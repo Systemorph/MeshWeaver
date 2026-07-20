@@ -80,6 +80,10 @@ builder.UseMeshWeaver(
     }
 );
 
+// Front-load dynamic NodeType compiles at startup so a fresh process doesn't make the
+// first visitor of each type wait out a cold Roslyn compile (best-effort, non-blocking).
+builder.Services.AddDynamicTypePreWarming();
+
 var app = builder.Build();
 
 // Map Aspire default endpoints (health checks)

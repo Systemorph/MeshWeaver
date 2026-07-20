@@ -9,6 +9,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
   </ItemGroup>
 
