@@ -192,6 +192,14 @@ public sealed class EventSubscriptionRunner(
             return;   // lost the race — another emission just established this node type
         slot.Disposable = AsSystem(() => meshService.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"nodeType:{nodeType}")))
+            // Every ChangeType EXCEPT Removed means "a matching node exists now" and is a valid
+            // existence-based reconcile trigger: Initial/Reset carry the full snapshot, Added a just-
+            // created invitee (the deferred-grant case), Updated an existing one re-emitted. EXCLUDE
+            // Removed — its Items carries the DELETED node (Items is a delta for Added/Updated/Removed,
+            // the full set only for Initial/Reset), and a Created subscription must never fire for a node
+            // being deleted. Repeated fires across emissions are harmless: the terminal Fired write drops
+            // the subscription from `pending` and every continuation is a create-or-update.
+            .Where(c => c.ChangeType != QueryChangeType.Removed)
             .Select(c => c.Items)
             .Subscribe(
                 items =>
