@@ -73,14 +73,20 @@ public static class SkillNodeType
     };
 
     /// <summary>
-    /// The query that discovers the skills available in a context — the SAME unified registry pattern as
-    /// agents and models: platform <c>Skill</c> + the current space's <c>{space}/Skill</c> + the user's
-    /// <c>{user}/Skill</c>, as one <c>namespace:A|B|C</c> exact-membership query
-    /// (<see cref="AgentPickerProjection.BuildSkillQueries"/>). <paramref name="contextPath"/> names the
-    /// space (its partition); <paramref name="userPath"/> the user's home.
+    /// The DEFAULT query that discovers the skills available in a context — the SAME unified registry
+    /// pattern as agents and models: platform <c>Skill</c> + the current space's <c>{space}/Skill</c> +
+    /// the current node type's <c>{typePartition}/Skill</c> + the user's <c>{user}/Skill</c>, as one
+    /// <c>namespace:A|B|C</c> exact-membership query (<see cref="AgentPickerProjection.BuildSkillQueries"/>).
+    /// <paramref name="contextPath"/> names the space (its partition); <paramref name="nodeTypePath"/> the
+    /// current node's TYPE path (its partition contributes the plugin-shipped skills, e.g. a node of type
+    /// <c>Office/Slide</c> surfaces <c>Office/Skill/*</c>); <paramref name="userPath"/> the user's home.
+    /// A user overrides/extends this default set via <see cref="AiSettings.SkillQueries"/> — resolved by
+    /// <see cref="AiSettingsNodeType.ResolveSkillQueries"/>, which falls back to exactly this builder.
     /// </summary>
-    public static string[] SkillQueries(string? contextPath, string? userPath)
-        => AgentPickerProjection.BuildSkillQueries(userPath, AgentPickerProjection.PartitionOf(contextPath));
+    public static string[] SkillQueries(
+        string? contextPath, string? userPath, string? nodeTypePath = null)
+        => AgentPickerProjection.BuildSkillQueries(
+            userPath, AgentPickerProjection.PartitionOf(contextPath), nodeTypePath);
 
     /// <summary>
     /// Projects a mesh-node snapshot into the available skills, deduped by id (the slash word). Reads

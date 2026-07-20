@@ -349,4 +349,82 @@ public class AgentPickerQueriesTest
             .Should().ContainSingle().Which.Should()
             .Be("namespace:AgenticPension/Skill|Skill nodeType:Skill");
     }
+
+    // ─── Skill sources: node-type partition + user-configurable query rows (AiSettings.SkillQueries) ───
+
+    [Fact]
+    public void BuildSkillQuery_NodeTypePath_AddsTypePartition()
+    {
+        // A node of type Office/Slide surfaces the skills its plugin ships next to its types —
+        // the TYPE path's PARTITION contributes {typePartition}/Skill to the default union.
+        AgentPickerProjection.BuildSkillQuery("rbuergi", "AgenticPension", "Office/Slide")
+            .Should().Be("namespace:rbuergi/Skill|AgenticPension/Skill|Office/Skill|Skill nodeType:Skill");
+    }
+
+    [Fact]
+    public void BuildSkillQuery_ReservedTypePartition_IsSkipped()
+    {
+        AgentPickerProjection.BuildSkillQuery("rbuergi", nodeTypePath: "settings/Whatever")
+            .Should().Be("namespace:rbuergi/Skill|Skill nodeType:Skill");
+    }
+
+    [Fact]
+    public void ResolveSkillQueries_Defaults_OneRowPerAvailableSource()
+    {
+        // Empty settings ⇒ the four default template rows; each resolves (or drops) independently.
+        AiSettingsNodeType.ResolveSkillQueries(
+                new AiSettings(), "AgenticPension/Foo/_Thread/x", "Office/Slide", "rbuergi")
+            .Should().Equal(
+                "namespace:Skill nodeType:Skill",
+                "namespace:AgenticPension/Skill nodeType:Skill",
+                "namespace:Office/Skill nodeType:Skill",
+                "namespace:rbuergi/Skill nodeType:Skill");
+    }
+
+    [Fact]
+    public void ResolveSkillQueries_MissingContext_DropsOnlyThatRow()
+    {
+        // No node type, no space ⇒ those rows drop; global + user remain. Null settings = defaults.
+        AiSettingsNodeType.ResolveSkillQueries(null, contextPath: null, nodeTypePath: null, userPath: "rbuergi")
+            .Should().Equal(
+                "namespace:Skill nodeType:Skill",
+                "namespace:rbuergi/Skill nodeType:Skill");
+    }
+
+    [Fact]
+    public void ResolveSkillQueries_CustomRows_ReplaceDefaults()
+    {
+        // A user-authored source list REPLACES the defaults (empty ⇒ defaults semantics), exactly
+        // like AgentQueries/ModelQueries. Package sources are plain literal rows.
+        var settings = new AiSettings
+        {
+            SkillQueries = System.Collections.Immutable.ImmutableArray.Create(
+                "namespace:Skill nodeType:Skill",
+                "namespace:Office/Skill nodeType:Skill"),
+        };
+        AiSettingsNodeType.ResolveSkillQueries(settings, "AgenticPension", "Chess/Game", "rbuergi")
+            .Should().Equal(
+                "namespace:Skill nodeType:Skill",
+                "namespace:Office/Skill nodeType:Skill");
+    }
+
+    [Fact]
+    public void MergeSkillSource_EmptyList_SeedsDefaultsThenAppends()
+    {
+        // Installing a package on pristine settings must not silently drop the standard sources:
+        // the defaults are seeded first, then the package row appended.
+        var merged = AiSettingsNodeType.MergeSkillSource(new AiSettings(), "Office/Skill");
+        merged.SkillQueries.Should().HaveCount(AiSettingsNodeType.DefaultSkillQueryTemplates.Length + 1);
+        merged.SkillQueries.Take(AiSettingsNodeType.DefaultSkillQueryTemplates.Length)
+            .Should().Equal(AiSettingsNodeType.DefaultSkillQueryTemplates);
+        merged.SkillQueries[^1].Should().Be("namespace:Office/Skill nodeType:Skill");
+    }
+
+    [Fact]
+    public void MergeSkillSource_IsIdempotent()
+    {
+        var once = AiSettingsNodeType.MergeSkillSource(new AiSettings(), "Office/Skill");
+        var twice = AiSettingsNodeType.MergeSkillSource(once, "Office/Skill");
+        twice.SkillQueries.Should().Equal(once.SkillQueries);
+    }
 }

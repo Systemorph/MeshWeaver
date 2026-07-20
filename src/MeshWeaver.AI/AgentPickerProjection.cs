@@ -85,18 +85,24 @@ public static class AgentPickerProjection
     public const string SkillSubNamespace = "Skill";
 
     /// <summary>Array form of <see cref="BuildSkillQuery"/> for the <c>hub.GetQuery</c> surface.</summary>
-    public static string[] BuildSkillQueries(string? userPath = null, string? spacePath = null)
-        => new[] { BuildSkillQuery(userPath, spacePath) };
+    public static string[] BuildSkillQueries(
+        string? userPath = null, string? spacePath = null, string? nodeTypePath = null)
+        => new[] { BuildSkillQuery(userPath, spacePath, nodeTypePath) };
 
     /// <summary>
     /// THE single canonical skill-registry query — IDENTICAL pattern to agents + models. Skills live in a
     /// dedicated <c>/Skill</c> sub-namespace PER PARTITION (platform <c>Skill</c> + <c>{space}/Skill</c> +
-    /// <c>{user}/Skill</c>), listed directly as a <c>namespace:A|B|C</c> exact-membership alternation — one
-    /// registry pattern for every public top-level domain (Agent, Model, Skill, …). Produces e.g.
-    /// <c>namespace:rbuergi/Skill|AgenticPension/Skill|Skill nodeType:Skill</c>.
+    /// <c>{typePartition}/Skill</c> + <c>{user}/Skill</c>), listed directly as a <c>namespace:A|B|C</c>
+    /// exact-membership alternation — one registry pattern for every public top-level domain
+    /// (Agent, Model, Skill, …). <paramref name="nodeTypePath"/> is the current node's TYPE path
+    /// (e.g. <c>Office/Slide</c>); its PARTITION contributes <c>Office/Skill</c>, so skills a plugin
+    /// ships next to its types resolve wherever those types are used. Produces e.g.
+    /// <c>namespace:rbuergi/Skill|AgenticPension/Skill|Office/Skill|Skill nodeType:Skill</c>.
     /// </summary>
-    public static string BuildSkillQuery(string? userPath = null, string? spacePath = null)
-        => BuildRegistryQuery(SkillNodeType.NodeType, SkillSubNamespace, userPath, spacePath, "");
+    public static string BuildSkillQuery(
+        string? userPath = null, string? spacePath = null, string? nodeTypePath = null)
+        => BuildRegistryQuery(SkillNodeType.NodeType, SkillSubNamespace, userPath, spacePath, "",
+            PartitionOf(nodeTypePath));
 
     // Rogue/reserved ROUTE partitions — auto-minted page artifacts (login, welcome, settings, …; mirrors
     // the reserved-schema list in PostgreSqlCrossSchemaQueryProvider). They carry NO read policy and never
@@ -123,7 +129,8 @@ public static class AgentPickerProjection
     /// flat, well-known namespace per partition, so there is no graph search.
     /// </summary>
     private static string BuildRegistryQuery(
-        string nodeType, string sub, string? userPath, string? spacePath, string extra)
+        string nodeType, string sub, string? userPath, string? spacePath, string extra,
+        string? typePartition = null)
     {
         var namespaces = new List<string>();
         void Add(string? partition)
@@ -136,6 +143,7 @@ public static class AgentPickerProjection
         }
         Add(userPath);
         Add(spacePath);
+        Add(typePartition); // the current node type's owning partition (skills shipped with a plugin)
         namespaces.Add(sub); // platform defaults — always present, last
         var nsClause = namespaces.Count > 1
             ? $"namespace:{string.Join("|", namespaces)}"
