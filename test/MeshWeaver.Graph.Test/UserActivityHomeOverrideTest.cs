@@ -11,7 +11,7 @@ namespace MeshWeaver.Graph.Test;
 /// Unit tests for the configurable owner home — ONE editable markdown page (the user node's
 /// <see cref="User.Body"/>, 1:1 with <c>Space.Body</c>): by default it serves the welcome template
 /// (which embeds the home regions with <c>@@</c>), and when <c>Body</c> is set the page respects that
-/// override verbatim. Also pins the catalog 100%-width fix.
+/// override verbatim. Also pins the unified, grouped "everything" catalog shape.
 /// </summary>
 public class UserActivityHomeOverrideTest
 {
@@ -124,12 +124,15 @@ public class UserActivityHomeOverrideTest
     }
 
     [Fact]
-    public void Catalog_IsFullWidth()
+    public void Catalog_IsAUnifiedGroupedEverythingSearch()
     {
-        var catalog = UserActivityLayoutAreas.BuildCatalog(NodePath, NodePath);
+        var catalog = UserActivityLayoutAreas.BuildCatalog();
 
-        catalog.Should().BeOfType<TabsControl>();
-        ((TabsControl)catalog).Skin.Width.Should().Be("100%",
-            "the catalog tabs must fill the home width, not shrink to content");
+        // ONE unified, grouped "everything" search — no tab row. It spans every partition the reader
+        // can see (no namespace restriction) and groups by type.
+        var search = catalog.Should().BeOfType<MeshSearchControl>().Subject;
+        search.HiddenQuery!.ToString().Should().Contain("is:main context:search");
+        search.HiddenQuery!.ToString().Should().NotContain("namespace:");
+        search.RenderMode.Should().Be(MeshSearchRenderMode.Grouped);
     }
 }

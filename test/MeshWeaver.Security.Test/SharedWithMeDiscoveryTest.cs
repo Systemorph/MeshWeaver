@@ -19,8 +19,8 @@ namespace MeshWeaver.Security.Test;
 /// reach it by URL but it is invisible in nav. The home's "Shared with me" tab sources the caller's
 /// own <c>AccessAssignment</c> grants (<c>content.accessObject == me</c>) and resolves each to its
 /// governed cross-partition target scope (<see cref="MeshNode.MainNode"/>) — the exact projection
-/// <c>UserActivityLayoutAreas.SharedTargetPaths</c> performs for the tab (unit-tested in
-/// <c>HomeTabExtensionTest</c>). This is purely additive: it READS the caller's own readable grants,
+/// <c>UserActivityLayoutAreas.SharedTargetPaths</c> performs for the band (unit-tested in
+/// <c>HomeCatalogTest</c>). This is purely additive: it READS the caller's own readable grants,
 /// no security surface changes.
 /// </summary>
 public class SharedWithMeDiscoveryTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
