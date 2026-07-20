@@ -11,13 +11,29 @@ namespace MeshWeaver.Graph.Configuration;
 /// <summary>
 /// Tears down a partition's entire backing store when its partition-owning root node is
 /// deleted — the deletion-side mirror of <c>OwnsPartitionProvisioningValidator</c>. Deleting
-/// a <c>Space</c> removes the space's nodes (the recursive delete), and this handler then
+/// a partition root (a <c>Space</c> OR a <c>User</c> home — every <c>OwnsPartition</c> type)
+/// removes that partition's nodes (the recursive delete), and this handler then
 /// (1) drops the partition's backing store on every <see cref="IPartitionStorageProvider"/>
 /// (the Postgres provider drops the schema with all satellite tables — threads, access,
-/// activities — in one <c>DROP SCHEMA … CASCADE</c>), and (2) deletes the
-/// <c>Admin/Partition/{id}</c> <see cref="PartitionDefinition"/> node that
-/// <c>SpacePostCreationHandler</c> emitted, so the partition disappears from the routing
-/// prime and partition listings mesh-wide.
+/// activities, notifications, user_activities — in one <c>DROP SCHEMA … CASCADE</c>), and
+/// (2) deletes the <c>Admin/Partition/{id}</c> <see cref="PartitionDefinition"/> node that
+/// <c>SpacePostCreationHandler</c> emitted (absent for User homes — the definition delete is
+/// best-effort), so the partition disappears from the routing prime and partition listings
+/// mesh-wide.
+///
+/// <para><b>Why the DROP is essential (not merely tidy).</b> The recursive fan-out only
+/// enumerates <c>mesh_nodes</c> descendants; satellite-table rows (threads, notifications,
+/// user_activities, access) live in dedicated tables the fan-out never visits, and RLS can
+/// hide gated children from the enumeration. The unconditional <c>DROP SCHEMA … CASCADE</c>
+/// is what makes a partition-root delete COMPLETE regardless — no orphaned schema, no leaked
+/// satellite rows. A <c>User</c> home that lacked this handler was left entirely behind
+/// (2026-07-19 memex-cloud incident); registering it for every <c>OwnsPartition</c> type is
+/// the fix.</para>
+///
+/// <para>The matched <see cref="NodeType"/> is supplied by the registration site
+/// (<c>AddSpaceType</c> → <c>Space</c>, <c>AddUserType</c> → <c>User</c>) so the same generic
+/// teardown serves every partition-owning type — the <see cref="Handle"/> body is NodeType
+/// agnostic (it keys off the root's <c>Id</c>).</para>
 ///
 /// <para>Sequenced store-drop → definition-delete: when the store drop fails, the
 /// definition node stays so the partition remains visible for a retry instead of turning
@@ -29,10 +45,11 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 public sealed class PartitionDropPostDeletionHandler(
     IMessageHub hub,
+    string nodeType,
     ILogger<PartitionDropPostDeletionHandler>? logger = null) : INodePostDeletionHandler
 {
     /// <inheritdoc />
-    public string NodeType => SpaceNodeType.NodeType;
+    public string NodeType => nodeType;
 
     /// <inheritdoc />
     public IObservable<Unit> Handle(MeshNode deletedNode, string? deletedBy)
