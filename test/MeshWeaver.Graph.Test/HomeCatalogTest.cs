@@ -13,8 +13,9 @@ namespace MeshWeaver.Graph.Test;
 /// The user home's catalog is ONE tab-less, FLAT, FIRST-LEVEL list — a single reactive
 /// <see cref="MeshSearchControl"/> (NOT a tab control, NOT grouped-by-type) showing only the TOP-LEVEL
 /// entries the viewer can see: the partition roots (spaces, courses, plugins) plus the user's own
-/// top-level home items — NOT the whole tree. It DEFAULTS to last-accessed order and exposes a
-/// view-options "Sort by" control — Last accessed (default), Last modified, Alphabetical. The one gap
+/// top-level home items — NOT the whole tree, and never the user's own root node. It DEFAULTS to
+/// last-accessed order and exposes a view-options "Sort by" control — Last accessed (default),
+/// Last modified, Alphabetical. The one gap
 /// this can't reach — a module in ANOTHER partition the caller was invited into (#385) — is resolved
 /// from the caller's own <c>AccessAssignment</c> grants (<see cref="UserActivityLayoutAreas.SharedTargetPaths"/>)
 /// and appended as an additive "Shared with me" band, present only when such grants exist.
@@ -58,8 +59,11 @@ public class HomeCatalogTest
     {
         var search = UserActivityLayoutAreas.BuildCatalog(NodePath).Should().BeOfType<MeshSearchControl>().Subject;
 
-        // Default order = last accessed (source:accessed projects the UserActivity access time into the
-        // sort slot), most-recently-opened first — supersedes the old "Last Read" tab.
+        // Default order = last accessed (source:accessed projects the UserActivity access time into
+        // the sort slot), most-recently-opened first. The JOIN targets the CALLER's own access log
+        // (their partition's user_activities) across every branch schema, so it works
+        // cross-partition — and every scope clause still applies (the roots leg pushes
+        // `namespace = ''`), so it stays a first-level list.
         search.HiddenQuery!.ToString().Should().Contain("source:accessed");
         search.HiddenQuery!.ToString().Should().Contain("sort:LastModified-desc");
     }
@@ -73,7 +77,7 @@ public class HomeCatalogTest
         options.Select(o => o.Label).Should().Equal("Last accessed", "Last modified", "Alphabetical");
         // The first option is the default and MUST equal the control's HiddenQuery.
         options[0].Query.Should().Be(search.HiddenQuery!.ToString());
-        // Last accessed = access-ordered working set; the other two order the first-level set differently.
+        // Last accessed = access-ordered working set; the other two are pure order-bys.
         options[0].Query.Should().Contain("source:accessed");
         options[1].Query.Should().Contain("sort:LastModified-desc");
         options[1].Query.Should().NotContain("source:accessed");
@@ -86,6 +90,21 @@ public class HomeCatalogTest
             o.Query.Should().Contain($"namespace:{NodePath} is:main");
             o.Query.Should().NotContain("scope:subtree");
         }
+    }
+
+    [Fact]
+    public void Catalog_ExcludesTheUsersOwnRootNode()
+    {
+        // The viewer's own home root (path == owner, namespace == "") matches the partition-roots
+        // leg (`namespace:` = empty-namespace top level), so the leg must exclude User nodes — a
+        // home page never lists the user itself.
+        var search = UserActivityLayoutAreas.BuildCatalog(NodePath).Should().BeOfType<MeshSearchControl>().Subject;
+        search.HiddenQuery!.ToString().Should().Contain("-nodeType:User");
+
+        var subtree = UserActivityLayoutAreas
+            .BuildCatalog(NodePath, new HomeConfig { Scope = HomeCatalogScope.Subtree })
+            .Should().BeOfType<MeshSearchControl>().Subject;
+        subtree.HiddenQuery!.ToString().Should().Contain("-nodeType:User");
     }
 
     [Fact]

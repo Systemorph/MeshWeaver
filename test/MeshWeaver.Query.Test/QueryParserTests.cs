@@ -889,6 +889,40 @@ public class QueryParserTests
     }
 
     [Fact]
+    public void Parse_NamespaceWithSubtreeScope_DegradesToDescendants()
+    {
+        // `namespace:X` names a NAMESPACE, never the node AT path X (that node's own namespace is
+        // its parent — the user root `rbuergi` has namespace ""). Subtree would include the self
+        // node in every backend's path walk, which is how the user node leaked into its own
+        // `source:activity namespace:{user} scope:subtree` activity feed — so namespace-derived
+        // paths degrade subtree to descendants.
+        var result = _parser.Parse("namespace:rbuergi scope:subtree");
+
+        result.Path.Should().Be("rbuergi");
+        result.Scope.Should().Be(QueryScope.Descendants);
+    }
+
+    [Fact]
+    public void Parse_NamespaceWithSelfAndDescendantsAlias_DegradesToDescendants()
+    {
+        var result = _parser.Parse("namespace:rbuergi scope:selfAndDescendants");
+
+        result.Path.Should().Be("rbuergi");
+        result.Scope.Should().Be(QueryScope.Descendants);
+    }
+
+    [Fact]
+    public void Parse_EmptyNamespace_KeepsEmptyPathWithChildrenScope()
+    {
+        // `namespace:` (empty value) = the root-level rows (namespace == "") — Path must stay ""
+        // (NOT null) so backends still push the root-children scope instead of dropping it.
+        var result = _parser.Parse("namespace: is:main");
+
+        result.Path.Should().Be("");
+        result.Scope.Should().Be(QueryScope.Children);
+    }
+
+    [Fact]
     public void Parse_PathWithSubtreeScope_FindsSelfAndDescendants()
     {
         // subtree = self + descendants - important for finding agents under a NodeType
