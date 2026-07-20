@@ -200,6 +200,11 @@ config:
     ModelTier__Light: ""
     ModelTier__Utility: ""
     ClaudeCode__ConfigDirRoot: ""
+    # Plugin catalog — the registry this installation installs plugins FROM.
+    # Empty = the admin tab reports no registry configured and nothing can be
+    # installed (opt-in by design). An overlay sets it per environment, e.g.
+    # "https://memex.meshweaver.cloud" for the public curated registry.
+    PluginCatalog__RegistryUrl: ""
     # ---- System email (Microsoft Graph) — BIDIRECTIONAL. Off by default; an
     # overlay turns it on per environment by setting Email__Enabled + the env's
     # own MailboxAddress / TenantId / ClientId (+ WebhookBaseUrl for inbound).

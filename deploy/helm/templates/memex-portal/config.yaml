@@ -162,6 +162,15 @@ data:
   WebSearch__Provider: "{{ .Values.config.memex_portal.WebSearch__Provider | default "" }}"
   WebSearch__Google__ApiKey: "{{ .Values.config.memex_portal.WebSearch__Google__ApiKey | default "" }}"
   WebSearch__Google__Cx: "{{ .Values.config.memex_portal.WebSearch__Google__Cx | default "" }}"
+  # ---- Plugin catalog (Settings ▸ Administration ▸ Plugin Catalog) — optional -
+  # The registry this installation installs plugins FROM. Left empty the admin tab
+  # renders "No plugin registry is configured" and no plugin can be installed — the
+  # catalog is opt-in, since an instance that should not pull third-party modules
+  # simply never sets it. The public registry is https://memex.meshweaver.cloud,
+  # which serves the curated MeshWeaver.Plugins node repos; a consumer needs NO
+  # GitHub credential of its own (the registry holds it). Several registries can be
+  # consumed via PluginCatalog:Registries instead — see /Doc/Architecture/PluginRegistry.
+  PluginCatalog__RegistryUrl: "{{ .Values.config.memex_portal.PluginCatalog__RegistryUrl | default "" }}"
   # ---- Observability (OTLP collector) — optional ----------------------------
   OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_ENDPOINT | default "" }}"
   OTEL_EXPORTER_OTLP_PROTOCOL: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_PROTOCOL | default "" }}"
