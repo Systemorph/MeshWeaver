@@ -873,11 +873,16 @@ public class MeshOperations
 
             try
             {
-                var delivery = hub.Post(
-                    DataChangeRequest.Update([node]),
-                    o => o.WithTarget(new Address(node.Path)))!;
-
-                innerSubscription = hub.Observe(delivery)
+                // 🚨 Pre-registering Observe(request, options) — registers the response
+                // subject BEFORE posting. The old Post-then-Observe(delivery) shape had a
+                // window in which an immediate response/DeliveryFailure (deleted target →
+                // instant NotFound) was pumped before the subject existed and silently
+                // lost; the caller then sat until the hub's 60s RequestTimeout — the
+                // McpNegativeOperationsTest.DeletedNode_EveryVerb_FailsCleanly 45.5s CI
+                // flake (PR #500, run 29571004819 shard 0).
+                innerSubscription = hub.Observe(
+                        DataChangeRequest.Update([node]),
+                        o => o.WithTarget(new Address(node.Path)))
                     .Subscribe(
                         d =>
                         {
@@ -991,11 +996,12 @@ public class MeshOperations
             IDisposable? innerSubscription = null;
             try
             {
-                var delivery = hub.Post(
-                    new GetDataRequest(reference),
-                    o => o.WithTarget(address))!;
-
-                innerSubscription = hub.Observe(delivery)
+                // 🚨 Pre-registering Observe(request, options) — subject registered
+                // BEFORE the post, so an immediate response/DeliveryFailure can never
+                // race past the registration and be lost (see UpdateViaDataChange).
+                innerSubscription = hub.Observe(
+                        new GetDataRequest(reference),
+                        o => o.WithTarget(address))
                     .Subscribe(
                         d =>
                         {
@@ -1762,11 +1768,12 @@ public class MeshOperations
 
             try
             {
-                var delivery = hub.Post(
-                    new PatchDataRequest(new MeshNodeReference(), new RawJson(rawPatch)),
-                    o => o.WithTarget(new Address(resolvedPath)))!;
-
-                innerSubscription = hub.Observe(delivery)
+                // 🚨 Pre-registering Observe(request, options) — subject registered
+                // BEFORE the post, so an immediate response/DeliveryFailure can never
+                // race past the registration and be lost (see UpdateViaDataChange).
+                innerSubscription = hub.Observe(
+                        new PatchDataRequest(new MeshNodeReference(), new RawJson(rawPatch)),
+                        o => o.WithTarget(new Address(resolvedPath)))
                     .Subscribe(
                         d =>
                         {
@@ -2444,11 +2451,17 @@ public class MeshOperations
             IDisposable? innerSubscription = null;
             try
             {
-                var delivery = hub.Post(
-                    new MoveNodeRequest(resolvedSource, resolvedTarget),
-                    o => o.WithTarget(new Address(resolvedSource)))!;
-
-                innerSubscription = hub.Observe(delivery)
+                // 🚨 Pre-registering Observe(request, options) — subject registered
+                // BEFORE the post. The old Post-then-Observe(delivery) shape lost the
+                // DELETED-source case's immediate DeliveryFailure whenever it was pumped
+                // before Observe registered the subject: the caller then waited out the
+                // hub's 60s RequestTimeout while the test's 45s bound fired first — the
+                // McpNegativeOperationsTest.DeletedNode_EveryVerb_FailsCleanly (line 105,
+                // the MOVE verb) CI flake on PR #500 (run 29571004819 shard 0; locally
+                // the round-trip never beat the registration, hence 646ms green).
+                innerSubscription = hub.Observe(
+                        new MoveNodeRequest(resolvedSource, resolvedTarget),
+                        o => o.WithTarget(new Address(resolvedSource)))
                     .Subscribe(
                         d =>
                         {
