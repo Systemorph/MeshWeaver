@@ -128,10 +128,12 @@ public class UserActivityHomeOverrideTest
     {
         var catalog = UserActivityLayoutAreas.BuildCatalog();
 
-        // ONE unified, grouped "everything" search — no tab row. It spans every partition the reader
-        // can see (no namespace restriction) and groups by type.
+        // ONE unified, tab-less, grouped list — no tab row. It spans every partition the reader can see
+        // (no namespace restriction), groups by type, and defaults to last-accessed order.
         var search = catalog.Should().BeOfType<MeshSearchControl>().Subject;
+        catalog.Should().NotBeOfType<TabsControl>();
         search.HiddenQuery!.ToString().Should().Contain("is:main context:search");
+        search.HiddenQuery!.ToString().Should().Contain("source:accessed");
         search.HiddenQuery!.ToString().Should().NotContain("namespace:");
         search.RenderMode.Should().Be(MeshSearchRenderMode.Grouped);
     }

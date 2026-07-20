@@ -283,6 +283,43 @@ public partial class MeshSearchView : IDisposable
         }
     }
 
+    // ----- Sort-by dropdown (view-options) -----
+    // The selected option's Query (an override of the hidden query). null ⇒ the default (first) option.
+    private string? _viewSortQuery;
+
+    /// <summary>The user-selectable sort choices supplied by the control (empty ⇒ no Sort-by dropdown).</summary>
+    private IReadOnlyList<MeshSearchSortOption> BoundSortOptions => ViewModel?.SortOptions ?? [];
+
+    /// <summary>Render the Sort-by dropdown only when the control declares options.</summary>
+    private bool HasSortOptions => BoundSortOptions.Count > 0;
+
+    /// <summary>
+    /// Two-way bound value of the Sort-by dropdown — the selected option's full hidden query. Unlike
+    /// Group-by (a client-side re-bucket), a sort choice can change BOTH the ordering and the result set
+    /// (e.g. "Last accessed" uses <c>source:accessed</c>), so setting it swaps the hidden query and
+    /// re-queries via the same <c>_overriddenHiddenQuery</c> path the search-options editor uses.
+    /// </summary>
+    private string SortBySelection
+    {
+        get => _viewSortQuery ?? BoundSortOptions.FirstOrDefault()?.Query ?? BoundHiddenQuery;
+        set
+        {
+            if (string.IsNullOrEmpty(value) || value == SortBySelection)
+                return;
+            _viewSortQuery = value;
+            _overriddenHiddenQuery = value;
+            _lastBoundHiddenQuery = value; // keep OnParametersSet from re-triggering on the same change
+            if (IsPrecomputedMode)
+                return;
+            if (IsNamespaceTreeMode)
+                ResetTree();
+            else if (IsGraphNavigatorMode)
+                ResetGraphNavigator();
+            else
+                LoadResults();
+        }
+    }
+
     /// <summary>Section counts after applying the display-menu override.</summary>
     private bool EffectiveShowCounts =>
         _showCountsOverride ?? (BoundSections?.ShowCounts ?? true);
