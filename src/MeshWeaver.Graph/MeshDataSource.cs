@@ -1284,34 +1284,82 @@ public static class MeshDataSourceExtensions
         if (initial || current.ChangeType != ChangeType.Patch)
             return new(node, current.StreamId, current.Version);
 
-        // Patch path: take the EntityUpdate whose Value is the targeted MeshNode.
-        // If reference.Path is set, prefer the update whose payload matches that
-        // path so a same-frame multi-entity update doesn't emit a sibling's value
-        // here. Falls back to FirstOrDefault for the no-path case.
-        var change = !string.IsNullOrEmpty(reference.Path)
-            ? current.Updates.FirstOrDefault(u =>
-                u.Value is MeshNode m
-                && string.Equals(m.Path, reference.Path, StringComparison.OrdinalIgnoreCase))
-                ?? current.Updates.FirstOrDefault()
-            : current.Updates.FirstOrDefault();
+        // Patch path with a targeted reference: emit ONLY when an EntityUpdate
+        // actually concerns the referenced node. 🚨 NO sibling fallback — the old
+        // `?? current.Updates.FirstOrDefault()` surfaced a SIBLING node (a
+        // Source/Release/_Activity satellite patched in the same collection) as
+        // this stream's value with a bumped Version. Every own-node subscriber
+        // then saw a foreign node masquerading as the own node; UpdateOwn's echo
+        // detection accepted it as "my write landed" and completed with a
+        // pre-write state — the lost-compile-dispatch wedge behind the
+        // FrameworkStaleInstanceRenderTest CI flake (run 29749071939). A patch
+        // whose updates all target siblings does not change the referenced node:
+        // emit a null-Value item so the reduced pipeline's not-null filter drops
+        // it (pinned by MeshNodeReducePatchTest).
+        if (!string.IsNullOrEmpty(reference.Path))
+        {
+            foreach (var u in current.Updates)
+            {
+                // u.Value is a JsonElement when the update was derived from a JSON
+                // patch (cross-hub / mirror path) — `is MeshNode` alone would miss
+                // it and previously fell into the sibling fallback by luck.
+                // Deserialize to probe the target path; a delete-shaped update
+                // (Value null) is matched via OldValue.
+                var valueNode = AsMeshNode(u.Value, options);
+                var candidate = valueNode ?? AsMeshNode(u.OldValue, options);
+                if (candidate is null
+                    || !string.Equals(candidate.Path, reference.Path, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                return new(valueNode, current.ChangedBy, current.StreamId,
+                    ChangeType.Patch, current.Version, [u]);
+            }
+            if (current.Updates.Count == 0)
+                // Patch with no Updates at all — fall back to full value instead of
+                // returning null (which silently drops the emission and blocks live updates).
+                return new(node, current.StreamId, current.Version);
+            // Updates exist but none targets the referenced node — sibling-only churn.
+            return new(null, current.ChangedBy, current.StreamId,
+                ChangeType.Patch, current.Version, []);
+        }
+
+        // No-path reference (legacy single-instance shape): keep the historical
+        // first-update behaviour.
+        var change = current.Updates.FirstOrDefault();
         if (change == null)
         {
             // Patch with no matching Updates — fall back to full value instead of
             // returning null (which silently drops the emission and blocks live updates).
             return new(node, current.StreamId, current.Version);
         }
-        // change.Value is a JsonElement when the update was derived from a JSON
-        // patch (cross-hub / mirror path) — `as MeshNode` would silently null it
-        // out, dropping a null-content ChangeItem into the mirror. Deserialize it
-        // the same way the sibling PatchMeshNode does.
-        var changedNode = change.Value switch
-        {
-            MeshNode m => m,
-            JsonElement je => je.Deserialize<MeshNode>(options),
-            _ => null
-        };
+        var changedNode = AsMeshNode(change.Value, options);
         return new(changedNode, current.ChangedBy, current.StreamId,
             ChangeType.Patch, current.Version, [change]);
+    }
+
+    /// <summary>
+    /// Converts an <see cref="EntityUpdate"/> payload to a <see cref="MeshNode"/>:
+    /// typed instances pass through; JsonElement payloads (cross-hub / mirror
+    /// patches) are deserialized; anything else — including undeserializable
+    /// JSON — yields null.
+    /// </summary>
+    private static MeshNode? AsMeshNode(object? value, JsonSerializerOptions options)
+    {
+        switch (value)
+        {
+            case MeshNode m:
+                return m;
+            case JsonElement je:
+                try
+                {
+                    return je.Deserialize<MeshNode>(options);
+                }
+                catch (JsonException)
+                {
+                    return null;
+                }
+            default:
+                return null;
+        }
     }
 
     /// <summary>
