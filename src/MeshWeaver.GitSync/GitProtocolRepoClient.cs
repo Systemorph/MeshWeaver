@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
@@ -98,11 +99,8 @@ public sealed class GitProtocolRepoClient(
     {
         ArgumentNullException.ThrowIfNull(pathFilter);
         var commitRef = string.IsNullOrWhiteSpace(commitish) ? "main" : commitish.Trim();
-        if (IsShortSha(commitRef))
-            // Wire fetch needs a ref or a FULL SHA; a short SHA resolves only through REST.
-            return octokit.Fetch(repositoryUrl, commitRef, subdirectory, accessToken, pathFilter);
         var prefix = NormalizePrefix(subdirectory);
-        return WithTempDir(tmp =>
+        var wire = WithTempDir(tmp =>
             Expect(git.Run(tmp, ["init", "-q"]))
                 .SelectMany(_ => Expect(git.Run(tmp, ["remote", "add", "origin", repositoryUrl])))
                 .SelectMany(_ => Expect(git.Run(tmp,
@@ -112,6 +110,19 @@ public sealed class GitProtocolRepoClient(
                 .SelectMany(_ => Expect(git.Run(tmp, ["rev-parse", "FETCH_HEAD"])))
                 .SelectMany(sha => ReadWorktree(tmp, prefix, pathFilter)
                     .Select(files => new RepoSnapshot(sha.StdOut.Trim(), files))));
+        // A hex-looking name is tried over the wire FIRST — "deadbee" may be a legitimate
+        // branch/tag, and the whole point of this client is to avoid per-file REST. Only when
+        // the wire fetch fails AND the commitish is an ABBREVIATED SHA (the one commitish the
+        // protocol cannot serve — upload-pack wants refs or full SHAs) does REST resolve it.
+        return IsShortSha(commitRef)
+            ? wire.Catch((Exception ex) =>
+            {
+                logger?.LogInformation(
+                    "Wire fetch of '{Commitish}' failed ({Error}); resolving the abbreviated SHA via REST.",
+                    commitRef, ex.Message);
+                return octokit.Fetch(repositoryUrl, commitRef, subdirectory, accessToken, pathFilter);
+            })
+            : wire;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -310,7 +321,7 @@ public sealed class GitProtocolRepoClient(
                     continue;
                 files.Add(RepoFileCodec.FromBytes(subRel, File.ReadAllBytes(full)));
             }
-            return (IReadOnlyList<RepoFile>)files;
+            return (IReadOnlyList<RepoFile>)files.ToImmutableList();
         });
 
     // ── shared plumbing ──────────────────────────────────────────────────────
@@ -359,9 +370,20 @@ public sealed class GitProtocolRepoClient(
     private static bool IsShortSha(string s)
         => s.Length is >= 7 and < 40 && s.All(Uri.IsHexDigit);
 
+    /// <summary>
+    /// Normalizes the mirror subdirectory to a <c>segment/…/</c> prefix and REJECTS any shape
+    /// that could escape the clone: rooted paths, <c>.</c>/<c>..</c> segments, backslashes. The
+    /// prefix names the deletion target of the mirror — defense here must not depend on
+    /// upstream request validation.
+    /// </summary>
     private static string NormalizePrefix(string? subdirectory)
     {
         var s = subdirectory?.Trim().Trim('/');
-        return string.IsNullOrEmpty(s) ? "" : s + "/";
+        if (string.IsNullOrEmpty(s))
+            return "";
+        if (s.Contains('\\') || Path.IsPathRooted(s)
+            || s.Split('/').Any(seg => seg.Length == 0 || seg is "." or ".."))
+            throw new ArgumentException($"Invalid repo subdirectory '{subdirectory}'.");
+        return s + "/";
     }
 }
