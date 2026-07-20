@@ -32,6 +32,19 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         public string Status { get; init; } = "";
     }
 
+    /// <summary>
+    /// A change feed that delivers NOTHING. Models the distributed portal's best-effort cross-silo relay
+    /// dropping a <c>User</c>/<c>Created</c> event (the invitee onboarded on another silo, so the event
+    /// created in their own partition hub never reached the portal-hosted runner). The runner must still
+    /// fire the subscription — via the live trigger-node reconcile — rather than depend on the feed.
+    /// </summary>
+    private sealed class SilentChangeFeed : IMeshChangeFeed
+    {
+        public void Publish(MeshChangeEvent change) { }
+        public IDisposable Subscribe(Action<MeshChangeEvent> handler, MeshChangeKind? filter = null)
+            => System.Reactive.Disposables.Disposable.Empty;
+    }
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddMeshNodes(new MeshNode(Space) { Name = "Invite Space", NodeType = "Space" })
@@ -162,6 +175,77 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
             $"subscription ended {final.Status}: {final.LastError}");
 
         // The membership landed: {groupPath}/{user}_Membership carries Member == userId and the group entry.
+        var membershipPath = $"{groupPath}/{InviteeId}_Membership";
+        var membership = await Mesh.GetWorkspace().GetMeshNodeStream(membershipPath)
+            .Where(n => n?.Content is GroupMembership gm
+                        && gm.Member == InviteeId
+                        && gm.Groups.Any(e => e.Group == groupPath))
+            .FirstAsync().Timeout(10.Seconds());
+        Assert.NotNull(membership);
+    }
+
+    /// <summary>
+    /// The prod regression (memex 2026-07-20, invitee "bari"): a pending AddToGroup subscription must fire
+    /// when the invitee onboards EVEN IF the change feed never delivers the User/Created event to the runner
+    /// — the cross-silo relay on a distributed portal is best-effort. Here the runner is wired to a
+    /// <see cref="SilentChangeFeed"/> (the live path is dead), and the user is created AFTER the subscription
+    /// is already pending (so the startup/set-change reconcile saw no matching user). The subscription must
+    /// still fire, driven by the change-feed-INDEPENDENT live trigger-node query. Fails before the fix
+    /// (nothing re-triggers the reconcile → stranded until restart), passes after.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task PendingAddToGroup_FiresOnUserCreation_EvenWhenChangeFeedDropsTheEvent()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var runnerLogger = Mesh.ServiceProvider
+            .GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>();
+
+        var groupPath = $"{Space}/Team2";
+        using (accessService.ImpersonateAsSystem())
+            await meshService.CreateNode(new MeshNode("Team2", Space)
+            {
+                NodeType = "Group",
+                Name = "Team2",
+                Content = new AccessObject { Description = "Test group" },
+            }).Should().Emit();
+
+        // The runner's ONLY live trigger is a SilentChangeFeed — it will never learn of the user create
+        // from the feed. If the subscription fires, it can ONLY be via the live trigger-node reconcile.
+        using var runner = new EventSubscriptionRunner(Mesh, new SilentChangeFeed(), meshService, accessService, runnerLogger);
+        await runner.StartAsync(default);
+
+        var subscription = new EventSubscription
+        {
+            TriggerType = EventTriggerType.NodeChange,
+            TriggerNodeType = "User",
+            TriggerKind = MeshChangeKind.Created,
+            MatchField = "email",
+            MatchValue = InviteeEmail,
+            ContinuationType = EventContinuationType.AddToGroup,
+            TargetPath = groupPath,
+        };
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+
+        // The invitee onboards AFTER the subscription is pending — the runner already reconciled (no user
+        // then) and the feed stays silent. Only the live trigger-node query can catch this.
+        using (accessService.ImpersonateAsSystem())
+        {
+            await meshService.CreateNode(new MeshNode(InviteeId)
+            {
+                NodeType = "User",
+                Name = "Newcomer",
+                Content = new User { Email = InviteeEmail, FullName = "Newcomer" },
+            }).Should().Emit();
+        }
+
+        var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
+            .Select(n => n?.Content as EventSubscription)
+            .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
+            .FirstAsync().Timeout(40.Seconds());
+        Assert.True(final!.Status == EventSubscriptionStatus.Fired,
+            $"subscription ended {final.Status}: {final.LastError}");
+
         var membershipPath = $"{groupPath}/{InviteeId}_Membership";
         var membership = await Mesh.GetWorkspace().GetMeshNodeStream(membershipPath)
             .Where(n => n?.Content is GroupMembership gm
