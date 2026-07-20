@@ -73,14 +73,12 @@ public static class UserActivityLayoutAreas
 
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
 
-    // Catalog tab labels. Each maps to a labelled MeshSearch in the fluent catalog (see BuildCatalog);
-    // the declaration order there is the tab order. Open threads are NOT a tab here — they have their
-    // own region above the catalog (see ThreadsAreaView); the catalog is the broader "browse" surface.
-    private const string TabSpaces = "Spaces";
-    private const string TabSharedWithMe = "Shared with me";
-    private const string TabMyItems = "My Items";
-    private const string TabLastRead = "Last Read";
-    private const string TabLastEdited = "Last Edited";
+    /// <summary>
+    /// Section title for the additive "Shared with me" band (#385) — the cross-partition modules the
+    /// caller was specifically invited into, which the unified <c>is:main</c> catalog query can't
+    /// reach on its own (they're readable by URL but invisible to a scope search). See BuildCatalog.
+    /// </summary>
+    private const string SharedWithMeTitle = "Shared with me";
 
     /// <summary>
     /// Adds the Activity view (the owner home / visitor profile) to the User node's layout, plus the
@@ -471,17 +469,17 @@ public static class UserActivityLayoutAreas
         return Observable.Return<UiControl?>(BuildOpenThreads(nodePath, OwnerIdOf(nodePath)));
     }
 
-    /// <summary>The catalog region — the declarative TabsControl + MeshSearches. Extension tabs
-    /// come from the mesh (<see cref="HomeTabNodeType"/> nodes) — see <see cref="ObserveHomeTabs"/>.</summary>
+    /// <summary>The catalog region — ONE unified, grouped "everything" <see cref="MeshSearchControl"/>
+    /// (see <see cref="BuildCatalog"/>), plus an additive "Shared with me" band for the caller's
+    /// cross-partition grants (#385) that a broad query can't reach — see <see cref="ObserveSharedTargets"/>.</summary>
     internal static IObservable<UiControl?> CatalogAreaView(LayoutAreaHost host, RenderingContext _)
     {
-        var nodePath = host.Hub.Address.ToString();
-        var ownerId = OwnerIdOf(nodePath);
-        // Combine the data-driven extension tabs with the caller's cross-partition grants
-        // (#385 "Shared with me"). Both start empty so the home paints instantly.
-        return ObserveHomeTabs(host)
-            .CombineLatest(ObserveSharedTargets(host, ownerId),
-                (tabs, shared) => (UiControl?)BuildCatalog(nodePath, ownerId, tabs, shared));
+        var ownerId = OwnerIdOf(host.Hub.Address.ToString());
+        // The unified catalog spans every partition the reader can see; the only thing it can't reach
+        // is a cross-partition module the caller was specifically invited into (#385), sourced from
+        // the caller's own readable AccessAssignments. Starts empty so the home paints instantly.
+        return ObserveSharedTargets(host, ownerId)
+            .Select(shared => (UiControl?)BuildCatalog(shared));
     }
 
     /// <summary>
@@ -541,90 +539,14 @@ public static class UserActivityLayoutAreas
             .ToList();
 
     /// <summary>
-    /// NodeType of a home-catalog EXTENSION TAB: the home's tab list is DATA, not code. Any
-    /// partition (a plugin's synced content, an admin's config) can publish a node of this type
-    /// and it appears as a tab on every user's home — the framework knows nothing about the
-    /// domain the tab surfaces (courses, feeds, …). The node's <c>Name</c> is the tab label,
-    /// <c>Order</c> sorts among extension tabs, and its content carries the MeshSearch mapping
-    /// (all optional): <c>nodeType</c>, <c>query</c>, <c>placeholder</c> (a non-empty one shows
-    /// the search box), and <c>createHref</c> (the tab's "+" target — e.g. a catalog page).
-    /// Visibility follows node readability: a viewer who cannot read the tab node gets no tab.
+    /// NodeType of a legacy home-catalog EXTENSION TAB. The extension-tab row was folded into the ONE
+    /// unified, grouped catalog search (see <see cref="BuildCatalog"/>): a tab node's CONTENT (e.g. a
+    /// plugin's courses) already surfaces in the cross-partition <c>is:main</c> list under its type
+    /// section, so a plugin no longer needs a tab. The node type stays REGISTERED
+    /// (<c>HomeTabNodeType.AddHomeTabType</c>) so existing HomeTab nodes remain valid and don't orphan;
+    /// they simply no longer render a separate tab.
     /// </summary>
     public const string HomeTabNodeType = "HomeTab";
-
-    /// <summary>
-    /// The live extension-tab list: every readable <see cref="HomeTabNodeType"/> node on the mesh,
-    /// ordered. Starts empty so the home paints instantly and the tabs land reactively.
-    /// </summary>
-    private static IObservable<IReadOnlyList<MeshNode>> ObserveHomeTabs(LayoutAreaHost host)
-    {
-        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
-        if (mesh is null)
-            return Observable.Return<IReadOnlyList<MeshNode>>([]);
-        return mesh
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{HomeTabNodeType} is:main"))
-            .Scan(ImmutableDictionary<string, MeshNode>.Empty,
-                (map, change) =>
-                {
-                    if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
-                        return change.Items.ToImmutableDictionary(n => n.Path);
-                    foreach (var item in change.Items)
-                        map = change.ChangeType switch
-                        {
-                            QueryChangeType.Added or QueryChangeType.Updated => map.SetItem(item.Path, item),
-                            QueryChangeType.Removed => map.Remove(item.Path),
-                            _ => map
-                        };
-                    return map;
-                })
-            .Select(map => (IReadOnlyList<MeshNode>)map.Values
-                .OrderBy(n => n.Order ?? int.MaxValue)
-                .ThenBy(n => n.Name ?? n.Id, StringComparer.OrdinalIgnoreCase)
-                .ToList())
-            .StartWith((IReadOnlyList<MeshNode>)[]);
-    }
-
-    /// <summary>A string field off a HomeTab node's content JSON (foreign-typed — read untyped).</summary>
-    private static string? HomeTabField(MeshNode node, string camelCaseField) =>
-        node.Content is JsonElement je && je.ValueKind == JsonValueKind.Object
-        && je.TryGetProperty(camelCaseField, out var prop) && prop.ValueKind == JsonValueKind.String
-            ? prop.GetString()
-            : null;
-
-    /// <summary>
-    /// One <see cref="HomeTabNodeType"/> node → its tab: the node's Name is the label; the content
-    /// maps to a <see cref="MeshSearchControl"/> with the catalog's standard look-and-feel —
-    /// <c>nodeType</c>/<c>query</c> compose the hidden query, a non-empty <c>placeholder</c> shows
-    /// the search box, <c>createHref</c> wires the tab's "+".
-    /// </summary>
-    internal static (string Label, MeshSearchControl Search) MapHomeTab(MeshNode tab)
-    {
-        var nodeType = HomeTabField(tab, "nodeType");
-        var query = HomeTabField(tab, "query") ?? "is:main sort:LastModified-desc";
-        var placeholder = HomeTabField(tab, "placeholder");
-        var createHref = HomeTabField(tab, "createHref");
-        var hiddenQuery = string.Join(" ", new[]
-        {
-            string.IsNullOrWhiteSpace(nodeType) ? null : $"nodeType:{nodeType}",
-            query.Trim(),
-        }.Where(part => !string.IsNullOrWhiteSpace(part)));
-        var search = Controls.MeshSearch
-            .WithHiddenQuery(hiddenQuery)
-            .WithShowSearchBox(!string.IsNullOrWhiteSpace(placeholder))
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithMaxColumns(4)
-            .WithItemLimit(50)
-            .WithMaxRows(3)
-            .WithReactiveMode(true);
-        if (!string.IsNullOrWhiteSpace(placeholder))
-            search = search.WithPlaceholder(placeholder!);
-        if (!string.IsNullOrWhiteSpace(createHref))
-            search = search.WithCreateHref(createHref!);
-        return (tab.Name ?? tab.Id, search);
-    }
 
     /// <summary>
     /// The chat composer region — the SAME <see cref="ThreadChatControl"/> the side panel mounts for a
@@ -673,89 +595,69 @@ public static class UserActivityLayoutAreas
             .WithCreateHref($"/{nodeOwnerId}/{ChatArea}");
 
     /// <summary>
-    /// The fluent catalog: a skinned <see cref="TabsControl"/> whose tabs are labelled
-    /// <see cref="MeshSearchControl"/>s, declared via <c>WithMeshSearch</c>. Each tab maps a
-    /// label + scoped query (and create/empty-state) from what used to be the per-tab
-    /// <c>Build*</c> helpers — now folded into the declarative builder. The TabsControl owns tab
-    /// switching, so there is no host-data tab-state and no CSS-flex toggling.
-    /// <para>Extension tabs (<paramref name="extensionTabs"/>, the readable
-    /// <see cref="HomeTabNodeType"/> nodes) render right after Spaces — the tab list is data,
-    /// so a plugin adds a tab by shipping a node, never by editing this file.</para>
+    /// The catalog region — ONE unified, grouped "everything" view. A single reactive
+    /// <see cref="MeshSearchControl"/> over <c>is:main context:search</c> with NO namespace
+    /// restriction, so it spans every partition the viewer can read in one grouped-by-type list:
+    /// their own home items, the spaces they can see, and Store/Plugin courses+plugins all appear as
+    /// labelled, collapsible sections (Space, Store/Plugin, Markdown, Code, …). This REPLACES the
+    /// former Spaces / My Items / Last Read / Last Edited tab row AND the data-driven extension tabs —
+    /// an extension's content already shows up here in its type section, so a plugin no longer needs a
+    /// tab.
+    /// <para>The one thing a broad query can't reach is a module in ANOTHER partition the caller was
+    /// specifically invited into (#385): those are resolved from the caller's own readable
+    /// <c>AccessAssignment</c> grants (<paramref name="sharedTargets"/>) and appended as an additive
+    /// "Shared with me" band, present ONLY when the caller actually has such grants. With none (the
+    /// common case) the catalog is literally a single grouped search.</para>
+    /// <para>Pure (no hub) so the catalog shape is unit-testable without standing up a hub.</para>
     /// </summary>
-    internal static UiControl BuildCatalog(
-        string nodePath, string nodeOwnerId, IReadOnlyList<MeshNode>? extensionTabs = null,
-        IReadOnlyList<string>? sharedTargets = null)
+    internal static UiControl BuildCatalog(IReadOnlyList<string>? sharedTargets = null)
     {
-        var tabs = Controls.Tabs
-            // 100% width so the tabs + their search grids fill the home page instead of shrinking to
-            // content width (the TabsControl had no Width skin before — FluentTabs defaulted to fit).
-            .WithSkin(s => s.WithWidth("100%"))
-            // Spaces the user can read — a FULL mesh search control scoped to nodeType:Space: the
-            // search bar is shown and the view-options ("settings") bar is enabled so the user can
-            // group/adjust and reveal the otherwise-hidden search. New space → the standard top-level
-            // create form (Space's DefaultNamespace is "" → top-level, the only sanctioned way to make
-            // a new partition).
-            .WithMeshSearch(TabSpaces,
-                nodeType: "Space",
-                query: "is:main sort:LastModified-desc",
-                placeholder: "Search spaces…",
-                configure: s => s
-                    .WithShowSearchBox(true).WithViewOptions(true).WithShowEmptyMessage(true)
-                    .WithRenderMode(MeshSearchRenderMode.Flat)
-                    .WithCollapsibleSections(false).WithSectionCounts(false)
-                    .WithMaxColumns(4).WithItemLimit(50).WithMaxRows(3).WithReactiveMode(true)
-                    .WithCreateHref("/create?type=Space"));
+        // The unified, cross-partition "everything" search: no namespace clause → every partition the
+        // reader can see; grouped by type with counts + collapsible sections so it reads as sections.
+        // View-options let the user regroup/search across everything. The item limit is bounded (this
+        // query is cross-partition — never unbounded-scan), matching the former Spaces / My Items tabs.
+        // "+" opens the generic create page (a type picker), never a type-specific target.
+        var everything = Controls.MeshSearch
+            .WithHiddenQuery("is:main context:search sort:LastModified-desc")
+            .WithShowSearchBox(true)
+            .WithViewOptions(true)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Grouped)
+            .WithSortBy("LastModified", ascending: false)
+            .WithSectionCounts(true)
+            .WithCollapsibleSections(true)
+            .WithItemLimit(50)
+            .WithMaxRows(3)
+            .WithMaxColumns(4)
+            .WithReactiveMode(true)
+            .WithCreateHref("/create");
 
-        // Shared with me (#385) — cross-partition modules the caller was invited into. Rendered
-        // right after Spaces so an invited module in another partition is discoverable in nav; the
-        // target scopes come from the caller's OWN readable AccessAssignments (no security change).
-        // The `path:a|b|c` alternation resolves each target node, access-filtered by the mesh.
-        if (sharedTargets is { Count: > 0 })
-        {
-            var pathList = string.Join("|", sharedTargets);
-            tabs = tabs.WithMeshSearch(TabSharedWithMe,
-                query: $"path:{pathList} is:main sort:LastModified-desc",
-                configure: s => s
-                    .WithShowSearchBox(false).WithShowEmptyMessage(true)
-                    .WithRenderMode(MeshSearchRenderMode.Flat)
-                    .WithCollapsibleSections(false).WithSectionCounts(false)
-                    .WithMaxColumns(4).WithItemLimit(50).WithMaxRows(3).WithReactiveMode(true));
-        }
+        // No cross-partition invitations → the catalog IS the single unified search.
+        if (sharedTargets is not { Count: > 0 })
+            return everything;
 
-        // The data-driven tabs — same look-and-feel defaults as Spaces; the node's content
-        // supplies only the mapping (nodeType/query/placeholder/createHref).
-        foreach (var tab in extensionTabs ?? [])
-        {
-            var (label, search) = MapHomeTab(tab);
-            tabs = tabs.WithView(search, label);
-        }
+        // Additive #385 band: modules in OTHER partitions the caller was invited into, which the broad
+        // is:main query can't reach (readable by URL but invisible to a scope search). The `path:a|b|c`
+        // alternation resolves each target node, access-filtered by the mesh.
+        var pathList = string.Join("|", sharedTargets);
+        var shared = Controls.MeshSearch
+            .WithTitle(SharedWithMeTitle)
+            .WithHiddenQuery($"path:{pathList} is:main sort:LastModified-desc")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(4)
+            .WithItemLimit(50)
+            .WithMaxRows(3)
+            .WithReactiveMode(true);
 
-        return tabs
-            // My Items — the owner's own partition (rbuergi.* post-v10), grouped by type.
-            .WithMeshSearch(TabMyItems,
-                @namespace: nodeOwnerId,
-                query: "is:main context:search sort:LastModified-desc",
-                configure: s => s
-                    .WithShowEmptyMessage(true).WithRenderMode(MeshSearchRenderMode.Grouped)
-                    .WithSortBy("LastModified", ascending: false).WithSectionCounts(true)
-                    .WithItemLimit(50).WithMaxRows(3).WithMaxColumns(4)
-                    .WithCollapsibleSections(true).WithReactiveMode(true)
-                    .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(nodeOwnerId)}"))
-            // Last Read — recently accessed nodes (excluding this dashboard node itself).
-            .WithMeshSearch(TabLastRead,
-                query: $"source:accessed scope:subtree is:main sort:LastModified-desc -path:{nodePath}",
-                configure: s => s
-                    .WithShowSearchBox(false).WithShowEmptyMessage(true)
-                    .WithRenderMode(MeshSearchRenderMode.Flat)
-                    .WithCollapsibleSections(false).WithSectionCounts(false)
-                    .WithMaxColumns(1).WithItemLimit(20).WithMaxRows(4).WithReactiveMode(true))
-            // Last Edited — the activity feed (main content nodes with recent changes).
-            .WithMeshSearch(TabLastEdited,
-                query: "source:activity scope:subtree is:main sort:LastModified-desc",
-                configure: s => s
-                    .WithShowSearchBox(false).WithRenderMode(MeshSearchRenderMode.Flat)
-                    .WithCollapsibleSections(false).WithSectionCounts(false)
-                    .WithMaxColumns(2).WithItemLimit(50).WithMaxRows(4).WithReactiveMode(true));
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("gap: 24px; width: 100%;")
+            .WithView(everything)
+            .WithView(shared);
     }
 
     // ── Public profile + owner-editable showcase ───────────────────────────────────────────────────
