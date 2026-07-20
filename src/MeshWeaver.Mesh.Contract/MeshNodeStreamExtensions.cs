@@ -526,21 +526,6 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 observer.OnCompleted();
             }
 
-            // Subscribe before applying the partition write so the post-update emission
-            // is never missed. Baseline = pre-write version; first emission past it wins.
-            long? baseline = null;
-            var sub = refStream.Subscribe(change =>
-            {
-                if (baseline is null)
-                {
-                    baseline = change.Version;
-                    return;
-                }
-                if (change.Version <= baseline.Value) return;
-                if (change.Value is { } node)
-                    EmitOnce(node);
-            }, observer.OnError);
-
             // Resolve the target Path: an explicit _path wins, otherwise default to the
             // workspace's own hub path. The InstanceCollection holds the OWN MeshNode
             // alongside any satellite nodes the data source has loaded (e.g. NodeType
@@ -550,6 +535,54 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // resolved correctly. When neither path is available, fall back to
             // FirstOrDefault â€” only legacy single-instance shapes hit this branch.
             var targetPath = _path ?? _workspace.Hub.Address.Path;
+
+            // 🚨 Echo detection is WRITE-IDENTITY-based, never emission-count-based.
+            // The update lambda stamps the strictly-increasing Version it writes
+            // (MeshNode.NextVersion — always > current.Version) into stampedVersion
+            // BEFORE the commit; the subscription emits only a state of the TARGET
+            // node at-or-past that stamp — a state that provably CONTAINS this
+            // caller's write.
+            //
+            // The previous shape ("baseline = first observed stream version; emit on
+            // any emission with a higher version") accepted FOREIGN emissions as the
+            // echo. Two real failure modes (the FrameworkStaleInstanceRenderTest CI
+            // flake, 2026-07-20 run 29749071939):
+            //   1. A concurrent write to ANOTHER instance in the same collection (a
+            //      Source/Release/_Activity satellite — which ReduceToMeshNode's
+            //      patch path even surfaced as the emission's Value) or a concurrent
+            //      writer on the SAME node bumped the stream version in the window
+            //      between Subscribe and this caller's update lambda running — the
+            //      observable completed with a PRE-WRITE (or sibling) node while the
+            //      lambda hadn't run. HandleDispatchCompile then read
+            //      weTransitioned == false, skipped the compile dispatch, and the
+            //      Pending→Compiling flip landed with NO compile driver → NodeType
+            //      wedged at Compiling forever (the 60s GetCompilationPathRequest
+            //      timeout in the CI trace was downstream of that wedge).
+            //   2. Under load, the subscription's initial replay could be delivered
+            //      AFTER the write applied — the post-write state became the
+            //      baseline and the true echo never came → the observable hung.
+            // Version-gating on the caller's own stamp eliminates both: pre-stamp
+            // emissions are ignored, and the post-commit echo (guaranteed — the
+            // subscription attaches before the write, and a replay delivered after
+            // the commit already carries Version >= stamp) always satisfies the
+            // gate. The happens-before chain (stamp write → commit under the
+            // stream's synchronization → emission/replay reads the committed state)
+            // makes the stamp visible on the emission thread whenever a post-write
+            // state is; Volatile is belt-and-suspenders.
+            long stampedVersion = -1;
+            var sub = refStream.Subscribe(change =>
+            {
+                var stamped = System.Threading.Volatile.Read(ref stampedVersion);
+                if (stamped < 0) return; // our write hasn't been applied yet
+                if (change.Value is not { } node) return;
+                // Only the referenced node can satisfy the echo — a sibling emission
+                // (same collection, different Path) must never complete this write.
+                if (!string.IsNullOrEmpty(targetPath)
+                    && !string.Equals(node.Path, targetPath, StringComparison.OrdinalIgnoreCase))
+                    return;
+                if (node.Version < stamped) return; // pre-write state
+                EmitOnce(node);
+            }, observer.OnError);
 
             try
             {
@@ -597,6 +630,9 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     {
                         Version = MeshNode.NextVersion(_workspace.Hub.Version, current.Version)
                     };
+                    // Stamp BEFORE the commit — the echo subscription above only emits
+                    // once it can see this write's Version on the target node.
+                    System.Threading.Volatile.Write(ref stampedVersion, updated.Version);
                     var newStore = store.Update(nameof(MeshNode), c => c.Update(updated.Id, updated));
                     return dsStream.ApplyChanges(new EntityStoreAndUpdates(newStore,
                         [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }],

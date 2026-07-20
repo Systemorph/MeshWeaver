@@ -112,10 +112,15 @@ public class ObservableAssertions<T>
     {
         try
         {
+            // Same sentinel discipline as WaitForFirst: only the WAIT's own timeout maps
+            // to "did not"; a source-thrown TimeoutException surfaces via "errored:".
             await _subject.SubscribeOn(TaskPoolScheduler.Default)
-                .IgnoreElements().Timeout(_timeout).ToTask();
+                .IgnoreElements()
+                .Timeout(_timeout, Observable.Defer(() =>
+                    Observable.Throw<T>(new AssertionWaitTimeoutException())))
+                .ToTask();
         }
-        catch (TimeoutException)
+        catch (AssertionWaitTimeoutException)
         {
             throw new ObservableAssertionException(
                 $"Expected the observable to complete within {Describe(_timeout)}{Reason(because)}, but it did not.");
@@ -162,10 +167,20 @@ public class ObservableAssertions<T>
         var source = predicate is null ? _subject : _subject.Where(predicate);
         try
         {
+            // 🚨 The assertion's OWN timeout throws the private sentinel below, so it is
+            // distinguishable from a TimeoutException raised by the SOURCE (e.g. the hub's
+            // RequestTimeout: "No response received in hub X within 30s for request Y →
+            // target Z"). The old plain .Timeout(_timeout) folded both into the same catch
+            // and reported "did not emit within 90s" for a source that ERRORED at 60s —
+            // masking the diagnostic that names the timed-out request and target hub
+            // (FrameworkStaleInstanceRenderTest CI triage, run 29749071939).
             return await source.SubscribeOn(TaskPoolScheduler.Default)
-                .Take(1).Timeout(_timeout).ToTask();
+                .Take(1)
+                .Timeout(_timeout, Observable.Defer(() =>
+                    Observable.Throw<T>(new AssertionWaitTimeoutException())))
+                .ToTask();
         }
-        catch (TimeoutException)
+        catch (AssertionWaitTimeoutException)
         {
             throw new ObservableAssertionException(
                 $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it did not.");
@@ -175,7 +190,7 @@ public class ObservableAssertions<T>
             // Source completed without producing a (matching) value — Take(1).ToTask() throws
             // InvalidOperationException("Sequence contains no elements"). Same "did not" outcome.
             throw new ObservableAssertionException(
-                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it did not.");
+                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it completed without one.");
         }
         catch (Exception ex)
         {
@@ -183,6 +198,14 @@ public class ObservableAssertions<T>
                 $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it errored: {ex.Message}.");
         }
     }
+
+    /// <summary>
+    /// Private sentinel thrown by the assertion's own <c>Timeout</c> operator so a
+    /// timeout of the WAIT is distinguishable from a <see cref="TimeoutException"/>
+    /// raised by the observed source itself (which carries the real diagnostic and
+    /// must surface via the "errored:" message).
+    /// </summary>
+    private sealed class AssertionWaitTimeoutException : Exception;
 
     private static string Describe(TimeSpan t)
         => t.TotalSeconds >= 1 ? $"{t.TotalSeconds:0.##}s" : $"{t.TotalMilliseconds:0}ms";
