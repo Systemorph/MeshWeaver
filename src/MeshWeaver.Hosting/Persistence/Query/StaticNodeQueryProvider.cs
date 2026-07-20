@@ -331,9 +331,12 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
                 .ToHashSet(StringComparer.OrdinalIgnoreCase)
             : null;
 
+        // Path == "" (an explicit `namespace:` root-children query) still scopes — only Path == null
+        // means "no path constraint". Short-circuiting on empty string leaked every static node at
+        // any depth into the home catalog's first-level "partition roots" leg.
         bool MatchesScope(MeshNode node) => frontierPaths != null
             ? frontierPaths.Contains(node.Path)
-            : string.IsNullOrEmpty(parsed.Path) || MatchesAnyPath(node, parsed);
+            : parsed.Path is null || MatchesAnyPath(node, parsed);
 
         if (hasQualifier)
         {
@@ -409,6 +412,14 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     {
         var nodePath = node.Path;
         var nodeNamespace = node.Namespace ?? "";
+        // Empty base path = the root: Children → root-level nodes only; the walk scopes span all.
+        if (path.Length == 0)
+            return scope switch
+            {
+                QueryScope.Children => nodeNamespace.Length == 0,
+                QueryScope.Exact => false,
+                _ => true,
+            };
         return scope switch
         {
             QueryScope.Exact =>
@@ -448,8 +459,18 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     /// </summary>
     private static bool MatchesPath(MeshNode node, ParsedQuery parsed)
     {
-        if (string.IsNullOrEmpty(parsed.Path))
+        // Only a NULL path means "no path constraint". An empty-but-set path (`namespace:` →
+        // Path == "" + Children) scopes to root-level nodes (namespace == ""); for the walk
+        // scopes an empty base is the root, whose subtree/descendants span everything.
+        if (parsed.Path is null)
             return true;
+        if (parsed.Path.Length == 0)
+            return parsed.Scope switch
+            {
+                QueryScope.Children => string.IsNullOrEmpty(node.Namespace),
+                QueryScope.Exact => false,
+                _ => true,
+            };
 
         var path = parsed.Path;
         var nodePath = node.Path;

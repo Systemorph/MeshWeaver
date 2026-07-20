@@ -502,6 +502,14 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     return idx > 0 ? path.Substring(0, idx) : null;
                 })
                 .Where(mainPath => mainPath != null && seenMains.Add(mainPath))
+                // The walk is always Subtree (satellites live BELOW the base), but the DERIVED main
+                // node must still satisfy the query's own path scope. Without this, the base node's
+                // OWN activity satellites ({base}/_activity/…) surface the base node itself even for
+                // a Descendants-scoped query — `source:activity namespace:{user}` showed the user
+                // node in its own activity feed (a namespace: query can never match the base node,
+                // whose namespace is its parent path).
+                .Where(mainPath => string.IsNullOrEmpty(basePath)
+                    || PathMatcher.ShouldNotify(mainPath!, basePath, effectiveScope))
                 .SelectMany(mainPath => persistence.Read(mainPath!, options)
                     .Take(1)
                     .Catch<MeshNode?, Exception>(ex =>

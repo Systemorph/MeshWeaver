@@ -1561,7 +1561,11 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         var generator = new SnowflakeSqlGenerator(_capabilities.Current) { SchemaName = _schemaName };
         var (sql, parameters) = generator.GenerateSelectQuery(query, userId, activityUserId, tableName,
             activityTable, userActivityTable, excludedNodeTypes, includeContent);
-        if (!string.IsNullOrEmpty(effectivePath) || (query.Paths is { Count: > 1 }))
+        // An EMPTY-but-set path (`namespace:` → Path == "" + Children) is the "root-level rows
+        // only" query — it must still push down `n."namespace" = ''` (mirrors PG).
+        if (!string.IsNullOrEmpty(effectivePath)
+            || (effectivePath is not null && query.Scope == QueryScope.Children)
+            || (query.Paths is { Count: > 1 }))
         {
             // Multi-value `path:a|b|c` push-down → `n.path IN (...)`; single-path queries use
             // the scope-clause generator unchanged.

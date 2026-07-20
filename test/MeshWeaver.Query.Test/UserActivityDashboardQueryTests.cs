@@ -127,7 +127,76 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
 
         // Note: In InMemory, source:accessed has no UserActivity JOIN,
         // so it returns ALL main nodes (equivalent to is:main).
-        // The PostgreSQL provider correctly filters by UserActivity records.
+        // The PostgreSQL provider filters by the caller's UserActivity records.
+    }
+
+    // ── The user node must NEVER surface in its own namespace-scoped feeds ──────────
+
+    /// <summary>
+    /// The profile "Recent Activity" query (<c>source:activity namespace:{owner} scope:subtree</c>)
+    /// must not return the owner node itself: <c>namespace:{owner}</c> can never match the node AT
+    /// path {owner} — its own namespace is "" — even though that node carries activity satellites
+    /// of its own. Pre-fix, subtree included self and the user node headlined its own feed.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task RecentActivity_NamespaceScoped_ExcludesTheNamespaceNodeItself()
+    {
+        const string owner = "uactRoot";
+        await SeedTopLevel(new MeshNode(owner) { Name = "Owner Root", NodeType = "Markdown" });
+        // The ROOT's own activity satellite — the exact shape that leaked the root into its feed.
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{owner}/_activity/rootLog") with
+        {
+            Name = "Root Log", NodeType = "Activity",
+            MainNode = owner,
+            Content = new ActivityLog("DataUpdate") { HubPath = owner }
+        }).Should().Emit();
+
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{owner}/doc") with
+        {
+            Name = "Owner Doc", NodeType = "Markdown"
+        }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{owner}/doc/_activity/docLog") with
+        {
+            Name = "Doc Log", NodeType = "Activity",
+            MainNode = $"{owner}/doc",
+            Content = new ActivityLog("DataUpdate") { HubPath = $"{owner}/doc" }
+        }).Should().Emit();
+
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"source:activity namespace:{owner} scope:subtree is:main sort:LastModified-desc"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
+
+        results.Select(n => n.Path).Should().Contain($"{owner}/doc");
+        results.Select(n => n.Path).Should().NotContain(owner,
+            "namespace:{0} can never match the node at path {0} — its namespace is empty", owner);
+    }
+
+    /// <summary>
+    /// A plain <c>namespace:{owner}</c> query (any scope) never returns the node at the namespace
+    /// path itself — the user node has namespace "" and must not appear in its own item lists.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task NamespaceQuery_NeverReturnsTheNodeAtTheNamespacePath()
+    {
+        const string owner = "uactNs";
+        await SeedTopLevel(new MeshNode(owner) { Name = "Ns Root", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{owner}/item") with
+        {
+            Name = "Item", NodeType = "Markdown"
+        }).Should().Emit();
+
+        foreach (var scope in new[] { "", " scope:descendants", " scope:subtree" })
+        {
+            var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"namespace:{owner}{scope} is:main sort:LastModified-desc"))
+                .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
+
+            results.Select(n => n.Path).Should().Contain($"{owner}/item",
+                "the child lives in namespace {0} (scope '{1}')", owner, scope);
+            results.Select(n => n.Path).Should().NotContain(owner,
+                "the node at path {0} has namespace '' and can never match namespace:{0} (scope '{1}')",
+                owner, scope);
+        }
     }
 
     // â”€â”€ Query 3: Latest Threads â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

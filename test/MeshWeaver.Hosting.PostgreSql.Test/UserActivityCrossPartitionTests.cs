@@ -234,6 +234,49 @@ public class UserActivityCrossPartitionTests
             "Threads should not appear in cross-schema results");
     }
 
+    [Fact(Timeout = 60000)]
+    public async Task RecentlyAccessed_CrossPartition_JoinsCallersAccessLog()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SetupMultiOrgWithThreads(ct);
+
+        // The reader's access log lives in the READER's OWN partition schema —
+        // {user}/_UserActivity routes by first segment → reader1.user_activities — even when the
+        // accessed nodes live in OTHER partitions. The cross-schema accessed UNION must join that
+        // ONE table per branch; joining each branch's own user_activities (the pre-fix shape)
+        // can never match a cross-partition access, which made "Last accessed" empty.
+        var partitionDef = new PartitionDefinition
+        {
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(),
+            NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
+        };
+        var (_, readerAdapter) = await _fixture.CreateSchemaAdapterAsync(
+            "reader1", partitionDef with { Namespace = "reader1", Schema = "reader1" });
+        foreach (var accessed in new[] { "OrgA/Doc1", "OrgB/Doc1" })
+        {
+            await readerAdapter.WriteAsync(new MeshNode(accessed.Replace('/', '_'), "reader1/_UserActivity")
+            {
+                Name = accessed,
+                NodeType = "UserActivity",
+                MainNode = "reader1",
+                State = MeshNodeState.Active,
+                Content = new { NodePath = accessed }
+            }, _options, ct);
+        }
+
+        var provider = new PostgreSqlCrossSchemaQueryProvider(_fixture.DataSource);
+        var parsed = new QueryParser().Parse("source:accessed is:main sort:LastModified-desc");
+        var results = await provider.QueryAcrossSchemasAsync(
+                parsed, _options, new List<string> { "orga", "orgb" }, "mesh_nodes",
+                userId: null, activityUserId: "reader1", ct)
+            .Collect(ct).Should().Within(30.Seconds()).Emit();
+
+        // Both cross-partition accesses surface (the accessed JOIN resolves against the CALLER's
+        // own access log); nodes the reader never opened (the org roots) don't.
+        results.Select(n => n.Path).OrderBy(p => p, StringComparer.Ordinal)
+            .Should().Equal("OrgA/Doc1", "OrgB/Doc1");
+    }
+
     // Raw cross-schema SELECT (built by PostgreSqlSqlGenerator) → MeshNode list.
     // Low-level reader loop stays async inside; the test asserts reactively via .Run().
     private async Task<List<MeshNode>> ReadMeshNodesAsync(

@@ -607,24 +607,29 @@ public static class UserActivityLayoutAreas
     //   2. `namespace:{ownerId}` → the user's OWN top-level home items (default scope children = the
     //      DIRECT children of their home partition root).
     // Neither spans a subtree, so no deep `…/Introduction/Exercise/…` nodes leak in.
-    /// <summary>Builds the two-query first-level UNION for a given sort/source suffix (newline-joined).</summary>
+    /// <summary>Builds the two-query first-level UNION for a given sort suffix (newline-joined).
+    /// The root leg excludes User nodes: the viewer's OWN home root has namespace "" and would
+    /// otherwise list itself on its own home page.</summary>
     private static string FirstLevelUnion(string ownerId, string sortSuffix) =>
-        $"namespace: is:main context:search {sortSuffix}\n" +
+        $"namespace: is:main context:search -nodeType:User {sortSuffix}\n" +
         $"namespace:{ownerId} is:main context:search {sortSuffix}";
 
     /// <summary>The catalog query for a scope + sort suffix: the first-level union (partition roots + the
     /// user's home children), or a cross-partition SUBTREE query (everything the viewer can read at every
-    /// depth) when <see cref="HomeConfig.Scope"/> selects <see cref="HomeCatalogScope.Subtree"/>.</summary>
+    /// depth) when <see cref="HomeConfig.Scope"/> selects <see cref="HomeCatalogScope.Subtree"/>. User
+    /// nodes are excluded in both shapes — a home page never lists the user's own root.</summary>
     private static string CatalogQuery(HomeCatalogScope scope, string ownerId, string sortSuffix) =>
         scope == HomeCatalogScope.Subtree
-            ? $"is:main context:search {sortSuffix}"
+            ? $"is:main context:search -nodeType:User {sortSuffix}"
             : FirstLevelUnion(ownerId, sortSuffix);
 
     // The three user-selectable sort orders (the view-options "Sort by" dropdown). LAST ACCESSED:
     // source:accessed JOINs the user's UserActivity satellite and projects its timestamp into
-    // last_modified, so the list is ordered by the user's own access recency (it supersedes the old
-    // "Last Read" tab). LAST MODIFIED / ALPHABETICAL drop source:accessed, ordering by edit-recency /
-    // name. Immutable constant lookup — enum · label · query suffix.
+    // last_modified, so the list is ordered by the user's own access recency. The scope clauses
+    // still apply to accessed queries — the empty-namespace roots leg pushes `namespace = ''`
+    // (the 2026-07-21 fix; previously the fan-out dropped it and the "list" became the user's
+    // whole access history) and `namespace:X` never matches the node at path X. LAST MODIFIED /
+    // ALPHABETICAL are pure order-bys. Immutable constant lookup — enum · label · query suffix.
     private const string SortSuffixLastAccessed = "source:accessed sort:LastModified-desc";
     private const string SortSuffixLastModified = "sort:LastModified-desc";
     private const string SortSuffixAlphabetical = "sort:Name-asc";

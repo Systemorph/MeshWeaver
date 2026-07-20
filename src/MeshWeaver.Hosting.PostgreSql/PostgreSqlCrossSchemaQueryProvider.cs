@@ -483,9 +483,20 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         if (tableName == "mesh_nodes" && !string.IsNullOrEmpty(query.TextSearch))
             contentSchemas = await GetSchemasWithTableAsync("content_chunks", ct).ConfigureAwait(false);
 
+        // source:accessed: the caller's access log lives in the CALLER's partition schema
+        // ({user}/_UserActivity routes by its first segment — same seg.ToLowerInvariant() rule as
+        // the path router), so every branch joins that ONE user_activities table. Joining each
+        // branch's own table could never match a cross-partition access, which made the home's
+        // "Last accessed" list empty outside the user's own partition. A caller without a
+        // partition schema yields 42P01 → the existing missing-relation catch → empty (correct:
+        // no access log, nothing accessed).
+        var activityUserSchema = query.Source == QuerySource.Accessed && !string.IsNullOrEmpty(activityUserId)
+            ? activityUserId!.ToLowerInvariant().Replace("\"", "\"\"")  // quoted-identifier escape
+            : null;
+
         var generator = new PostgreSqlSqlGenerator();
         var (sql, parameters) = generator.GenerateCrossSchemaSelectQuery(
-            query, schemas, userId, tableName, activityUserId, contentSchemas);
+            query, schemas, userId, tableName, activityUserId, contentSchemas, activityUserSchema);
 
         _logger?.LogInformation(
             "[CrossSchema] Satellite query: table={Table}, schemas={Count}, contentSchemas={ContentCount}, userId={User}, source={Source}",
