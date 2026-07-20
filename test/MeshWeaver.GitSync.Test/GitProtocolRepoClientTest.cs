@@ -214,6 +214,43 @@ public class GitProtocolRepoClientTest(ITestOutputHelper output) : GitHubSyncTes
         Assert.All(snapshot.Files, f => Assert.EndsWith("index.json", f.Path));
     }
 
+    [Fact(Timeout = 120000)]
+    public async Task Fetch_HexLookingBranchName_TravelsOverTheWire()
+    {
+        var temp = NewTempDir();
+        var bare = await SeedBareRemote(temp, ("Docs/a.md", "on main"));
+        // A legitimate branch whose name LOOKS like an abbreviated SHA must still fetch over
+        // the wire (REST would fail here outright — the remote is a local file URL).
+        var seed = Path.Combine(temp, "seed");
+        await RunGit(seed, "checkout", "-b", "deadbee");
+        await File.WriteAllTextAsync(Path.Combine(seed, "Docs/a.md"), "on deadbee");
+        await RunGit(seed, "add", "-A");
+        await RunGit(seed, "-c", "user.email=t@t.dev", "-c", "user.name=T", "commit", "-m", "branch");
+        await RunGit(seed, "push", "-q", "origin", "deadbee");
+
+        var snapshot = await Client.Fetch(FileUrl(bare), "deadbee", "Docs", "").Timeout(60.Seconds()).ToTask();
+        Assert.Equal("on deadbee", Assert.Single(snapshot.Files).Content);
+    }
+
+    [Fact(Timeout = 120000)]
+    public async Task Push_TraversalSubdirectory_IsRejected()
+    {
+        var temp = NewTempDir();
+        var bare = await SeedBareRemote(temp, ("README.md", "# base\n"));
+        foreach (var evil in new[] { "../outside", "a/../../b", ".", "a/./b" })
+            await Assert.ThrowsAsync<ArgumentException>(() => Client.Push(new GitHubPushRequest
+            {
+                RepositoryUrl = FileUrl(bare),
+                Branch = "main",
+                Subdirectory = evil,
+                Files = [new RepoFile("x.txt", "x")],
+                CommitMessage = "x",
+                AuthorName = "T",
+                AuthorEmail = "t@t.dev",
+                AccessToken = "",
+            }).Timeout(60.Seconds()).ToTask());
+    }
+
     // ── local-remote plumbing ────────────────────────────────────────────────
 
     /// <summary>A bare remote seeded with one commit on <c>main</c> carrying the given files.</summary>

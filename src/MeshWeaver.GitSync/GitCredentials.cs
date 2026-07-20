@@ -20,5 +20,8 @@ internal static class GitCredentials
 
     /// <summary>The environment carrying the token for <see cref="AuthArgs"/>'s helper.</summary>
     public static IReadOnlyDictionary<string, string>? AuthEnv(string? token) =>
-        string.IsNullOrEmpty(token) ? null : new Dictionary<string, string> { ["GW_TOKEN"] = token };
+        string.IsNullOrEmpty(token)
+            ? null
+            : System.Collections.Immutable.ImmutableDictionary<string, string>.Empty
+                .Add("GW_TOKEN", token);
 }
