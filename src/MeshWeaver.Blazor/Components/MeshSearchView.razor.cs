@@ -283,6 +283,45 @@ public partial class MeshSearchView : IDisposable
         }
     }
 
+    // ----- Sort-by dropdown (view-options) -----
+    // The selected option's Label. null ⇒ the default (first) option.
+    private string? _viewSortLabel;
+
+    /// <summary>The user-selectable sort choices supplied by the control (empty ⇒ no Sort-by dropdown).</summary>
+    private IReadOnlyList<MeshSearchSortOption> BoundSortOptions => ViewModel?.SortOptions ?? [];
+
+    /// <summary>Render the Sort-by dropdown only when the control declares options.</summary>
+    private bool HasSortOptions => BoundSortOptions.Count > 0;
+
+    /// <summary>
+    /// Two-way bound value of the Sort-by dropdown — the selected option's Label. Unlike Group-by (a
+    /// client-side re-bucket), a sort choice can change BOTH the ordering and the result set (e.g. "Last
+    /// accessed" uses <c>source:accessed</c>; an option's query may even be a newline-joined union — see
+    /// <see cref="BuildQueryRequest"/>), so setting it swaps the hidden query and re-queries via the same
+    /// <c>_overriddenHiddenQuery</c> path the search-options editor uses.
+    /// </summary>
+    private string SortBySelection
+    {
+        get => _viewSortLabel ?? BoundSortOptions.FirstOrDefault()?.Label ?? "";
+        set
+        {
+            var option = BoundSortOptions.FirstOrDefault(o => o.Label == value);
+            if (option is null || value == SortBySelection)
+                return;
+            _viewSortLabel = value;
+            _overriddenHiddenQuery = option.Query;
+            _lastBoundHiddenQuery = option.Query; // keep OnParametersSet from re-triggering on the same change
+            if (IsPrecomputedMode)
+                return;
+            if (IsNamespaceTreeMode)
+                ResetTree();
+            else if (IsGraphNavigatorMode)
+                ResetGraphNavigator();
+            else
+                LoadResults();
+        }
+    }
+
     /// <summary>Section counts after applying the display-menu override.</summary>
     private bool EffectiveShowCounts =>
         _showCountsOverride ?? (BoundSections?.ShowCounts ?? true);
@@ -566,8 +605,7 @@ public partial class MeshSearchView : IDisposable
     {
         _reactiveSubscription?.Dispose();
         var accumulator = _resultAccumulator = new SearchResultAccumulator();
-        var query = BuildFullQuery();
-        _reactiveSubscription = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+        _reactiveSubscription = MeshQuery.Query<MeshNode>(BuildQueryRequest())
             .Subscribe(
                 change =>
                 {
@@ -846,6 +884,28 @@ public partial class MeshSearchView : IDisposable
             parts.Add(_currentValue.Trim());
 
         return string.Join(" ", parts);
+    }
+
+    /// <summary>
+    /// Builds the query request for the main result stream. A hidden query may declare a UNION of
+    /// sub-queries, one per LINE (e.g. the home catalog's first-level index — "partition roots the user
+    /// can read" on one line, "the user's home direct children" on another). Each sub-query is combined
+    /// with the current visible search term and the engine yields their path-keyed union as a single
+    /// live snapshot (sort/limit taken from the FIRST sub-query). A single-line hidden query keeps the
+    /// plain single-query path (<see cref="BuildFullQuery"/>).
+    /// </summary>
+    private MeshQueryRequest BuildQueryRequest()
+    {
+        var subQueries = BoundHiddenQuery
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (subQueries.Length <= 1)
+            return MeshQueryRequest.FromQuery(BuildFullQuery());
+
+        var visible = string.IsNullOrWhiteSpace(_currentValue) ? null : _currentValue.Trim();
+        var unioned = subQueries
+            .Select(q => visible is null ? q : $"{q} {visible}")
+            .ToArray();
+        return MeshQueryRequest.FromQueries(unioned);
     }
 
     private const int CompletionLimit = 20;

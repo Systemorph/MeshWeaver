@@ -73,6 +73,18 @@
                     }
                 </select>
             </label>
+            @if (HasSortOptions)
+            {
+                <label class="mesh-search-viewbar-field">
+                    <span class="mesh-search-viewbar-label">Sort by</span>
+                    <select class="mesh-search-sortby" @bind="SortBySelection">
+                        @foreach (var opt in BoundSortOptions)
+                        {
+                            <option value="@opt.Label">@opt.Label</option>
+                        }
+                    </select>
+                </label>
+            }
             <div class="mesh-search-viewbar-spacer"></div>
             <div class="mesh-search-viewbar-menu-wrap">
                 <button type="button" class="mesh-search-viewbar-menu-btn" title="Display options"

@@ -475,11 +475,15 @@ public static class UserActivityLayoutAreas
     internal static IObservable<UiControl?> CatalogAreaView(LayoutAreaHost host, RenderingContext _)
     {
         var ownerId = OwnerIdOf(host.Hub.Address.ToString());
-        // The unified catalog spans every partition the reader can see; the only thing it can't reach
-        // is a cross-partition module the caller was specifically invited into (#385), sourced from
-        // the caller's own readable AccessAssignments. Starts empty so the home paints instantly.
-        return ObserveSharedTargets(host, ownerId)
-            .Select(shared => (UiControl?)BuildCatalog(shared));
+        var options = host.Hub.JsonSerializerOptions;
+        // The home's DISPLAY CONFIG is DATA-DRIVEN: read the admin-editable Admin/HomeConfig platform
+        // node reactively (shipped defaults when absent), so an admin's edit updates every open home
+        // LIVE — no code change, no image roll. Combined with the caller's cross-partition grants
+        // (#385, the one thing a first-level query can't reach). Both start with a value so the home
+        // paints instantly.
+        return HomeConfigNodeType.Observe(host.Workspace, options)
+            .CombineLatest(ObserveSharedTargets(host, ownerId),
+                (config, shared) => (UiControl?)BuildCatalog(ownerId, config, shared));
     }
 
     /// <summary>
@@ -594,45 +598,92 @@ public static class UserActivityLayoutAreas
             // there starts a proper thread via StartThread.
             .WithCreateHref($"/{nodeOwnerId}/{ChatArea}");
 
+    // ── First-level catalog queries ────────────────────────────────────────────────────────────────
+    // The home is a SHALLOW, first-level index — NOT a full-tree dump. Each sort order is a UNION of two
+    // sub-queries (newline-joined; MeshSearchView issues them as a MeshQueryRequest union, sort/limit
+    // taken from the FIRST):
+    //   1. `namespace:` (empty) → the root-level partition nodes the reader can see — spaces,
+    //      courses/plugins, their own home root (default scope is children-of-root = the roots).
+    //   2. `namespace:{ownerId}` → the user's OWN top-level home items (default scope children = the
+    //      DIRECT children of their home partition root).
+    // Neither spans a subtree, so no deep `…/Introduction/Exercise/…` nodes leak in.
+    /// <summary>Builds the two-query first-level UNION for a given sort/source suffix (newline-joined).</summary>
+    private static string FirstLevelUnion(string ownerId, string sortSuffix) =>
+        $"namespace: is:main context:search {sortSuffix}\n" +
+        $"namespace:{ownerId} is:main context:search {sortSuffix}";
+
+    /// <summary>The catalog query for a scope + sort suffix: the first-level union (partition roots + the
+    /// user's home children), or a cross-partition SUBTREE query (everything the viewer can read at every
+    /// depth) when <see cref="HomeConfig.Scope"/> selects <see cref="HomeCatalogScope.Subtree"/>.</summary>
+    private static string CatalogQuery(HomeCatalogScope scope, string ownerId, string sortSuffix) =>
+        scope == HomeCatalogScope.Subtree
+            ? $"is:main context:search {sortSuffix}"
+            : FirstLevelUnion(ownerId, sortSuffix);
+
+    // The three user-selectable sort orders (the view-options "Sort by" dropdown). LAST ACCESSED:
+    // source:accessed JOINs the user's UserActivity satellite and projects its timestamp into
+    // last_modified, so the list is ordered by the user's own access recency (it supersedes the old
+    // "Last Read" tab). LAST MODIFIED / ALPHABETICAL drop source:accessed, ordering by edit-recency /
+    // name. Immutable constant lookup — enum · label · query suffix.
+    private const string SortSuffixLastAccessed = "source:accessed sort:LastModified-desc";
+    private const string SortSuffixLastModified = "sort:LastModified-desc";
+    private const string SortSuffixAlphabetical = "sort:Name-asc";
+    private static readonly (HomeCatalogSort Sort, string Label, string Suffix)[] CatalogSorts =
+    {
+        (HomeCatalogSort.LastAccessed, "Last accessed", SortSuffixLastAccessed),
+        (HomeCatalogSort.LastModified, "Last modified", SortSuffixLastModified),
+        (HomeCatalogSort.Alphabetical, "Alphabetical", SortSuffixAlphabetical),
+    };
+
     /// <summary>
-    /// The catalog region — ONE unified, grouped "everything" view. A single reactive
-    /// <see cref="MeshSearchControl"/> over <c>is:main context:search</c> with NO namespace
-    /// restriction, so it spans every partition the viewer can read in one grouped-by-type list:
-    /// their own home items, the spaces they can see, and Store/Plugin courses+plugins all appear as
-    /// labelled, collapsible sections (Space, Store/Plugin, Markdown, Code, …). This REPLACES the
-    /// former Spaces / My Items / Last Read / Last Edited tab row AND the data-driven extension tabs —
-    /// an extension's content already shows up here in its type section, so a plugin no longer needs a
-    /// tab.
-    /// <para>The one thing a broad query can't reach is a module in ANOTHER partition the caller was
+    /// The catalog region — ONE tab-less list, whose shape is DATA-DRIVEN by <paramref name="config"/>
+    /// (the admin-editable <c>Admin/HomeConfig</c> platform node; <c>null</c> ⇒
+    /// <see cref="HomeConfigNodeType.Defaults"/> = <b>FirstLevel + Flat + LastAccessed</b>). The config
+    /// drives the depth (first-level top-level entries vs the full subtree), the render (flat list vs
+    /// grouped-by-type sections), and the default sort — and a view-options "Sort by" control still lets
+    /// the user pick <b>Last accessed</b> / <b>Last modified</b> / <b>Alphabetical</b> at will. FIRST-LEVEL
+    /// shows only the partition roots (spaces, courses, plugins) the viewer can read plus their own
+    /// top-level home items — NOT the whole tree. This REPLACES the former Spaces / My Items / Last Read /
+    /// Last Edited tab row AND the data-driven extension tabs.
+    /// <para>The one thing a first-level query can't reach is a module in ANOTHER partition the caller was
     /// specifically invited into (#385): those are resolved from the caller's own readable
     /// <c>AccessAssignment</c> grants (<paramref name="sharedTargets"/>) and appended as an additive
-    /// "Shared with me" band, present ONLY when the caller actually has such grants. With none (the
-    /// common case) the catalog is literally a single grouped search.</para>
+    /// "Shared with me" band, present ONLY when the caller actually has such grants.</para>
     /// <para>Pure (no hub) so the catalog shape is unit-testable without standing up a hub.</para>
     /// </summary>
-    internal static UiControl BuildCatalog(IReadOnlyList<string>? sharedTargets = null)
+    internal static UiControl BuildCatalog(
+        string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null)
     {
-        // The unified, cross-partition "everything" search: no namespace clause → every partition the
-        // reader can see; grouped by type with counts + collapsible sections so it reads as sections.
-        // View-options let the user regroup/search across everything. The item limit is bounded (this
-        // query is cross-partition — never unbounded-scan), matching the former Spaces / My Items tabs.
-        // "+" opens the generic create page (a type picker), never a type-specific target.
+        var cfg = config ?? HomeConfigNodeType.Defaults;
+
+        // Sort options, DEFAULT first (so the dropdown's default selection == HiddenQuery). Each option
+        // carries its full catalog query (first-level union or subtree, per cfg.Scope); the query itself
+        // carries the sort/source, so no client-side WithSortBy (that would override the query order).
+        var sortOptions = CatalogSorts
+            .OrderByDescending(s => s.Sort == cfg.DefaultSort)
+            .Select(s => new MeshSearchSortOption(s.Label, CatalogQuery(cfg.Scope, nodeOwnerId, s.Suffix)))
+            .ToArray();
+
         var everything = Controls.MeshSearch
-            .WithHiddenQuery("is:main context:search sort:LastModified-desc")
+            .WithHiddenQuery(sortOptions[0].Query)
+            .WithSortOptions(sortOptions)
             .WithShowSearchBox(true)
             .WithViewOptions(true)
             .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Grouped)
-            .WithSortBy("LastModified", ascending: false)
-            .WithSectionCounts(true)
-            .WithCollapsibleSections(true)
+            .WithRenderMode(cfg.Render == HomeCatalogRender.Grouped
+                ? MeshSearchRenderMode.Grouped
+                : MeshSearchRenderMode.Flat)
             .WithItemLimit(50)
-            .WithMaxRows(3)
+            .WithMaxRows(6)
             .WithMaxColumns(4)
             .WithReactiveMode(true)
             .WithCreateHref("/create");
 
-        // No cross-partition invitations → the catalog IS the single unified search.
+        // Grouped render → collapsible per-type sections with counts (flat is the default, no grouping).
+        if (cfg.Render == HomeCatalogRender.Grouped)
+            everything = everything.WithSectionCounts(true).WithCollapsibleSections(true);
+
+        // No cross-partition invitations → the catalog IS the single list.
         if (sharedTargets is not { Count: > 0 })
             return everything;
 

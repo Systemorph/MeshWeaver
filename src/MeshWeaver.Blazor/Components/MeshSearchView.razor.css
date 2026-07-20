@@ -97,7 +97,8 @@
     color: var(--neutral-foreground-hint, #666);
 }
 
-.mesh-search-groupby {
+.mesh-search-groupby,
+.mesh-search-sortby {
     font-size: 13px;
     padding: 3px 24px 3px 8px;
     height: 28px;
@@ -108,7 +109,8 @@
     cursor: pointer;
 }
 
-.mesh-search-groupby:hover {
+.mesh-search-groupby:hover,
+.mesh-search-sortby:hover {
     border-color: var(--accent-fill-rest, #0078d4);
 }
 
