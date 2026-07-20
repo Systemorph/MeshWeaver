@@ -601,6 +601,65 @@ public class QuerySyntaxTests
 
     #endregion
 
+    #region Slashed nodeType values (Edu/Exercise, Store/Plugin)
+
+    private async Task SeedSlashedTypes()
+    {
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        var adapter = _fixture.StorageAdapter;
+        var ac = _fixture.AccessControl;
+        var ct = TestContext.Current.CancellationToken;
+
+        await adapter.Write(new MeshNode("Ex1", "ACME/Course")
+        {
+            Name = "Exercise One",
+            NodeType = "Edu/Exercise",
+        }, _options).Should().Within(30.Seconds()).Emit();
+
+        await adapter.Write(new MeshNode("Ex2", "ACME/Course")
+        {
+            Name = "Exercise Two",
+            NodeType = "Edu/Exercise",
+        }, _options).Should().Within(30.Seconds()).Emit();
+
+        await adapter.Write(new MeshNode("Plug1", "ACME/Store")
+        {
+            Name = "A Plugin",
+            NodeType = "Store/Plugin",
+        }, _options).Should().Within(30.Seconds()).Emit();
+
+        await ac.Grant("ACME", "Anonymous", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
+    }
+
+    [Fact]
+    public async Task SlashedNodeType_ScopedFilter_MatchesRows()
+    {
+        await SeedSlashedTypes();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("nodeType:Edu/Exercise path:ACME scope:descendants");
+
+        var results = await CollectResults(query, request);
+
+        results.Should().HaveCount(2);
+        results.Select(n => n.NodeType).Distinct()
+            .Should().BeEquivalentTo(new[] { "Edu/Exercise" }, JsonSerializerOptions.Default);
+    }
+
+    [Fact]
+    public async Task SlashedNodeType_StorePlugin_MatchesRow()
+    {
+        await SeedSlashedTypes();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("nodeType:Store/Plugin");
+
+        var results = await CollectResults(query, request);
+
+        results.Should().HaveCount(1);
+        results[0].Name.Should().Be("A Plugin");
+    }
+
+    #endregion
+
     private async Task<List<MeshNode>> CollectResults(PostgreSqlMeshQuery query, MeshQueryRequest request)
         => (await query.QueryList(request, _options, TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit())
