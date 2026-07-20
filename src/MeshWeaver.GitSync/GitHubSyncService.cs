@@ -495,13 +495,24 @@ public sealed class GitHubSyncService
         // Error (ActivityRunner.Finish rolls the terminal status up to Failed) in addition to
         // the server log. Files with no registered parser (.yml, .py, …) stay silent — repos
         // legitimately carry non-node files.
-        var parsed = parsers.TryParse(ext, file.Path, file.Content, file.Path, (path, ex) =>
+        // The relative path handed to the parser must carry the SPACE prefix for CHILD nodes:
+        // the parser derives the node path from it and bakes it into the content's
+        // PrerenderedHtml as the base for RELATIVE markdown links (LinkUrlCleanupExtension).
+        // Parsing with the bare in-repo path prerendered "../.." on
+        // {space}/TDD/Exercise/X against "TDD/Exercise/X" — every relative link in the
+        // stored prerender lost the partition segment (core #582). The id/namespace the
+        // parser derives from the prefixed path are overridden by the rebase below either
+        // way, so only the prerender base changes. The root index keeps the bare path (its
+        // namespace is the space itself; prefixing would double it).
+        var isRoot = NodeFileMapper.IsRootIndex(file.Path);
+        var parseRelativePath = isRoot ? file.Path : $"{spaceId}/{file.Path}";
+        var parsed = parsers.TryParse(ext, file.Path, file.Content, parseRelativePath, (path, ex) =>
         {
             logger?.LogWarning(ex, "Failed to parse {Path} — file skipped on import.", path);
             progress?.Invoke($"Failed to parse '{path}': {ex.Message} — file skipped.", LogLevel.Error);
         });
         if (parsed is null) return Observable.Return(((MeshNode?)null, false));
-        if (NodeFileMapper.IsRootIndex(file.Path))
+        if (isRoot)
         {
             var root = parsed with
             {
