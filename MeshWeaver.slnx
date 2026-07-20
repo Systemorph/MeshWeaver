@@ -167,6 +167,7 @@
     <Project Path="test/MeshWeaver.Hosting.Cosmos.Test/MeshWeaver.Hosting.Cosmos.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.PostgreSql.Test/MeshWeaver.Hosting.PostgreSql.Test.csproj" />
     <Project Path="test/MeshWeaver.PluginImage.Test/MeshWeaver.PluginImage.Test.csproj" />
+    <Project Path="test/MeshWeaver.PluginTester.Test/MeshWeaver.PluginTester.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Snowflake.Test/MeshWeaver.Hosting.Snowflake.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Sqlite.Test/MeshWeaver.Hosting.Sqlite.Test.csproj" />
     <Project Path="test/MeshWeaver.Connection.SignalR.Test/MeshWeaver.Connection.SignalR.Test.csproj" />
@@ -189,6 +190,7 @@
   <Folder Name="/tools/">
     <File Path="tools/generate-memex-template.cs" />
     <Project Path="tools/MeshWeaver.MemexTemplate.Pack/MeshWeaver.MemexTemplate.Pack.csproj" />
+    <Project Path="tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj" />
     <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />
   </Folder>
 </Solution>
