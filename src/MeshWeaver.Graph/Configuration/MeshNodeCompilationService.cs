@@ -385,8 +385,7 @@ internal class MeshNodeCompilationService(
     private IObservable<DateTimeOffset> DiscoverSourceMaxLastModified(
         NodeTypeDefinition? ntDef, string selfPath,
         IReadOnlyList<MeshNode>? sourcesOverride = null) =>
-        ResolveSources(ntDef, selfPath, sourcesOverride)
-            .Take(1)
+        SnapshotSources(ntDef, selfPath, sourcesOverride)
             .Select(nodes => nodes.Aggregate(
                 DateTimeOffset.MinValue,
                 (acc, n) => n.LastModified > acc ? n.LastModified : acc));
@@ -410,8 +409,7 @@ internal class MeshNodeCompilationService(
     public IObservable<ImmutableDictionary<string, long>> DiscoverSourceVersionSnapshot(
         NodeTypeDefinition? ntDef, string selfPath,
         IReadOnlyList<MeshNode>? sourcesOverride = null) =>
-        ResolveSources(ntDef, selfPath, sourcesOverride)
-            .Take(1)
+        SnapshotSources(ntDef, selfPath, sourcesOverride)
             .Select(nodes => nodes
                 .Where(n => !string.IsNullOrEmpty(n.Path))
                 .Aggregate(
@@ -431,6 +429,40 @@ internal class MeshNodeCompilationService(
         if (sourcesOverride is not null)
             return Observable.Return<IEnumerable<MeshNode>>(sourcesOverride);
         return GetSourceCollection(ntDef, selfPath);
+    }
+
+    /// <summary>
+    /// 🚨 The ONE-SHOT source snapshot every compile stage reads — <see cref="ResolveSources"/>
+    /// bounded to exactly one emission with a hard completion guarantee. The underlying
+    /// <c>NodeSources.GetSources</c> synced query is a LIVE, never-completing collection; a bare
+    /// <c>.Take(1)</c> on it means "wait for the first emission, potentially forever". When the
+    /// query's Initial is genuinely lost (a subscription that raced a source-update burst — the
+    /// memex-cloud 2026-07-20 Store/Plugin GitSync burst), that unbounded wait parked the compile
+    /// at <c>CompilationStatus=Compiling</c> with NO error, NO terminal write and NO recovery
+    /// path: the compile watcher needs a Pending TRANSITION, the release watcher gates on a
+    /// SETTLED status, and the recovery kickoff is activation-one-shot — one hung snapshot wedged
+    /// the NodeType absorbing-forever (every later trigger no-oped; only a recycle re-rolled the
+    /// dice). Bounding the snapshot turns the lost Initial into a LOUD terminal failure: the
+    /// timeout propagates through <c>RunCompile</c>'s Catch to a
+    /// <c>CompilationStatus=Error</c> write naming the dead query, the park registry counts a
+    /// bounded (non-deterministic) failure, and a fresh <c>RequestedReleaseAt</c> trigger — or
+    /// the Compile button — retries cleanly. In every healthy state the snapshot is instant
+    /// (Replay(1) cache) or one cold storage read, far below the bound.
+    /// </summary>
+    private IObservable<IEnumerable<MeshNode>> SnapshotSources(
+        NodeTypeDefinition? ntDef, string selfPath, IReadOnlyList<MeshNode>? sourcesOverride)
+    {
+        var bound = _cacheOptions.SourceSnapshotTimeout;
+        return ResolveSources(ntDef, selfPath, sourcesOverride)
+            .Take(1)
+            .Timeout(bound)
+            .Catch<IEnumerable<MeshNode>, TimeoutException>(ex =>
+                Observable.Throw<IEnumerable<MeshNode>>(new TimeoutException(
+                    $"Source snapshot for '{selfPath}' did not emit within {bound.TotalSeconds:0}s — "
+                    + $"the shared synced source query ('{NodeSources.CacheId(selfPath)}') never produced "
+                    + "its Initial (a lost/raced synced-query subscription, not a source-code error). "
+                    + "The compile fails terminally instead of parking at Compiling forever; retry via "
+                    + "the Compile button / a fresh RequestedReleaseAt.", ex)));
     }
 
     /// <summary>
@@ -460,8 +492,7 @@ internal class MeshNodeCompilationService(
         // could pick up the pre-update Initial emission and the V2 compile would
         // silently consume V1 source — that was the V1↔V2 mismatch root cause in
         // CodeEditRecompileTest.
-        var discoverCodeFiles = ResolveSources(ntDef, selfPath, sourcesOverride)
-            .Take(1)
+        var discoverCodeFiles = SnapshotSources(ntDef, selfPath, sourcesOverride)
             .Select(matches =>
             {
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -922,8 +953,7 @@ internal class MeshNodeCompilationService(
         string selfPath = selfDef != null ? node.Path : node.NodeType;
 
         return resolveDef.SelectMany(ntDef =>
-            ResolveSources(ntDef, selfPath, sourcesOverride)
-                .Take(1)
+            SnapshotSources(ntDef, selfPath, sourcesOverride)
                 .SelectMany(matches =>
                 {
                     var pairs = CollectSourcePairs(matches);
