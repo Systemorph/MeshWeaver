@@ -45,11 +45,23 @@ public class SkillAutocompleteProvider : IAutocompleteProvider
         // subscription isn't shared across identities.
         var accessService = _serviceProvider.GetService<AccessService>();
         var userHome = AgentPickerProjection.ResolveUserHome(accessService);
-        var queries = BuildQueries(accessService, contextPath);
-        return AgentPickerProjection.ObserveSnapshot(
-                workspace, hub, $"skill-autocomplete|{contextPath}|{userHome}", queries)
+        // The user's SKILL SOURCES are configurable (AiSettings.SkillQueries — one query row per
+        // source, defaulting to global/space/type/user; installing a skill package appends its row).
+        // Observe the settings and Switch to the resolved query set; the cache id carries the
+        // query-set key so different source sets never share a snapshot entry.
+        return AiSettingsNodeType
+            .ObserveSkillQueries(workspace, hub, _serviceProvider, userHome, contextPath, nodeTypePath: null)
+            .Select(queries => AgentPickerProjection.ObserveSnapshot(
+                workspace, hub,
+                $"skill-autocomplete|{contextPath}|{userHome}|{QueryKey(queries)}", queries))
+            .Switch()
             .Select(snapshot => BuildItems(snapshot, hub));
     }
+
+    /// <summary>Stable in-process key for a resolved query set — distinct source sets must not share a
+    /// synced-query cache entry (the cache is keyed by id + user).</summary>
+    private static string QueryKey(string[] queries)
+        => string.Join("|", queries).GetHashCode().ToString("x8");
 
     /// <summary>
     /// The skill-autocomplete query union: the platform <c>Skill</c> catalog plus the current space's

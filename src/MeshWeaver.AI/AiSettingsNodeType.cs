@@ -87,8 +87,110 @@ public static class AiSettingsNodeType
             ModelQueries = AgentPickerProjection
                 .BuildModelQueries(CurrentPathToken, NodeTypePathToken, null, UserPathToken)
                 .ToImmutableArray(),
+            SkillQueries = DefaultSkillQueryTemplates,
         };
     }
+
+    /// <summary>
+    /// The default SKILL SOURCES, one template ROW per source so each resolves (or drops) independently:
+    /// the platform <c>Skill</c> catalog, the current space's <c>{space}/Skill</c>, the current node
+    /// type's <c>{typePartition}/Skill</c> (skills a plugin ships next to its types), and the user's own
+    /// <c>{user}/Skill</c>. A skill package adds a fifth row (<see cref="MergeSkillSource"/>).
+    /// </summary>
+    public static readonly ImmutableArray<string> DefaultSkillQueryTemplates = ImmutableArray.Create(
+        $"namespace:{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}",
+        $"namespace:{CurrentPathToken}/{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}",
+        $"namespace:{NodeTypePathToken}/{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}",
+        $"namespace:{UserPathToken}/{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}");
+
+    /// <summary>
+    /// Resolves the user's skill sources for a context: takes <see cref="AiSettings.SkillQueries"/>
+    /// (empty ⇒ <see cref="DefaultSkillQueryTemplates"/>), substitutes <c>{currentPath}</c> with the
+    /// context's PARTITION, <c>{nodeTypePath}</c> with the node type's PARTITION and <c>{userPath}</c>
+    /// with the user's home (reserved/rogue partitions nulled so a poisoned context can't break the
+    /// query), drops rows whose token has no value, and dedupes. Falls back to the canonical
+    /// <see cref="SkillNodeType.SkillQueries"/> defaults if everything resolves away.
+    /// </summary>
+    public static string[] ResolveSkillQueries(
+        AiSettings? settings, string? contextPath, string? nodeTypePath, string? userPath)
+    {
+        var templates = settings is { SkillQueries.IsDefaultOrEmpty: false }
+            ? settings.SkillQueries.AsEnumerable()
+            : DefaultSkillQueryTemplates;
+        string? Partition(string? path)
+            => AgentPickerProjection.IsReservedPartition(path) ? null : AgentPickerProjection.PartitionOf(path);
+        var resolved = ResolveQueries(templates, Partition(contextPath), Partition(nodeTypePath), userPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return resolved.Length > 0
+            ? resolved
+            : SkillNodeType.SkillQueries(contextPath, userPath, nodeTypePath);
+    }
+
+    /// <summary>
+    /// Pure merge for "install this skill package": appends the package's source query
+    /// (<c>namespace:{sourceNamespace} nodeType:Skill</c>) to <see cref="AiSettings.SkillQueries"/>.
+    /// When the list is still empty (= "code defaults"), it is seeded with
+    /// <see cref="DefaultSkillQueryTemplates"/> FIRST so adding a package never silently drops the
+    /// standard sources. Idempotent — an already-present source (case-insensitive) is not duplicated.
+    /// </summary>
+    public static AiSettings MergeSkillSource(AiSettings settings, string sourceNamespace)
+    {
+        var rows = settings.SkillQueries.IsDefaultOrEmpty
+            ? DefaultSkillQueryTemplates
+            : settings.SkillQueries;
+        var query = $"namespace:{sourceNamespace} nodeType:{SkillNodeType.NodeType}";
+        return rows.Contains(query, StringComparer.OrdinalIgnoreCase)
+            ? settings with { SkillQueries = rows }
+            : settings with { SkillQueries = rows.Add(query) };
+    }
+
+    /// <summary>
+    /// Installs a SKILL PACKAGE for <paramref name="user"/>: appends the package's skill folder (e.g.
+    /// <c>Office/Skill</c>) to the user's <see cref="AiSettings.SkillQueries"/> sources — idempotent,
+    /// fire-and-forget, same keyed-query read discipline as <see cref="EnsureExists"/> (never a
+    /// point-read of a possibly-absent node).
+    /// </summary>
+    public static void AddSkillSource(
+        IMessageHub hub, IServiceProvider services, string user, string sourceNamespace)
+    {
+        var meshService = services.GetService<IMeshService>();
+        if (meshService is null || string.IsNullOrEmpty(user) || string.IsNullOrEmpty(sourceNamespace))
+            return;
+        var path = PathFor(user);
+        hub.GetWorkspace()
+            .GetQuery($"{NodeType}|{user}", $"path:{path} nodeType:{NodeType}")
+            .Take(1)
+            .SelectMany(nodes =>
+            {
+                var node = nodes.FirstOrDefault(n =>
+                    string.Equals(n.NodeType, NodeType, StringComparison.OrdinalIgnoreCase));
+                var current = Effective(node, BuildDefaults(services), hub.JsonSerializerOptions);
+                var merged = MergeSkillSource(current, sourceNamespace);
+                var target = node ?? MeshNode.FromPath(path) with { NodeType = NodeType, Name = "AI Settings" };
+                return meshService.CreateOrUpdateNode(target with { Content = merged });
+            })
+            .Subscribe(
+                _ => { },
+                ex => services.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(AiSettingsNodeType))
+                    .LogWarning(ex, "AddSkillSource: appending {Source} for {Path} failed",
+                        sourceNamespace, path));
+    }
+
+    /// <summary>
+    /// The LIVE resolved skill queries for a user + context — the reactive form the skill surfaces
+    /// (slash autocomplete, slash execution) consume: observes the user's <see cref="AiSettings"/>
+    /// (defaults when there is no signed-in user) and re-resolves the source templates on change.
+    /// </summary>
+    public static IObservable<string[]> ObserveSkillQueries(
+        IWorkspace workspace, IMessageHub hub, IServiceProvider services,
+        string? user, string? contextPath, string? nodeTypePath)
+        => string.IsNullOrEmpty(user)
+            ? Observable.Return(ResolveSkillQueries(null, contextPath, nodeTypePath, user))
+            : Observe(workspace, hub, services, user!)
+                .Select(settings => ResolveSkillQueries(settings, contextPath, nodeTypePath, user))
+                .DistinctUntilChanged(qs => string.Join("\n", qs));
 
     private const string CurrentPathToken = "{currentPath}";
     private const string NodeTypePathToken = "{nodeTypePath}";

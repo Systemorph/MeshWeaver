@@ -1829,12 +1829,22 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
         }
 
-        var queries = MeshWeaver.AI.SkillNodeType.SkillQueries(initialContext, _userHome);
+        // The user's SKILL SOURCES are configurable (AiSettings.SkillQueries — one query row per
+        // source, defaulting to global/space/type/user; installing a skill package appends its row).
+        // The node-type source comes from the resolved picker context, same as the model picker; the
+        // cache id carries the query-set key so different source sets never share a snapshot entry.
+        var picker = AgentPickerProjection.DerivePickerContext(_currentNavContext, initialContext);
+        var skillSnapshots = MeshWeaver.AI.AiSettingsNodeType
+            .ObserveSkillQueries(workspace, Hub, Hub.ServiceProvider, _userHome, initialContext, picker.NodeTypePath)
+            .Select(queries => AgentPickerProjection.ObserveSnapshot(
+                workspace, Hub,
+                $"skills|{initialContext}|{_userHome}|{string.Join("|", queries).GetHashCode():x8}", queries))
+            .Switch();
         // Run the skill-resolve read under the durable circuit user — this method is reached from
         // SubmitMessageCore via InvokeAsync and the query fans out on the synced-query scheduler where
         // the AsyncLocal context is gone; context-null here makes the /command either resolve nothing
         // ("Unknown command") or surface skills the user can't read. RunUnderCircuitUser mirrors RunPicker.
-        RunUnderCircuitUser(AgentPickerProjection.ObserveSnapshot(workspace, Hub, $"skills|{initialContext}|{_userHome}", queries))
+        RunUnderCircuitUser(skillSnapshots)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .Subscribe(
