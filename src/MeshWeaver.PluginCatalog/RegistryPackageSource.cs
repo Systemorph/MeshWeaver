@@ -34,12 +34,17 @@ public sealed class RegistryPackageSource : IPackageSource
     private readonly string _registryUrl;
     private readonly IIoPool _httpPool;
     private readonly HttpClient _http;
+    private readonly string _token;
 
     /// <summary>Creates the source. <paramref name="registryUrl"/> is the registry instance base URL
-    /// (e.g. <c>https://memex.meshweaver.cloud</c>); trailing slash is trimmed.</summary>
-    public RegistryPackageSource(IMessageHub hub, string registryUrl)
+    /// (e.g. <c>https://memex.meshweaver.cloud</c>); trailing slash is trimmed.
+    /// <paramref name="token"/> is the instance token issued when this installation registered with
+    /// the registry (see <see cref="PluginRegistryTokens"/>), sent as <c>Authorization: Bearer</c>;
+    /// empty → unauthenticated (only an open dev/e2e registry answers).</summary>
+    public RegistryPackageSource(IMessageHub hub, string registryUrl, string? token = null)
     {
         _registryUrl = (registryUrl ?? "").TrimEnd('/');
+        _token = (token ?? "").Trim();
         _httpPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
         _http = hub.ServiceProvider.GetService<IHttpClientFactory>()?.CreateClient("plugin-registry") ?? SharedHttp;
     }
@@ -47,12 +52,27 @@ public sealed class RegistryPackageSource : IPackageSource
     private sealed record ListResponse(IReadOnlyList<PackageManifest>? Packages);
     private sealed record FilesResponse(IReadOnlyList<PackageFile>? Files);
 
+    // Per-REQUEST auth header — never on the client: _http can be the process-wide SharedHttp, and
+    // mutating its DefaultRequestHeaders would leak this registry's token to every other registry.
+    private HttpRequestMessage Request(HttpMethod method, string url, HttpContent? content = null)
+    {
+        var request = new HttpRequestMessage(method, url) { Content = content };
+        if (_token.Length > 0)
+            request.Headers.TryAddWithoutValidation("Authorization", PluginRegistryTokens.AuthorizationHeader(_token));
+        return request;
+    }
+
     /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
         _httpPool.Invoke(async ct =>
         {
             var url = $"{_registryUrl}{RoutePrefix}?ref={Uri.EscapeDataString(gitRef ?? "")}";
-            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
+            using var request = Request(HttpMethod.Get, url);
+            using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
+            var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode)
+                throw new InvalidOperationException(
+                    $"Registry catalog list failed ({(int)resp.StatusCode}): {json}");
             var parsed = JsonSerializer.Deserialize<ListResponse>(json, Json);
             return (IReadOnlyList<PackageManifest>)(parsed?.Packages ?? []);
         });
@@ -65,8 +85,8 @@ public sealed class RegistryPackageSource : IPackageSource
             // curated catalog (see PluginRegistryEndpoints), so a consumer can't reach arbitrary paths.
             var body = JsonSerializer.Serialize(new { id = package.Id, @ref = gitRef }, Json);
             using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
-            using var resp = await _http.PostAsync($"{_registryUrl}{RoutePrefix}/files", content, ct)
-                .ConfigureAwait(false);
+            using var request = Request(HttpMethod.Post, $"{_registryUrl}{RoutePrefix}/files", content);
+            using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
             var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
                 throw new InvalidOperationException(

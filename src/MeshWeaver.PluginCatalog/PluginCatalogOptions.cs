@@ -30,6 +30,12 @@ public sealed class PluginCatalogOptions
     /// so the registry could honor a pinned rollout later without a consumer change.</summary>
     public string RegistryRef { get; set; } = "HEAD";
 
+    /// <summary>The instance token this installation was issued when it registered with the
+    /// registry, sent as <c>Authorization: Bearer</c> (see <see cref="PluginRegistryTokens"/>).
+    /// Empty → requests go out unauthenticated (only an open dev/e2e registry answers them).
+    /// Legacy single-registry key — prefer <see cref="PluginRegistryReference.Token"/>.</summary>
+    public string RegistryToken { get; set; } = "";
+
     /// <summary>
     /// The registries this installation consumes, in display order
     /// (<c>PluginCatalog:Registries:0:{Name,Url,Ref}</c>, …). Empty → falls back to the legacy
@@ -47,7 +53,7 @@ public sealed class PluginCatalogOptions
             ? configured
             : string.IsNullOrWhiteSpace(RegistryUrl)
                 ? []
-                : [new PluginRegistryReference { Url = RegistryUrl, Ref = RegistryRef }];
+                : [new PluginRegistryReference { Url = RegistryUrl, Ref = RegistryRef, Token = RegistryToken }];
 }
 
 /// <summary>One registry a consumer reads its plugin catalog from (an entry of
@@ -63,4 +69,8 @@ public sealed class PluginRegistryReference
 
     /// <summary>Advisory git ref (see <see cref="PluginCatalogOptions.RegistryRef"/>).</summary>
     public string Ref { get; set; } = "HEAD";
+
+    /// <summary>The instance token issued for THIS registry when the installation registered with it
+    /// (see <see cref="PluginCatalogOptions.RegistryToken"/> and <see cref="PluginRegistryTokens"/>).</summary>
+    public string Token { get; set; } = "";
 }
