@@ -17,11 +17,26 @@ public static class ViewModelExtensions
     public static Microsoft.FluentUI.AspNetCore.Components.Icon? ToFluentIcon(this Icon icon) =>
         icon.Provider switch
         {
-            FluentIcons.Provider =>
-                new IconInfo { Name = icon.Id, Size = (IconSize)icon.Size, Variant = (IconVariant)icon.Variant }.GetInstance(),
+            FluentIcons.Provider => CreateFluentIcon(icon),
             CustomIcons.Provider => CreateCustomIcon(icon),
             _ => null
         };
+
+    private static Microsoft.FluentUI.AspNetCore.Components.Icon? CreateFluentIcon(Icon icon)
+    {
+        try
+        {
+            return new IconInfo { Name = icon.Id, Size = (IconSize)icon.Size, Variant = (IconVariant)icon.Variant }
+                .GetInstance();
+        }
+        catch (ArgumentException)
+        {
+            // A PascalCase word that is not an actual Fluent icon name (Icon.Parse classifies any
+            // such free-text node icon as FluentProvider) must degrade to "no icon" — GetInstance's
+            // only signal for an unknown name is this throw, and a per-render throw storms the log.
+            return null;
+        }
+    }
 
     private static Microsoft.FluentUI.AspNetCore.Components.Icon? CreateCustomIcon(Icon icon)
     {
