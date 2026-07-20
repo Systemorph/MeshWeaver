@@ -124,17 +124,15 @@ public class UserActivityHomeOverrideTest
     }
 
     [Fact]
-    public void Catalog_IsAUnifiedGroupedEverythingSearch()
+    public void Catalog_IsATablessFlatFirstLevelList()
     {
-        var catalog = UserActivityLayoutAreas.BuildCatalog();
+        var catalog = UserActivityLayoutAreas.BuildCatalog(NodePath);
 
-        // ONE unified, tab-less, grouped list — no tab row. It spans every partition the reader can see
-        // (no namespace restriction), groups by type, and defaults to last-accessed order.
+        // ONE tab-less, FLAT, FIRST-LEVEL list — no tab row, no grouping, defaults to last-accessed.
         var search = catalog.Should().BeOfType<MeshSearchControl>().Subject;
         catalog.Should().NotBeOfType<TabsControl>();
-        search.HiddenQuery!.ToString().Should().Contain("is:main context:search");
         search.HiddenQuery!.ToString().Should().Contain("source:accessed");
-        search.HiddenQuery!.ToString().Should().NotContain("namespace:");
-        search.RenderMode.Should().Be(MeshSearchRenderMode.Grouped);
+        search.HiddenQuery!.ToString().Should().NotContain("scope:subtree");
+        search.RenderMode.Should().Be(MeshSearchRenderMode.Flat);
     }
 }
