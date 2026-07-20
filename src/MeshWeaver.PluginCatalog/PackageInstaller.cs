@@ -399,6 +399,30 @@ public static class PackageInstaller
                 : batch.Select(n => UpsertIfChanged(hub, persistence, n, options))
                     .ToObservable().Concat().ToList(); // sequential to respect the ordering
 
+        // 🚨 CONFIRM THE SELF-TYPED ROOT'S RETYPE RECONCILED before the install reports success.
+        // Stage 2 retypes the Space placeholder to the in-package type via
+        // GetMeshNodeStream(root).Update. That write is UpdateRemote: it returns the OPTIMISTIC
+        // snapshot the instant the patch is ACCEPTED and does NOT wait for the owner's reconciled
+        // state to echo back onto the shared IMeshNodeStreamCache handle (its own contract —
+        // "callers needing the reconciled state follow the shared GetMeshNodeStream(path) handle").
+        // So without this the install completed while that shared handle still replayed the Space
+        // PLACEHOLDER: a reader immediately after install (the GUI, the SelfTypedRootInstallTest pin)
+        // read NodeType "Space" instead of the in-package type — the intermittent flake under CI
+        // load, where the owner's async fan-out lags the install's optimistic completion. FOLLOW the
+        // shared handle until it carries the real type, so the install's completion is a happens-
+        // before for every reader of that SAME handle. Reactive and bounded by the retype LANDING
+        // (it is in flight and always settles); the Timeout is the graceful sink for a wedged owner,
+        // never a fixed sleep that would cache the fallback.
+        IObservable<System.Reactive.Unit> RootRetypeReconciled() =>
+            placeholderRoot is null || root is null || string.IsNullOrEmpty(root.NodeType)
+                ? Observable.Return(System.Reactive.Unit.Default)
+                : hub.GetMeshNodeStream(root.Path)
+                    .Where(n => n is not null
+                        && string.Equals(n.NodeType, root.NodeType, StringComparison.Ordinal))
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(30))
+                    .Select(_ => System.Reactive.Unit.Default);
+
         // Eager provisioning must also cover the package's OWN partition: with a dynamic root
         // type the placeholder covers it, but belt-and-braces keeps the fresh-mesh pin honest.
         return EnsurePartitionsProvisioned(hub, manifest.TargetPartition ?? manifest.Id, InstalledPartition)
@@ -407,6 +431,9 @@ public static class PackageInstaller
                 .SelectMany(_ => WriteAll(stage1))
                 .SelectMany(typeWrites => Visible(nodeTypePaths)
                     .SelectMany(_ => WriteAll(stage2))
+                    // The retype's optimistic emit is not the reconciled state — wait for the
+                    // shared root handle to actually carry the in-package type before reporting.
+                    .SelectMany(rest => RootRetypeReconciled().Select(_ => rest))
                     // A placeholder's write is bookkeeping, not content — its FINAL retype in
                     // stage 2 is the root's one counted write (keeps Written ≤ node count).
                     .Select(rest => (IList<bool>)(placeholderRoot is null ? rootWrites : [])
