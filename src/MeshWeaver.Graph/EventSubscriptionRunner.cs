@@ -264,11 +264,14 @@ public sealed class EventSubscriptionRunner(
     {
         try
         {
-            return System.Text.Json.JsonSerializer.Deserialize<EventSubscription>(
-                je.GetRawText(), hub.JsonSerializerOptions);
+            // Deserialize straight from the JsonElement — no GetRawText() string round-trip / re-parse.
+            return System.Text.Json.JsonSerializer.Deserialize<EventSubscription>(je, hub.JsonSerializerOptions);
         }
-        catch
+        catch (System.Text.Json.JsonException ex)
         {
+            // A malformed subscription node must not abort the whole cold-start seed — skip it, but SURFACE
+            // it (never a silent swallow) so a genuine data problem is visible.
+            logger?.LogWarning(ex, "Skipping malformed EventSubscription content in the cold-start reconcile");
             return null;
         }
     }
