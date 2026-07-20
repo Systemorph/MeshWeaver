@@ -52,6 +52,13 @@ public sealed class EventSubscriptionRunner(
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IDisposable> timerSubs = new();
     // Live NodeStatus watches, same lifecycle contract as timerSubs.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IDisposable> statusSubs = new();
+    // Live trigger-node watches — one per DISTINCT TriggerNodeType among pending NodeChange/Created
+    // subscriptions (keyed by node type, NOT subscription id, so a handful of entries, never a per-
+    // subscription registry leak). The change-feed-INDEPENDENT firing path: a synced query re-emits via
+    // the storage layer (PG LISTEN/NOTIFY — silo-independent) when a matching node is created, so a
+    // deferred invite fires even when the in-process/Orleans change feed's best-effort cross-silo relay
+    // never delivers the User/Created event to this runner. Same lifecycle contract as timerSubs/statusSubs.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IDisposable> nodeChangeSubs = new();
     private IDisposable? pendingSub;
     private IDisposable? feedSub;
     private IDisposable? legacySub;
@@ -87,6 +94,22 @@ public sealed class EventSubscriptionRunner(
                     ScheduleTimer(s);
                 foreach (var s in list.Where(s => s is { TriggerType: EventTriggerType.NodeStatus, WatchPath.Length: > 0 }))
                     WatchNodeStatus(s);
+
+                // Change-feed-INDEPENDENT reconcile: keep a live trigger-node query per distinct node type
+                // among the pending Created subscriptions. It re-emits (via PG LISTEN/NOTIFY, silo-agnostic)
+                // when a matching node is created even if the change-feed event never reaches this runner —
+                // the memex 2026-07-20 stranded-invite root cause (cross-silo relay dropped the create).
+                var neededNodeTypes = list
+                    .Where(s => s is { TriggerType: EventTriggerType.NodeChange, TriggerKind: MeshChangeKind.Created,
+                        TriggerNodeType.Length: > 0 })
+                    .Select(s => s.TriggerNodeType!)
+                    .ToHashSet(StringComparer.Ordinal);
+                foreach (var nodeType in neededNodeTypes)
+                    WatchTriggerNodeType(nodeType);
+                foreach (var nodeType in nodeChangeSubs.Keys.Where(nt => !neededNodeTypes.Contains(nt)).ToList())
+                    if (nodeChangeSubs.TryRemove(nodeType, out var d))
+                        d.Dispose();
+
                 var pendingIds = list.Select(s => s.Id).ToHashSet();
                 foreach (var (subs, _) in new[] { (timerSubs, 0), (statusSubs, 0) })
                     foreach (var id in subs.Keys.Where(id => !pendingIds.Contains(id)).ToList())
@@ -141,6 +164,52 @@ public sealed class EventSubscriptionRunner(
                 if (node is not null)
                     Execute(subscription, node);
             }, ex => logger?.LogWarning(ex, "Reconcile query for subscription {Id} failed", subscription.Id));
+    }
+
+    /// <summary>
+    /// Establishes a LIVE query over every node of <paramref name="nodeType"/> and reconciles the pending
+    /// <see cref="EventTriggerType.NodeChange"/>/<see cref="MeshChangeKind.Created"/> subscriptions of that
+    /// type against each emission — the reliable, change-feed-INDEPENDENT firing path.
+    ///
+    /// <para><see cref="OnChange"/> fires the instant a node is written, but the change feed's cross-silo
+    /// relay is best-effort: on a distributed portal a <c>User</c> created in its own partition hub (another
+    /// silo) may never reach this runner, so the deferred invite strands until the next restart's reconcile
+    /// (the memex 2026-07-20 "bari onboarded but got no access" incident — all six of his pending
+    /// subscriptions stayed Pending). A synced query re-emits through the storage layer (PG LISTEN/NOTIFY),
+    /// which is silo-independent, so this watch fires the subscription regardless of change-feed delivery.
+    /// It supplements — does not replace — the feed + startup reconcile; all three are idempotent (the
+    /// terminal <c>Fired</c> write gates re-entry and every continuation is a create-or-update), so they
+    /// cannot double-apply. One watch per node type (a small bounded set; the dictionary key is the node
+    /// type, not the subscription id, so no per-subscription registry leak), disposed when no pending
+    /// Created subscription needs it and on runner stop.</para>
+    /// </summary>
+    private void WatchTriggerNodeType(string nodeType)
+    {
+        if (nodeChangeSubs.ContainsKey(nodeType))
+            return;
+        var slot = new System.Reactive.Disposables.SingleAssignmentDisposable();
+        if (!nodeChangeSubs.TryAdd(nodeType, slot))
+            return;   // lost the race — another emission just established this node type
+        slot.Disposable = AsSystem(() => meshService.Query<MeshNode>(
+                MeshQueryRequest.FromQuery($"nodeType:{nodeType}")))
+            .Select(c => c.Items)
+            .Subscribe(
+                items =>
+                {
+                    List<EventSubscription> candidates;
+                    lock (gate)
+                        candidates = pending
+                            .Where(s => s is { TriggerType: EventTriggerType.NodeChange, TriggerKind: MeshChangeKind.Created }
+                                        && string.Equals(s.TriggerNodeType, nodeType, StringComparison.Ordinal))
+                            .ToList();
+                    foreach (var s in candidates)
+                    {
+                        var node = (items ?? []).FirstOrDefault(n => Matches(s, n));
+                        if (node is not null)
+                            Execute(s, node);
+                    }
+                },
+                ex => logger?.LogWarning(ex, "Trigger-node watch for {NodeType} failed", nodeType));
     }
 
     private bool Matches(EventSubscription subscription, MeshNode node)
@@ -359,7 +428,7 @@ public sealed class EventSubscriptionRunner(
         pendingSub?.Dispose();
         feedSub?.Dispose();
         legacySub?.Dispose();
-        foreach (var subs in new[] { timerSubs, statusSubs })
+        foreach (var subs in new[] { timerSubs, statusSubs, nodeChangeSubs })
             foreach (var id in subs.Keys.ToList())
                 if (subs.TryRemove(id, out var d))
                     d.Dispose();
