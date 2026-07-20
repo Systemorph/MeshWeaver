@@ -58,7 +58,10 @@ public sealed class RegistryPackageSource : IPackageSource
     {
         var request = new HttpRequestMessage(method, url) { Content = content };
         if (_token.Length > 0)
-            request.Headers.TryAddWithoutValidation("Authorization", PluginRegistryTokens.AuthorizationHeader(_token));
+            // Typed header, not TryAddWithoutValidation: a malformed configured token (e.g. with a
+            // CRLF) must throw here rather than travel as an invalid header.
+            request.Headers.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue(PluginRegistryTokens.Scheme, _token);
         return request;
     }
 
