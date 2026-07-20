@@ -62,6 +62,8 @@ public sealed class EventSubscriptionRunner(
     private IDisposable? pendingSub;
     private IDisposable? feedSub;
     private IDisposable? legacySub;
+    // One-shot cold-start reconcile seeded from an authoritative storage read (see StartAsync) — disposed on stop.
+    private IDisposable? startupSub;
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
@@ -116,6 +118,32 @@ public sealed class EventSubscriptionRunner(
                         if (subs.TryRemove(id, out var d))
                             d.Dispose();
             }, ex => logger?.LogWarning(ex, "Event-subscriptions query failed"));
+
+        // 🚨 Cold-start authoritative reconcile — the fix for the memex 2026-07-20 stranded-invite incident.
+        // The live pendingSub above reads the WORKSPACE cache (GetQuery): on a cold start it is EMPTY until
+        // the Admin partition syncs into the workspace, and it does NOT re-emit when the partition later
+        // warms — only on a subsequent write. So after every deploy restart the runner's pending set stayed
+        // empty and NOTHING reconciled until an unrelated Admin/EventSubscription write happened to nudge
+        // the query; an invited, already-onboarded user's Pending grants were stranded for hours (bari: his
+        // User node existed and his AddToGroup/GrantSpaceAccess subs were Pending, yet none fired after the
+        // roll until a write re-triggered the reconcile). IMeshService.Query is a FRESH storage read that
+        // does NOT wait on the workspace cache, so it returns the outstanding subscriptions even on a cold
+        // start — seed the reconcile once from it. Every already-matchable Created subscription fires now,
+        // and each fire's terminal Fired-write re-emits pendingSub (warm) so the live path takes over.
+        // One-shot + idempotent (the Fired write gates re-entry; continuations are create-or-update).
+        startupSub = AsSystem(() => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{EventSubscriptionNodeType.Namespace} scope:children nodeType:{EventSubscriptionNodeType.NodeType}"))
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
+                .Select(c => c.Items)
+                .Take(1))
+            .Subscribe(items =>
+            {
+                foreach (var node in items ?? [])
+                    if (ReadSubscription(node) is
+                        { Status: EventSubscriptionStatus.Pending,
+                          TriggerType: EventTriggerType.NodeChange, TriggerKind: MeshChangeKind.Created } s)
+                        Reconcile(s);
+            }, ex => logger?.LogWarning(ex, "Startup authoritative reconcile failed"));
 
         // Live: fire on the actual change event.
         feedSub = changeFeed.Subscribe(OnChange);
@@ -218,6 +246,34 @@ public sealed class EventSubscriptionRunner(
                     }
                 },
                 ex => logger?.LogWarning(ex, "Trigger-node watch for {NodeType} failed", nodeType));
+    }
+
+    /// <summary>
+    /// Deserializes a node's content to <see cref="EventSubscription"/>, tolerating both a typed instance
+    /// (the workspace <c>GetQuery</c> path) and a raw <see cref="System.Text.Json.JsonElement"/> (the
+    /// storage <c>IMeshService.Query</c> path the cold-start seed reads from). Returns null otherwise.
+    /// </summary>
+    private EventSubscription? ReadSubscription(MeshNode node) => node.Content switch
+    {
+        EventSubscription es => es,
+        System.Text.Json.JsonElement je => TryDeserializeSubscription(je),
+        _ => null,
+    };
+
+    private EventSubscription? TryDeserializeSubscription(System.Text.Json.JsonElement je)
+    {
+        try
+        {
+            // Deserialize straight from the JsonElement — no GetRawText() string round-trip / re-parse.
+            return System.Text.Json.JsonSerializer.Deserialize<EventSubscription>(je, hub.JsonSerializerOptions);
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            // A malformed subscription node must not abort the whole cold-start seed — skip it, but SURFACE
+            // it (never a silent swallow) so a genuine data problem is visible.
+            logger?.LogWarning(ex, "Skipping malformed EventSubscription content in the cold-start reconcile");
+            return null;
+        }
     }
 
     private bool Matches(EventSubscription subscription, MeshNode node)
@@ -436,6 +492,7 @@ public sealed class EventSubscriptionRunner(
         pendingSub?.Dispose();
         feedSub?.Dispose();
         legacySub?.Dispose();
+        startupSub?.Dispose();
         foreach (var subs in new[] { timerSubs, statusSubs, nodeChangeSubs })
             foreach (var id in subs.Keys.ToList())
                 if (subs.TryRemove(id, out var d))
