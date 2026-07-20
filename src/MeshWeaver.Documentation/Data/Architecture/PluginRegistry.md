@@ -1,7 +1,7 @@
 ---
 Name: Plugin Registry
 Category: Architecture
-Description: One MeshWeaver instance acts as the plugin registry — it holds the source credential, syncs plugins from git, and re-serves them over a public REST surface so any installation's platform admin can browse and install plugins without its own GitHub access. The credential is encapsulated in the registry, npm/NuGet-style.
+Description: One MeshWeaver instance acts as the plugin registry — it holds the source credential, syncs plugins from git, and re-serves them over a token-gated REST surface so any registered installation's platform admin can browse and install plugins without its own GitHub access. The credential is encapsulated in the registry, npm/NuGet-style.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v4H3z"/><path d="M5 7v14h14V7"/><path d="M10 12h4"/></svg>
 ---
 
@@ -33,11 +33,17 @@ the registry has source access and clients just speak HTTP.
                                                             └────────────────────────┘
 ```
 
-## The surface — public, curated
+## The surface — registered instances only, curated
 
-Two endpoints, mapped by `PluginRegistryEndpoints` (`memex/Memex.Portal.Shared/Api`). Unlike the
-authenticated `/api/mesh/*` surface, these are **anonymous** — a plugin registry is meant to be
-pulled by any installation. That is safe because the registry only exposes **curated plugins**:
+Two endpoints, mapped by `PluginRegistryEndpoints` (`memex/Memex.Portal.Shared/Api`). The surface is
+**not public**: it serves only **registered MeshWeaver instances**. Registering an instance means
+issuing it a token and adding that token to the registry's `PluginCatalog:RegistryTokens` list
+(config/secret on the registry); the consumer sends its token as `Authorization: Bearer` (its
+`PluginCatalog:RegistryToken`, or per-registry `Registries:N:Token`), and a request without a valid
+token is 401 (validated fixed-time by `PluginRegistryTokens`, the shared producer/consumer contract).
+Only when **no** tokens are configured — the local-dev / e2e-stub mode — does the registry answer
+anonymously; a production registry always configures tokens. What a registered instance can then
+read is **curated plugins** only:
 by default the node-native repos the [`MeshWeaver.Plugins`](/Doc/Architecture/Plugins) repo ships —
 `<Plugin>/index.json` **Space** roots carrying a `PluginManifest`, node-per-file — via a
 `NodeRepoPackageSource` (`PluginCatalog:SourceFormat=node-repo`, the default). A `package.json`-manifest
@@ -116,8 +122,9 @@ in a shared partition.
   installation is "point `PluginCatalog:RegistryUrl` at the registry," not "provision it a GitHub App."
 - **Not a Space.** The catalog is an admin tab reading a remote registry; there is no partition for a
   non-admin to navigate into and be denied.
-- **Curated + public.** Only `package.json` folders are exposed, so anonymous read is safe and the
-  catalog lists real modules (Slides, Edu, …), not every partition that happens to define a type.
+- **Registered + curated.** Only registered instances (their issued token in
+  `PluginCatalog:RegistryTokens`) can read, and only `package.json` folders are exposed — the
+  catalog lists real modules (Publish, Edu, …), not every partition that happens to define a type.
 - **Capability, not data.** A package ships its `NodeType`/`Code`/content folder — never a partition's
   user data — so installing a plugin gives you the types and their code, not anyone's records.
 

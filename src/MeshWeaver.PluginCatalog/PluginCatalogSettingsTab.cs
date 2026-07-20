@@ -96,7 +96,7 @@ public static class PluginCatalogSettingsTab
             var label = string.IsNullOrWhiteSpace(registry.Name) ? registry.Url : registry.Name;
             if (registries.Count > 1)
                 stack = stack.WithView(Controls.Title(label, 2));
-            var source = new RegistryPackageSource(host.Hub, registry.Url);
+            var source = new RegistryPackageSource(host.Hub, registry.Url, registry.Token);
             stack = stack.WithView((h, _) => CatalogLayoutAreas.RenderFromSource(
                 h, source, registry.Ref, description: null, sourceLabel: registry.Url));
         }

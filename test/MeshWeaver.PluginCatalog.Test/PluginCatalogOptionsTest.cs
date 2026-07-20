@@ -24,11 +24,13 @@ public class PluginCatalogOptionsTest
         {
             RegistryUrl = "https://memex.meshweaver.cloud",
             RegistryRef = "main",
+            RegistryToken = "tok-instance-1",
         };
 
         var registry = Assert.Single(options.EffectiveRegistries);
         Assert.Equal("https://memex.meshweaver.cloud", registry.Url);
         Assert.Equal("main", registry.Ref);
+        Assert.Equal("tok-instance-1", registry.Token);
     }
 
     [Fact]

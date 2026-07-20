@@ -13,28 +13,50 @@ using Microsoft.Extensions.Logging;
 namespace Memex.Portal.Shared.Api;
 
 /// <summary>
-/// The PUBLIC plugin-registry surface — this instance acting as the distribution point for plugin
+/// The plugin-registry surface — this instance acting as the distribution point for plugin
 /// modules. <c>GET /api/plugins</c> lists the catalog; <c>POST /api/plugins/files</c> returns one
 /// package's files. Both are backed by the registry's configured git <see cref="IPackageSource"/>s
 /// (<c>PluginCatalog:Sources:N:*</c> — e.g. the plugins repo AND an education repo — or the legacy
 /// single <c>PluginCatalog:SourceRepoPath</c>, via GitSync), so a consuming instance
 /// browses/installs over HTTP with NO git/GitHub credentials of its own: the registry's GitHub App
-/// credential stays here and is never handed out (npm/NuGet-style encapsulation). Only curated
-/// packages — each addressed by its plugin id in the configured source (node-native
-/// <c>&lt;Plugin&gt;.json</c> Space roots by default, or <c>package.json</c> folders) — are exposed,
-/// so anonymous read is safe by design.
+/// credential stays here and is never handed out (npm/NuGet-style encapsulation).
+///
+/// <para>🚨 The surface is NOT public: it serves only <b>registered MeshWeaver instances</b>, each
+/// holding a token issued at registration and listed in the registry's
+/// <c>PluginCatalog:RegistryTokens</c> (see <see cref="PluginRegistryTokens"/>). Requests without a
+/// valid <c>Authorization: Bearer</c> token are 401. Only when NO tokens are configured — the
+/// local-dev / e2e-stub mode — does the registry answer anonymously; a production registry always
+/// configures tokens.</para>
 ///
 /// <para>Consumed by <see cref="RegistryPackageSource"/>; the wire shapes are produced by
 /// <see cref="PluginRegistryPayloads"/> so producer and consumer cannot drift.</para>
 /// </summary>
 public static class PluginRegistryEndpoints
 {
-    /// <summary>Maps the anonymous <c>/api/plugins</c> registry group. Call alongside <c>MapMeshApi</c>.</summary>
+    /// <summary>Maps the token-gated <c>/api/plugins</c> registry group. Call alongside <c>MapMeshApi</c>.</summary>
     public static IEndpointRouteBuilder MapPluginRegistry(this IEndpointRouteBuilder endpoints)
     {
-        // PUBLIC — no auth: a plugin registry is meant to be pulled by any installation. The registry
-        // serves only curated packages from its configured source; its own credentials never leave.
+        // AllowAnonymous at the ASP.NET auth layer: callers are INSTANCES, not signed-in users, so
+        // the user auth schemes don't apply. The real gate is the instance-token filter below —
+        // only registered instances (their issued token in PluginCatalog:RegistryTokens) get through.
         var group = endpoints.MapGroup(RegistryPackageSource.RoutePrefix).AllowAnonymous();
+
+        group.AddEndpointFilter(async (ctx, next) =>
+        {
+            var config = ctx.HttpContext.RequestServices.GetRequiredService<IConfiguration>();
+            var issued = IssuedTokens(config);
+            if (issued.Count == 0)
+                return await next(ctx); // no tokens issued → the open local-dev / e2e-stub registry
+            if (PluginRegistryTokens.Validate(ctx.HttpContext.Request.Headers.Authorization, issued))
+                return await next(ctx);
+            ctx.HttpContext.RequestServices.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(PluginRegistryEndpoints))
+                .LogWarning("Plugin registry: rejected request to {Path} without a valid instance token",
+                    ctx.HttpContext.Request.Path);
+            return Results.Json(
+                new { error = "A registered instance token is required (Authorization: Bearer …)." },
+                statusCode: StatusCodes.Status401Unauthorized);
+        });
 
         group.MapGet("", (IMessageHub rootHub, IConfiguration config, CancellationToken ct) =>
             List(rootHub, config, ct));
@@ -44,6 +66,15 @@ public static class PluginRegistryEndpoints
 
         return endpoints;
     }
+
+    /// <summary>The instance tokens this registry has issued — <c>PluginCatalog:RegistryTokens:N</c>
+    /// (registering an instance = issuing it a token and provisioning it into this list).</summary>
+    private static IReadOnlyList<string> IssuedTokens(IConfiguration config) =>
+        config.GetSection(PluginRegistryTokens.SectionName).GetChildren()
+            .Select(c => c.Value)
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v!)
+            .ToList();
 
     /// <summary>One configured registry source: the git package source, the ref it serves, and a
     /// display name (for logs). The registry is authoritative on each source's ref (its configured

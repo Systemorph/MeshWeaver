@@ -81,11 +81,13 @@ and check the type's page.
 A platform admin installs from the GUI: **Settings ▸ Administration ▸ Plugin Catalog**. The tab
 lists the registry's modules with Install / Update / Installed status and installs on click — the
 consumer pulls the package over HTTP and compiles it locally; no GitHub credential is involved. The
-tab reads `PluginCatalog:RegistryUrl` (the registry base URL) and the registry's public endpoints:
+tab reads `PluginCatalog:RegistryUrl` (the registry base URL) plus the instance token the registry
+issued this installation (`PluginCatalog:RegistryToken`, sent as `Authorization: Bearer`) and calls
+the registry's token-gated endpoints:
 
 ```text
-GET  {registry}/api/plugins             → the catalog { packages:[…] }    (anonymous)
-POST {registry}/api/plugins/files {id}  → a package's files { files:[…] } (anonymous)
+GET  {registry}/api/plugins             → the catalog { packages:[…] }    (Bearer instance token)
+POST {registry}/api/plugins/files {id}  → a package's files { files:[…] } (Bearer instance token)
 ```
 
 The types compile on first import; re-running is an upsert. See [Plugin
@@ -134,8 +136,10 @@ Any MeshWeaver instance can be the distribution point for its own plugins. One-t
 
 5. **Point the instance's catalog source at your plugins repo** — set
    `PluginCatalog:SourceRepoPath` to the repo URL (the App credential above lets it read a private
-   repo). The instance now serves the catalog anonymously at `GET /api/plugins`; consumers set their
-   `PluginCatalog:RegistryUrl` to this instance and install from the **Plugin Catalog** admin tab.
+   repo). The instance now serves the catalog at `GET /api/plugins` — gated to registered
+   consumers once you issue tokens into `PluginCatalog:RegistryTokens` (open only while that list is
+   empty, the dev mode); consumers set their `PluginCatalog:RegistryUrl` to this instance, put their
+   issued token in `PluginCatalog:RegistryToken`, and install from the **Plugin Catalog** admin tab.
 
 The App credential lives on this ONE instance; every consumer pulls over HTTP — that's the whole
 point ([Plugin Registry](/Doc/Architecture/PluginRegistry) → credential encapsulation).
