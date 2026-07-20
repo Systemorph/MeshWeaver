@@ -1,18 +1,47 @@
+@using MeshWeaver.Graph
 @inherits NavItemView<NavLinkControl, NavLink>
 
 @if (IsInMenuContext)
 {
     <a href="@Href" class="menu-item-link@(IsActive ? " active" : "")" @onclick="OnClick">
-        @if (Icon != null)
+        @if (ResolvedFluentIcon is not null)
         {
-            <FluentIcon Value="@Icon.ToFluentIcon()" Width="20px" Style="fill: var(--accent-fill-rest); flex-shrink: 0;" />
+            <FluentIcon Value="@ResolvedFluentIcon" Width="20px" Style="fill: var(--accent-fill-rest); flex-shrink: 0;" />
+        }
+        else
+        {
+            @RawIcon
         }
         <span>@Title</span>
     </a>
 }
 else
 {
-    <FluentNavLink Href="@Href" Icon="@Icon?.ToFluentIcon()" OnClick="@OnClick"
-                   Class="@(IsActive ? "active" : null)">@Title</FluentNavLink>
+    <FluentNavLink Href="@Href" Icon="@ResolvedFluentIcon" OnClick="@OnClick"
+                   Class="@(IsActive ? "active" : null)">@RawIcon@Title</FluentNavLink>
 }
 
+@code {
+    private Microsoft.FluentUI.AspNetCore.Components.Icon? ResolvedFluentIcon => Icon?.ToFluentIcon();
+
+    // A MeshNode.Icon travels as a raw string and Icon.Parse classifies it (see Domain.Icon):
+    // Fluent names render through the FluentIcon slot above; the other forms render here with the
+    // SAME mechanism the node cards/thumbnails use — an image URL / data URI as <img>, inline
+    // <svg> markup verbatim (sized via MeshNodeImageHelper.SizeInlineSvg), and a text glyph
+    // (emoji) as text. Anything else renders nothing — never a throw, never a per-render log.
+    private RenderFragment RawIcon => __builder =>
+    {
+        if (Icon is { Provider: MeshWeaver.Domain.Icon.UrlProvider } urlIcon)
+        {
+            <img src="@urlIcon.Id" alt="" style="width: 20px; height: 20px; flex-shrink: 0; vertical-align: middle;" />
+        }
+        else if (Icon is { Provider: MeshWeaver.Domain.Icon.InlineSvgProvider } svgIcon)
+        {
+            <span style="display: inline-flex; flex-shrink: 0; vertical-align: middle;">@((MarkupString)MeshNodeImageHelper.SizeInlineSvg(svgIcon.Id, 20))</span>
+        }
+        else if (Icon is { Provider: MeshWeaver.Domain.Icon.TextProvider } textIcon)
+        {
+            <span style="font-size: 16px; flex-shrink: 0; vertical-align: middle;">@textIcon.Id</span>
+        }
+    };
+}
