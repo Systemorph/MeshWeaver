@@ -95,21 +95,39 @@ public static class SeoResolver
             : null;
     }
 
-    /// <summary>A string member of the node's content, read untyped.</summary>
+    /// <summary>
+    /// A string member of the node's content, by camelCase JSON name. Content arrives here in two
+    /// shapes and both must resolve the same way: untyped <see cref="JsonElement"/> (node-native
+    /// types the portal hub hasn't registered), or a TYPED record when the hub knows the CLR type —
+    /// a markdown page resolves as <c>MarkdownContent</c>, so reading only the JsonElement shape
+    /// silently dropped <c>og:image</c> for every markdown node's <c>thumbnail</c>.
+    /// </summary>
     public static string? ContentString(MeshNode node, string property) =>
-        node.Content is JsonElement { ValueKind: JsonValueKind.Object } je
-            && je.TryGetProperty(property, out var value)
-            && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
+        node.Content switch
+        {
+            JsonElement { ValueKind: JsonValueKind.Object } je
+                when je.TryGetProperty(property, out var value)
+                    && value.ValueKind == JsonValueKind.String => value.GetString(),
+            JsonElement or null => null,
+            var typed => TypedMember(typed, property) as string,
+        };
 
-    /// <summary>A decimal member of the node's content, read untyped.</summary>
+    /// <summary>A decimal member of the node's content, by camelCase JSON name (both shapes).</summary>
     public static decimal? ContentDecimal(MeshNode node, string property) =>
-        node.Content is JsonElement { ValueKind: JsonValueKind.Object } je
-            && je.TryGetProperty(property, out var value)
-            && value.ValueKind == JsonValueKind.Number
-            ? value.GetDecimal()
-            : null;
+        node.Content switch
+        {
+            JsonElement { ValueKind: JsonValueKind.Object } je
+                when je.TryGetProperty(property, out var value)
+                    && value.ValueKind == JsonValueKind.Number => value.GetDecimal(),
+            JsonElement or null => null,
+            var typed => TypedMember(typed, property) is decimal d ? d : null,
+        };
+
+    /// <summary>The PascalCase CLR property matching a camelCase JSON member name.</summary>
+    private static object? TypedMember(object content, string jsonName) =>
+        content.GetType()
+            .GetProperty(char.ToUpperInvariant(jsonName[0]) + jsonName[1..])?
+            .GetValue(content);
 
     private static string? FirstNonEmpty(params string?[] values) =>
         values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
