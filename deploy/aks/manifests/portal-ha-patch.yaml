@@ -51,20 +51,28 @@ spec:
               app.kubernetes.io/component: memex-portal
       containers:
         - name: memex-portal
+          # timeoutSeconds is CRITICAL: the portal's `/` renders the full Blazor home and
+          # legitimately takes ~1s (more under GC pressure or partition load). Omitting it lets
+          # k8s apply the DEFAULT timeoutSeconds: 1 — so a normal-but-slow response failed the
+          # probe, 6 failures killed the pod (exit 139), and it crash-looped (memex-cloud,
+          # 2026-07-21: "TDD won't load, then crash"). 15s tolerates a busy moment; the liveness
+          # failureThreshold of 10 × 30s = 300s before a kill.
           readinessProbe:
             httpGet:
               path: /
               port: 8080
             initialDelaySeconds: 20
-            periodSeconds: 10
-            failureThreshold: 6
+            periodSeconds: 15
+            timeoutSeconds: 15
+            failureThreshold: 8
           livenessProbe:
             httpGet:
               path: /
               port: 8080
             initialDelaySeconds: 60
-            periodSeconds: 20
-            failureThreshold: 6
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 10
           # Sizable AI image with GENEROUS limits per replica (kept in sync with
           # resources.portal in values.aks.yaml). The AI image is memory-hungry
           # (NodeType compile cache, agent runtimes); on the 32 GiB Standard_D8s_v5
@@ -75,7 +83,11 @@ spec:
               memory: "8Gi"
             limits:
               cpu: "6"
-              memory: "16Gi"
+              # 28Gi (was 16Gi): .NET server-GC targets ~75% of the container limit, so a 16Gi cap
+              # put the GC ceiling at ~12GB — exactly where the three big courses' live set sits, so
+              # every burst thrashed the GC and stalled Orleans (the memex-cloud spiral, 2026-07-21).
+              # The 32 GiB nodes have room for 28Gi + system pods.
+              memory: "28Gi"
           # volumeMounts merge by `mountPath`. The first two mirror the chart's
           # existing mounts (no-op); the last two are the NEW /mnt drives.
           volumeMounts:

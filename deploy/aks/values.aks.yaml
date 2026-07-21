@@ -242,7 +242,9 @@ resources:
       memory: "8Gi"    # a bit of RAM
     limits:
       cpu: "6"         # generous CPU ceiling
-      memory: "16Gi"   # generous memory ceiling (half a 32 GiB node)
+      memory: "28Gi"   # .NET server-GC targets ~75% of the limit; 16Gi put the GC ceiling at ~12GB
+                       # (where the courses' live set sits) → GC thrash + Orleans stalls. Kept in
+                       # sync with portal-ha-patch.yaml. The 32 GiB nodes fit 28Gi + system pods.
 
 # --- HA / replicas ----------------------------------------------------------
 # Launch 2 portal replicas by default (still needs cookie session affinity +
