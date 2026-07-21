@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Text;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 using Octokit;
@@ -513,6 +512,14 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     /// </summary>
     internal static HeadInfo AsNewBranchBase(HeadInfo defaultHead) => defaultHead with { RefExists = false };
 
+    /// <summary>The repo-existence/creation REST step exposed for <see cref="GitProtocolRepoClient"/> —
+    /// the one push ingredient git itself cannot do. Emits true when the repo was created.</summary>
+    internal IObservable<bool> EnsureRepoExists(string repositoryUrl, string accessToken, bool createIfMissing)
+    {
+        var (owner, repo) = ParseRepoUrl(repositoryUrl);
+        return EnsureRepo(Client(accessToken), owner, repo, createIfMissing);
+    }
+
     /// <summary>Ensures the repo exists; creates it private (under the user or the org) when missing.</summary>
     private IObservable<bool> EnsureRepo(IObservableGitHubClient client, string owner, string repo, bool createIfMissing)
         => Http.InvokeObservable(ct => client.Repository.Get(owner, repo))
@@ -665,33 +672,9 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     {
         if (!string.Equals(blob.Encoding.StringValue, "base64", StringComparison.OrdinalIgnoreCase))
             return new RepoFile(path, blob.Content);
-        var bytes = Convert.FromBase64String(blob.Content);
-        return TryDecodeUtf8(bytes, out var text)
-            ? new RepoFile(path, text)
-            : new RepoFile(path, string.Empty, bytes);
+        // Shared strict-UTF-8 text/binary classification (RepoFileCodec) — one rule per transport.
+        return RepoFileCodec.FromBytes(path, Convert.FromBase64String(blob.Content));
     }
-
-    /// <summary>
-    /// True + the decoded text when <paramref name="bytes"/> is valid UTF-8; false for binary content.
-    /// Uses a strict (throw-on-invalid) UTF-8 decoder so an arbitrary byte stream (a video, a font) is
-    /// classified binary rather than silently lossily decoded.
-    /// </summary>
-    private static bool TryDecodeUtf8(byte[] bytes, out string text)
-    {
-        try
-        {
-            text = StrictUtf8.GetString(bytes);
-            return true;
-        }
-        catch (DecoderFallbackException)
-        {
-            text = string.Empty;
-            return false;
-        }
-    }
-
-    private static readonly Encoding StrictUtf8 =
-        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private static string NormalizePrefix(string? subdirectory)
     {
