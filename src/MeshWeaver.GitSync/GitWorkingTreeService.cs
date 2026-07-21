@@ -288,17 +288,11 @@ public sealed class GitWorkingTreeService(
         return changes;
     }
 
-    /// <summary>The credential-helper config that reads the token from <c>$GW_TOKEN</c> (token never in argv).</summary>
-    private static IReadOnlyList<string> AuthArgs(string? token) => string.IsNullOrEmpty(token)
-        ? []
-        : [
-            // Clear any inherited helper (system credential store), then install ours.
-            "-c", "credential.helper=",
-            "-c", "credential.helper=!f() { test \"$1\" = get && printf 'username=x-access-token\\npassword=%s\\n' \"$GW_TOKEN\"; }; f",
-          ];
+    /// <summary>The shared <c>$GW_TOKEN</c> credential-helper config (token never in argv).</summary>
+    private static IReadOnlyList<string> AuthArgs(string? token) => GitCredentials.AuthArgs(token);
 
     private static IReadOnlyDictionary<string, string>? AuthEnv(string? token) =>
-        string.IsNullOrEmpty(token) ? null : new Dictionary<string, string> { ["GW_TOKEN"] = token };
+        GitCredentials.AuthEnv(token);
 
     /// <summary>Resolves a repo-relative path and guarantees it stays inside the user's working tree.</summary>
     private string ResolveInTree(string userId, string repoSlug, string relativePath)

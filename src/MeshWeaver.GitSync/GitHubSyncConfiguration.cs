@@ -40,7 +40,15 @@ public static class GitHubSyncConfiguration
             sp.GetRequiredService<IoPoolRegistry>(),
             sp.GetRequiredService<IOptions<GitHubAppOptions>>(),
             sp.GetService<ILogger<GitHubAppTokenService>>()));
-        services.AddSingleton<IGitHubRepoClient, OctokitGitHubRepoClient>();
+        // The production repo client: BULK transfer (push/fetch) over the git protocol — REST
+        // paid one request PER FILE, so one big-repo sync exhausted the GitHub App installation's
+        // hourly budget — with refs/PRs/issues remaining on the Octokit REST client it wraps.
+        services.AddSingleton<OctokitGitHubRepoClient>();
+        services.AddSingleton<IGitHubRepoClient>(sp => new GitProtocolRepoClient(
+            sp.GetRequiredService<OctokitGitHubRepoClient>(),
+            sp.GetRequiredService<GitCli>(),
+            sp.GetRequiredService<IoPoolRegistry>(),
+            sp.GetService<ILogger<GitProtocolRepoClient>>()));
         services.AddSingleton<GitHubCredentialService>();
         services.AddSingleton<GitHubSyncService>();
         services.AddSingleton<PullRequestService>();
