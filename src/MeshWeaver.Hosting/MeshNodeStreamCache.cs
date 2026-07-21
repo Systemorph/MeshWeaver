@@ -300,6 +300,33 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private static readonly TimeSpan StormMaxCooldown = TimeSpan.FromMinutes(5);
     private const int StormFailThreshold = 5;
 
+    // 🚨 TRANSIENT-FAULT BREAKER. IsTransientOwnerFailure faults (reactivation reject /
+    // hub-request timeout) are deliberately NEVER negative-cached — the just-idle-collected
+    // grain reactivates and the very next probe lands on the fresh activation, so suppression
+    // would break the "navigate to an idle page" case. But that clean-cache policy assumed the
+    // fault is a ONE-OFF. A PERSISTENTLY faulting activation (2026-07-21: a poisoned
+    // AgenticEngineering init replayed the same cached SubscribeRequest timeout into every
+    // fresh activation) turns the policy into an unbounded instant-re-probe loop: every read
+    // re-opens an upstream SubscribeRequest ~3/sec, each cycle allocates, and the silo leaked
+    // 4→22 GiB in ~12 minutes while its action blocks starved — one broken hub degrading the
+    // whole portal. This breaker keeps BOTH properties: the first TransientGraceFailures
+    // consecutive transient faults stay exactly as before (clean cache, instant re-probe — the
+    // idle-page case never sees it), but a streak beyond the grace is empirical proof the
+    // "transient" claim is false, so re-probes back off exponentially
+    // (TransientBaseCooldown · 2^(n-grace-1), capped at TransientMaxCooldown — a short cap,
+    // because a recycle CAN heal these). Cleared instantly by a real resolution, a change-feed
+    // invalidation (recycle / post-commit write), or a quiet period (a streak with no fault for
+    // TransientStreakExpiry is stale — occasional blips over a long session never accumulate).
+    // Reads only: writes already bound their owner wait (QueueAdvanceBound) and a write is
+    // often the recycle that heals the path.
+    private sealed record TransientStreak(Exception Error, int FailCount, DateTimeOffset OpenUntil,
+        DateTimeOffset LastFailAt, bool Reprobing = false);
+    private readonly ConcurrentDictionary<string, TransientStreak> _transientStreaks = new();
+    private static readonly TimeSpan TransientBaseCooldown = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan TransientMaxCooldown = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan TransientStreakExpiry = TimeSpan.FromMinutes(5);
+    private const int TransientGraceFailures = 3;
+
     // In-flight cross-hub write subscriptions that have OUTLIVED their queue slot. The
     // per-path Update queue advances on a bounded signal (QueueAdvanceBound) so a lost
     // owner response can't starve retries, but each write's subscription to the owner's
@@ -525,6 +552,19 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     path, cleared.FailCount);
         }
 
+        if (_transientStreaks.TryRemove(path, out var clearedStreak))
+        {
+            if (clearedStreak.FailCount > TransientGraceFailures)
+                logger.LogInformation(
+                    "[TRANSIENT-BREAKER] Cleared '{Path}' on change-feed invalidation after {FailCount} consecutive "
+                    + "transient owner faults — next read re-probes fresh.",
+                    path, clearedStreak.FailCount);
+            else
+                logger.LogDebug(
+                    "MeshNodeStreamCache: cleared transient-fault streak for {Path} on change-feed invalidation (failCount={FailCount})",
+                    path, clearedStreak.FailCount);
+        }
+
         if (_streams.TryGetValue(path, out var lazy) && lazy.IsValueCreated && lazy.Value.IsFaulted
             && _streams.TryRemove(new KeyValuePair<string, Lazy<Entry>>(path, lazy)))
         {
@@ -634,6 +674,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // 5. Storm-breaker negative cache — drop the cached failure windows so
         //    nothing roots the disposed mesh's exceptions/identities.
         _negative.Clear();
+        _transientStreaks.Clear();
     }
 
     /// <summary>
@@ -772,11 +813,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             var disposal = new System.Reactive.Disposables.CompositeDisposable(hydrationSub);
             var entry = new Entry(handle, inner.AsObservable(), disposal);
             var bookkeeping = inner.AsObservable().Subscribe(
-                node => { if (node is not null) _negative.TryRemove(p, out _); },
+                node =>
+                {
+                    if (node is not null)
+                    {
+                        _negative.TryRemove(p, out _);
+                        _transientStreaks.TryRemove(p, out _);
+                    }
+                },
                 ex =>
                 {
                     entry.MarkFaulted();
                     if (IsMissingNodeFailure(ex)) RecordNegative(p, ex);
+                    // A transient owner failure stays out of the negative cache (the node
+                    // exists — see IsTransientOwnerFailure), but a STREAK of them is the
+                    // poisoned-activation loop; record it so re-probes back off past the grace.
+                    else if (IsTransientOwnerFailure(ex)) RecordTransient(p, ex);
                 });
             disposal.Add(bookkeeping);
             return entry;
@@ -960,6 +1012,49 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     }
 
     /// <summary>
+    /// Records a TRANSIENT owner fault (<see cref="IsTransientOwnerFailure"/>) for
+    /// <paramref name="path"/> in the transient-fault breaker. The first
+    /// <see cref="TransientGraceFailures"/> consecutive faults open NO window (the ordinary
+    /// just-idle reactivation miss keeps its instant re-probe); past the grace, each further
+    /// fault opens an exponential-backoff window (<see cref="TransientBaseCooldown"/> ·
+    /// 2^(n-grace-1), capped at <see cref="TransientMaxCooldown"/>) that
+    /// <see cref="GetStreamRaw"/> fast-fails inside — breaking the poisoned-activation
+    /// re-probe loop. A streak whose last fault is older than
+    /// <see cref="TransientStreakExpiry"/> restarts from 1 (a blip an hour ago is not
+    /// evidence about now). Crossing the grace logs ONE warning. Never re-subscribes —
+    /// purely records state, mirroring <see cref="RecordNegative"/>.
+    /// Internal as a test seam.
+    /// </summary>
+    internal void RecordTransient(string path, Exception error) =>
+        RecordTransient(path, error, DateTimeOffset.UtcNow);
+
+    /// <summary>Clock-injectable seam so the streak-expiry rule is testable without real waits.</summary>
+    internal void RecordTransient(string path, Exception error, DateTimeOffset now)
+    {
+        var priorFails =
+            _transientStreaks.TryGetValue(path, out var existing) && now - existing.LastFailAt < TransientStreakExpiry
+                ? existing.FailCount
+                : 0;
+        var failCount = priorFails + 1;
+        var openUntil = now;
+        if (failCount > TransientGraceFailures)
+        {
+            var backoffTicks = Math.Min(
+                TransientBaseCooldown.Ticks * (1L << Math.Min(failCount - TransientGraceFailures - 1, 20)),
+                TransientMaxCooldown.Ticks);
+            openUntil = now + TimeSpan.FromTicks(backoffTicks);
+        }
+        _transientStreaks[path] = new TransientStreak(error, failCount, openUntil, now);
+        if (failCount == TransientGraceFailures + 1)
+            logger.LogWarning(
+                "[TRANSIENT-BREAKER] '{Path}' has faulted {FailCount} consecutive times with a transient-classified "
+                + "owner failure: {Error}. The fault is empirically NOT transient (a poisoned activation / wedged owner) — "
+                + "re-probes now back off exponentially (cap {Cap}s) instead of hammering the owner. A recycle or a "
+                + "successful resolution clears the streak immediately.",
+                path, failCount, error.Message, TransientMaxCooldown.TotalSeconds);
+    }
+
+    /// <summary>
     /// True when an owner failure means the node/hub does not exist (NotFound / activation
     /// failed) — the only failure class the storm-breaker suppresses. RLS denials and
     /// <see cref="IsTransientOwnerFailure">transient routing errors</see> are excluded so an
@@ -1089,6 +1184,30 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     stale.MarkEvicted();
                     stale.HydrationSub.Dispose();
                     readStreamEvictions.OnNext(new ReadStreamEviction(path, false, "storm-breaker"));
+                }
+                catch (Exception ex) { logger.LogDebug(ex, "MeshNodeStreamCache: error disposing stale entry for {Path}", path); }
+            }
+        }
+
+        // TRANSIENT-FAULT BREAKER: same fast-fail + single-flight re-probe discipline as the
+        // negative cache above, but for a persistent STREAK of "transient" owner faults (see
+        // _transientStreaks). Within the grace no entry has an open window, so this block is a
+        // no-op for the ordinary just-idle reactivation miss.
+        if (_transientStreaks.TryGetValue(path, out var streak))
+        {
+            if (streak.OpenUntil > DateTimeOffset.UtcNow)
+                return Observable.Throw<MeshNode>(streak.Error);
+            if (streak.FailCount > TransientGraceFailures
+                && !streak.Reprobing
+                && _transientStreaks.TryUpdate(path, streak with { Reprobing = true }, streak)
+                && _streams.TryRemove(path, out var staleTransientLazy) && staleTransientLazy.IsValueCreated)
+            {
+                try
+                {
+                    var stale = staleTransientLazy.Value;
+                    stale.MarkEvicted();
+                    stale.HydrationSub.Dispose();
+                    readStreamEvictions.OnNext(new ReadStreamEviction(path, false, "transient-breaker"));
                 }
                 catch (Exception ex) { logger.LogDebug(ex, "MeshNodeStreamCache: error disposing stale entry for {Path}", path); }
             }
