@@ -51,10 +51,19 @@ export function attach(container) {
     };
 }
 
-// Anchor the FIXED chat popup (login dialog / agent·model picker) just above the composer.
+// Anchor the FIXED chat popup (login dialog / agent·model picker) to the composer.
 // The widget is position:fixed to escape the chat's overflow clip and paint OVER the sticky header;
-// here we set its left/width/bottom to hover over .thread-chat-input-content. Registered once, a resize
-// listener keeps it aligned. Idempotent + cheap; a no-op when no popup is present.
+// here we set its left/width and vertical placement relative to .thread-chat-input-content.
+// Registered once, a resize listener keeps it aligned. Idempotent + cheap; a no-op when no popup
+// is present. Two layout constraints the CSS alone can't express:
+// - WIDTH: the popup is a command palette, not a sheet — follow the composer's left edge (where
+//   the chips/commands that opened it live) but cap the width, so the full-page home composer
+//   doesn't produce a viewport-wide menu for a four-item list.
+// - HEIGHT/DIRECTION: size the popup to the space actually available on the chosen side of the
+//   composer. The side panel has the composer at the screen bottom (open upward, lots of room);
+//   the home page has it near the top of a possibly short window, where a fixed 440px cap would
+//   overrun the viewport top, cover the portal header and clip the list. Prefer upward, but flip
+//   downward when there is more room below.
 let _popupResizeBound = false;
 export function anchorChatPopup() {
     const reposition = () => {
@@ -64,11 +73,24 @@ export function anchorChatPopup() {
         if (!w || !anchor) return;
         const r = anchor.getBoundingClientRect();
         if (r.width === 0) return;
+        const gap = 6;      // breathing room between popup and composer
+        const margin = 8;   // minimum clearance to the viewport edge
+        const cap = 440;    // tallest the popup ever gets; the inner list scrolls past it
         w.style.left = Math.round(r.left) + 'px';
-        w.style.width = Math.round(r.width) + 'px';
+        w.style.width = Math.round(Math.min(r.width, 560)) + 'px';
         w.style.right = 'auto';
-        // Sit its bottom edge 6px above the composer's top edge.
-        w.style.bottom = Math.round(window.innerHeight - r.top + 6) + 'px';
+        const above = r.top - gap - margin;
+        const below = window.innerHeight - r.bottom - gap - margin;
+        if (above >= 220 || above >= below) {
+            // Open upward, bottom edge 6px above the composer's top edge.
+            w.style.top = 'auto';
+            w.style.bottom = Math.round(window.innerHeight - r.top + gap) + 'px';
+            w.style.maxHeight = Math.round(Math.min(cap, Math.max(above, 120))) + 'px';
+        } else {
+            w.style.bottom = 'auto';
+            w.style.top = Math.round(r.bottom + gap) + 'px';
+            w.style.maxHeight = Math.round(Math.min(cap, Math.max(below, 120))) + 'px';
+        }
     };
     reposition();
     if (!_popupResizeBound) {

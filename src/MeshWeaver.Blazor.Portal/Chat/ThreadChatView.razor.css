@@ -625,20 +625,23 @@ button.thread-chat-status-item {
        scroll area, so an absolute popup could never sit over the header no matter its z-index. Fixed +
        z-index 10000 puts it in the root/top stacking layer, above every sticky heading (≤1100). No
        ancestor has transform/filter (verified), so fixed is NOT trapped. JS (anchorChatPopup) sets
-       left/width/bottom each frame to hover just above the composer; the fallback keeps it on-screen. */
+       left/width, the open direction (above/below the composer) and a max-height fitted to the free
+       space on that side, each frame; the values here are only the first-frame fallback. */
     position: fixed;
     left: 0;
     right: 0;
     bottom: 96px;
     z-index: 10000;
+    /* Command-palette width, not a sheet: cap it so the full-width home-page composer doesn't
+       produce a viewport-wide menu (anchorChatPopup applies the same cap when it takes over). */
+    max-width: 560px;
     border: 1px solid var(--neutral-stroke-rest);
     border-radius: 8px;
     background: var(--neutral-layer-1);
     overflow: hidden;
-    /* Responsive cap: never taller than the space between the side-panel header and the input,
-       so the popup (agent/model picker AND the CLI-login dialog) can't overrun the "New Thread"
-       header at the top of a short side panel. calc(100vh - 180px) ≈ viewport minus header+input+gap;
-       capped at 440px so it stays compact on a tall window. The inner list scrolls past that. */
+    /* First-frame fallback only — anchorChatPopup replaces this with the measured free space
+       above/below the composer, so a composer near the top of a short window (the home page) can't
+       overrun the viewport top and cover the portal header. The inner list scrolls past the cap. */
     max-height: min(440px, calc(100vh - 180px));
     display: flex;
     flex-direction: column;
