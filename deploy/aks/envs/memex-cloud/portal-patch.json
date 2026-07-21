@@ -1,6 +1,9 @@
 [
-  { "op": "replace", "path": "/spec/replicas", "value": 1 },
+  { "op": "replace", "path": "/spec/replicas", "value": 2 },
   { "op": "add", "path": "/spec/template/spec/nodeSelector", "value": { "workload": "silos" } },
+  { "op": "add", "path": "/spec/template/spec/topologySpreadConstraints",
+    "value": [ { "maxSkew": 1, "topologyKey": "kubernetes.io/hostname", "whenUnsatisfiable": "DoNotSchedule",
+                 "labelSelector": { "matchLabels": { "app.kubernetes.io/component": "memex-portal" } } } ] },
 
   { "op": "replace", "path": "/spec/template/spec/volumes/0",
     "value": { "name": "memex-data", "persistentVolumeClaim": { "claimName": "memex-data" } } },
@@ -32,7 +35,7 @@
   { "op": "add", "path": "/spec/template/spec/containers/0/resources",
     "value": { "requests": { "cpu": "4", "memory": "8Gi" }, "limits": { "cpu": "6", "memory": "16Gi" } } },
   { "op": "add", "path": "/spec/template/spec/containers/0/readinessProbe",
-    "value": { "httpGet": { "path": "/", "port": 8080 }, "initialDelaySeconds": 20, "periodSeconds": 10, "failureThreshold": 6 } },
+    "value": { "httpGet": { "path": "/health", "port": 8080 }, "initialDelaySeconds": 20, "periodSeconds": 10, "timeoutSeconds": 5, "failureThreshold": 6 } },
   { "op": "add", "path": "/spec/template/spec/containers/0/livenessProbe",
-    "value": { "httpGet": { "path": "/", "port": 8080 }, "initialDelaySeconds": 90, "periodSeconds": 20, "failureThreshold": 6 } }
+    "value": { "httpGet": { "path": "/alive", "port": 8080 }, "initialDelaySeconds": 90, "periodSeconds": 20, "timeoutSeconds": 5, "failureThreshold": 6 } }
 ]

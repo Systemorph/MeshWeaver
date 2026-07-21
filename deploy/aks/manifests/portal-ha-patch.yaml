@@ -51,19 +51,29 @@ spec:
               app.kubernetes.io/component: memex-portal
       containers:
         - name: memex-portal
+          # Readiness = /health (pulls a wedged pod out of rotation so peers serve);
+          # liveness = /alive (a constant hub-pool-INDEPENDENT check, so a wedged
+          # hub pool can't false-kill the pod on the full /  route). Probing / (the
+          # Blazor route served THROUGH the hub pool) caused the 2-min outage: one
+          # pool wedge failed both probes and k8s waited 6x20s before restarting.
+          # timeoutSeconds 5 (NOT the default 1): a CPU-saturated-but-alive pod
+          # must not be liveness-killed — each kill cold-starts caches/compiles
+          # and drives the next saturation (the probe death spiral of 2026-07-21).
           readinessProbe:
             httpGet:
-              path: /
+              path: /health
               port: 8080
             initialDelaySeconds: 20
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 6
           livenessProbe:
             httpGet:
-              path: /
+              path: /alive
               port: 8080
             initialDelaySeconds: 60
             periodSeconds: 20
+            timeoutSeconds: 5
             failureThreshold: 6
           # Sizable AI image with GENEROUS limits per replica (kept in sync with
           # resources.portal in values.aks.yaml). The AI image is memory-hungry
