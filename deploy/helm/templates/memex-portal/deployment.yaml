@@ -43,9 +43,22 @@ spec:
                 name: "memex-portal-config"
             - secretRef:
                 name: "memex-portal-secrets"
+          env:
+            # 🩺 Crash diagnostics. We hit a native SIGSEGV (exit 139) in the Npgsql → SslStream TLS
+            # read path: the process dies with NO managed exception, so the logs show nothing useful.
+            # Write a dump to the persistent /data volume (a hostPath that survives the restart on the
+            # same node) so the next crash — and the heap, to confirm/refute the suspected leak — is
+            # analyzable. Type 2 = heap (WithPrivateReadWriteMemory). Dumps only appear on crash.
+            - name: "DOTNET_DbgEnableMiniDump"
+              value: "1"
+            - name: "DOTNET_DbgMiniDumpType"
+              value: "2"
+            - name: "DOTNET_DbgMiniDumpName"
+              value: "/data/dumps/coredump.%p.%t"
+            - name: "DOTNET_CreateDumpDiagnostics"
+              value: "1"
           {{- with .Values.selfUpdate }}
           {{- if .azureClientId }}
-          env:
             # Explicit AZURE_CLIENT_ID for the self-updater's ACR credential (the workload-identity
             # webhook also injects this; set here so it's correct even without the webhook).
             - name: "AZURE_CLIENT_ID"
@@ -81,7 +94,14 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 60
           readinessProbe:
-            httpGet: { path: /health, port: 8080 }
+            # ⚠️ /alive (light: process-up), NOT /health (heavy: DB + mesh checks). /health as the
+            # readiness probe is the "probe death-spiral": under load a heavy /health times out (5s) →
+            # 3 fails → the pod is yanked from the Service endpoints → 503 flapping, and the connection
+            # churn that follows aggravates the SslStream SIGSEGV. The rollout gate stays correct
+            # because the STARTUP probe below already holds readiness on /health until the mesh is up
+            # (so no 502 to a booting pod); once up, /alive keeps a serving pod in rotation and never
+            # flaps it out. (Fixed live 2026-07-21; it regressed because the fix wasn't in this chart.)
+            httpGet: { path: /alive, port: 8080 }
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
