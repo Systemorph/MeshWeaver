@@ -64,14 +64,18 @@
         text-decoration: underline;
     }
 
-/* Content-height rows at every folder depth (issue #472). The FluentDataGrid's CSS grid gets
-   a definite height from its layout-area container; with the grid default `align-content:
-   stretch` the surplus height is distributed INTO the row tracks, so a folder with few items
-   renders each row several × too tall, with the (top-aligned) single-line cell content
-   floating at the top of the tall row. The effect worsens with depth because deeper folders
-   hold fewer items (fewer rows share the same surplus). Pack the tracks to the top at content
-   height instead of stretching them. `::deep` reaches the FluentUI web-component element. */
-::deep fluent-data-grid {
+/* Content-height rows at every folder depth (issue #472). FluentDataGrid renders a
+   `<table class="fluent-data-grid grid">` with `display: grid` whose rows are `<tr>`s with
+   `display: contents` — the CELLS are the grid items, and the row heights are the grid's
+   IMPLICIT row tracks. The table is `flex: 1` inside `.file-browser`, so it gets a definite
+   height; with the grid default `align-content: stretch` the surplus height is distributed
+   INTO the row tracks (measured: `grid-template-rows: 290px 282px 282px` for a header + two
+   32px rows), so a folder with few items renders each row several × too tall. The effect
+   worsens with depth because deeper folders hold fewer items (fewer rows share the same
+   surplus). Pack the tracks to the top at content height instead of stretching them.
+   🚨 The selector must target `table.fluent-data-grid` — there is NO `<fluent-data-grid>`
+   custom element in the rendered DOM (that was the original, ineffective fix). */
+::deep table.fluent-data-grid {
     align-content: start;      /* don't distribute surplus height into the row tracks */
     grid-auto-rows: min-content; /* each row sizes to its content, not stretched */
 }
