@@ -321,6 +321,41 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
     }
 
     /// <summary>
+    /// A boot re-import at an UNCHANGED fingerprint must be a PURE READ — no writes at all. The old
+    /// skip path "re-ensured" the partition root (an unconditional overwrite) plus every governance
+    /// node on every boot; on a loaded mesh those writes fan out per-node hub activations that queue
+    /// behind the boot storm and time out at 30s apiece (the memex 2026-07-22 startup storm). The
+    /// observable contract: after a Skipped re-run, the root's Version is UNCHANGED (the overwrite
+    /// would have bumped it — see Reimport_ChangedContent_Updates_AndIncrementsVersion).
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task SkippedReimport_IsReadOnly_DoesNotRewriteRoot()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var first = (await Import()).Single(r => r.Partition == _partition);
+        first.Outcome.Should().Be("Imported");
+
+        // Wait for the Succeeded marker to be visible to the importer's own query (same guard as
+        // Import_CreatesSpaceRoot…), so the re-run below deterministically takes the skip path.
+        var markerPath = $"{_partition}/_Activity/import-{first.Fingerprint}";
+        await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+            .SelectMany(_ => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{markerPath}")).Take(1))
+            .Where(c => c.Items.Any(n => n.Content is ActivityLog { Status: ActivityStatus.Succeeded }))
+            .Take(1).Should().Within(30.Seconds()).Emit();
+
+        var rootBefore = await Mesh.GetMeshNodeStream(_partition)
+            .Where(n => n is { NodeType: "Space" }).Should().Within(30.Seconds()).Emit();
+
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be("Skipped");
+
+        var rootAfter = await Mesh.GetMeshNodeStream(_partition)
+            .Where(n => n is { NodeType: "Space" }).Should().Within(30.Seconds()).Emit();
+        rootAfter!.Version.Should().Be(rootBefore!.Version,
+            "an unchanged-fingerprint boot skip must not rewrite the partition root — every boot "
+            + "bumping the root Version is the write fan-out that starved the memex boot");
+    }
+
+    /// <summary>
     /// SELF-HEALING content sync: a prior Succeeded import marks the partition "done" — but if the
     /// CONTENT nodes are later dropped (a cross-partition prune, a manual delete, a botched migration)
     /// while the <c>_Activity/import-*</c> marker survives, the old marker short-circuit skipped the
