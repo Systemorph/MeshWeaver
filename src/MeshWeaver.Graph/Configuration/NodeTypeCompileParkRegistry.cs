@@ -33,7 +33,9 @@ namespace MeshWeaver.Graph.Configuration;
 /// <para><b>Un-park.</b> The single un-park trigger is a DELIBERATE retry — the user
 /// requests a fresh release (<c>InstallReleaseRequestWatcher</c> calls
 /// <see cref="Unpark"/> before promoting the request to Pending), or a compile genuinely
-/// succeeds (<see cref="OnCompileSucceeded"/>). The registry is mesh-scoped and held in
+/// succeeds (<see cref="OnCompileSucceeded"/>), or automatically when a parked type's SOURCE
+/// snapshot changes after the failure (<see cref="ShouldRetryForSourceChange"/> — the "retry
+/// only if the sources changed" path). The registry is mesh-scoped and held in
 /// memory, so a process restart also clears it — a redeployed fix recompiles fresh.</para>
 ///
 /// <para>Mesh-scoped singleton (registered in <c>AddGraph</c>): one instance shared by
@@ -79,6 +81,35 @@ public sealed class NodeTypeCompileParkRegistry
     public string? GetParkedError(string nodeTypePath) =>
         _parked.TryGetValue(nodeTypePath, out var p) ? p.Error : null;
 
+    /// <summary>
+    /// <c>true</c> when the NodeType is parked AND <paramref name="currentSources"/> differs from
+    /// the source snapshot captured when it parked — i.e. a source edit/add/remove landed SINCE
+    /// the terminal failure, so the (presumed) fix warrants an automatic recompile. A parked type
+    /// whose sources are UNCHANGED returns <c>false</c>: the failure would reproduce identically,
+    /// so there is nothing to retry (and no storm). This is the "retry only if the sources
+    /// changed" gate — <c>NodeTypeCompilationHelpers.InstallSourcesWatcher</c> consults it on
+    /// every source change and, when it is <c>true</c>, calls <see cref="Unpark"/> and re-drives
+    /// the compile (a fresh <c>CompilationStatus = Pending</c>) with no deliberate Compile/recycle.
+    /// </summary>
+    public bool ShouldRetryForSourceChange(
+        string nodeTypePath, IReadOnlyDictionary<string, long> currentSources) =>
+        _parked.TryGetValue(nodeTypePath, out var p)
+        && !SnapshotEquals(p.Sources, currentSources);
+
+    /// <summary>Source-snapshot equality treating <c>null</c> and an empty map as equal.</summary>
+    private static bool SnapshotEquals(
+        IReadOnlyDictionary<string, long>? a, IReadOnlyDictionary<string, long>? b)
+    {
+        var ca = a?.Count ?? 0;
+        var cb = b?.Count ?? 0;
+        if (ca != cb) return false;
+        if (ca == 0) return true;
+        foreach (var kv in a!)
+            if (!b!.TryGetValue(kv.Key, out var v) || v != kv.Value)
+                return false;
+        return true;
+    }
+
     /// <summary>A compile succeeded — clear any parked failure / retry budget for the type.</summary>
     public void OnCompileSucceeded(string nodeTypePath)
     {
@@ -114,17 +145,21 @@ public sealed class NodeTypeCompileParkRegistry
     /// for a System-driven first-build / seed compile, in which case the notification is a
     /// satellite of the failing type (visible to whoever can read the type).</param>
     /// <param name="logger">Optional logger.</param>
+    /// <param name="sources">The source-version snapshot (<c>{path → LastModified.Ticks}</c>)
+    /// that this failing compile consumed — stored with the park so a later source edit can be
+    /// detected (<see cref="ShouldRetryForSourceChange"/>) and auto-retried.</param>
     public void OnCompileFailed(
         IMessageHub hub,
         string nodeTypePath,
         string error,
         bool deterministic,
         string? recipientUserId,
+        IReadOnlyDictionary<string, long>? sources,
         ILogger? logger)
     {
         var failures = _failureCounts.AddOrUpdate(nodeTypePath, 1, (_, n) => n + 1);
         if (deterministic || failures >= MaxCompileAttempts)
-            ParkAndNotify(hub, nodeTypePath, error, recipientUserId, logger);
+            ParkAndNotify(hub, nodeTypePath, error, sources, recipientUserId, logger);
     }
 
     /// <summary>
@@ -133,9 +168,10 @@ public sealed class NodeTypeCompileParkRegistry
     /// exactly one notification — never a storm).
     /// </summary>
     private void ParkAndNotify(
-        IMessageHub hub, string nodeTypePath, string error, string? recipientUserId, ILogger? logger)
+        IMessageHub hub, string nodeTypePath, string error,
+        IReadOnlyDictionary<string, long>? sources, string? recipientUserId, ILogger? logger)
     {
-        if (!_parked.TryAdd(nodeTypePath, new ParkedCompileFailure(error, DateTimeOffset.UtcNow)))
+        if (!_parked.TryAdd(nodeTypePath, new ParkedCompileFailure(error, DateTimeOffset.UtcNow, sources)))
             return; // already parked — do not re-notify
 
         logger?.LogError(
@@ -217,6 +253,8 @@ public sealed class NodeTypeCompileParkRegistry
         return trimmed.Length <= max ? trimmed : string.Concat(trimmed.AsSpan(0, max), " …");
     }
 
-    /// <summary>Record of a parked terminal compile failure: the error text and when it parked.</summary>
-    private sealed record ParkedCompileFailure(string Error, DateTimeOffset ParkedAt);
+    /// <summary>Record of a parked terminal compile failure: the error text, when it parked, and
+    /// the source-version snapshot that failed (used to detect a later source change).</summary>
+    private sealed record ParkedCompileFailure(
+        string Error, DateTimeOffset ParkedAt, IReadOnlyDictionary<string, long>? Sources);
 }

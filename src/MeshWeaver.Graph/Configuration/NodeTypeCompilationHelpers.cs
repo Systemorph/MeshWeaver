@@ -144,8 +144,12 @@ internal static class NodeTypeCompilationHelpers
         //     AccessControl rejects without Edit (intended) or accepts and
         //     produces a Release attributed to the user.
         // The IsDirty computed property on NodeTypeDefinition stays as
-        // informational state — UI uses it to enable the Compile button, but
-        // it NEVER auto-fires a recompile. Doc: AccessContextPropagation.md.
+        // informational state — UI uses it to enable the Compile button, and a
+        // healthy (never-parked) type does NOT auto-fire a recompile on a source
+        // edit. The one exception: a PARKED (terminally-failed) type whose source
+        // then changes IS auto-retried — InstallSourcesWatcher un-parks and flips
+        // Pending so a redeploy/edit that fixes the break heals without a manual
+        // Compile ("retry only if the sources changed"). Doc: AccessContextPropagation.md.
         var ownStream = workspace.GetMeshNodeStream();
 
         var hubPath = hub.Address.Path;
@@ -501,6 +505,11 @@ internal static class NodeTypeCompilationHelpers
         // Source-set discovery is read as System (see the GetSources call in the
         // Select below — break-the-cycle fix for the activation self-deadlock).
         var accessService = hub.ServiceProvider.GetService<AccessService>();
+        // 🅿️ Park registry — when a source change lands on a PARKED (terminally-failed) type,
+        // this watcher un-parks and re-drives the compile (the "retry only if the sources
+        // changed" path). Same mesh-scoped singleton the compile watcher's parked short-circuit
+        // uses; null in the rare host that does not register it (no auto-retry, unchanged before).
+        var parkRegistry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>();
 
         // Outer subscription: discover the source path set via the shared
         // synced query (NodeSources.GetSources). When the path set changes
@@ -587,6 +596,45 @@ internal static class NodeTypeCompilationHelpers
             .Subscribe(
                 snapshot =>
                 {
+                    // 🅿️ Auto-retry a PARKED (terminally-failed) type when its SOURCE snapshot has
+                    // CHANGED since the failure — the "retry only if the sources changed" path. The
+                    // compile watcher's parked short-circuit swallows a bare Pending flip, so we
+                    // Unpark FIRST (in-memory + synchronous → happens-before the Pending emission the
+                    // watcher observes), then flip Pending under System (re-driving framework compile
+                    // state is infrastructure, not a user write — same shape as the parked
+                    // re-settle in InstallCompileWatcher) so a fresh compile runs against the fixed
+                    // sources. An UNCHANGED broken type never reaches here (ShouldRetryForSourceChange
+                    // is false), so the failure stays contained — no recompile storm.
+                    if (parkRegistry?.ShouldRetryForSourceChange(hubPath, snapshot) == true)
+                    {
+                        parkRegistry.Unpark(hubPath);
+                        using (accessService?.ImpersonateAsSystem())
+                            workspace.GetMeshNodeStream().Update(curr =>
+                            {
+                                if (curr.Content is not NodeTypeDefinition def) return curr;
+                                // Never clobber an in-flight compile (Pending/Compiling) — only
+                                // refresh the snapshot; a settled state re-drives to Pending.
+                                var status =
+                                    def.CompilationStatus is CompilationStatus.Pending
+                                        or CompilationStatus.Compiling
+                                        ? def.CompilationStatus
+                                        : CompilationStatus.Pending;
+                                return curr with
+                                {
+                                    Content = def with
+                                    {
+                                        CurrentSourceVersions = snapshot,
+                                        CompilationStatus = status
+                                    }
+                                };
+                            }).Subscribe(
+                                _ => { },
+                                ex => logger?.LogWarning(ex,
+                                    "SourcesWatcher: failed to auto-retry parked {HubPath} after source change",
+                                    hubPath));
+                        return;
+                    }
+
                     workspace.GetMeshNodeStream().Update(curr =>
                     {
                         if (curr.Content is not NodeTypeDefinition def) return curr;
@@ -1260,9 +1308,16 @@ internal static class NodeTypeCompilationHelpers
                                 ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } perr
                                     ? string.Join("; ", perr.Select(m => m.Message))
                                     : "Compilation produced no assembly");
-                            var requestedBy = outcome.PendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseBy;
+                            var pendingDef = outcome.PendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+                            var requestedBy = pendingDef?.RequestedReleaseBy;
+                            // 🅿️ Capture the exact source snapshot this compile consumed (from the
+                            // failed result; fall back to the node's live CurrentSourceVersions) and
+                            // park it WITH the failure. A later edit that changes the snapshot then
+                            // auto-un-parks + recompiles (ShouldRetryForSourceChange in the sources
+                            // watcher) — "retry only if the sources changed".
+                            var failedSources = outcome.Result?.CompiledSources ?? pendingDef?.CurrentSourceVersions;
                             parkRegistry.OnCompileFailed(
-                                hub, hubPath, parkError, deterministic, requestedBy, logger);
+                                hub, hubPath, parkError, deterministic, requestedBy, failedSources, logger);
                         }
                     }
 
