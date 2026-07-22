@@ -604,15 +604,22 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         parkRegistry.IsParked(typePath).Should().BeTrue(
             "a deterministic compile error must park the type");
 
-        // Fix the source; the sources watcher flips IsDirty — parked state intact.
+        // Fix the SOURCE. A source change on a parked type now auto-un-parks and recompiles —
+        // the "retry only if the sources changed" heal path (pinned in NodeTypeCompileParkTest
+        // .ParkedNodeType_SourceFix_AutoRecompilesAndUnparks). Wait for that automatic heal to
+        // settle Ok + un-parked before exercising the deliberate tool retry below.
         await workspace.GetMeshNodeStream(sourcePath).Update(curr =>
             curr with { Content = new CodeConfiguration { Code = CodeV1, Language = "csharp" } })
             .Should().Within(30.Seconds()).Emit();
-        await WaitForIsDirty(typePath, expected: true);
-        parkRegistry.IsParked(typePath).Should().BeTrue(
-            "editing the source alone must not un-park — only a deliberate retry does");
+        await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(90.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok);
+        parkRegistry.IsParked(typePath).Should().BeFalse(
+            "a source fix auto-un-parks the type (retry only if the sources changed)");
 
-        // Retry via the REAL tool surface.
+        // The deliberate compile-tool retry still FORCES a fresh run (RequestedReleaseForce) —
+        // the anti-replay contract: it must report THIS run, never the previous run's snapshot.
         var resultJson = await new MeshOperations(Mesh).Compile(typePath)
             .FirstAsync().Timeout(150.Seconds()).ToTask(ct);
         Output.WriteLine($"Compile tool returned: {resultJson}");
