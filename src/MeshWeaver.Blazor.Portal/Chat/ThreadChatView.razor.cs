@@ -2071,11 +2071,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             }
         }
 
-        // Anchor the FIXED chat popup (login dialog / agent-model picker) just above the composer. The
-        // widget is position:fixed (so it escapes the chat's overflow clip and paints over the sticky
-        // header); JS sets its left/width/bottom to hover over .thread-chat-input-content and keeps it
-        // there on resize. Runs on every render while a popup is open (cheap; no-op when none).
-        if ((LoginDialogOpen || pendingPicker is not null) && !_isDisposed)
+        // Anchor the FIXED chat popup (login dialog / agent-model picker / delete confirm) to the
+        // composer. The widget is position:fixed (so it escapes the chat's overflow clip and paints
+        // over the sticky header); JS sets its left/width, open direction and fitted max-height from
+        // .thread-chat-input-content and keeps it there on resize. Runs on every render while a popup
+        // is open (cheap; no-op when none).
+        if ((LoginDialogOpen || pendingPicker is not null || _deleteConfirmId is not null) && !_isDisposed)
         {
             try
             {
