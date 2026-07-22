@@ -161,4 +161,66 @@ public sealed class AssemblyLoadContextLeakTest : IDisposable
         weak.IsAlive.Should().BeFalse(
             "UnloadContext must release the collectible context so per-node disposal reclaims memory");
     }
+
+    /// <summary>Emit a tiny assembly to a UNIQUE on-disk path — one recompile's output.</summary>
+    private string EmitTinyAssemblyToDisk(string asmName, string typeName)
+    {
+        var bytes = EmitTinyAssembly(asmName, typeName);
+        // Mirror EmitToDiskWithRetry: each release writes to its own {name}_{guid} subdir, so
+        // successive loads of the same node land on DIFFERENT keys in _loadContexts.
+        var dir = Path.Combine(_cacheDir, $"{asmName}_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dll = Path.Combine(dir, $"{asmName}.dll");
+        File.WriteAllBytes(dll, bytes);
+        return dll;
+    }
+
+    /// <summary>
+    /// Load an emitted assembly through the path-keyed context (the live recompile path,
+    /// <c>CompileResultFromAssembly</c> → <c>GetOrCreateLoadContextForPath</c>), USE its type, and
+    /// return ONLY a weak ref to the context. Locals die with this <see cref="MethodImplOptions.NoInlining"/>
+    /// frame so no strong ref survives on the caller's stack.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private WeakReference LoadPathAndWeakRef(string nodeName, string dllPath)
+    {
+        var context = _service.GetOrCreateLoadContextForPath(nodeName, dllPath);
+        var assembly = context.LoadNodeAssembly();
+        assembly.Should().NotBeNull("the emitted assembly must load from its path-keyed context");
+        var type = assembly!.GetTypes().FirstOrDefault(t => t.IsClass);
+        type.Should().NotBeNull();
+        Activator.CreateInstance(type!).Should().NotBeNull();
+        return new WeakReference(context);
+    }
+
+    /// <summary>
+    /// 🚨 The per-recompile reclaim (the memex native-memory leak). A long-lived NodeType hub is
+    /// recompiled repeatedly WITHOUT tearing down; each recompile writes a new unique path and loads
+    /// it via <see cref="CompilationCacheService.GetOrCreateLoadContextForPath"/>. Loading the NEW
+    /// path must evict + collect the SUPERSEDED context for the same NodeType then and there — not
+    /// only on hub teardown (<c>UnloadNodeContexts</c>). If RED, every recompile pins another
+    /// collectible ALC + its native metadata/JIT for the hub's whole life → unbounded growth to the
+    /// GC hard limit → the GC-thrash crash. The current context must survive (not over-evicted).
+    /// </summary>
+    [Fact]
+    public void RecompileToNewPath_EvictsAndCollects_SupersededContext_WithoutTeardown()
+    {
+        const string node = "recompile_evict_node";
+
+        var v1Dll = EmitTinyAssemblyToDisk($"GenAsm_{node}_v1", "Widget");
+        var weakV1 = LoadPathAndWeakRef(node, v1Dll);
+        weakV1.IsAlive.Should().BeTrue("V1's context is held by the cache after the first load");
+
+        // A recompile: a NEW unique path for the SAME node. Loading it evicts V1's superseded context.
+        var v2Dll = EmitTinyAssemblyToDisk($"GenAsm_{node}_v2", "Widget");
+        var weakV2 = LoadPathAndWeakRef(node, v2Dll);
+
+        ForceCollect(weakV1);
+
+        weakV1.IsAlive.Should().BeFalse(
+            "loading a new path for the same NodeType must evict + collect the SUPERSEDED " +
+            "AssemblyLoadContext without waiting for hub teardown — otherwise every recompile leaks an ALC");
+        weakV2.IsAlive.Should().BeTrue(
+            "the CURRENT context (just-loaded V2) must NOT be evicted — it is the live assembly the hub runs on");
+    }
 }

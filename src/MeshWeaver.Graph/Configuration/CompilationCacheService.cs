@@ -798,14 +798,68 @@ internal class CompilationCacheService(
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        return _loadContexts.GetOrAdd(dllPath, path =>
+        var created = false;
+        var ctx = _loadContexts.GetOrAdd(dllPath, path =>
         {
+            created = true;
             logger.LogDebug("Creating new path-keyed AssemblyLoadContext for {NodeName} at {DllPath}", nodeName, path);
-            var ctx = new NodeAssemblyLoadContext(nodeName, path, logger);
+            var c = new NodeAssemblyLoadContext(nodeName, path, logger);
             if (_probingDirs.TryGetValue(nodeName, out var dirs) && !dirs.IsDefaultOrEmpty)
-                ctx.SetProbingDirectories(dirs);
-            return ctx;
+                c.SetProbingDirectories(dirs);
+            return c;
         });
+
+        // A genuinely NEW path-keyed context means a fresh compile/release just superseded any
+        // prior assembly for this NodeType. Each recompile writes to a unique
+        // {nodeName}_{timestamp}_{guid} directory (see EmitToDiskWithRetry), so the OLD entries —
+        // same NodeName, different key — are never reused. Left in place they pin their collectible
+        // NodeAssemblyLoadContext (and its native metadata/JIT images) for the ENTIRE life of the
+        // (long-lived) NodeType hub, unloaded only on hub teardown (UnloadNodeContexts). That
+        // per-recompile accumulation is the native-memory leak that drove memex to the server-GC
+        // hard limit (~21 GB at the 28 Gi cap) and its GC-thrash crashes. Evict them now — but only
+        // when WE added the current context (created), so a re-request of an already-cached path can
+        // never evict the live assembly. See EvictSupersededContexts for why this is safe mid-recompile.
+        if (created)
+            EvictSupersededContexts(nodeName, keepKey: dllPath);
+
+        return ctx;
+    }
+
+    /// <summary>
+    /// Unloads every load context for <paramref name="nodeName"/> whose dictionary key is not
+    /// <paramref name="keepKey"/> — the assemblies a just-loaded recompile/release superseded —
+    /// bounding <see cref="_loadContexts"/> to the current context per NodeType instead of one per
+    /// recompile.
+    /// </summary>
+    /// <remarks>
+    /// Safe to call mid-recompile, while old instance hubs may still be running on the superseded
+    /// assembly: <see cref="NodeAssemblyLoadContext.Dispose"/> calls the COOPERATIVE
+    /// <see cref="System.Runtime.Loader.AssemblyLoadContext.Unload"/>, which does not rip out loaded
+    /// types — a context still referenced by a live hub stays fully mapped and usable and is
+    /// collected only once that hub recycles onto the new assembly and drops its last reference. The
+    /// context's <c>Unloading</c> handler (<c>ReflectionCacheEviction.EvictFor</c>) purges Autofac's
+    /// shared reflection cache so the freed context is neither rooted nor left as a dangling key.
+    /// Mirrors the match in <see cref="UnloadNodeContexts"/>/<see cref="InvalidateCache"/> (both key
+    /// on <see cref="NodeAssemblyLoadContext.NodeName"/>), just triggered per recompile rather than
+    /// only on hub teardown.
+    /// </remarks>
+    private void EvictSupersededContexts(string nodeName, string keepKey)
+    {
+        if (_disposed)
+            return;
+
+        var stale = _loadContexts
+            .Where(kvp => !string.Equals(kvp.Key, keepKey, StringComparison.Ordinal)
+                       && string.Equals(kvp.Value.NodeName, nodeName, StringComparison.Ordinal))
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        foreach (var key in stale)
+            UnloadContext(key);
+
+        if (stale.Count > 0)
+            logger.LogDebug("Evicted {Count} superseded AssemblyLoadContext(s) for recompiled node {NodeName}",
+                stale.Count, nodeName);
     }
 
     /// <inheritdoc />
