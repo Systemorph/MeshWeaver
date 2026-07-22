@@ -44,8 +44,13 @@
    scoped to `.no-messages`, keeping the inline `max-height` cap + Monaco's internal scroll.
    `::deep` reaches the child component's root; `!important` beats the inline height (and the
    JS grow-writes, which we don't want in the fill state anyway). The with-messages composer
-   has no `.no-messages` class, so its #178 auto-grow is completely untouched. */
-.thread-chat-container.no-messages .input-container ::deep .monaco-editor-container {
+   has no `.no-messages` class, so its #178 auto-grow is completely untouched.
+   🚨 Scoped to :not(.compact-mode): in compact-mode (the dashboard/user-activity composer)
+   the container is `position: static` and the whole chain sizes to CONTENT — there is no
+   definite height to fill, so `height: 100%` resolves against an auto-height parent,
+   collapses to the 80px min, AND its `!important` blocks the auto-grow height writes.
+   In compact-mode the composer must rely on #178 auto-grow instead of the fill. */
+.thread-chat-container.no-messages:not(.compact-mode) .input-container ::deep .monaco-editor-container {
     height: 100% !important;
 }
 
