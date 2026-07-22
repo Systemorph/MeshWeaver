@@ -213,7 +213,13 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     private readonly ILogger? _logger;
     private readonly string? _dllPath;
     private readonly object _loadLock = new();
-    private Assembly? _loadedAssembly;
+    // 🚨 Weak, never a strong Assembly field: a collectible context that strongly references
+    // its own assembly forms a cycle THROUGH the runtime's LoaderAllocator GC handle
+    // (LoaderAllocator → handle → context → Assembly → LoaderAllocator) that the GC can never
+    // break — a context dropped WITHOUT Dispose would be immortal garbage. Weak is lossless
+    // here: a live context roots its own assemblies natively, so the target only dies when the
+    // whole context does.
+    private WeakReference<Assembly>? _loadedAssembly;
     private volatile bool _disposed;
     private ImmutableArray<string> _probingDirs = ImmutableArray<string>.Empty;
 
@@ -238,7 +244,8 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     /// <summary>
     /// Gets the loaded assembly, or null if not yet loaded.
     /// </summary>
-    public Assembly? LoadedAssembly => _loadedAssembly;
+    public Assembly? LoadedAssembly =>
+        _loadedAssembly is { } weak && weak.TryGetTarget(out var assembly) ? assembly : null;
 
     /// <summary>
     /// Gets whether this context has been disposed/unloaded.
@@ -271,9 +278,8 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
             throw new ObjectDisposedException(Name, "Cannot load assembly from disposed context");
 
         // Fast path: already loaded
-        var loaded = _loadedAssembly;
-        if (loaded != null)
-            return loaded;
+        if (LoadedAssembly is { } fast)
+            return fast;
 
         lock (_loadLock)
         {
@@ -281,8 +287,7 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
             if (_disposed)
                 throw new ObjectDisposedException(Name, "Cannot load assembly from disposed context");
 
-            loaded = _loadedAssembly;
-            if (loaded != null)
+            if (LoadedAssembly is { } loaded)
                 return loaded;
 
             if (string.IsNullOrEmpty(_dllPath) || !File.Exists(_dllPath))
@@ -318,11 +323,12 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
             // Load the assembly into this isolated context
             try
             {
-                _loadedAssembly = LoadFromAssemblyPath(_dllPath);
+                var assembly = LoadFromAssemblyPath(_dllPath);
+                _loadedAssembly = new WeakReference<Assembly>(assembly);
                 _logger?.LogDebug("Loaded assembly {AssemblyName} into context {ContextName}",
-                    _loadedAssembly.GetName().Name, Name);
+                    assembly.GetName().Name, Name);
 
-                return _loadedAssembly;
+                return assembly;
             }
             catch (BadImageFormatException ex)
             {
@@ -353,9 +359,8 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
             throw new ObjectDisposedException(Name, "Cannot load assembly from disposed context");
 
         // Fast path: already loaded
-        var loaded = _loadedAssembly;
-        if (loaded != null)
-            return loaded;
+        if (LoadedAssembly is { } fast)
+            return fast;
 
         lock (_loadLock)
         {
@@ -363,18 +368,18 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
             if (_disposed)
                 throw new ObjectDisposedException(Name, "Cannot load assembly from disposed context");
 
-            loaded = _loadedAssembly;
-            if (loaded != null)
+            if (LoadedAssembly is { } loaded)
                 return loaded;
 
             using var assemblyStream = new MemoryStream(assemblyBytes);
             using var pdbStream = pdbBytes != null ? new MemoryStream(pdbBytes) : null;
 
-            _loadedAssembly = LoadFromStream(assemblyStream, pdbStream);
+            var assembly = LoadFromStream(assemblyStream, pdbStream);
+            _loadedAssembly = new WeakReference<Assembly>(assembly);
             _logger?.LogDebug("Loaded assembly {AssemblyName} from bytes into context {ContextName}",
-                _loadedAssembly.GetName().Name, Name);
+                assembly.GetName().Name, Name);
 
-            return _loadedAssembly;
+            return assembly;
         }
     }
 

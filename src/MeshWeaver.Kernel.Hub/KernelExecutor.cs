@@ -36,7 +36,10 @@ namespace MeshWeaver.Kernel.Hub;
 /// </summary>
 internal sealed class KernelExecutor(IMessageHub publicHub)
 {
-    private ScriptState<object>? scriptState;
+    // The REPL chain + its collectible AssemblyLoadContext — see ScriptSession. Owning the
+    // emit/load path (instead of ScriptState.RunAsync) is what lets the per-cell assemblies
+    // unload with the session; Roslyn's own script loader is permanently non-collectible.
+    private ScriptSession? session;
     private ScriptOptions scriptOptions = ScriptOptions.Default;
     private MeshScriptGlobals? scriptGlobals;
     private ScriptLogger? scriptLogger;
@@ -98,10 +101,23 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         config.TypeRegistry.WithType(typeof(SubmitCodeResponse), nameof(SubmitCodeResponse));
         config.TypeRegistry.WithType(typeof(CancelScriptRequest), nameof(CancelScriptRequest));
         // Start the serial REPL processor ONCE. Concat runs queued submissions strictly in
-        // arrival order — each Execute fully completes (scriptState assigned) before the next
-        // subscribes — so cross-submission state sharing is deterministic without any lock.
+        // arrival order — each Execute fully completes (the session's chain advanced) before
+        // the next subscribes — so cross-submission state sharing is deterministic without any
+        // lock.
         submissionPump = submissions.Select(RunSubmission).Concat().Subscribe();
         return config
+            .WithInitialization(hub =>
+                // Executor hub disposal (idle disconnect / session close) eagerly unloads the
+                // session's collectible AssemblyLoadContext — the per-cell script assemblies
+                // die with the session instead of accumulating for the process lifetime — and
+                // stops the pump. Disposing the session while a script is still running is
+                // safe: unloading is cooperative and completes when the last reference dies.
+                hub.RegisterForDisposal(System.Reactive.Disposables.Disposable.Create(() =>
+                {
+                    submissionPump?.Dispose();
+                    session?.Dispose();
+                    session = null;
+                })))
             .WithHandler<SubmitCodeRequest>(HandleSubmitCodeRequest)
             .WithHandler<CancelScriptRequest>(HandleCancelRequest);
     }
@@ -348,20 +364,21 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             // Roslyn compile+execute on the bounded Compile IoPool (see `compilePool`) —
             // NOT a bare Observable.FromAsync on the shared ThreadPool. `t` is the pool's
             // cancellation (cancelled on unsubscribe), identical to the prior FromAsync CT,
-            // so REPL state + CancelScriptRequest semantics are preserved.
-            scope => compilePool.Invoke(t => scriptState is null
-                    ? CSharpScript.RunAsync(cleaned, scriptOptions, scriptGlobals, typeof(MeshScriptGlobals), t)
-                    : scriptState.ContinueWithAsync(cleaned, scriptOptions, t))
-                .Select(state =>
+            // so REPL state + CancelScriptRequest semantics are preserved. The session owns
+            // chain advancement (only on success — a throwing submission's variables are
+            // discarded, the historical ScriptState behavior).
+            scope => compilePool.Invoke(t =>
+                    (session ??= new ScriptSession(scriptGlobals!))
+                        .RunAsync(cleaned, scriptOptions, typeof(MeshScriptGlobals), t))
+                .Select(returnValue =>
                 {
-                    scriptState = state;
                     scope.Flush();
-                    if (state.ReturnValue is not null)
+                    if (returnValue is not null)
                     {
-                        UpdateView(viewId, state.ReturnValue);
-                        scriptOutputLogger.LogInformation("{Value}", state.ReturnValue.ToString() ?? "");
+                        UpdateView(viewId, returnValue);
+                        scriptOutputLogger.LogInformation("{Value}", returnValue.ToString() ?? "");
                     }
-                    return state.ReturnValue;
+                    return returnValue;
                 }));
     }
 
