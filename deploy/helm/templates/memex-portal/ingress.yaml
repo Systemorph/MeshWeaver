@@ -91,4 +91,64 @@ spec:
                 port:
                   number: {{ .Values.grpc.port }}
 {{- end }}
+# ---- MCP + its OAuth flow pinned to ONE pod (stateful per-pod sessions) ------
+# /mcp (Streamable HTTP) and its OAuth endpoints (/register /authorize /token) keep session +
+# dynamic-client-registration + issued-token state IN-MEMORY PER POD. With >1 replica, the site's
+# cookie affinity does NOT help (the MCP HTTP client doesn't carry the cookie), so requests bounce
+# between pods → "authenticated user does not match the session" / "rejected on reconnect". A
+# dedicated Ingress routes the whole flow to a SINGLE pod via a constant hash ($host) so
+# registration, token and session all land together. Low traffic; if that pod dies the consistent
+# hash remaps to a live one (reconnect once). Real fix: shared/distributed MCP session state.
+---
+apiVersion: "networking.k8s.io/v1"
+kind: "Ingress"
+metadata:
+  name: "memex-portal-mcp-ingress"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-portal"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+  annotations:
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$host"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tlsSecret | quote }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: "/mcp"
+            pathType: "Prefix"
+            backend:
+              service:
+                name: "memex-portal-service"
+                port:
+                  number: {{ .Values.config.memex_portal.ASPNETCORE_HTTP_PORTS | default 8080 }}
+          - path: "/register"
+            pathType: "Prefix"
+            backend:
+              service:
+                name: "memex-portal-service"
+                port:
+                  number: {{ .Values.config.memex_portal.ASPNETCORE_HTTP_PORTS | default 8080 }}
+          - path: "/authorize"
+            pathType: "Prefix"
+            backend:
+              service:
+                name: "memex-portal-service"
+                port:
+                  number: {{ .Values.config.memex_portal.ASPNETCORE_HTTP_PORTS | default 8080 }}
+          - path: "/token"
+            pathType: "Prefix"
+            backend:
+              service:
+                name: "memex-portal-service"
+                port:
+                  number: {{ .Values.config.memex_portal.ASPNETCORE_HTTP_PORTS | default 8080 }}
 {{- end }}
