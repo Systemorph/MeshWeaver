@@ -64,6 +64,22 @@ public interface IMeshLanguageService
         string nodeTypePath,
         string sourcePath,
         string proposedCode);
+
+    /// <summary>
+    /// Drops and disposes the cached Roslyn workspace for <paramref name="nodeTypePath"/>, if any.
+    /// Called when the NodeType's hub disposes (node deleted / grain deactivated) so its
+    /// <c>AdhocWorkspace</c> — which strongly roots a full <c>CSharpCompilation</c>, every
+    /// <c>SyntaxTree</c> and the whole <c>PENamedTypeSymbol</c>/<c>MetadataReference</c> symbol graph
+    /// — does not linger for the life of this singleton service. Without it the cache is bounded
+    /// only by "distinct NodeTypes ever queried by the language service," each entry an enormous
+    /// managed Roslyn graph held forever (the 619 MB managed Roslyn heap seen on memex).
+    /// <para>
+    /// A synchronous fire-and-forget cleanup, NOT part of the reactive query surface: it neither
+    /// blocks nor awaits, so it is safe to call from a hub-disposal callback. A no-op when nothing
+    /// is cached for the path.
+    /// </para>
+    /// </summary>
+    void Evict(string nodeTypePath);
 }
 
 /// <summary>0-based line/character position. LSP convention (Monaco is 1-based for lines — converted at the boundary).</summary>
