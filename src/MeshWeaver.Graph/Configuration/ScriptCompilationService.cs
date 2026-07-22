@@ -1,8 +1,11 @@
 using System.Collections.Concurrent;
+using System.Reflection;
+using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
+using Microsoft.CodeAnalysis.Emit;
 using Microsoft.CodeAnalysis.Scripting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -17,7 +20,18 @@ namespace MeshWeaver.Graph.Configuration;
 /// <summary>
 /// Service that compiles MeshNode configurations using CSharpScript.
 /// Unlike MeshNodeCompilationService which generates assemblies, this service
-/// evaluates scripts directly and caches the compiled Script objects.
+/// evaluates scripts directly and caches the compiled executors.
+///
+/// <para>🚨 Each cached entry's assembly is emitted by US into a <b>collectible</b>
+/// <see cref="AssemblyLoadContext"/>, never run through <c>Script.RunAsync</c> — Roslyn's own
+/// script loader is permanently non-collectible (verified against Roslyn 5.3), and the cache
+/// key includes <c>node.LastModified</c>, so with RunAsync every node UPDATE stranded the
+/// previous entry's assembly for the process lifetime (a co-driver of the portal's
+/// memory-fatigue wall alongside the kernel's per-cell leak — see <c>ScriptSession</c> in
+/// MeshWeaver.Kernel.Hub for the same cure on the REPL path). Invalidation now unloads the
+/// entry's context; a <c>HubConfiguration</c> delegate still referenced by a running hub keeps
+/// its context alive until the hub dies (unloading is cooperative), then everything is
+/// reclaimed.</para>
 /// </summary>
 internal class ScriptCompilationService : IDisposable
 {
@@ -27,8 +41,17 @@ internal class ScriptCompilationService : IDisposable
     private readonly ScriptOptions _scriptOptions;
     private readonly INuGetAssemblyResolver _nugetResolver;
 
-    // In-memory cache of compiled scripts by cache key
-    private readonly ConcurrentDictionary<string, Script<MeshNode>> _compiledScripts = new();
+    // In-memory cache of compiled config executors by cache key. The entry owns its
+    // collectible load context; the Factory delegate (→ its target method → assembly) is what
+    // keeps the context alive while cached — Unload() on eviction lets it die.
+    private sealed record CompiledConfig(Func<object?[], Task<MeshNode>> Factory, AssemblyLoadContext LoadContext)
+    {
+        /// <summary>The generated submission entry point: slot 0 = globals (none here), slot 1
+        /// is written by the submission itself — a fresh 2-slot array per execution.</summary>
+        public Task<MeshNode> ExecuteAsync() => Factory(new object?[2]);
+    }
+
+    private readonly ConcurrentDictionary<string, CompiledConfig> _compiledScripts = new();
 
     // Track script source files on disk for debugging
     private readonly ConcurrentDictionary<string, string> _sourceFiles = new();
@@ -65,8 +88,8 @@ internal class ScriptCompilationService : IDisposable
 
         _logger.LogDebug("Compiling script for {NodePath} with cache key {CacheKey}", node.Path, cacheKey);
 
-        // Try to get cached compiled script
-        if (!_compiledScripts.TryGetValue(cacheKey, out var script))
+        // Try to get cached compiled executor
+        if (!_compiledScripts.TryGetValue(cacheKey, out var compiled))
         {
             // Generate script source
             var rawSource = _generator.GenerateScriptSource(node, codeFile, hubConfiguration, contentCollections);
@@ -87,21 +110,12 @@ internal class ScriptCompilationService : IDisposable
                 await SaveSourceToDiskAsync(node.Path, cacheKey, source, ct);
             }
 
-            // Compile the script
-            script = CSharpScript.Create<MeshNode>(source, scriptOptions);
-
-            // Validate compilation
-            var diagnostics = script.Compile(ct);
-            var errors = diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
-            if (errors.Any())
-            {
-                var errorMessage = string.Join("\n", errors.Select(e => e.ToString()));
-                _logger.LogError("Script compilation failed for {NodePath}:\n{Errors}", node.Path, errorMessage);
-                throw new CompilationException(node.Path, errorMessage);
-            }
-
-            // Cache the compiled script
-            _compiledScripts[cacheKey] = script;
+            var fresh = CompileToCollectibleContext(node.Path, source, scriptOptions, ct);
+            // On a lost publication race the winner stays cached; shed the duplicate's context
+            // (unloading is cooperative — this call can still execute from it safely).
+            compiled = _compiledScripts.GetOrAdd(cacheKey, fresh);
+            if (!ReferenceEquals(compiled, fresh))
+                fresh.LoadContext.Unload();
             _logger.LogDebug("Script compiled and cached for {NodePath}", node.Path);
         }
         else
@@ -112,14 +126,54 @@ internal class ScriptCompilationService : IDisposable
         // Execute the script
         try
         {
-            var result = await script.RunAsync(cancellationToken: ct);
-            return result.ReturnValue;
+            return await compiled.ExecuteAsync();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Script execution failed for {NodePath}", node.Path);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Compiles the config script through Roslyn's script API but emits + loads it into a
+    /// fresh collectible context and binds the generated <c>&lt;Factory&gt;</c> entry point —
+    /// the submission protocol of the scripting host, minus its permanent loader.
+    /// </summary>
+    private CompiledConfig CompileToCollectibleContext(
+        string nodePath, string source, ScriptOptions scriptOptions, CancellationToken ct)
+    {
+        var script = CSharpScript.Create<MeshNode>(source, scriptOptions);
+        var compilation = script.GetCompilation();
+
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+        var emitted = compilation.Emit(
+            peStream,
+            pdbStream,
+            options: new EmitOptions(debugInformationFormat: DebugInformationFormat.PortablePdb),
+            cancellationToken: ct);
+        if (!emitted.Success)
+        {
+            var errorMessage = string.Join("\n", emitted.Diagnostics
+                .Where(d => d.Severity == DiagnosticSeverity.Error)
+                .Select(e => e.ToString()));
+            _logger.LogError("Script compilation failed for {NodePath}:\n{Errors}", nodePath, errorMessage);
+            throw new CompilationException(nodePath, errorMessage);
+        }
+
+        // One context per entry; a single submission never needs sibling resolution, so every
+        // bind falls through to the default context. 🚨 Never store the Assembly on the
+        // context itself — a strong self-reference is a GC-handle cycle that can never unload.
+        var loadContext = new AssemblyLoadContext($"node-config-script:{nodePath}", isCollectible: true);
+        peStream.Position = 0;
+        pdbStream.Position = 0;
+        var assembly = loadContext.LoadFromStream(peStream, pdbStream);
+        var scriptClass = compilation.ScriptClass!.MetadataName;
+        var factory = assembly.GetType(scriptClass, throwOnError: true)!
+                          .GetMethod("<Factory>", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                      ?? throw new InvalidOperationException($"Submission type '{scriptClass}' has no <Factory> entry point.");
+        return new CompiledConfig(factory.CreateDelegate<Func<object?[], Task<MeshNode>>>(), loadContext);
     }
 
     /// <summary>
@@ -141,7 +195,8 @@ internal class ScriptCompilationService : IDisposable
     /// </summary>
     public void InvalidateCache(string cacheKey)
     {
-        _compiledScripts.TryRemove(cacheKey, out _);
+        if (_compiledScripts.TryRemove(cacheKey, out var evicted))
+            evicted.LoadContext.Unload();
 
         if (_sourceFiles.TryRemove(cacheKey, out var sourcePath) && File.Exists(sourcePath))
         {
@@ -179,7 +234,9 @@ internal class ScriptCompilationService : IDisposable
     /// </summary>
     public void ClearCache()
     {
-        _compiledScripts.Clear();
+        foreach (var key in _compiledScripts.Keys.ToList())
+            if (_compiledScripts.TryRemove(key, out var evicted))
+                evicted.LoadContext.Unload();
         _sourceFiles.Clear();
     }
 
@@ -318,7 +375,6 @@ internal class ScriptCompilationService : IDisposable
 
     public void Dispose()
     {
-        _compiledScripts.Clear();
-        _sourceFiles.Clear();
+        ClearCache();
     }
 }

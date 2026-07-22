@@ -114,14 +114,30 @@ public class KernelScriptMemoryLeakTest(ITestOutputHelper output) : MonolithMesh
 
         ForceCollect();
 
-        // CI trace shows alc count +1 per kernel-script test, never reclaimed —
-        // name every surviving context (Roslyn's script LoadContext is the suspect).
         foreach (var alc in System.Runtime.Loader.AssemblyLoadContext.All)
         {
             Output.WriteLine(
                 $"[alc] {alc.GetType().FullName} name={alc.Name} collectible={alc.IsCollectible} " +
                 $"assemblies=[{string.Join(", ", alc.Assemblies.Select(a => a.GetName().Name).Take(5))}{(alc.Assemblies.Count() > 5 ? ", …" : "")}]");
         }
+
+        // The kernel's per-cell script assemblies load into ScriptSession's COLLECTIBLE
+        // "kernel-script-session" context (Roslyn's own script loader is permanently
+        // non-collectible — the historical +1-ALC-per-session leak this suite used to only
+        // LOG). After hub + SP disposal the session was disposed (context unloaded);
+        // unloading completes asynchronously, so retry collect-and-check. A context that
+        // survives this loop is pinned — the classic cause is a STRONG Assembly reference
+        // held by the context itself (the map must stay WeakReference-valued; see
+        // ScriptSession.SessionLoadContext).
+        static bool SessionContextAlive() =>
+            System.Runtime.Loader.AssemblyLoadContext.All
+                .Any(alc => alc.Name == Kernel.Hub.ScriptSession.LoadContextName);
+        for (var round = 0; round < 10 && SessionContextAlive(); round++)
+            ForceCollect();
+        SessionContextAlive().Should().BeFalse(
+            "every kernel ScriptSession load context must unload after the mesh and its " +
+            "ServiceProvider are disposed — a surviving context means the per-cell script " +
+            "assemblies leak for the process lifetime (the memory-fatigue wall)");
 
         var (pinned, report) = AnalyzeScriptRoots();
         Output.WriteLine(report);
