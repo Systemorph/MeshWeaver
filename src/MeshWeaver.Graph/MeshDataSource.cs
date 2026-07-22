@@ -12,6 +12,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Services.LanguageServer;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -689,6 +690,16 @@ public static class MeshDataSourceExtensions
                 var sanitizedNodeName = compilationCache.SanitizeNodeName(hub.Address.Path);
                 hub.RegisterForDisposal(_ => compilationCache.UnloadNodeContexts(sanitizedNodeName));
             }
+
+            // 🚨 Memory: same per-node reclaim for the LSP workspace cache. The language service is a
+            // singleton whose _cache holds one AdhocWorkspace — a full Roslyn CSharpCompilation +
+            // SyntaxTrees + symbol graph — per NodeType path, never evicted once queried. Drop this
+            // node's entry on hub teardown so that managed Roslyn heap (the 619 MB memex managed leak)
+            // is released with the node instead of held for the process lifetime. No-op for nodes the
+            // language service never cached.
+            var languageService = hub.ServiceProvider.GetService<IMeshLanguageService>();
+            if (languageService != null)
+                hub.RegisterForDisposal(_ => languageService.Evict(hub.Address.Path));
 
             // Persistence sampler: posts SaveMeshNodeRequest to the per-node
             // hub at most every SaveSampleInterval, with the latest version of

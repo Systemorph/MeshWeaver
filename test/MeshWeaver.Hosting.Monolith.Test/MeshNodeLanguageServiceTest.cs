@@ -266,6 +266,42 @@ public record DiagDemo
     }
 
     [Fact]
+    public async Task Evict_DropsCachedWorkspace_ForDisposedNodeType()
+    {
+        // A query builds + caches the NodeType's AdhocWorkspace (a full CSharpCompilation + symbol
+        // graph). Without eviction that entry lives for the singleton's whole life — the managed
+        // Roslyn leak. Evict (the hub-disposal reclaim) must drop + dispose it.
+        await SeedNodeType(
+            "EvictDemo",
+            new NodeTypeDefinition { Configuration = "config => config.WithContentType<EvictDemo>()" },
+            ("EvictDemo.cs", @"
+public record EvictDemo
+{
+    public string Id { get; init; } = string.Empty;
+}")).Should().Within(60.Seconds()).Emit();
+
+        const string nodeTypePath = "type/EvictDemo";
+
+        await LanguageService.GetDiagnostics(nodeTypePath).Should().Within(60.Seconds()).Emit();
+
+        var concrete = (MeshNodeLanguageService)LanguageService;
+        concrete.IsWorkspaceCached(nodeTypePath).Should().BeTrue(
+            "querying the language service must cache a Roslyn workspace for the NodeType");
+
+        LanguageService.Evict(nodeTypePath);
+
+        concrete.IsWorkspaceCached(nodeTypePath).Should().BeFalse(
+            "Evict must drop the cache entry — otherwise the cache grows one full Roslyn graph per " +
+            "NodeType ever queried, held for the process lifetime (the memex managed Roslyn leak)");
+
+        // Idempotent + safe on an already-evicted / never-queried path (the disposal hook fires for
+        // EVERY node hub, most of which the language service never cached).
+        LanguageService.Evict(nodeTypePath);
+        LanguageService.Evict("type/NeverQueried");
+        concrete.IsWorkspaceCached("type/NeverQueried").Should().BeFalse();
+    }
+
+    [Fact]
     public async Task GetHover_OnPropertyInsideRecord_ReturnsMarkdown()
     {
         // Position the cursor over the `string` keyword in a property declaration, expect

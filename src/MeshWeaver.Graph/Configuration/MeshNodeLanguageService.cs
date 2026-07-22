@@ -92,6 +92,23 @@ internal sealed class MeshNodeLanguageService(
                         : _ioPool.Run(ct =>
                             speculativeCompilation.GetDiagnosticsAsync(inputs, sourcePath, proposedCode, ct))));
 
+    /// <inheritdoc />
+    public void Evict(string nodeTypePath)
+    {
+        // Drop + dispose the cached AdhocWorkspace so its CSharpCompilation / SyntaxTrees /
+        // symbol graph are released the moment the NodeType hub disposes, rather than lingering
+        // for the life of this singleton. Dispose() is the same release BuildOrReuseWorkspace does
+        // on a version change; here it is triggered by node deletion / hub teardown instead.
+        if (_cache.TryRemove(nodeTypePath, out var cached))
+        {
+            cached.Workspace.Dispose();
+            logger.LogDebug("Evicted cached AdhocWorkspace for disposed NodeType {NodeTypePath}", nodeTypePath);
+        }
+    }
+
+    /// <summary>Test seam (InternalsVisibleTo): is a workspace currently cached for this NodeType?</summary>
+    internal bool IsWorkspaceCached(string nodeTypePath) => _cache.ContainsKey(nodeTypePath);
+
     /// <summary>
     /// Resolves the NodeType MeshNode, fetches <see cref="CompilationInputs"/>, and builds
     /// (or reuses) an <see cref="AdhocWorkspace"/> whose Documents mirror the input sources.
