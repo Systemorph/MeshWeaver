@@ -158,6 +158,21 @@ builder.UseOrleansMeshServer(address, silo =>
             opts.ClusterId = MemexDistributedConstants.ClusterId;
             opts.ServiceId = MemexDistributedConstants.ServiceId;
         });
+        // Membership-probe tolerance. EVERY portal crash on memex-cloud over 2026-07-15..22 was the
+        // same self-inflicted death: a silo starved by load (boot import/compile storm, GC pauses
+        // from the content-render leak) missed probes, got voted dead by its peers, and
+        // Environment.FailFast'd ("I have been told I am dead") — on 2026-07-20 BOTH silos voted
+        // each other dead within a second (full outage). Defaults (10s probe, 3 misses) declare a
+        // busy-but-alive silo dead after ~30s of unresponsiveness. Widen to ~75s and probe
+        // indirectly before condemning: a transiently starved silo recovers instead of dying; a
+        // TRULY wedged pod is still restarted by the k8s liveness probe (/alive, 6×15s), so real
+        // failures don't linger — we only stop killing pods that were about to recover.
+        silo.Configure<ClusterMembershipOptions>(opts =>
+        {
+            opts.ProbeTimeout = TimeSpan.FromSeconds(15);
+            opts.NumMissedProbesLimit = 5;
+            opts.EnableIndirectProbes = true;
+        });
         if (string.Equals(orleansClustering, "Localhost", StringComparison.OrdinalIgnoreCase))
         {
             silo.UseLocalhostClustering();

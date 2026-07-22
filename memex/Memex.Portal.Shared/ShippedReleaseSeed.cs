@@ -38,6 +38,12 @@ namespace Memex.Portal.Shared;
 /// the cache and the <c>Release</c> node is created even on a read-only partition. Idempotent: a
 /// NodeType that already has a usable build is skipped, so re-boots are cheap. Fire-and-forget off
 /// the thread pool — never blocks host startup.</para>
+///
+/// <para><b>Opt-in per deployment</b> (<c>ShippedRelease:PreseedEnabled</c>, default off): even the
+/// "skip already-built" pass stream-reads every code NodeType in every shipped partition — a boot
+/// subscribe storm on a loaded mesh. By default only the partitions a deployment names in
+/// <c>ShippedRelease:ExtraPreseedPartitions</c> are seeded; everything else compiles lazily on
+/// first access.</para>
 /// </summary>
 public static class ShippedReleaseSeed
 {
@@ -348,25 +354,28 @@ public sealed class ShippedReleaseSeedHostedService(
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        // Boot pre-seed = the shipped sample/framework partitions PLUS any extra partitions a deployment
-        // opts into via config (ShippedRelease:ExtraPreseedPartitions). User/Space partitions are NOT
-        // shipped (they're user-Released), but a deployment can pre-build a heavily-used runtime Space at
-        // boot so its NodeType/dashboard views don't render empty during the cold compile-on-first-access
-        // window after a pod restart. Set PER-DEPLOYMENT (e.g. atioz: AgenticPension) — never hardcode a
-        // customer's space name into framework source. Pre-build is async (never blocks host startup).
+        // Boot pre-seed is OPT-IN (ShippedRelease:PreseedEnabled, default false): enumerating +
+        // stream-reading every code NodeType in every shipped partition is a boot-time subscribe
+        // storm on a loaded mesh, and the lazy compile-on-first-access path already covers
+        // correctness. When disabled, only the explicitly configured extra partitions
+        // (ShippedRelease:ExtraPreseedPartitions) are seeded — a deployment naming a partition
+        // there has asked for exactly that pre-build (e.g. atioz: AgenticPension; set
+        // PER-DEPLOYMENT, never hardcode a customer's space name into framework source). The
+        // platform-version anchor + boot activity below run regardless — they touch one Admin
+        // node, not the mesh. Pre-build is async (never blocks host startup).
         var extra = configuration.GetSection("ShippedRelease:ExtraPreseedPartitions").Get<string[]>()
             ?? [];
-        var partitions = ShippedReleaseSeed.ShippedPartitions
-            .Concat(extra)
+        var preseedShipped = configuration.GetValue("ShippedRelease:PreseedEnabled", false);
+        var partitions = (preseedShipped ? ShippedReleaseSeed.ShippedPartitions.Concat(extra) : extra)
             .Where(p => !string.IsNullOrWhiteSpace(p))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         logger?.LogInformation(
-            "[PlatformStartup] version={Version}; pre-building shipped code-NodeType releases as System for "
-            + "{Partitions}{Extra} and recording the boot activity under {VersionNode}.",
+            "[PlatformStartup] version={Version}; pre-seed {Mode}; pre-building shipped code-NodeType releases as System for "
+            + "[{Partitions}] and recording the boot activity under {VersionNode}.",
             ShippedReleaseSeed.InstalledPlatformVersion,
+            preseedShipped ? "ENABLED (ShippedRelease:PreseedEnabled)" : "disabled (config extras only)",
             string.Join(", ", partitions),
-            extra.Length > 0 ? $" (incl. config extras: {string.Join(", ", extra)})" : "",
             ShippedReleaseSeed.PlatformVersionNodePath);
         _subscription = ShippedReleaseSeed
             .RunPlatformStartup(hub, partitions, logger)
