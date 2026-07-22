@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
   </ItemGroup>
 
   <ItemGroup>
