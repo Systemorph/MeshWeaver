@@ -600,9 +600,14 @@ public class AgentChatClient : IAgentChat
         if (!string.IsNullOrEmpty(cachedSystemPrompt))
             messageText.Append(cachedSystemPrompt);
 
-        // User identity
+        // User identity. Prefer the DURABLE thread-user identity captured at submission
+        // (ExecutionContext.UserAccessContext) — by the time this prompt is built the agent runs
+        // async on the agent hub, where the ambient AccessContext has often been reset to null or an
+        // impersonated System principal, leaving the block empty so the agent has to ASK who the user
+        // is. The thread owner is the correct identity (ThreadExecution re-asserts it the same way).
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var userContext = accessService?.Context ?? accessService?.CircuitContext;
+        var userContext = ExecutionContext?.UserAccessContext
+            ?? accessService?.Context ?? accessService?.CircuitContext;
         if (userContext != null)
         {
             messageText.AppendLine("# Current User");
