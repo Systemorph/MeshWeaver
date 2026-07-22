@@ -325,7 +325,13 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
                 if (st.resizeTimeout) clearTimeout(st.resizeTimeout);
                 st.resizeTimeout = setTimeout(() => {
                     const inner = document.getElementById(editorId);
-                    const outer = inner?.closest('.monaco-editor-container');
+                    // 🚨 #editorId is BlazorMonaco's OWN root div, which carries BlazorMonaco's
+                    // default class `monaco-editor-container` — the SAME name as our wrapper.
+                    // A plain `inner.closest(...)` therefore self-matches the inner element,
+                    // and the height write lands on the `!important`-pinned .monaco-editor-view
+                    // (silently ignored) instead of the wrapper — auto-grow dead on every
+                    // surface (issue #458). Start the search at the PARENT to reach the wrapper.
+                    const outer = inner?.parentElement?.closest('.monaco-editor-container');
                     // Guard against a dispose race: the editor can be torn down during the 50ms
                     // debounce window, after which layout() throws "Couldn't find the editor…".
                     // getDomNode() returns null once the instance is disposed — bail if so.
