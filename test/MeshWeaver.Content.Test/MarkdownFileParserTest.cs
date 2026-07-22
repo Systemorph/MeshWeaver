@@ -821,4 +821,37 @@ public class MarkdownFileParserTest
     }
 
     #endregion
+
+    #region Relative-link prerender base (core #582)
+
+    /// <summary>
+    /// Pins core #582: the prerender resolves RELATIVE markdown links against the relativePath the
+    /// caller hands in — so an importer must pass the FULL mesh path ({space}/{in-repo path}), not
+    /// the bare in-repo path. With the space-prefixed path, "../../Solution/X" on
+    /// {space}/TDD/Exercise/X prerenders as href="/{space}/TDD/Solution/X"; with the bare path the
+    /// partition segment is lost (href="/TDD/…" — the broken hrefs the courses shipped).
+    /// GitHubSyncService.ParseFile passes the prefixed path since the fix.
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public void Parse_RelativeLinks_PrerenderAgainstTheGivenNodePath()
+    {
+        var content = "See **[the solution](../../Solution/OrdinalSuffix)** and [the module](../../).";
+
+        var prefixed = _parser.Parse(
+            "/repo/TDD/Exercise/OrdinalSuffix.md", content,
+            "AgenticEngineering/TDD/Exercise/OrdinalSuffix.md");
+        var md = Assert.IsType<MarkdownContent>(prefixed!.Content);
+        Assert.Contains("href=\"/AgenticEngineering/TDD/Solution/OrdinalSuffix\"", md.PrerenderedHtml);
+        Assert.Contains("href=\"/AgenticEngineering/TDD\"", md.PrerenderedHtml);
+
+        // The bug shape the fix guards against: a bare in-repo path loses the partition segment.
+        var bare = _parser.Parse(
+            "/repo/TDD/Exercise/OrdinalSuffix.md", content,
+            "TDD/Exercise/OrdinalSuffix.md");
+        var bareMd = Assert.IsType<MarkdownContent>(bare!.Content);
+        Assert.Contains("href=\"/TDD/Solution/OrdinalSuffix\"", bareMd.PrerenderedHtml);
+        Assert.DoesNotContain("/AgenticEngineering/", bareMd.PrerenderedHtml);
+    }
+
+    #endregion
 }
