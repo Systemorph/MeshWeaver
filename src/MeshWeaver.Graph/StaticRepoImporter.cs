@@ -513,12 +513,18 @@ public static class StaticRepoImporter
                 var existing = change.Items.FirstOrDefault();
 
                 // The content-skip path: the content fingerprint matches a prior Succeeded import, so
-                // re-ensure ONLY the CRITICAL governance (partition ROOT + its read-only _Policy —
+                // verify ONLY the CRITICAL governance (partition ROOT + its read-only _Policy —
                 // Harness/Agent/Skill/Provider PublicRead). These MUST exist on every boot: if dropped
                 // after a prior import (a cross-partition prune, a manual delete, a botched migration)
                 // the content-skip would otherwise leave the partition UNREADABLE FOREVER (the "user
-                // 'rbuergi' lacks Read permission on 'harness'" composer denial). EnsureRoot + the
-                // _Policy upsert are idempotent; best-effort so a self-heal hiccup never fails the import.
+                // 'rbuergi' lacks Read permission on 'harness'" composer denial). 🚨 READ-FIRST: check
+                // existence via the query and write ONLY what is missing — the old unconditional
+                // re-upsert made every boot a per-partition write fan-out (root + every governance node
+                // activating its per-node hub), which on a loaded mesh queued behind the boot storm and
+                // timed out at 30s apiece (memex 2026-07-22). A steady-state boot is now pure reads.
+                // The query is eventually consistent: a stale miss upserts idempotently (harmless); a
+                // stale hit merely defers the heal to the next boot — the same lag the Succeeded-marker
+                // short-circuit already accepts. Best-effort so a self-heal hiccup never fails the import.
                 IObservable<StaticRepoImportResult> SkipWithGovernanceHeal()
                 {
                     var governance = nodes
@@ -526,13 +532,19 @@ public static class StaticRepoImporter
                                     || n.Segments.Skip(1).Any(seg => seg.StartsWith('_')))
                         .ToArray();
                     logger?.LogInformation(
-                        "[StaticRepoImport] {Partition} already at {Fingerprint} — content skipped; re-ensuring root + {Count} governance node(s).",
+                        "[StaticRepoImport] {Partition} already at {Fingerprint} — content skipped; verifying root + {Count} governance node(s).",
                         source.Partition, fingerprint, governance.Length);
-                    return EnsureRoot(hub, source, root, activityPath, logger)
+                    return EnsureRoot(hub, source, root, activityPath, logger, refreshExisting: false)
                         .SelectMany(_ => governance.Length == 0
                             ? Observable.Return(0)
                             : governance
-                                .Select(g => Upsert(hub, Materialize(g))
+                                .Select(g => meshService
+                                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{g.Path}"))
+                                    .Take(1)
+                                    .SelectMany(c => c.Items.Any(n =>
+                                            string.Equals(n.Path, g.Path, StringComparison.OrdinalIgnoreCase))
+                                        ? Observable.Return(0)
+                                        : Upsert(hub, Materialize(g)))
                                     .Catch<int, Exception>(_ => Observable.Return(0)))
                                 .ToObservable().Merge(BatchSize).Sum())
                         .Select(_ => new StaticRepoImportResult(source.Partition, fingerprint, "Skipped"))
@@ -975,11 +987,15 @@ public static class StaticRepoImporter
     /// create triggers eager schema provisioning + the partition-definition/routing prime + the
     /// admin grant); present → overwrite to refresh the welcome, preserving owner identity. The
     /// create degrades to an overwrite on a concurrent-replica "already exists" so the import never
-    /// faults on the lock race.
+    /// faults on the lock race. With <paramref name="refreshExisting"/> <c>false</c> (the
+    /// unchanged-fingerprint boot skip path) an existing root is left entirely untouched — the
+    /// fingerprint covers the root, so a matching fingerprint means its content is current and the
+    /// refresh write (which activates the root hub and can queue 30s behind a boot storm) is pure
+    /// waste; only an ABSENT root is then (re)created.
     /// </summary>
     private static IObservable<int> EnsureRoot(
         IMessageHub hub, IStaticRepoSource source, MeshNode root,
-        string activityPath, ILogger? logger)
+        string activityPath, ILogger? logger, bool refreshExisting = true)
     {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         // 🚨 Honour an admin's "stop sync" claim on the partition ROOT. If the EXISTING root carries a
@@ -1004,6 +1020,8 @@ public static class StaticRepoImporter
                     // schema provisioning + the partition-definition/routing prime + the admin grant.
                     return Upsert(hub, Materialize(root));
                 }
+                if (!refreshExisting)
+                    return Observable.Return(0); // present + skip path: verified, nothing to write.
                 // EXISTING root: check the claim AUTHORITATIVELY (GetMeshNodeStream), never only the
                 // query snapshot — a JUST-SET "sync: none" lags the eventually-consistent query (the
                 // same race ReadClaimedRoots guards; here the stakes are higher because the upsert
