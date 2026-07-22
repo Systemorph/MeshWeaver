@@ -281,6 +281,89 @@ public class NodeTypeCompileParkTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     /// <summary>
+    /// 🅿️ "Retry only if the sources changed." A parked type whose SOURCE Code node is FIXED
+    /// auto-recompiles to Ok and un-parks with NO deliberate Compile/recycle — the redeploy/edit
+    /// heal path. Regression for the 2026-07 UWDeepfield case: a GitSync-imported source fix left
+    /// the type stuck at Error because the in-memory park only cleared on a deliberate retry, so
+    /// the fixed source never recompiled in the running process. The negative half is pinned in
+    /// the same test: while the broken source is UNCHANGED, repeated activations never re-run
+    /// Roslyn (the park still contains the failure — no storm).
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ParkedNodeType_SourceFix_AutoRecompilesAndUnparks_WithoutDeliberateRetry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var workspace = Mesh.GetWorkspace();
+        var parkRegistry = Mesh.ServiceProvider.GetRequiredService<NodeTypeCompileParkRegistry>();
+        const string typePath = $"{Partition}/SourceAutoRetry";
+        const string sourcePath = $"{Partition}/SourceAutoRetry/Source/code";
+
+        // Plant the deliberately-uncompilable SOURCE Code node FIRST so the type's first-build
+        // compile sees it and fails on the SOURCE (not just a broken inline Configuration).
+        await NodeFactory.CreateNode(new MeshNode("code", $"{Partition}/SourceAutoRetry/Source")
+        {
+            Name = "Code",
+            NodeType = "Code",
+            Content = new CodeConfiguration { Code = "this is not valid C#;", Language = "csharp" }
+        }).Should().Emit();
+
+        // A NodeType with a VALID Configuration but the broken source above under it.
+        await NodeFactory.CreateNode(new MeshNode("SourceAutoRetry", Partition)
+        {
+            Name = "Source Auto Retry",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Valid config, broken SOURCE node (source-change auto-retry test).",
+                Configuration = ValidConfiguration
+            }
+        }).Should().Emit();
+
+        // Settle at Error + parked (deterministic source error parks on the first failure).
+        await workspace.GetMeshNodeStream(typePath)
+            .Should().Within(90.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Error);
+        parkRegistry.IsParked(typePath).Should().BeTrue(
+            "a deterministic SOURCE compile error must park the type");
+        var attemptsAtPark = parkRegistry.GetCompileAttemptCount(typePath);
+        Output.WriteLine($"{typePath} parked at Error after {attemptsAtPark} compile(s).");
+
+        // NEGATIVE — source UNCHANGED: hammer activation/enrichment; Roslyn must NOT re-run.
+        var instance = new MeshNode("src-instance", Partition)
+        {
+            Name = "Src Instance",
+            NodeType = typePath,
+            State = MeshNodeState.Active
+        };
+        await NodeFactory.CreateNode(instance).Should().Emit();
+        var resolver = Mesh.ServiceProvider.GetRequiredService<INodeConfigurationResolver>();
+        for (var i = 0; i < 10; i++)
+            (await resolver.ResolveConfiguration(instance).FirstAsync().Timeout(30.Seconds()).ToTask(ct))
+                .Should().NotBeNull();
+        parkRegistry.GetCompileAttemptCount(typePath).Should().Be(attemptsAtPark,
+            "an UNCHANGED broken source must not re-run Roslyn — retry only if the sources changed");
+        parkRegistry.IsParked(typePath).Should().BeTrue(
+            "the type must stay parked while its source is unchanged");
+        Output.WriteLine("10 enrichments, unchanged source — still parked, no recompile.");
+
+        // FIX the SOURCE — and DO NOTHING ELSE. No Compile tool, no recycle, no release request.
+        // The source-change alone must auto-un-park and drive a fresh compile to Ok.
+        await workspace.GetMeshNodeStream(sourcePath).Update(curr =>
+                curr with { Content = new CodeConfiguration
+                    { Code = "public record AutoRetryOk;", Language = "csharp" } })
+            .Should().Within(30.Seconds()).Emit();
+
+        await workspace.GetMeshNodeStream(typePath)
+            .Should().Within(120.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok);
+        parkRegistry.IsParked(typePath).Should().BeFalse(
+            "fixing the SOURCE must auto-un-park the type WITHOUT a deliberate retry");
+        Output.WriteLine("Source fixed → auto-recompiled to Ok and un-parked (no deliberate retry).");
+    }
+
+    /// <summary>
     /// Creates a NodeType with a deliberately non-compiling Configuration at
     /// <c>{Partition}/{id}</c>, waits for the first-build compile to settle at Error and
     /// asserts the type is parked (deterministic source errors park on the FIRST failure).
