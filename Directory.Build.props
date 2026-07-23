@@ -53,18 +53,42 @@
     <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0</PlatformVersion>
   </PropertyGroup>
   <!-- Multi-arch container publish race fix (main-cd / release-images / edge-images pass
-       -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"). The SDK builds the two RID legs of the
-       publish CONCURRENTLY. A reference assembly is RID-INVARIANT, so its intermediate path has NO rid
-       segment (obj/<cfg>/<tfm>/ref/<Asm>.dll) — both legs' CopyRefAssembly target write that SAME file
-       and intermittently collide → "error MSB3883: … MeshWeaver.Graph.dll … being used by another
-       process" (the intermittent portal-ai image-build failure). Ref assemblies exist only to skip
-       downstream recompilation on INCREMENTAL rebuilds; a from-clean CI container publish gains
-       nothing from them, so turning them off for the multi-arch publish removes the one shared,
-       contended output — killing the race at its source while keeping both RID legs parallel (no
-       serialization, no retry). ContainerRuntimeIdentifiers is a global property, so this condition is
-       seen by every project in the publish graph — including the referenced libraries that actually
-       race. It is empty in normal dev / the Build-and-Test CI, so ref assemblies (and fast incremental
-       builds) are UNAFFECTED there. -->
+       -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"). The SDK's _PublishMultiArchContainers
+       target invokes THIS SAME project once per RID with AdditionalProperties
+       "ContainerRuntimeIdentifier=<rid>;RuntimeIdentifier=<rid>;…" and BuildInParallel=true — two full
+       publish legs run CONCURRENTLY in one MSBuild session. The entry project is safe (RuntimeIdentifier
+       is set, so its bin/obj get the RID appended). The LIBRARIES are not: the ProjectReference protocol
+       undefines RuntimeIdentifier/SelfContained for RID-agnostic references, but ContainerRuntimeIdentifier
+       (singular) is NOT undefined — it flows to every library in the graph, so the two legs' library
+       builds are DISTINCT MSBuild configurations (no build-once dedupe) that both compile and copy into
+       the SAME RID-agnostic bin/obj paths. That shared-path double build is the whole race class:
+       obj/<cfg>/<tfm>/ref/<Asm>.dll (MSB3883, PR #552) and bin/<cfg>/<tfm>/<Asm>.dll — one leg's
+       _CopyFilesToOutputDirectory rewriting MeshWeaver.Graph.dll while the other leg's CSC reads it as a
+       reference (CS0009 "Metadata file … being used by another process", CD run 29929207634).
+
+       ROOT FIX: use the same per-leg discriminator (ContainerRuntimeIdentifier — global, per-leg unique,
+       visible to every project at evaluation time) to give each leg FULLY ISOLATED bin/obj trees. Both
+       legs stay parallel (no serialization, no retry); they just stop sharing any output path.
+       MSBuildProjectExtensionsPath is pinned to the standard obj/ so NuGet's restore outputs
+       (project.assets.json, nuget.g.props/targets) — written ONCE by the outer `dotnet publish` restore
+       before the legs fork, and only READ during the legs — stay where restore put them.
+       Scoped to RID-agnostic projects ('$(RuntimeIdentifier)' == ''): the entry project already gets
+       RID-qualified paths from AppendRuntimeIdentifierToOutputPath. Inert in normal dev / Build-and-Test
+       CI (ContainerRuntimeIdentifier is only a global property inside multi-arch publish legs). -->
+  <PropertyGroup Condition="'$(ContainerRuntimeIdentifiers)' != '' and '$(ContainerRuntimeIdentifier)' != '' and '$(RuntimeIdentifier)' == ''">
+    <MSBuildProjectExtensionsPath>$(MSBuildProjectDirectory)/obj/</MSBuildProjectExtensionsPath>
+    <BaseIntermediateOutputPath>obj/container/$(ContainerRuntimeIdentifier)/</BaseIntermediateOutputPath>
+    <BaseOutputPath>bin/container/$(ContainerRuntimeIdentifier)/</BaseOutputPath>
+    <!-- The SDK derives DefaultItemExcludes from Base(Intermediate)OutputPath — with those moved,
+         the STANDARD obj/ and bin/ (holding the outer restore + the outer build's generated
+         AssemblyInfo.cs) would fall back into the default **/*.cs compile glob → CS0579 duplicate
+         assembly attributes. Keep them excluded explicitly (also covers obj/container/, nested). -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj/**;bin/**</DefaultItemExcludes>
+  </PropertyGroup>
+  <!-- Ref assemblies stay OFF for the whole multi-arch publish (PR #552): with per-leg isolation they
+       no longer collide, but a from-clean CI container publish gains nothing from producing them
+       (they only skip downstream recompiles on INCREMENTAL rebuilds), so this is pure saved work.
+       Empty in normal dev / Build-and-Test CI — ref assemblies and incremental builds unaffected there. -->
   <PropertyGroup Condition="'$(ContainerRuntimeIdentifiers)' != ''">
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
   </PropertyGroup>
