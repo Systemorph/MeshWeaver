@@ -155,7 +155,20 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
                     logger.LogInformation("Creating API token {Label} for user {UserId} (hash prefix {HashPrefix})",
                         label, userId, hashPrefix);
 
-                    return indexObs.Select(_ => new TokenCreationResult(rawToken, created));
+                    // 🚨 Confirm BOTH nodes are readable before returning the raw token. On a
+                    // multi-silo portal a just-created node is not instantly routable: the /token
+                    // exchange issues the token on one replica and the MCP client reconnects
+                    // (validates) near-instantly, often on ANOTHER replica, where ValidateToken's
+                    // one-shot hub.GetMeshNode hits [ROUTE] NotFound during the create→routable
+                    // window → the token is rejected ("Got new credentials, but memex rejected them
+                    // on reconnect"). Reading each node back through the resilient GetMeshNodeStream
+                    // poll activates its owning per-node hub from Postgres, so by the time /token
+                    // returns the token is validatable on any replica. Keeps the HOT validation path
+                    // on the fast one-shot read (only issuance — a one-time login — pays this).
+                    return indexObs.SelectMany(_ =>
+                        ConfirmReadable(indexNode.Path)
+                            .SelectMany(__ => ConfirmReadable(created.Path))
+                            .Select(___ => new TokenCreationResult(rawToken, created)));
                 });
         });
     }
@@ -255,6 +268,44 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
                 () => accessService.ImpersonateAsSystem(),
                 _ => hub.GetMeshNode(path, TimeSpan.FromSeconds(5)))
             : hub.GetMeshNode(path, TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>
+    /// Best-effort confirm that a just-created node is readable, tolerating the
+    /// create→persist→routable lag. Reads via the authoritative
+    /// <c>GetMeshNodeStream(path)</c> — which activates the owning per-node hub from
+    /// Postgres — polling one subscription at a time (Concat, never Merge, so a lagging
+    /// node never accumulates concurrent owner-hub subscriptions). Each attempt swallows
+    /// the transient "No node found" and re-subscribes after 50 ms until the node loads
+    /// with content, bounded by a 10 s timeout. On timeout it logs and returns null rather
+    /// than failing issuance — the token IS created; worst case validation resolves it a
+    /// beat later. System identity: the ApiToken/index nodes are System-owned.
+    /// </summary>
+    private IObservable<MeshNode?> ConfirmReadable(string path)
+    {
+        IObservable<MeshNode?> Attempt() =>
+            hub.GetWorkspace().GetMeshNodeStream(path)
+                .Take(1)
+                .Where(n => n is not null && n.Content is not null)
+                .Select(n => (MeshNode?)n)
+                .Catch<MeshNode?, Exception>(_ => Observable.Empty<MeshNode?>())
+                .Concat(Observable.Defer(Attempt).DelaySubscription(TimeSpan.FromMilliseconds(50)));
+
+        var poll = Observable.Defer(Attempt)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch<MeshNode?, Exception>(ex =>
+            {
+                logger.LogWarning(ex,
+                    "API token node {Path} not confirmed readable within 10s of issuance; returning token anyway",
+                    path);
+                return Observable.Return<MeshNode?>(null);
+            });
+
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return accessService != null
+            ? Observable.Using(() => accessService.ImpersonateAsSystem(), _ => poll)
+            : poll;
     }
 
     private ApiToken? FinalizeToken(MeshNode? tokenNode, ApiToken? apiToken, string hash, string hashPrefix)
