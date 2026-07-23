@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -26,6 +27,12 @@ public static class IoPoolServiceCollectionExtensions
         services.TryAddSingleton(_ =>
             configure is null ? new IoPoolOptions() : configure(new IoPoolOptions()));
         services.TryAddSingleton<IoPoolRegistry>();
+        // The drainable-subscribe scheduler for layout-area renders. Lets LayoutAreaHost (which sits
+        // BELOW this assembly and cannot reference IoPoolRegistry) route its render subscribes through
+        // the drainable Layout pool via the IPooledSubscribeScheduler abstraction, so teardown's
+        // DrainAll() cancel+joins them before the scope disposes / NodeType ALCs unload (the endemic
+        // teardown SIGSEGV).
+        services.TryAddSingleton<IPooledSubscribeScheduler, IoPoolSubscribeScheduler>();
         // The async half of mesh teardown — resources enqueue async cleanup here from
         // their sync Dispose(); the mesh's DisposeAsync drains it before the scope dies.
         services.TryAddSingleton<AsyncDisposeQueue>();
