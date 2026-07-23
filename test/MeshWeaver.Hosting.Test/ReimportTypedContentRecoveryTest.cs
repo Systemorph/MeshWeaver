@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Text.Json;
 using MeshWeaver.Fixture;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 
@@ -111,6 +112,43 @@ public class ReimportTypedContentRecoveryTest(ITestOutputHelper output) : HubTes
 
         registry.TryResolveByDiscriminator("Nope", out _).Should().BeFalse();
         registry.TryResolveByNodeType("space/Absent", out _).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The SEAM wiring, end to end: drives the real degrade seam
+    /// <c>MeshNodeStreamHandle.EnsureTypedContent</c> (the boundary every cross-hub read passes
+    /// through). WITHOUT the mesh-wide registry the seam hands consumers a bare
+    /// <see cref="JsonElement"/> (the bug); WITH it the seam re-types the content. This pins the
+    /// wiring itself — deleting the registry call from the seam turns this test red — where
+    /// <see cref="DegradedContent_StaysUntypedWithoutRegistry_RecoversThroughRegistry"/> pins only
+    /// the recovery primitive.
+    /// </summary>
+    [Fact]
+    public void EnsureTypedContent_Seam_RecoversViaRegistry_DegradesWithout()
+    {
+        var options = GetClient().JsonSerializerOptions;
+
+        var contentType = EmitCollectibleType("SeamSlideContent", "Heading");
+        var instance = Activator.CreateInstance(contentType)!;
+        contentType.GetProperty("Heading")!.SetValue(instance, "Seam One");
+        var stored = JsonSerializer.Deserialize<JsonElement>(
+            JsonSerializer.Serialize(instance, contentType, options));
+        var node = new MeshNode("n") { Content = stored };
+
+        // Seam WITHOUT the registry → content stays a degraded JsonElement (the defect at the seam).
+        MeshNodeStreamHandle.EnsureTypedContent(node, options, contentTypeRegistry: null)
+            .Content.Should().BeOfType<JsonElement>(
+                "without the registry the degrade seam hands consumers an untyped JsonElement");
+
+        // Seam WITH the registry → EnsureTypedContent re-types via the registry (the wired fix).
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(contentType);
+        var typed = MeshNodeStreamHandle.EnsureTypedContent(node, options, registry);
+
+        typed.Content!.GetType().Should().Be(contentType,
+            "the seam must consult the mesh-wide registry on the degraded path, not just warn");
+        contentType.GetProperty("Heading")!.GetValue(typed.Content).Should().Be("Seam One",
+            "the seam must round-trip the payload, not merely the type tag");
     }
 
     /// <summary>
