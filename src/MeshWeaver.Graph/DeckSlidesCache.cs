@@ -35,32 +35,35 @@ public interface IDeckSlidesCache
 
 /// <summary>
 /// Default <see cref="IDeckSlidesCache"/>: per-parent
-/// <c>Replay(1).RefCount(disconnectDelay)</c> over the sibling-slide pipeline
+/// <c>Replay(1).RefCount()</c> over the sibling-slide pipeline
 /// (query → Scan into a path-keyed map → CombineLatest with the parent node's
-/// manifest stream → <see cref="OrderSlides"/>). The disconnect delay keeps the
-/// live query connected across the subscriber-free gaps between slide
-/// navigations, so the next slide's render is a warm synchronous hit.
+/// manifest stream → <see cref="OrderSlides"/>).
 /// Registered as a mesh-level singleton in
 /// <c>GraphConfigurationExtensions.AddGraph</c> (same lifetime idiom as
 /// <see cref="PartitionRegistry"/>); dependencies resolve lazily off the mesh
 /// hub so construction never races DI wiring.
+///
+/// <para><b>Plain <c>RefCount()</c>, deliberately NO disconnect delay.</b> A
+/// time-delayed <c>RefCount(TimeSpan)</c> keeps the shared query connected past
+/// the last unsubscribe by arming a <see cref="System.Threading.Timer"/> in the
+/// PROCESS-GLOBAL TimerQueue — and that timer roots the whole replayed chain,
+/// which through the pipeline closure captures the mesh service and hub, so a
+/// DISPOSED mesh stays pinned until the delay elapses (repro:
+/// <c>MeshHubDisposalLeakTest</c> flagged the TimerQueue→RefCount→DeckSlidesCache
+/// chain). Warmth across a slide switch does not need it: the client retires the
+/// OUTGOING slide's area stream only once the INCOMING slide's first frame lands
+/// (LayoutAreaView's stream hand-over), so the two slides' subscriptions to this
+/// shared per-deck entry OVERLAP — the refcount never reaches zero mid-navigation
+/// and the Replay(1) buffer is handed to the next slide synchronously. The chain
+/// disconnects (and releases the hub) immediately only when the deck is left
+/// entirely — no timer, no leak.</para>
 /// </summary>
 public sealed class DeckSlidesCache : IDeckSlidesCache
 {
-    /// <summary>
-    /// How long a parent's replayed pipeline stays CONNECTED after its last
-    /// subscriber disconnects. Slide renders subscribe only transiently, so a
-    /// plain <c>RefCount()</c> would tear the shared query down between two
-    /// navigations and cold-start every slide switch; a few minutes comfortably
-    /// covers a presentation's between-slide gaps.
-    /// </summary>
-    private static readonly TimeSpan DefaultDisconnectDelay = TimeSpan.FromMinutes(3);
-
     private readonly Func<IMeshService> meshService;
     private readonly Func<string, IObservable<MeshNode?>> parentNodes;
     private readonly Func<JsonSerializerOptions> serializerOptions;
     private readonly Func<AccessService?> accessService;
-    private readonly TimeSpan disconnectDelay;
     private readonly ConcurrentDictionary<string, IObservable<IReadOnlyList<MeshNode>>> cache =
         new(StringComparer.Ordinal);
 
@@ -76,7 +79,6 @@ public sealed class DeckSlidesCache : IDeckSlidesCache
             () => hub.ServiceProvider.GetRequiredService<IMeshService>(),
             path => hub.GetMeshNodeStream(path).Select(node => (MeshNode?)node),
             () => hub.JsonSerializerOptions,
-            DefaultDisconnectDelay,
             () => hub.ServiceProvider.GetService<AccessService>())
     {
     }
@@ -90,13 +92,11 @@ public sealed class DeckSlidesCache : IDeckSlidesCache
         Func<IMeshService> meshService,
         Func<string, IObservable<MeshNode?>> parentNodes,
         Func<JsonSerializerOptions> serializerOptions,
-        TimeSpan disconnectDelay,
         Func<AccessService?>? accessService = null)
     {
         this.meshService = meshService;
         this.parentNodes = parentNodes;
         this.serializerOptions = serializerOptions;
-        this.disconnectDelay = disconnectDelay;
         this.accessService = accessService ?? (() => null);
     }
 
@@ -105,7 +105,7 @@ public sealed class DeckSlidesCache : IDeckSlidesCache
         cache.GetOrAdd(parentPath, path =>
             BuildOrderedSlides(meshService(), parentNodes(path), path, serializerOptions(), accessService())
                 .Replay(1)
-                .RefCount(disconnectDelay));
+                .RefCount());
 
     /// <summary>
     /// The (uncached) sibling-slide pipeline — shared by the cache above and by

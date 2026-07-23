@@ -69,8 +69,7 @@ public class DeckSlidesCacheTest
     private static DeckSlidesCache MakeCache(IMeshService mesh) =>
         new(() => mesh,
             _ => Observable.Never<MeshNode?>(),
-            () => new JsonSerializerOptions(),
-            disconnectDelay: TimeSpan.FromMinutes(3));
+            () => new JsonSerializerOptions());
 
     [Fact]
     public void GetOrderedSlides_ConcurrentSubscribers_ShareOneQuerySubscription()
@@ -88,6 +87,35 @@ public class DeckSlidesCacheTest
             "both subscribers receive the replayed ordered slide list");
         received.Should().OnlyContain(slides =>
             slides.Count == 1 && slides[0].Path == "DeckA/s1");
+    }
+
+    /// <summary>
+    /// After the LAST subscriber disconnects, the shared per-deck pipeline must
+    /// disconnect fully — a plain <c>Replay(1).RefCount()</c> with NO time-delayed
+    /// hold. A re-subscribe therefore re-runs the query. This is the leak guard at
+    /// the unit level: a <c>RefCount(TimeSpan)</c> would keep the source connected
+    /// via a process-global <see cref="System.Threading.Timer"/> that roots the
+    /// pipeline closure → mesh hub past mesh disposal (repro:
+    /// <c>MeshHubDisposalLeakTest</c>). Overlapping subscribers still share one
+    /// query (the two tests above); only a genuine subscriber-free gap disconnects.
+    /// </summary>
+    [Fact]
+    public void GetOrderedSlides_AfterLastUnsubscribe_DisconnectsWithNoLingeringTimer()
+    {
+        var (mesh, subscriptions) = MakeCountingMesh();
+        var cache = MakeCache(mesh);
+
+        cache.GetOrderedSlides("DeckA").Subscribe().Dispose();
+        subscriptions.Values.Sum().Should().Be(1, "the first subscription ran the query once");
+
+        // Re-subscribe after the refcount already hit zero: with a plain RefCount the
+        // source is fully disconnected, so this re-runs the query (count → 2). A
+        // lingering disconnect-delay timer would instead replay the warm buffer (count
+        // stuck at 1) — AND root the hub in the global TimerQueue.
+        cache.GetOrderedSlides("DeckA").Subscribe().Dispose();
+        subscriptions.Values.Sum().Should().Be(2,
+            "with no disconnect-delay timer, a re-subscribe after the refcount hit zero " +
+            "re-runs the query rather than replaying from a timer-held connection");
     }
 
     [Fact]
