@@ -162,26 +162,7 @@ internal class OAuthCodeStore(IMeshService meshService, IMessageHub hub, ILogger
         // resolves in ~1–2 s (Take(1) on first match); a genuinely unknown / already-
         // consumed / expired code never matches and falls through to the ReadTimeout →
         // invalid_grant.
-        return AsSystem(() => Observable
-                .Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-                // Each tick re-reads the node. A freshly-created node is not instantly
-                // readable — GetMeshNodeStream ERRORS "No node found at {path}" during the
-                // create→persist→routable window (the persistence sampler debounces ~200 ms;
-                // cross-silo the owning hub must still activate from Postgres). Swallow that
-                // per-attempt error so the NEXT tick retries; a genuinely unknown / consumed /
-                // expired code errors on every tick and never matches → the outer Timeout
-                // fires → invalid_grant. Without this per-attempt Catch the first error
-                // propagates through SelectMany and aborts the whole poll (the bug the first
-                // cut of this fix shipped: even a valid code failed inside the debounce window).
-                .SelectMany(_ => hub.GetWorkspace().GetMeshNodeStream(path)
-                    .Take(1)
-                    .Where(n => ExtractEntry(n) is { } e
-                                && string.Equals(e.CodeHash, hash, StringComparison.OrdinalIgnoreCase))
-                    .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>()))
-                .Select(n => (MeshNode?)n)
-                .Take(1)
-                .Timeout(ReadTimeout)
-                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null)))
+        return AsSystem(() => ReadCodeNode(path, hash))
             .SelectMany(node =>
             {
                 var entry = ExtractEntry(node);
@@ -206,6 +187,36 @@ internal class OAuthCodeStore(IMeshService meshService, IMessageHub hub, ILogger
                             "already consumed: lost the single-use consume race (first delete wins) "
                             + "— e.g. a duplicate callback or the same code replayed against another replica"));
             });
+    }
+
+    /// <summary>
+    /// Reads the code node by exact path, tolerating the create→persist→routable lag.
+    /// <para>A freshly-created node is not instantly readable: <c>GetMeshNodeStream</c>
+    /// throws "No node found at {path}" during the window before the persistence sampler
+    /// flushes and (cross-silo) the owning per-node hub activates from Postgres. Each
+    /// attempt swallows that transient error and, ONLY on no-match, re-subscribes after
+    /// 50 ms — <c>Concat</c>, never <c>Merge</c>, so exactly ONE owner-hub subscription is
+    /// live at a time. A missing / consumed / expired code therefore never accumulates
+    /// concurrent subscriptions (the storm the Interval+SelectMany first cut would have
+    /// caused); it simply keeps re-probing until the outer <see cref="ReadTimeout"/> fires
+    /// → null → invalid_grant. A valid code emits on the first matching attempt and the
+    /// outer <c>Take(1)</c> tears the whole chain down.</para>
+    /// </summary>
+    private IObservable<MeshNode?> ReadCodeNode(string path, string hash)
+    {
+        IObservable<MeshNode?> Attempt() =>
+            hub.GetWorkspace().GetMeshNodeStream(path)
+                .Take(1)
+                .Where(n => ExtractEntry(n) is { } e
+                            && string.Equals(e.CodeHash, hash, StringComparison.OrdinalIgnoreCase))
+                .Select(n => (MeshNode?)n)
+                .Catch<MeshNode?, Exception>(_ => Observable.Empty<MeshNode?>())
+                .Concat(Observable.Defer(Attempt).DelaySubscription(TimeSpan.FromMilliseconds(50)));
+
+        return Observable.Defer(Attempt)
+            .Take(1)
+            .Timeout(ReadTimeout)
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
     }
 
     /// <summary>
