@@ -127,4 +127,49 @@ public class MeshQueryMergeContractTest
         paths.Should().Contain("p/one");
         paths.Should().Contain("q/two");
     }
+
+    /// <summary>
+    /// The single-provider fast path is wrapped by the Initial stall probe (a diagnostic timer
+    /// that names a provider which never delivers its Initial). The wrapper must be TRANSPARENT:
+    /// the Limit clip still applies and the emission flows unchanged.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task SingleProvider_ClipStillApplies_ThroughStallProbeWrapper()
+    {
+        var a = new FakeProvider("a",
+            () => Observable.Return(Initial(Node("p/one"), Node("p/two"), Node("p/three"))));
+
+        var query = new MeshQuery([a], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 2 }, Options)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask();
+
+        change.ChangeType.Should().Be(QueryChangeType.Initial);
+        change.Items.Should().HaveCount(2, "the Limit clip must still apply through the probe wrapper");
+    }
+
+    /// <summary>
+    /// A single provider's error must surface on the consumer's OnError unchanged — the stall
+    /// probe wrapper may only observe, never swallow.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task SingleProvider_ErrorPropagates_ThroughStallProbeWrapper()
+    {
+        var boom = new FakeProvider("boom",
+            () => Observable.Throw<QueryResultChange<MeshNode>>(
+                new InvalidOperationException("backing store down")));
+
+        var query = new MeshQuery([boom], hub: null!);
+
+        var act = () => ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask();
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+    }
 }
