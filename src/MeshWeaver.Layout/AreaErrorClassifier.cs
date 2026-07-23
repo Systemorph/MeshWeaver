@@ -33,6 +33,11 @@ public static class AreaErrorClassifier
             if (msg.Contains("No response received in hub", StringComparison.OrdinalIgnoreCase)) return true;
             if (msg.Contains("target hub was not found", StringComparison.OrdinalIgnoreCase)) return true;
             if (msg.Contains("undeliverable", StringComparison.OrdinalIgnoreCase)) return true;
+            // MessageService's shutdown-drop NACK ("Hub X is shutting down … Rejecting now."):
+            // the delivery raced the target hub's DisposeRequest (recycle / restart) — retry-
+            // worthy, the address typically reactivates on the next probe. Mirrors
+            // MeshNodeStreamCache.IsTransientOwnerFailure so the layers agree.
+            if (msg.Contains("is shutting down", StringComparison.OrdinalIgnoreCase)) return true;
         }
         return false;
     }

@@ -335,6 +335,26 @@ public static class JsonSynchronizationStream
                         reduced.StreamId),
                 ex =>
                 {
+                    // 🚨 TRANSIENT shutdown reject (ErrorType.ShuttingDown): our SubscribeRequest
+                    // raced the owner hub's DisposeRequest — a recycle / restart in flight, NOT a
+                    // missing owner. The owner's fresh activation re-announces via the change feed
+                    // and the resubscribe latch below re-sends the SubscribeRequest (~2s later in
+                    // the recycle flow), so the ONLY correct reaction is to keep the stream and
+                    // the keep-alive ALIVE and wait for that rehydration — exactly what happened
+                    // under the pre-NACK silent drop. Faulting here killed the latch with the
+                    // stream and wedged every reader of a mid-recycle NodeType to its timeout
+                    // (CI 30003419841, NodeTypeCompileParkTest.RecycleRetry). This is not a
+                    // retry/watchdog: nothing re-posts on a timer — recovery stays event-driven
+                    // (change-feed announce → latch), the same protocol as an owner restart.
+                    if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
+                    {
+                        logger.LogDebug(
+                            "SubscribeRequest for stream {StreamId} rejected — owner {Owner} is shutting down "
+                            + "(recycle/restart in flight); keeping the stream alive for the resubscribe latch",
+                            reduced.StreamId, owner);
+                        return;
+                    }
+
                     // DeliveryFailure / NotFound — the owner address does not exist. Terminal: fault
                     // subscribers + tear down the keep-alive so we NEVER heartbeat or resubscribe a
                     // non-existent owner (the storm that wedges the session).

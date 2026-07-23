@@ -411,6 +411,23 @@ public class MessageService : IMessageService
             // ReportFailure applies — never NACK a DeliveryFailure (no ping-pong: a NACK
             // arriving at another disposing hub is excluded here) nor [CanBeIgnored]
             // lifecycle traffic (no requester is waiting).
+            //
+            // 🚨 The NACK is a TRANSIENT rejection — ErrorType.ShuttingDown — never NotFound,
+            // never a generic terminal failure. A disposing hub cannot know whether its
+            // address is gone for good (node deleted) or about to REACTIVATE (recycle /
+            // restart): the very same drop fires for a SubscribeRequest racing a recycle's
+            // DisposeRequest. It mirrors the Orleans mid-DeactivateOnIdle reject ("invalid
+            // activation. Rejecting now.") that the transient classifiers (MeshNodeStream-
+            // Cache.IsTransientOwnerFailure, RoutingGrain.IsTransientFailure, AreaError-
+            // Classifier.IsTransientHubFailure) already treat as retry-worthy: the sender's
+            // next probe gets the authoritative answer — a fresh activation (recycle) or a
+            // routing NotFound (deleted). Consumers with their own recovery machinery ride
+            // it out: SynchronizationStream keeps the stream ALIVE on this ErrorType so its
+            // change-feed resubscribe latch rehydrates after the reactivation. Both wrong
+            // shapes are CI-proven (run 30003419841, NodeTypeCompileParkTest.RecycleRetry):
+            // a NotFound NACK faulted the stream cache's shared Replay(1) with no re-probe
+            // path, and ANY terminal treatment killed the sync stream's resubscribe latch —
+            // each wedged every read of the mid-recycle NodeType.
             if (delivery.Message is not DeliveryFailure
                 && delivery.Message is not null
                 && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
@@ -423,8 +440,9 @@ public class MessageService : IMessageService
                 {
                     parent.Post(new DeliveryFailure(delivery)
                     {
-                        ErrorType = ErrorType.NotFound,
-                        Message = $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — cannot process {typeName}."
+                        ErrorType = ErrorType.ShuttingDown,
+                        Message = $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — cannot process "
+                                  + $"{typeName}; the address may reactivate (recycle / restart). Rejecting now."
                     }, o => o.ResponseFor(delivery));
                 }
                 catch (Exception ex)

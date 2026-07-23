@@ -178,7 +178,20 @@ public enum ErrorType
     /// <summary>
     /// The caller is authenticated but lacks permission for this operation.
     /// </summary>
-    Forbidden
+    Forbidden,
+    /// <summary>
+    /// TRANSIENT rejection: the delivery raced the target hub's disposal
+    /// (<c>MessageService.ScheduleNotify</c>'s shutdown-drop NACK — a recycle, restart,
+    /// or delete in flight). The ADDRESS may reactivate on the very next probe, so this
+    /// is retry-worthy, never terminal: request/response callers surface it like any
+    /// failure (their caller retries or maps it to absence), while long-lived consumers
+    /// with their own recovery machinery — chiefly <c>SynchronizationStream</c>'s
+    /// keep-alive + change-feed resubscribe latch — MUST ride it out rather than tear
+    /// down (CI 30003419841: erroring the sync stream on this NACK killed the resubscribe
+    /// latch and wedged every read of a mid-recycle NodeType). Mirrors the Orleans
+    /// mid-DeactivateOnIdle forwarding reject ("invalid activation. Rejecting now.").
+    /// </summary>
+    ShuttingDown
 }
 
 
