@@ -2,6 +2,7 @@
 
 using System.Text.Json;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -98,5 +99,39 @@ public class SpaceResolveSpaceTest
         var md = Assert.IsType<MarkdownControl>(control);
         md.NodePath.Should().Be("Acme");
         md.Markdown.ToString()!.Should().Contain("Hi");
+    }
+
+    // ---------- Foreign-typed content carrying an authored body ----------
+    // A plugin-package Space root's content IS the partition's NodeTypeDefinition (the
+    // UWDeepfield shape) — the node is still a Space to the viewer, and its authored home
+    // page lives in NodeTypeDefinition.Body. ResolveSpace must recover it; without this,
+    // no content edit can ever replace the welcome placeholder on such a root (verified
+    // live on memex.systemorph.com 2026-07-23: a stored body was rendered-inert).
+
+    [Fact]
+    public void ForeignTypedContent_WithBody_RecoveredAsSpaceBody()
+    {
+        var def = new NodeTypeDefinition { Description = "package node", Body = "# UW Deepfield\n\n@@(\"area/Search\")" };
+        var space = SpaceLayoutAreas.ResolveSpace(Node(def), Options);
+        space.Should().NotBeNull("an authored body on foreign-typed content must render, not the placeholder");
+        space!.Body.Should().Contain("UW Deepfield");
+    }
+
+    [Fact]
+    public void ForeignTypedContent_WithoutBody_Null()
+    {
+        // No authored body ⇒ genuinely nothing to render — the welcome placeholder path stays.
+        var def = new NodeTypeDefinition { Description = "package node" };
+        SpaceLayoutAreas.ResolveSpace(Node(def), Options).Should().BeNull();
+    }
+
+    [Fact]
+    public void JsonElementForeignContent_WithBody_Recovered()
+    {
+        // The same shape after a query-boundary degrade to JsonElement: Deserialize<Space> maps
+        // the camel-cased `body` member onto Space.Body directly.
+        var je = JsonSerializer.SerializeToElement(
+            new NodeTypeDefinition { Body = "BODY" }, Options);
+        SpaceLayoutAreas.ResolveSpace(Node(je), Options)!.Body.Should().Be("BODY");
     }
 }
