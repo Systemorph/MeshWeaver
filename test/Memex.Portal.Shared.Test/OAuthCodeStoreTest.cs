@@ -51,6 +51,10 @@ public class OAuthCodeStoreTest(ITestOutputHelper output) : MonolithMeshTestBase
         Mesh.ServiceProvider.GetRequiredService<ILogger<OAuthCodeStore>>())
     {
         CodeLifetime = codeLifetime ?? TimeSpan.FromMinutes(5),
+        // Short read window so the negative-path tests (unknown / consumed / expired code,
+        // which wait out the timeout by design) stay fast on the single in-memory mesh; a
+        // valid code resolves near-instantly via Take(1) regardless. Prod default is 10 s.
+        ReadTimeout = TimeSpan.FromSeconds(2),
     };
 
     private static string Challenge(string verifier)

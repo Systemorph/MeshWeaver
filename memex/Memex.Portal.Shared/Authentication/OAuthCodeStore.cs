@@ -56,7 +56,15 @@ internal class OAuthCodeStore(IMeshService meshService, IMessageHub hub, ILogger
     /// created on a different replica); the MCP client is blocking on the /token
     /// HTTP response anyway. Typical case is sub-second.
     /// </summary>
-    private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// Bounded read-your-writes wait for the code node to become readable at /token.
+    /// A valid code resolves in ~1–2 s (Take(1) on the first matching emission); an
+    /// unknown / already-consumed / expired code never matches and falls through to this
+    /// timeout → invalid_grant. Default 10 s: ample margin over the observed create→routable
+    /// lag (~1 s on memex-cloud) while keeping the negative-path (rare: replay/expiry) fast.
+    /// Init-only so tests can shorten it — never a static bound to "tune away" a failure.
+    /// </summary>
+    public TimeSpan ReadTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Codes expire 5 minutes after issuance (RFC 6749 §4.1.2 recommends ≤10).
@@ -140,7 +148,21 @@ internal class OAuthCodeStore(IMeshService meshService, IMessageHub hub, ILogger
         var hash = HashRawCode(code);
         var path = $"{CodeNamespace}/{hash[..HashPrefixLength]}";
 
-        return AsSystem(() => hub.GetMeshNode(path, ReadTimeout))
+        // Read the code node through the AUTHORITATIVE single-node primitive —
+        // workspace.GetMeshNodeStream(path) — NOT the one-shot hub.GetMeshNode(path)
+        // routing read. On a multi-silo portal the code is minted by /authorize on one
+        // replica and redeemed by /token on another; a freshly-created node is not
+        // instantly routable, so a one-shot GetMeshNode hits [ROUTE] NotFound and the
+        // exchange fails (observed on memex-cloud: "Node created at Admin/OAuthCode/{id}"
+        // immediately followed by "[ROUTE] NotFound ... Admin/OAuthCode/{id}"). The
+        // stream read activates the owning per-node hub from shared Postgres and rides
+        // out the create/routing/persistence lag via the transient breaker; the 50 ms
+        // poll re-subscribes until the node with our matching CodeHash surfaces (same
+        // read-your-writes pattern as OrleansCacheUpdateMultiSiloTest). A valid code
+        // resolves in ~1–2 s (Take(1) on first match); a genuinely unknown / already-
+        // consumed / expired code never matches and falls through to the ReadTimeout →
+        // invalid_grant.
+        return AsSystem(() => ReadCodeNode(path, hash))
             .SelectMany(node =>
             {
                 var entry = ExtractEntry(node);
@@ -165,6 +187,36 @@ internal class OAuthCodeStore(IMeshService meshService, IMessageHub hub, ILogger
                             "already consumed: lost the single-use consume race (first delete wins) "
                             + "— e.g. a duplicate callback or the same code replayed against another replica"));
             });
+    }
+
+    /// <summary>
+    /// Reads the code node by exact path, tolerating the create→persist→routable lag.
+    /// <para>A freshly-created node is not instantly readable: <c>GetMeshNodeStream</c>
+    /// throws "No node found at {path}" during the window before the persistence sampler
+    /// flushes and (cross-silo) the owning per-node hub activates from Postgres. Each
+    /// attempt swallows that transient error and, ONLY on no-match, re-subscribes after
+    /// 50 ms — <c>Concat</c>, never <c>Merge</c>, so exactly ONE owner-hub subscription is
+    /// live at a time. A missing / consumed / expired code therefore never accumulates
+    /// concurrent subscriptions (the storm the Interval+SelectMany first cut would have
+    /// caused); it simply keeps re-probing until the outer <see cref="ReadTimeout"/> fires
+    /// → null → invalid_grant. A valid code emits on the first matching attempt and the
+    /// outer <c>Take(1)</c> tears the whole chain down.</para>
+    /// </summary>
+    private IObservable<MeshNode?> ReadCodeNode(string path, string hash)
+    {
+        IObservable<MeshNode?> Attempt() =>
+            hub.GetWorkspace().GetMeshNodeStream(path)
+                .Take(1)
+                .Where(n => ExtractEntry(n) is { } e
+                            && string.Equals(e.CodeHash, hash, StringComparison.OrdinalIgnoreCase))
+                .Select(n => (MeshNode?)n)
+                .Catch<MeshNode?, Exception>(_ => Observable.Empty<MeshNode?>())
+                .Concat(Observable.Defer(Attempt).DelaySubscription(TimeSpan.FromMilliseconds(50)));
+
+        return Observable.Defer(Attempt)
+            .Take(1)
+            .Timeout(ReadTimeout)
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
     }
 
     /// <summary>
