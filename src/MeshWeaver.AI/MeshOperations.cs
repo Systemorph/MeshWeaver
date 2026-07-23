@@ -2580,8 +2580,18 @@ public class MeshOperations
 
         // 1. Snapshot the subtree (root + descendants) — the same query Copy traverses. Ancestor-first
         //    ordering so an inherited collection is attributed to its owning ancestor on dedup.
+        //    Bounded fail-loud: this was the ONE stage of the chain with no bound, so a stalled query
+        //    provider (see MeshQuery's Initial stall probe) hung the whole Export in total silence —
+        //    for an agent tool call that is a forever-hung round. The timeout converts the invisible
+        //    hang into a named error; the ROOT CAUSE of any stall is the provider (fix there), never
+        //    this bound.
         return mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{root} scope:subtree"))
             .Take(1)
+            .Timeout(TimeSpan.FromSeconds(60))
+            .Catch((TimeoutException _) => Observable.Throw<QueryResultChange<MeshNode>>(
+                new TimeoutException(
+                    $"Export: the subtree snapshot query for '{root}' produced no result within 60s — "
+                    + "a query provider stalled (check the 'has not emitted an Initial' warnings in the log).")))
             .Select(change => change.Items
                 .Where(n => !string.IsNullOrEmpty(n.Path))
                 .ToList())
@@ -2837,7 +2847,16 @@ public class MeshOperations
                                 .Where(bytes => bytes is not null)
                                 .Select(bytes => new ExportedFile(
                                     nodePath, collectionName, file.Path.TrimStart('/'), bytes!)))
-                            .Concat());
+                            .Concat())
+                    // Bounded fail-loud: GetCollection / the per-file reads had no bound, so one
+                    // stalled backing store hung the whole Export in silence. Rx's relative Timeout
+                    // bounds the GAP between emissions (subscribe→first, then file→file), so slow
+                    // MANY-file collections are fine as long as individual reads respond. Real
+                    // errors still propagate unchanged — only the silent stall becomes named.
+                    .Timeout(TimeSpan.FromSeconds(120))
+                    .Catch((TimeoutException _) => Observable.Throw<ExportedFile>(new TimeoutException(
+                        $"Export: reading content files for '{nodePath}/{collectionName}' stalled "
+                        + "(no progress for 120s) — the collection's backing store did not respond.")));
             }))
             .ToObservable()
             .Concat()
@@ -2933,6 +2952,11 @@ public class MeshOperations
         };
         return mesh.CreateNode(newNode)
             .Select(_ => 1)
+            // Bounded: a CreateNode that neither emits nor errors would stall the import's
+            // sequential Concat forever in silence. The timeout routes into the existing
+            // tolerant per-node catch below, so one stalled node logs and counts as failed
+            // instead of hanging the whole import.
+            .Timeout(TimeSpan.FromSeconds(30))
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex, "Import: create failed for {Path}", newPath);

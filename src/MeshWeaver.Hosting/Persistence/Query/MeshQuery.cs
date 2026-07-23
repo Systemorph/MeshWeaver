@@ -431,7 +431,7 @@ public class MeshQuery : IMeshQueryCore
             // Single-provider ordering is preserved when OrderBy is absent
             // and all scores are equal, because LINQ's OrderByDescending
             // is stable.
-            return observables[0].Stream.Select(change =>
+            var single = observables[0].Stream.Select(change =>
             {
                 if (change.ChangeType != QueryChangeType.Initial)
                     return change;
@@ -442,7 +442,42 @@ public class MeshQuery : IMeshQueryCore
                     var score = scores is not null && j < scores.Count ? scores[j] : 0.0;
                     hits.Add((change.Items[j], score));
                 }
-                return ClipMergedInitial<T>(hits, change, change.Query!, request);
+                // Same null-Query defense as the multi-provider merge: a provider that emits an
+                // Initial without stamping Query (contract slip) NRE'd ClipMergedInitial here —
+                // fall back to parsing the request instead of trusting the provider.
+                var parsed = change.Query
+                    ?? new QueryParser().Parse(request.EffectiveQueries.FirstOrDefault() ?? "");
+                return ClipMergedInitial<T>(hits, change, parsed, request);
+            });
+            // Same stall probe as the multi-provider merge below — a single provider that
+            // neither emits nor completes hangs its consumer just as silently.
+            return Observable.Create<QueryResultChange<T>>(observer =>
+            {
+                // Benign race by design: a plain bool flag read by the probe timer. Worst
+                // case is one spurious warning when the Initial lands exactly at the probe
+                // deadline — acceptable for a diagnostic; no gate lock on the hot path.
+                var gotInitial = false;
+                var providerName = observables[0].Provider;
+                var probe = Observable.Timer(InitialStallProbeDelay).Subscribe(_ =>
+                {
+                    if (gotInitial)
+                        return;
+                    Logger?.LogWarning(
+                        "Query provider [{Provider}] has not emitted an Initial after {Delay}s for query "
+                        + "'{Query}' (user '{UserId}') — its consumer hangs with no error. Fix the stalled "
+                        + "provider; never bump the consumer's timeout.",
+                        providerName, InitialStallProbeDelay.TotalSeconds, request.Query, request.UserId);
+                });
+                var sub = single.Subscribe(
+                    change =>
+                    {
+                        if (change.ChangeType == QueryChangeType.Initial)
+                            gotInitial = true;
+                        observer.OnNext(change);
+                    },
+                    observer.OnError,
+                    observer.OnCompleted);
+                return new System.Reactive.Disposables.CompositeDisposable(probe, sub);
             });
         }
 
@@ -607,9 +642,46 @@ public class MeshQuery : IMeshQueryCore
                 subscriptions.Add(sub);
             }
 
+            // 🔦 Stall probe — pure diagnosability, no behavior change. The merged Initial
+            // gates on EVERY provider; the completion guard above covers a provider that
+            // COMPLETES without an Initial, but a provider that neither emits nor completes
+            // nor errors starves the gate FOREVER and the consumer hangs in TOTAL silence
+            // (CI 2026-07-21: ExportImportAccessControlTest watchdog-killed at 60s with a
+            // flat heap and not one log line — this warning is the line that was missing).
+            // Warning level so default CI/prod log levels carry it; names the exact laggard
+            // so the NEXT occurrence is attributable. Disposed with the subscriptions, so a
+            // normally-answered query never logs.
+            var stallProbe = Observable.Timer(InitialStallProbeDelay).Subscribe(_ =>
+            {
+                string missing;
+                lock (gate)
+                {
+                    if (initialCount == initialTarget)
+                        return;
+                    missing = string.Join(", ", observables
+                        .Where((_, k) => !initialSeen[k])
+                        .Select(o => o.Provider));
+                }
+                Logger?.LogWarning(
+                    "Query providers [{Providers}] have not emitted an Initial after {Delay}s for query "
+                    + "'{Query}' (user '{UserId}') — the merged query is silently stalled on its "
+                    + "all-providers gate and its consumer hangs with no error. Fix the stalled "
+                    + "provider; never bump the consumer's timeout.",
+                    missing, InitialStallProbeDelay.TotalSeconds, request.Query, request.UserId);
+            });
+            subscriptions.Add(stallProbe);
+
             return new System.Reactive.Disposables.CompositeDisposable(subscriptions);
         });
     }
+
+    /// <summary>
+    /// How long a query provider may take to deliver its Initial before the merge's stall probe
+    /// names it in a warning. Diagnostic only — nothing is cancelled; generous enough that a slow
+    /// cold provider under suite load doesn't produce noise (the observed healthy worst case is
+    /// single-digit seconds), short enough to land well before consumer watchdogs (60s+).
+    /// </summary>
+    private static readonly TimeSpan InitialStallProbeDelay = TimeSpan.FromSeconds(20);
 
     /// <summary>
     /// Sort + skip + clip the merged initial set. The authoritative ordering
