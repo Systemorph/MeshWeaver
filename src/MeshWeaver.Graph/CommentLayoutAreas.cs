@@ -54,6 +54,11 @@ public static class CommentLayoutAreas
         return $"{(int)(elapsed.TotalDays / 365)}y";
     }
 
+    /// <summary>A comment with nothing written yet opens straight in EDIT mode — "+ Comment" exists to
+    /// write, so a freshly created (empty) comment must not demand an extra ✎ click before typing.
+    /// Anything already written renders read-only until the author toggles the editor.</summary>
+    internal static bool OpensInEdit(string? text) => string.IsNullOrWhiteSpace(text);
+
     /// <summary>
     /// Renders the Overview area for a Comment node.
     /// Shows author, comment text (as rendered markdown), click-to-edit toggle,
@@ -192,10 +197,10 @@ public static class CommentLayoutAreas
         {
             container = container.WithView((h, _) =>
             {
-                // Initialize edit state once
+                // Initialize edit state once — a fresh (empty) comment opens straight in the editor.
                 if (!initialized[0])
                 {
-                    h.UpdateData(editStateId, false);
+                    h.UpdateData(editStateId, OpensInEdit(comment.Text));
                     initialized[0] = true;
                 }
 
