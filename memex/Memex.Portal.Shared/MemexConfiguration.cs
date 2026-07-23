@@ -652,6 +652,13 @@ public static class MemexConfiguration
                 // credential nodes. Without this the create throws "NodeType 'ApiCredential' is not
                 // registered" — the OAuth callback's persist step fails and sign-in reports failure.
                 .AddApiCredentialType()
+                // Register the OAuthCode NodeType + AuthorizationCode content type so the
+                // MCP OAuth server (OAuthCodeStore) can persist pending authorization codes
+                // as Admin/OAuthCode/{hashPrefix} mesh nodes — the replica-safe store every
+                // pod shares (the /token exchange may land on a different replica than the
+                // /authorize that minted the code). Without this the create fails with
+                // "NodeType 'OAuthCode' is not registered" and no MCP client can connect.
+                .AddOAuthCodeType()
                 // Seed root-scope Admin AccessAssignments for users listed under
                 // `Auth:GlobalAdmins` so configured admins bypass per-partition
                 // RLS for cross-partition operations (list Spaces, create

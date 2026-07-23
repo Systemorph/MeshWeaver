@@ -399,6 +399,41 @@ public class MessageService : IMessageService
                 logger.LogDebug("Dropping message {MessageType} (ID: {MessageId}) in {Address} - hub is shutting down (RunLevel={RunLevel})",
                     delivery.Message?.GetType().Name, delivery.Id, Address, hub.RunLevel);
             MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} DROPPED_SHUTTING_DOWN runLevel={hub.RunLevel}");
+
+            // 🚨 NACK, never a silent drop, for messages a SENDER IS AWAITING. Callers of
+            // hostedHub.DeliverMessage (HierarchicalRouting, RoutingServiceBase) return
+            // Forwarded() without inspecting our Failed state, so a request landing here —
+            // e.g. a GetDataRequest racing the per-node hub's post-delete DisposeRequest —
+            // used to vanish and the sender's hub.Observe(...) sat silent until its full
+            // RequestTimeout (the OAuth consumed-code re-exchange stalled 30s on exactly
+            // this). Post the DeliveryFailure through the PARENT hub: our own Post would
+            // re-enter this same gate and be dropped. Cascade-safe by the same exclusions
+            // ReportFailure applies — never NACK a DeliveryFailure (no ping-pong: a NACK
+            // arriving at another disposing hub is excluded here) nor [CanBeIgnored]
+            // lifecycle traffic (no requester is waiting).
+            if (delivery.Message is not DeliveryFailure
+                && delivery.Message is not null
+                && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
+                && delivery.Sender is not null
+                && !delivery.Sender.Equals(Address)
+                && ParentHub is { } parent
+                && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            {
+                try
+                {
+                    parent.Post(new DeliveryFailure(delivery)
+                    {
+                        ErrorType = ErrorType.NotFound,
+                        Message = $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — cannot process {typeName}."
+                    }, o => o.ResponseFor(delivery));
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex,
+                        "Failed to NACK {MessageType} (ID: {MessageId}) dropped by shutting-down hub {Address}",
+                        typeName, delivery.Id, Address);
+                }
+            }
             return delivery.Failed("Hub is shutting down");
         }
 

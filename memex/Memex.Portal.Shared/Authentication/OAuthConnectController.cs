@@ -131,16 +131,20 @@ public class OAuthConnectController(
     /// <summary>
     /// OAuth Authorization Endpoint — redirects authenticated users to the client's redirect_uri
     /// with an authorization code. Unauthenticated users are sent to /login first.
+    /// The code is persisted as a mesh node (replica-safe: the /token exchange may land on a
+    /// different pod), so this action bridges the store's IObservable to Task at the HTTP
+    /// boundary — same single-bridge shape as <see cref="ExchangeToken"/>.
     /// </summary>
     [HttpGet("/authorize")]
-    public IActionResult Authorize(
+    public Task<IActionResult> Authorize(
         [FromQuery] string response_type,
         [FromQuery] string client_id,
         [FromQuery] string redirect_uri,
         [FromQuery] string? state,
         [FromQuery] string? scope,
         [FromQuery] string? code_challenge,
-        [FromQuery] string? code_challenge_method)
+        [FromQuery] string? code_challenge_method,
+        CancellationToken ct = default)
     {
         logger.LogInformation(
             "OAuth /authorize: response_type={ResponseType}, client_id={ClientId}, redirect_uri={RedirectUri}, has_state={HasState}, has_pkce={HasPkce}, authenticated={Authenticated}",
@@ -151,13 +155,13 @@ public class OAuthConnectController(
         if (response_type != "code")
         {
             logger.LogWarning("OAuth /authorize rejected: unsupported response_type={ResponseType}", response_type);
-            return BadRequest(new { error = "unsupported_response_type" });
+            return Task.FromResult<IActionResult>(BadRequest(new { error = "unsupported_response_type" }));
         }
 
         if (string.IsNullOrEmpty(client_id) || string.IsNullOrEmpty(redirect_uri))
         {
             logger.LogWarning("OAuth /authorize rejected: missing client_id or redirect_uri");
-            return BadRequest(new { error = "invalid_request", error_description = "client_id and redirect_uri are required" });
+            return Task.FromResult<IActionResult>(BadRequest(new { error = "invalid_request", error_description = "client_id and redirect_uri are required" }));
         }
 
         // If user is not authenticated, redirect to login with return URL
@@ -166,7 +170,7 @@ public class OAuthConnectController(
             var authorizeUrl = $"{Request.Scheme}://{Request.Host}{Request.Path}{Request.QueryString}";
             var loginUrl = $"/login?returnUrl={Uri.EscapeDataString(authorizeUrl)}";
             logger.LogInformation("OAuth /authorize: redirecting unauthenticated caller to {LoginUrl}", loginUrl);
-            return Redirect(loginUrl);
+            return Task.FromResult<IActionResult>(Redirect(loginUrl));
         }
 
         // Extract user identity from cookie claims (email/name are display
@@ -185,7 +189,7 @@ public class OAuthConnectController(
         if (string.IsNullOrEmpty(email))
         {
             logger.LogWarning("OAuth /authorize rejected: authenticated principal has no email/preferred_username claim");
-            return BadRequest(new { error = "invalid_request", error_description = "Unable to determine user identity" });
+            return Task.FromResult<IActionResult>(BadRequest(new { error = "invalid_request", error_description = "Unable to determine user identity" }));
         }
 
         // Refuse to issue a code with an unresolved or email-shaped userId — it
@@ -199,27 +203,43 @@ public class OAuthConnectController(
                 "OAuth /authorize rejected: no resolved mesh identity for {Email} (userId='{UserId}'). "
                 + "Retry after a browser login provisions/loads the User node.",
                 email, userId ?? "(null)");
-            return BadRequest(new { error = "invalid_request", error_description = "Unable to determine user identity" });
+            return Task.FromResult<IActionResult>(BadRequest(new { error = "invalid_request", error_description = "Unable to determine user identity" }));
         }
 
-        // Generate authorization code
-        var code = CodeStore.GenerateCode(
-            userId: userId,
-            userName: name,
-            userEmail: email,
-            clientId: client_id,
-            redirectUri: redirect_uri,
-            codeChallenge: code_challenge,
-            codeChallengeMethod: code_challenge_method);
+        // Generate + persist the authorization code (mesh node — visible to every
+        // replica). The redirect only fires once the node write committed; a code
+        // whose persistence failed must never reach the client (it could not be
+        // exchanged anywhere), so a store error surfaces as 500 server_error.
+        return CodeStore.GenerateCode(
+                userId: userId,
+                userName: name,
+                userEmail: email,
+                clientId: client_id,
+                redirectUri: redirect_uri,
+                codeChallenge: code_challenge,
+                codeChallengeMethod: code_challenge_method)
+            .Select(code =>
+            {
+                logger.LogInformation("Issued OAuth authorization code for user {Email}, client {ClientId}", email, client_id);
 
-        logger.LogInformation("Issued OAuth authorization code for user {Email}, client {ClientId}", email, client_id);
+                // Redirect to client with code (and state if provided)
+                var callbackUrl = string.IsNullOrEmpty(state)
+                    ? $"{redirect_uri}?code={Uri.EscapeDataString(code)}"
+                    : $"{redirect_uri}?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}";
 
-        // Redirect to client with code (and state if provided)
-        var callbackUrl = string.IsNullOrEmpty(state)
-            ? $"{redirect_uri}?code={Uri.EscapeDataString(code)}"
-            : $"{redirect_uri}?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}";
-
-        return Redirect(callbackUrl);
+                return (IActionResult)Redirect(callbackUrl);
+            })
+            .Catch<IActionResult, Exception>(ex =>
+            {
+                logger.LogError(ex,
+                    "OAuth /authorize failed to persist the authorization code for user {Email}, client {ClientId}",
+                    email, client_id);
+                return Observable.Return<IActionResult>(StatusCode(
+                    StatusCodes.Status500InternalServerError,
+                    new { error = "server_error", error_description = "Failed to persist the authorization code" }));
+            })
+            .FirstAsync()
+            .ToTask(ct);
     }
 
     /// <summary>
@@ -247,49 +267,52 @@ public class OAuthConnectController(
             return Task.FromResult<IActionResult>(BadRequest(new { error = "invalid_request" }));
         }
 
-        var entry = CodeStore.ExchangeCode(
-            request.code,
-            request.client_id,
-            request.redirect_uri,
-            request.code_verifier,
-            out var failureReason);
-
-        if (entry == null)
-        {
-            // The reason names the exact failing check (unknown/consumed, expired, client_id,
-            // redirect_uri, PKCE) — the wire response stays a generic invalid_grant per RFC 6749.
-            logger.LogWarning(
-                "OAuth token exchange failed for client {ClientId}: {FailureReason}",
-                request.client_id, failureReason);
-            return Task.FromResult<IActionResult>(BadRequest(new { error = "invalid_grant" }));
-        }
-
-        // Create an mw_ API token via the existing token service. Lifetime
-        // is long-lived because OAuth clients (MCP, CLI tools) typically
-        // can't run interactive re-auth flows — a token that expires in 30
-        // days surprises users who connect once and come back months later.
-        // Refresh-token flow isn't implemented yet; until it is, default to
-        // 1 year. Bump if needed via TokenLifetime below.
-        //
-        // No await: pull IObservable up to the controller's return type.
-        // Single bridge to Task happens at .ToTask(ct) — passing the
-        // request's cancellation token so a client disconnect tears down
-        // the reactive subscription.
-        return TokenService.CreateToken(
-                userId: entry.UserId,
-                userName: entry.UserName,
-                userEmail: entry.UserEmail,
-                label: $"OAuth: {request.client_id}",
-                expiresAt: DateTimeOffset.UtcNow.Add(TokenLifetime))
-            .Select(creation =>
+        // Exchange the code against the mesh-backed store (replica-safe: the code may
+        // have been minted by any pod, and the single-use consume is atomic across
+        // replicas — first delete wins), then mint the mw_ API token. One reactive
+        // chain, single bridge to Task at .ToTask(ct).
+        return CodeStore.ExchangeCode(
+                request.code,
+                request.client_id,
+                request.redirect_uri,
+                request.code_verifier)
+            .SelectMany(exchange =>
             {
-                logger.LogInformation("Issued OAuth access token for user {Email}, client {ClientId}", entry.UserEmail, request.client_id);
-                return (IActionResult)Ok(new
+                if (exchange.Entry is null)
                 {
-                    access_token = creation.RawToken,
-                    token_type = "Bearer",
-                    expires_in = (int)TokenLifetime.TotalSeconds,
-                });
+                    // The reason names the exact failing check (unknown/consumed, lost consume
+                    // race, expired, client_id, redirect_uri, PKCE) — the wire response stays
+                    // a generic invalid_grant per RFC 6749.
+                    logger.LogWarning(
+                        "OAuth token exchange failed for client {ClientId}: {FailureReason}",
+                        request.client_id, exchange.FailureReason);
+                    return Observable.Return<IActionResult>(BadRequest(new { error = "invalid_grant" }));
+                }
+
+                var entry = exchange.Entry;
+
+                // Create an mw_ API token via the existing token service. Lifetime
+                // is long-lived because OAuth clients (MCP, CLI tools) typically
+                // can't run interactive re-auth flows — a token that expires in 30
+                // days surprises users who connect once and come back months later.
+                // Refresh-token flow isn't implemented yet; until it is, default to
+                // 1 year. Bump if needed via TokenLifetime below.
+                return TokenService.CreateToken(
+                        userId: entry.UserId,
+                        userName: entry.UserName,
+                        userEmail: entry.UserEmail,
+                        label: $"OAuth: {request.client_id}",
+                        expiresAt: DateTimeOffset.UtcNow.Add(TokenLifetime))
+                    .Select(creation =>
+                    {
+                        logger.LogInformation("Issued OAuth access token for user {Email}, client {ClientId}", entry.UserEmail, request.client_id);
+                        return (IActionResult)Ok(new
+                        {
+                            access_token = creation.RawToken,
+                            token_type = "Bearer",
+                            expires_in = (int)TokenLifetime.TotalSeconds,
+                        });
+                    });
             })
             .FirstAsync()
             .ToTask(ct);

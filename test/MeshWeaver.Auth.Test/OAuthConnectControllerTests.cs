@@ -1,4 +1,5 @@
 using System;
+using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -29,10 +30,20 @@ namespace MeshWeaver.Auth.Test;
 /// </summary>
 public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    protected override MeshWeaver.Mesh.MeshBuilder ConfigureMesh(MeshWeaver.Mesh.MeshBuilder builder)
+        // Same registration the portal wires in ConfigureMemexMesh — the OAuthCode
+        // NodeType + AuthorizationCode content type the mesh-backed code store persists.
+        => base.ConfigureMesh(builder).AddOAuthCodeType();
+
     private OAuthConnectController CreateController(ClaimsPrincipal? user = null, string host = "memex.test", string scheme = "https")
     {
         var services = new ServiceCollection();
-        services.AddSingleton<OAuthCodeStore>();
+        // The code store is mesh-backed (replica-safe) — build it on the test mesh's
+        // services, the same way the ApiTokenService below is.
+        services.AddSingleton(new OAuthCodeStore(
+            Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
+            Mesh,
+            Mesh.ServiceProvider.GetRequiredService<ILogger<OAuthCodeStore>>()));
         services.AddSingleton(new ApiTokenService(
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh,
@@ -46,6 +57,17 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
         controller.ControllerContext = new ControllerContext { HttpContext = httpContext };
         return controller;
     }
+
+    /// <summary>
+    /// Waits until the authorization-code node minted by /authorize is readable —
+    /// absorbs create→routing visibility lag (sanctioned Interval+re-read pattern)
+    /// so the /token exchange under test exercises its own logic, not read lag.
+    /// </summary>
+    private async Task AwaitCodeVisible(string code) =>
+        await Observable
+            .Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => ReadNode(OAuthCodeStore.PathForCode(code)))
+            .Should().Within(30.Seconds()).Match(n => n is not null);
 
     private static ClaimsPrincipal AuthenticatedUser(string email = "alice@example.com", string name = "Alice")
     {
@@ -238,7 +260,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     // ─── /authorize ──────────────────────────────────────────────────────────
 
     [Fact]
-    public void Authorize_Unauthenticated_RedirectsToLogin()
+    public async Task Authorize_Unauthenticated_RedirectsToLogin()
     {
         // "we should go to our login screen" — this is the step the user was waiting for.
         // Unauthenticated calls to /authorize must 302 to /login?returnUrl=... so the portal
@@ -248,14 +270,15 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
         controller.ControllerContext.HttpContext.Request.QueryString = new QueryString(
             "?response_type=code&client_id=c1&redirect_uri=https%3A%2F%2Fclaude.ai%2Fcb&state=xyz&code_challenge=abc&code_challenge_method=S256");
 
-        var result = controller.Authorize(
+        var result = await controller.Authorize(
             response_type: "code",
             client_id: "c1",
             redirect_uri: "https://claude.ai/cb",
             state: "xyz",
             scope: "mcp",
             code_challenge: "abc",
-            code_challenge_method: "S256") as RedirectResult;
+            code_challenge_method: "S256",
+            ct: TestContext.Current.CancellationToken) as RedirectResult;
 
         result.Should().NotBeNull();
         result!.Url.Should().StartWith("/login?returnUrl=");
@@ -264,18 +287,19 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void Authorize_Authenticated_IssuesCodeAndRedirectsToClient()
+    public async Task Authorize_Authenticated_IssuesCodeAndRedirectsToClient()
     {
         var controller = CreateController(AuthenticatedUser());
 
-        var result = controller.Authorize(
+        var result = await controller.Authorize(
             response_type: "code",
             client_id: "c1",
             redirect_uri: "https://claude.ai/cb",
             state: "nonce-42",
             scope: "mcp",
             code_challenge: null,
-            code_challenge_method: null) as RedirectResult;
+            code_challenge_method: null,
+            ct: TestContext.Current.CancellationToken) as RedirectResult;
 
         result.Should().NotBeNull();
         result!.Url.Should().StartWith("https://claude.ai/cb?code=");
@@ -283,67 +307,71 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void Authorize_AuthenticatedNoState_RedirectsWithoutStateParam()
+    public async Task Authorize_AuthenticatedNoState_RedirectsWithoutStateParam()
     {
         // Edge: some minimal clients don't pass state. Must not emit state= with empty value.
         var controller = CreateController(AuthenticatedUser());
 
-        var result = controller.Authorize(
+        var result = await controller.Authorize(
             response_type: "code",
             client_id: "c1",
             redirect_uri: "https://claude.ai/cb",
             state: null,
             scope: null,
             code_challenge: null,
-            code_challenge_method: null) as RedirectResult;
+            code_challenge_method: null,
+            ct: TestContext.Current.CancellationToken) as RedirectResult;
 
         result!.Url.Should().StartWith("https://claude.ai/cb?code=");
         result.Url.Should().NotContain("state=");
     }
 
     [Fact]
-    public void Authorize_UnsupportedResponseType_Returns400()
+    public async Task Authorize_UnsupportedResponseType_Returns400()
     {
         var controller = CreateController(AuthenticatedUser());
 
-        var result = controller.Authorize(
+        var result = await controller.Authorize(
             response_type: "token",
             client_id: "c1",
             redirect_uri: "https://claude.ai/cb",
-            state: null, scope: null, code_challenge: null, code_challenge_method: null) as BadRequestObjectResult;
+            state: null, scope: null, code_challenge: null, code_challenge_method: null,
+            ct: TestContext.Current.CancellationToken) as BadRequestObjectResult;
 
         result.Should().NotBeNull();
         result!.Value!.GetType().GetProperty("error")!.GetValue(result.Value).Should().Be("unsupported_response_type");
     }
 
     [Fact]
-    public void Authorize_MissingClientId_Returns400()
+    public async Task Authorize_MissingClientId_Returns400()
     {
         var controller = CreateController(AuthenticatedUser());
 
-        var result = controller.Authorize(
+        var result = await controller.Authorize(
             response_type: "code",
             client_id: "",
             redirect_uri: "https://claude.ai/cb",
-            state: null, scope: null, code_challenge: null, code_challenge_method: null) as BadRequestObjectResult;
+            state: null, scope: null, code_challenge: null, code_challenge_method: null,
+            ct: TestContext.Current.CancellationToken) as BadRequestObjectResult;
 
         result.Should().NotBeNull();
         result!.Value!.GetType().GetProperty("error")!.GetValue(result.Value).Should().Be("invalid_request");
     }
 
     [Fact]
-    public void Authorize_AuthenticatedWithoutEmail_Returns400()
+    public async Task Authorize_AuthenticatedWithoutEmail_Returns400()
     {
         // Degenerate: a cookie claim set without email/preferred_username — we can't issue
         // an API token for an unknown user.
         var identity = new ClaimsIdentity([new Claim(ClaimTypes.Name, "No Email")], authenticationType: "Test");
         var controller = CreateController(new ClaimsPrincipal(identity));
 
-        var result = controller.Authorize(
+        var result = await controller.Authorize(
             response_type: "code",
             client_id: "c1",
             redirect_uri: "https://claude.ai/cb",
-            state: null, scope: null, code_challenge: null, code_challenge_method: null) as BadRequestObjectResult;
+            state: null, scope: null, code_challenge: null, code_challenge_method: null,
+            ct: TestContext.Current.CancellationToken) as BadRequestObjectResult;
 
         result.Should().NotBeNull();
         var err = result!.Value!.GetType().GetProperty("error")!.GetValue(result.Value);
@@ -375,17 +403,19 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
         var challenge = Convert.ToBase64String(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)))
             .Replace("+", "-").Replace("/", "_").TrimEnd('=');
 
-        var authRedirect = (RedirectResult)controller.Authorize(
+        var authRedirect = (RedirectResult)await controller.Authorize(
             response_type: "code",
             client_id: reg.ClientId,
             redirect_uri: "https://claude.ai/cb",
             state: "s1",
             scope: "mcp",
             code_challenge: challenge,
-            code_challenge_method: "S256")!;
+            code_challenge_method: "S256",
+            ct: TestContext.Current.CancellationToken);
 
         var code = Uri.UnescapeDataString(
             authRedirect.Url["https://claude.ai/cb?code=".Length..authRedirect.Url.IndexOf("&state=")]);
+        await AwaitCodeVisible(code);
 
         // Step 3: exchange code for token. ExchangeToken returns Task<IActionResult>
         // (genuine controller SDK boundary) — bridge it to the reactive assertion via
@@ -416,10 +446,12 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
         var challenge = Convert.ToBase64String(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)))
             .Replace("+", "-").Replace("/", "_").TrimEnd('=');
 
-        var authRedirect = (RedirectResult)controller.Authorize(
-            "code", "c1", "https://claude.ai/cb", "s", "mcp", challenge, "S256")!;
+        var authRedirect = (RedirectResult)await controller.Authorize(
+            "code", "c1", "https://claude.ai/cb", "s", "mcp", challenge, "S256",
+            TestContext.Current.CancellationToken);
         var code = Uri.UnescapeDataString(
             authRedirect.Url["https://claude.ai/cb?code=".Length..authRedirect.Url.IndexOf("&state=")]);
+        await AwaitCodeVisible(code);
 
         var result = await controller.ExchangeToken(new TokenRequest
         {
@@ -440,9 +472,11 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
         // RFC 6749 §4.1.3: token endpoint MUST verify the code was issued to the same client.
         var controller = CreateController(AuthenticatedUser());
 
-        var authRedirect = (RedirectResult)controller.Authorize(
-            "code", "client-A", "https://claude.ai/cb", null, null, null, null)!;
+        var authRedirect = (RedirectResult)await controller.Authorize(
+            "code", "client-A", "https://claude.ai/cb", null, null, null, null,
+            TestContext.Current.CancellationToken);
         var code = authRedirect.Url["https://claude.ai/cb?code=".Length..];
+        await AwaitCodeVisible(Uri.UnescapeDataString(code));
 
         var result = await controller.ExchangeToken(new TokenRequest
         {
@@ -461,9 +495,11 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     {
         var controller = CreateController(AuthenticatedUser());
 
-        var authRedirect = (RedirectResult)controller.Authorize(
-            "code", "c1", "https://claude.ai/cb", null, null, null, null)!;
+        var authRedirect = (RedirectResult)await controller.Authorize(
+            "code", "c1", "https://claude.ai/cb", null, null, null, null,
+            TestContext.Current.CancellationToken);
         var code = authRedirect.Url["https://claude.ai/cb?code=".Length..];
+        await AwaitCodeVisible(Uri.UnescapeDataString(code));
 
         var result = await controller.ExchangeToken(new TokenRequest
         {
@@ -483,9 +519,11 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
         // Codes are single-use. Second exchange of the same code must fail.
         var controller = CreateController(AuthenticatedUser());
 
-        var authRedirect = (RedirectResult)controller.Authorize(
-            "code", "c1", "https://claude.ai/cb", null, null, null, null)!;
+        var authRedirect = (RedirectResult)await controller.Authorize(
+            "code", "c1", "https://claude.ai/cb", null, null, null, null,
+            TestContext.Current.CancellationToken);
         var code = Uri.UnescapeDataString(authRedirect.Url["https://claude.ai/cb?code=".Length..]);
+        await AwaitCodeVisible(code);
 
         var first = await controller.ExchangeToken(new TokenRequest
         {
