@@ -1098,9 +1098,18 @@ internal class MeshNodeCompilationService(
                 // so V1 and V2 ALCs are separate; loading from the canonical shared path
                 // would always return V1's assembly after V2 compiles. In-memory
                 // assemblies keep the old keyed-by-nodeName path.
-                var assembly = assemblyLocation.StartsWith("memory://", StringComparison.Ordinal)
-                    ? cacheService.LoadAssembly(nodeName)
-                    : cacheService.GetOrCreateLoadContextForPath(nodeName, assemblyLocation).LoadNodeAssembly();
+                // PIN the context across BOTH the load AND the GetTypes / MeshNodeProviderAttribute
+                // scan below. A concurrent recompile/eviction/teardown must not Unload this context
+                // while we reflect over its assembly, or the scan faults with
+                // "TypeLoadException: could not load type '…MeshNodeProviderAttribute' … because the
+                // format is invalid" (the flaky Orleans dynamic-compilation race). The pin releases
+                // when this method returns; Dispose() drains pins before Unload(). Pin throws if the
+                // context is already unloading → the catch below records it as a load miss (retryable).
+                var context = assemblyLocation.StartsWith("memory://", StringComparison.Ordinal)
+                    ? cacheService.GetOrCreateLoadContext(nodeName)
+                    : cacheService.GetOrCreateLoadContextForPath(nodeName, assemblyLocation);
+                using var scanPin = context.Pin();
+                var assembly = context.LoadNodeAssembly();
                 if (assembly == null)
                 {
                     // Promoted from Warning → Error: this is the root cause that
@@ -1704,7 +1713,12 @@ internal class MeshNodeCompilationService(
 
         try
         {
-            var assembly = cacheService.LoadAssemblyFromRelease(release, releaseFolder);
+            // PIN across load + the GetTypes/MeshNodeProviderAttribute scan below — same
+            // unload-during-scan race as CompileResultFromAssembly (TypeLoadException 'format is
+            // invalid'). Released when the method returns; Dispose() drains pins before Unload().
+            var context = cacheService.GetOrCreateLoadContextForRelease(release, releaseFolder);
+            using var scanPin = context.Pin();
+            var assembly = context.LoadNodeAssembly();
             if (assembly == null)
             {
                 logger.LogWarning("Failed to load assembly from {DllPath}", dllPath);

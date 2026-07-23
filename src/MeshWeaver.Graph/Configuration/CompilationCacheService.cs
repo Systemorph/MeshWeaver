@@ -221,6 +221,13 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     // whole context does.
     private WeakReference<Assembly>? _loadedAssembly;
     private volatile bool _disposed;
+    // In-flight SCANS of this context's loaded assembly (the GetTypes / MeshNodeProviderAttribute
+    // reflection / Activator block in MeshNodeCompilationService). Dispose() drains these before
+    // Unload() so a concurrent recompile / eviction / teardown cannot tear down the collectible
+    // LoaderAllocator mid-metadata-resolution — the "TypeLoadException: could not load type
+    // '…MeshNodeProviderAttribute' … because the format is invalid" race under parallel activation.
+    // See Pin().
+    private int _pins;
     private ImmutableArray<string> _probingDirs = ImmutableArray<string>.Empty;
 
     // Opt-in diagnostic (env MESHWEAVER_ALC_UNLOAD_GC_PROBE=1) — OFF by default, so zero cost in
@@ -251,6 +258,43 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     /// Gets whether this context has been disposed/unloaded.
     /// </summary>
     public bool IsDisposed => _disposed;
+
+    /// <summary>
+    /// Pins the context for the duration of a SCAN of its loaded assembly (GetTypes + attribute
+    /// reflection + Activator). While any pin is held, <see cref="Dispose"/> waits before
+    /// <see cref="System.Runtime.Loader.AssemblyLoadContext.Unload"/> so it cannot tear down the
+    /// collectible LoaderAllocator mid-metadata-resolution — otherwise a concurrent recompile /
+    /// eviction / teardown surfaces as <c>TypeLoadException: could not load type
+    /// '…MeshNodeProviderAttribute' … because the format is invalid</c>. ALWAYS use the returned
+    /// handle in a <c>using</c>. Throws <see cref="ObjectDisposedException"/> if the context is
+    /// already unloading — the caller must then re-resolve against the current context rather than
+    /// scan a doomed assembly.
+    /// </summary>
+    public IDisposable Pin()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(Name, "Cannot scan an assembly whose context is unloading");
+        Interlocked.Increment(ref _pins);
+        // Re-check after the increment: Dispose sets _disposed then drains _pins, so a pin taken
+        // concurrently with Dispose must not slip past the drain. If Dispose already started, back
+        // out and throw — Dispose's drain will observe the decrement and proceed.
+        if (_disposed)
+        {
+            Interlocked.Decrement(ref _pins);
+            throw new ObjectDisposedException(Name, "Cannot scan an assembly whose context is unloading");
+        }
+        return new PinScope(this);
+    }
+
+    private sealed class PinScope(NodeAssemblyLoadContext ctx) : IDisposable
+    {
+        private int _released;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+                Interlocked.Decrement(ref ctx._pins);
+        }
+    }
 
     public NodeAssemblyLoadContext(string nodeName, string? dllPath, ILogger? logger = null)
         : base(name: $"DynamicNode_{nodeName}", isCollectible: true)
@@ -421,6 +465,18 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 
             _logger?.LogDebug("Unloading AssemblyLoadContext {ContextName}", Name);
         }
+
+        // Drain in-flight assembly SCANS before tearing down the LoaderAllocator. _disposed is set
+        // above, so Pin() now rejects NEW scans; wait (time-bounded) for the ones already running to
+        // release. Unloading mid-GetTypes/attribute-resolution corrupts the assembly the scanner is
+        // holding (TypeLoadException '…format is invalid'), the race that flakes the concurrent
+        // Orleans dynamic-compilation tests and risks the same under a live-mesh recompile. A scan
+        // is milliseconds; the 5 s ceiling can never deadlock teardown — after it we unload anyway
+        // (last-resort, matching the prior always-unload behaviour).
+        var drainDeadline = Environment.TickCount64 + 5_000;
+        var spin = new SpinWait();
+        while (Volatile.Read(ref _pins) > 0 && Environment.TickCount64 < drainDeadline)
+            spin.SpinOnce();
 
         // Initiate unload outside the lock - the context will be collected when all references are released
         Unload();
