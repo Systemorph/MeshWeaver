@@ -19,8 +19,9 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// its own portal + migration Deployments to the new version so k8s rolls them. Outside Kubernetes it
 /// records the available version for detect-and-notify. Mirrors <c>ShippedReleaseSeedHostedService</c>
 /// (raw <see cref="IHostedService"/>, <c>SubscribeOn(TaskPoolScheduler.Default)</c>, one subscription).
+/// Not sealed: <see cref="CreatePolicySource"/> is the fault-injection seam for the resilience test.
 /// </summary>
-public sealed class SelfUpdateHostedService : IHostedService
+public class SelfUpdateHostedService : IHostedService
 {
     private readonly IMessageHub _hub;
     private readonly IAcrTagLister _acr;
@@ -50,23 +51,27 @@ public sealed class SelfUpdateHostedService : IHostedService
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        var workspace = _hub.GetWorkspace();
-        var accessService = _hub.ServiceProvider.GetService<AccessService>();
-        var jsonOptions = _hub.JsonSerializerOptions;
-
         _logger?.LogInformation(
             "[SelfUpdate] starting; version={Version}, registry={Registry}/{Repo}, canPatch={CanPatch}, interval={Interval}.",
             ShippedReleaseSeed.InstalledPlatformVersion, _options.Registry, _options.PortalRepository,
             _updater.CanPatch, _options.PollInterval);
 
-        _subscription = UpdatePolicyNodeType
-            // Seed Admin/UpdatePolicy if absent (storm-safe), THEN subscribe live — never point-read
-            // a maybe-absent node (NotFound storm).
-            .EnsureExists(_hub, accessService, _options.DefaultPolicy, _logger)
-            .SelectMany(_ => workspace.GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
-                .Select(node => UpdatePolicyNodeType.Parse(node, jsonOptions))
-                .DistinctUntilChanged(c => (c.Policy, c.RequireCiGreen)) // <-- re-switch only on a REAL policy change
-                .StartWith(new UpdatePolicyContent { Policy = _options.DefaultPolicy }))
+        _subscription = Observable
+            // Defer so every (re)subscription rebuilds the whole policy source — seed + live stream.
+            .Defer(CreatePolicySource)
+            // 🔁 wedges-to-zero: the policy READ can fault transiently — e.g. the 2026-07-23 prod
+            // hub-cache SubscribeRequest to Admin/UpdatePolicy timing out while the pod was degraded.
+            // That fault used to OnError through .Switch() into the terminal Subscribe and KILL the
+            // poller for the life of the pod — exactly when the update it polls for is what would
+            // recover it. Log the fault and re-establish the subscription at the existing polling
+            // cadence (a delayed, Rx-composed resubscribe — not a hot retry loop, not a watchdog).
+            .RetryWhen(faults => faults.SelectMany(ex =>
+            {
+                _logger?.LogWarning(ex,
+                    "[SelfUpdate] policy stream faulted; re-establishing in {Interval}.",
+                    _options.PollInterval);
+                return Observable.Timer(_options.PollInterval);
+            }))
             // The policy re-drives the poller via Switch. With DistinctUntilChanged the timer is only
             // re-subscribed when the admin ACTUALLY changes the policy (human-rare) — not a storm.
             .Select(content => content.Policy == UpdatePolicyKind.None
@@ -92,6 +97,26 @@ public sealed class SelfUpdateHostedService : IHostedService
     {
         _subscription?.Dispose();
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The policy source: seed <c>Admin/UpdatePolicy</c> if absent (storm-safe, via a query — never a
+    /// point-read of a maybe-absent node), then the live node stream, keyed to re-emit only on a REAL
+    /// policy change, starting with the default so the poller runs before the first live emission.
+    /// Virtual: the resilience test overrides this to inject a first-subscription fault at the exact
+    /// seam the prod hub-cache SubscribeRequest timeout surfaced through.
+    /// </summary>
+    protected virtual IObservable<UpdatePolicyContent> CreatePolicySource()
+    {
+        var workspace = _hub.GetWorkspace();
+        var accessService = _hub.ServiceProvider.GetService<AccessService>();
+        var jsonOptions = _hub.JsonSerializerOptions;
+        return UpdatePolicyNodeType
+            .EnsureExists(_hub, accessService, _options.DefaultPolicy, _logger)
+            .SelectMany(_ => workspace.GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                .Select(node => UpdatePolicyNodeType.Parse(node, jsonOptions))
+                .DistinctUntilChanged(c => (c.Policy, c.RequireCiGreen)) // <-- re-switch only on a REAL policy change
+                .StartWith(new UpdatePolicyContent { Policy = _options.DefaultPolicy }));
     }
 
     /// <summary>One evaluation: list tags → pick target per policy → gate target &gt; current →
