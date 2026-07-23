@@ -973,6 +973,25 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             ).WithHandler<DeliveryFailure>((_, delivery) =>
                 {
                     var failure = delivery.Message;
+                    // 🚨 A TRANSIENT shutdown reject is NOT terminal for a sync stream. It
+                    // means one delivery (typically our SubscribeRequest) raced the owner
+                    // hub's DisposeRequest during a recycle/restart — the address is about
+                    // to reactivate. This stream's own recovery machinery (keep-alive +
+                    // the change-feed resubscribe latch) re-sends the SubscribeRequest
+                    // once the fresh activation announces itself, so the right reaction is
+                    // to RIDE IT OUT. Calling OnError here tore that machinery down with
+                    // the stream: the latch never fired, nothing rehydrated, and every
+                    // reader of a mid-recycle NodeType waited to its timeout
+                    // (CI 30003419841, NodeTypeCompileParkTest.RecycleRetry — the exact
+                    // regression the ShuttingDown ErrorType exists to prevent). All other
+                    // failure kinds (RLS denial, validation, NotFound, …) stay terminal.
+                    if (failure.ErrorType == ErrorType.ShuttingDown)
+                    {
+                        logger.LogDebug(
+                            "Stream {StreamId} received transient shutdown reject: {Message} — keeping the stream alive for the resubscribe latch",
+                            StreamId, failure.Message);
+                        return delivery.Processed();
+                    }
                     logger.LogWarning("Stream {StreamId} received DeliveryFailure: {Message}", StreamId, failure.Message);
                     OnError(new DeliveryFailureException(failure));
                     return delivery.Processed();

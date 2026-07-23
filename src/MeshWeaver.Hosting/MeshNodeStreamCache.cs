@@ -1117,6 +1117,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             if (msg.Contains("target hub was not found", StringComparison.OrdinalIgnoreCase)) return true;
             if (msg.Contains("No response received in hub", StringComparison.OrdinalIgnoreCase)) return true;
             if (msg.Contains("undeliverable", StringComparison.OrdinalIgnoreCase)) return true;
+            // MessageService.ScheduleNotify's shutdown-drop NACK (ErrorType.ShuttingDown):
+            // a delivery raced the target hub's DisposeRequest (recycle / delete / restart).
+            // Transient by design — the address may reactivate (recycle), and if the node is
+            // genuinely gone the NEXT probe gets the authoritative routing NotFound.
+            if (msg.Contains("is shutting down", StringComparison.OrdinalIgnoreCase)) return true;
         }
         return false;
     }
