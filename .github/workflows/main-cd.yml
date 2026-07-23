@@ -264,6 +264,51 @@ jobs:
           -p:ContainerRepository=mw-plugin-test
           -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main;latest"'
 
+  # ───────────────────────────── FAILURE ALERTING ────────────────────────────
+  # A red CD after a green merge is otherwise INVISIBLE (nobody watches the Actions tab), and the
+  # consequence is severe: the merged commit never gets a deployable image, so every pull-based
+  # self-updating install silently stays on the previous image (2026-07-22: prod ran a leaky build
+  # for 20h because run 29929207634 failed unnoticed). This job makes a failed main CD loud: it
+  # files (or comments on) a GitHub issue labeled `ci-failure`.
+  # - `if: failure()` with `needs`: fires only when at least one image job actually FAILED —
+  #   not when they were skipped (PR-triggered workflow_run) and not on cancellation.
+  # - Idempotent: one open `ci-failure` issue collects repeat failures as comments; a new issue is
+  #   only created when none is open (close the issue once CD is green again).
+  alert-on-failure:
+    name: "Alert: CD failed on main"
+    needs: [portal-image, migration-image, plugin-test-image]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Job-level permissions REPLACE the workflow-level map for this job: the default GITHUB_TOKEN
+    # here only needs to read/write issues (no checkout, no OIDC).
+    permissions:
+      issues: write
+    steps:
+      - name: Create or comment on ci-failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # Ensure the label exists (--force = update-or-create, idempotent).
+          gh label create ci-failure --repo "$GITHUB_REPOSITORY" \
+            --description "A main-branch CD run failed - no deployable image was published" \
+            --color B60205 --force
+          body="CD failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) for commit \`${HEAD_SHA}\`.
+
+          No deployable image was published for this merge - every self-updating install stays on the PREVIOUS image until a CD run goes green. Triage the failed job in the linked run, fix (or re-run if infrastructure), and close this issue once CD is green."
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "CD failed on main: run ${GITHUB_RUN_ID}" \
+              --label ci-failure --body "$body"
+          fi
+
   # ─────────────────────────────── NO DEPLOY JOB ─────────────────────────────
   # Deployment is PULL-BASED, not push. CI's job ends at "publish the image to ACR" (the image
   # jobs above). Each installation — memex / atioz / memex-cloud AND every external install in the
