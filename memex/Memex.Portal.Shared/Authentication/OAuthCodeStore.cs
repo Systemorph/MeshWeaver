@@ -140,7 +140,29 @@ internal class OAuthCodeStore(IMeshService meshService, IMessageHub hub, ILogger
         var hash = HashRawCode(code);
         var path = $"{CodeNamespace}/{hash[..HashPrefixLength]}";
 
-        return AsSystem(() => hub.GetMeshNode(path, ReadTimeout))
+        // Read the code node through the AUTHORITATIVE single-node primitive —
+        // workspace.GetMeshNodeStream(path) — NOT the one-shot hub.GetMeshNode(path)
+        // routing read. On a multi-silo portal the code is minted by /authorize on one
+        // replica and redeemed by /token on another; a freshly-created node is not
+        // instantly routable, so a one-shot GetMeshNode hits [ROUTE] NotFound and the
+        // exchange fails (observed on memex-cloud: "Node created at Admin/OAuthCode/{id}"
+        // immediately followed by "[ROUTE] NotFound ... Admin/OAuthCode/{id}"). The
+        // stream read activates the owning per-node hub from shared Postgres and rides
+        // out the create/routing/persistence lag via the transient breaker; the 50 ms
+        // poll re-subscribes until the node with our matching CodeHash surfaces (same
+        // read-your-writes pattern as OrleansCacheUpdateMultiSiloTest). A valid code
+        // resolves in ~1–2 s (Take(1) on first match); a genuinely unknown / already-
+        // consumed / expired code never matches and falls through to the ReadTimeout →
+        // invalid_grant.
+        return AsSystem(() => Observable
+                .Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .SelectMany(_ => hub.GetWorkspace().GetMeshNodeStream(path).Take(1))
+                .Where(n => ExtractEntry(n) is { } e
+                            && string.Equals(e.CodeHash, hash, StringComparison.OrdinalIgnoreCase))
+                .Select(n => (MeshNode?)n)
+                .Take(1)
+                .Timeout(ReadTimeout)
+                .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null)))
             .SelectMany(node =>
             {
                 var entry = ExtractEntry(node);
