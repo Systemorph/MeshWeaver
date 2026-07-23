@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Reactive.Linq;
 using MeshWeaver.Graph.Configuration;
@@ -378,89 +377,36 @@ public static class SlideLayoutAreas
     /// <see cref="DeckNodeType">Deck</see> with a non-empty <see cref="DeckContent.Slides"/>
     /// manifest, the order comes from that EXTERNAL manifest — the deck owns the sequence,
     /// not the slides. Otherwise a deck is any parent whose children are Slide nodes and they
-    /// play by <see cref="MeshNode.Order"/> (null last), ties broken by path. Starts with an
-    /// empty list so the stage renders before the first query emission.
+    /// play by <see cref="MeshNode.Order"/> (null last), ties broken by path.
+    /// <para>The sibling query is SHARED across the deck's slides via the mesh-level
+    /// <see cref="IDeckSlidesCache"/> (Replay(1) semantics — after the deck's first render
+    /// every slide switch gets the ordered list synchronously). Deliberately no leading
+    /// empty-list emission: the FIRST Content/Present frame waits for the real deck, so it
+    /// never renders the incomplete "Slide 1 / 1"-without-Prev/Next frame (repro:
+    /// <c>SlideLayoutAreaTest.ContentArea_FirstFrame_CarriesDeckPosition</c>). Minimal
+    /// fixtures without the cache service fall back to the same (uncached) pipeline,
+    /// <see cref="DeckSlidesCache.BuildOrderedSlides"/>.</para>
     /// </summary>
     private static IObservable<IReadOnlyList<MeshNode>> ObserveDeckSlides(LayoutAreaHost host)
     {
         var parentPath = GetParentPath(host.Hub.Address.ToString());
-        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshService is null || parentPath is null)
+        if (parentPath is null)
             return Observable.Return<IReadOnlyList<MeshNode>>([]);
 
-        // Candidate set: the sibling Slide nodes sharing this node's parent.
-        var siblingSlides = meshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"namespace:{parentPath} nodeType:{SlideNodeType.NodeType}"))
-            .Scan(ImmutableDictionary<string, MeshNode>.Empty, (map, change) =>
-            {
-                if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
-                    return change.Items.ToImmutableDictionary(n => n.Path);
-                foreach (var item in change.Items)
-                    map = change.ChangeType switch
-                    {
-                        QueryChangeType.Added or QueryChangeType.Updated => map.SetItem(item.Path, item),
-                        QueryChangeType.Removed => map.Remove(item.Path),
-                        _ => map
-                    };
-                return map;
-            });
+        var cache = host.Hub.ServiceProvider.GetService<IDeckSlidesCache>();
+        if (cache is not null)
+            return cache.GetOrderedSlides(parentPath);
 
-        // The parent's own node — if it is a Deck with a manifest, that manifest IS the order.
-        // StartWith(null) lets the combined stream render on the Order fallback until the parent
-        // node arrives (and stays on the fallback for any non-Deck parent, e.g. a Markdown deck).
-        var parentManifest = host.Workspace.GetMeshNodeStream(parentPath)
-            .Select(parent => DeckManifestPaths(parent, parentPath, host))
-            .StartWith((IReadOnlyList<string>?)null);
+        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Return<IReadOnlyList<MeshNode>>([]);
 
-        return siblingSlides
-            .CombineLatest(parentManifest, OrderSlides)
-            .StartWith((IReadOnlyList<MeshNode>)ImmutableList<MeshNode>.Empty);
-    }
-
-    /// <summary>
-    /// If <paramref name="parent"/> is a Deck with a non-empty manifest, returns its entries
-    /// resolved to full child paths (the deck's declared order); otherwise <c>null</c> (→ the
-    /// <see cref="MeshNode.Order"/> fallback).
-    /// </summary>
-    private static IReadOnlyList<string>? DeckManifestPaths(
-        MeshNode? parent, string parentPath, LayoutAreaHost host)
-    {
-        if (parent is null || !string.Equals(parent.NodeType, DeckNodeType.NodeType, StringComparison.Ordinal))
-            return null;
-        var refs = parent.ContentAs<DeckContent>(host.Hub.JsonSerializerOptions)?.Slides;
-        if (refs is null || refs.Count == 0)
-            return null;
-        return refs
-            .Where(r => !string.IsNullOrWhiteSpace(r))
-            .Select(r => DeckLayoutAreas.ResolveSlidePath(parentPath, r))
-            .ToImmutableList();
-    }
-
-    /// <summary>
-    /// Orders the candidate slide set: by the deck-manifest position when a manifest is present
-    /// (slides absent from the manifest fall to the end, then by Order/path); otherwise by
-    /// <see cref="MeshNode.Order"/> (null last), ties broken by path.
-    /// </summary>
-    private static IReadOnlyList<MeshNode> OrderSlides(
-        IReadOnlyDictionary<string, MeshNode> slides, IReadOnlyList<string>? manifestPaths)
-    {
-        if (manifestPaths is { Count: > 0 })
-        {
-            var position = new Dictionary<string, int>(StringComparer.Ordinal);
-            for (var i = 0; i < manifestPaths.Count; i++)
-                position.TryAdd(manifestPaths[i], i);
-            return slides.Values
-                .OrderBy(n => position.TryGetValue(n.Path, out var i) ? i : int.MaxValue)
-                .ThenBy(n => n.Order ?? int.MaxValue)
-                .ThenBy(n => n.Path, StringComparer.Ordinal)
-                .ToImmutableList();
-        }
-
-        return slides.Values
-            .OrderBy(n => n.Order ?? int.MaxValue)
-            .ThenBy(n => n.Path, StringComparer.Ordinal)
-            .ToImmutableList();
+        return DeckSlidesCache.BuildOrderedSlides(
+            meshService,
+            host.Workspace.GetMeshNodeStream(parentPath).Select(parent => (MeshNode?)parent),
+            parentPath,
+            host.Hub.JsonSerializerOptions,
+            host.Hub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>());
     }
 
     /// <summary>

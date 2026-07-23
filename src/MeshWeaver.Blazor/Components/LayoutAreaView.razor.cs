@@ -55,9 +55,22 @@ public partial class LayoutAreaView
             && (!AreaStream.Reference.Equals(ViewModel.Reference) ||
                 !AreaStream.Owner.Equals(Address)))
         {
-            Logger.LogDebug("[LAV] DISPOSE_STALE area={Area} addr={Address} ref={Ref} (parameters changed)",
+            Logger.LogDebug("[LAV] RETIRE_STALE area={Area} addr={Address} ref={Ref} (parameters changed — hand-over until the new stream's first frame)",
                 Area, ViewModel.Address, ViewModel.Reference);
-            AreaStream.Dispose();
+            // The per-area ErrorBoundary stays MOUNTED across navigations (no @key — see the
+            // comment in LayoutAreaView.razor), so explicitly recover it here, on the same
+            // area-changed condition that retires the stream: a previous area's render error
+            // must not stick to the new area. Recover() reproduces the old
+            // @key-recreate-on-parameter-change semantics (clean render attempt for the new
+            // area; a repeated throw on the new area shows the error again) WITHOUT
+            // recreating the subtree — which is what preserves NamedAreaView's keep-last-good
+            // RootControl across navigation.
+            _errorBoundary?.Recover();
+            // HAND-OVER, not dispose: the outgoing stream stays alive until the NEW stream
+            // delivers its first frame (wired in BindStream via _handover). Until then the
+            // still-visible previous content's interactive elements (e.g. slide
+            // click-to-advance) keep posting into a live stream instead of a disposed one.
+            _handover.BeginTransition(AreaStream);
             AreaStream = null;
         }
 
@@ -102,6 +115,21 @@ public partial class LayoutAreaView
 
     private Address? Address { get; set; }
     private ISynchronizationStream<JsonElement>? AreaStream { get; set; }
+
+    /// <summary>
+    /// The per-area ErrorBoundary in the razor markup, captured via <c>@ref</c> so
+    /// <see cref="SetParametersAsync"/> can <c>Recover()</c> it on a genuine area change
+    /// instead of recreating it with <c>@key</c> (which reset NamedAreaView's
+    /// keep-last-good content on every navigation).
+    /// </summary>
+    private Microsoft.AspNetCore.Components.Web.ErrorBoundary? _errorBoundary;
+
+    /// <summary>
+    /// Hand-over owner for the retiring area stream on navigation: the outgoing stream is
+    /// disposed only when the NEW stream's first frame arrives (see <see cref="StreamHandover"/>),
+    /// so the kept-last-good previous content stays interactive during the gap.
+    /// </summary>
+    private readonly StreamHandover _handover = new();
     /// <summary>
     /// Disposes the area, dialog, and progress streams when the component is torn down
     /// in interactive mode. In pre-render mode the streams were never bound, so disposal
@@ -126,6 +154,9 @@ public partial class LayoutAreaView
             Logger.LogDebug("LayoutAreaView disposed during prerender for {Area} — stream was never bound",
                 Area);
         }
+        // Any stream still retiring from an in-flight navigation hand-over dies with the
+        // component (its replacement's first frame will never arrive now).
+        _handover.Dispose();
         AreaStream = null;
         DialogStream = null;
         ProgressStream = null;
@@ -142,6 +173,7 @@ public partial class LayoutAreaView
         AreaStream?.Dispose();
         DialogStream?.Dispose();
         ProgressStream?.Dispose();
+        _handover.Dispose();
         AreaStream = null;
         DialogStream = null;
         ProgressStream = null;
@@ -167,6 +199,12 @@ public partial class LayoutAreaView
             if (AreaStream is null)
                 Logger.LogWarning("[LAV] BIND_STREAM_NULL area={Area} addr={Address} ref={Ref} — GetRemoteStream returned null",
                     Area, Address, ViewModel.Reference);
+            else
+                // Complete the navigation hand-over on THIS stream's first frame: only then
+                // is the retiring previous-area stream disposed (see StreamHandover /
+                // SetParametersAsync). Registered on the new stream so the trigger
+                // subscription tears down with it automatically.
+                AreaStream.RegisterForDisposal(_handover.CompleteOnFirstFrame(AreaStream));
             DialogStream = SetupDialogAreaMonitoring(AreaStream!);
             DialogStream?.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(
                 el => OnDialogStreamChanged(el.Value),

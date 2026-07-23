@@ -22,21 +22,24 @@
            originates above the per-control ErrorBoundary in DispatchView (e.g. a throw in
            NamedAreaView's own render, or a parameter-change re-render that throws before reaching a
            leaf control) is contained HERE and shown as an inline error in THIS area — it never
-           tears down the whole circuit / blanks the app. @key ties the boundary to the area
-           reference: a year/PK switch that changes the reference recreates the boundary fresh
-           (auto-recover), so the new parameter gets a clean render attempt; a repeated throw on the
-           new parameter shows the error again rather than spinning a retry loop. (Async stream
-           OnErrors are surfaced separately by the subscription onError handlers — an ErrorBoundary
-           only catches synchronous render/lifecycle throws.) *@
-        @* @key on the area's NORMALIZED identity, not its ToString. LayoutAreaReference.ToString() renders a
-           string Id as `v12` but a round-tripped JsonElement Id as `"v12"` (quoted), so an interpolated string
-           @key FLAPS between the two representations even though LayoutAreaReference.Equals normalizes them
-           equal. That flap re-creates the ErrorBoundary → the child ThreadChatView → resets its keep-last-good
-           field → the intermittent round-N "chat vanishes". GetHashCode is computed from the SAME normalized
-           Area/Id/Layout as Equals, so it is stable across a representation flip while still changing for a
-           genuine area switch (different Area/Id/Layout) → clean auto-recovery. Kept as a STRING key (not the
-           reference object / an anonymous type) — Blazor's @key reuse misbehaves with those here. *@
-        <ErrorBoundary @key="@($"{Address}|{ViewModel.Reference.GetHashCode()}")">
+           tears down the whole circuit / blanks the app. (Async stream OnErrors are surfaced
+           separately by the subscription onError handlers — an ErrorBoundary only catches
+           synchronous render/lifecycle throws.) *@
+        @* NO @key — the boundary (and the NamedAreaView inside it) stays MOUNTED across
+           navigations. A @key derived from the area reference recreated the whole subtree on
+           every navigation to a different node, resetting NamedAreaView's keep-last-good
+           RootControl → the page blanked to a spinner until the new area's first frame (the
+           slide-to-slide "full interrupt"). Keeping the subtree preserves the last-good content
+           until the new stream's first frame swaps it in. The @key's OTHER job — a clean render
+           attempt when the area genuinely changes (a year/PK switch after an error), without
+           auto-retry-looping a repeated throw — is reproduced explicitly: SetParametersAsync
+           calls Recover() on this @ref-captured boundary on the same area-reference/address
+           change that retires the stale stream. This also retires the historical
+           representation-flap hazard for good (LayoutAreaReference.ToString rendering a string
+           Id as `v12` but a round-tripped JsonElement Id as quoted `"v12"`, flapping an
+           interpolated @key and vanishing the chat mid-round): with no @key there is nothing
+           to flap. *@
+        <ErrorBoundary @ref="_errorBoundary">
             <ChildContent>
                 <NamedAreaView Stream="@AreaStream" ViewModel="@NamedArea" Area="@NamedArea.GetArea()" Top="@Top" />
             </ChildContent>

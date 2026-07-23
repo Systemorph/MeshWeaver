@@ -453,8 +453,6 @@ internal class NavigationService : INavigationService
             route = contentRoute;
         }
 
-        _status.OnNext(NavigationStatus.LookingUp(route));
-
         // Capture the requesting identity SYNCHRONOUSLY, here on the inbound-
         // activity thread where AccessService.CircuitContext is set. Reading it
         // later (inside an Rx callback below) is unreliable: AsyncLocal does not
@@ -476,6 +474,13 @@ internal class NavigationService : INavigationService
         // node being deleted) reflows into the navigation context. No retry
         // timer, no backoff array — the catalog change feed drives re-emit.
         var resolved = false;
+        // Set inside the subscription callbacks (OnNext/OnError) so that, after the
+        // Subscribe call below returns, we know whether resolution completed
+        // SYNCHRONOUSLY (the path-resolution cache hit): in that case the transient
+        // LookingUp progress status is skipped entirely — pushing it would churn the
+        // UI into the full-page progress bar for content that is already Ready in the
+        // same call stack. Only a genuinely slow (asynchronous) resolution surfaces it.
+        var settled = false;
 
         // Stale-checked NotFound settle — called once every probe across the full
         // budget has come back empty (or the resolver errored). Reported only if the
@@ -521,6 +526,7 @@ internal class NavigationService : INavigationService
             .Subscribe(
                 resolution =>
                 {
+                    settled = true;
                     if (resolution is not null)
                     {
                         resolved = true;
@@ -531,7 +537,18 @@ internal class NavigationService : INavigationService
                         SettleNotFound();
                     }
                 },
-                _ => SettleNotFound());
+                _ =>
+                {
+                    settled = true;
+                    SettleNotFound();
+                });
+
+        // Progress status AFTER Subscribe, not before: when the resolver emitted
+        // synchronously (cache hit) the navigation has already settled — Ready (or
+        // NotFound) is the current status and a late LookingUp would both flash the
+        // progress UI and clobber the terminal status.
+        if (!settled)
+            _status.OnNext(NavigationStatus.LookingUp(route));
     }
 
     private void ProcessResolvedPath(string route, ImmutableDictionary<string, string> args, AddressResolution resolution, string userId)
@@ -644,14 +661,23 @@ internal class NavigationService : INavigationService
 
         void LoadResolved()
         {
-        _status.OnNext(NavigationStatus.Redirecting(resolution.Prefix, area));
-        _status.OnNext(NavigationStatus.Loading(resolution.Prefix));
+        // Subscribe FIRST; push the Redirecting/Loading progress statuses only when the
+        // load did NOT complete synchronously. On a cache hit the whole load runs inside
+        // the Subscribe call (resolution.Node present, or a synchronous query) and ends
+        // in Ready — pushing transient progress statuses for it would churn the UI into
+        // the full-page progress bar on every navigation. `settled` flips in the
+        // callbacks; `subscribeReturned` distinguishes a deferred (asynchronous) emission
+        // from the synchronous one so the name-bearing Loading upgrade below is also
+        // skipped on the fast path.
+        var settled = false;
+        var subscribeReturned = false;
 
         // Reactive load â€” Subscribe, never await (every async bit through a hub
         // round-trip is a deadlock surface; see Doc/Architecture/AsynchronousCalls.md).
         LoadNodeWithPreRenderedHtml(resolution)
             .Subscribe(node =>
         {
+            settled = true;
             // Null node after the load completes means one of: (a) the path
             // genuinely doesn't exist, (b) the user's Read permission was
             // filtered out at the RLS layer, or (c) the 15s timeout above
@@ -678,7 +704,9 @@ internal class NavigationService : INavigationService
             // "Loading 'Hello chat thread'…" with the path as detail,
             // instead of staring at a raw "Loading rbuergi/_Thread/hello-2a76…"
             // for the duration of the layout-area subscription handshake.
-            if (!string.IsNullOrWhiteSpace(node.Name))
+            // Only on the ASYNCHRONOUS path (subscribeReturned): a synchronous load
+            // reaches Ready in this same call stack, so no Loading status may flash.
+            if (subscribeReturned && !string.IsNullOrWhiteSpace(node.Name))
                 _status.OnNext(NavigationStatus.LoadingNamed(resolution.Prefix, node.Name));
 
             // Satellite redirect: areas like Settings, Threads, Comments are
@@ -727,6 +755,7 @@ internal class NavigationService : INavigationService
         },
         ex =>
         {
+            settled = true;
             // The load FAILED (not just returned null): the target hub did not TREAT the request —
             // a DeliveryFailure with ErrorType.Ignored (no handler matched) or ErrorType.NotFound —
             // or a timeout/other error. Surface page-not-found rather than leaking an unobserved Rx
@@ -742,6 +771,17 @@ internal class NavigationService : INavigationService
             _navigationContext.OnNext(null);
             _status.OnNext(NavigationStatus.NotFound(route));
         });
+
+        subscribeReturned = true;
+        // Progress statuses AFTER Subscribe, not before: when the load completed
+        // synchronously the navigation is already Ready (or NotFound) — flashing
+        // Redirecting/Loading now would both churn the UI and clobber the terminal
+        // status. A deferred load pushes them here, before its first emission arrives.
+        if (!settled)
+        {
+            _status.OnNext(NavigationStatus.Redirecting(resolution.Prefix, area));
+            _status.OnNext(NavigationStatus.Loading(resolution.Prefix));
+        }
         }
     }
 

@@ -61,17 +61,28 @@
             <p>@Status.Message</p>
         </div>
     }
-    else if (!IsInteractive || IsLoading || NavigationService.Context is null)
+    else if (ShowFullProgress(IsInteractive, IsLoading, NavigationService.Context is not null, ViewModel is not null))
     {
-        @* Prerender without cached HTML, or interactive resolution in flight.
-           NavigationProgressBar always renders a non-empty message so there
-           is no endless-spinner state. *@
+        @* Prerender without cached HTML, or the FIRST interactive resolution (no
+           previously-rendered ViewModel to keep showing). NavigationProgressBar always
+           renders a non-empty message so there is no endless-spinner state. Once a
+           ViewModel exists, in-circuit navigations never take this branch — the kept
+           LayoutAreaView below stays mounted (keep-last-good) with at most a compact
+           overlay, instead of blanking the page on every navigation. *@
         <NavigationProgressBar Status="@Status" />
     }
     else
     {
-        @* Interactive phase, resolved: LayoutAreaView with stream subscription. DrivesMenu:
-           this routed page owns the header menu (a modal preview / embed must not). *@
+        @* Interactive phase: LayoutAreaView with stream subscription. DrivesMenu:
+           this routed page owns the header menu (a modal preview / embed must not).
+           During a SLOW in-circuit navigation (IsLoading with the previous content still
+           up) the compact overlay — the same one the prerender branch uses — floats above
+           the kept content; fast (synchronous, cache-hit) navigations never span a render
+           with IsLoading set, so nothing flashes. *@
+        @if (IsLoading)
+        {
+            <NavigationProgressBar Status="@Status" Compact="true" CssClass="overlay" />
+        }
         <LayoutAreaView ViewModel="@ViewModel" Top="true" DrivesMenu="true" />
     }
 </CascadingValue>

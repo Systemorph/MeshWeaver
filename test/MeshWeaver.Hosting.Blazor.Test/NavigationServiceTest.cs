@@ -1435,6 +1435,73 @@ public class NavigationServiceTest
 
     #endregion
 
+    #region Progress Status Tests
+
+    /// <summary>
+    /// 🚨 Slide-navigation performance: when path resolution completes SYNCHRONOUSLY on
+    /// Subscribe (the server-side path-resolution cache hit) and the node load also
+    /// completes synchronously, the transient progress statuses (LookingUp / Redirecting /
+    /// Loading) must NOT be pushed at all — each one churns the UI into the full-page
+    /// progress bar even though the content is ready in the same call stack. Only the
+    /// terminal Ready may surface.
+    /// </summary>
+    [Fact]
+    public void SynchronousResolution_SkipsProgressStatuses()
+    {
+        var service = CreateService();
+        // Cache hit: the resolver emits synchronously on Subscribe (Observable.Return),
+        // and the default fixture query stub is synchronous too.
+        _pathResolver.ResolveNavigationPath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("ACME/Project", null)));
+        service.Initialize();
+
+        // Collect every status emitted BY the navigation below. Skip(1) discards the
+        // BehaviorSubject's replayed current value (pre-navigation state).
+        var statuses = new List<NavigationStatus>();
+        using var sub = service.Status.Skip(1).Subscribe(statuses.Add);
+
+        // The whole pipeline runs synchronously inside the location-changed dispatch.
+        _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project");
+
+        statuses.Should().Contain(s => s.Phase == NavigationPhase.Ready);
+        statuses.Should().NotContain(
+            s => s.Phase == NavigationPhase.LookingUp
+                 || s.Phase == NavigationPhase.Redirecting
+                 || s.Phase == NavigationPhase.Loading,
+            "a synchronously-resolved navigation (cache hit) must not flash progress UI");
+    }
+
+    /// <summary>
+    /// Counterpart guard: when resolution is genuinely SLOW (asynchronous — a cache
+    /// miss), the progress statuses must still surface so the user is never staring at
+    /// a silent stale page. Green before and after the synchronous-skip change.
+    /// </summary>
+    [Fact]
+    public async Task AsynchronousResolution_ShowsProgressStatuses()
+    {
+        var service = CreateService();
+        // Cache miss: the resolver emits on a scheduler AFTER Subscribe returns.
+        _pathResolver.ResolveNavigationPath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable
+                .Return<AddressResolution?>(new AddressResolution("ACME/Project", null))
+                .Delay(TimeSpan.FromMilliseconds(50)));
+        service.Initialize();
+
+        var statuses = new List<NavigationStatus>();
+        using var sub = service.Status.Skip(1).Subscribe(statuses.Add);
+
+        _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project");
+
+        await service.Status.Should().Within(WaitTimeout)
+            .Match(s => s.Phase == NavigationPhase.Ready);
+        statuses.Should().Contain(s => s.Phase == NavigationPhase.LookingUp,
+            "a slow (asynchronous) resolution must surface progress");
+        statuses.Should().Contain(s => s.Phase == NavigationPhase.Ready);
+    }
+
+    #endregion
+
     [Fact]
     public async Task NavigationContext_ReplaysLastValueToLateSubscriber()
     {

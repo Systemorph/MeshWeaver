@@ -307,11 +307,12 @@ namespace MeshWeaver.Hosting
 
                     var resolved = new Address(resolution.Prefix.Split('/'));
 
-                    // The matched MeshNode is carried on AddressResolution.Node — same
-                    // cached observable PathResolver populated. NO second query: a
-                    // separate path:X round-trip used to fire here, which doubled
-                    // routing latency and duplicated the cache key set. The cache is
-                    // the single source of truth.
+                    // The matched MeshNode is carried on AddressResolution.Node,
+                    // populated by the same PathResolver resolution (which fronts a
+                    // positive-only, change-feed-invalidated promise cache — see
+                    // PathResolutionService). NO second query: a separate path:X
+                    // round-trip used to fire here, which doubled routing latency.
+                    // The resolver is the single source of truth for the routed node.
                     var node = resolution.Node;
                     var routeLogger = Mesh.ServiceProvider.GetService<ILogger<RoutingServiceBase>>();
                     routeLogger?.LogDebug("RouteMessage: {MessageType} to {Address} (original={OriginalAddress}). Resolution={Resolution}, Node={NodeFound}, NodeType={NodeType}, HubConfig={HasHubConfig}",
