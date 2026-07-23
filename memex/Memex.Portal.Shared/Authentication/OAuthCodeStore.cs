@@ -56,7 +56,15 @@ internal class OAuthCodeStore(IMeshService meshService, IMessageHub hub, ILogger
     /// created on a different replica); the MCP client is blocking on the /token
     /// HTTP response anyway. Typical case is sub-second.
     /// </summary>
-    private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// Bounded read-your-writes wait for the code node to become readable at /token.
+    /// A valid code resolves in ~1–2 s (Take(1) on the first matching emission); an
+    /// unknown / already-consumed / expired code never matches and falls through to this
+    /// timeout → invalid_grant. Default 10 s: ample margin over the observed create→routable
+    /// lag (~1 s on memex-cloud) while keeping the negative-path (rare: replay/expiry) fast.
+    /// Init-only so tests can shorten it — never a static bound to "tune away" a failure.
+    /// </summary>
+    public TimeSpan ReadTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Codes expire 5 minutes after issuance (RFC 6749 §4.1.2 recommends ≤10).
@@ -156,13 +164,24 @@ internal class OAuthCodeStore(IMeshService meshService, IMessageHub hub, ILogger
         // invalid_grant.
         return AsSystem(() => Observable
                 .Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-                .SelectMany(_ => hub.GetWorkspace().GetMeshNodeStream(path).Take(1))
-                .Where(n => ExtractEntry(n) is { } e
-                            && string.Equals(e.CodeHash, hash, StringComparison.OrdinalIgnoreCase))
+                // Each tick re-reads the node. A freshly-created node is not instantly
+                // readable — GetMeshNodeStream ERRORS "No node found at {path}" during the
+                // create→persist→routable window (the persistence sampler debounces ~200 ms;
+                // cross-silo the owning hub must still activate from Postgres). Swallow that
+                // per-attempt error so the NEXT tick retries; a genuinely unknown / consumed /
+                // expired code errors on every tick and never matches → the outer Timeout
+                // fires → invalid_grant. Without this per-attempt Catch the first error
+                // propagates through SelectMany and aborts the whole poll (the bug the first
+                // cut of this fix shipped: even a valid code failed inside the debounce window).
+                .SelectMany(_ => hub.GetWorkspace().GetMeshNodeStream(path)
+                    .Take(1)
+                    .Where(n => ExtractEntry(n) is { } e
+                                && string.Equals(e.CodeHash, hash, StringComparison.OrdinalIgnoreCase))
+                    .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>()))
                 .Select(n => (MeshNode?)n)
                 .Take(1)
                 .Timeout(ReadTimeout)
-                .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null)))
+                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null)))
             .SelectMany(node =>
             {
                 var entry = ExtractEntry(node);

@@ -43,7 +43,12 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
         services.AddSingleton(new OAuthCodeStore(
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh,
-            Mesh.ServiceProvider.GetRequiredService<ILogger<OAuthCodeStore>>()));
+            Mesh.ServiceProvider.GetRequiredService<ILogger<OAuthCodeStore>>())
+        {
+            // Short read window so unknown/replayed-code tests fail fast on the single
+            // in-memory mesh; a valid code resolves near-instantly via Take(1). Prod = 10 s.
+            ReadTimeout = TimeSpan.FromSeconds(2),
+        });
         services.AddSingleton(new ApiTokenService(
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh,
