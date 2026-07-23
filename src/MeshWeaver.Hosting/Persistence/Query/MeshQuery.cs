@@ -450,34 +450,27 @@ public class MeshQuery : IMeshQueryCore
                 return ClipMergedInitial<T>(hits, change, parsed, request);
             });
             // Same stall probe as the multi-provider merge below — a single provider that
-            // neither emits nor completes hangs its consumer just as silently.
+            // neither emits nor completes hangs its consumer just as silently. The probe is a
+            // standalone hub-independent object (see InitialStallProbe) so the process-global
+            // TimerQueue timer can never pin the owning hub past disposal (MeshHubDisposalLeakTest).
+            var singleProbe = new InitialStallProbe([observables[0].Provider]);
+            var singleProbeLogger = Logger;
+            var singleProbeQuery = request.Query;
+            var singleProbeUser = request.UserId;
             return Observable.Create<QueryResultChange<T>>(observer =>
             {
-                // Benign race by design: a plain bool flag read by the probe timer. Worst
-                // case is one spurious warning when the Initial lands exactly at the probe
-                // deadline — acceptable for a diagnostic; no gate lock on the hot path.
-                var gotInitial = false;
-                var providerName = observables[0].Provider;
-                var probe = Observable.Timer(InitialStallProbeDelay).Subscribe(_ =>
-                {
-                    if (gotInitial)
-                        return;
-                    Logger?.LogWarning(
-                        "Query provider [{Provider}] has not emitted an Initial after {Delay}s for query "
-                        + "'{Query}' (user '{UserId}') — its consumer hangs with no error. Fix the stalled "
-                        + "provider; never bump the consumer's timeout.",
-                        providerName, InitialStallProbeDelay.TotalSeconds, request.Query, request.UserId);
-                });
+                var probeArm = singleProbe.Arm(
+                    InitialStallProbeDelay, singleProbeLogger, singleProbeQuery, singleProbeUser);
                 var sub = single.Subscribe(
                     change =>
                     {
                         if (change.ChangeType == QueryChangeType.Initial)
-                            gotInitial = true;
+                            singleProbe.MarkSeen(0);
                         observer.OnNext(change);
                     },
                     observer.OnError,
                     observer.OnCompleted);
-                return new System.Reactive.Disposables.CompositeDisposable(probe, sub);
+                return new System.Reactive.Disposables.CompositeDisposable(probeArm, sub);
             });
         }
 
@@ -518,6 +511,11 @@ public class MeshQuery : IMeshQueryCore
             var initialSeen = new bool[observables.Count];
             ParsedQuery? lastQuery = null;
             var gate = new object();
+
+            // Standalone, hub-independent stall probe (see the Arm(...) call after the subscribe
+            // loop). Driven by MarkSeen(idx) in each provider's Initial handler below; keeps the
+            // TimerQueue timer off the merge's closure so it can't root the hub.
+            var stallProbe = new InitialStallProbe(observables.Select(o => o.Provider).ToArray());
 
             // Live-stream dedup: track Path so a Removed for a path
             // we never Added is dropped, and an Added for a path that's already
@@ -586,6 +584,7 @@ public class MeshQuery : IMeshQueryCore
                                     initialSeen[idx] = true;
                                     initialCount++;
                                 }
+                                stallProbe.MarkSeen(idx);
 
                                 EmitMergedInitialIfComplete(change);
                             }
@@ -624,6 +623,9 @@ public class MeshQuery : IMeshQueryCore
                                 providerName, request.Query, request.UserId);
                             initialSeen[idx] = true;
                             initialCount++;
+                            // A provider that COMPLETED (even without an Initial) is not stalled —
+                            // mark it seen so the stall probe doesn't also flag it.
+                            stallProbe.MarkSeen(idx);
                             // Stamp Query even when EVERY provider went silent (lastQuery never
                             // set) — downstream consumers rely on QueryResultChange.Query being
                             // populated on an Initial; fall back to parsing the request.
@@ -648,28 +650,15 @@ public class MeshQuery : IMeshQueryCore
             // nor errors starves the gate FOREVER and the consumer hangs in TOTAL silence
             // (CI 2026-07-21: ExportImportAccessControlTest watchdog-killed at 60s with a
             // flat heap and not one log line — this warning is the line that was missing).
-            // Warning level so default CI/prod log levels carry it; names the exact laggard
+            // Warning level so default CI/prod log levels carry it; names the exact laggards
             // so the NEXT occurrence is attributable. Disposed with the subscriptions, so a
             // normally-answered query never logs.
-            var stallProbe = Observable.Timer(InitialStallProbeDelay).Subscribe(_ =>
-            {
-                string missing;
-                lock (gate)
-                {
-                    if (initialCount == initialTarget)
-                        return;
-                    missing = string.Join(", ", observables
-                        .Where((_, k) => !initialSeen[k])
-                        .Select(o => o.Provider));
-                }
-                Logger?.LogWarning(
-                    "Query providers [{Providers}] have not emitted an Initial after {Delay}s for query "
-                    + "'{Query}' (user '{UserId}') — the merged query is silently stalled on its "
-                    + "all-providers gate and its consumer hangs with no error. Fix the stalled "
-                    + "provider; never bump the consumer's timeout.",
-                    missing, InitialStallProbeDelay.TotalSeconds, request.Query, request.UserId);
-            });
-            subscriptions.Add(stallProbe);
+            // 🚨 The timer lives on the process-global TimerQueue for the probe window; it reads a
+            // standalone InitialStallProbe (provider-name strings + a seen flag), NEVER the merge's
+            // closure — so it cannot root the owning hub past disposal (MeshHubDisposalLeakTest).
+            // The per-provider Initial handler above calls stallProbe.MarkSeen(idx).
+            subscriptions.Add(stallProbe.Arm(
+                InitialStallProbeDelay, Logger, request.Query, request.UserId));
 
             return new System.Reactive.Disposables.CompositeDisposable(subscriptions);
         });
@@ -682,6 +671,70 @@ public class MeshQuery : IMeshQueryCore
     /// single-digit seconds), short enough to land well before consumer watchdogs (60s+).
     /// </summary>
     private static readonly TimeSpan InitialStallProbeDelay = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// Standalone, HUB-INDEPENDENT state + timer for the Initial stall diagnostic. It exists as its
+    /// own object (not the merge's closure) for one load-bearing reason: the diagnostic timer lives
+    /// on the PROCESS-GLOBAL TimerQueue for the whole probe window, and a timer whose callback closed
+    /// over the merge's <c>Observable.Create</c> scope would transitively root the observer chain and
+    /// the owning <c>MessageHub</c> until it fires — pinning a disposed mesh's hub past disposal and
+    /// failing <c>MeshHubDisposalLeakTest</c>. This object holds ONLY provider-name strings and a
+    /// seen flag, so the timer that reads it can never reach a hub. It is fed by <see cref="MarkSeen"/>
+    /// from each provider's Initial (or silent-completion) handler; <see cref="Arm"/> starts the timer.
+    /// </summary>
+    private sealed class InitialStallProbe(string[] providerNames)
+    {
+        private readonly bool[] _seen = new bool[providerNames.Length];
+        private readonly object _gate = new();
+        private int _seenCount;
+
+        /// <summary>Records that provider <paramref name="idx"/> has delivered (or terminally
+        /// completed) its Initial, so the probe no longer counts it as stalled. Idempotent.</summary>
+        public void MarkSeen(int idx)
+        {
+            lock (_gate)
+            {
+                if (idx >= 0 && idx < _seen.Length && !_seen[idx])
+                {
+                    _seen[idx] = true;
+                    _seenCount++;
+                }
+            }
+        }
+
+        /// <summary>Comma-joined names of providers that have not yet delivered an Initial, or
+        /// <c>null</c> when every provider has — i.e. nothing is stalled.</summary>
+        private string? MissingOrNull()
+        {
+            lock (_gate)
+            {
+                if (_seenCount >= _seen.Length)
+                    return null;
+                return string.Join(", ", providerNames.Where((_, k) => !_seen[k]));
+            }
+        }
+
+        /// <summary>
+        /// Arms the diagnostic timer. The returned subscription is added to the merge's disposables,
+        /// so a normally-answered (and thus unsubscribed) query cancels the timer well before it
+        /// fires. The callback closes over ONLY <c>this</c> (hub-free) + the passed logger/strings —
+        /// deliberately a separate display class from the merge closure (this method is on this
+        /// nested type, not inside <c>Observable.Create</c>), which is what keeps the hub uncaptured.
+        /// </summary>
+        public IDisposable Arm(TimeSpan delay, ILogger? logger, string? query, string? userId) =>
+            Observable.Timer(delay).Subscribe(_ =>
+            {
+                var missing = MissingOrNull();
+                if (missing is null)
+                    return;
+                logger?.LogWarning(
+                    "Query provider(s) [{Providers}] have not emitted an Initial after {Delay}s for query "
+                    + "'{Query}' (user '{UserId}') — the query is silently stalled on its all-providers "
+                    + "Initial gate and its consumer hangs with no error. Fix the stalled provider; "
+                    + "never bump the consumer's timeout.",
+                    missing, delay.TotalSeconds, query, userId);
+            });
+    }
 
     /// <summary>
     /// Sort + skip + clip the merged initial set. The authoritative ordering
