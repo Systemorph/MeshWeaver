@@ -399,6 +399,75 @@ public class MessageService : IMessageService
                 logger.LogDebug("Dropping message {MessageType} (ID: {MessageId}) in {Address} - hub is shutting down (RunLevel={RunLevel})",
                     delivery.Message?.GetType().Name, delivery.Id, Address, hub.RunLevel);
             MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} DROPPED_SHUTTING_DOWN runLevel={hub.RunLevel}");
+
+            // 🚨 NACK, never a silent drop, for messages a SENDER IS AWAITING. Callers of
+            // hostedHub.DeliverMessage (HierarchicalRouting, RoutingServiceBase) return
+            // Forwarded() without inspecting our Failed state, so a request landing here —
+            // e.g. a GetDataRequest racing the per-node hub's post-delete DisposeRequest —
+            // used to vanish and the sender's hub.Observe(...) sat silent until its full
+            // RequestTimeout (the OAuth consumed-code re-exchange stalled 30s on exactly
+            // this). Post the DeliveryFailure through the PARENT hub: our own Post would
+            // re-enter this same gate and be dropped.
+            //
+            // The NACK is GATED to deliveries a caller can actually be awaiting:
+            //  • typed IRequest messages (hub.Observe request/response);
+            //  • RawJson — cross-hub deliveries reach this gate UNDESERIALIZED (the
+            //    MESHWEAVER_MSG_TRACE captures show the dropped GetDataRequest and
+            //    SubscribeRequest both as msg=RawJson here), so the payload type cannot
+            //    be inspected: fail LOUD rather than reintroduce the silent 30s hang.
+            //    An IRequest-only gate would silently skip exactly the two flows this
+            //    NACK exists for. The one RawJson we skip is a payload that looks like
+            //    a DeliveryFailure itself (cheap content sniff) — NACKing a NACK
+            //    between two concurrently-disposing hubs would ping-pong; a false
+            //    positive on the sniff merely reverts that delivery to the historical
+            //    silent drop.
+            // Typed fire-and-forget events (DataChangedEvent & co) fall back to the
+            // historical silent drop — nobody awaits them, and NACKing them was pure
+            // disposal noise. Cascade-safe by the same exclusions ReportFailure applies —
+            // never NACK a DeliveryFailure nor [CanBeIgnored] lifecycle traffic (no
+            // requester is waiting).
+            //
+            // 🚨 The NACK is a TRANSIENT rejection — ErrorType.ShuttingDown — never NotFound,
+            // never a generic terminal failure. A disposing hub cannot know whether its
+            // address is gone for good (node deleted) or about to REACTIVATE (recycle /
+            // restart): the very same drop fires for a SubscribeRequest racing a recycle's
+            // DisposeRequest. It mirrors the Orleans mid-DeactivateOnIdle reject ("invalid
+            // activation. Rejecting now.") that the transient classifiers (MeshNodeStream-
+            // Cache.IsTransientOwnerFailure, RoutingGrain.IsTransientFailure, AreaError-
+            // Classifier.IsTransientHubFailure) already treat as retry-worthy: the sender's
+            // next probe gets the authoritative answer — a fresh activation (recycle) or a
+            // routing NotFound (deleted). Consumers with their own recovery machinery ride
+            // it out: SynchronizationStream keeps the stream ALIVE on this ErrorType so its
+            // change-feed resubscribe latch rehydrates after the reactivation. Both wrong
+            // shapes are CI-proven (run 30003419841, NodeTypeCompileParkTest.RecycleRetry):
+            // a NotFound NACK faulted the stream cache's shared Replay(1) with no re-probe
+            // path, and ANY terminal treatment killed the sync stream's resubscribe latch —
+            // each wedged every read of the mid-recycle NodeType.
+            if ((delivery.Message is IRequest
+                    || (delivery.Message is RawJson rawJson
+                        && !rawJson.Content.Contains(nameof(DeliveryFailure), StringComparison.Ordinal)))
+                && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
+                && delivery.Sender is not null
+                && !delivery.Sender.Equals(Address)
+                && ParentHub is { } parent
+                && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            {
+                try
+                {
+                    parent.Post(new DeliveryFailure(delivery)
+                    {
+                        ErrorType = ErrorType.ShuttingDown,
+                        Message = $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — cannot process "
+                                  + $"{typeName}; the address may reactivate (recycle / restart). Rejecting now."
+                    }, o => o.ResponseFor(delivery));
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex,
+                        "Failed to NACK {MessageType} (ID: {MessageId}) dropped by shutting-down hub {Address}",
+                        typeName, delivery.Id, Address);
+                }
+            }
             return delivery.Failed("Hub is shutting down");
         }
 
