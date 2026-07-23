@@ -148,6 +148,21 @@ public class MessageService : IMessageService
     }
 
     /// <summary>
+    /// Cheap per-delivery log line — type, id, sender → target, state. The hot Debug logs
+    /// (start-processing, deserializing) run for EVERY delivery, so they must never serialize
+    /// the payload: even through <see cref="LoggingSerializerOptions"/>, only properties
+    /// explicitly marked <c>[PreventLogging]</c> are stripped, and a burst of cross-hub patches
+    /// carrying fat unmarked payloads turned the discarded log JSON into a GB-scale allocation
+    /// storm that starved every action block in the process (the CrossHubPatchAtomicityTest
+    /// watchdog kills: +3.9 GiB / 14k gen-0 GCs in one test, 2.7 GB of live log strings in the
+    /// mid-storm heap dump, 2026-07-22). Payload rendering (<see cref="LogText"/>) is reserved
+    /// for the rare error path, where it is worth its cost.
+    /// </summary>
+    private static string LogSummary(IMessageDelivery delivery) =>
+        $"{delivery.Message?.GetType().Name ?? "(null)"} (ID: {delivery.Id}, "
+        + $"{delivery.Sender} -> {delivery.Target}, {delivery.State})";
+
+    /// <summary>
     /// Creates the message service for a hub: captures the address and parent hub, picks the per-hub
     /// turn scheduler (the configured <c>TaskScheduler</c> or <c>TaskScheduler.Default</c>), composes the
     /// post and delivery pipelines from configuration, wires hierarchical routing and the storm breaker,
@@ -863,7 +878,7 @@ public class MessageService : IMessageService
             logger.LogTrace("MESSAGE_FLOW: EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 messageTypeName, Address, delivery.Id);
         if (logger.IsEnabled(LogLevel.Debug))
-            logger.LogDebug("Start processing {Delivery} in {Address}", LogText(delivery), Address);
+            logger.LogDebug("Start processing {Delivery} in {Address}", LogSummary(delivery), Address);
 
         var executionStopwatch = Stopwatch.StartNew();
         var isDisposing = hub.RunLevel >= MessageHubRunLevel.ShutDown;
@@ -1009,7 +1024,7 @@ public class MessageService : IMessageService
         if (delivery.Message is not RawJson rawJson)
             return delivery;
         if (logger.IsEnabled(LogLevel.Debug))
-            logger.LogDebug("Deserializing {Delivery} in {Address}", LogText(delivery), Address);
+            logger.LogDebug("Deserializing {Delivery} in {Address}", LogSummary(delivery), Address);
         var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), hub.JsonSerializerOptions);
         if (deserializedMessage == null)
             return delivery.Failed("Deserialization returned null");
