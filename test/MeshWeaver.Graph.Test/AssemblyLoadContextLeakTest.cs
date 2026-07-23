@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using MeshWeaver.Graph.Configuration;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -222,5 +223,43 @@ public sealed class AssemblyLoadContextLeakTest : IDisposable
             "AssemblyLoadContext without waiting for hub teardown — otherwise every recompile leaks an ALC");
         weakV2.IsAlive.Should().BeTrue(
             "the CURRENT context (just-loaded V2) must NOT be evicted — it is the live assembly the hub runs on");
+    }
+
+    /// <summary>
+    /// 🚨 The unload-during-scan guard. A context PINNED by an in-flight assembly scan must not be
+    /// torn down: <see cref="System.Runtime.Loader.AssemblyLoadContext.Unload"/> mid-scan corrupts
+    /// the assembly the scanner holds (TypeLoadException '…format is invalid' — the flaky Orleans
+    /// dynamic-compilation race). So <c>Dispose()</c> must DRAIN pins before unloading: it blocks
+    /// while a pin is held and completes once released.
+    /// </summary>
+    [Fact]
+    public void Pin_MakesDispose_DrainBeforeUnload()
+    {
+        var ctx = _service.GetOrCreateLoadContext("pin_drain_node");
+        var pin = ctx.Pin();
+
+        var disposeReturned = new ManualResetEventSlim(false);
+        var disposer = new Thread(() => { ctx.Dispose(); disposeReturned.Set(); }) { IsBackground = true };
+        disposer.Start();
+
+        // While the pin is held, Dispose() must still be draining — it must NOT have returned.
+        disposeReturned.Wait(300).Should().BeFalse(
+            "Dispose() must block (drain) while a scan pin is held, or it unloads the LoaderAllocator mid-scan");
+
+        // Release the pin → the drain completes and Dispose() returns.
+        pin.Dispose();
+        disposeReturned.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue(
+            "releasing the pin must let Dispose() finish the unload");
+        disposer.Join();
+    }
+
+    /// <summary>Once a context starts unloading, a NEW scan must not be able to pin it — the caller
+    /// must re-resolve against the current context rather than scan a doomed assembly.</summary>
+    [Fact]
+    public void Pin_Throws_OnceContextIsUnloading()
+    {
+        var ctx = _service.GetOrCreateLoadContext("pin_disposed_node");
+        ctx.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => ctx.Pin());
     }
 }
