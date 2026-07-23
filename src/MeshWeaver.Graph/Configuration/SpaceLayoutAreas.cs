@@ -193,10 +193,13 @@ public static class SpaceLayoutAreas
     /// <summary>
     /// Resolves the <see cref="Space"/> off a node's <see cref="MeshNode.Content"/>, robust to
     /// every form Content can take: an already-typed <see cref="Space"/>, a degraded
-    /// <see cref="JsonElement"/>, or — when the content lost its typing entirely — a raw string.
-    /// A JSON-object string is deserialised back into the Space; any other non-empty string is
-    /// taken as the body so the page still shows the author's text instead of the welcome
-    /// placeholder. Returns null only when there is genuinely nothing to render.
+    /// <see cref="JsonElement"/>, a FOREIGN-typed content that carries an authored
+    /// <c>body</c> (a plugin-package Space root whose content is the partition's
+    /// <see cref="Configuration.NodeTypeDefinition"/> — the UWDeepfield shape), or — when the content lost
+    /// its typing entirely — a raw string. A JSON-object string is deserialised back into the
+    /// Space; any other non-empty string is taken as the body so the page still shows the
+    /// author's text instead of the welcome placeholder. Returns null only when there is
+    /// genuinely nothing to render.
     /// </summary>
     internal static Space? ResolveSpace(MeshNode? node, JsonSerializerOptions options)
     {
@@ -206,6 +209,28 @@ public static class SpaceLayoutAreas
         var space = node.ContentAs<Space>(options);
         if (space != null)
             return space;
+
+        // Foreign-typed content (a differently-named CLR type — ContentAs correctly returns
+        // null so call sites can probe-dispatch). The node still IS a Space to the viewer, and
+        // such content may carry an authored `body` (NodeTypeDefinition.Body on a plugin-package
+        // root). Recover it via a JSON round-trip so the Overview renders the authored home page
+        // instead of the welcome placeholder. Serialized AS the concrete runtime type — the
+        // object-declared path would adopt the foreign type into this hub's registry as a read
+        // side effect (same rationale as ContentAs's own cross-assembly recovery).
+        if (node.Content is not null and not string and not JsonElement)
+        {
+            try
+            {
+                var el = JsonSerializer.SerializeToElement(node.Content, node.Content.GetType(), options);
+                if (el.ValueKind == JsonValueKind.Object
+                    && el.TryGetProperty("body", out var b)
+                    && b.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(b.GetString()))
+                    return new Space { Body = b.GetString() };
+            }
+            catch (Exception e) when (e is JsonException or NotSupportedException or InvalidOperationException)
+            { /* not recoverable — fall through to the placeholder */ }
+        }
 
         // Content degraded to a bare string (or a JSON-string JsonElement) — recover it
         // rather than falling back to the welcome placeholder.
