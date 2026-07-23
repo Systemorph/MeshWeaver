@@ -76,6 +76,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     private readonly bool _bypassCache;
     private readonly JsonSerializerOptions _jsonOptions;
 
+    // Mesh-wide $type→CLR-Type resolver (see IMeshContentTypeRegistry). When Content arrives as a
+    // bare JsonElement whose $type this workspace's options can't resolve (a dynamically-compiled
+    // NodeType after a re-import), EnsureTypedContent re-types it from here instead of degrading.
+    private readonly MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? _contentTypeRegistry;
+
     // 🚨 How long a cross-hub Update waits for the OWNER's PatchDataResponse before
     // falling back to the optimistic snapshot. Deliberately SHORT (not the old 30s):
     // a content write must EMIT AS SOON AS THE ACTIVITY IS STARTED (the message is
@@ -104,6 +109,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         // second divergent stream.
         _bypassCache = bypassCache;
         _jsonOptions = workspace.Hub.JsonSerializerOptions;
+        _contentTypeRegistry = workspace.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshContentTypeRegistry>();
     }
 
     private bool IsOwn => _path is null
@@ -191,7 +197,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     {
         try
         {
-            var typedObserver = new TypedContentObserver(observer, _jsonOptions);
+            var typedObserver = new TypedContentObserver(observer, _jsonOptions, _contentTypeRegistry);
             // 🚨 Cross-hub reads route through IMeshNodeStreamCache (when one is
             // registered): one shared process-wide upstream subscription per
             // path. The cache holds the upstream alive; ad-hoc GetRemoteStream
@@ -230,14 +236,16 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// up the producer stack where it would tear down unrelated streams.
     /// </para>
     /// </summary>
-    private sealed class TypedContentObserver(IObserver<MeshNode> inner, JsonSerializerOptions jsonOptions) : IObserver<MeshNode>
+    private sealed class TypedContentObserver(
+        IObserver<MeshNode> inner, JsonSerializerOptions jsonOptions,
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry = null) : IObserver<MeshNode>
     {
         public void OnNext(MeshNode value)
         {
             MeshNode typed;
             try
             {
-                typed = EnsureTypedContent(value, jsonOptions);
+                typed = EnsureTypedContent(value, jsonOptions, contentTypeRegistry);
             }
             catch (System.Exception ex)
             {
@@ -271,13 +279,27 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// typed error card; tests can assert on <c>Error.Code</c>.
     /// </para>
     /// </summary>
-    internal static MeshNode EnsureTypedContent(MeshNode node, JsonSerializerOptions jsonOptions)
+    internal static MeshNode EnsureTypedContent(
+        MeshNode node, JsonSerializerOptions jsonOptions,
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry = null)
     {
         if (node.Content is JsonElement je)
         {
             try
             {
-                return node with { Content = je.Deserialize<object>(jsonOptions) };
+                var deserialized = je.Deserialize<object>(jsonOptions);
+                // Deserialize<object> degrades BACK to a JsonElement when these options' (frozen)
+                // TypeRegistry can't resolve the $type — a dynamically-compiled NodeType whose
+                // registration lives only in another hub's options. Re-type it from the mesh-wide
+                // content-type registry (the reimport-renders-empty cure) before handing subscribers
+                // an untyped value they would silently `as MyType ?? new MyType()`.
+                if (deserialized is JsonElement degraded && contentTypeRegistry is not null)
+                {
+                    var recovered = contentTypeRegistry.TryRecover(degraded, jsonOptions);
+                    if (recovered is not null)
+                        return node with { Content = recovered };
+                }
+                return node with { Content = deserialized };
             }
             catch (System.Text.Json.JsonException ex)
             {
@@ -289,9 +311,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 // polymorphic discriminator names a type that isn't
                 // registered in the consumer hub's options — the recurring
                 // "type 'X' is not registered in this hub's TypeRegistry"
-                // footgun. Same translation: surface loudly with the raw
-                // JSON snippet so the caller can see which discriminator
-                // value is missing.
+                // footgun. Try the mesh-wide registry first (it may own the
+                // dynamically-compiled type this hub's options lack); only if
+                // it can't resolve do we surface loudly with the raw JSON
+                // snippet so the caller sees which discriminator is missing.
+                var recovered = contentTypeRegistry?.TryRecover(je, jsonOptions);
+                if (recovered is not null)
+                    return node with { Content = recovered };
                 throw new MeshNodeStreamException(BuildDeserializationError(node, je, ex), ex);
             }
         }
@@ -409,7 +435,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 ? null
                 : accessService.SwitchAccessContext(capturedForLambda))
             {
-                return update(EnsureTypedContent(node, _jsonOptions));
+                return update(EnsureTypedContent(node, _jsonOptions, _contentTypeRegistry));
             }
         };
 
@@ -463,7 +489,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 // converter — callers chaining `.Select(node => node.Content as MyType)`
                 // off the Update's returned observable get the same typed
                 // shape as Subscribe.
-                .Select(node => EnsureTypedContent(node, _jsonOptions)),
+                .Select(node => EnsureTypedContent(node, _jsonOptions, _contentTypeRegistry)),
             $"MeshNodeStreamHandle.Update(path='{_path ?? "<own>"}')",
             _workspace.Hub.ServiceProvider);
     }
@@ -497,7 +523,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             + $"on hub '{_workspace.Hub.Address}', but none is registered."))
                 // Same clamp as Update — see the comment there.
                 .CarryAccessContext(_workspace.Hub.ServiceProvider, restoreNullCapture: true)
-                .Select(n => EnsureTypedContent(n, _jsonOptions)),
+                .Select(n => EnsureTypedContent(n, _jsonOptions, _contentTypeRegistry)),
             $"MeshNodeStreamHandle.Overwrite(path='{_path ?? "<own>"}')",
             _workspace.Hub.ServiceProvider);
     }

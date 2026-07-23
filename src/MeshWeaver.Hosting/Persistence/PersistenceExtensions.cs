@@ -674,6 +674,12 @@ public static class PersistenceExtensions
     public static IServiceCollection AddMeshCatalog(this IServiceCollection services)
     {
         services.TryAddSingleton<IMeshChangeFeed, InProcessMeshChangeFeed>();
+        // Mesh-wide content-type resolver: the ONE $type→CLR-Type map for dynamically-compiled
+        // NodeTypes, reachable from every hub (incl. the domain-agnostic cache hub) and retained
+        // for the process lifetime. Populated at MeshDataSource.WithContentType; consulted by the
+        // degrade seams (MeshNodeStreamCache, EnsureTypedContent) to re-type content that froze as
+        // a bare JsonElement after a re-import — see IMeshContentTypeRegistry.
+        services.TryAddSingleton<IMeshContentTypeRegistry, MeshContentTypeRegistry>();
         // PathResolutionService owns the positive-only per-path promise cache
         // (Replay(1).AutoConnect(0); null resolutions never cached) and
         // subscribes to IMeshChangeFeed internally for invalidation.
