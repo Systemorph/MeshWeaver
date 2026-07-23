@@ -12,10 +12,13 @@ namespace MeshWeaver.Mesh.Services;
 /// </para>
 ///
 /// <para>Implemented by <c>PathResolutionService</c>, which owns a
-/// <c>Replay(1).RefCount()</c> per path. Concurrent subscribers share the
-/// cached resolution stream; the matched <see cref="MeshNode"/> rides on
-/// <see cref="AddressResolution.Node"/> so the routing layer doesn't need a
-/// second <c>path:X</c> query.</para>
+/// POSITIVE-ONLY per-path promise cache (<c>Replay(1).AutoConnect(0)</c>,
+/// invalidated by the mesh change feed): concurrent subscribers share one
+/// in-flight query, a warm entry emits synchronously on Subscribe, and a null
+/// (not-found) resolution is never cached — so a query snapshot racing
+/// change-feed propagation right after CreateNode can't pin a stale 404. The
+/// matched <see cref="MeshNode"/> rides on <see cref="AddressResolution.Node"/>
+/// so the routing layer doesn't need a second <c>path:X</c> query.</para>
 /// </summary>
 public interface IPathResolver
 {

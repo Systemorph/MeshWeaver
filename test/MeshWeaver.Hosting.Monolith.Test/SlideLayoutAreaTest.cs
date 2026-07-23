@@ -3,6 +3,7 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -109,6 +110,60 @@ public class SlideLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBas
             .Should().Within(10.Seconds()).Match(c => c is ButtonControl))!;
         deckLink.NavigateToHref!.ToString().Should().Be($"/{deck}",
             "the presenter bar links back to the deck parent");
+
+        await CleanupDeck(deck, first, middle, last);
+    }
+
+    /// <summary>
+    /// The FIRST frame of the Content area must already carry the deck position:
+    /// counter "Slide 2 / 3" and a presenter bar with BOTH Prev and Next. An
+    /// initial empty-deck frame ("Slide 1 / 1", no Prev/Next) that later re-renders
+    /// is the incomplete-first-frame defect — the deck's sibling query must be part
+    /// of the first emission, not appended after a <c>StartWith(empty)</c> frame.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ContentArea_FirstFrame_CarriesDeckPosition()
+    {
+        var (deck, first, middle, last) = await SeedDeck();
+
+        var workspace = GetClient(c => c.AddData()).GetWorkspace();
+        var reference = new LayoutAreaReference(SlideLayoutAreas.ContentArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(middle), reference);
+
+        // Capture frames from the very first snapshot: connect BEFORE awaiting
+        // anything so the assertions observe the FIRST rendered frame, not the
+        // settled state (an eventually-matches idiom would mask the defect).
+        var barPath = $"{SlideLayoutAreas.ContentArea}/{SlideLayoutAreas.PresenterBarArea}";
+        var counterPath = $"{barPath}/{SlideLayoutAreas.CounterArea}";
+        var barFrames = stream.GetControlStream(barPath)
+            .Where(c => c is StackControl).Select(c => (StackControl)c!).Replay();
+        var counterFrames = stream.GetControlStream(counterPath)
+            .Where(c => c is LabelControl).Select(c => (LabelControl)c!).Replay();
+        using var barConnection = barFrames.Connect();
+        using var counterConnection = counterFrames.Connect();
+
+        var firstCounter = await counterFrames.FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30)).ToTask();
+        firstCounter.Data?.ToString().Should().Be("Slide 2 / 3",
+            "the FIRST Content frame must already carry the deck position — an empty-deck 'Slide 1 / 1' first frame is the incomplete-first-frame defect");
+
+        var firstBar = await barFrames.FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30)).ToTask();
+        var barAreas = firstBar.Areas.Select(a => a.Area?.ToString()).ToList();
+        barAreas.Should().Contain(
+            p => p != null && p.EndsWith($"/{SlideLayoutAreas.PrevButtonArea}", StringComparison.Ordinal),
+            "the first PresenterBar frame must already render Prev");
+        barAreas.Should().Contain(
+            p => p != null && p.EndsWith($"/{SlideLayoutAreas.NextButtonArea}", StringComparison.Ordinal),
+            "the first PresenterBar frame must already render Next");
+
+        // Path-shape guard: the constructed area paths above must match what the
+        // server actually rendered — otherwise the Replay subscriptions observed
+        // a dead pointer and the assertions were vacuous.
+        var root = await stream.GetControlStream(reference.Area!)
+            .Should().Within(30.Seconds()).Match(c => c is StackControl);
+        AreaPath((StackControl)root!, SlideLayoutAreas.PresenterBarArea).Should().Be(barPath);
 
         await CleanupDeck(deck, first, middle, last);
     }
