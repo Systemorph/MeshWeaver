@@ -37,23 +37,38 @@ namespace MeshWeaver.Hosting;
 ///     <c>AddMeshNodes</c> seed) — in-memory <c>StartsWith</c> filter.</item>
 /// </list></para>
 ///
-/// <para><b>Positive-only promise cache per path.</b> Resolution runs per routed
+/// <para><b>Positive-only value cache per path.</b> Resolution runs per routed
 /// message (<c>RoutingServiceBase.RouteMessage</c>) and per Blazor navigation, so
 /// re-querying on every call was the dominant slide-switch latency.
-/// <see cref="ResolveSegments"/> memoizes each SUCCESSFUL resolution in a
-/// <see cref="ConcurrentDictionary{TKey,TValue}"/> of
-/// <c>Replay(1).AutoConnect(0)</c> observables keyed by the joined segment path —
-/// the promise-cache idiom: concurrent misses share one in-flight query, and a
-/// warm entry emits SYNCHRONOUSLY on Subscribe (the contract the Blazor layer
-/// relies on to skip progress UI).</para>
+/// <see cref="ResolveSegments"/> memoizes each SUCCESSFUL resolution — the
+/// resolved <see cref="AddressResolution"/> VALUE, keyed by the joined segment
+/// path — in a <see cref="ConcurrentDictionary{TKey,TValue}"/>. A warm entry is
+/// returned as <c>Observable.Return(value)</c>, which emits SYNCHRONOUSLY on
+/// Subscribe (the contract the Blazor layer relies on to skip progress UI).</para>
 ///
-/// <para><b>Why positive-only</b>: a NULL resolution is NEVER persisted. The
-/// previous <c>Replay(1).RefCount()</c> cache here was removed because caching a
-/// null (the query snapshot racing change-feed propagation right after
-/// CreateNode) pinned a permanent 404 (repro:
-/// <c>PathResolutionCacheTest.NullResolution_IsNotCached</c>). A null result now
-/// removes its own entry on emission, so negatives are never served from cache
-/// beyond the in-flight window; errored queries evict themselves the same way.</para>
+/// <para><b>Cache the RESULT, not the in-flight query.</b> An earlier design cached
+/// the <c>Replay(1).AutoConnect(0)</c> observable itself and self-evicted only on
+/// <c>onNext(null)</c> / <c>onError</c>. That amplified a transient into a permanent
+/// hang: if the in-flight resolution query never emitted its Initial snapshot (the
+/// known subscribe-handshake "dropped Full" race, worse under bulk load), the cached
+/// observable NEVER emitted, errored, or completed — so the self-eviction never fired
+/// and every later resolution of that path replayed the same dead observable forever.
+/// A one-call, self-healing race became a permanent per-path stall (repro:
+/// <c>PathResolutionCacheTest.HungFirstQuery_DoesNotPoisonCache</c> — a downstream
+/// <c>mesh.Query(...).Take(1)</c> with no timeout, e.g. AI Export's subtree snapshot,
+/// then hangs its whole operation). Caching only the resolved VALUE fixes this at the
+/// root: a hung / errored / null resolution stores NOTHING, so it can never be served
+/// from cache — it can only ever stall its own caller, which recovers via that
+/// caller's existing timeout/retry exactly as before the cache existed. Concurrent
+/// first-callers for one path each run their own query (no in-flight sharing); that
+/// is a negligible cost — misses for the same path are rare — bought back by never
+/// being able to pin a non-terminating query.</para>
+///
+/// <para><b>Why positive-only</b>: a NULL resolution is NEVER stored. The previous
+/// <c>Replay(1).RefCount()</c> cache here was removed because caching a null (the
+/// query snapshot racing change-feed propagation right after CreateNode) pinned a
+/// permanent 404 (repro: <c>PathResolutionCacheTest.NullResolution_IsNotCached</c>).
+/// Only a non-null resolution is added to the map, so negatives are never served.</para>
 ///
 /// <para><b>Invalidation</b>: the constructor subscribes the optional
 /// <see cref="IMeshChangeFeed"/> (the same post-commit broadcast
@@ -76,12 +91,15 @@ internal class PathResolutionService : IPathResolver, IDisposable
     private readonly bool _hasWritablePartitionProvider;
 
     /// <summary>
-    /// Positive-only promise cache: joined segment path → replayed resolution.
-    /// Non-null ONLY when an <see cref="IMeshChangeFeed"/> is registered — without
-    /// the invalidation signal, caching would serve stale routes forever, so the
-    /// service then resolves uncached (exactly the pre-cache behaviour).
+    /// Positive-only value cache: joined segment path → the resolved
+    /// <see cref="AddressResolution"/> (never null). Non-null ONLY when an
+    /// <see cref="IMeshChangeFeed"/> is registered — without the invalidation
+    /// signal, caching would serve stale routes forever, so the service then
+    /// resolves uncached (exactly the pre-cache behaviour). Storing the VALUE (not
+    /// the in-flight observable) means a hung / errored / null resolution caches
+    /// nothing and so can never poison the path — see the class doc.
     /// </summary>
-    private readonly ConcurrentDictionary<string, IObservable<AddressResolution?>>? _resolutionCache;
+    private readonly ConcurrentDictionary<string, AddressResolution>? _resolutionCache;
 
     /// <summary>Change-feed invalidation subscription; disposed with the singleton.</summary>
     private readonly IDisposable? _changeFeedSubscription;
@@ -102,7 +120,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
         if (changeFeed is not null)
         {
-            _resolutionCache = new ConcurrentDictionary<string, IObservable<AddressResolution?>>(StringComparer.Ordinal);
+            _resolutionCache = new ConcurrentDictionary<string, AddressResolution>(StringComparer.Ordinal);
             _changeFeedSubscription = changeFeed.Subscribe(OnMeshChange);
         }
         // Gates the partition-root MeshNode synthesis below — we only fall back
@@ -182,12 +200,13 @@ internal class PathResolutionService : IPathResolver, IDisposable
             : Observable.Return(resolution);
 
     /// <summary>
-    /// Cache-fronted resolution. A warm entry replays synchronously on Subscribe;
-    /// a miss shares ONE in-flight <see cref="ResolveSegmentsCore"/> query among
-    /// concurrent callers (promise cache: <c>Replay(1).AutoConnect(0)</c>). A null
-    /// or errored resolution removes its own entry on emission, so only POSITIVE
-    /// resolutions persist (see the class doc for why). Without a registered
-    /// <see cref="IMeshChangeFeed"/> there is no cache and every call queries.
+    /// Cache-fronted resolution. A warm entry returns the cached
+    /// <see cref="AddressResolution"/> VALUE via <c>Observable.Return</c> (emits
+    /// synchronously on Subscribe — the Blazor skip-progress contract). A miss runs
+    /// <see cref="ResolveSegmentsCore"/> and stores ONLY a non-null result, so a
+    /// null / errored / never-emitting query caches nothing and can never poison the
+    /// path (see the class doc). Without a registered <see cref="IMeshChangeFeed"/>
+    /// there is no cache and every call queries.
     /// </summary>
     private IObservable<AddressResolution?> ResolveSegments(string[] segments)
     {
@@ -195,24 +214,20 @@ internal class PathResolutionService : IPathResolver, IDisposable
             return ResolveSegmentsCore(segments);
 
         var key = string.Join("/", segments);
-        return _resolutionCache.GetOrAdd(key, k =>
-            ResolveSegmentsCore(segments)
-                .Do(
-                    resolution =>
-                    {
-                        // Positive-only: a null resolution evicts itself so it can
-                        // never be replayed once the in-flight query has finished.
-                        if (resolution is null)
-                            _resolutionCache.TryRemove(k, out _);
-                    },
-                    ex =>
-                    {
-                        // An errored query must not be replayed forever either —
-                        // evict so the next caller re-probes.
-                        _resolutionCache.TryRemove(k, out _);
-                    })
-                .Replay(1)
-                .AutoConnect(0));
+        if (_resolutionCache.TryGetValue(key, out var cached))
+            return Observable.Return<AddressResolution?>(cached);
+
+        return ResolveSegmentsCore(segments)
+            .Do(resolution =>
+            {
+                // Positive-only, value-cache: store ONLY a resolved result. A null
+                // (absent path) is never cached — a concurrent CreateNode may still
+                // be propagating — and a query that never emits or errors stores
+                // nothing at all, so it can only stall its own caller, never the
+                // whole path. The change feed invalidates positive entries on write.
+                if (resolution is not null)
+                    _resolutionCache.TryAdd(key, resolution);
+            });
     }
 
     /// <summary>
