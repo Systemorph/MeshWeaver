@@ -46,9 +46,11 @@ spec:
           env:
             # 🩺 Crash diagnostics. We hit a native SIGSEGV (exit 139) in the Npgsql → SslStream TLS
             # read path: the process dies with NO managed exception, so the logs show nothing useful.
-            # Write a dump to the persistent /data volume (a hostPath that survives the restart on the
-            # same node) so the next crash — and the heap, to confirm/refute the suspected leak — is
-            # analyzable. Type 2 = heap (WithPrivateReadWriteMemory). Dumps only appear on crash.
+            # Write a dump to /data/dumps (the dedicated memex-dumps emptyDir below — createdump does
+            # NOT create directories, so the target dir MUST be a mount) so the next crash — and the
+            # heap, to confirm/refute the suspected leak — is analyzable. Type 2 = heap: ~heap-sized
+            # output (tens of GB at the pod's memory limit), which is why it gets its own size-bounded
+            # volume instead of the /data PVC. Dumps only appear on crash.
             - name: "DOTNET_DbgEnableMiniDump"
               value: "1"
             - name: "DOTNET_DbgMiniDumpType"
@@ -80,6 +82,8 @@ spec:
               mountPath: "/data"
             - name: "memex-users"
               mountPath: "/mnt/users"
+            - name: "memex-dumps"
+              mountPath: "/data/dumps"
           imagePullPolicy: "IfNotPresent"
           # 🚦 Zero-502 rollouts. Without a readiness probe a pod counts as "Ready" the moment its
           # container starts — long before the app serves (Orleans + mesh + static-repo import take
@@ -153,6 +157,19 @@ spec:
 {{- end }}
         - name: "memex-users"
           emptyDir: {}
+        # 🩺 Crash-dump target (DOTNET_DbgMiniDumpName=/data/dumps/…). createdump does NOT create
+        # directories — without this mount every crash failed with "Could not create output file …:
+        # No such file or directory", destroying its own evidence (and burning ~6s + a ~350k-line
+        # createdump log storm on the way down; seen on memex-cloud 2026-07-23). A dedicated emptyDir
+        # both guarantees the directory exists and keeps heap-sized dumps off the /data volume.
+        # sizeLimit ≈ the pod's memory limit (a type-2 heap dump is ~heap-sized); if a dump would
+        # exceed it kubelet evicts the pod instead of filling the node disk. Trade-off: emptyDir
+        # survives container restarts (the crash → restart-in-place case we analyze) but not pod
+        # rescheduling — acceptable for diagnostics. ⚠️ Keep this AFTER memex-data/memex-users: the
+        # AKS env patches (deploy/aks/envs/*/portal-patch.json) replace volumes 0 and 1 BY INDEX.
+        - name: "memex-dumps"
+          emptyDir:
+            sizeLimit: "30Gi"
   selector:
     matchLabels:
       app.kubernetes.io/name: "{{ .Chart.Name }}"
