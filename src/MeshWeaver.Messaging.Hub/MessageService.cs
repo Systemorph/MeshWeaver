@@ -407,10 +407,25 @@ public class MessageService : IMessageService
             // used to vanish and the sender's hub.Observe(...) sat silent until its full
             // RequestTimeout (the OAuth consumed-code re-exchange stalled 30s on exactly
             // this). Post the DeliveryFailure through the PARENT hub: our own Post would
-            // re-enter this same gate and be dropped. Cascade-safe by the same exclusions
-            // ReportFailure applies — never NACK a DeliveryFailure (no ping-pong: a NACK
-            // arriving at another disposing hub is excluded here) nor [CanBeIgnored]
-            // lifecycle traffic (no requester is waiting).
+            // re-enter this same gate and be dropped.
+            //
+            // The NACK is GATED to deliveries a caller can actually be awaiting:
+            //  • typed IRequest messages (hub.Observe request/response);
+            //  • RawJson — cross-hub deliveries reach this gate UNDESERIALIZED (the
+            //    MESHWEAVER_MSG_TRACE captures show the dropped GetDataRequest and
+            //    SubscribeRequest both as msg=RawJson here), so the payload type cannot
+            //    be inspected: fail LOUD rather than reintroduce the silent 30s hang.
+            //    An IRequest-only gate would silently skip exactly the two flows this
+            //    NACK exists for. The one RawJson we skip is a payload that looks like
+            //    a DeliveryFailure itself (cheap content sniff) — NACKing a NACK
+            //    between two concurrently-disposing hubs would ping-pong; a false
+            //    positive on the sniff merely reverts that delivery to the historical
+            //    silent drop.
+            // Typed fire-and-forget events (DataChangedEvent & co) fall back to the
+            // historical silent drop — nobody awaits them, and NACKing them was pure
+            // disposal noise. Cascade-safe by the same exclusions ReportFailure applies —
+            // never NACK a DeliveryFailure nor [CanBeIgnored] lifecycle traffic (no
+            // requester is waiting).
             //
             // 🚨 The NACK is a TRANSIENT rejection — ErrorType.ShuttingDown — never NotFound,
             // never a generic terminal failure. A disposing hub cannot know whether its
@@ -428,8 +443,9 @@ public class MessageService : IMessageService
             // a NotFound NACK faulted the stream cache's shared Replay(1) with no re-probe
             // path, and ANY terminal treatment killed the sync stream's resubscribe latch —
             // each wedged every read of the mid-recycle NodeType.
-            if (delivery.Message is not DeliveryFailure
-                && delivery.Message is not null
+            if ((delivery.Message is IRequest
+                    || (delivery.Message is RawJson rawJson
+                        && !rawJson.Content.Contains(nameof(DeliveryFailure), StringComparison.Ordinal)))
                 && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
                 && delivery.Sender is not null
                 && !delivery.Sender.Equals(Address)

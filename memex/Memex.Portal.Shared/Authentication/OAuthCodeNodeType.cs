@@ -40,7 +40,7 @@ public static class OAuthCodeNodeType
         NodeType = "NodeType",
         Icon = "/static/NodeTypeIcons/key.svg",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = System.Collections.Immutable.ImmutableHashSet.Create("search", "create"),
         Content = new NodeTypeDefinition
         {
             Description = "Pending OAuth authorization code (PKCE) awaiting its /token exchange. "
