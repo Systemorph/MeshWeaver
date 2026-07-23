@@ -209,6 +209,66 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         return ResolveRefSha(client, owner, repo, commitRef);
     }
 
+    // The GitHub compare endpoint returns at most this many files in one response; beyond it the
+    // file list is TRUNCATED, so we cannot trust it as the complete change set → full-import instead.
+    private const int CompareFileCap = 300;
+
+    /// <inheritdoc />
+    public IObservable<IReadOnlyList<string>?> GetChangedPaths(
+        string repositoryUrl, string baseSha, string headSha, string? subdirectory, string accessToken)
+    {
+        if (string.IsNullOrWhiteSpace(baseSha) || string.IsNullOrWhiteSpace(headSha))
+            return Observable.Return<IReadOnlyList<string>?>(null);
+        if (string.Equals(baseSha, headSha, StringComparison.Ordinal))
+            return Observable.Return<IReadOnlyList<string>?>(Array.Empty<string>());
+
+        var (owner, repo) = ParseRepoUrl(repositoryUrl);
+        var client = Client(accessToken);
+        var prefix = NormalizePrefix(subdirectory);
+
+        return Http.InvokeObservable(ct => client.Repository.Commit.Compare(owner, repo, baseSha, headSha))
+            .Select(cmp =>
+            {
+                // Only trust the diff when the head DESCENDS from the base (or equals it). "behind" /
+                // "diverged" means the base is NOT an ancestor — a force-push or history rewrite — so
+                // the file list is not the cumulative change set; and a truncated list (> the cap)
+                // is incomplete. Either way return null → the caller full-imports (never a silent miss).
+                var status = cmp.Status.ToString();
+                if (!string.Equals(status, "ahead", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(status, "identical", StringComparison.OrdinalIgnoreCase))
+                    return null;
+                var files = cmp.Files ?? (IReadOnlyList<GitHubCommitFile>)Array.Empty<GitHubCommitFile>();
+                if (files.Count >= CompareFileCap)
+                    return null;
+                var changed = new List<string>();
+                foreach (var f in files)
+                {
+                    AddIfUnderPrefix(changed, f.Filename, prefix);
+                    // A rename reports the NEW filename; its OLD path must also count as changed so the
+                    // stale node is pruned/re-created (prune handles the delete of the absent old file).
+                    AddIfUnderPrefix(changed, f.PreviousFileName, prefix);
+                }
+                return (IReadOnlyList<string>)changed;
+            })
+            // A compare failure (network, an unknown SHA after a rebase, rate limit) is NOT "nothing
+            // changed" — fall back to a full import so an update is never silently dropped.
+            .Catch<IReadOnlyList<string>?, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "GitHub compare {Base}...{Head} on {Repo} failed — falling back to a full import.",
+                    baseSha, headSha, repositoryUrl);
+                return Observable.Return<IReadOnlyList<string>?>(null);
+            });
+    }
+
+    private static void AddIfUnderPrefix(List<string> into, string? repoPath, string prefix)
+    {
+        if (string.IsNullOrEmpty(repoPath)) return;
+        if (prefix.Length == 0) { into.Add(repoPath); return; }
+        if (repoPath.StartsWith(prefix, StringComparison.Ordinal))
+            into.Add(repoPath[prefix.Length..]);
+    }
+
     /// <summary>Creates a branch from an existing ref (branch name or SHA) resolved to its commit.</summary>
     /// <param name="request">The create-branch request (repo, new branch, base ref, token).</param>
     /// <returns>An observable emitting the new branch name and the commit SHA it points at.</returns>

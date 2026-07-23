@@ -65,6 +65,25 @@ public interface IGitHubRepoClient
         => Fetch(repositoryUrl, commitish, null, accessToken).Select(snapshot => snapshot.CommitSha);
 
     /// <summary>
+    /// The <paramref name="subdirectory"/>-relative file paths that changed between
+    /// <paramref name="baseSha"/> and <paramref name="headSha"/> (added + modified + removed +
+    /// renamed) — the <c>git diff</c> that lets an import touch ONLY what actually changed since the
+    /// last successful sync instead of re-materialising the whole partition. Paths are made relative
+    /// to <paramref name="subdirectory"/> exactly like <see cref="Fetch(string,string,string?,string)"/>'s
+    /// files; changes OUTSIDE the subdirectory are excluded.
+    ///
+    /// <para>🚨 Returns <see langword="null"/> when the diff cannot be computed RELIABLY — the base is
+    /// not an ancestor of the head (a force-push / history rewrite), or the compare call errored. A
+    /// null answer means "diff unknown → the caller MUST full-import"; it must NEVER be read as
+    /// "nothing changed". The default implementation returns null (no diff support → always
+    /// full-import — the safe fallback); <see cref="OctokitGitHubRepoClient"/> overrides it with the
+    /// GitHub compare API.</para>
+    /// </summary>
+    IObservable<IReadOnlyList<string>?> GetChangedPaths(
+        string repositoryUrl, string baseSha, string headSha, string? subdirectory, string accessToken)
+        => Observable.Return<IReadOnlyList<string>?>(null);
+
+    /// <summary>
     /// Creates <see cref="GitHubCreateBranchRequest.NewBranch"/> from
     /// <see cref="GitHubCreateBranchRequest.BaseRef"/> (resolving the base ref to its
     /// commit SHA first), and emits the new branch + the SHA it points at. Surfaces a
