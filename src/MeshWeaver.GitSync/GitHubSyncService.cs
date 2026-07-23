@@ -366,16 +366,25 @@ public sealed class GitHubSyncService
                 var token = auth.Token;
                 logger?.LogInformation("Re-importing {Space} at {Ref} (twoWay={TwoWay}, force={Force})",
                     spacePath, commitish, config.TwoWay, force);
+                // Baseline for the git-diff scope: the last SUCCESSFULLY-synced commit. `force` ignores
+                // it (deliberate full overwrite/prune). Because RecordLastSync only advances on a clean
+                // success (below), this base always names a commit the mesh REALLY reached — so the diff
+                // is cumulative and self-heals a previously-failed push (its files are still in the diff
+                // until an import actually lands them).
                 return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath,
-                        SyncIgnore.For(config), progress, policy)
+                        SyncIgnore.For(config), progress, policy,
+                        baseSha: force ? null : config.LastSyncCommitSha)
                     // 🚨 Only advance the last-sync baseline when the mesh is now IN SYNC with the repo.
                     // A two-way import that PRESERVED server-newer nodes leaves the mesh AHEAD of the repo
                     // (those edits aren't committed back yet); advancing LastSyncedAt would move the
                     // baseline past them, so the NEXT update would no longer see them as "newer on the
                     // server" and would overwrite them — losing the very edits two-way just protected.
-                    // Leave the baseline until a commit carries them back (which advances it). A clean
-                    // import (nothing preserved — always the case git-first) records normally.
+                    // A FAILED import must ALSO not advance the baseline — otherwise the next diff would
+                    // start past the commit whose nodes never landed, permanently skipping them. Leave
+                    // the baseline until an import cleanly reaches the head. A clean import (nothing
+                    // preserved — always the case git-first) records normally.
                     .SelectMany(x => x.Result.Preserved > 0
+                            || string.Equals(x.Result.Outcome, "Failed", StringComparison.OrdinalIgnoreCase)
                         ? Observable.Return(x.Result)
                         : RecordLastSync(spacePath, x.CommitSha, sourceId).Select(_ => x.Result));
             });
@@ -431,17 +440,62 @@ public sealed class GitHubSyncService
 
     private IObservable<(StaticRepoImportResult Result, string CommitSha)> FetchAndImport(
         string repoUrl, string commitish, string? subdirectory, string token, string spaceId,
-        SyncIgnore ignore, Action<string, LogLevel>? progress = null, ImportConflictPolicy? policy = null)
+        SyncIgnore ignore, Action<string, LogLevel>? progress = null, ImportConflictPolicy? policy = null,
+        string? baseSha = null)
     {
         return repoClient.Fetch(repoUrl, commitish, subdirectory, token).SelectMany(snapshot =>
-            ParseSnapshot(snapshot, spaceId, ignore, progress).SelectMany(parsed =>
-            {
-                var source = new InMemoryStaticRepoSource(
-                    spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs);
-                return StaticRepoImporter.ImportSource(hub, source, logger, policy)
-                    .Select(result => (result, snapshot.CommitSha));
-            }));
+        {
+            // Git-diff scope: when we know the last SUCCESSFULLY-synced commit (a routine
+            // webhook/update — not a force, not a first import), ask GitHub what changed between it
+            // and the head and import ONLY those nodes. A null answer (no base, force, force-push,
+            // truncated, or a compare error) falls back to a full import — never a silent
+            // under-import. This is what stops a routine push from re-materialising the whole
+            // partition and storming the live compiler (the memex-cloud outage loop, 2026-07-23).
+            var diff = string.IsNullOrEmpty(baseSha) || policy?.Force == true
+                ? Observable.Return<IReadOnlyList<string>?>(null)
+                : repoClient.GetChangedPaths(repoUrl, baseSha!, snapshot.CommitSha, subdirectory, token);
+            return diff.SelectMany(changedFiles =>
+                ParseSnapshot(snapshot, spaceId, ignore, progress).SelectMany(parsed =>
+                {
+                    var source = new InMemoryStaticRepoSource(
+                        spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs);
+                    var changedNodePaths = ChangedNodePaths(changedFiles, spaceId);
+                    if (changedNodePaths is not null)
+                        logger?.LogInformation(
+                            "[GitSync] {Space}: git-diff {Base}..{Head} → {Count} changed node(s) — "
+                            + "importing only those (full partition left untouched).",
+                            spaceId, Short(baseSha), Short(snapshot.CommitSha), changedNodePaths.Count);
+                    return StaticRepoImporter.ImportSource(hub, source, logger, policy, changedNodePaths)
+                        .Select(result => (result, snapshot.CommitSha));
+                }));
+        });
     }
+
+    /// <summary>
+    /// Maps the <c>git diff</c>'s subdirectory-relative changed FILE paths to the set of changed
+    /// NODE paths (the importer's <c>changedNodePaths</c> scope), via <see cref="NodeFileMapper"/> —
+    /// the canonical inverse of the export path mapping. <see langword="null"/> in → null out (diff
+    /// unknown → full import). Content-collection assets (<c>{node}/content/**</c>) are excluded:
+    /// they sync through a separate, unscoped path, so they never need to gate a node upsert.
+    /// </summary>
+    private static IReadOnlySet<string>? ChangedNodePaths(IReadOnlyList<string>? changedFiles, string spaceId)
+    {
+        if (changedFiles is null) return null;
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rel in changedFiles)
+        {
+            if (string.IsNullOrWhiteSpace(rel) || ContentAssetMapper.IsContentPath(rel))
+                continue;
+            var (id, ns) = NodeFileMapper.FromRelativePath(rel);
+            if (string.IsNullOrEmpty(id))
+                continue;
+            set.Add(ns.Length == 0 ? $"{spaceId}/{id}" : $"{spaceId}/{ns}/{id}");
+        }
+        return set;
+    }
+
+    private static string Short(string? sha) =>
+        string.IsNullOrEmpty(sha) ? "(none)" : sha.Length <= 8 ? sha : sha[..8];
 
     private IObservable<(MeshNode? Root, IReadOnlyList<MeshNode> Children, IReadOnlyList<StaticContentSync> ContentSyncs)> ParseSnapshot(
         RepoSnapshot snapshot, string spaceId, SyncIgnore ignore, Action<string, LogLevel>? progress = null)
