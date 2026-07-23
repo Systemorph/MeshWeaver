@@ -22,6 +22,7 @@ using Microsoft.Extensions.Logging;
 using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor.Test")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith.Test")]
 namespace MeshWeaver.Blazor;
 

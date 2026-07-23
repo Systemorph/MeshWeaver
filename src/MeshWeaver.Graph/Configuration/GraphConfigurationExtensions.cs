@@ -251,6 +251,10 @@ public static class GraphConfigurationExtensions
                     // stops a hub that (re)activates after a delete from resurrecting the row
                     // via its activation-triggered save. See RecentlyDeletedRegistry.
                     services.AddSingleton<RecentlyDeletedRegistry>();
+                    // Mesh-scoped deck sibling-slide cache: one shared, replayed sibling
+                    // query per deck so slide navigation never re-runs the query per
+                    // slide render (see DeckSlidesCache / SlideLayoutAreas.ObserveDeckSlides).
+                    services.AddSingleton<IDeckSlidesCache, DeckSlidesCache>();
                     return services;
                 })
                 .WithHandler<GetDataRequest>(HandleNodeTypeRequest));

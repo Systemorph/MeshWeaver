@@ -674,8 +674,9 @@ public static class PersistenceExtensions
     public static IServiceCollection AddMeshCatalog(this IServiceCollection services)
     {
         services.TryAddSingleton<IMeshChangeFeed, InProcessMeshChangeFeed>();
-        // PathResolutionService owns the per-path Replay(1).RefCount() cache
-        // and subscribes to IMeshChangeFeed internally.
+        // PathResolutionService owns the positive-only per-path promise cache
+        // (Replay(1).AutoConnect(0); null resolutions never cached) and
+        // subscribes to IMeshChangeFeed internally for invalidation.
         services.TryAddSingleton<PathResolutionService>();
         services.TryAddSingleton<IPathResolver>(sp => sp.GetRequiredService<PathResolutionService>());
         // Replay-AutoConnect cache for MeshNode streams. Routing reads it for

@@ -264,6 +264,18 @@ public partial class ApplicationPage : ComponentBase, IDisposable
             ?? context.Address.Type;
     }
 
+    /// <summary>
+    /// Render-branch decision: does the page replace the whole content area with the
+    /// full-page <c>NavigationProgressBar</c>? ONLY when there is no previously-rendered
+    /// <see cref="ViewModel"/> to keep showing: once a layout area has rendered, an
+    /// in-circuit navigation keeps it mounted (LayoutAreaView / NamedAreaView keep-last-good
+    /// swap in the new content when its first frame arrives) and a slow navigation surfaces
+    /// only the compact overlay on top — never the full-page "interrupt" that blanked the
+    /// page on every slide-to-slide navigation. Pure and static so it is table-testable.
+    /// </summary>
+    internal static bool ShowFullProgress(bool isInteractive, bool isLoading, bool hasContext, bool hasViewModel)
+        => !isInteractive || (!hasViewModel && (isLoading || !hasContext));
+
     private string? GetDisplayNameFromId()
     {
         if (Reference.Id is null)
