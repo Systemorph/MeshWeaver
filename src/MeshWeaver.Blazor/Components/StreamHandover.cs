@@ -54,11 +54,15 @@ internal sealed class StreamHandover : IDisposable
     /// <summary>
     /// Wires the hand-over completion: when <paramref name="newStreamFrames"/> emits its
     /// first item (the new content's first frame — the moment the kept old content is
-    /// actually replaced on screen), the currently retiring stream is disposed. An error
-    /// before the first frame also completes the hand-over (the fault itself is surfaced by
-    /// the primary area subscriptions, never here). Returns the trigger subscription; the
-    /// caller registers it on the NEW stream (<c>RegisterForDisposal</c>) so it tears down
-    /// with that stream automatically.
+    /// actually replaced on screen), the currently retiring stream is disposed. ALL three
+    /// terminal paths complete the hand-over so the retiring stream is never orphaned:
+    /// an error before the first frame, and — critically — a stream that COMPLETES without
+    /// ever emitting a frame (otherwise the retiring stream would linger until component
+    /// teardown; the fault/empty itself is surfaced by the primary area subscriptions, never
+    /// here). <see cref="Complete"/> is idempotent + generation-guarded, so the normal
+    /// onNext-then-onCompleted double-fire from <c>Take(1)</c> is harmless. Returns the
+    /// trigger subscription; the caller registers it on the NEW stream
+    /// (<c>RegisterForDisposal</c>) so it tears down with that stream automatically.
     /// </summary>
     public IDisposable CompleteOnFirstFrame<T>(IObservable<T> newStreamFrames)
     {
@@ -67,7 +71,10 @@ internal sealed class StreamHandover : IDisposable
             generation = _generation;
         return newStreamFrames
             .Take(1)
-            .Subscribe(_ => Complete(generation), _ => Complete(generation));
+            .Subscribe(
+                _ => Complete(generation),
+                _ => Complete(generation),
+                () => Complete(generation));
     }
 
     private void Complete(int generation)

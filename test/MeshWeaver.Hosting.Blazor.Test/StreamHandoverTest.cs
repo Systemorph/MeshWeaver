@@ -106,4 +106,39 @@ public class StreamHandoverTest
         newFrames.OnNext(1);
         oldStream.DisposeCount.Should().Be(1);
     }
+
+    [Fact]
+    public void NewStreamCompletesWithoutAnyFrame_StillDisposesRetiringStream()
+    {
+        // The new stream can complete WITHOUT ever emitting a frame (e.g. an empty
+        // area). The hand-over must still release the retiring stream — otherwise it
+        // lingers until component teardown. Completes on OnCompleted, not only OnNext.
+        var handover = new StreamHandover();
+        var oldStream = new FakeStream();
+        var newFrames = new Subject<int>();
+
+        handover.BeginTransition(oldStream);
+        using var trigger = handover.CompleteOnFirstFrame(newFrames);
+
+        oldStream.IsDisposed.Should().BeFalse("no frame and no completion yet");
+
+        newFrames.OnCompleted();
+        oldStream.DisposeCount.Should().Be(1,
+            "a new stream that completes without a frame must still complete the hand-over");
+    }
+
+    [Fact]
+    public void NewStreamErrorsBeforeAnyFrame_StillDisposesRetiringStream()
+    {
+        var handover = new StreamHandover();
+        var oldStream = new FakeStream();
+        var newFrames = new Subject<int>();
+
+        handover.BeginTransition(oldStream);
+        using var trigger = handover.CompleteOnFirstFrame(newFrames);
+
+        newFrames.OnError(new InvalidOperationException("boom"));
+        oldStream.DisposeCount.Should().Be(1,
+            "an error before the first frame must still complete the hand-over");
+    }
 }
