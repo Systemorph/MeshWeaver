@@ -2,5 +2,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <!-- OAuthCodeStoreTest runs against a full monolith mesh (the store persists
+         authorization codes as mesh nodes — the multi-replica safety contract). -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
   </ItemGroup>
 </Project>
