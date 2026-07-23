@@ -289,10 +289,11 @@ internal class OAuthCodeStore(IMeshService meshService, IMessageHub hub, ILogger
         => $"{CodeNamespace}/{HashRawCode(code)[..HashPrefixLength]}";
 
     /// <summary>
-    /// Node content → <see cref="AuthorizationCode"/>. In-process the content stays the
-    /// CLR record; after a PG round-trip it comes back as a JsonElement (the type is
-    /// internal and not in the TypeRegistry) — same fallback shape as
-    /// <c>ApiTokenService.ExtractApiToken</c>.
+    /// Node content → <see cref="AuthorizationCode"/>. In-process the content usually stays
+    /// the typed CLR record (<see cref="OAuthCodeNodeType.AddOAuthCodeType{TBuilder}"/>
+    /// registers the type via <c>WithMeshType</c>); the JsonElement fallback covers reads
+    /// through hubs that have not registered the type and older persisted rows — same
+    /// fallback shape as <c>ApiTokenService.ExtractApiToken</c>.
     /// </summary>
     private static AuthorizationCode? ExtractEntry(MeshNode? node)
     {
