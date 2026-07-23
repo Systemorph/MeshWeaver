@@ -265,6 +265,71 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
     }
 
     /// <summary>
+    /// Git-diff scope (<c>changedNodePaths</c>): a webhook/reimport that supplies the set of nodes
+    /// that changed since the last successful sync must re-upsert ONLY those — leaving every other
+    /// EXISTING node untouched (Version unchanged), EVEN WHEN the per-node manifest is gone. This is
+    /// the fix for the memex-cloud outage loop: a failed manifest write used to make every webhook
+    /// re-materialise the WHOLE partition (every source node re-versioned → the mass recompile storm
+    /// that starved the mesh). With git as the change oracle, an out-of-scope node is skipped
+    /// regardless of manifest state — and a node ABSENT from the mesh is still imported
+    /// (first-materialisation safety), so the scope can never silently under-import.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task ScopedImport_UpsertsOnlyChangedNodes_EvenWithoutManifest()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        _source.Nodes =
+        [
+            new MeshNode("Page1", _partition) { NodeType = "Markdown", Name = "Page 1", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "one" } },
+            new MeshNode("Page2", _partition) { NodeType = "Markdown", Name = "Page 2", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "two" } },
+        ];
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+        var page2VersionBefore = (await Read($"{_partition}/Page2"))!.Version;
+
+        // Simulate the production failure that started the loop: the manifest write never landed, so
+        // the per-node token skip is BLIND — without the git-diff scope the next import re-upserts
+        // every node (the storm). Deleting the manifest reproduces exactly that state.
+        await meshService.DeleteNode($"{_partition}/_Activity/import-manifest")
+            .Should().Within(30.Seconds()).Emit();
+
+        // The push changed ONLY Page1 and ADDED Page3; Page2's repo content is unchanged. Model that:
+        // edit Page1, add Page3, leave Page2 — and scope the import to exactly what git reported.
+        _source.Nodes =
+        [
+            new MeshNode("Page1", _partition) { NodeType = "Markdown", Name = "Page 1", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "one-EDITED" } },
+            new MeshNode("Page2", _partition) { NodeType = "Markdown", Name = "Page 2", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "two" } },
+            new MeshNode("Page3", _partition) { NodeType = "Markdown", Name = "Page 3", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "three-NEW" } },
+        ];
+        IReadOnlySet<string> changed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { $"{_partition}/Page1", $"{_partition}/Page3" };
+
+        (await StaticRepoImporter.ImportSource(Mesh, _source, null, null, changed)
+                .ToList().Should().Within(120.Seconds()).Emit())
+            .Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+
+        // Page1 (in scope) re-imported with its new content.
+        var page1 = await Mesh.GetMeshNodeStream($"{_partition}/Page1")
+            .Where(n => n?.Content is MarkdownContent mc && mc.Content.Contains("EDITED"))
+            .Should().Within(30.Seconds()).Emit();
+        (page1!.Content as MarkdownContent)!.Content.Should().Contain("one-EDITED");
+
+        // Page3 (in scope, ABSENT from the mesh) created — the scope never blocks a first import.
+        (await Read($"{_partition}/Page3")).Should().NotBeNull(
+            "a node absent from the mesh must be imported even when in scope — first-materialisation safety");
+
+        // Page2 (OUT of scope, already present) NOT re-upserted despite the missing manifest — its
+        // Version is unchanged. That avoided re-write is exactly the recompile storm the scope prevents.
+        (await Read($"{_partition}/Page2"))!.Version.Should().Be(page2VersionBefore,
+            "an out-of-scope existing node must not be re-upserted (Version unchanged) even with no "
+            + "manifest — the needless re-write is what stormed the live compiler on memex-cloud");
+    }
+
+    /// <summary>
     /// "sync: none" on a partition ROOT. Setting the partition root's <see cref="SyncBehavior"/> to
     /// <see cref="SyncBehavior.ExcludeThisAndChildren"/> must DURABLY decouple the whole partition: a
     /// later source change (new fingerprint → full re-import) must leave the root's claim intact AND

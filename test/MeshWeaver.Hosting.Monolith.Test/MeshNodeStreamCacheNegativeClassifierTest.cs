@@ -130,4 +130,66 @@ public class MeshNodeStreamCacheNegativeClassifierTest
     {
         MeshNodeStreamCache.IsTransientOwnerFailure(null).Should().BeFalse();
     }
+
+    // ---- TRANSIENT DATABASE-CONNECTIVITY: the 2026-07-23 memex outage ----
+    //
+    // An Azure emergency host repair rebooted the silo's node; for ~2 min the silo could not reach
+    // Postgres. The owner READ for the AgenticEngineering NodeType node faulted with an Npgsql
+    // "Failed to connect …", which crossed the Orleans grain boundary FLATTENED to its message
+    // string (the inner TimeoutException object lost in serialization) and reached the cache as a
+    // DeliveryFailureException. Before the fix it matched NEITHER predicate → the entry was marked
+    // faulted with NO breaker window → every re-activation replayed the stale error FOREVER, until
+    // a manual recycle. It MUST classify transient so the ≤60s breaker self-heals it.
+
+    // The verbatim shape the silo routing grain posts when the owner read hits a dead PG endpoint.
+    private const string PgConnectFailureMessage =
+        "Delivery to 'AgenticEngineering' failed: Failed to connect to 10.42.18.4:5432";
+
+    [Fact]
+    public void PostgresConnectFailure_AsNack_IsTransient_NotMissingNode()
+    {
+        var nack = Nack(PgConnectFailureMessage, ErrorType.Failed);
+        MeshNodeStreamCache.IsTransientOwnerFailure(nack).Should().BeTrue(
+            "a lost Postgres connection is a node-EXISTS-but-DB-unreachable miss that self-heals — " +
+            "the exact 2026-07-23 memex wedge");
+        MeshNodeStreamCache.IsMissingNodeFailure(nack).Should().BeFalse(
+            "a transient DB fault must NEVER be recorded as a missing-node negative (it would suppress a live node)");
+    }
+
+    [Theory]
+    [InlineData("Failed to connect to 10.42.18.4:5432")]
+    [InlineData("Timeout during connection attempt")]
+    [InlineData("Exception while connecting: connection reset by peer")]
+    [InlineData("server closed the connection unexpectedly")]
+    [InlineData("The connection pool has been exhausted, either raise MaxPoolSize or Timeout")]
+    [InlineData("57P01: terminating connection due to administrator command")]
+    [InlineData("the database system is starting up")]
+    [InlineData("the database system is in recovery mode")]
+    [InlineData("No connection could be made because the target machine actively refused it")]
+    public void TransientDatabaseFaultMessages_AreTransient(string message)
+    {
+        MeshNodeStreamCache.IsTransientDatabaseFailure(message).Should().BeTrue();
+        MeshNodeStreamCache.IsTransientOwnerFailure(Nack(message, ErrorType.Failed)).Should().BeTrue();
+    }
+
+    [Fact]
+    public void TransientDatabaseFault_WrappedAsInner_IsStillTransient()
+    {
+        var wrapped = new InvalidOperationException("owner read failed",
+            new Exception("Failed to connect to 10.42.18.4:5432"));
+        MeshNodeStreamCache.IsTransientOwnerFailure(wrapped).Should().BeTrue(
+            "the classifier walks the inner-exception chain");
+    }
+
+    [Theory]
+    [InlineData("relation \"mesh_nodes\" does not exist")]            // 42P01 — a real missing table, NOT transient
+    [InlineData("duplicate key value violates unique constraint")]    // 23505 — a real write conflict
+    [InlineData("syntax error at or near \"SELCT\"")]                 // a real SQL bug
+    [InlineData("Access denied: user lacks Read permission")]         // an RLS denial
+    [InlineData("")]
+    public void NonTransientMessages_AreNotTransientDatabaseFaults(string message)
+    {
+        MeshNodeStreamCache.IsTransientDatabaseFailure(message).Should().BeFalse(
+            "only connectivity faults are transient — a real query/schema/permission error must propagate");
+    }
 }

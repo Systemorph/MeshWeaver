@@ -1,5 +1,6 @@
 ﻿using System.Reactive;
 using MeshWeaver.Hosting.Embeddings;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
@@ -218,9 +219,106 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     private static bool IsUndefinedTable(Exception ex)
         => ex is PostgresException pg && pg.SqlState == "42P01";
 
+    // Transient Postgres connectivity faults (connection dropped / endpoint momentarily
+    // unreachable) get a SHORT bounded retry at the read leaf so a sub-second-to-second blip
+    // (the common case during a host reboot or failover) never surfaces as a hard read fault.
+    // A LONGER outage exhausts these retries and the fault propagates — the upstream
+    // MeshNodeStreamCache classifies it as transient (IsTransientDatabaseFailure) and its ≤60s
+    // breaker self-heals the activation instead of wedging it until a manual recycle (the memex
+    // AgenticEngineering incident, 2026-07-23). Deliberately short (≤3 retries, 200→800ms) so it
+    // never approaches the 60s SubscribeRequest budget. READS only — writes are never
+    // auto-retried (no idempotency key ⇒ replay risk).
+    private const int MaxTransientReadRetries = 3;
+
+    private static readonly HashSet<string> TransientPostgresSqlStates = new(StringComparer.Ordinal)
+    {
+        "57P01", "57P02", "57P03",                     // admin/crash shutdown, cannot_connect_now (startup)
+        "53300", "53400",                              // too_many_connections, configuration_limit_exceeded
+        "08000", "08001", "08003", "08004", "08006",   // connection_exception family
+        "40001", "40P01",                              // serialization_failure, deadlock_detected (retryable)
+    };
+
+    /// <summary>
+    /// True when <paramref name="ex"/> (or an inner exception) is a TRANSIENT Postgres
+    /// connectivity fault worth a bounded retry — a dropped/unreachable connection, a server
+    /// restart/failover, connection/pool exhaustion, or a serialization/deadlock race — as
+    /// opposed to a real query/schema error. A <see cref="PostgresException"/> with a
+    /// non-transient <c>SqlState</c> (e.g. <c>42P01</c> undefined_table, <c>23505</c> unique
+    /// violation, a syntax error) is NOT transient and must propagate. A bare
+    /// <see cref="NpgsqlException"/> that is not a server <see cref="PostgresException"/> is a
+    /// client/connection failure ("Failed to connect", "Timeout during connection attempt") and
+    /// IS transient.
+    /// </summary>
+    internal static bool IsTransientConnectionFault(Exception? ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            switch (e)
+            {
+                case TimeoutException:
+                case System.Net.Sockets.SocketException:
+                    return true;
+                case PostgresException pg when TransientPostgresSqlStates.Contains(pg.SqlState):
+                    return true;
+                case PostgresException:
+                    break; // a real server error (42P01, 23505, syntax, …) — not transient
+                case NpgsqlException:
+                    return true; // connection-layer Npgsql failure (not a server error)
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Bounded exponential backoff for the transient-read retry: 200ms, 400ms, 800ms (capped).</summary>
+    internal static TimeSpan TransientReadBackoff(int attempt)
+        => TimeSpan.FromMilliseconds(Math.Min(200 * Math.Pow(2, attempt), 800));
+
+    /// <summary>
+    /// Wraps a cold read observable with a bounded exponential-backoff retry that fires ONLY on
+    /// <see cref="IsTransientConnectionFault"/>. Any non-transient error (and any transient fault
+    /// past <see cref="MaxTransientReadRetries"/>) propagates unchanged so the caller's existing
+    /// <c>.Catch(IsUndefinedTable …)</c> and the upstream breaker still see the real exception.
+    /// </summary>
+    private IObservable<T> WithTransientRetry<T>(Func<IObservable<T>> read, string op)
+        => RetryTransientReads(read, IsTransientConnectionFault, MaxTransientReadRetries,
+            TransientReadBackoff,
+            (ex, attempt, delay) => _logger?.LogWarning(ex,
+                "PostgreSqlStorageAdapter: transient DB fault on {Op}, attempt {Attempt}/{Max}, retrying in {Delay}ms",
+                op, attempt, MaxTransientReadRetries, delay.TotalMilliseconds),
+            scheduler: null);
+
+    /// <summary>
+    /// Deterministically testable core of <see cref="WithTransientRetry{T}"/>: re-subscribes the
+    /// cold <paramref name="read"/> on a transient fault with <paramref name="backoff"/> delay, up
+    /// to <paramref name="maxRetries"/>, then lets the fault propagate. Split out (with an injectable
+    /// <paramref name="scheduler"/>) so tests can drive the backoff with a <c>TestScheduler</c> —
+    /// mirrors <c>RoutingGrain.DeliverToGrainObservable</c>.
+    /// </summary>
+    internal static IObservable<T> RetryTransientReads<T>(
+        Func<IObservable<T>> read,
+        Func<Exception, bool> isTransient,
+        int maxRetries,
+        Func<int, TimeSpan> backoff,
+        Action<Exception, int, TimeSpan>? onRetry = null,
+        IScheduler? scheduler = null)
+    {
+        var sch = scheduler ?? Scheduler.Default;
+        return Observable.Defer(read)
+            .RetryWhen(errors => errors
+                .Select((ex, i) => (Exception: ex, Attempt: i))
+                .SelectMany(t =>
+                {
+                    if (t.Attempt >= maxRetries || !isTransient(t.Exception))
+                        return Observable.Throw<long>(t.Exception);
+                    var delay = backoff(t.Attempt);
+                    onRetry?.Invoke(t.Exception, t.Attempt + 1, delay);
+                    return Observable.Timer(delay, sch);
+                }));
+    }
+
     /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => _ioPool.Invoke(ct => ReadAsyncCore(path, options, ct));
+        => WithTransientRetry(() => _ioPool.Invoke(ct => ReadAsyncCore(path, options, ct)), "Read");
 
     private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -497,7 +595,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
     /// <inheritdoc />
     public IObservable<bool> Exists(string path)
-        => _ioPool.Invoke(ct => ExistsAsyncCore(path, ct))
+        => WithTransientRetry(() => _ioPool.Invoke(ct => ExistsAsyncCore(path, ct)), "Exists")
             .Catch<bool, Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return(false)
                 : Observable.Throw<bool>(ex));
@@ -523,7 +621,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// <inheritdoc />
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
-        => _ioPool.Invoke(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct))
+        => WithTransientRetry(() => _ioPool.Invoke(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct)), "FindBestPrefixMatch")
             .Catch<(MeshNode?, int), Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<(MeshNode?, int)>((null, 0))
                 : Observable.Throw<(MeshNode?, int)>(ex));
@@ -566,7 +664,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// </summary>
     public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
         string fullPath, JsonSerializerOptions options)
-        => _ioPool.Invoke(ct => ResolvePathAsyncCore(fullPath, options, ct))
+        => WithTransientRetry(() => _ioPool.Invoke(ct => ResolvePathAsyncCore(fullPath, options, ct)), "ResolvePath")
             .Catch<(MeshNode?, int), Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<(MeshNode?, int)>((null, 0))
                 : Observable.Throw<(MeshNode?, int)>(ex));
