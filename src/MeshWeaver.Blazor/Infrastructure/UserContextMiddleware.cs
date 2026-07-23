@@ -190,25 +190,29 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
     };
 
     /// <summary>
-    /// Posts a fire-and-forget <see cref="TrackActivityRequest"/> with
-    /// <see cref="ActivityType.Login"/> for the just-resolved user. Process-
-    /// level deduped (see <see cref="_loginDedup"/>) so a request burst from
-    /// a single user doesn't spam the activity grain. Exits silently on any
-    /// failure — auth must never depend on activity tracking.
+    /// Posts a <see cref="TrackActivityRequest"/> with <see cref="ActivityType.Login"/>
+    /// for the just-resolved user. Process-level deduped (see <see cref="_loginDedup"/>)
+    /// so a request burst from a single user doesn't spam the activity hub. The request
+    /// is handled on the dedicated activity-tracking hub (see
+    /// <c>ActivityTrackingHub</c> / <c>MeshNodeExtensions.HandleTrackActivity</c>), which
+    /// fully observes its own reactive pipeline and surfaces faults at Error — so this is
+    /// a plain message dispatch, not a swallowed fire-and-forget. Any synchronous fault
+    /// posting the request is logged at Warning (never swallowed) but must not break
+    /// authentication, which does not depend on activity tracking.
     /// </summary>
     private void TrackLogin(AccessContext userContext, IMessageHub hub)
     {
+        if (string.IsNullOrEmpty(userContext.ObjectId))
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        var last = _loginDedup.GetValueOrDefault(userContext.ObjectId, DateTimeOffset.MinValue);
+        if (now - last < LoginDedupWindow)
+            return;
+        _loginDedup[userContext.ObjectId] = now;
+
         try
         {
-            if (string.IsNullOrEmpty(userContext.ObjectId))
-                return;
-
-            var now = DateTimeOffset.UtcNow;
-            var last = _loginDedup.GetValueOrDefault(userContext.ObjectId, DateTimeOffset.MinValue);
-            if (now - last < LoginDedupWindow)
-                return;
-            _loginDedup[userContext.ObjectId] = now;
-
             hub.Post(new TrackActivityRequest(
                 NodePath: userContext.ObjectId,
                 UserId: userContext.ObjectId,
@@ -218,9 +222,13 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             )
             { ActivityType = ActivityType.Login });
         }
-        catch
+        catch (Exception ex)
         {
-            // Activity tracking is best-effort.
+            // Never swallow silently (feedback_no_bandaids): surface at Warning so a
+            // broken tracking-post is visible in Loki. Auth still proceeds — tracking
+            // is not on the authentication critical path.
+            logger.LogWarning(ex,
+                "TrackLogin: failed to post TrackActivityRequest for {ObjectId}", userContext.ObjectId);
         }
     }
 
