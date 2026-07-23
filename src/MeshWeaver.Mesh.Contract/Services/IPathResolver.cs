@@ -11,11 +11,16 @@ namespace MeshWeaver.Mesh.Services;
 /// <c>Doc/Architecture/AsynchronousCalls.md</c>).
 /// </para>
 ///
-/// <para>Implemented by <c>PathResolutionService</c>, which owns a
-/// <c>Replay(1).RefCount()</c> per path. Concurrent subscribers share the
-/// cached resolution stream; the matched <see cref="MeshNode"/> rides on
-/// <see cref="AddressResolution.Node"/> so the routing layer doesn't need a
-/// second <c>path:X</c> query.</para>
+/// <para>Implemented by <c>PathResolutionService</c>, which owns a POSITIVE-ONLY
+/// per-path VALUE cache (the resolved <see cref="AddressResolution"/>, invalidated
+/// by the mesh change feed): a warm entry replays synchronously via
+/// <c>Observable.Return</c>, and only a non-null result is stored — a null
+/// (not-found), errored, or never-emitting resolution caches nothing, so a query
+/// snapshot racing change-feed propagation right after CreateNode can't pin a stale
+/// 404 and a dropped-Initial query can't poison the path (it stalls only its own
+/// caller). The matched <see cref="MeshNode"/> rides on
+/// <see cref="AddressResolution.Node"/> so the routing layer doesn't need a second
+/// <c>path:X</c> query.</para>
 /// </summary>
 public interface IPathResolver
 {

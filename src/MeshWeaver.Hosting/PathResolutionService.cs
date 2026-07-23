@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Graph.Configuration;
@@ -36,16 +37,51 @@ namespace MeshWeaver.Hosting;
 ///     <c>AddMeshNodes</c> seed) — in-memory <c>StartsWith</c> filter.</item>
 /// </list></para>
 ///
-/// <para><b>No PathResolution-level cache.</b> <c>Query</c> is live;
-/// memoizing here either races change-feed propagation (stale-NULL after
-/// CreateNode, repro:
-/// <c>AddressResolutionTest.ResolvePath_ExactMatch_ReturnsNullRemainder</c>)
-/// or duplicates the provider-level caching that already exists. Each call
-/// triggers a fresh query — bounded cost, single round-trip on Postgres.
-/// No <c>MeshConfiguration.Nodes</c> scan, no <c>IStorageAdapter</c>
-/// reach-through, no partition-provider enumeration.</para>
+/// <para><b>Positive-only value cache per path.</b> Resolution runs per routed
+/// message (<c>RoutingServiceBase.RouteMessage</c>) and per Blazor navigation, so
+/// re-querying on every call was the dominant slide-switch latency.
+/// <see cref="ResolveSegments"/> memoizes each SUCCESSFUL resolution — the
+/// resolved <see cref="AddressResolution"/> VALUE, keyed by the joined segment
+/// path — in a <see cref="ConcurrentDictionary{TKey,TValue}"/>. A warm entry is
+/// returned as <c>Observable.Return(value)</c>, which emits SYNCHRONOUSLY on
+/// Subscribe (the contract the Blazor layer relies on to skip progress UI).</para>
+///
+/// <para><b>Cache the RESULT, not the in-flight query.</b> An earlier design cached
+/// the <c>Replay(1).AutoConnect(0)</c> observable itself and self-evicted only on
+/// <c>onNext(null)</c> / <c>onError</c>. That amplified a transient into a permanent
+/// hang: if the in-flight resolution query never emitted its Initial snapshot (the
+/// known subscribe-handshake "dropped Full" race, worse under bulk load), the cached
+/// observable NEVER emitted, errored, or completed — so the self-eviction never fired
+/// and every later resolution of that path replayed the same dead observable forever.
+/// A one-call, self-healing race became a permanent per-path stall (repro:
+/// <c>PathResolutionCacheTest.HungFirstQuery_DoesNotPoisonCache</c> — a downstream
+/// <c>mesh.Query(...).Take(1)</c> with no timeout, e.g. AI Export's subtree snapshot,
+/// then hangs its whole operation). Caching only the resolved VALUE fixes this at the
+/// root: a hung / errored / null resolution stores NOTHING, so it can never be served
+/// from cache — it can only ever stall its own caller, which recovers via that
+/// caller's existing timeout/retry exactly as before the cache existed. Concurrent
+/// first-callers for one path each run their own query (no in-flight sharing); that
+/// is a negligible cost — misses for the same path are rare — bought back by never
+/// being able to pin a non-terminating query.</para>
+///
+/// <para><b>Why positive-only</b>: a NULL resolution is NEVER stored. The previous
+/// <c>Replay(1).RefCount()</c> cache here was removed because caching a null (the
+/// query snapshot racing change-feed propagation right after CreateNode) pinned a
+/// permanent 404 (repro: <c>PathResolutionCacheTest.NullResolution_IsNotCached</c>).
+/// Only a non-null resolution is added to the map, so negatives are never served.</para>
+///
+/// <para><b>Invalidation</b>: the constructor subscribes the optional
+/// <see cref="IMeshChangeFeed"/> (the same post-commit broadcast
+/// <c>MeshNodeStreamCache</c> uses). Any <see cref="MeshChangeEvent"/> with path
+/// <c>P</c> — Created, Updated or Deleted — removes every entry whose key equals
+/// <c>P</c> or starts with <c>P + "/"</c>: Created(P) can deepen resolutions of
+/// P and its descendants; Deleted/Updated(P) invalidate anything resolving to or
+/// under P. Iterating the whole dictionary per event is fine — events are rare
+/// relative to resolutions. When no <see cref="IMeshChangeFeed"/> is registered
+/// (minimal test fixtures) the service does not cache at all and behaves exactly
+/// like the uncached implementation.</para>
 /// </summary>
-internal class PathResolutionService : IPathResolver
+internal class PathResolutionService : IPathResolver, IDisposable
 {
     private readonly IMessageHub _hub;
     private readonly IMeshQueryCore _queryCore;
@@ -53,6 +89,20 @@ internal class PathResolutionService : IPathResolver
     private readonly ILogger<PathResolutionService>? _logger;
     private readonly IReadOnlyList<IPartitionStorageProvider> _writablePartitionProviders;
     private readonly bool _hasWritablePartitionProvider;
+
+    /// <summary>
+    /// Positive-only value cache: joined segment path → the resolved
+    /// <see cref="AddressResolution"/> (never null). Non-null ONLY when an
+    /// <see cref="IMeshChangeFeed"/> is registered — without the invalidation
+    /// signal, caching would serve stale routes forever, so the service then
+    /// resolves uncached (exactly the pre-cache behaviour). Storing the VALUE (not
+    /// the in-flight observable) means a hung / errored / null resolution caches
+    /// nothing and so can never poison the path — see the class doc.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, AddressResolution>? _resolutionCache;
+
+    /// <summary>Change-feed invalidation subscription; disposed with the singleton.</summary>
+    private readonly IDisposable? _changeFeedSubscription;
 
     public PathResolutionService(
         IMessageHub hub,
@@ -64,6 +114,15 @@ internal class PathResolutionService : IPathResolver
         _queryCore = queryCore;
         _accessService = hub.ServiceProvider.GetService<AccessService>();
         _logger = logger;
+        // Optional service (same pattern as MeshNodeStreamCache): minimal test
+        // fixtures without the feed registration get NO cache — never a cache
+        // without its invalidation signal.
+        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+        if (changeFeed is not null)
+        {
+            _resolutionCache = new ConcurrentDictionary<string, AddressResolution>(StringComparer.Ordinal);
+            _changeFeedSubscription = changeFeed.Subscribe(OnMeshChange);
+        }
         // Gates the partition-root MeshNode synthesis below — we only fall back
         // to a placeholder when at least one writable provider could plausibly
         // own the partition (otherwise we'd activate grains for genuinely
@@ -140,7 +199,74 @@ internal class PathResolutionService : IPathResolver
             ? ResolveSegments(resolution.Remainder.Split('/'))
             : Observable.Return(resolution);
 
+    /// <summary>
+    /// Cache-fronted resolution. A warm entry returns the cached
+    /// <see cref="AddressResolution"/> VALUE via <c>Observable.Return</c> (emits
+    /// synchronously on Subscribe — the Blazor skip-progress contract). A miss runs
+    /// <see cref="ResolveSegmentsCore"/> and stores ONLY a non-null result, so a
+    /// null / errored / never-emitting query caches nothing and can never poison the
+    /// path (see the class doc). Without a registered <see cref="IMeshChangeFeed"/>
+    /// there is no cache and every call queries.
+    /// </summary>
     private IObservable<AddressResolution?> ResolveSegments(string[] segments)
+    {
+        if (_resolutionCache is null)
+            return ResolveSegmentsCore(segments);
+
+        var key = string.Join("/", segments);
+        if (_resolutionCache.TryGetValue(key, out var cached))
+            return Observable.Return<AddressResolution?>(cached);
+
+        return ResolveSegmentsCore(segments)
+            .Do(resolution =>
+            {
+                // Positive-only, value-cache: store ONLY a resolved result. A null
+                // (absent path) is never cached — a concurrent CreateNode may still
+                // be propagating — and a query that never emits or errors stores
+                // nothing at all, so it can only stall its own caller, never the
+                // whole path. The change feed invalidates positive entries on write.
+                if (resolution is not null)
+                    _resolutionCache.TryAdd(key, resolution);
+            });
+    }
+
+    /// <summary>
+    /// Change-feed invalidation: any Created/Updated/Deleted event with path
+    /// <c>P</c> removes every cached entry resolving to or under <c>P</c>
+    /// (<c>key == P</c> or <c>key.StartsWith(P + "/")</c>). Created(P) can DEEPEN
+    /// the resolution of P and of every descendant path (they previously resolved
+    /// to a shallower ancestor); Deleted/Updated(P) staleness anything that
+    /// resolved to or through P. Runs synchronously on the publisher's thread —
+    /// pure dictionary ops, no I/O, no hub post. Full-dictionary iteration is
+    /// deliberate: change events are rare relative to resolutions.
+    /// </summary>
+    private void OnMeshChange(MeshChangeEvent change)
+    {
+        if (_resolutionCache is null || string.IsNullOrEmpty(change.Path))
+            return;
+        var path = change.Path;
+        var childPrefix = path + "/";
+        foreach (var key in _resolutionCache.Keys)
+        {
+            if (string.Equals(key, path, StringComparison.Ordinal)
+                || key.StartsWith(childPrefix, StringComparison.Ordinal))
+                _resolutionCache.TryRemove(key, out _);
+        }
+    }
+
+    /// <summary>
+    /// Disposes the change-feed subscription. The service is a mesh singleton
+    /// (see <c>PersistenceExtensions.AddMeshCatalog</c>), so the DI container
+    /// disposes it with the mesh.
+    /// </summary>
+    public void Dispose() => _changeFeedSubscription?.Dispose();
+
+    /// <summary>
+    /// The uncached resolution query (the body <see cref="ResolveSegments"/>
+    /// memoizes). One live prefix query, first emission only — see the inline
+    /// notes below.
+    /// </summary>
+    private IObservable<AddressResolution?> ResolveSegmentsCore(string[] segments)
     {
         // Quote each prefix so segments containing SPACES survive the query parser.
         // Unquoted values terminate at the first whitespace (the parser's "space = AND"
