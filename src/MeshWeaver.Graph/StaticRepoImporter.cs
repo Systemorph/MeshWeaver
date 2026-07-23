@@ -405,14 +405,21 @@ public static class StaticRepoImporter
     /// wrapper), so callers pre-create any user-owned partition root under the user first, then call
     /// this for the content. Reactive — Subscribe to run.
     /// </summary>
+    /// <param name="changedNodePaths">Optional git-diff scope: when non-null, an EXISTING node whose
+    /// path is NOT in this set is treated as unchanged and its upsert is skipped — even when the
+    /// per-node manifest is missing/stale. Sourced from <c>git diff</c> between the last
+    /// SUCCESSFULLY-synced commit and the new head (see <c>GitHubSyncService.FetchAndImport</c>), so
+    /// a routine webhook push touches only the handful of nodes it actually changed instead of
+    /// re-materialising the whole partition (the memex-cloud recompile storm, 2026-07-23). Null =
+    /// full import (every node evaluated) — the safe fallback whenever the diff can't be computed.</param>
     public static IObservable<StaticRepoImportResult> ImportSource(
         IMessageHub meshHub, IStaticRepoSource source, ILogger? logger = null,
-        ImportConflictPolicy? policy = null)
+        ImportConflictPolicy? policy = null, IReadOnlySet<string>? changedNodePaths = null)
     {
         logger ??= meshHub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.StaticRepoImporter");
         var importHub = CreateImportHub(meshHub, logger);
-        return Import(importHub, source, logger, policy: policy);
+        return Import(importHub, source, logger, policy: policy, changedNodePaths: changedNodePaths);
     }
 
     /// <summary>
@@ -477,7 +484,8 @@ public static class StaticRepoImporter
     /// <returns>An observable that emits the import outcome for the partition.</returns>
     public static IObservable<StaticRepoImportResult> Import(
         IMessageHub hub, IStaticRepoSource source, ILogger? logger = null,
-        PartitionSyncMode? syncModeOverride = null, ImportConflictPolicy? policy = null)
+        PartitionSyncMode? syncModeOverride = null, ImportConflictPolicy? policy = null,
+        IReadOnlySet<string>? changedNodePaths = null)
     {
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.StaticRepoImporter");
@@ -579,7 +587,7 @@ public static class StaticRepoImporter
                         }
                     };
                     return Upsert(hub, activityNode)
-                        .SelectMany(_ => Run(hub, source, nodes, root, activityPath, fingerprint, syncMode, logger, policy))
+                        .SelectMany(_ => Run(hub, source, nodes, root, activityPath, fingerprint, syncMode, logger, policy, changedNodePaths))
                         .Catch<StaticRepoImportResult, Exception>(ex =>
                         {
                             logger?.LogWarning(ex,
@@ -645,7 +653,7 @@ public static class StaticRepoImporter
     private static IObservable<StaticRepoImportResult> Run(
         IMessageHub hub, IStaticRepoSource source, IReadOnlyList<MeshNode> nodes,
         MeshNode root, string activityPath, string fingerprint, PartitionSyncMode syncMode, ILogger? logger,
-        ImportConflictPolicy? policy = null)
+        ImportConflictPolicy? policy = null, IReadOnlySet<string>? changedNodePaths = null)
     {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         NodeTypeCompilationActivity.AppendLog(
@@ -753,6 +761,24 @@ public static class StaticRepoImporter
                         {
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: skip claimed {Path}", source.Partition, path);
+                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 0));
+                        }
+
+                        // 🅶 Git-diff scope: when the caller supplied the changed-path set (a webhook /
+                        // reimport that diffed the last-synced commit against the new head), an EXISTING
+                        // node NOT in that set was not touched by any commit since the last sync — skip it
+                        // WITHOUT computing its token or re-upserting. This survives a missing/stale
+                        // manifest (the failure that made every webhook re-materialise the whole partition
+                        // → mass recompile storm, memex-cloud 2026-07-23): git, not a mesh write that can
+                        // fail under load, is the authority on "what changed". A node ABSENT from the DB is
+                        // NOT skipped even if outside the diff (first materialisation / self-heal safety),
+                        // and prune still runs over the full source set, so deletes are unaffected.
+                        if (changedNodePaths is not null && target is not null
+                            && !changedNodePaths.Contains(path))
+                        {
+                            logger?.LogDebug(
+                                "[StaticRepoImport] {Partition}: outside git-diff scope, skipping {Path}",
+                                source.Partition, path);
                             return Observable.Return((Imported: 0, Failed: 0, Preserved: 0));
                         }
 
