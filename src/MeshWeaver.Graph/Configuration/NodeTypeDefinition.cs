@@ -43,6 +43,17 @@ public record NodeTypeDefinition
     public string? Description { get; init; }
 
     /// <summary>
+    /// Optional authored markdown home page for a PARTITION-ROOT node whose content is this
+    /// NodeTypeDefinition (a plugin-package Space root — e.g. UWDeepfield, whose root's content
+    /// IS the partition-level compile config and therefore cannot be a <see cref="Space"/>).
+    /// The Space Overview renders it exactly like <c>Space.Body</c> (recovered in
+    /// <c>SpaceLayoutAreas.ResolveSpace</c>'s foreign-typed probe). Declared as a first-class
+    /// member so typed round-trips and compile write-backs (<c>with</c>-expressions on this
+    /// record) PRESERVE the authored page instead of silently dropping an unknown JSON member.
+    /// </summary>
+    public string? Body { get; init; }
+
+    /// <summary>
     /// Default values for initializing new instances of this type.
     /// Keys are property names, values are default values.
     /// </summary>
