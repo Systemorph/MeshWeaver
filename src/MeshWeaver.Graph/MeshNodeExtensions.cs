@@ -237,7 +237,20 @@ public static class MeshNodeExtensions
         // below (FoldOntoLive), so the query's eventual consistency only ever decides
         // create-vs-update — never the AccessCount. The create-vs-update race is coalesced by
         // the CreateNode catch below, which folds the increment in via stream.Update.
-        var pipeline = workspace
+        // 🚨 Build (and subscribe) the whole read+write pipeline UNDER the caller's identity.
+        // WrapWithPerUserRls (SyncedQueryDataSourceExtensions) captures AccessService.Context
+        // EAGERLY at the GetQuery(...) call — on the workspace's hub (the tracking hub) — so the
+        // per-user RLS filter must see the caller's identity AT THAT CALL, not only at the write's
+        // subscribe. Observable.Using acquires Impersonate() BEFORE invoking the factory, so
+        // GetQuery is called with the caller's context established on the tracking hub's
+        // AccessService (fail-closed when callerCtx is null: no context ⇒ empty userId ⇒ the RLS
+        // wrap yields no rows for the exact-path existence probe, and the subsequent write posts
+        // context-null and is rejected by PostPipeline). The inner per-write Observable.Using
+        // (Impersonate) still re-establish the identity on each write's own emission thread —
+        // AsyncLocal does not flow across Rx scheduler hops, so the outer scope alone is not enough.
+        var pipeline = Observable.Using(
+            Impersonate,
+            _ => workspace
             .GetQuery($"UserActivity|{activityPath}", $"path:{activityPath} nodeType:UserActivity")
             .Take(1)
             .Select(nodes => nodes.FirstOrDefault(n =>
@@ -345,7 +358,7 @@ public static class MeshNodeExtensions
                         ? Observable.Using(Impersonate, _ => storage.Write(saveNode, jsonOptions))
                         : Observable.Empty<MeshNode>();
                 });
-            });
+            }));
 
         // No fire-and-forget: the pipeline is fully observed and faults surface at Error.
         pipeline.Subscribe(
