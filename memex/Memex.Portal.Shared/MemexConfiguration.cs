@@ -1166,9 +1166,45 @@ public static class MemexConfiguration
             .AddMeshViews()
             .AddInteractiveServerRenderMode();
 
+        // Deploy-timing lifecycle markers, measurable in Loki (grep "PortalReady" /
+        // "PortalShutdown"). A dedicated Information-level category (the same surfaced-channel
+        // pattern as MeshWeaver.Blazor.Circuit) — the general Memex.* namespace stays at Warning
+        // in prod, so these lines must NOT ride on the class logger or they never reach stdout.
+        var lifecycleLogger = app.Services.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("Memex.Portal.Lifecycle");
+        var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
+        var shutdownWatch = new System.Diagnostics.Stopwatch();
+        lifetime.ApplicationStarted.Register(() =>
+        {
+            // PID 1 in the container ⇒ process start ≈ container start; TickCount64 would be
+            // time-since-OS-boot, which is wrong here.
+#pragma warning disable CA1416
+            var elapsed = DateTime.UtcNow
+                          - System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime();
+            lifecycleLogger.LogInformation(
+                "PortalReady in {ElapsedMs} ms (PID {PID})",
+                (long)elapsed.TotalMilliseconds, Environment.ProcessId);
+#pragma warning restore CA1416
+        });
+#pragma warning disable CA1416
+        lifetime.ApplicationStopping.Register(() =>
+        {
+            shutdownWatch.Restart();
+            // This line IS the SIGTERM timestamp in Loki — the shutdown window opens here.
+            lifecycleLogger.LogInformation("PortalShutdown starting (PID {PID})", Environment.ProcessId);
+        });
+        lifetime.ApplicationStopped.Register(() =>
+            // Registered callback, not code after Run(): the console logger still flushes here.
+            // Its ABSENCE in Loki for a pod means the kubelet SIGKILLed mid-drain (grace too low).
+            lifecycleLogger.LogInformation(
+                "PortalShutdown complete in {ElapsedMs} ms (PID {PID})",
+                shutdownWatch.ElapsedMilliseconds, Environment.ProcessId));
+#pragma warning restore CA1416
+
         app.Run();
 #pragma warning disable CA1416
-        logger.LogInformation("Started Memex portal on PID: {PID}", Environment.ProcessId);
+        // After Run() returns the host has already stopped — this is an EXIT marker, not a start.
+        logger.LogInformation("Memex portal exited (PID {PID})", Environment.ProcessId);
 #pragma warning restore CA1416
     }
 

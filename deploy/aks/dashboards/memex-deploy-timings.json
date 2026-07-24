@@ -1,0 +1,82 @@
+{
+  "dashboard": {
+    "uid": "memex-deploy-timings",
+    "title": "Memex Deploy Timings",
+    "tags": ["memex", "deploy"],
+    "schemaVersion": 39,
+    "refresh": "30s",
+    "time": { "from": "now-3h", "to": "now" },
+    "templating": {
+      "list": [
+        { "type": "query", "name": "namespace", "label": "Namespace", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "query": "label_values(namespace)", "refresh": 2, "sort": 1, "includeAll": false, "multi": false, "current": { "text": "memex-cloud", "value": "memex-cloud" }, "options": [] }
+      ]
+    },
+    "panels": [
+      {
+        "type": "timeseries",
+        "title": "PortalReady (ms) per pod",
+        "description": "Time from process start to PortalReady, per portal pod. Each point is the max PortalReady duration logged in the interval.",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+        "fieldConfig": { "defaults": { "custom": { "drawStyle": "points", "pointSize": 8, "fillOpacity": 0 }, "unit": "ms" }, "overrides": [] },
+        "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "max by (pod) (max_over_time({namespace=\"$namespace\", pod=~\"memex-portal-deployment-.*\"} |= \"PortalReady\" | regexp \"in (?P<elapsed_ms>[0-9]+) ms\" | unwrap elapsed_ms [$__auto]))", "legendFormat": "{{pod}}", "queryType": "range" }]
+      },
+      {
+        "type": "timeseries",
+        "title": "PortalShutdown (ms) per pod",
+        "description": "Time for graceful shutdown (PortalShutdown complete), per portal pod.",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+        "fieldConfig": { "defaults": { "custom": { "drawStyle": "points", "pointSize": 8, "fillOpacity": 0 }, "unit": "ms" }, "overrides": [] },
+        "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "max by (pod) (max_over_time({namespace=\"$namespace\", pod=~\"memex-portal-deployment-.*\"} |= \"PortalShutdown complete\" | regexp \"in (?P<elapsed_ms>[0-9]+) ms\" | unwrap elapsed_ms [$__auto]))", "legendFormat": "{{pod}}", "queryType": "range" }]
+      },
+      {
+        "type": "timeseries",
+        "title": "Circuit churn",
+        "description": "Blazor circuit connections dropped (DOWN) and opened per minute. A spike of DOWN followed by opened is the user-visible cost of a rollout.",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+        "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+        "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 70 }, "unit": "short" }, "overrides": [{ "matcher": { "id": "byName", "options": "circuits down" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }, { "matcher": { "id": "byName", "options": "circuits opened" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }] },
+        "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+        "targets": [
+          { "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"$namespace\"} |= \"Circuit connection DOWN\" [1m]))", "legendFormat": "circuits down", "queryType": "range" },
+          { "refId": "B", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"$namespace\"} |= \"Circuit opened\" [1m]))", "legendFormat": "circuits opened", "queryType": "range" }
+        ]
+      },
+      {
+        "type": "timeseries",
+        "title": "Errors (fail/crit) rate",
+        "description": "fail/crit log lines per minute across the namespace. Should stay flat through a rollout.",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+        "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+        "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 70 }, "unit": "short", "color": { "mode": "fixed", "fixedColor": "red" } }, "overrides": [] },
+        "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"$namespace\"} |~ \"^(fail|crit):\" [1m]))", "legendFormat": "errors/min", "queryType": "range" }]
+      },
+      {
+        "type": "timeseries",
+        "title": "Per-pod log activity (rollout overlap)",
+        "description": "Log lines per 30s for each portal pod. During a rollout the old and new pods' series must OVERLAP — both pods logging at the same time means zero-downtime handover. A gap between the old pod's series ending and the new pod's series starting = downtime.",
+        "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+        "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+        "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 25 }, "unit": "short" }, "overrides": [] },
+        "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum by (pod) (count_over_time({namespace=\"$namespace\", pod=~\"memex-portal-deployment-.*\"} [30s]))", "legendFormat": "{{pod}}", "queryType": "range" }]
+      },
+      {
+        "type": "logs",
+        "title": "Lifecycle log lines",
+        "description": "Raw startup/shutdown lifecycle events from the portal pods.",
+        "gridPos": { "h": 10, "w": 24, "x": 0, "y": 24 },
+        "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+        "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none", "prettifyLogMessage": false },
+        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "{namespace=\"$namespace\", pod=~\"memex-portal-deployment-.*\"} |~ \"PortalReady|PortalShutdown|Now listening on|Application started|Application is shutting down|startup complete\"", "queryType": "range" }]
+      }
+    ]
+  },
+  "overwrite": true,
+  "folderId": 0,
+  "message": "Provisioned by Claude Code"
+}

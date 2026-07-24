@@ -11,6 +11,12 @@ metadata:
     nginx.ingress.kubernetes.io/session-cookie-name: "MEMEXCLOUD_AFFINITY"
     nginx.ingress.kubernetes.io/session-cookie-max-age: "172800"
     nginx.ingress.kubernetes.io/session-cookie-samesite: "Lax"
+    # Rollout resilience: re-pin the affinity cookie when the pinned pod goes away (without this,
+    # persistent affinity keeps routing to the draining/terminated pod), and retry the surviving
+    # upstream on the cutover instant instead of surfacing a 502 to the browser.
+    nginx.ingress.kubernetes.io/session-cookie-change-on-failure: "true"
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "error timeout http_502"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-tries: "3"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"

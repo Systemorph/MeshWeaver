@@ -8,6 +8,7 @@
     "time": { "from": "now-3h", "to": "now" },
     "templating": {
       "list": [
+        { "type": "query", "name": "namespace", "label": "Namespace", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "query": "label_values(namespace)", "refresh": 2, "sort": 1, "includeAll": false, "multi": false, "current": { "text": "memex-cloud", "value": "memex-cloud" }, "options": [] },
         { "type": "textbox", "name": "filter", "label": "Text filter (regex)", "query": "", "current": { "text": "", "value": "" } }
       ]
     },
@@ -20,9 +21,9 @@
         "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 70, "stacking": { "mode": "normal" } }, "unit": "short" }, "overrides": [{ "matcher": { "id": "byName", "options": "errors" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }, { "matcher": { "id": "byName", "options": "warnings" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }] }, { "matcher": { "id": "byName", "options": "info" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }] },
         "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
         "targets": [
-          { "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"memex\"} |~ `^info:` [$__auto]))", "legendFormat": "info", "queryType": "range" },
-          { "refId": "B", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"memex\"} |~ `^warn:` [$__auto]))", "legendFormat": "warnings", "queryType": "range" },
-          { "refId": "C", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"memex\"} |~ `^(fail|crit):` [$__auto]))", "legendFormat": "errors", "queryType": "range" }
+          { "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"$namespace\"} |~ `^info:` [$__auto]))", "legendFormat": "info", "queryType": "range" },
+          { "refId": "B", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"$namespace\"} |~ `^warn:` [$__auto]))", "legendFormat": "warnings", "queryType": "range" },
+          { "refId": "C", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"$namespace\"} |~ `^(fail|crit):` [$__auto]))", "legendFormat": "errors", "queryType": "range" }
         ]
       },
       {
@@ -32,7 +33,7 @@
         "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
         "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "blue", "value": null }] }, "unit": "short" }, "overrides": [] },
         "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto" },
-        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"memex\"} |~ `^(info|warn|fail|crit|dbug|trce):` [$__range]))", "queryType": "instant" }]
+        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"$namespace\"} |~ `^(info|warn|fail|crit|dbug|trce):` [$__range]))", "queryType": "instant" }]
       },
       {
         "type": "stat",
@@ -41,7 +42,7 @@
         "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
         "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }, "unit": "short" }, "overrides": [] },
         "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "area", "textMode": "auto" },
-        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"memex\"} |~ `^(fail|crit):` [$__range]))", "queryType": "instant" }]
+        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"$namespace\"} |~ `^(fail|crit):` [$__range]))", "queryType": "instant" }]
       },
       {
         "type": "table",
@@ -50,7 +51,7 @@
         "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
         "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [] },
         "options": { "showHeader": true, "sortBy": [{ "displayName": "Count", "desc": true }] },
-        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "topk(20, sum by (category) (count_over_time({namespace=\"memex\"} |~ `^(warn|fail|crit):` | regexp `^\\w{4}: (?P<category>[A-Za-z0-9_.]+)` [$__range])))", "queryType": "instant" }],
+        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "topk(20, sum by (category) (count_over_time({namespace=\"$namespace\"} |~ `^(warn|fail|crit):` | regexp `^\\w{4}: (?P<category>[A-Za-z0-9_.]+)` [$__range])))", "queryType": "instant" }],
         "transformations": [
           { "id": "labelsToFields", "options": {} },
           { "id": "organize", "options": { "excludeByName": { "Time": true }, "renameByName": { "category": "Category", "Value": "Count" } } }
@@ -62,7 +63,7 @@
         "gridPos": { "h": 11, "w": 24, "x": 0, "y": 17 },
         "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
         "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none", "prettifyLogMessage": false },
-        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "{namespace=\"memex\"} |~ `(?i)${filter:raw}`", "queryType": "range" }]
+        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "{namespace=\"$namespace\"} |~ `(?i)${filter:raw}`", "queryType": "range" }]
       }
     ]
   },
