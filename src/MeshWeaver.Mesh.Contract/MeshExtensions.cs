@@ -3,6 +3,7 @@ using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -1940,6 +1941,11 @@ public static class MeshExtensions
                     DispatchInnerCreate();
                     return;
                 }
+                if (IsNoOpUpsert(existing, node, hub.JsonSerializerOptions))
+                {
+                    SkipNoOpIfAuthorized(existing);
+                    return;
+                }
                 ApplyUpdateViaStream(existing);
             },
             ex =>
@@ -1994,6 +2000,50 @@ public static class MeshExtensions
                             "[CreateOrUpdate] inner CreateNode faulted for {Path}", node.Path);
                         PostFail($"Inner CreateNode faulted: {ex.Message}",
                             NodeUpsertRejectionReason.Unknown);
+                    });
+        }
+
+        // 🚨 THE NO-OP UPSERT GUARD — the owner-side churn breaker. An upsert whose applied fields
+        // are IDENTICAL to the persisted state must not reach the owner: the stream write
+        // unconditionally re-stamps LastModified and mints a fresh Version, which re-broadcasts the
+        // node to every subscriber (the deploy screen-flicker), appends a version-history row, and
+        // for NodeType/Code nodes can flip IsDirty into a pointless recompile + hub recycle. A full
+        // re-sync of unchanged content (a GitSync re-import whose _Activity manifest was lost, a
+        // plugin re-install without a manifest) hits this for EVERY node. Acknowledge with the
+        // persisted state instead — but only for a caller who could have written anyway
+        // (SkipNoOpIfAuthorized): success-without-write must never become a permission bypass or a
+        // content-confirmation oracle for callers the owner would have refused.
+        void SkipNoOpIfAuthorized(MeshNode existing)
+        {
+            (string.IsNullOrEmpty(requestedBy)
+                    ? Observable.Return(false)
+                    : hub.GetEffectivePermissions(node.Path, requestedBy!)
+                        .Take(1)
+                        .Timeout(NodeOpForwardTimeout)
+                        .Select(p => p.HasFlag(Permission.Update) || p.HasFlag(Permission.Sync))
+                        .Catch((Exception _) => Observable.Return(false)))
+                .Subscribe(
+                    authorized =>
+                    {
+                        if (authorized)
+                        {
+                            logger.LogDebug(
+                                "[CreateOrUpdate] no-op upsert for {Path}: identical to persisted state; skipped",
+                                node.Path);
+                            PostOk(existing, isCreate: false,
+                                $"Node at '{node.Path}' unchanged — no-op upsert skipped");
+                        }
+                        else
+                            // Not (provably) authorized → the normal owner path stays the single
+                            // authority on allow/deny; it will refuse exactly as before.
+                            ApplyUpdateViaStream(existing);
+                    },
+                    ex =>
+                    {
+                        logger.LogDebug(ex,
+                            "[CreateOrUpdate] no-op permission probe failed for {Path}; taking the write path",
+                            node.Path);
+                        ApplyUpdateViaStream(existing);
                     });
         }
 
@@ -2074,6 +2124,50 @@ public static class MeshExtensions
             NodeCreationRejectionReason.ValidationFailed => NodeUpsertRejectionReason.ValidationFailed,
             _ => NodeUpsertRejectionReason.Unknown,
         };
+    }
+
+    /// <summary>
+    /// True when applying <paramref name="sourceNode"/> onto <paramref name="existing"/> via
+    /// <see cref="UpdateAccordingToSourceNode"/> would change nothing but the churn stamps
+    /// (LastModified/Version) — the write can then be skipped entirely. MUST mirror that merge
+    /// field-for-field (same null-keeps-state convention); a field added there without a compare
+    /// here would silently stop landing on unchanged-otherwise nodes. Content compares
+    /// structurally through the hub's serializer (bridging typed content against the persisted
+    /// <see cref="JsonElement"/> representation); any doubt — a serialization failure, a mixed
+    /// shape — reports "changed", which merely takes today's write path. Conservative by
+    /// construction: it can only ever under-skip, never over-skip.
+    /// </summary>
+    private static bool IsNoOpUpsert(MeshNode existing, MeshNode sourceNode, JsonSerializerOptions options)
+    {
+        if ((sourceNode.Name ?? existing.Name) != existing.Name
+            || (sourceNode.NodeType ?? existing.NodeType) != existing.NodeType
+            || (sourceNode.Icon ?? existing.Icon) != existing.Icon
+            || (sourceNode.Category ?? existing.Category) != existing.Category
+            || (sourceNode.Description ?? existing.Description) != existing.Description
+            || (sourceNode.Order ?? existing.Order) != existing.Order
+            || (sourceNode.State == default ? existing.State : sourceNode.State) != existing.State
+            || (sourceNode.PreRenderedHtml ?? existing.PreRenderedHtml) != existing.PreRenderedHtml)
+            return false;
+        var excludeApplied = sourceNode.ExcludeFromContext ?? existing.ExcludeFromContext;
+        if (!ReferenceEquals(excludeApplied, existing.ExcludeFromContext)
+            && (excludeApplied is null || existing.ExcludeFromContext is null
+                || !excludeApplied.SequenceEqual(existing.ExcludeFromContext)))
+            return false;
+        var contentApplied = sourceNode.Content ?? existing.Content;
+        if (ReferenceEquals(contentApplied, existing.Content))
+            return true;
+        if (existing.Content is null)
+            return false;
+        try
+        {
+            return JsonElement.DeepEquals(
+                JsonSerializer.SerializeToElement(contentApplied, options),
+                JsonSerializer.SerializeToElement(existing.Content, options));
+        }
+        catch (Exception)
+        {
+            return false; // unserializable content → the write path decides, exactly as before
+        }
     }
 
     /// <summary>
