@@ -123,6 +123,16 @@ public class ActivityTrackingHubTest(ITestOutputHelper output) : MonolithMeshTes
             "the handler originates the write from the dedicated tracking hub, not the caller");
         node!.Path.Should().Be($"{user}/_UserActivity/{nodePath.Replace("/", "_")}");
         node.NodeType.Should().Be("UserActivity");
+
+        // 🚨 The write ran under the CALLER's identity, not system/empty. The handler builds
+        // the read (GetQuery, whose per-user RLS captures AccessService.Context eagerly at the
+        // call) AND every write under Observable.Using(Impersonate), which re-establishes the
+        // caller's context on the tracking + root AccessServices. CreateNode stamps CreatedBy
+        // from that context — so a null/system context (the pre-fix RLS-capture bug) would show
+        // up here as an empty/"system-security" CreatedBy.
+        node.CreatedBy.Should().Be(user,
+            "the tracking read+write must run under the caller's identity (Impersonate is in effect " +
+            "when GetQuery's RLS captures context and when the create stamps CreatedBy) — never system/empty");
     }
 
     private async Task OnboardPartitionRoot(string user)

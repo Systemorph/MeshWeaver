@@ -1,4 +1,3 @@
-using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
