@@ -188,8 +188,13 @@ public static class CatalogLayoutAreas
         card = card.WithView(Controls.Body($"v{pkg.Version}  ·  {pkg.Kind}  ·  → {pkg.TargetPartition}")
             .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; display: block; margin-bottom: 10px;"));
 
+        // ModuleVersion (the module's OWN content hash from manifest.lock) beats the whole-repo
+        // commit sha: an unrelated commit no longer flips every card to "Update". The commit-sha
+        // compare stays the fallback for manifest-less packages.
         var upToDate = installed is not null
-            && string.Equals(installed.Version, pkg.Version, StringComparison.Ordinal);
+            && (!string.IsNullOrEmpty(pkg.ModuleVersion) && !string.IsNullOrEmpty(installed.ModuleVersion)
+                ? string.Equals(installed.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal)
+                : string.Equals(installed.Version, pkg.Version, StringComparison.Ordinal));
 
         if (upToDate)
         {
@@ -223,16 +228,114 @@ public static class CatalogLayoutAreas
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var user = accessService?.Context;
 
-        source.FetchPackageFiles(pkg, sourceRef)
-            .SelectMany(files => accessService is null
-                ? PackageInstaller.Install(host.Hub, pkg, files, sourceRef, logger)
-                : Observable.Using(
-                    () => accessService.SwitchAccessContext(user),
-                    _ => PackageInstaller.Install(host.Hub, pkg, files, sourceRef, logger)))
+        var install = InstallOrUpdate(host.Hub, source, sourceRef, pkg, logger);
+        (accessService is null
+                ? install
+                : Observable.Using(() => accessService.SwitchAccessContext(user), _ => install))
             .Subscribe(
                 result => logger?.LogInformation("Installed {Id}: {Written} written, {Unchanged} unchanged.",
                     pkg.Id, result.Written, result.Unchanged),
                 ex => logger?.LogWarning(ex, "Install of {Id} failed.", pkg.Id));
+    }
+
+    /// <summary>
+    /// The install/update orchestrator. For a manifest-carrying node-repo package it skips or
+    /// narrows the work by the module manifest: an installed record with the SAME
+    /// <see cref="PackageManifest.ModuleVersion"/> means nothing to sync (no fetch, no record
+    /// rewrite); a differing one fetches only <c>manifest.lock</c>, diffs it against the record's
+    /// installed-files baseline and updates just the changed nodes (pruning removed ones). Every
+    /// other case — no manifest, no baseline, a shared-Source change (whose blast radius is every
+    /// type in the package), or ANY error on the incremental path — falls back to the legacy full
+    /// install, which is always correct.
+    /// </summary>
+    internal static IObservable<InstallResult> InstallOrUpdate(
+        IMessageHub hub, IPackageSource source, string sourceRef, PackageManifest pkg, ILogger? logger)
+    {
+        IObservable<InstallResult> Full() =>
+            source.FetchPackageFiles(pkg, sourceRef)
+                .SelectMany(files => PackageInstaller.Install(hub, pkg, files, sourceRef, logger));
+
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (pkg.Kind != PackageKind.NodeRepo || string.IsNullOrEmpty(pkg.ModuleVersion) || persistence is null)
+            return Full();
+
+        // The authoritative install record (the same read UpsertIfChanged uses) — the diff baseline.
+        return persistence.Read($"{PackageInstaller.InstalledPartition}/{pkg.Id}", hub.JsonSerializerOptions)
+            .Take(1)
+            .Select(n => n?.ContentAs<PackageManifest>(hub.JsonSerializerOptions))
+            .Catch<PackageManifest?, Exception>(_ => Observable.Return<PackageManifest?>(null))
+            .SelectMany(record =>
+            {
+                if (record is not null
+                    && string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
+                {
+                    logger?.LogInformation(
+                        "Package {Id} is up to date (module {ModuleVersion}); nothing to sync.",
+                        pkg.Id, pkg.ModuleVersion);
+                    return Observable.Return(new InstallResult(0, 0));
+                }
+                if (record?.InstalledFiles is not { Count: > 0 })
+                    return Full();
+                return IncrementalUpdate(hub, source, sourceRef, pkg, record, logger)
+                    .Catch<InstallResult, Exception>(ex =>
+                    {
+                        logger?.LogWarning(ex,
+                            "Incremental update of {Id} failed; falling back to full install.", pkg.Id);
+                        return Full();
+                    });
+            });
+    }
+
+    // The manifest-diff fast path: fetch only manifest.lock, diff, fetch only the changed files.
+    private static IObservable<InstallResult> IncrementalUpdate(
+        IMessageHub hub, IPackageSource source, string sourceRef, PackageManifest pkg,
+        PackageManifest record, ILogger? logger)
+    {
+        var manifestPath = $"{pkg.Id}/{ModuleManifest.FileName}";
+        return source.FetchPackageFiles(pkg, sourceRef, [manifestPath])
+            .SelectMany(files =>
+            {
+                var newManifest = files
+                    .Where(f => ModuleManifest.IsManifestPath(f.RelativePath))
+                    .Select(f => ModuleManifest.TryParse(f.Content, logger))
+                    .FirstOrDefault(m => m is not null);
+                if (newManifest is null)
+                    throw new InvalidOperationException(
+                        $"Package '{pkg.Id}' ships no parseable {ModuleManifest.FileName}.");
+
+                var delta = newManifest.DiffFrom(record.InstalledFiles);
+
+                // A change to the package's SHARED Source/Test (partition-level compile inputs)
+                // affects every type in the package — the full install's release-all handles that;
+                // the delta's owner-derivation would miss siblings.
+                var sharedPrefixes = new[] { $"{pkg.Id}/Source/", $"{pkg.Id}/Test/" };
+                if (delta.AddedOrChangedFiles.Concat(delta.RemovedFiles)
+                    .Any(p => sharedPrefixes.Any(s => p.StartsWith(s, StringComparison.Ordinal))))
+                    throw new InvalidOperationException(
+                        $"Package '{pkg.Id}' changed shared Source/Test files; full install required.");
+
+                var changedNodePaths = delta.AddedOrChangedFiles
+                    .Select(PackageInstaller.NodePathForFile)
+                    .Where(p => p is not null).Select(p => p!)
+                    .ToHashSet(StringComparer.Ordinal);
+                // Removed FILES prune their nodes — unless the node is still fed by a changed file
+                // (the `X.json` → `X/index.json` layout move maps both to node X).
+                var removedNodePaths = delta.RemovedFiles
+                    .Select(PackageInstaller.NodePathForFile)
+                    .Where(p => p is not null && !changedNodePaths.Contains(p))
+                    .Select(p => p!)
+                    .ToHashSet(StringComparer.Ordinal);
+
+                logger?.LogInformation(
+                    "Updating {Id} incrementally: {Changed} changed file(s), {Removed} removed → module {ModuleVersion}.",
+                    pkg.Id, delta.AddedOrChangedFiles.Count, delta.RemovedFiles.Count, newManifest.ModuleVersion);
+
+                return (delta.AddedOrChangedFiles.Count == 0
+                        ? Observable.Return((IReadOnlyList<PackageFile>)[])
+                        : source.FetchPackageFiles(pkg, sourceRef, delta.AddedOrChangedFiles))
+                    .SelectMany(changedFiles => PackageInstaller.InstallNodeRepoDelta(
+                        hub, pkg, newManifest, changedFiles, removedNodePaths, sourceRef, logger));
+            });
     }
 
     private static ILogger? Logger(LayoutAreaHost host) =>

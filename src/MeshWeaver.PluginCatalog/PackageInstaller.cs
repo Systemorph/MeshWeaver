@@ -137,7 +137,8 @@ public static class PackageInstaller
     }
 
     private static IObservable<MeshNode> WriteInstalledRecord(
-        IMessageHub hub, PackageManifest manifest, string installedFromRef, int count)
+        IMessageHub hub, PackageManifest manifest, string installedFromRef, int count,
+        ModuleManifest? moduleManifest = null)
     {
         var record = MeshNode.FromPath($"{InstalledPartition}/{manifest.Id}") with
         {
@@ -149,6 +150,10 @@ public static class PackageInstaller
                 InstalledFromRef = installedFromRef,
                 InstalledAtUtc = DateTimeOffset.UtcNow,
                 InstalledNodeCount = count,
+                // The manifest baseline the NEXT update diffs against (null when the package ships
+                // no manifest.lock — the legacy full path stays in charge then).
+                ModuleVersion = moduleManifest?.ModuleVersion ?? manifest.ModuleVersion,
+                InstalledFiles = moduleManifest?.Files ?? manifest.InstalledFiles,
             },
         };
         // System-impersonated like every installer write (Using — see Upsert): this runs after
@@ -303,6 +308,12 @@ public static class PackageInstaller
     {
         _ = batchSize; // node-repo installs are ordered (Concat), not fanned out
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
+        // The CI manifest sidecar (when the package ships one) becomes the install record's diff
+        // baseline — the next update touches only what its manifest diff names.
+        var moduleManifest = files
+            .Where(f => ModuleManifest.IsManifestPath(f.RelativePath))
+            .Select(f => ModuleManifest.TryParse(f.Content, logger))
+            .FirstOrDefault(m => m is not null);
         var nodes = files
             .Select(f => ParseCanonical(parsers, f, logger))
             .Where(n => n is not null).Select(n => n!)
@@ -455,8 +466,151 @@ public static class PackageInstaller
                             hub.RequestNodeTypeRelease(path,
                                 onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
                 }
-                return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length).Select(_ => result);
+                return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length, moduleManifest)
+                    .Select(_ => result);
             });
+    }
+
+    /// <summary>
+    /// Applies a MANIFEST-DIFF update to an already-installed node-repo plugin: upserts only the
+    /// <paramref name="changedFiles"/> (same landing order and unchanged-skip as the full install),
+    /// prunes the <paramref name="removedNodePaths"/> (derived from the diff's removed files,
+    /// restricted by the caller to previously-installed paths), requests a recompile only for the
+    /// NodeTypes actually affected, and re-stamps the install record with
+    /// <paramref name="newManifest"/> as the next diff baseline. A delta presupposes a prior
+    /// install, so no fresh-mesh placeholder dance — the root and existing types are already
+    /// present; a visibility barrier still guards instances of a type ADDED by this very delta.
+    /// </summary>
+    public static IObservable<InstallResult> InstallNodeRepoDelta(
+        IMessageHub hub,
+        PackageManifest manifest,
+        ModuleManifest newManifest,
+        IReadOnlyList<PackageFile> changedFiles,
+        IReadOnlyCollection<string> removedNodePaths,
+        string installedFromRef,
+        ILogger? logger = null)
+    {
+        logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.PluginCatalog.PackageInstaller");
+
+        var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
+        var nodes = changedFiles
+            .Select(f => ParseCanonical(parsers, f, logger))
+            .Where(n => n is not null).Select(n => n!)
+            .ToArray();
+
+        var options = hub.JsonSerializerOptions;
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        var nodeTypePaths = nodes.Where(n => n.Content is NodeTypeDefinition).Select(n => n.Path).ToArray();
+
+        // Same landing order as the full install: a changed type's compile inputs before the type,
+        // types before instances, satellites last.
+        int Order(MeshNode n)
+        {
+            if (n.Path.Split('/').Any(seg => seg.StartsWith('_')))
+                return 4;
+            if (n.Content is NodeTypeDefinition)
+                return 1;
+            if (OwningTypePath(n.Path) is not null)
+                return 0;
+            return 3;
+        }
+
+        var head = nodes.Where(n => Order(n) <= 1).OrderBy(Order).ToArray();
+        var tail = nodes.Where(n => Order(n) >= 2).OrderBy(Order).ToArray();
+
+        IObservable<System.Reactive.Unit> TypesVisible() =>
+            persistence is null || nodeTypePaths.Length == 0
+                ? Observable.Return(System.Reactive.Unit.Default)
+                : nodeTypePaths.Select(path => Observable
+                        .Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+                        .SelectMany(_ => persistence.Exists(path))
+                        .Where(exists => exists)
+                        .FirstAsync()
+                        .Timeout(TimeSpan.FromSeconds(30)))
+                    .ToObservable().Concat().LastAsync().Select(_ => System.Reactive.Unit.Default);
+
+        IObservable<IList<bool>> WriteAll(IReadOnlyList<MeshNode> batch) =>
+            batch.Count == 0
+                ? Observable.Return((IList<bool>)new List<bool>())
+                : batch.Select(n => UpsertIfChanged(hub, persistence, n, options))
+                    .ToObservable().Concat().ToList();
+
+        // Prune the removed nodes — System-impersonated per delete, like every installer write.
+        // A failed/absent delete degrades to a log line, never fails the update.
+        IObservable<int> Prune() =>
+            meshService is null || removedNodePaths.Count == 0
+                ? Observable.Return(0)
+                : removedNodePaths
+                    .Select(path => Observable.Using(
+                            () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
+                                  ?? System.Reactive.Disposables.Disposable.Empty,
+                            _ => meshService.DeleteNode(path))
+                        .Take(1)
+                        .Select(deleted => deleted ? 1 : 0)
+                        .Catch<int, Exception>(ex =>
+                        {
+                            logger?.LogWarning(ex, "Pruning removed node {Path} failed.", path);
+                            return Observable.Return(0);
+                        }))
+                    .ToObservable().Concat().Sum();
+
+        return EnsurePartitionsProvisioned(hub, manifest.TargetPartition ?? manifest.Id, InstalledPartition)
+            .SelectMany(_ => WriteAll(head))
+            .SelectMany(headWrites => TypesVisible()
+                .SelectMany(_ => WriteAll(tail))
+                .Select(tailWrites => (IList<bool>)headWrites.Concat(tailWrites).ToList()))
+            .SelectMany(writes => Prune().Select(pruned => (Writes: writes, Pruned: pruned)))
+            .SelectMany(t =>
+            {
+                var written = head.Concat(tail)
+                    .Zip(t.Writes, (node, wrote) => (node, wrote))
+                    .Where(x => x.wrote)
+                    .Select(x => x.node)
+                    .ToArray();
+                var result = new InstallResult(nodes.Length, written.Length);
+
+                // Recompile exactly what the delta touched: a written NodeType node, and the OWNER
+                // of any written Source/Test node whose type node itself did not change. A pruned
+                // source's owner recompiles too (stale code must leave the assembly).
+                var releaseTargets = written
+                    .Select(n => n.Content is NodeTypeDefinition ? n.Path : OwningTypePath(n.Path))
+                    .Concat(removedNodePaths.Select(OwningTypePath))
+                    .Where(p => p is not null).Select(p => p!)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+
+                logger?.LogInformation(
+                    "Updated node-repo plugin {Id} incrementally: {Written} written, {Unchanged} unchanged, " +
+                    "{Pruned} pruned, {Releases} recompile(s) @ {Ref} (module {ModuleVersion})",
+                    manifest.Id, result.Written, result.Unchanged, t.Pruned,
+                    releaseTargets.Length, installedFromRef, newManifest.ModuleVersion);
+
+                if (releaseTargets.Length > 0)
+                {
+                    var accessService = hub.ServiceProvider.GetService<AccessService>();
+                    using (accessService?.ImpersonateAsSystem())
+                        foreach (var path in releaseTargets)
+                            hub.RequestNodeTypeRelease(path,
+                                onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
+                }
+                return WriteInstalledRecord(hub, manifest, installedFromRef,
+                        newManifest.Files.Count, newManifest)
+                    .Select(_ => result);
+            });
+    }
+
+    // The NodeType that owns a compile-input node (…/Source/* or …/Test/*), or null when the path
+    // is no compile input. The prefix before /Source|/Test is the type's path by the node-repo
+    // layout; for a partition-shared Source the prefix is the partition ROOT (only a type when its
+    // content is a NodeTypeDefinition — a failed release request on a non-type root just logs).
+    private static string? OwningTypePath(string nodePath)
+    {
+        var i = nodePath.IndexOf("/Source/", StringComparison.Ordinal);
+        if (i < 0)
+            i = nodePath.IndexOf("/Test/", StringComparison.Ordinal);
+        return i > 0 ? nodePath[..i] : null;
     }
 
     // Parses a node-per-file file into a MeshNode at its CANONICAL path (no partition rebase) — the
@@ -464,7 +618,8 @@ public static class PackageInstaller
     // display file, never a node (mirrors GitHubSyncService.ParseFile, minus the space rebase).
     private static MeshNode? ParseCanonical(FileFormatParserRegistry parsers, PackageFile file, ILogger? logger)
     {
-        if (string.Equals(file.RelativePath, "README.md", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(file.RelativePath, "README.md", StringComparison.OrdinalIgnoreCase)
+            || ModuleManifest.IsManifestPath(file.RelativePath))
             return null;
         var ext = System.IO.Path.GetExtension(file.RelativePath);
         var parsed = parsers.TryParse(ext, file.RelativePath, file.Content, file.RelativePath);
@@ -533,7 +688,24 @@ public static class PackageInstaller
 
     private static bool IsManifest(string relativePath) =>
         relativePath.EndsWith("/package.json", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(relativePath, "package.json", StringComparison.OrdinalIgnoreCase);
+        || string.Equals(relativePath, "package.json", StringComparison.OrdinalIgnoreCase)
+        || ModuleManifest.IsManifestPath(relativePath);
+
+    /// <summary>
+    /// The canonical node path a node-repo file maps to, or null for the non-node files a package
+    /// ships (README, the manifest sidecar, <c>content/**</c> assets). Used to derive prune targets
+    /// from a manifest diff's removed files — a removed content asset must never delete its owning
+    /// node.
+    /// </summary>
+    public static string? NodePathForFile(string relativePath)
+    {
+        if (string.Equals(relativePath, "README.md", StringComparison.OrdinalIgnoreCase)
+            || ModuleManifest.IsManifestPath(relativePath)
+            || ContentAssetMapper.IsContentPath(relativePath))
+            return null;
+        var (id, ns) = NodeFileMapper.FromRelativePath(relativePath);
+        return string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+    }
 }
 
 /// <summary>
