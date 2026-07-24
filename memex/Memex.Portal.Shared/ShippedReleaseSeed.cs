@@ -383,7 +383,15 @@ public sealed class ShippedReleaseSeedHostedService(
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex, "[PlatformStartup] startup failed."),
-                () => logger?.LogInformation("[PlatformStartup] startup complete."));
+                // The "fully warm" deploy-timing marker (seeding completes after
+                // ApplicationStarted/PortalReady): elapsed since process start, greppable in Loki.
+#pragma warning disable CA1416
+                () => logger?.LogInformation(
+                    "[PlatformStartup] startup complete in {ElapsedMs} ms since process start.",
+                    (long)(DateTime.UtcNow
+                           - System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime())
+                        .TotalMilliseconds));
+#pragma warning restore CA1416
         return Task.CompletedTask;
     }
 
