@@ -21,6 +21,44 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class CommentLayoutAreas
 {
+    /// <summary>
+    /// Per-layout-area-session view state for the comment Overview. Two jobs:
+    /// <list type="bullet">
+    ///   <item><b>Once-per-session seeds</b> (<see cref="EditSeeded"/> &amp; friends) — a re-render of
+    ///     the Overview (the node stream and the permission stream both emit repeatedly by design)
+    ///     must not reset the user's edit/expand state or stomp the text they are typing.</item>
+    ///   <item><b>Current-value shadows</b> (<see cref="Editing"/>, <see cref="Text"/>, …) — every
+    ///     sub-view stream re-subscribed on a re-render starts with <c>.StartWith(shadow)</c>, because
+    ///     the transient <c>/data</c> seed does NOT reliably replay to a second subscription (see the
+    ///     same defense in <c>EditorExtensions.BuildToggleableProperty</c>). Without the shadow the
+    ///     re-rendered sub-view never emits and the PREVIOUSLY rendered content sticks — the
+    ///     "comment only appears after a page refresh" bug.</item>
+    /// </list>
+    /// Instance state on the host's render pipeline — never static (NoStaticState.md).
+    /// </summary>
+    internal sealed class OverviewSession
+    {
+        public bool EditSeeded;
+        public bool RepliesSeeded;
+        public bool ReplyFormSeeded;
+
+        /// <summary>Shadow of the editState_* data item — is the editor open right now?</summary>
+        public bool Editing;
+        /// <summary>Shadow of the commentText_* buffer — the text currently displayed/edited.</summary>
+        public string Text = "";
+        /// <summary>The node text the buffer was last seeded from — external-change detection.</summary>
+        public string NodeText = "";
+
+        /// <summary>Shadow of the replyPath_* data item — the open reply draft, "" when none.</summary>
+        public string ReplyPath = "";
+        /// <summary>The reply path whose draft buffer was already seeded — seed each draft ONCE.</summary>
+        public string? SeededReplyPath;
+
+        public LayoutAreaControl[] RepliesControls = Array.Empty<LayoutAreaControl>();
+        public bool RepliesExpanded;
+        public int RepliesVisible = InitialReplyCount;
+    }
+
     /// <summary>Area name for the Overview layout area.</summary>
     public const string OverviewArea = "Overview";
     /// <summary>Area name for the Edit layout area.</summary>
@@ -71,7 +109,7 @@ public static class CommentLayoutAreas
         var currentUser = accessService?.Context?.Name ?? "";
 
         var editStateId = $"editState_comment_{hubPath.Replace("/", "_")}";
-        var initialized = new[] { false, false, false }; // [0]=editState, [1]=repliesExpanded, [2]=replyForm
+        var session = new OverviewSession();
 
         var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
         var permissionsStream = host.Hub.GetEffectivePermissions(parentPath);
@@ -95,6 +133,7 @@ public static class CommentLayoutAreas
                     .OrderBy(n => n.ContentAs<Comment>(host.Hub.JsonSerializerOptions)!.CreatedAt)
                     .Select(n => Controls.LayoutArea(n.Path, OverviewArea))
                     .ToArray();
+                session.RepliesControls = replyControls;
                 host.UpdateData(repliesDataId, replyControls);
             });
 
@@ -103,7 +142,7 @@ public static class CommentLayoutAreas
             {
                 var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
                 var canDelete = perms.HasFlag(Permission.Delete);
-                return (UiControl?)BuildOverview(host, node, hubPath, editStateId, initialized,
+                return (UiControl?)BuildOverview(host, node, hubPath, editStateId, session,
                     currentUser, canComment, canDelete, repliesDataId);
             });
     }
@@ -130,7 +169,7 @@ public static class CommentLayoutAreas
     }
 
     internal static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, string hubPath,
-        string editStateId, bool[] initialized, string currentUser,
+        string editStateId, OverviewSession session, string currentUser,
         bool canComment = true, bool canDelete = true, string? repliesDataId = null)
     {
         // ContentAs (deserialize), not `as Comment`: this view is data-bound via CombineLatest on
@@ -192,23 +231,67 @@ public static class CommentLayoutAreas
 
         container = container.WithView(headerRow);
 
-        // Toggleable content: click to edit (author only), Done to return
+        // Toggleable content: click to edit (author only), Done to return.
+        var textDataId = $"commentText_{hubPath.Replace("/", "_")}";
+        // The displayed/edited text lives in ONE session buffer (the commentText_* data item):
+        // the editor binds to it, the Done click persists FROM it, and the read-only view renders
+        // FROM it. That makes the text the user just saved appear IMMEDIATELY on Done — the old
+        // code rendered the comment.Text captured at the LAST node emission, so the fresh text
+        // only showed up once the node stream re-emitted AND the /data replay reached the
+        // re-rendered sub-view; under production timing neither is guaranteed, and the comment
+        // only appeared after a full page refresh (add AND edit — the UWDeepfield report).
         if (canEdit)
         {
             container = container.WithView((h, _) =>
             {
-                // Initialize edit state once — a fresh (empty) comment opens straight in the editor.
-                if (!initialized[0])
+                if (!session.EditSeeded)
                 {
-                    h.UpdateData(editStateId, OpensInEdit(comment.Text));
-                    initialized[0] = true;
+                    // Seed once — a fresh (empty) comment opens straight in the editor.
+                    session.Editing = OpensInEdit(comment.Text);
+                    session.Text = comment.Text ?? "";
+                    session.NodeText = comment.Text ?? "";
+                    h.UpdateData(textDataId, new Dictionary<string, object?> { ["text"] = session.Text });
+                    h.UpdateData(editStateId, session.Editing);
+                    session.EditSeeded = true;
+                }
+                else if (!session.Editing && (comment.Text ?? "") != session.NodeText)
+                {
+                    // The node's text changed under us (another user / another surface) while we
+                    // are NOT editing → refresh the buffer. NEVER while editing — a re-render
+                    // mid-edit must not stomp what the user is typing (the old per-render re-seed
+                    // in BuildCommentEditor did exactly that).
+                    session.NodeText = comment.Text ?? "";
+                    session.Text = session.NodeText;
+                    h.UpdateData(textDataId, new Dictionary<string, object?> { ["text"] = session.Text });
                 }
 
+                // StartWith(shadow): a re-subscribed sub-view gets no reliable /data replay — it
+                // must default to the session's current state and then react (same defense as
+                // EditorExtensions.BuildToggleableProperty), or the re-rendered area never emits
+                // and the previously rendered (stale) content sticks until a refresh.
                 return h.Stream.GetDataStream<bool>(editStateId)
+                    .StartWith(session.Editing)
                     .DistinctUntilChanged()
-                    .Select(isEditing => isEditing
-                        ? BuildCommentEditor(h, hubPath, comment.Text, editStateId)
-                        : BuildCommentReadOnly(comment.Text));
+                    .Select(isEditing =>
+                    {
+                        session.Editing = isEditing;
+                        return isEditing
+                            // While editing the view is static — keystrokes flow into the buffer
+                            // without re-rendering the editor control.
+                            ? Observable.Return(BuildCommentEditor(h, hubPath, editStateId, textDataId, session))
+                            // Read-only renders LIVE from the buffer, so the text saved by Done
+                            // (already in the buffer) shows without any node-stream round-trip.
+                            : h.Stream.GetDataStream<Dictionary<string, object?>>(textDataId)
+                                .Select(d => d?.GetValueOrDefault("text")?.ToString() ?? "")
+                                .StartWith(session.Text)
+                                .DistinctUntilChanged()
+                                .Select(text =>
+                                {
+                                    session.Text = text;
+                                    return BuildCommentReadOnly(text);
+                                });
+                    })
+                    .Switch();
             });
         }
         else
@@ -232,17 +315,24 @@ public static class CommentLayoutAreas
             var replyPathStateId = $"replyPath_{hubPath.Replace("/", "_")}";
             container = container.WithView((h, _) =>
             {
-                if (!initialized[2])
+                if (!session.ReplyFormSeeded)
                 {
                     h.UpdateData(replyPathStateId, "");
-                    initialized[2] = true;
+                    session.ReplyFormSeeded = true;
                 }
 
+                // StartWith(shadow) — same no-replay defense as the edit toggle above, so an open
+                // reply draft survives a re-render instead of the area sticking on stale content.
                 return h.Stream.GetDataStream<string>(replyPathStateId)
+                    .StartWith(session.ReplyPath)
                     .DistinctUntilChanged()
-                    .Select(replyPath => string.IsNullOrEmpty(replyPath)
-                        ? (UiControl?)null
-                        : BuildReplyCreateForm(h, replyPath, replyPathStateId, comment, currentUser));
+                    .Select(replyPath =>
+                    {
+                        session.ReplyPath = replyPath;
+                        return string.IsNullOrEmpty(replyPath)
+                            ? (UiControl?)null
+                            : BuildReplyCreateForm(h, replyPath, replyPathStateId, comment, currentUser, session);
+                    });
             });
         }
 
@@ -258,19 +348,28 @@ public static class CommentLayoutAreas
 
             container = container.WithView((h, _) =>
             {
-                if (!initialized[1])
+                if (!session.RepliesSeeded)
                 {
                     h.UpdateData(expandedStateId, false);
                     h.UpdateData(visibleCountStateId, InitialReplyCount);
-                    initialized[1] = true;
+                    session.RepliesSeeded = true;
                 }
 
+                // StartWith(shadow) on all three inputs — CombineLatest only fires once EVERY
+                // source has emitted, so a single missing /data replay after a re-render would
+                // freeze the whole replies section on its previous render.
                 return h.Stream.GetDataStream<LayoutAreaControl[]>(repliesDataId)
+                    .StartWith(session.RepliesControls)
+                    .DistinctUntilChanged()
                     .CombineLatest(
-                        h.Stream.GetDataStream<bool>(expandedStateId),
-                        h.Stream.GetDataStream<int>(visibleCountStateId),
+                        h.Stream.GetDataStream<bool>(expandedStateId)
+                            .StartWith(session.RepliesExpanded).DistinctUntilChanged(),
+                        h.Stream.GetDataStream<int>(visibleCountStateId)
+                            .StartWith(session.RepliesVisible).DistinctUntilChanged(),
                         (replyControls, expanded, visibleCount) =>
                         {
+                            session.RepliesExpanded = expanded;
+                            session.RepliesVisible = visibleCount;
                             var totalCount = replyControls?.Length ?? 0;
                             if (totalCount == 0)
                                 return (UiControl)Controls.Stack;
@@ -341,13 +440,17 @@ public static class CommentLayoutAreas
         return view;
     }
 
-    private static UiControl BuildCommentEditor(LayoutAreaHost host, string hubPath, string text, string editStateId)
+    private static UiControl BuildCommentEditor(LayoutAreaHost host, string hubPath, string editStateId,
+        string textDataId, OverviewSession session)
     {
         var stack = Controls.Stack.WithWidth("100%");
-        var textDataId = $"commentText_{hubPath.Replace("/", "_")}";
 
-        // Initialize text data area with current comment text
-        host.UpdateData(textDataId, new Dictionary<string, object?> { ["text"] = text ?? "" });
+        // 🚨 NO buffer seeding here. The session buffer (textDataId) is seeded ONCE by the edit
+        // toggle in BuildOverview and refreshed only on an external node-text change while NOT
+        // editing. This method runs on every re-render of the Overview while the editor is open
+        // (the node and permission streams emit repeatedly by design) — the unconditional re-seed
+        // that used to live here overwrote the text the user was typing with the stale captured
+        // node text on every such re-render.
 
         // Editor bound to data area — no WithAutoSave() to avoid overwriting
         // the Comment node with a Markdown node (which saves as .md instead of .json)
@@ -388,8 +491,25 @@ public static class CommentLayoutAreas
                                 existing ??= new Comment();
                                 return n with { Content = existing with { Text = newText } };
                             }, host.Hub.JsonSerializerOptions).Subscribe(
-                                _ => ctx.Host.UpdateData(editStateId, false),
-                                _ => ctx.Host.UpdateData(editStateId, false));
+                                _ =>
+                                {
+                                    // Update the session shadows BEFORE flipping to read-only: the
+                                    // read-only view starts from session.Text, so the text the user
+                                    // just saved renders immediately — no dependency on the node
+                                    // stream echoing the write back in time (it does not under
+                                    // production timing; that was the "only after refresh" bug).
+                                    session.Text = newText;
+                                    session.NodeText = newText;
+                                    ctx.Host.UpdateData(editStateId, false);
+                                },
+                                ex =>
+                                {
+                                    // Keep the editor OPEN on a failed save — flipping to read-only
+                                    // would silently discard the user's text. Same contract as the
+                                    // reply create-form.
+                                    host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>()
+                                        ?.LogWarning(ex, "Failed to save comment at {Path}", ownPath);
+                                });
                         });
                     return Task.CompletedTask;
                 })));
@@ -403,14 +523,20 @@ public static class CommentLayoutAreas
     /// Create writes the reply Active with its text in a single <c>CreateNode</c>.
     /// </summary>
     private static UiControl BuildReplyCreateForm(LayoutAreaHost host, string replyPath, string replyPathStateId,
-        Comment comment, string currentUser)
+        Comment comment, string currentUser, OverviewSession session)
     {
         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var replyTextDataId = $"replyText_{replyPath.Replace("/", "_")}";
         var replyErrorDataId = $"replyError_{replyPath.Replace("/", "_")}";
 
-        host.UpdateData(replyTextDataId, new Dictionary<string, object?> { ["text"] = "" });
-        host.UpdateData(replyErrorDataId, "");
+        // Seed each reply draft ONCE. This form is rebuilt on every Overview re-render while the
+        // draft is open — an unconditional re-seed would wipe the reply the user is typing.
+        if (!string.Equals(session.SeededReplyPath, replyPath, StringComparison.Ordinal))
+        {
+            session.SeededReplyPath = replyPath;
+            host.UpdateData(replyTextDataId, new Dictionary<string, object?> { ["text"] = "" });
+            host.UpdateData(replyErrorDataId, "");
+        }
 
         var stack = Controls.Stack
             .WithStyle("margin-top: 4px; padding: 4px; padding-left: 6px; border-left: 2px solid var(--accent-fill-rest);");
