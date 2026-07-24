@@ -1,5 +1,4 @@
 [
-  { "op": "replace", "path": "/spec/replicas", "value": 1 },
   { "op": "add", "path": "/spec/template/spec/nodeSelector", "value": { "workload": "silos" } },
 
   { "op": "replace", "path": "/spec/template/spec/volumes/0",
@@ -30,9 +29,5 @@
     "value": { "secretRef": { "name": "memexcloud-portal-ai-secrets" } } },
 
   { "op": "add", "path": "/spec/template/spec/containers/0/resources",
-    "value": { "requests": { "cpu": "4", "memory": "8Gi" }, "limits": { "cpu": "6", "memory": "16Gi" } } },
-  { "op": "add", "path": "/spec/template/spec/containers/0/readinessProbe",
-    "value": { "httpGet": { "path": "/", "port": 8080 }, "initialDelaySeconds": 20, "periodSeconds": 10, "failureThreshold": 6 } },
-  { "op": "add", "path": "/spec/template/spec/containers/0/livenessProbe",
-    "value": { "httpGet": { "path": "/", "port": 8080 }, "initialDelaySeconds": 90, "periodSeconds": 20, "failureThreshold": 6 } }
+    "value": { "requests": { "cpu": "4", "memory": "8Gi" }, "limits": { "cpu": "6", "memory": "16Gi" } } }
 ]
