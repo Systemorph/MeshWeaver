@@ -209,6 +209,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private readonly IMessageHub cacheHub;
     private readonly ILogger<MeshNodeStreamCache> logger;
 
+    // Mesh-wide $type→CLR-Type resolver (see IMeshContentTypeRegistry). The cache hub is
+    // domain-type-agnostic, so a dynamic-node content type deserialises here to a bare
+    // JsonElement; this registry lets the two degrade seams below re-type it on the
+    // already-degraded path. Resolved once from the process-shared root provider.
+    private readonly MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry;
+
     // 🚨 Lazy<Entry> wraps the factory because ConcurrentDictionary.GetOrAdd
     // is NOT threadsafe for compound operations: under contention the factory
     // delegate runs more than once, the losing values are discarded, but any
@@ -406,6 +412,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     {
         this.meshHub = meshHub;
         this.logger = logger;
+        contentTypeRegistry = meshHub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshContentTypeRegistry>();
         var opts = options ?? new MeshNodeStreamCacheOptions();
         readStreamIdleExpiration = opts.ReadStreamIdleExpiration;
         readStreamSweepInterval = opts.ReadStreamSweepInterval;
@@ -1614,7 +1621,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// <see cref="IMeshNodeStreamCache.GetStream(string, JsonSerializerOptions)"/>.
     /// </summary>
     public IObservable<MeshNode> GetStream(string path, JsonSerializerOptions options) =>
-        GetStreamRaw(path).Select(node => ConvertContentJsonElementToTyped(node, options, logger));
+        GetStreamRaw(path).Select(node => ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry));
 
     /// <summary>
     /// Caller-typed write: deserialises the current MeshNode's <c>Content</c>
@@ -1631,7 +1638,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     {
         Func<MeshNode, MeshNode> wrapped = node =>
         {
-            var typed = ConvertContentJsonElementToTyped(node, options, logger);
+            var typed = ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry);
             var updated = update(typed);
             return ConvertContentTypedToJsonElement(updated, options);
         };
@@ -1680,7 +1687,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         return result;
     }
 
-    private static MeshNode ConvertContentJsonElementToTyped(MeshNode node, JsonSerializerOptions options, ILogger logger)
+    private static MeshNode ConvertContentJsonElementToTyped(
+        MeshNode node, JsonSerializerOptions options, ILogger logger,
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry)
     {
         // Only convert when the cache emitted a raw JsonElement (the cache hub
         // doesn't know domain types, so Content lands here as JsonElement). If
@@ -1693,10 +1702,19 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // when the caller's TypeRegistry can't resolve the $type discriminator. The
             // node then crosses the GetStream/GetMeshNodeStream boundary STILL untyped,
             // so every downstream `Content is X` / `as X` silently fails (renders empty,
-            // reactive waits time out with no visible cause). Surface it LOUDLY here —
-            // the degrade was previously invisible at this seam.
-            if (deserialized is JsonElement)
+            // reactive waits time out with no visible cause).
+            if (deserialized is JsonElement degraded)
             {
+                // Self-heal: the mesh-wide content-type registry is the ONE $type→CLR-Type map for
+                // dynamically-compiled NodeTypes, independent of this (frozen, domain-agnostic) cache
+                // hub's options. When it names the discriminator, re-type on the already-degraded path
+                // (no hot-path cost) — this is what cures the GitSync-reimport-renders-empty bug
+                // WITHOUT waiting for a manual recycle. Only genuinely-unresolvable content falls
+                // through to the loud warning below.
+                var recovered = contentTypeRegistry?.TryRecover(degraded, options);
+                if (recovered is not null)
+                    return node with { Content = recovered };
+
                 logger.LogWarning(
                     "MeshNodeStreamCache.GetStream: Content for {Path} stayed an untyped JsonElement after "
                     + "deserialization (TypeRegistry lacks the $type discriminator) — downstream "
@@ -1897,11 +1915,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // inert (no Subscribe), so there's no upstream leak.
         return _optionsWrappedQueries.GetOrAdd((id, options), static (_, state) =>
             System.Reactive.Linq.Observable.Select(state.raw, items =>
-                (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, state.options, state.logger)).ToArray()),
-            (raw, options, logger));
+                (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, state.options, state.logger, state.registry)).ToArray()),
+            (raw, options, logger, registry: contentTypeRegistry));
     }
 
-    private static MeshNode DeserializeContent(MeshNode node, JsonSerializerOptions options, ILogger logger)
+    private static MeshNode DeserializeContent(
+        MeshNode node, JsonSerializerOptions options, ILogger logger,
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry)
     {
         if (node.Content is not JsonElement je || je.ValueKind != JsonValueKind.Object)
             return node;
@@ -1913,10 +1933,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // 🚨 Bad-data tolerance: Deserialize<object> degrades BACK to a JsonElement when
             // the caller's TypeRegistry can't resolve the $type — the GetQuery resolution
             // boundary then hands consumers an untyped JsonElement and every `Content is X`
-            // soft-cast silently fails. Surface it (don't fault the query) so the corrupt row
-            // is visible rather than rendering empty / timing out a reactive wait.
-            if (deserialized is JsonElement)
+            // soft-cast silently fails.
+            if (deserialized is JsonElement degraded)
             {
+                // Self-heal via the mesh-wide content-type registry before warning — same cure as
+                // the GetStream seam above: re-type a dynamically-compiled NodeType's content that
+                // this domain-agnostic hub's frozen options can't resolve (reimport-renders-empty).
+                var recovered = contentTypeRegistry?.TryRecover(degraded, options);
+                if (recovered is not null)
+                    return node with { Content = recovered };
+
                 logger.LogWarning(
                     "MeshNodeStreamCache.GetQuery: Content for {Path} stayed an untyped JsonElement after "
                     + "deserialization (TypeRegistry lacks the $type discriminator) — downstream "
