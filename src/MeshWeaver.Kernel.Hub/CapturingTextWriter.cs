@@ -20,19 +20,41 @@ namespace MeshWeaver.Kernel.Hub;
 /// capture's stdout target, <c>Console.Error.WriteLine</c> on its stderr target —
 /// so a script's error prints reach the ActivityLog (as error-level messages)
 /// instead of vanishing into the host process's stderr.</para>
+///
+/// <para>🚨 The AsyncLocal holds a mutable <see cref="CaptureCell"/>, NEVER the
+/// writer itself. Anything that snapshots the ExecutionContext while a capture is
+/// active — a lazily-created long-lived <c>TimerQueueTimer</c>, a pending Rx delay,
+/// a pooled work item — freezes the AsyncLocal map into that snapshot, and the
+/// scope's Restorer can never reach it. When the map held the
+/// <c>LoggerTextWriter</c> directly, one such timer pinned the writer →
+/// <c>ActivityLogLogger</c> → the DISPOSED kernel activity hub → the whole mesh for
+/// the timer's lifetime (the <c>MeshHubDisposalLeakTest</c> CI retention path, run
+/// 30068597014). With the cell indirection, scope disposal nulls
+/// <see cref="CaptureCell.Target"/> and SEVERS the graph even inside frozen
+/// snapshots — a stray context keeps only the empty cell.</para>
 /// </summary>
-internal sealed class CapturingTextWriter(AsyncLocal<TextWriter?> channel, TextWriter fallback) : TextWriter
+internal sealed class CapturingTextWriter(AsyncLocal<CapturingTextWriter.CaptureCell?> channel, TextWriter fallback) : TextWriter
 {
+    /// <summary>
+    /// Indirection between the AsyncLocal map and the capture target. Captured
+    /// ExecutionContexts reference this cell; disposing the capture scope nulls
+    /// <see cref="Target"/>, releasing the writer graph from every snapshot.
+    /// </summary>
+    internal sealed class CaptureCell
+    {
+        public volatile TextWriter? Target;
+    }
+
     // AsyncLocal flow-state (NOT a cache/collection): scopes each capture to its own
     // logical execution context. One channel per standard stream.
-    private static readonly AsyncLocal<TextWriter?> CurrentOutTarget = new();
-    private static readonly AsyncLocal<TextWriter?> CurrentErrorTarget = new();
+    private static readonly AsyncLocal<CaptureCell?> CurrentOutTarget = new();
+    private static readonly AsyncLocal<CaptureCell?> CurrentErrorTarget = new();
     private static int installedOut;
     private static int installedError;
 
     public override Encoding Encoding => fallback.Encoding;
 
-    private TextWriter Active => channel.Value ?? fallback;
+    private TextWriter Active => channel.Value?.Target ?? fallback;
 
     public override void Write(char value) => Active.Write(value);
     public override void Write(string? value) => Active.Write(value);
@@ -44,7 +66,9 @@ internal sealed class CapturingTextWriter(AsyncLocal<TextWriter?> channel, TextW
     /// <summary>
     /// Begin capturing <c>Console.Out</c> writes to <paramref name="outTarget"/> and
     /// <c>Console.Error</c> writes to <paramref name="errorTarget"/> on the current
-    /// async-flow. Dispose the returned scope to restore the previous targets.
+    /// async-flow. Dispose the returned scope to restore the previous targets AND
+    /// sever the targets from any ExecutionContext snapshotted during the scope
+    /// (see the class remarks — this is what keeps disposed meshes collectible).
     /// Idempotently installs the global console hooks on first use.
     /// </summary>
     public static IDisposable Capture(TextWriter outTarget, TextWriter errorTarget)
@@ -56,10 +80,18 @@ internal sealed class CapturingTextWriter(AsyncLocal<TextWriter?> channel, TextW
 
         var prevOut = CurrentOutTarget.Value;
         var prevError = CurrentErrorTarget.Value;
-        CurrentOutTarget.Value = outTarget;
-        CurrentErrorTarget.Value = errorTarget;
+        var outCell = new CaptureCell { Target = outTarget };
+        var errorCell = new CaptureCell { Target = errorTarget };
+        CurrentOutTarget.Value = outCell;
+        CurrentErrorTarget.Value = errorCell;
         return new Restorer(() =>
         {
+            // Sever FIRST: contexts already captured by timers / pool items during
+            // the scope hold these cells — nulling Target releases the writer graph
+            // inside those frozen snapshots (their late writes fall back to the real
+            // console instead of a disposed pipe). Then restore the current flow.
+            outCell.Target = null;
+            errorCell.Target = null;
             CurrentOutTarget.Value = prevOut;
             CurrentErrorTarget.Value = prevError;
         });
