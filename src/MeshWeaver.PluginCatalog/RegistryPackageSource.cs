@@ -82,11 +82,19 @@ public sealed class RegistryPackageSource : IPackageSource
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
+        FetchPackageFiles(package, gitRef, null);
+
+    /// <inheritdoc />
+    public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(
+        PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
         _httpPool.Invoke(async ct =>
         {
             // Only the package id is authoritative — the registry resolves the folder from its own
-            // curated catalog (see PluginRegistryEndpoints), so a consumer can't reach arbitrary paths.
-            var body = JsonSerializer.Serialize(new { id = package.Id, @ref = gitRef }, Json);
+            // curated catalog (see PluginRegistryEndpoints), so a consumer can't reach arbitrary
+            // paths; `paths` only FILTERS within that package's own files (the manifest-diff fast
+            // path: unchanged files never travel). An old registry ignores the extra field and
+            // returns everything — the consumer's manifest diff still upserts only what changed.
+            var body = JsonSerializer.Serialize(new { id = package.Id, @ref = gitRef, paths }, Json);
             using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
             using var request = Request(HttpMethod.Post, $"{_registryUrl}{RoutePrefix}/files", content);
             using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
@@ -95,7 +103,13 @@ public sealed class RegistryPackageSource : IPackageSource
                 throw new InvalidOperationException(
                     $"Registry file fetch for '{package.Id}' failed ({(int)resp.StatusCode}): {json}");
             var parsed = JsonSerializer.Deserialize<FilesResponse>(json, Json);
-            return (IReadOnlyList<PackageFile>)(parsed?.Files ?? []);
+            var files = (IReadOnlyList<PackageFile>)(parsed?.Files ?? []);
+            if (paths is null)
+                return files;
+            // Filter locally as well: an OLD registry ignores the `paths` field and returns the
+            // whole package — the subset contract must hold regardless of the server's version.
+            var wanted = paths as ISet<string> ?? new HashSet<string>(paths, StringComparer.Ordinal);
+            return (IReadOnlyList<PackageFile>)files.Where(f => wanted.Contains(f.RelativePath)).ToList();
         });
 }
 
