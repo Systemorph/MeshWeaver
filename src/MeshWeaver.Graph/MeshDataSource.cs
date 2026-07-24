@@ -1514,6 +1514,16 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         // Register the content type in TypeRegistry for JSON serialization
         Workspace.Hub.TypeRegistry.WithType(dataType, dataType.Name);
 
+        // Also record it in the MESH-WIDE content-type registry. This is the single reliable
+        // choke point where a dynamically-compiled NodeType's CLR content type is in hand (this
+        // call is made by the compiled HubConfiguration when a node's hub cold-activates). Unlike
+        // the per-hub TypeRegistry above — which lives in THIS hub's frozen JsonSerializerOptions —
+        // the mesh singleton is process-wide and survives a re-import, so the degrade seams can
+        // re-type content that the domain-agnostic cache hub deserialised to a bare JsonElement
+        // (the GitSync-reimport-renders-empty bug). See IMeshContentTypeRegistry.
+        Workspace.Hub.ServiceProvider.GetService<Mesh.Services.IMeshContentTypeRegistry>()
+            ?.Register(dataType);
+
         // Store ContentType for UI integration (editor generation, etc.)
         // Content is accessed via MeshNode.Content - there's no separate TypeSource
         return this with { ContentType = dataType };
