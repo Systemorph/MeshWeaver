@@ -25,6 +25,11 @@ spec:
       # The in-pod self-updater patches this deployment via the Kubernetes API using this SA's
       # projected token (RBAC in rbac.yaml). See Doc/Architecture/ReleaseStrategy.
       serviceAccountName: "memex-portal-sa"
+      # Graceful drain budget: the host's ShutdownTimeout is 90s (Memex.Portal.Distributed
+      # Program.cs) and the preStop below sleeps 15s — the k8s default of 30s SIGKILLed the
+      # portal mid-drain on every rollout (circuits and the Orleans silo torn down abruptly).
+      # 120 is a ceiling, not a delay: a fast shutdown still exits fast.
+      terminationGracePeriodSeconds: 120
       initContainers:
         # Postgres and the portal start concurrently on a fresh install; the portal's hub
         # init FAILS (and the host aborts) if Postgres isn't yet accepting connections.
@@ -38,6 +43,15 @@ spec:
       containers:
         - image: "ghcr.io/systemorph/memex-portal-ai:latest"
           name: "memex-portal"
+          # On rollout, endpoint removal propagates to the ingress-nginx upstreams asynchronously —
+          # without this grace window the pod stops accepting the instant it is SIGTERMed and
+          # in-flight/new requests briefly hit a dead socket (the deploy 502 blip). Sleep first so
+          # the endpoint drains from the upstream set BEFORE the host begins shutting down.
+          # (Base image is Debian aspnet — sh exists.)
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 15"]
           envFrom:
             - configMapRef:
                 name: "memex-portal-config"
