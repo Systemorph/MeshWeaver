@@ -122,11 +122,28 @@ public static class PluginGateRunner
                         return types
                             .Select(type => TestNodeType(harness, options, type))
                             .ToObservable().Concat().ToList()
-                            .Select(typeResults => new PackageResult(package.Id)
-                            {
-                                NodeCount = install.Total,
-                                NodeTypes = typeResults.ToImmutableList(),
-                            });
+                            // The idempotence pin: a SECOND install of the same snapshot must write
+                            // ZERO nodes — otherwise every re-sync would churn versions, re-broadcast
+                            // nodes and recompile untouched NodeTypes (the deploy-flicker source).
+                            // Runs after the compile gates so an enriched NodeType (compile stamps)
+                            // is the realistic re-install input.
+                            .SelectMany(typeResults => PackageInstaller
+                                .Install(harness.Mesh, package, files, snapshot.CommitSha)
+                                .Select(second => new PackageResult(package.Id)
+                                {
+                                    NodeCount = install.Total,
+                                    IdempotenceError = second.Written == 0
+                                        ? null
+                                        : $"re-install of the unchanged snapshot wrote {second.Written} node(s) " +
+                                          "(expected 0 — the unchanged-skip regressed)",
+                                    NodeTypes = typeResults.ToImmutableList(),
+                                })
+                                .Catch((Exception ex) => Observable.Return(new PackageResult(package.Id)
+                                {
+                                    NodeCount = install.Total,
+                                    IdempotenceError = $"re-install failed: {ex.GetType().Name}: {ex.Message}",
+                                    NodeTypes = typeResults.ToImmutableList(),
+                                })));
                     });
             })
             .Catch((Exception ex) => Observable.Return(new PackageResult(package.Id)

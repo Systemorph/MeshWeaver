@@ -58,11 +58,18 @@ public sealed record PackageResult(string Id)
     /// <summary>Install failure detail; null when the install succeeded.</summary>
     public string? InstallError { get; init; }
 
+    /// <summary>
+    /// Idempotence failure detail: a SECOND install of the identical snapshot must write zero
+    /// nodes (the unchanged-skip is what keeps a re-sync from churning versions, re-broadcasting
+    /// nodes and recompiling untouched NodeTypes). Null when the re-install wrote nothing.
+    /// </summary>
+    public string? IdempotenceError { get; init; }
+
     /// <summary>Per-NodeType gate results.</summary>
     public IReadOnlyList<NodeTypeResult> NodeTypes { get; init; } = [];
 
-    /// <summary>True when the install and every NodeType gate passed.</summary>
-    public bool Success => InstallError is null && NodeTypes.All(t => t.Success);
+    /// <summary>True when the install, the re-install idempotence pin and every NodeType gate passed.</summary>
+    public bool Success => InstallError is null && IdempotenceError is null && NodeTypes.All(t => t.Success);
 }
 
 /// <summary>The whole run's outcome: per-package results and the process exit code.</summary>
@@ -91,6 +98,8 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
                              $"({package.NodeCount} node(s), {package.NodeTypes.Count} type(s))");
             if (package.InstallError is not null)
                 output.WriteLine($"    install: {package.InstallError}");
+            if (package.IdempotenceError is not null)
+                output.WriteLine($"    idempotence: {package.IdempotenceError}");
             foreach (var type in package.NodeTypes)
             {
                 output.WriteLine(

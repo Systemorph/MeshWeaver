@@ -73,6 +73,23 @@ public sealed class NodeRepoPackageSource : IPackageSource
         tokenProvider().SelectMany(token => fetch(repoUrl, gitRef, null, token))
             .Select(snapshot =>
             {
+                // The CI-maintained manifest sidecar (`<Plugin>/manifest.lock`): its moduleVersion
+                // rides on the catalog entry so a consumer can decide "nothing to sync" without
+                // fetching a single package file. Tolerant: a missing/broken sidecar just leaves
+                // ModuleVersion null (legacy commit-sha comparison applies).
+                var moduleVersions = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var file in snapshot.Files)
+                {
+                    var slash = file.Path.IndexOf('/');
+                    if (slash <= 0
+                        || file.Path.IndexOf('/', slash + 1) >= 0
+                        || !file.Path.AsSpan(slash + 1).Equals(ModuleManifest.FileName, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    var parsed = ModuleManifest.TryParse(file.Content, logger);
+                    if (parsed is not null)
+                        moduleVersions[file.Path[..slash]] = parsed.ModuleVersion;
+                }
+
                 var manifests = new List<PackageManifest>();
                 foreach (var file in snapshot.Files)
                 {
@@ -99,6 +116,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         TargetPartition = id,
                         SourceFolder = id,
                         Version = snapshot.CommitSha,
+                        ModuleVersion = moduleVersions.TryGetValue(id, out var mv) ? mv : null,
                         Category = peeked.Category,
                         Icon = peeked.Icon,
                         Price = peeked.Price,
