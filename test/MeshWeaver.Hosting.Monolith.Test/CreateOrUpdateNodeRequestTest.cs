@@ -8,7 +8,9 @@ using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -167,5 +169,105 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
             "CreatedBy is identity — UpdateAccordingToSourceNode preserves it");
         after.Path.Should().Be(path, "Path is identity");
         after.Name.Should().Be("Renamed", "Name is writable — should overwrite");
+    }
+
+    /// <summary>
+    /// The no-op guard: an upsert IDENTICAL to the persisted state must be acknowledged without
+    /// reaching the owner — no Version mint, no LastModified re-stamp, no history row, no stream
+    /// re-broadcast (the deploy-flicker source when a full re-sync rewrites unchanged nodes).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Upsert_WithIdenticalState_IsSkipped_NoVersionOrTimestampChurn()
+    {
+        var path = $"{TestPartition}/upsert-noop-{Guid.NewGuid():N}";
+        MeshNode Node() => new(path.Split('/').Last(), TestPartition)
+        {
+            Name = "Same",
+            NodeType = "Markdown",
+            Content = new MarkdownContent { Content = "# identical" },
+            State = MeshNodeState.Active,
+        };
+
+        await NodeFactory.CreateNode(Node()).Should().Emit();
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var before = await ReadStable(storage, path);
+
+        var resp = await Mesh
+            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(Node()))
+            .Select(d => d.Message)
+            .Should().Emit();
+
+        resp.Success.Should().BeTrue(resp.Error ?? "");
+        resp.WasCreated.Should().BeFalse();
+        resp.Node.Should().NotBeNull();
+        resp.Log!.Messages.Any(m => m.Message.Contains("no-op", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("the skip must be visible in the activity log, not a silent success");
+
+        // The persisted stamps prove no write reached the owner: any write re-stamps LastModified
+        // and mints a fresh Version unconditionally. ReadStable's quiet window (>1.2s, well past
+        // the 200ms persist debounce) would catch a stray write.
+        var after = await ReadStable(storage, path);
+        after.Version.Should().Be(before.Version, "an identical upsert must not mint a Version");
+        after.LastModified.Should().Be(before.LastModified, "an identical upsert must not re-stamp LastModified");
+    }
+
+    /// <summary>
+    /// The guard must not over-skip: a single changed writable field (here Name; content identical)
+    /// still takes the write path.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Upsert_WithOneChangedField_StillWrites()
+    {
+        var path = $"{TestPartition}/upsert-nearnoop-{Guid.NewGuid():N}";
+        await NodeFactory.CreateNode(new MeshNode(path.Split('/').Last(), TestPartition)
+        {
+            Name = "Before",
+            NodeType = "Markdown",
+            Content = new MarkdownContent { Content = "# same content" },
+            State = MeshNodeState.Active,
+        }).Should().Emit();
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var before = await ReadStable(storage, path);
+
+        var resp = await Mesh
+            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(
+                new MeshNode(path.Split('/').Last(), TestPartition)
+                {
+                    Name = "After",
+                    NodeType = "Markdown",
+                    Content = new MarkdownContent { Content = "# same content" },
+                    State = MeshNodeState.Active,
+                }))
+            .Select(d => d.Message)
+            .Should().Emit();
+        resp.Success.Should().BeTrue(resp.Error ?? "");
+
+        var after = await ReadStable(storage, path, n => n.Name == "After");
+        after.Name.Should().Be("After");
+        after.LastModified.Should().BeAfter(before.LastModified,
+            "a real change takes the write path and re-stamps");
+    }
+
+    // Reads until the persisted node satisfies the predicate AND its Version is unchanged across
+    // 4 consecutive samples (~1.2s quiet — past the 200ms persist debounce), so enrichment/debounce
+    // trails can't masquerade as churn.
+    private async Task<MeshNode> ReadStable(
+        IStorageAdapter storage, string path, Func<MeshNode, bool>? predicate = null)
+    {
+        MeshNode? last = null;
+        var stable = 0;
+        for (var i = 0; i < 100 && stable < 4; i++)
+        {
+            var current = await storage.Read(path, Mesh.JsonSerializerOptions).FirstAsync().ToTask();
+            stable = current is not null && last is not null
+                     && current.Version == last.Version
+                     && (predicate is null || predicate(current))
+                ? stable + 1
+                : 0;
+            last = current ?? last;
+            await Task.Delay(300);
+        }
+        last.Should().NotBeNull($"node {path} must be persisted");
+        return last!;
     }
 }
