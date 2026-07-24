@@ -39,7 +39,14 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh,
             Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>()
-        );
+        )
+        {
+            // Short resilient-read window: the revoked/deleted-token checks below
+            // wait out ValidateToken's read timeout by design (the revoke deletes
+            // the global index entry). Prod default is 8 s — same pattern as
+            // OAuthCodeStoreTest.NewStore's ReadTimeout.
+            ValidationReadTimeout = TimeSpan.FromSeconds(2),
+        };
 
     /// <summary>
     /// SHOULD-FAIL-IF: <c>RevokeToken</c> resolves the token via

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -26,8 +27,9 @@ namespace Memex.Portal.Shared.Authentication;
 /// 🚨 No async / Task / FromAsync / await anywhere in this file. Every
 /// reachable method returns <see cref="IObservable{T}"/> and the chain
 /// stays observable end-to-end. Reads of known paths go through
-/// <c>hub.GetMeshNode(path)</c> (one-shot) or
-/// <c>workspace.GetMeshNodeStream(path)</c> (live); listings go through
+/// <c>hub.GetMeshNode(path)</c> (one-shot, issuance-side) or the bounded
+/// resilient <c>workspace.GetMeshNodeStream(path)</c> poll
+/// (validation-side, <see cref="ReadValidationNode"/>); listings go through
 /// <c>workspace.GetQuery(id, queries...)</c> (synced + path-keyed dedup).
 /// QueryAsync / <see cref="IAsyncEnumerable{T}"/> iteration is forbidden
 /// in this file per <c>Doc/Architecture/AsynchronousCalls.md</c> and
@@ -55,6 +57,28 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastStampDispatchedAt = new();
 
     private int stampDispatchCount;
+
+    /// <summary>
+    /// Upper bound on each of the two validation-side node reads (index at
+    /// <c>ApiToken/{hashPrefix}</c>, then the user-scoped token node). The read is the
+    /// resilient <c>GetMeshNodeStream</c> poll (same shape as
+    /// <c>OAuthCodeStore.ReadCodeNode</c>), so a WARM token resolves on the first
+    /// attempt with no added latency — only a genuine miss (unknown token, or a fresh
+    /// token still inside the create→routable window on THIS replica) keeps polling
+    /// and burns the window. 8 s default: ample margin over the observed cross-replica
+    /// create→routable lag on memex-cloud (a fresh token 401ed for ~2 min under the
+    /// old one-shot read; the poll rides the lag out instead). Init-only so tests can
+    /// shorten it — never a static bound to "tune away" a failure.
+    /// </summary>
+    public TimeSpan ValidationReadTimeout { get; init; } = TimeSpan.FromSeconds(8);
+
+    /// <summary>
+    /// Pause between validation read attempts — matches <c>OAuthCodeStore.ReadCodeNode</c>
+    /// and <see cref="ConfirmReadable"/> (self-paced Concat: the next attempt subscribes
+    /// only after the previous one completed, so exactly one owner-hub subscription is
+    /// live at a time).
+    /// </summary>
+    private static readonly TimeSpan ValidationRetryDelay = TimeSpan.FromMilliseconds(50);
 
     /// <summary>
     /// Number of LastUsedAt stamp writes this instance has DISPATCHED — the
@@ -181,6 +205,13 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
     /// identity, then <c>.Select</c>. Emits an empty array on missing
     /// assignment or read failure (the issued token still has identity
     /// but no role grants — correct outcome).
+    /// <para>ISSUANCE-ONLY — called exclusively from <see cref="CreateToken"/>,
+    /// never on the validation path (Bearer-request role enrichment goes
+    /// through <c>UserRoleResolver.LoadDbRolesAsync</c> → the synced query),
+    /// so the one-shot read's timeout cannot 401 anybody; a miss only means
+    /// the new token carries no captured roles. Do not "harden" it with the
+    /// validation-side resilient poll — issuance is a one-time login that
+    /// must not stall on a genuinely absent assignment.</para>
     /// </summary>
     private IObservable<IReadOnlyCollection<string>> ResolveSelfScopeRoles(string assignmentPath)
     {
@@ -218,14 +249,28 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
     }
 
     /// <summary>
-    /// Reactive token validation. Reads index node at
-    /// <c>ApiToken/{hashPrefix}</c> via <c>hub.GetMeshNode</c> (one-shot,
-    /// authoritative — never <c>QueryAsync</c> for a known path per
-    /// <c>Doc/Architecture/AsynchronousCalls.md</c>); when the index
-    /// points at a user-scoped token, follows the pointer with a second
-    /// one-shot read. The chain is fully observable — no
-    /// <c>FromAsync</c>, no <c>FirstOrDefaultAsync.AsTask()</c>, no
-    /// <c>await</c>.
+    /// Reactive token validation. Reads the index node at
+    /// <c>ApiToken/{hashPrefix}</c> — and, when it points at a user-scoped token,
+    /// the token node — through the bounded resilient
+    /// <c>GetMeshNodeStream</c> poll (<see cref="ReadValidationNode"/>, same shape
+    /// as <c>OAuthCodeStore.ReadCodeNode</c>), NOT a one-shot <c>hub.GetMeshNode</c>.
+    /// <para>
+    /// Why: on a multi-replica portal a freshly-minted token is not instantly
+    /// routable on the replicas that did NOT mint it. The old one-shot read hit
+    /// [ROUTE] NotFound for the full 5 s and then emitted null SILENTLY → every
+    /// /mcp reconnect on pods B/C returned 401 for ~2 minutes with zero server-side
+    /// trace (memex-cloud 2026-07-24, ingress logs: every rejected request took
+    /// exactly 5.000–5.007 s). The issuance-side warm-up (#624) only helps the
+    /// minting pod. The resilient read activates the owning per-node hub from
+    /// shared Postgres and rides out the lag; a warm token resolves on the first
+    /// attempt, so the hot path pays nothing.
+    /// </para>
+    /// <para>
+    /// Every failure is logged at Warning with the hash prefix (never the raw
+    /// token), the failing stage (index-read-timeout / index-hash-mismatch /
+    /// token-read-timeout / token-hash-mismatch / revoked / expired) and elapsed ms.
+    /// The chain is fully observable — no <c>FromAsync</c>, no <c>await</c>.
+    /// </para>
     /// </summary>
     public IObservable<ApiToken?> ValidateToken(string rawToken)
     {
@@ -236,38 +281,116 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
         var hashPrefix = hash[..12];
         var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
 
-        return ReadAsSystem(indexPath)
-            .SelectMany(indexNode =>
-            {
-                if (indexNode == null)
-                    return Observable.Return<(MeshNode? node, ApiToken? token)>((null, null));
-
-                var index = indexNode.Content as ApiTokenIndex ?? ExtractApiTokenIndex(indexNode);
-                if (index != null)
+        return Observable.Defer(() =>
+        {
+            var elapsed = Stopwatch.StartNew();
+            return ReadValidationNode(indexPath, node => IndexHashVerdict(node, hash), "index", hashPrefix, elapsed)
+                .SelectMany(indexNode =>
                 {
-                    if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
+                    if (indexNode == null)
                         return Observable.Return<(MeshNode? node, ApiToken? token)>((null, null));
-                    return ReadAsSystem(index.TokenPath)
-                        .Select(tn => (
-                            node: tn,
-                            token: (tn?.Content as ApiToken) ?? ExtractApiToken(tn)));
-                }
-                // Legacy format: full ApiToken at index path.
-                return Observable.Return((
-                    node: (MeshNode?)indexNode,
-                    token: (indexNode.Content as ApiToken) ?? ExtractApiToken(indexNode)));
-            })
-            .Select(t => FinalizeToken(t.node, t.token, hash, hashPrefix));
+
+                    var index = indexNode.Content as ApiTokenIndex ?? ExtractApiTokenIndex(indexNode);
+                    if (index != null)
+                        return ReadValidationNode(
+                                index.TokenPath, node => TokenHashVerdict(node, hash), "token", hashPrefix, elapsed)
+                            .Select(tn => (
+                                node: tn,
+                                token: (tn?.Content as ApiToken) ?? ExtractApiToken(tn)));
+
+                    // Legacy format: full ApiToken at the index path (its hash already
+                    // matched in the verdict — a mismatch would have terminated above).
+                    return Observable.Return((
+                        node: (MeshNode?)indexNode,
+                        token: (indexNode.Content as ApiToken) ?? ExtractApiToken(indexNode)));
+                })
+                .Select(t => FinalizeToken(t.node, t.token, hash, hashPrefix, elapsed));
+        });
     }
 
-    private IObservable<MeshNode?> ReadAsSystem(string path)
+    /// <summary>
+    /// Verdict for one successfully-read candidate node during validation:
+    /// <c>true</c> = expected content present with the MATCHING hash (emit the node);
+    /// <c>false</c> = content present but a DIFFERENT hash — someone else's token
+    /// colliding on the 12-char prefix / tampering — a TERMINAL mismatch that must
+    /// fail fast, never spin the poll; <c>null</c> = content not (yet) extractable —
+    /// transient (mid-create, sync lag), keep polling until the timeout.
+    /// </summary>
+    private bool? IndexHashVerdict(MeshNode node, string hash)
     {
+        var index = node.Content as ApiTokenIndex ?? ExtractApiTokenIndex(node);
+        if (index != null)
+            return string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase);
+        var legacy = node.Content as ApiToken ?? ExtractApiToken(node);
+        if (legacy != null)
+            return string.Equals(legacy.TokenHash, hash, StringComparison.OrdinalIgnoreCase);
+        return null;
+    }
+
+    /// <inheritdoc cref="IndexHashVerdict"/>
+    private bool? TokenHashVerdict(MeshNode node, string hash)
+    {
+        var token = node.Content as ApiToken ?? ExtractApiToken(node);
+        if (token != null)
+            return string.Equals(token.TokenHash, hash, StringComparison.OrdinalIgnoreCase);
+        return null;
+    }
+
+    /// <summary>
+    /// Bounded resilient read for the validation path — the exact
+    /// <c>OAuthCodeStore.ReadCodeNode</c> shape (#620), with one correctness nuance:
+    /// a node that reads SUCCESSFULLY but carries a non-matching hash is a terminal
+    /// mismatch (emit null immediately, logged as <c>{stage}-hash-mismatch</c>) —
+    /// only read-error/absence re-polls. Each attempt reads through the authoritative
+    /// <c>GetMeshNodeStream(path)</c> (activates the owning per-node hub from
+    /// Postgres), swallows the transient "No node found", and — ONLY on no-verdict —
+    /// re-subscribes after <see cref="ValidationRetryDelay"/> via <c>Concat</c>
+    /// (never <c>Merge</c>: exactly one owner-hub subscription live at a time).
+    /// Bounded by <see cref="ValidationReadTimeout"/> → Warning
+    /// (<c>{stage}-read-timeout</c>) → null. System identity established at
+    /// subscribe time (<c>Observable.Using</c>): validation is the entry point that
+    /// turns a raw token into an identity, so the caller is by definition
+    /// unauthenticated; the hash compare is the actual authentication step.
+    /// </summary>
+    private IObservable<MeshNode?> ReadValidationNode(
+        string path, Func<MeshNode, bool?> hashVerdict, string stage, string hashPrefix, Stopwatch elapsed)
+    {
+        IObservable<MeshNode?> Attempt() =>
+            hub.GetWorkspace().GetMeshNodeStream(path)
+                .Take(1)
+                .SelectMany(node =>
+                {
+                    var verdict = node is null ? null : hashVerdict(node);
+                    if (verdict == true)
+                        return Observable.Return((MeshNode?)node);
+                    if (verdict == false)
+                        return Observable.Defer(() =>
+                        {
+                            logger.LogWarning(
+                                "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms: node at {Path} exists but carries a different token hash",
+                                stage + "-hash-mismatch", hashPrefix, elapsed.ElapsedMilliseconds, path);
+                            return Observable.Return((MeshNode?)null);
+                        });
+                    return Observable.Empty<MeshNode?>();
+                })
+                .Catch<MeshNode?, Exception>(_ => Observable.Empty<MeshNode?>())
+                .Concat(Observable.Defer(Attempt).DelaySubscription(ValidationRetryDelay));
+
+        var poll = Observable.Defer(Attempt)
+            .Take(1)
+            .Timeout(ValidationReadTimeout)
+            .Catch<MeshNode?, Exception>(ex =>
+            {
+                logger.LogWarning(ex,
+                    "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms: node at {Path} not readable within {Timeout}",
+                    stage + "-read-timeout", hashPrefix, elapsed.ElapsedMilliseconds, path, ValidationReadTimeout);
+                return Observable.Return<MeshNode?>(null);
+            });
+
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         return accessService != null
-            ? Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => hub.GetMeshNode(path, TimeSpan.FromSeconds(5)))
-            : hub.GetMeshNode(path, TimeSpan.FromSeconds(5));
+            ? Observable.Using(() => accessService.ImpersonateAsSystem(), _ => poll)
+            : poll;
     }
 
     /// <summary>
@@ -308,20 +431,34 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
             : poll;
     }
 
-    private ApiToken? FinalizeToken(MeshNode? tokenNode, ApiToken? apiToken, string hash, string hashPrefix)
+    private ApiToken? FinalizeToken(MeshNode? tokenNode, ApiToken? apiToken, string hash, string hashPrefix, Stopwatch elapsed)
     {
         if (apiToken == null)
-            return null;
+            return null; // read failure/mismatch — already logged by ReadValidationNode with its stage
         if (!string.Equals(apiToken.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
+        {
+            // Defense in depth — the verdict in ReadValidationNode already terminates
+            // mismatches, so this branch should be unreachable; log it if it ever fires.
+            logger.LogWarning(
+                "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms",
+                "token-hash-mismatch", hashPrefix, elapsed.ElapsedMilliseconds);
             return null;
+        }
+        // Warning, not Debug: a rejected token surfaces as a bare 401 to the client —
+        // without a server-side line naming the stage, prod triage is blind (the
+        // 2026-07-24 fresh-token 401s cost hours because every failure was silent).
         if (apiToken.IsRevoked)
         {
-            logger.LogDebug("Token {HashPrefix} is revoked", hashPrefix);
+            logger.LogWarning(
+                "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms",
+                "revoked", hashPrefix, elapsed.ElapsedMilliseconds);
             return null;
         }
         if (apiToken.ExpiresAt.HasValue && apiToken.ExpiresAt.Value < DateTimeOffset.UtcNow)
         {
-            logger.LogDebug("Token {HashPrefix} has expired", hashPrefix);
+            logger.LogWarning(
+                "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms (expired {ExpiresAt})",
+                "expired", hashPrefix, elapsed.ElapsedMilliseconds, apiToken.ExpiresAt.Value);
             return null;
         }
 
