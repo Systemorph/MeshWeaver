@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Security.Cryptography;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -20,12 +23,20 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder);
 
-    private ApiTokenService GetService() =>
+    private ApiTokenService GetService(TimeSpan? validationReadTimeout = null, ILogger<ApiTokenService>? logger = null) =>
         new(
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh,
-            Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>()
-        );
+            logger ?? Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>()
+        )
+        {
+            // Short read window so the negative-path tests (unknown / revoked-with-
+            // deleted-index / deleted token, which wait out the resilient read's
+            // timeout by design) stay fast on the single in-memory mesh; a valid
+            // token resolves on the first attempt regardless. Prod default is 8 s —
+            // same pattern as OAuthCodeStoreTest.NewStore's ReadTimeout.
+            ValidationReadTimeout = validationReadTimeout ?? TimeSpan.FromSeconds(2),
+        };
 
     [Fact]
     public async Task CreateToken_ReturnsTokenWithCorrectPrefix()
@@ -127,7 +138,8 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact]
     public async Task ValidateToken_ExpiredToken_ReturnsNull()
     {
-        var service = GetService();
+        var logs = new CapturingLogger();
+        var service = GetService(logger: logs);
         var result = await service.CreateToken(
             "user1", "Test User", "test@example.com", "Expired",
             expiresAt: DateTimeOffset.UtcNow.AddDays(-1)).Should().Emit();
@@ -135,6 +147,135 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         var validated = await service.ValidateToken(result.RawToken).Should().Emit();
 
         validated.Should().BeNull();
+        // No silent rejection: the failing stage must be named at Warning with the
+        // hash prefix (never the raw token) — the diagnosability gap behind the
+        // untraceable 401s of 2026-07-24.
+        var hashPrefix = ApiTokenService.HashToken(result.RawToken)[..12];
+        logs.Entries.Should().Contain(e =>
+                e.Level == LogLevel.Warning && e.Message.Contains("expired") && e.Message.Contains(hashPrefix),
+            "an expired-token rejection must log a Warning naming the stage and hash prefix");
+        logs.Entries.Should().NotContain(e => e.Message.Contains(result.RawToken),
+            "the raw token must never appear in any log line");
+    }
+
+    // ── Resilient validation read (the fresh-token multi-replica 401 fix) ──
+    //
+    // Prod bug being pinned (memex-cloud 2026-07-24, 3+ KEDA replicas): /token minted
+    // an mw_ token on pod A; the MCP client's immediate reconnect landed on pods B/C,
+    // where ValidateToken's one-shot 5 s GetMeshNode read hit the create→routable
+    // window, timed out, and emitted null SILENTLY → 401 for ~2 minutes (ingress:
+    // every rejected request took exactly 5.000–5.007 s). The fix mirrors
+    // OAuthCodeStore.ReadCodeNode (#620): a self-paced GetMeshNodeStream poll bounded
+    // by ValidationReadTimeout, with a hash MISMATCH on a successfully-read node as a
+    // terminal fail-fast (never a poll spin).
+
+    /// <summary>
+    /// SHOULD-FAIL-IF: the resilient read adds latency to the hot path — a warm
+    /// token must resolve on the FIRST poll attempt (well under 1 s), never touch
+    /// the retry window. The 2 s test window doubles as the discriminator: a
+    /// retried/timed-out read would blow both the wall-clock and the null check.
+    /// </summary>
+    [Fact]
+    public async Task ValidateToken_WarmToken_ResolvesOnFirstAttempt_NoAddedLatency()
+    {
+        var service = GetService();
+        var result = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "Warm").Should().Emit();
+
+        // First validation absorbs any residual create→readable lag (issuance already
+        // confirmed both nodes readable, so this normally hits first-attempt too).
+        (await service.ValidateToken(result.RawToken).Should().Emit()).Should().NotBeNull();
+
+        var stopwatch = Stopwatch.StartNew();
+        var validated = await service.ValidateToken(result.RawToken).Should().Emit();
+        stopwatch.Stop();
+
+        validated.Should().NotBeNull();
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1),
+            "a warm token must validate on the first read attempt — the resilient poll may add latency ONLY on a genuine miss");
+    }
+
+    /// <summary>
+    /// SHOULD-FAIL-IF: an unknown token is rejected INSTANTLY — that is exactly the
+    /// behavior that 401ed fresh tokens during the create→routable window on the
+    /// non-minting replicas. The resilient read must keep polling for the full
+    /// <see cref="ApiTokenService.ValidationReadTimeout"/> before concluding null,
+    /// and the timeout must be named at Warning with the hash prefix.
+    /// </summary>
+    [Fact]
+    public async Task ValidateToken_UnknownToken_FailsAtReadTimeout_NotInstantly()
+    {
+        var logs = new CapturingLogger();
+        var window = TimeSpan.FromSeconds(1);
+        var service = GetService(window, logs);
+        const string unknownToken = "mw_thistokenwasneverissued0123456789";
+
+        var stopwatch = Stopwatch.StartNew();
+        var validated = await service.ValidateToken(unknownToken).Should().Emit();
+        stopwatch.Stop();
+
+        validated.Should().BeNull();
+        stopwatch.Elapsed.Should().BeGreaterThanOrEqualTo(window - TimeSpan.FromMilliseconds(100),
+            "an unknown token must poll the full ValidationReadTimeout window — an instant no is indistinguishable from a fresh token that is not yet routable on this replica");
+
+        var hashPrefix = ApiTokenService.HashToken(unknownToken)[..12];
+        logs.Entries.Should().Contain(e =>
+                e.Level == LogLevel.Warning
+                && e.Message.Contains("index-read-timeout")
+                && e.Message.Contains(hashPrefix),
+            "the read timeout must be logged at Warning with the failing stage and hash prefix — never a silent null");
+        logs.Entries.Should().NotContain(e => e.Message.Contains(unknownToken),
+            "the raw token must never appear in any log line");
+    }
+
+    /// <summary>
+    /// SHOULD-FAIL-IF: a node that reads SUCCESSFULLY but carries a different full
+    /// hash (someone else's token colliding on the 12-char prefix, or tampering)
+    /// spins the poll to the timeout. A read that succeeded with non-matching
+    /// content is a TERMINAL mismatch — fail fast, log <c>index-hash-mismatch</c>.
+    /// </summary>
+    [Fact]
+    public async Task ValidateToken_ExistingIndexWithWrongHash_FailsFast_NotAtTimeout()
+    {
+        var logs = new CapturingLogger();
+        // Generous window so the timing assert genuinely discriminates fail-fast
+        // from wait-out-the-window.
+        var service = GetService(TimeSpan.FromSeconds(8), logs);
+
+        var rawToken = "mw_" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            .Replace("+", "-").Replace("/", "_").TrimEnd('=');
+        var hashPrefix = ApiTokenService.HashToken(rawToken)[..12];
+
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var indexNode = new MeshNode(hashPrefix, "ApiToken")
+        {
+            NodeType = "ApiToken",
+            State = MeshNodeState.Active,
+            Content = new ApiTokenIndex
+            {
+                TokenHash = new string('0', 64), // NOT rawToken's hash — colliding entry
+                TokenPath = $"user1/ApiToken/{hashPrefix}",
+            },
+        };
+        await meshService.CreateNode(indexNode).Should().Emit();
+        // Ensure the node is readable BEFORE measuring, so the wall-clock below
+        // captures the mismatch verdict, not create→readable lag.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => ReadNode(indexNode.Path))
+            .Should().Match(n => n is not null);
+
+        var stopwatch = Stopwatch.StartNew();
+        var validated = await service.ValidateToken(rawToken).Should().Emit();
+        stopwatch.Stop();
+
+        validated.Should().BeNull("a hash mismatch must reject");
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(4),
+            "a successfully-read node with a non-matching hash is a terminal mismatch — it must NOT spin the poll to the 8 s timeout");
+        logs.Entries.Should().Contain(e =>
+                e.Level == LogLevel.Warning
+                && e.Message.Contains("index-hash-mismatch")
+                && e.Message.Contains(hashPrefix),
+            "the terminal mismatch must be logged at Warning with the failing stage and hash prefix");
     }
 
     [Fact]
@@ -500,11 +641,11 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     /// <c>.Should().Match(...)</c>, which blocks (≤ the assertion timeout) for the first
     /// snapshot satisfying the predicate. No polling, no <c>Task.Delay</c>.
     /// <para>
-    /// Required for ApiToken paths because those nodes are <c>IsSatelliteType</c> and have no
-    /// per-node hub — the test base's <c>ReadNodeAsync</c> (and <c>GetMeshNodeStream(path)</c>)
-    /// would hang for 30s waiting for a route. The mesh-level <c>Query</c> reads the
-    /// authoritative persistence state through the same pipeline production <c>ApiTokenService</c>
-    /// uses for its own reads, with live change-notifier deltas instead of a polling loop.
+    /// Used for ApiToken paths as a route-independent read: the mesh-level <c>Query</c> reads
+    /// the authoritative persistence state with live change-notifier deltas instead of a
+    /// polling loop. (ApiToken nodes are regular content nodes — <c>IsSatelliteType = false</c>
+    /// per <c>ApiTokenNodeType.CreateMeshNode</c> — so <c>GetMeshNodeStream(path)</c> also works;
+    /// production <c>ValidateToken</c> reads through it since the resilient-read fix.)
     /// </para>
     /// </summary>
     private IObservable<MeshNode?> ObserveNode(string path)
@@ -521,5 +662,25 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
                 QueryChangeType.Removed => null,
                 _ => current,
             });
+    }
+
+    private sealed record LogEntry(LogLevel Level, string Message);
+
+    /// <summary>
+    /// Minimal in-memory <see cref="ILogger{T}"/> capture so the tests can assert the
+    /// no-silent-401 contract (every validation failure logs a Warning naming the
+    /// failing stage + hash prefix, never the raw token). Instance state on the test —
+    /// dies with it; not a mock of any core mesh interface.
+    /// </summary>
+    private sealed class CapturingLogger : ILogger<ApiTokenService>
+    {
+        public ConcurrentQueue<LogEntry> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+            => Entries.Enqueue(new LogEntry(logLevel, formatter(state, exception)));
     }
 }
