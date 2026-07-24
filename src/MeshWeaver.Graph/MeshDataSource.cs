@@ -457,6 +457,53 @@ public static class MeshDataSourceExtensions
     }
 
     /// <summary>
+    /// 🚨 Pending-save tracker for the own-node persistence sampler — the state the
+    /// dispose-time final flush reads so a write that was APPLIED AND ACKED inside the
+    /// 200 ms <c>Sample</c> window is never dropped on hub teardown.
+    ///
+    /// <para><b>The defect this closes (CI run 30068597014,
+    /// <c>TwoSiloRecycleConvergenceTest</c>):</b> a <c>PatchDataRequest</c> that lands in the
+    /// owner hub's Quiescing window (after <c>Dispose()</c> posted the
+    /// <c>DisposeRequest</c>, before <c>RunLevel</c> reaches <c>DisposeHostedHubs</c> — the
+    /// ShuttingDown NACK gate) is processed normally: the patch commits in-RAM and the
+    /// owner posts <c>PatchDataResponse</c> Success. The persistence sampler then holds the
+    /// new state in its 200 ms <c>Sample</c> buffer — and the ShutDown phase's
+    /// <c>DisposeImpl</c> disposed that subscription with the save still pending. The
+    /// acknowledged write was durably LOST: the next activation loaded the stale persisted
+    /// version. Creates/deletes were already covered (<c>MeshNodeTypeSource</c>'s
+    /// <c>FlushPendingWrites</c> reactive dispose action); updates were not — this tracker
+    /// plus <see cref="FlushPendingOwnSave"/> gives the update sampler the same guarantee.</para>
+    ///
+    /// <para>Holds only <see cref="MeshNode"/> references (never the hub), so stamping it
+    /// from inside the sampler's timer chain cannot recreate the TimerQueue-roots-the-hub
+    /// leak the sampler's static-local-function shape exists to prevent.</para>
+    /// </summary>
+    internal sealed class PendingOwnSave
+    {
+        private volatile MeshNode? latest;
+        private volatile MeshNode? requested;
+
+        /// <summary>Latest own-node state that passed the sampler's gates (candidate for save).</summary>
+        public void Track(MeshNode node) => latest = node;
+
+        /// <summary>Marks <paramref name="node"/>'s save as dispatched — its
+        /// <c>SaveMeshNodeRequest</c> was ACCEPTED by the hub (not rejected by the
+        /// teardown guard), so the inbox will process it before the FIFO-ordered
+        /// phase-advance <c>ShutdownRequest</c>s and the storage write runs on the
+        /// mesh IO pool, which outlives the hub.</summary>
+        public void MarkRequested(MeshNode node) => requested = node;
+
+        /// <summary>The latest gated state whose save was never dispatched — or null when
+        /// everything the sampler saw has a dispatched save. Reference identity is exact
+        /// here: <c>Sample</c> forwards the same instance the gate chain stamped.</summary>
+        public MeshNode? TakeUnsaved()
+        {
+            var l = latest;
+            return l is null || ReferenceEquals(l, requested) ? null : l;
+        }
+    }
+
+    /// <summary>
     /// Best-effort: write a <c>Release</c> MeshNode at
     /// <c>{nodeTypePath}/Release/{version}</c> capturing the compiled assembly
     /// path + the markdown release notes from the NodeType's
@@ -729,11 +776,14 @@ public static class MeshDataSourceExtensions
             // RegisterForDisposal / compile-watcher uses below), transitively pinning the hub. A
             // `static` local function cannot capture the enclosing scope, so the hub is referenced
             // solely by the WeakReference and an abandoned hub stays collectable; a live hub is kept
-            // reachable via the mesh/cache so sampling persists normally, and the sampler self-disposes
-            // once the hub is collected or past Started.
+            // reachable via the mesh/cache so sampling persists normally; the sampler self-disposes
+            // once the hub is collected, and on a DISPOSING hub (past Started) it stops posting but
+            // keeps tracking so the dispose-time FlushPendingOwnSave persists the latest state —
+            // teardown's DisposeImpl bounds the chain's lifetime via RegisterForDisposal(saveSub).
             static IDisposable InstallPersistenceSampler(
                 IObservable<MeshNode> own, OwnNodeCache nodeCache,
-                WeakReference<IMessageHub> weakHub, TimeSpan interval)
+                WeakReference<IMessageHub> weakHub, TimeSpan interval,
+                PendingOwnSave pending)
             {
                 var sub = new System.Reactive.Disposables.SingleAssignmentDisposable();
                 sub.Disposable = own
@@ -751,22 +801,48 @@ public static class MeshDataSourceExtensions
                     .Where(n => n != null && !nodeCache.IsDeleted
                         && !ReferenceEquals(n, nodeCache.PersistedSnapshot))
                     .DistinctUntilChanged()
+                    // 🚨 Track every save-worthy state BEFORE the Sample buffer: the
+                    // dispose-time FlushPendingOwnSave persists the latest tracked state
+                    // whose save was never dispatched, so a write acked inside the Sample
+                    // window survives hub teardown (see PendingOwnSave). Holds only the
+                    // MeshNode — no hub reference enters the timer chain.
+                    .Do(pending.Track)
                     .Sample(interval)
                     .Subscribe(node =>
                     {
                         if (nodeCache.IsDeleted) return;
-                        if (!weakHub.TryGetTarget(out var saveHub)
-                            || saveHub.RunLevel > MessageHubRunLevel.Started)
+                        if (!weakHub.TryGetTarget(out var saveHub))
                         {
-                            // Hub collected or past Started — stop sampling so the TimerQueue releases it.
+                            // Hub collected (abandoned at RunLevel=1, never disposed) — stop
+                            // sampling so the TimerQueue releases the chain.
                             sub.Dispose();
+                            return;
+                        }
+                        if (saveHub.RunLevel > MessageHubRunLevel.Started)
+                        {
+                            // Hub is tearing down (Quiescing or later). Do NOT post — the inbox
+                            // may already reject it — and do NOT self-dispose: the chain must
+                            // keep tracking quiesce-window writes (a PatchDataRequest is still
+                            // processed and ACKED during Quiescing) so the dispose-time
+                            // FlushPendingOwnSave persists the true latest state. Teardown
+                            // bounds the chain's lifetime: DisposeImpl disposes it via the
+                            // RegisterForDisposal(saveSub) registration. The old `sub.Dispose()`
+                            // here silently DISCARDED the pending save — half of the
+                            // acked-write-lost-on-recycle defect (CI run 30068597014).
                             return;
                         }
                         // Per-node hub auto-persists its OWN MeshNode on every change. SaveMeshNodeRequest
                         // is [SystemMessage] (PostPipeline accepts a null AccessContext — per-node hub
                         // self-write); no ImpersonateAsHub stamping (the hub address polluted CreatedBy via
                         // the AsyncLocal leak, fixed 2026-05-22). See AccessContextPropagation.md.
-                        saveHub.Post(new SaveMeshNodeRequest(node));
+                        var posted = saveHub.Post(new SaveMeshNodeRequest(node));
+                        // Only a delivery the hub ACCEPTED counts as dispatched — Post returns
+                        // Failed("Hub is shutting down") from the hoisted teardown guard when the
+                        // RunLevel flipped between our check above and the post. An accepted
+                        // delivery is FIFO-ordered ahead of the phase-advance ShutdownRequests,
+                        // so its handler runs and the storage write lands on the IO pool.
+                        if (posted is not null && posted.State != MessageDeliveryState.Failed)
+                            pending.MarkRequested(node);
                     });
                 return sub;
             }
@@ -787,9 +863,28 @@ public static class MeshDataSourceExtensions
             // WithMeshNodes (FindServedStaticNode) so serving and persisting stay in lockstep.
             if (FindServedStaticNode(hub.ServiceProvider, hub.Address.Path) is null)
             {
+                var pending = new PendingOwnSave();
                 var saveSub = InstallPersistenceSampler(
-                    ownStream, cache, new WeakReference<IMessageHub>(hub), SaveSampleInterval);
+                    ownStream, cache, new WeakReference<IMessageHub>(hub), SaveSampleInterval, pending);
                 hub.RegisterForDisposal(saveSub);
+                // 🚨 Final flush — the update-path twin of MeshNodeTypeSource's
+                // FlushPendingWrites dispose action (which covers creates/deletes). A write
+                // that commits and ACKS during the Quiescing window sits in the 200 ms Sample
+                // buffer above; without this flush, DisposeImpl disposed the sampler with the
+                // save still pending and the ACKED write was durably lost — the reactivated
+                // hub loaded the stale persisted version (TwoSiloRecycleConvergenceTest flake,
+                // CI run 30068597014: post-recycle patch acked, store never advanced).
+                // Registered as a REACTIVE dispose action: the returned observable's write
+                // leaf runs on the mesh IO pool (outlives this hub); a fault surfaces through
+                // DisposeImpl's [DISPOSE-ACTION] logging, never silently.
+                // Block-bodied lambda: binds the Func<IMessageHub, IObservable<Unit>>
+                // (reactive dispose action) overload unambiguously — an expression lambda
+                // is also convertible to Action<IMessageHub>, which would never subscribe
+                // the (cold) flush observable.
+                hub.RegisterForDisposal(h =>
+                {
+                    return FlushPendingOwnSave(h, cache, pending);
+                });
             }
 
             // Per-NodeType compile auto-watcher: fires RunCompile whenever the own
@@ -923,6 +1018,48 @@ public static class MeshDataSourceExtensions
             }
         });
         hub.RegisterForDisposal(delSub);
+    }
+
+    /// <summary>
+    /// Dispose-time final flush for the own-node persistence sampler: persists the latest
+    /// save-worthy own-node state whose <see cref="SaveMeshNodeRequest"/> was never
+    /// dispatched (see <see cref="PendingOwnSave"/>). Runs as a REACTIVE dispose action in
+    /// <c>DisposeImpl</c> — the storage adapter is mesh-scoped and runs its async leaf on
+    /// the mesh IO pool, which outlives this hub, so the write completes in the background;
+    /// the hub never awaits. Applies the same guards as <c>HandleSaveMeshNode</c>
+    /// (recently-deleted tombstone, Version >= 1) plus the sampler's own gates re-checked
+    /// at flush time (IsDeleted, PersistedSnapshot identity). A fault propagates to
+    /// DisposeImpl's Catch wrapper and is logged as <c>[DISPOSE-ACTION] … faulted</c>.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> FlushPendingOwnSave(
+        IMessageHub hub, OwnNodeCache cache, PendingOwnSave pending)
+    {
+        var node = pending.TakeUnsaved();
+        if (node is null || cache.IsDeleted || ReferenceEquals(node, cache.PersistedSnapshot))
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null)
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        // "Delete wins" — same tombstone guard as HandleSaveMeshNode: never let the flush
+        // resurrect a just-deleted path.
+        var recentlyDeleted = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
+        if (recentlyDeleted?.IsRecentlyDeleted(node.Path) == true)
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        if (node.Version == 0)
+            node = node with { Version = 1 };
+
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.SaveMeshNodeHandler");
+        logger?.LogDebug("[SaveMeshNode] dispose-flush start path={Path} version={Version}",
+            node.Path, node.Version);
+        return persistence.Write(node, hub.JsonSerializerOptions)
+            .Do(saved => logger?.LogDebug(
+                "[SaveMeshNode] dispose-flush persisted path={Path} version={Version}",
+                saved?.Path, saved?.Version))
+            .Select(_ => System.Reactive.Unit.Default);
     }
 
     /// <summary>
