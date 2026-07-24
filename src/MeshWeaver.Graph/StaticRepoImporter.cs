@@ -659,27 +659,6 @@ public static class StaticRepoImporter
         NodeTypeCompilationActivity.AppendLog(
             hub, activityPath, $"Importing {nodes.Count} node(s) into {source.Partition}…", logger!);
 
-        // 🔁 Auto-recycle-on-reimport (the fix for "custom-typed content renders empty after a
-        // re-import into a running process"). The importer re-materialises content nodes but never
-        // recycled the per-node hubs, so a node whose custom NodeType hub was already activated keeps
-        // serving content the domain-agnostic cache re-read as an untyped JsonElement. Collect the
-        // set of CUSTOM NodeType keys this partition defines (a NodeType-definition node's own path
-        // plus its short id) so we can, after the upsert, recycle exactly the content INSTANCES of
-        // those types that changed THIS run — not framework/markdown nodes (never darkened), not
-        // incremental-skips. Reuses the RecycleCore mechanism (MeshChangeFeed Updated + DisposeRequest).
-        var customTypeKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var n in nodes)
-        {
-            if (!string.Equals(n.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
-                continue;
-            customTypeKeys.Add(n.Path);
-            var segs = n.Path.Split('/');
-            if (segs.Length > 0 && !string.IsNullOrEmpty(segs[^1]))
-                customTypeKeys.Add(segs[^1]);
-        }
-        // Thread-safe: the per-node upsert runs under .Merge(BatchSize) (concurrent).
-        var recyclePaths = new System.Collections.Concurrent.ConcurrentQueue<string>();
-
         // Read the existing target subtree(s) ONCE. A source's nodes may span MULTIPLE partitions
         // (e.g. the model catalog: the read-only _Policy under "Model", the provider/model content
         // under "_Provider"), so read each touched partition's subtree. The snapshot yields each
@@ -848,15 +827,7 @@ public static class StaticRepoImporter
                         // Failed and continue. The Failed tally drives the terminal Warning status
                         // below — the activity never reports a green Succeeded while hiding failures.
                         return Upsert(hub, materialized)
-                            .Select(_ =>
-                            {
-                                // Only content INSTANCES of a custom NodeType this partition defines are
-                                // recycled (so their hubs re-activate → re-run WithContentType → re-type).
-                                // Framework/markdown nodes fall through (their NodeType is not a custom key).
-                                if (materialized.NodeType is { Length: > 0 } nt && customTypeKeys.Contains(nt))
-                                    recyclePaths.Enqueue(path);
-                                return (Imported: 1, Failed: 0, Preserved: 0);
-                            })
+                            .Select(_ => (Imported: 1, Failed: 0, Preserved: 0))
                             .Catch<(int Imported, int Failed, int Preserved), Exception>(ex =>
                             {
                                 logger?.LogWarning(ex,
@@ -922,10 +893,6 @@ public static class StaticRepoImporter
                         // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
                         return WriteManifest(hub, source.Partition, nodes, hub.JsonSerializerOptions, logger).Select(_ =>
                         {
-                            // 🔁 Recycle the custom-typed instances upserted THIS run so their per-node
-                            // hubs re-activate cold and re-register their content type — the same heal a
-                            // manual recycle performed after the outage, now automatic on every import.
-                            RecycleReimportedNodes(hub, recyclePaths, activityPath, logger);
                             // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →
                             // Warning (the ⚠ lines above pinpoint which files), all-clear →
                             // Succeeded. Written via Complete so the status + summary land in ONE
@@ -1238,52 +1205,6 @@ public static class StaticRepoImporter
     /// </summary>
     private static bool IsGovernance(MeshNode node) =>
         node.Segments.Skip(1).Any(seg => seg.StartsWith('_'));
-
-    /// <summary>
-    /// Recycles the per-node hubs of the custom-typed content instances upserted this run: publishes a
-    /// <see cref="MeshChangeKind.Updated"/> event (invalidates the shared node-stream cache) and posts a
-    /// <see cref="DisposeRequest"/> (tears the hub down so the next read activates it COLD and re-runs
-    /// its compiled <c>WithContentType</c>). Same mechanism as <c>MeshOperations.RecycleCore</c>, but it
-    /// deliberately does NOT stamp a release request — these are content instances, not NodeType nodes,
-    /// so there is nothing to recompile. Fire-and-forget + per-node guarded: a recycle hiccup must never
-    /// fail the import that already succeeded.
-    /// </summary>
-    private static void RecycleReimportedNodes(
-        IMessageHub hub, System.Collections.Concurrent.ConcurrentQueue<string> paths,
-        string activityPath, ILogger? logger)
-    {
-        if (paths.IsEmpty)
-            return;
-        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
-        var recycled = 0;
-        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            try
-            {
-                var segments = path.Split('/');
-                var id = segments.Length > 0 ? segments[^1] : path;
-                var ns = segments.Length > 1 ? string.Join("/", segments[..^1]) : "";
-                changeFeed?.Publish(new MeshChangeEvent(
-                    Namespace: ns, Id: id, Path: path, Kind: MeshChangeKind.Updated,
-                    NodeType: null, Version: 0, Timestamp: DateTimeOffset.UtcNow));
-                hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
-                recycled++;
-            }
-            catch (Exception ex)
-            {
-                logger?.LogWarning(ex,
-                    "[StaticRepoImport] recycle of re-imported node {Path} failed (continuing).", path);
-            }
-        }
-        if (recycled > 0)
-        {
-            logger?.LogInformation(
-                "[StaticRepoImport] recycled {Count} re-imported custom-typed node hub(s) so content re-types on next read.",
-                recycled);
-            NodeTypeCompilationActivity.AppendLog(hub, activityPath,
-                $"🔁 Recycled {recycled} re-imported custom-typed node(s) so their content re-types.", logger!);
-        }
-    }
 
     /// <summary>
     /// Computes prerendered HTML for markdown nodes via the shared <see cref="MarkdownContent.Parse"/>
