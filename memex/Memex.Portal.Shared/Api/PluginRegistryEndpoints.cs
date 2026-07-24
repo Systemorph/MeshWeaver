@@ -190,7 +190,9 @@ public static class PluginRegistryEndpoints
                     return Observable.Return((IResult)Results.Json(
                         new { error = $"Unknown package '{body.Id}'" }, statusCode: StatusCodes.Status404NotFound));
                 }
-                return hit.Source.Source.FetchPackageFiles(hit.Package, hit.Source.GitRef)
+                // The paths subset (manifest-diff fast path) only FILTERS within the resolved
+                // package's own files — the curated-id resolution above stays the security gate.
+                return hit.Source.Source.FetchPackageFiles(hit.Package, hit.Source.GitRef, body.Paths)
                     .Select(files => (IResult)Results.Content(PluginRegistryPayloads.Files(files), "application/json"));
             })
             .Catch((Exception ex) =>
@@ -204,6 +206,8 @@ public static class PluginRegistryEndpoints
 
     /// <summary>Fetch-files request: only the package <paramref name="Id"/> is authoritative — the
     /// registry resolves the folder from its curated catalog. <paramref name="Ref"/> is advisory (the
-    /// registry serves its own configured ref).</summary>
-    public record FilesBody(string Id, string? Ref = null);
+    /// registry serves its own configured ref). <paramref name="Paths"/> optionally narrows the
+    /// response to a subset of the package's own repo-relative paths (the manifest-diff incremental
+    /// fast path); null = all files. Unknown paths are simply absent from the response.</summary>
+    public record FilesBody(string Id, string? Ref = null, IReadOnlyList<string>? Paths = null);
 }

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Text.Json.Serialization;
 
 namespace MeshWeaver.PluginCatalog;
@@ -52,6 +53,16 @@ public record PackageManifest
     /// <summary>Package version string (compared to the installed record for update-available status).</summary>
     public string? Version { get; init; }
 
+    /// <summary>
+    /// The module's content version from its CI-maintained <c>manifest.lock</c>
+    /// (<see cref="ModuleManifest.ModuleVersion"/>) — a hash of the module's own files, unlike
+    /// <see cref="Version"/> which is the whole-repo commit sha. When both the catalog entry and the
+    /// installed record carry it, equality means "nothing to sync": the card shows Installed and an
+    /// update request skips without fetching a single file. Null for packages without a manifest
+    /// (legacy behavior applies).
+    /// </summary>
+    public string? ModuleVersion { get; init; }
+
     /// <summary>The package's folder within the source repo. Set by the source while listing;
     /// not authored in <c>package.json</c>.</summary>
     public string? SourceFolder { get; init; }
@@ -95,6 +106,14 @@ public record PackageManifest
 
     /// <summary>Number of content nodes upserted on the last install. Null until installed.</summary>
     public int? InstalledNodeCount { get; init; }
+
+    /// <summary>
+    /// The module manifest's per-file hash map at install time (<see cref="ModuleManifest.Files"/>)
+    /// — the baseline the NEXT update diffs against to touch only what really changed. Null until
+    /// installed from a manifest-carrying package (a null baseline falls back to the legacy full
+    /// install path).
+    /// </summary>
+    public ImmutableSortedDictionary<string, string>? InstalledFiles { get; init; }
 }
 
 /// <summary>A single file of a package folder read from the source at a git ref.</summary>
@@ -117,4 +136,25 @@ public interface IPackageSource
     /// <summary>Fetches every file of <paramref name="package"/>'s folder at <paramref name="gitRef"/>
     /// (the manifest itself is included; the installer skips it).</summary>
     IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef);
+
+    /// <summary>
+    /// Fetches only the given <paramref name="paths"/> (repo-relative) of the package — the
+    /// incremental-update fast path driven by a <see cref="ModuleManifest"/> diff. Null paths =
+    /// everything. The default implementation filters the full fetch locally; remote sources
+    /// (<see cref="RegistryPackageSource"/>) override it to move the filter to the server so
+    /// unchanged files never travel. Paths absent from the package simply don't appear in the
+    /// result.
+    /// </summary>
+    IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(
+        PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
+        paths is null
+            ? FetchPackageFiles(package, gitRef)
+            : FetchPackageFiles(package, gitRef)
+                .Select(files =>
+                {
+                    var wanted = paths as ISet<string> ?? new HashSet<string>(paths, StringComparer.Ordinal);
+                    return (IReadOnlyList<PackageFile>)files
+                        .Where(f => wanted.Contains(f.RelativePath))
+                        .ToList();
+                });
 }
