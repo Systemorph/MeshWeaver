@@ -1250,14 +1250,46 @@ public static class DataExtensions
             hub.Post(resp, o => o.ResponseFor(request));
         }
 
-        // OFF-TURN ack — IDENTICAL shape to the deferred path: wait for the reduced stream's
-        // post-commit emission (off the action-block turn), durably Flush (persist + publish the
-        // cache-eviction feed event), then ack. Subscribed BEFORE the write so the tick is never
-        // missed. A no-op/NotFound write never emits → AckOnce already fired inside the lambda.
+        // 🚨 Write-identity stamps — set by the merge lambda AT COMMIT TIME (the same
+        // happens-before pattern as MeshNodeStreamHandle.UpdateOwn's echo detection):
+        // the ack watcher below fires ONLY for an emission that provably CONTAINS this
+        // patch (same entity id, Version at-or-past the minted stamp). Until the merge
+        // has stamped, nothing can ack success.
+        long stampedVersion = -1;
+        string? stampedId = null;
+
+        // OFF-TURN ack — wait for a post-commit emission CONTAINING THIS WRITE (off the
+        // action-block turn), durably Flush (persist + publish the cache-eviction feed
+        // event), then ack. Subscribed BEFORE the write so the tick is never missed.
+        // A no-op/NotFound write never stamps → the gate never opens → AckOnce fires
+        // from the lambda's failure path instead.
+        //
+        // 🚨 NEVER `.Skip(1).Take(1)` here — that is emission-COUNTING, and on the
+        // pathless per-node reduced stream "the next emission" is not necessarily this
+        // write: on a COLD activation (idle-recycle → reactivate-on-write) the init
+        // gate opens BEFORE the initial collection commits to the primary stream, so
+        // the first post-subscribe emission is the initial LOAD echo (the PRE-patch
+        // node), and on a busy owner it can be sibling-satellite churn. The old
+        // Skip(1).Take(1) took that load echo as "committed", Flush()ed the STALE
+        // pre-patch node and posted PatchDataResponse SUCCESS while the merge turn
+        // no-op'd NotFound against the still-empty store (suppressed by the AckOnce
+        // guard) — a success-acked write that never existed anywhere. That is the
+        // acked-write-loss behind TwoSiloRecycleConvergenceTest on main runs
+        // 30068597014 / 30079395006 (post-recycle store frozen at the pre-recycle
+        // version despite a fast Success ack). Write-echo detection is identity-based,
+        // never emission-count-based (PR #584 rule).
         var postSub = stream
-            .Skip(1)
+            .Where(c => ChangeContainsStampedWrite(
+                c.Value,
+                System.Threading.Volatile.Read(ref stampedId),
+                System.Threading.Interlocked.Read(ref stampedVersion),
+                idKey, versionKey, jsonOpts))
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(5))
+            // Bounded: covers the one-shot cold-store defer below (10s) + flush. On
+            // expiry the AckOnce guard means this NACK only fires if no terminal was
+            // posted yet (e.g. commit emission lost in a teardown) — the caller's
+            // retry machinery takes over; never a silent hang.
+            .Timeout(TimeSpan.FromSeconds(20))
             .Subscribe(
                 committed =>
                 {
@@ -1287,8 +1319,9 @@ public static class DataExtensions
         }
 
         // ATOMIC read-merge-write on the primary action-block turn — a PURE, bounded transform.
-        // No ack here (the off-turn flush above acks on success), no IO, no nested subscribe.
-        primary.Update(
+        // No ack here (the off-turn identity-gated flush above acks on success), no IO, no
+        // nested subscribe. `deferred` guards the ONE-SHOT cold-store re-arm below.
+        void RunMergeTurn(bool deferred) => primary.Update(
             store =>
             {
                 try
@@ -1307,8 +1340,56 @@ public static class DataExtensions
                         entityId = only.Key?.ToString();
                         liveEntity = only.Value;
                     }
+                    // Cold with satellites already loaded (Count > 1): the Count==1 shortcut
+                    // can't pick — resolve the OWN node by Path == hub.Address.Path (segments
+                    // only; ToString() on hosted hubs appends "~<host>" and never matches).
+                    if (liveEntity is null && collection is { Instances.Count: > 1 })
+                    {
+                        var ownPath = hub.Address.Path;
+                        var pathKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Path") ?? "Path";
+                        foreach (var kvp in collection.Instances)
+                        {
+                            var candidate = System.Text.Json.JsonSerializer
+                                .SerializeToNode(kvp.Value, kvp.Value.GetType(), jsonOpts)
+                                as System.Text.Json.Nodes.JsonObject;
+                            if ((candidate?[pathKey] ?? candidate?["Path"] ?? candidate?["path"])
+                                    is System.Text.Json.Nodes.JsonValue pv
+                                && pv.TryGetValue<string>(out var candidatePath)
+                                && string.Equals(candidatePath, ownPath, StringComparison.OrdinalIgnoreCase))
+                            {
+                                entityId = kvp.Key?.ToString();
+                                liveEntity = kvp.Value;
+                                break;
+                            }
+                        }
+                    }
                     if (liveEntity is null || string.IsNullOrEmpty(entityId))
                     {
+                        // 🚨 COLD-ACTIVATION WINDOW — defer, never insta-NotFound. The MeshNode
+                        // init gate opens inside BuildInstanceCollection (on the storage-read
+                        // emission), which RELEASES this held PatchDataRequest BEFORE the loaded
+                        // collection has committed to the primary stream. The old code no-op'd
+                        // AckOnce(false, NotFound) here against the not-yet-loaded store — for a
+                        // node that EXISTS in storage — and raced the load echo into the old
+                        // counting ack (see postSub comment). Re-arm ONCE when the store first
+                        // carries data (the in-flight initial load), bounded; a genuinely absent
+                        // node then NotFounds on the deferred attempt against the LOADED store.
+                        if (!deferred && (collection is null || collection.Instances.Count == 0))
+                        {
+                            var deferSub = primary
+                                .Where(ci => ci.Value?.Collections.GetValueOrDefault(collectionName)
+                                    is { Instances.Count: > 0 })
+                                .Take(1)
+                                .Timeout(TimeSpan.FromSeconds(10))
+                                .Subscribe(
+                                    _ => RunMergeTurn(deferred: true),
+                                    _ => AckOnce(false, new MeshNodeError(
+                                        MeshNodeErrorCode.NotFound, hubPath,
+                                        "Target MeshNode not found for patch apply "
+                                        + "(store did not initialize within the bound)")));
+                            hub.RegisterForDisposal(deferSub);
+                            return null; // no write this turn — the deferred attempt commits
+                        }
                         AckOnce(false, new MeshNodeError(
                             MeshNodeErrorCode.NotFound, hubPath,
                             "Target MeshNode not found for patch apply"));
@@ -1329,11 +1410,18 @@ public static class DataExtensions
                         request.Message, jsonOpts, mergeGuardLogger, hubPath);
                     // The OWNER mints the monotonic Version on apply (same rule as the deferred path).
                     // 🚨 #325: forward-only from the node's own version — see NextMeshNodeVersion.
-                    currentNode[versionKey] = NextMeshNodeVersion(currentNode, versionKey, version);
+                    var minted = NextMeshNodeVersion(currentNode, versionKey, version);
+                    currentNode[versionKey] = minted;
                     var merged = System.Text.Json.JsonSerializer
                         .Deserialize<T>(currentNode.ToJsonString(jsonOpts), jsonOpts);
                     if (merged is null)
                         throw new System.Text.Json.JsonException("Merged value deserialised to null");
+
+                    // Stamp BEFORE the commit (id first, then the version that opens the
+                    // gate) — the ack watcher only accepts an emission at-or-past this
+                    // write, so a load echo / sibling emission can never ack it.
+                    System.Threading.Volatile.Write(ref stampedId, entityId);
+                    System.Threading.Interlocked.Exchange(ref stampedVersion, minted);
 
                     var newStore = s.Update(collectionName, c => c.Update(entityId, merged));
                     return primary.ApplyChanges(new EntityStoreAndUpdates(
@@ -1348,6 +1436,45 @@ public static class DataExtensions
                 }
             },
             ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+
+        RunMergeTurn(deferred: false);
+    }
+
+    /// <summary>
+    /// 🚨 Write-identity echo gate for the cross-hub MeshNode patch ack
+    /// (<see cref="ApplyMeshNodePatchInTurn{T}"/>): true only for an emission that provably
+    /// CONTAINS the stamped write — same entity id AND Version at-or-past the version the
+    /// merge lambda minted. Emission-COUNTING (<c>Skip(1).Take(1)</c>) is forbidden here:
+    /// on a cold activation the reduced stream's first post-subscribe emission is the
+    /// initial LOAD echo (pre-patch state), and on a busy owner it can be sibling-satellite
+    /// churn — acking on either flushed stale state and reported success for a write that
+    /// never landed (TwoSiloRecycleConvergenceTest, runs 30068597014 / 30079395006).
+    /// Internal for the deterministic pin in <c>MeshWeaver.Data.Test</c>.
+    /// </summary>
+    internal static bool ChangeContainsStampedWrite(
+        object? value,
+        string? stampedId,
+        long stampedVersion,
+        string idKey,
+        string versionKey,
+        System.Text.Json.JsonSerializerOptions jsonOpts)
+    {
+        if (stampedVersion < 0 || string.IsNullOrEmpty(stampedId) || value is null)
+            return false;
+        var obj = System.Text.Json.JsonSerializer
+            .SerializeToNode(value, value.GetType(), jsonOpts) as System.Text.Json.Nodes.JsonObject;
+        if (obj is null)
+            return false;
+        var idNode = obj[idKey] ?? obj["Id"] ?? obj["id"];
+        if (idNode is not System.Text.Json.Nodes.JsonValue idValue
+            || !idValue.TryGetValue<string>(out var id)
+            || !string.Equals(id, stampedId, StringComparison.Ordinal))
+            return false;
+        long ver = 0;
+        if (obj[versionKey] is System.Text.Json.Nodes.JsonValue verValue
+            && verValue.TryGetValue<long>(out var parsed))
+            ver = parsed;
+        return ver >= stampedVersion;
     }
 
     private static Type? WalkBaseForGeneric(Type type, Type genericDef)
