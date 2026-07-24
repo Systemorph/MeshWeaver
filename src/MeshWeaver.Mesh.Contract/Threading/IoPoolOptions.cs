@@ -34,6 +34,18 @@ public static class IoPoolNames
     /// </summary>
     public const string Query = "Query";
 
+    /// <summary>
+    /// Layout-area render subscribes (<see cref="IIoPool.SubscribeThroughPool{T}"/>, via
+    /// <c>IPooledSubscribeScheduler</c>). Exists so the render SUBSCRIBE — which hops off the owning
+    /// hub's action block to stay query-in-render-safe, and runs the synchronous render body
+    /// (including menu renderers that resolve services and touch collectible NodeType ALC types) — is
+    /// TRACKED and DRAINABLE at teardown. Without it the render straggler executes on a bare
+    /// ThreadPool thread after the Autofac scope is disposed and the NodeType ALC unloaded → the
+    /// endemic teardown SIGSEGV (FutuRe.Test exit=139). Generous cap: it's a drain hook, not a
+    /// throttle (the slot is held only for the bounded subscribe window).
+    /// </summary>
+    public const string Layout = "Layout";
+
     /// <summary>CPU-bound compilation (Roslyn compile/script). Wave 3.</summary>
     public const string Compile = "Compile";
 
@@ -118,6 +130,13 @@ public sealed record IoPoolOptions
     /// </summary>
     public int Query { get; init; } = 256;
 
+    /// <summary>
+    /// Concurrent layout-area render subscribes (the <c>Layout</c> pool). A drain hook, not a
+    /// throttle — the slot is held only for the bounded subscribe window — so the cap is generous
+    /// (256) to never bottleneck concurrent area renders (a page renders many nested areas at once).
+    /// </summary>
+    public int Layout { get; init; } = 256;
+
     /// <summary>Concurrent compilations. CPU-bound; defaults to the processor count.</summary>
     public int Compile { get; init; } = Environment.ProcessorCount;
 
@@ -165,6 +184,7 @@ public sealed record IoPoolOptions
             IoPoolNames.Http => Http,
             IoPoolNames.Ai => Ai,
             IoPoolNames.Query => Query,
+            IoPoolNames.Layout => Layout,
             IoPoolNames.Compile => Compile,
             IoPoolNames.Process => Process,
             _ => Default,
