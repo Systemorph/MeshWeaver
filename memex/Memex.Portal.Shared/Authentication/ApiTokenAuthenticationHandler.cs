@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
@@ -37,9 +38,21 @@ public class ApiTokenAuthenticationHandler(
         var tokenService = serviceProvider.GetRequiredService<ApiTokenService>();
         // HTTP boundary — bridge IObservable to Task once. The service exposes
         // IObservable<ApiToken?> per the "no async in hub-reachable code" rule.
+        var validationStopwatch = Stopwatch.StartNew();
         var apiToken = await tokenService.ValidateToken(rawToken).FirstAsync().ToTask();
         if (apiToken == null)
+        {
+            // 🚨 Never a silent 401: every rejected Bearer token gets a Warning naming
+            // the hash prefix (never the raw token) and how long validation took —
+            // ApiTokenService has already logged the exact failing stage
+            // (index/token read-timeout, hash mismatch, revoked, expired) under the
+            // same prefix. The silent Fail is what made the 2026-07-24 fresh-token
+            // 401 storm untraceable server-side.
+            Logger.LogWarning(
+                "API token authentication failed for hash prefix {HashPrefix} after {ElapsedMs} ms — see the ApiTokenService warning with the same prefix for the failing stage",
+                ApiTokenService.HashToken(rawToken)[..12], validationStopwatch.ElapsedMilliseconds);
             return AuthenticateResult.Fail("Invalid or expired API token");
+        }
 
         var claims = BuildClaims(apiToken).ToList();
 
