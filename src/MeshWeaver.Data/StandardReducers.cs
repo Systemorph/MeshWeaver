@@ -84,10 +84,26 @@ public static class StandardReducers
                         && (id.Equals(u.Id) || id.ToString() == u.Id?.ToString())).ToArray());
     }
 
+    // 🚨 Version stamp on subscriber-side patches: CARRY the base version the patch was computed
+    // on (stream.Current — the owner's clock as of the last applied frame), NEVER stream.Hub.Version.
+    // These patch functions run on SUBSCRIBER-side projections (a client's layout-area JsonElement
+    // stream, a reduced InstanceCollection), whose hub clock is a DIFFERENT counter than the
+    // owner's — and every monotonicity guard compares owner-clock versions
+    // (ISynchronizationStream.Current docs: "OWNER-ONLY Version … a non-owner stamping its own
+    // Version breaks ordering"). Stamping the local hub clock broke BOTH directions, depending on
+    // which clock happened to be ahead:
+    //   • busy client (Blazor circuit, clock ≫ owner): a local optimistic edit jumped the mirror's
+    //     Version sky-high, so every subsequent owner broadcast was dropped as "stale" — the page
+    //     froze on pre-save state until a refresh re-subscribed (the "comment only appears after
+    //     refreshing" bug on the UWDeepfield treaty tabs).
+    //   • quiet client (clock < owner): the outgoing PatchDataChangeRequest carried a version below
+    //     the owner mirror's Current and the USER'S EDIT was silently dropped on the owner.
+    // (UpdateStream re-stamps INCOMING patches with delivery.Message.Version before SetCurrent, so
+    // applying received frames is unaffected — this stamp matters for locally-originated updates.)
     private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch? patch, string changedBy)
     {
         var typeRegistry = stream.Hub.TypeRegistry;
-        return new(updated, changedBy, stream.StreamId, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch!, stream.Hub.JsonSerializerOptions, typeRegistry));
+        return new(updated, changedBy, stream.StreamId, ChangeType.Patch, stream.Current?.Version ?? stream.Hub.Version, current.ToEntityUpdates(updated, patch!, stream.Hub.JsonSerializerOptions, typeRegistry));
     }
     private static ChangeItem<InstanceCollection> PatchInstanceCollectionJsonElement(ISynchronizationStream<InstanceCollection> stream, InstanceCollection current, JsonElement updated, JsonPatch? patch, string changedBy)
     {
@@ -97,7 +113,7 @@ public static class StandardReducers
             changedBy,
             stream.StreamId,
             ChangeType.Patch,
-            stream.Hub.Version,
+            stream.Current?.Version ?? stream.Hub.Version,
             current.ToEntityUpdates((CollectionReference)stream.Reference, updated, patch!, stream.Hub.JsonSerializerOptions));
     }
 
