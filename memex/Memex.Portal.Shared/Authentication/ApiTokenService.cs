@@ -26,17 +26,21 @@ namespace Memex.Portal.Shared.Authentication;
 /// <para>
 /// 🚨 No async / Task / FromAsync / await anywhere in this file. Every
 /// reachable method returns <see cref="IObservable{T}"/> and the chain
-/// stays observable end-to-end. Reads of known paths go through
-/// <c>hub.GetMeshNode(path)</c> (one-shot, issuance-side) or the bounded
-/// resilient <c>workspace.GetMeshNodeStream(path)</c> poll
-/// (validation-side, <see cref="ReadValidationNode"/>); listings go through
-/// <c>workspace.GetQuery(id, queries...)</c> (synced + path-keyed dedup).
-/// QueryAsync / <see cref="IAsyncEnumerable{T}"/> iteration is forbidden
-/// in this file per <c>Doc/Architecture/AsynchronousCalls.md</c> and
+/// stays observable end-to-end. VALIDATION-side reads go straight to the
+/// authoritative shared store (<see cref="IStorageAdapter"/> — Postgres on
+/// multi-replica portals): auth is the front door and must not depend on
+/// cross-silo per-node-hub activation being healthy (memex-cloud 2026-07-25:
+/// the GetMeshNodeStream-based validation read timed out for the full 8 s on
+/// every pod that didn't mint the token — 3 of 4 replicas 401ed every MCP
+/// request). Issuance-side reads keep <c>hub.GetMeshNode(path)</c>; listings
+/// go through <c>workspace.GetQuery(id, queries...)</c> (synced + path-keyed
+/// dedup). QueryAsync / <see cref="IAsyncEnumerable{T}"/> iteration is
+/// forbidden in this file per <c>Doc/Architecture/AsynchronousCalls.md</c> and
 /// <c>Doc/Architecture/SyncedMeshNodeQueries.md</c>.
 /// </para>
 /// </summary>
-internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogger<ApiTokenService> logger)
+internal class ApiTokenService(
+    IMeshService nodeFactory, IMessageHub hub, IStorageAdapter storage, ILogger<ApiTokenService> logger)
 {
     private const string TokenPrefix = "mw_";
     private const int TokenByteLength = 32;
@@ -251,19 +255,18 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
     /// <summary>
     /// Reactive token validation. Reads the index node at
     /// <c>ApiToken/{hashPrefix}</c> — and, when it points at a user-scoped token,
-    /// the token node — through the bounded resilient
-    /// <c>GetMeshNodeStream</c> poll (<see cref="ReadValidationNode"/>, same shape
-    /// as <c>OAuthCodeStore.ReadCodeNode</c>), NOT a one-shot <c>hub.GetMeshNode</c>.
+    /// the token node — DIRECTLY from the authoritative shared store
+    /// (<see cref="ReadValidationNode"/> → <see cref="IStorageAdapter.Read"/>).
     /// <para>
-    /// Why: on a multi-replica portal a freshly-minted token is not instantly
-    /// routable on the replicas that did NOT mint it. The old one-shot read hit
-    /// [ROUTE] NotFound for the full 5 s and then emitted null SILENTLY → every
-    /// /mcp reconnect on pods B/C returned 401 for ~2 minutes with zero server-side
-    /// trace (memex-cloud 2026-07-24, ingress logs: every rejected request took
-    /// exactly 5.000–5.007 s). The issuance-side warm-up (#624) only helps the
-    /// minting pod. The resilient read activates the owning per-node hub from
-    /// shared Postgres and rides out the lag; a warm token resolves on the first
-    /// attempt, so the hot path pays nothing.
+    /// Why: auth must be deterministic on every replica. Both prior shapes rode
+    /// the mesh routing path and failed multi-replica: the one-shot
+    /// <c>hub.GetMeshNode</c> hit [ROUTE] NotFound on non-minting pods
+    /// (memex-cloud 2026-07-24), and the resilient <c>GetMeshNodeStream</c> poll
+    /// that replaced it (#633) still timed out for the full 8 s on 3 of 4 pods
+    /// because the cross-silo per-node-hub subscribe itself wedged (memex-cloud
+    /// 2026-07-25). The storage read has no such dependency: the row either is
+    /// or isn't in Postgres, identically for every pod; the short poll only
+    /// rides out the mint→flush window for a seconds-old token.
     /// </para>
     /// <para>
     /// Every failure is logged at Warning with the hash prefix (never the raw
@@ -337,27 +340,30 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
     }
 
     /// <summary>
-    /// Bounded resilient read for the validation path — the exact
-    /// <c>OAuthCodeStore.ReadCodeNode</c> shape (#620), with one correctness nuance:
+    /// Bounded resilient read for the validation path, with one correctness nuance:
     /// a node that reads SUCCESSFULLY but carries a non-matching hash is a terminal
     /// mismatch (emit null immediately, logged as <c>{stage}-hash-mismatch</c>) —
-    /// only read-error/absence re-polls. Each attempt reads through the authoritative
-    /// <c>GetMeshNodeStream(path)</c> (activates the owning per-node hub from
-    /// Postgres), swallows the transient "No node found", and — ONLY on no-verdict —
-    /// re-subscribes after <see cref="ValidationRetryDelay"/> via <c>Concat</c>
-    /// (never <c>Merge</c>: exactly one owner-hub subscription live at a time).
-    /// Bounded by <see cref="ValidationReadTimeout"/> → Warning
-    /// (<c>{stage}-read-timeout</c>) → null. System identity established at
-    /// subscribe time (<c>Observable.Using</c>): validation is the entry point that
-    /// turns a raw token into an identity, so the caller is by definition
-    /// unauthenticated; the hash compare is the actual authentication step.
+    /// only absence re-polls. Each attempt reads the AUTHORITATIVE shared store
+    /// directly (<see cref="IStorageAdapter.Read"/> → the Postgres row on
+    /// multi-replica portals) — deterministic on EVERY replica, no grain
+    /// activation, no cross-silo stream subscribe. The previous
+    /// <c>GetMeshNodeStream</c> read rode the mesh's cross-silo per-node-hub
+    /// path, which wedged on non-minting pods (memex-cloud 2026-07-25:
+    /// index-read-timeout after the full 8 s on 3 of 4 replicas → every MCP
+    /// request 401ed); auth must not be hostage to that path. The short poll
+    /// (re-subscribe after <see cref="ValidationRetryDelay"/> via <c>Concat</c> —
+    /// never <c>Merge</c>) only rides out the mint→flush window for a token
+    /// created moments ago on another replica; a warm token resolves on the
+    /// first probe. Bounded by <see cref="ValidationReadTimeout"/> → Warning
+    /// (<c>{stage}-read-timeout</c>) → null. No impersonation needed: the
+    /// storage adapter enforces no ACL — the hash compare IS the
+    /// authentication step.
     /// </summary>
     private IObservable<MeshNode?> ReadValidationNode(
         string path, Func<MeshNode, bool?> hashVerdict, string stage, string hashPrefix, Stopwatch elapsed)
     {
         IObservable<MeshNode?> Attempt() =>
-            hub.GetWorkspace().GetMeshNodeStream(path)
-                .Take(1)
+            storage.Read(path, hub.JsonSerializerOptions)
                 .SelectMany(node =>
                 {
                     var verdict = node is null ? null : hashVerdict(node);
@@ -373,10 +379,12 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
                         });
                     return Observable.Empty<MeshNode?>();
                 })
+                // A transient storage error (connection blip) re-polls like an
+                // absent row — the outer Timeout bounds the whole chain.
                 .Catch<MeshNode?, Exception>(_ => Observable.Empty<MeshNode?>())
                 .Concat(Observable.Defer(Attempt).DelaySubscription(ValidationRetryDelay));
 
-        var poll = Observable.Defer(Attempt)
+        return Observable.Defer(Attempt)
             .Take(1)
             .Timeout(ValidationReadTimeout)
             .Catch<MeshNode?, Exception>(ex =>
@@ -386,35 +394,29 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
                     stage + "-read-timeout", hashPrefix, elapsed.ElapsedMilliseconds, path, ValidationReadTimeout);
                 return Observable.Return<MeshNode?>(null);
             });
-
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        return accessService != null
-            ? Observable.Using(() => accessService.ImpersonateAsSystem(), _ => poll)
-            : poll;
     }
 
     /// <summary>
-    /// Best-effort confirm that a just-created node is readable, tolerating the
-    /// create→persist→routable lag. Reads via the authoritative
-    /// <c>GetMeshNodeStream(path)</c> — which activates the owning per-node hub from
-    /// Postgres — polling one subscription at a time (Concat, never Merge, so a lagging
-    /// node never accumulates concurrent owner-hub subscriptions). Each attempt swallows
-    /// the transient "No node found" and re-subscribes after 50 ms until the node loads
-    /// with content, bounded by a 10 s timeout. On timeout it logs and returns null rather
-    /// than failing issuance — the token IS created; worst case validation resolves it a
-    /// beat later. System identity: the ApiToken/index nodes are System-owned.
+    /// Best-effort confirm that a just-created node has reached the SHARED store
+    /// (<see cref="IStorageAdapter.Read"/> — the Postgres row on multi-replica
+    /// portals), tolerating the create→persist flush lag. This is the guarantee
+    /// that matters for issuance: once the row is committed, <see cref="ValidateToken"/>
+    /// (which reads the same store directly) succeeds on EVERY replica — the MCP
+    /// client's immediate reconnect can land anywhere. Polls one probe at a time
+    /// (Concat, never Merge) every 50 ms, bounded by a 10 s timeout. On timeout it
+    /// logs and returns null rather than failing issuance — the token IS created;
+    /// worst case validation resolves it a beat later.
     /// </summary>
     private IObservable<MeshNode?> ConfirmReadable(string path)
     {
         IObservable<MeshNode?> Attempt() =>
-            hub.GetWorkspace().GetMeshNodeStream(path)
-                .Take(1)
+            storage.Read(path, hub.JsonSerializerOptions)
                 .Where(n => n is not null && n.Content is not null)
                 .Select(n => (MeshNode?)n)
                 .Catch<MeshNode?, Exception>(_ => Observable.Empty<MeshNode?>())
                 .Concat(Observable.Defer(Attempt).DelaySubscription(TimeSpan.FromMilliseconds(50)));
 
-        var poll = Observable.Defer(Attempt)
+        return Observable.Defer(Attempt)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .Catch<MeshNode?, Exception>(ex =>
@@ -424,11 +426,6 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
                     path);
                 return Observable.Return<MeshNode?>(null);
             });
-
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        return accessService != null
-            ? Observable.Using(() => accessService.ImpersonateAsSystem(), _ => poll)
-            : poll;
     }
 
     private ApiToken? FinalizeToken(MeshNode? tokenNode, ApiToken? apiToken, string hash, string hashPrefix, Stopwatch elapsed)

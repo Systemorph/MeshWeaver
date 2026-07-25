@@ -176,6 +176,20 @@ public sealed class PersistenceService : IStorageAdapter
     private static readonly JsonSerializerOptions JsonSerializerOptionsCache = new();
 
     /// <summary>
+    /// Fan-out OR across every writable provider's <see cref="IStorageAdapter.DeleteIfExists"/>.
+    /// Unlike <see cref="Delete"/> (read-then-delete containment probe), this
+    /// delegates the atomicity to each adapter — Postgres answers via the DELETE
+    /// row count, in-memory via TryRemove — so concurrent single-use consumers
+    /// racing across replicas get exactly one <c>true</c>. Never throws on a
+    /// missing node: absent everywhere simply emits <c>false</c>.
+    /// </summary>
+    public IObservable<bool> DeleteIfExists(string path)
+        => _writable
+            .Select(p => p.Adapter.DeleteIfExists(path))
+            .Merge()
+            .Aggregate(false, (any, deleted) => any || deleted);
+
+    /// <summary>
     /// Fan-out OR: any adapter reporting true wins. Implemented via
     /// <see cref="Observable.Any{TSource}(IObservable{TSource})"/> over the merged stream so the chain
     /// completes as soon as the first true lands.
