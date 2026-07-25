@@ -362,25 +362,35 @@ internal class ApiTokenService(
     private IObservable<MeshNode?> ReadValidationNode(
         string path, Func<MeshNode, bool?> hashVerdict, string stage, string hashPrefix, Stopwatch elapsed)
     {
+        // 🚨 An ABSENT row is a TERMINAL negative, never a reason to poll.
+        // CreateToken confirms both rows are committed to the shared store BEFORE
+        // the raw token leaves the server (ConfirmReadable), so by the time any
+        // client can PRESENT a token, its rows exist — absence at validation means
+        // unknown/deleted, full stop. The previous shape re-polled absence until
+        // ValidationReadTimeout, making every bad-token 401 cost the full 8 s
+        // (measured 8.2 s per unauthenticated /mcp probe on memex-cloud after the
+        // storage-direct cutover) — a leftover from the cross-silo mesh read whose
+        // lag no longer exists. Only a THROWN storage error (connection blip)
+        // re-polls, bounded by ValidationReadTimeout.
         IObservable<MeshNode?> Attempt() =>
             storage.Read(path, hub.JsonSerializerOptions)
-                .SelectMany(node =>
+                .Select(node =>
                 {
                     var verdict = node is null ? null : hashVerdict(node);
                     if (verdict == true)
-                        return Observable.Return((MeshNode?)node);
+                        return (MeshNode?)node;
                     if (verdict == false)
-                        return Observable.Defer(() =>
-                        {
-                            logger.LogWarning(
-                                "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms: node at {Path} exists but carries a different token hash",
-                                stage + "-hash-mismatch", hashPrefix, elapsed.ElapsedMilliseconds, path);
-                            return Observable.Return((MeshNode?)null);
-                        });
-                    return Observable.Empty<MeshNode?>();
+                        logger.LogWarning(
+                            "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms: node at {Path} exists but carries a different token hash",
+                            stage + "-hash-mismatch", hashPrefix, elapsed.ElapsedMilliseconds, path);
+                    else
+                        logger.LogWarning(
+                            "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms: no row at {Path} (unknown or deleted token)",
+                            stage + "-not-found", hashPrefix, elapsed.ElapsedMilliseconds, path);
+                    return (MeshNode?)null;
                 })
-                // A transient storage error (connection blip) re-polls like an
-                // absent row — the outer Timeout bounds the whole chain.
+                // A transient storage ERROR (not absence) re-polls — the outer
+                // Timeout bounds the whole chain.
                 .Catch<MeshNode?, Exception>(_ => Observable.Empty<MeshNode?>())
                 .Concat(Observable.Defer(Attempt).DelaySubscription(ValidationRetryDelay));
 
