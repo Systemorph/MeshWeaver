@@ -691,6 +691,11 @@ public static class PersistenceExtensions
         // upstream subscription per path serves every consumer.
         services.TryAddSingleton<MeshNodeStreamCache>();
         services.TryAddSingleton<IMeshNodeStreamCache>(sp => sp.GetRequiredService<MeshNodeStreamCache>());
+        // Late owner-response watch for cross-hub writes: UpdateRemote arms an entry per
+        // posted patch; the cache hub's PatchDataResponse handler dispatches responses whose
+        // 2s caller window already closed (see LatePatchResponseRegistry). Mesh-scoped
+        // instance singleton — dies with the mesh.
+        services.TryAddSingleton<LatePatchResponseRegistry>();
         // Post-commit durable-flush hook for the PatchDataRequest handler: chains the
         // owner's ack off the storage write so a cross-hub stream.Update completion
         // guarantees read-after-write (see IPostCommitFlush / StoragePostCommitFlush).
