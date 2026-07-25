@@ -464,6 +464,23 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // the process-singleton cache from every domain type a tenant
                 // happens to register.
                 .AddData()  // IWorkspace registration so GetEntry can build the stream handle
+                // 🚨 LATE owner-response seam. A PatchDataResponse whose 2s caller window
+                // (UpdateRemote's bounded wait) already closed has no pending Observe callback,
+                // so HandleCallbacks lets it fall through to this typed handler — the ONLY
+                // place a post-optimistic-emit verdict (above all the OwnerDisposing disposal
+                // NACK) can still be observed without holding a >2s responseSubjects entry
+                // (which the Quiescing leak detector would flag at teardown). Dispatch is a
+                // no-op for timely responses: the caller's bounded wait already disarmed the
+                // registry entry synchronously inside the callback dispatch. See
+                // LatePatchResponseRegistry.
+                .WithHandler<PatchDataResponse>((hub, delivery) =>
+                {
+                    if (delivery.Properties.TryGetValue(PostOptions.RequestId, out var rid)
+                        && rid?.ToString() is { Length: > 0 } requestId)
+                        hub.ServiceProvider.GetService<LatePatchResponseRegistry>()
+                            ?.Dispatch(requestId, delivery.Message);
+                    return delivery.Processed();
+                })
                 .WithInitialization(hub =>
                     hub.RegisterForDisposal(routingService.RegisterStream(hub))),
             HostedHubCreation.Always)!;

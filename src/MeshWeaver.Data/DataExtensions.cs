@@ -762,6 +762,55 @@ public static class DataExtensions
     }
 
     /// <summary>
+    /// 🚨 Owner-side disposal NACK for an in-flight <see cref="PatchDataRequest"/>. The patch
+    /// pipeline registers its ack watcher / merge turn on structures that DIE SILENTLY with the
+    /// hub (postSub / deferSub / flushSub are <c>hub.RegisterForDisposal</c>'d; the merge turn's
+    /// <c>UpdateStreamRequest</c> queued on the sync hub is dropped by the shutting-down gate) —
+    /// so an activation disposed after the request was delivered but before the merge committed
+    /// never posted ANY response: the mirror's optimistic emit stood while the write was gone
+    /// (the residual acked-write-loss behind TwoSiloRecycleConvergenceTest, main run 30159928718 /
+    /// PR-645 run 30160988085). This registers a disposal action that claims the shared AckOnce
+    /// gate and posts an explicit <see cref="MeshNodeErrorCode.OwnerDisposing"/> NACK; a real ack
+    /// that already won the Interlocked gate makes it a no-op.
+    /// <para>Disposal actions run in the ShutDown phase, where this hub's OWN Post is gated
+    /// closed (PostImplGeneric fails every non-shutdown message once RunLevel ≥
+    /// DisposeHostedHubs). The NACK therefore posts through the PARENT hub — the same escape the
+    /// MessageService shutting-down NACK uses; response correlation rides ResponseFor's
+    /// RequestId property, never the posting hub's identity. During a WHOLE-MESH teardown the
+    /// parent is itself past DisposeHostedHubs, the guard skips the post, and nobody is waiting
+    /// anyway (the mirror died with the same mesh).</para>
+    /// </summary>
+    /// <param name="hub">The owning per-node hub handling the patch.</param>
+    /// <param name="request">The in-flight patch request to NACK on disposal.</param>
+    /// <param name="hubPath">The hub's path (error payload).</param>
+    /// <param name="tryClaimAck">Claims the shared once-only ack gate; false ⇒ already acked.</param>
+    private static void RegisterOwnerDisposingNack(
+        IMessageHub hub,
+        IMessageDelivery<PatchDataRequest> request,
+        string hubPath,
+        Func<bool> tryClaimAck)
+    {
+        hub.RegisterForDisposal(_ =>
+        {
+            if (!tryClaimAck())
+                return;
+            var nodeErr = new MeshNodeError(
+                MeshNodeErrorCode.OwnerDisposing,
+                hubPath,
+                "owner activation disposing before the merge turn ran — the patch was NOT applied; "
+                + "safe to retry against the fresh activation");
+            var resp = new PatchDataResponse(false, hub.Version)
+            {
+                Error = nodeErr.Message,
+                NodeError = nodeErr,
+            };
+            var parent = hub.Configuration.ParentHub;
+            if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+                parent.Post(resp, o => o.ResponseFor(request));
+        });
+    }
+
+    /// <summary>
     /// Maps owner-side patch exceptions to structured <see cref="MeshNodeError"/>
     /// codes. Unknown exception types fall through as
     /// <see cref="MeshNodeErrorCode.Unknown"/> with the exception type prefixed
@@ -1058,6 +1107,21 @@ public static class DataExtensions
             return;
         }
 
+        // Once-only ack gate at METHOD scope (not inside the Take(1) callback): the disposal
+        // NACK below must be able to claim it even when the hub dies BEFORE the stream's first
+        // emission released the callback — the deferred path's silent-death window.
+        var ackPosted = 0;
+        void AckOnce(bool success, MeshNodeError? error = null)
+        {
+            if (System.Threading.Interlocked.Exchange(ref ackPosted, 1) != 0) return;
+            var resp = new PatchDataResponse(success, hub.Version);
+            if (error is not null)
+                resp = resp with { Error = error.Message, NodeError = error };
+            hub.Post(resp, o => o.ResponseFor(request));
+        }
+        RegisterOwnerDisposingNack(hub, request, hubPath,
+            () => System.Threading.Interlocked.Exchange(ref ackPosted, 1) == 0);
+
         stream
             .Take(1)
             .Subscribe(change =>
@@ -1123,17 +1187,11 @@ public static class DataExtensions
                     var merged = System.Text.Json.JsonSerializer.Deserialize<T>(mergedJson, jsonOpts);
                     if (merged is null)
                     {
-                        var nodeErr = new MeshNodeError(
+                        AckOnce(false, new MeshNodeError(
                             MeshNodeErrorCode.Deserialization,
                             hubPath,
                             "Merged value deserialised to null",
-                            patchText);
-                        hub.Post(new PatchDataResponse(false, hub.Version)
-                            {
-                                Error = nodeErr.Message,
-                                NodeError = nodeErr,
-                            },
-                            o => o.ResponseFor(request));
+                            patchText));
                         return;
                     }
 
@@ -1147,16 +1205,6 @@ public static class DataExtensions
                     // deadlock under load. The post-commit response timing
                     // is preserved (caller's RegisterCallback fires after the
                     // commit lands, before any subsequent Get).
-                    var ackPosted = 0;
-                    void AckOnce(bool success, MeshNodeError? error = null)
-                    {
-                        if (System.Threading.Interlocked.Exchange(ref ackPosted, 1) != 0) return;
-                        var resp = new PatchDataResponse(success, hub.Version);
-                        if (error is not null)
-                            resp = resp with { Error = error.Message, NodeError = error };
-                        hub.Post(resp, o => o.ResponseFor(request));
-                    }
-
                     var postSub = stream
                         .Skip(1)
                         .Take(1)
@@ -1199,13 +1247,7 @@ public static class DataExtensions
                 }
                 catch (Exception ex)
                 {
-                    var nodeErr = ClassifyPatchException(ex, hubPath);
-                    hub.Post(new PatchDataResponse(false, hub.Version)
-                        {
-                            Error = nodeErr.Message,
-                            NodeError = nodeErr,
-                        },
-                        o => o.ResponseFor(request));
+                    AckOnce(false, ClassifyPatchException(ex, hubPath));
                 }
             });
     }
@@ -1305,6 +1347,10 @@ public static class DataExtensions
                 },
                 ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
         hub.RegisterForDisposal(postSub);
+        // Registered AFTER postSub so the composite disposes the watcher FIRST, then this NACK
+        // claims the gate — an unacked in-flight patch always gets a terminal, never silence.
+        RegisterOwnerDisposingNack(hub, request, hubPath,
+            () => System.Threading.Interlocked.Exchange(ref ackPosted, 1) == 0);
 
         // Resolve the target id SYNCHRONOUSLY from the reduced stream's Current (Id is immutable)
         // — never a nested Take(1).Subscribe that re-enters the owner.
