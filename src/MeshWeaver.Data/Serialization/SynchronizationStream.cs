@@ -919,7 +919,24 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         logger.LogDebug("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
-        Hub = Host.GetHostedHub(SynchronizationAddress.Create(ClientId), ConfigureSynchronizationHub);
+        var syncHub = Host.GetHostedHub(
+            SynchronizationAddress.Create(ClientId), ConfigureSynchronizationHub, HostedHubCreation.Always);
+        if (syncHub is null)
+        {
+            // Creation was refused: an ANCESTOR hub began disposing and the
+            // creation-freeze cascade closed this collection before the Host's
+            // own RunLevel moved (the gap the RunLevel check above cannot see).
+            // Same dead-stream semantics as that check — without this, Hub
+            // would be a null on a LIVE stream and every downstream touch NREs.
+            logger.LogDebug(
+                "[SYNC_STREAM] Hosted-hub creation refused for {Reference} on {Host} (teardown creation freeze); creating dead stream",
+                Reference, Host.Address);
+            isDisposed = true;
+            Hub = null!;
+            Store.OnCompleted();
+            return;
+        }
+        Hub = syncHub;
 
         // 🚨 Capture the creating user's identity ONCE, here on the thread that constructs
         // the stream — in production that is the circuit thread (cache.GetMeshNodeStream)
