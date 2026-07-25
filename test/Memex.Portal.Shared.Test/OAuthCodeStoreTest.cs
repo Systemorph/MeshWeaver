@@ -22,13 +22,14 @@ namespace Memex.Portal.Shared.Test;
 /// duplicate-callback burn or a PKCE mismatch).
 ///
 /// <para>
-/// The store persists codes as mesh nodes at <c>Admin/OAuthCode/{hashPrefix}</c> — the
-/// replica-safety fix for the 2026-07-23 prod outage where /authorize minted the code in
-/// pod A's in-memory dictionary and the MCP client's /token exchange landed on pod B
-/// ("never issued by this process"). <see cref="TwoStoreInstances_GenerateOnOne_ExchangeOnOther"/>
-/// pins exactly that scenario: two store INSTANCES sharing one mesh (two replicas sharing
-/// one PG) must exchange each other's codes, and the single-use consume (first delete
-/// wins) must hold across instances.
+/// The store persists codes STRAIGHT to the shared storage adapter at
+/// <c>Admin/OAuthCode/{hashPrefix}</c> — replica-deterministic by construction (the
+/// 2026-07-23 in-memory-dictionary outage and the 2026-07-25 cross-silo mesh-read
+/// wedge were both "pod B can't see pod A's code" failures).
+/// <see cref="TwoStoreInstances_GenerateOnOne_ExchangeOnOther"/> pins exactly that
+/// scenario: two store INSTANCES sharing one storage (two replicas sharing one PG)
+/// must exchange each other's codes, and the single-use consume (first delete wins,
+/// via the atomic <c>DeleteIfExists</c>) must hold across instances.
 /// </para>
 /// </summary>
 public class OAuthCodeStoreTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -42,20 +43,22 @@ public class OAuthCodeStoreTest(ITestOutputHelper output) : MonolithMeshTestBase
         => base.ConfigureMesh(builder).AddOAuthCodeType();
 
     /// <summary>
-    /// Each call builds an independent store instance on the SAME mesh — the same
-    /// relationship two KEDA replicas have to the shared PG-backed mesh.
+    /// Each call builds an independent store instance on the SAME shared storage
+    /// adapter — the same relationship two KEDA replicas have to the shared PG.
     /// </summary>
     private OAuthCodeStore NewStore(TimeSpan? codeLifetime = null) => new(
-        Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
+        Storage,
         Mesh,
         Mesh.ServiceProvider.GetRequiredService<ILogger<OAuthCodeStore>>())
     {
         CodeLifetime = codeLifetime ?? TimeSpan.FromMinutes(5),
-        // Short read window so the negative-path tests (unknown / consumed / expired code,
-        // which wait out the timeout by design) stay fast on the single in-memory mesh; a
-        // valid code resolves near-instantly via Take(1) regardless. Prod default is 10 s.
-        ReadTimeout = TimeSpan.FromSeconds(2),
     };
+
+    /// <summary>
+    /// The shared store both "replicas" read/write — the in-memory twin of the
+    /// shared Postgres the production stores hit directly.
+    /// </summary>
+    private IStorageAdapter Storage => Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
 
     private static string Challenge(string verifier)
     {
@@ -64,9 +67,9 @@ public class OAuthCodeStoreTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Issues a code and waits until its node is readable — absorbs create→routing
-    /// visibility lag (sanctioned Interval+re-read pattern, WritingTests.md) so the
-    /// exchange under test exercises its own branch, not read-side lag.
+    /// Issues a code. GenerateCode emits only after the storage write committed —
+    /// the row is deterministically readable on every "replica" the moment the
+    /// code exists (no visibility poll needed; the single read assert pins that).
     /// </summary>
     private async Task<string> Issue(OAuthCodeStore store, string? challenge = null, string? method = null)
     {
@@ -74,9 +77,10 @@ public class OAuthCodeStoreTest(ITestOutputHelper output) : MonolithMeshTestBase
                 ClientId, RedirectUri, challenge, method)
             .Should().Within(30.Seconds()).Emit();
 
-        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .SelectMany(_ => ReadNode(OAuthCodeStore.PathForCode(code)))
-            .Should().Within(30.Seconds()).Match(n => n is not null);
+        var stored = await Storage
+            .Read(OAuthCodeStore.PathForCode(code), Mesh.JsonSerializerOptions)
+            .Should().Within(30.Seconds()).Emit();
+        stored.Should().NotBeNull("GenerateCode must not emit before the row is committed");
 
         return code;
     }
@@ -140,8 +144,10 @@ public class OAuthCodeStoreTest(ITestOutputHelper output) : MonolithMeshTestBase
         result.Entry.Should().BeNull();
         result.FailureReason.Should().Contain("expired");
 
-        // reject + delete: the expired code's node was consumed by the rejection.
-        var after = await ReadNode(OAuthCodeStore.PathForCode(code)).Should().Within(30.Seconds()).Emit();
+        // reject + delete: the expired code's row was consumed by the rejection.
+        var after = await Storage
+            .Read(OAuthCodeStore.PathForCode(code), Mesh.JsonSerializerOptions)
+            .Should().Within(30.Seconds()).Emit();
         after.Should().BeNull();
     }
 

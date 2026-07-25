@@ -27,14 +27,14 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         new(
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh,
+            Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>(),
             logger ?? Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>()
         )
         {
             // Short read window so the negative-path tests (unknown / revoked-with-
             // deleted-index / deleted token, which wait out the resilient read's
             // timeout by design) stay fast on the single in-memory mesh; a valid
-            // token resolves on the first attempt regardless. Prod default is 8 s —
-            // same pattern as OAuthCodeStoreTest.NewStore's ReadTimeout.
+            // token resolves on the first attempt regardless. Prod default is 8 s.
             ValidationReadTimeout = validationReadTimeout ?? TimeSpan.FromSeconds(2),
         };
 
