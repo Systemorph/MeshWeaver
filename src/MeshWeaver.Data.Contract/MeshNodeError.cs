@@ -48,7 +48,18 @@ public enum MeshNodeErrorCode
     /// (e.g. missing required field, value-out-of-range). Diagnostic carries
     /// the validation error.
     /// </summary>
-    Validation = 6
+    Validation = 6,
+    /// <summary>
+    /// The owning activation started disposing (idle-recycle / restart) after the
+    /// patch was delivered but BEFORE its merge turn ran — the patch was provably
+    /// NEVER applied. Unlike <see cref="OwnerUnreachable"/> (routing failed) or a
+    /// silent ack loss (owner busy — the patch still applies when the queue drains),
+    /// this code is the owner's explicit statement that the write is gone, so the
+    /// mirror may safely re-enqueue the SAME update against the fresh activation:
+    /// the re-enqueue re-diffs against the freshest state, making it idempotent and
+    /// ordering-safe. Every other NACK code stays terminal (never auto-retried).
+    /// </summary>
+    OwnerDisposing = 7
 }
 
 /// <summary>

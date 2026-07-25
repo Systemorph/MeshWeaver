@@ -93,7 +93,22 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     // queue) — this is exactly what kills the 30s GUI "Response did not arrive in time"
     // stall during thread execution. Callers needing the reconciled state follow the
     // shared GetMeshNodeStream(path) handle.
+    //
+    // The optimistic emit does NOT abandon the owner's verdict: the write stays armed in
+    // LatePatchResponseRegistry (LateResponseWatchBound, 30s) so a LATE terminal — above
+    // all the OwnerDisposing disposal NACK, which only lands after the owner's phased
+    // teardown — is still observed and a provably-unapplied write is re-enqueued. See
+    // LatePatchResponseRegistry for why the late watch is a registry + hub handler and
+    // not a detached hub.Observe subscription.
     private static readonly TimeSpan UpdateResponseWaitBound = TimeSpan.FromSeconds(2);
+
+    // 🚨 Retry budget for the ONE provably-safe late-NACK case (OwnerDisposing — the owner
+    // stated the patch NEVER applied). Each re-enqueue re-runs the ORIGINAL update lambda
+    // against the freshest state and re-diffs, so a superseding write makes it a no-op;
+    // two re-enqueues cover a re-enqueue that itself lands on a disposing fresh activation
+    // (recycle churn). NEVER retried: silence (a busy owner still applies the original
+    // patch) and every other NACK code (validation/RLS/NotFound are terminal verdicts).
+    private const int MaxOwnerDisposingReenqueues = 2;
 
     internal MeshNodeStreamHandle(IWorkspace workspace, string? path = null,
         IMeshNodeStreamCache? cache = null, bool bypassCache = false)
@@ -805,15 +820,19 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// <para>The returned observable emits the post-merge MeshNode once the
     /// owner's response arrives, then completes.</para>
     /// </summary>
-    private IObservable<MeshNode> UpdateRemote(Func<MeshNode, MeshNode> update)
+    /// <param name="update">The update lambda (already typed-content/context-wrapped).</param>
+    /// <param name="attempt">Re-enqueue depth: 0 for a caller write, incremented by the
+    /// late OwnerDisposing-NACK re-enqueue, capped at <see cref="MaxOwnerDisposingReenqueues"/>.
+    /// Carried as a parameter — never static state.</param>
+    private IObservable<MeshNode> UpdateRemote(Func<MeshNode, MeshNode> update, int attempt = 0)
         => Observable.Create<MeshNode>(observer =>
         {
             var diagLogger = _workspace.Hub.ServiceProvider
                 .GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
                 ?.CreateLogger("MeshWeaver.Mesh.MeshNodeStreamHandle");
             diagLogger?.LogDebug(
-                "[UpdateRemote] BEGIN hub={Hub} target={Path}",
-                _workspace.Hub.Address, _path);
+                "[UpdateRemote] BEGIN hub={Hub} target={Path} attempt={Attempt}",
+                _workspace.Hub.Address, _path, attempt);
 
             // 🚨 Capture AccessContext SYNCHRONOUSLY here, NOT inside the
             // deferred initialSub.Subscribe callback below. The outer
@@ -990,6 +1009,62 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 }
                             }
 
+                            // 🚨 Arm the LATE-response watch BEFORE opening the bounded wait —
+                            // exactly-once hand-off: a response racing the 2s timeout is either
+                            // consumed by the still-pending Observe callback (which Completes the
+                            // watch synchronously, below) or falls through to the cache hub's
+                            // PatchDataResponse handler, which finds the watch still armed. A
+                            // LATE NACK whose code is OwnerDisposing (the owner's explicit "the
+                            // patch NEVER applied") re-enqueues the ORIGINAL update lambda —
+                            // recursion through UpdateRemote re-reads the freshest state and
+                            // re-diffs, so it is idempotent and ordering-safe (a superseding
+                            // write makes the re-diff a no-op). Silence and every other late
+                            // code are never retried. See LatePatchResponseRegistry.
+                            var lateRegistry = _workspace.Hub.ServiceProvider
+                                .GetService<LatePatchResponseRegistry>();
+                            var requestId = delivery.Id;
+                            lateRegistry?.Register(requestId, _path!, resp =>
+                            {
+                                if (resp.Success && resp.NodeError is null)
+                                {
+                                    diagLogger?.LogDebug(
+                                        "[UpdateRemote] LATE_ACK hub={Hub} target={Path} — write applied after the optimistic emit",
+                                        _workspace.Hub.Address, _path);
+                                    return;
+                                }
+                                var lateErr = resp.NodeError ?? new MeshNodeError(
+                                    MeshNodeErrorCode.Unknown, _path!,
+                                    resp.Error ?? "Update rejected by owner");
+                                if (lateErr.Code == MeshNodeErrorCode.OwnerDisposing
+                                    && attempt < MaxOwnerDisposingReenqueues)
+                                {
+                                    diagLogger?.LogWarning(
+                                        "[UpdateRemote] LATE_NACK_REENQUEUE hub={Hub} target={Path} attempt={Attempt} — owner disposed before the merge turn; re-enqueueing the original update against the fresh activation",
+                                        _workspace.Hub.Address, _path, attempt + 1);
+                                    // Restore the writer's identity: this callback runs on the
+                                    // cache hub's action block where the AsyncLocal context is
+                                    // the hub's own, and the re-posted patch must carry the
+                                    // ORIGINAL caller's AccessContext (UpdateRemote's eager
+                                    // capture runs synchronously inside Subscribe).
+                                    using (accessServiceAtEntry is not null && capturedContextAtEntry is not null
+                                        ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
+                                        : null)
+                                    {
+                                        UpdateRemote(update, attempt + 1).Subscribe(
+                                            _ => { },
+                                            ex2 => diagLogger?.LogWarning(ex2,
+                                                "[UpdateRemote] LATE_NACK_REENQUEUE failed hub={Hub} target={Path} attempt={Attempt}",
+                                                _workspace.Hub.Address, _path, attempt + 1));
+                                    }
+                                }
+                                else
+                                {
+                                    diagLogger?.LogWarning(
+                                        "[UpdateRemote] LATE_NACK_TERMINAL hub={Hub} target={Path} code={Code} attempt={Attempt} msg={Msg} — the optimistically-acked write did NOT apply and is not auto-retryable",
+                                        _workspace.Hub.Address, _path, lateErr.Code, attempt, lateErr.Message);
+                                }
+                            });
+
                             // 🚨 BOUNDED response wait — emit as soon as the activity is
                             // STARTED (the patch is accepted), fail-fast on errors, and NEVER
                             // wait for the round to finish. We still observe the owner's
@@ -1006,12 +1081,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // optimistic snapshot — the RFC 7396 patch is deterministic, so
                             // `updated` matches the owner's reconciled state. Callers needing the
                             // reconciled state follow the shared GetMeshNodeStream(path) handle.
+                            //
+                            // Every REAL terminal below disarms the late watch (Complete); ONLY
+                            // the TimeoutException branch leaves it armed — that is the one case
+                            // where the owner's verdict is still outstanding after the caller's
+                            // optimistic emit.
                             var responseSub = _workspace.Hub.Observe(delivery)
                                 .Timeout(UpdateResponseWaitBound)
                                 .Take(1)
                                 .Subscribe(
                                     d =>
                                     {
+                                        lateRegistry?.Complete(requestId);
                                         // Owner posted a structured rejection (deserialization /
                                         // validation gate) as PatchDataResponse.NodeError, or a
                                         // non-success ack → surface as a typed exception (fail-fast).
@@ -1043,6 +1124,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         if (ex is DeliveryFailureException dfx
                                             && dfx.Failure?.ErrorType == ErrorType.Unauthorized)
                                         {
+                                            lateRegistry?.Complete(requestId);
                                             diagLogger?.LogWarning(
                                                 "[UpdateRemote] OWNER_DENIED hub={Hub} target={Path} msg={Msg}",
                                                 _workspace.Hub.Address, _path, dfx.Failure.Message);
@@ -1055,6 +1137,9 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             // is running). Emit the optimistic snapshot now rather
                                             // than wait for the activity to finish; the patch is
                                             // posted and applies when the owner drains its queue.
+                                            // The late watch STAYS armed — a late OwnerDisposing
+                                            // NACK proves the patch will never apply and triggers
+                                            // the re-enqueue above.
                                             diagLogger?.LogDebug(
                                                 "[UpdateRemote] RESPONSE_TIMEOUT hub={Hub} target={Path} — optimistic emit (owner busy)",
                                                 _workspace.Hub.Address, _path);
@@ -1062,6 +1147,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         }
                                         else
                                         {
+                                            lateRegistry?.Complete(requestId);
                                             // Other owner-side / delivery error → surface it (fail-fast).
                                             diagLogger?.LogWarning(ex,
                                                 "[UpdateRemote] response wait errored hub={Hub} target={Path}",
