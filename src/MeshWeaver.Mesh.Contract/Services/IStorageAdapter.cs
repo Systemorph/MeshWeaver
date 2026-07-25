@@ -63,6 +63,19 @@ public interface IStorageAdapter
     IObservable<string> Delete(string path);
 
     /// <summary>
+    /// Deletes a node if present, emitting whether THIS call removed a stored
+    /// node — the atomic "first delete wins" primitive that multi-replica
+    /// single-use consumers (OAuth authorization codes) gate on. Backends that
+    /// can observe the outcome atomically MUST override: Postgres via the
+    /// DELETE row count, in-memory via <c>TryRemove</c>. The default emits
+    /// <c>true</c> unconditionally (non-strict) — acceptable only for
+    /// single-instance backends (FileSystem dev hosts). Decorators MUST
+    /// forward to their inner adapter so strict semantics survive the chain.
+    /// </summary>
+    IObservable<bool> DeleteIfExists(string path)
+        => System.Reactive.Linq.Observable.Select(Delete(path), _ => true);
+
+    /// <summary>
     /// Lists child paths under a parent path.
     /// Returns both node paths (records present at that level) and directory paths
     /// (intermediate folders that have nodes under them but no node at the folder level).

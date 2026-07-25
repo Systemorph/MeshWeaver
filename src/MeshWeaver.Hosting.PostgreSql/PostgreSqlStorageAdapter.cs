@@ -543,11 +543,30 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             return path;
         });
 
-    private async Task DeleteAsyncCore(string path, CancellationToken ct)
+    /// <inheritdoc />
+    /// <remarks>
+    /// Strict semantics via the DELETE row count: the single SQL statement is the
+    /// atomic cross-replica "first delete wins" gate (two concurrent consumers of
+    /// the same row get exactly one <c>true</c> between them — row-level locking
+    /// serialises the deletes). The change notification fires only for the winner.
+    /// </remarks>
+    public IObservable<bool> DeleteIfExists(string path)
+        => _ioPool.Invoke(async ct =>
+        {
+            var removed = await DeleteAsyncCore(path, ct).ConfigureAwait(false) > 0;
+            if (removed)
+            {
+                try { _changes.OnNext(DataChangeNotification.Deleted(path)); }
+                catch { /* never throw — change feed is best-effort */ }
+            }
+            return removed;
+        });
+
+    private async Task<int> DeleteAsyncCore(string path, CancellationToken ct)
     {
         var normalizedPath = NormalizePath(path);
         if (string.IsNullOrEmpty(normalizedPath))
-            return;
+            return 0;
 
         var (ns, id) = SplitPath(normalizedPath);
 
@@ -557,7 +576,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
 
-        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     // Child-listing is a READ → runs in the read pool (pg-read:{adapter}), bounded below the

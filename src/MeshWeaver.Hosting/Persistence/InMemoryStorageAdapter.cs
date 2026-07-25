@@ -93,6 +93,23 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         });
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Strict semantics via <see cref="ConcurrentDictionary{TKey,TValue}.TryRemove(TKey, out TValue)"/>:
+    /// concurrent consumers of the same path get exactly one <c>true</c> between
+    /// them — the in-memory twin of the Postgres DELETE-rowcount gate.
+    /// </remarks>
+    public IObservable<bool> DeleteIfExists(string path)
+        => Observable.Defer(() =>
+        {
+            var won = _nodes.TryRemove(Norm(path), out var removed);
+            if (won)
+            {
+                try { _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed)); } catch { /* never throw */ }
+            }
+            return Observable.Return(won);
+        });
+
+    /// <inheritdoc />
     public override IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
         ListChildPaths(string? parentPath)
         => Observable.Defer(() =>

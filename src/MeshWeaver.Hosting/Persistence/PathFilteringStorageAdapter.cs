@@ -37,6 +37,12 @@ public sealed class PathFilteringStorageAdapter(IStorageAdapter inner, Func<stri
             : Observable.Return(path);
 
     /// <inheritdoc />
+    public IObservable<bool> DeleteIfExists(string path)
+        => matches(path)
+            ? inner.DeleteIfExists(path)
+            : Observable.Return(false);
+
+    /// <inheritdoc />
     public IObservable<bool> Exists(string path)
         => matches(path)
             ? inner.Exists(path)

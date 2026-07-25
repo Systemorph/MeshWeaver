@@ -255,6 +255,10 @@ public class CachingStorageAdapter : IStorageAdapter
     }
 
     /// <inheritdoc />
+    public IObservable<bool> DeleteIfExists(string path)
+        => Delete(path).Select(_ => true);
+
+    /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => Observable.Defer(() => Observable.Return(ListChildPathsCore(parentPath)));
 

@@ -38,20 +38,17 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     private OAuthConnectController CreateController(ClaimsPrincipal? user = null, string host = "memex.test", string scheme = "https")
     {
         var services = new ServiceCollection();
-        // The code store is mesh-backed (replica-safe) — build it on the test mesh's
-        // services, the same way the ApiTokenService below is.
+        // The code store reads/writes the shared storage adapter directly
+        // (replica-deterministic) — build it on the test mesh's services, the
+        // same way the ApiTokenService below is.
         services.AddSingleton(new OAuthCodeStore(
-            Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
+            Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>(),
             Mesh,
-            Mesh.ServiceProvider.GetRequiredService<ILogger<OAuthCodeStore>>())
-        {
-            // Short read window so unknown/replayed-code tests fail fast on the single
-            // in-memory mesh; a valid code resolves near-instantly via Take(1). Prod = 10 s.
-            ReadTimeout = TimeSpan.FromSeconds(2),
-        });
+            Mesh.ServiceProvider.GetRequiredService<ILogger<OAuthCodeStore>>()));
         services.AddSingleton(new ApiTokenService(
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh,
+            Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>(),
             Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>()));
         var provider = services.BuildServiceProvider();
 
@@ -64,15 +61,17 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
-    /// Waits until the authorization-code node minted by /authorize is readable —
-    /// absorbs create→routing visibility lag (sanctioned Interval+re-read pattern)
-    /// so the /token exchange under test exercises its own logic, not read lag.
+    /// Asserts the authorization-code row minted by /authorize is readable in the
+    /// shared store. GenerateCode commits the row BEFORE the redirect emits, so a
+    /// single direct read suffices — no visibility poll.
     /// </summary>
-    private async Task AwaitCodeVisible(string code) =>
-        await Observable
-            .Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .SelectMany(_ => ReadNode(OAuthCodeStore.PathForCode(code)))
-            .Should().Within(30.Seconds()).Match(n => n is not null);
+    private async Task AwaitCodeVisible(string code)
+    {
+        var stored = await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
+            .Read(OAuthCodeStore.PathForCode(code), Mesh.JsonSerializerOptions)
+            .Should().Within(30.Seconds()).Emit();
+        stored.Should().NotBeNull("/authorize must not redirect before the code row is committed");
+    }
 
     private static ClaimsPrincipal AuthenticatedUser(string email = "alice@example.com", string name = "Alice")
     {

@@ -58,7 +58,20 @@ public static class McpExtensions
     public static IServiceCollection AddMeshMcp(this IServiceCollection services)
     {
         services.AddMcpServer(options => options.ServerInstructions = ServerInstructions)
-            .WithHttpTransport()
+            // 🚨 Stateless: the default (stateful) transport parks each Mcp-Session-Id
+            // session in a PER-PROCESS dictionary, so on a multi-replica portal every
+            // request that lands on a pod other than the one that served `initialize`
+            // gets 404 "session not found" → the client re-initializes → permanent
+            // ping-pong. MCP clients (Claude Code, claude.ai, VS Code — see
+            // microsoft/vscode#302394) do NOT replay cookies, so ingress cookie
+            // affinity never engages for /mcp; header-based sticky routing isn't
+            // available on nginx OSS. Stateless mode removes the per-pod session
+            // table entirely — any replica serves any request, matching the mesh's
+            // own location transparency. Costs server→client requests (sampling/
+            // elicitation) and unsolicited notifications — the mesh tools use
+            // neither: long operations return an activity/thread path immediately
+            // and clients poll with `get`.
+            .WithHttpTransport(options => options.Stateless = true)
             .WithToolsFromAssembly(typeof(McpMeshPlugin).Assembly)
             .WithResourcesFromAssembly(typeof(McpResources).Assembly);
 
