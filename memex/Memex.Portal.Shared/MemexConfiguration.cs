@@ -65,6 +65,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
+using ModelContextProtocol.AspNetCore;
 using PortalAuthOptions = MeshWeaver.Blazor.Portal.Authentication.AuthenticationOptions;
 
 namespace Memex.Portal.Shared;
@@ -273,6 +274,13 @@ public static class MemexConfiguration
         // Register API token service for MCP bearer auth and OAuth code store
         services.AddSingleton<ApiTokenService>();
         services.AddSingleton<OAuthCodeStore>();
+        // Replica-safe stateful MCP sessions: the store persists each session's initialize
+        // params as an Admin/McpSession/{hashPrefix} mesh node, and the migration handler
+        // re-hydrates a session on whichever replica a follow-up request lands on (the MCP
+        // client carries no affinity cookie). The MCP SDK's WithHttpTransport() resolves the
+        // ISessionMigrationHandler from DI — registering it here is the entire wiring.
+        services.AddSingleton<McpSessionStore>();
+        services.AddSingleton<ISessionMigrationHandler, McpSessionMigrationHandler>();
         // Automatic, token-based MCP back-connection for the co-hosted Claude Code / Copilot CLIs.
         // The chat clients resolve this at spawn to mint/reuse the per-user MCP ApiToken + URL.
         services.AddSingleton<MeshWeaver.AI.Connect.IMcpBackConnection, McpBackConnectionService>();
@@ -659,6 +667,11 @@ public static class MemexConfiguration
                 // /authorize that minted the code). Without this the create fails with
                 // "NodeType 'OAuthCode' is not registered" and no MCP client can connect.
                 .AddOAuthCodeType()
+                // Register the McpSession NodeType + McpSessionEntry content type so
+                // McpSessionStore can persist stateful MCP sessions as Admin/McpSession/{hashPrefix}
+                // mesh nodes — the replica-safe store that lets any silo re-hydrate a session an
+                // MCP client established on another (the client sends no affinity cookie).
+                .AddMcpSessionType()
                 // Seed root-scope Admin AccessAssignments for users listed under
                 // `Auth:GlobalAdmins` so configured admins bypass per-partition
                 // RLS for cross-partition operations (list Spaces, create
