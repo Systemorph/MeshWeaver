@@ -844,17 +844,35 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
             return path;
         });
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Strict semantics via the DELETE row count — PG parity: the single DELETE
+    /// statement is the atomic cross-replica "first delete wins" gate. The change
+    /// notification fires only for the winner.
+    /// </remarks>
+    public IObservable<bool> DeleteIfExists(string path)
+        => _ioPool.Invoke(async ct =>
+        {
+            var removed = await DeleteAsyncCore(path, ct).ConfigureAwait(false) > 0;
+            if (removed)
+            {
+                try { _changes.OnNext(DataChangeNotification.Deleted(path)); }
+                catch { /* never throw — change feed is best-effort */ }
+            }
+            return removed;
+        });
+
     /// <summary>
     /// Delete leaf: reads the row's <c>node_type</c> first (PG's triggers see OLD.*; without
     /// triggers the type must be known BEFORE the row is gone to decide the auth-mirror delete
     /// and the projection rebuild), then deletes, then runs the trigger-replacement steps on the
     /// same connection.
     /// </summary>
-    private async Task DeleteAsyncCore(string path, CancellationToken ct)
+    private async Task<int> DeleteAsyncCore(string path, CancellationToken ct)
     {
         var normalizedPath = NormalizePath(path);
         if (string.IsNullOrEmpty(normalizedPath))
-            return;
+            return 0;
 
         var (ns, id) = SplitPath(normalizedPath);
 
@@ -884,12 +902,13 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
             }
         }
 
+        int deletedRows;
         await using (var cmd = connection.CreateCommand())
         {
             cmd.CommandText = $"DELETE FROM {table} WHERE \"namespace\" = :ns AND \"id\" = :id";
             SnowflakeConnectionSource.AddParam(cmd, "ns", ns, DbType.String);
             SnowflakeConnectionSource.AddParam(cmd, "id", id, DbType.String);
-            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            deletedRows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         // ── Trigger replacement (delete side) ─────────────────────────────────────────────
@@ -927,6 +946,8 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         {
             await RebuildProjectionGuardedAsync(connection, normalizedPath, ct).ConfigureAwait(false);
         }
+
+        return deletedRows;
     }
 
     // Child-listing is a READ → runs in the read pool, bounded, NOT the cap-1 write pool

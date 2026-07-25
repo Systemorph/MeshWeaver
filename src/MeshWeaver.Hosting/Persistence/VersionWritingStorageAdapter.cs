@@ -57,6 +57,9 @@ internal class VersionWritingStorageAdapter(
 
     public IObservable<string> Delete(string path) => inner.Delete(path);
 
+    /// <inheritdoc />
+    public IObservable<bool> DeleteIfExists(string path) => inner.DeleteIfExists(path);
+
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => inner.ListChildPaths(parentPath);
 

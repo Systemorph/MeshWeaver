@@ -23,9 +23,21 @@ namespace MeshWeaver.Mcp;
 public static class SessionHubResolver
 {
     /// <summary>
+    /// Process-stable disambiguator appended to every session-hub address. With the
+    /// stateless MCP transport (no ingress affinity), consecutive requests for the
+    /// same caller land on DIFFERENT replicas; without this suffix each replica would
+    /// materialise a hub at the SAME <c>portal/…</c> address and RegisterStream the
+    /// same routed memory stream — every response would fan out to all replicas'
+    /// hubs. The suffix keeps each replica's routing anchor unique. Immutable
+    /// constant initialised once per process (never written at runtime).
+    /// </summary>
+    private static readonly string InstanceId = Guid.NewGuid().ToString("N")[..8];
+
+    /// <summary>
     /// Materialises (or reuses) a hosted hub for the calling user × protocol session
-    /// at address <c>portal/{prefix}-{sessionId}</c>. Falls back to <paramref name="rootHub"/>
-    /// if no caller / session can be derived from <paramref name="ctx"/>.
+    /// at address <c>portal/{prefix}-{sessionId}-{instance}</c>. Falls back to
+    /// <paramref name="rootHub"/> if no caller / session can be derived from
+    /// <paramref name="ctx"/>.
     /// </summary>
     /// <param name="rootHub">Portal-level hub from which to host the child.</param>
     /// <param name="ctx">Current HTTP context (claims + Mcp-Session-Id header).</param>
@@ -48,7 +60,7 @@ public static class SessionHubResolver
         }
 
         var routingService = rootHub.ServiceProvider.GetRequiredService<IRoutingService>();
-        var address = AddressExtensions.CreatePortalAddress($"{prefix}-{sessionId}");
+        var address = AddressExtensions.CreatePortalAddress($"{prefix}-{sessionId}-{InstanceId}");
         logger.LogInformation("Materialising {Prefix} session hub at {Address}", prefix, address);
 
         // AddData() ensures the session hub has its own IWorkspace so MeshOperations.Compile
@@ -77,8 +89,15 @@ public static class SessionHubResolver
 
         // Prefer the standard MCP protocol header. REST callers can set it too
         // for stable per-connection session scoping; otherwise the caller id alone
-        // identifies the session.
+        // identifies the session. Long values (e.g. the self-contained ids some
+        // stateless transports mint) are hashed to a short stable hex so the
+        // resulting hub address / grain key stays compact and well-formed.
         var protocolSession = ctx.Request.Headers["Mcp-Session-Id"].FirstOrDefault();
+        if (protocolSession is { Length: > 48 })
+            protocolSession = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(
+                        System.Text.Encoding.UTF8.GetBytes(protocolSession)))[..16]
+                .ToLowerInvariant();
 
         var callerId = ctx.User?.FindFirst("oid")?.Value
                     ?? ctx.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value

@@ -207,6 +207,17 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
             ? a.Delete(path)
             : Observable.Return(path);
 
+    /// <summary>
+    /// Forwards to the per-schema adapter's strict rowcount-gated
+    /// <see cref="IStorageAdapter.DeleteIfExists"/>; an unroutable path was
+    /// never stored here → <c>false</c>. Read-path routing (never CREATE SCHEMA
+    /// just to delete nothing).
+    /// </summary>
+    public IObservable<bool> DeleteIfExists(string path)
+        => AdapterForRead(path) is { } a
+            ? a.DeleteIfExists(path)
+            : Observable.Return(false);
+
     public IObservable<bool> Exists(string path)
         => AdapterForRead(path) is { } a
             ? a.Exists(path)

@@ -270,6 +270,12 @@ internal sealed class SnowflakePathRoutingAdapter : IStorageAdapter
             ? a.Delete(path)
             : Observable.Return(path);
 
+    /// <inheritdoc cref="IStorageAdapter.DeleteIfExists"/>
+    public IObservable<bool> DeleteIfExists(string path)
+        => AdapterForRead(path) is { } a
+            ? a.DeleteIfExists(path)
+            : Observable.Return(false);
+
     /// <inheritdoc/>
     public IObservable<bool> Exists(string path)
         => AdapterForRead(path) is { } a

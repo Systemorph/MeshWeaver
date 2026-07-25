@@ -42,6 +42,7 @@ public class ApiTokensSettingsTabRevokeTests(ITestOutputHelper output) : Monolit
         new(
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh,
+            Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>(),
             Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>()
         );
 
