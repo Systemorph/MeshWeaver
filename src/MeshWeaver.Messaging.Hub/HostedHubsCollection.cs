@@ -161,8 +161,26 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// whose timers later detonate on the disposed container (the post-teardown
     /// ObjectDisposedException straggler class). Existing hubs remain resolvable for the
     /// drain; only CREATION is refused (logged, observable).
+    ///
+    /// <para>🚨 The freeze CASCADES through the entire hosted-hub SUBTREE immediately.
+    /// The per-hub flip alone left every DESCENDANT collection open until the dispose
+    /// cascade reached it — potentially seconds into teardown — so a straggler emission
+    /// (a workspace Reduce, a routed enrichment) could still enter hub CONSTRUCTION on a
+    /// mid-tree hub while the root container and the compiled-NodeType collectible ALCs
+    /// were already being torn down. Constructing a hub there walks the type registry
+    /// (TypeRegistry ctor → XmlDocs.Summary) over types whose ALC is unloading — the
+    /// FutuRe.Test teardown SIGSEGV (exit=139, issue #613; dump: String.Ctor over a
+    /// span into the unloaded assembly's metadata). Freezing the whole subtree at
+    /// root-dispose start closes that window at the single choke point every hub
+    /// creation goes through. The tree is acyclic (each hub has one parent), so the
+    /// recursion terminates.</para>
     /// </summary>
-    public void CloseCreation() => creationClosed = true;
+    public void CloseCreation()
+    {
+        creationClosed = true;
+        foreach (var hub in messageHubs.Values)
+            (hub as MessageHub)?.CloseHostedHubCreation();
+    }
 
     // Reactive completion source of truth — completed exactly once (CAS-guarded) when every
     // hosted hub has finished disposing (or the 10 s cap elapses). ReplaySubject(1) so a late
