@@ -1352,6 +1352,15 @@ public sealed class MessageHub : IMessageHub
     /// machine, and arms a watchdog that force-completes disposal if that path ever wedges. Returns
     /// immediately; observe <see cref="DisposalCompleted"/> for completion.
     /// </summary>
+    /// <summary>
+    /// Freezes creation of NEW hosted hubs beneath this hub, cascading through the
+    /// whole subtree. Invoked by the parent's <see cref="HostedHubsCollection.CloseCreation"/>
+    /// the moment an ANCESTOR begins disposing, so no straggler emission anywhere in
+    /// the tree can enter hub construction during teardown (issue #613). Does NOT
+    /// dispose anything — existing hubs keep draining until their own dispose phase.
+    /// </summary>
+    internal void CloseHostedHubCreation() => hostedHubs.CloseCreation();
+
     public void Dispose()
     {
         var totalStopwatch = Stopwatch.StartNew();
@@ -1374,7 +1383,9 @@ public sealed class MessageHub : IMessageHub
         // phase disposes the collection. A hub created in the Quiescing window races
         // DisposeHubsReactive's snapshot and leaks as a zombie whose timers later
         // detonate on the disposed container (post-dispose ObjectDisposedException
-        // stragglers). Existing hubs still resolve for the drain.
+        // stragglers). CloseCreation cascades the freeze through the ENTIRE subtree
+        // (see HostedHubsCollection.CloseCreation — the FutuRe.Test teardown SIGSEGV,
+        // issue #613). Existing hubs still resolve for the drain.
         hostedHubs.CloseCreation();
 
         // Log all hosted hubs that will be disposed
