@@ -196,17 +196,22 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
-    /// SHOULD-FAIL-IF: an unknown token is rejected INSTANTLY — that is exactly the
-    /// behavior that 401ed fresh tokens during the create→routable window on the
-    /// non-minting replicas. The resilient read must keep polling for the full
-    /// <see cref="ApiTokenService.ValidationReadTimeout"/> before concluding null,
-    /// and the timeout must be named at Warning with the hash prefix.
+    /// SHOULD-FAIL-IF: an unknown token polls the read window before rejecting.
+    /// That poll-on-absence was the resilient-read shape for the CROSS-SILO mesh
+    /// read, whose lag no longer exists: validation reads the shared store
+    /// directly, and <see cref="ApiTokenService.CreateToken"/> confirms both rows
+    /// are committed BEFORE the raw token leaves the server — so absence at
+    /// validation is a terminal negative. Polling it anyway made every bad-token
+    /// 401 cost the full 8 s window (measured on memex-cloud 2026-07-25). The
+    /// rejection must be fast and named at Warning with the hash prefix.
     /// </summary>
     [Fact]
-    public async Task ValidateToken_UnknownToken_FailsAtReadTimeout_NotInstantly()
+    public async Task ValidateToken_UnknownToken_FailsFast_NotAtTimeout()
     {
         var logs = new CapturingLogger();
-        var window = TimeSpan.FromSeconds(1);
+        // Generous window so the timing assert genuinely discriminates fail-fast
+        // from wait-out-the-window.
+        var window = TimeSpan.FromSeconds(8);
         var service = GetService(window, logs);
         const string unknownToken = "mw_thistokenwasneverissued0123456789";
 
@@ -215,15 +220,15 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         stopwatch.Stop();
 
         validated.Should().BeNull();
-        stopwatch.Elapsed.Should().BeGreaterThanOrEqualTo(window - TimeSpan.FromMilliseconds(100),
-            "an unknown token must poll the full ValidationReadTimeout window — an instant no is indistinguishable from a fresh token that is not yet routable on this replica");
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(4),
+            "an absent row in the authoritative store is a terminal negative — rejection must not wait out the read window");
 
         var hashPrefix = ApiTokenService.HashToken(unknownToken)[..12];
         logs.Entries.Should().Contain(e =>
                 e.Level == LogLevel.Warning
-                && e.Message.Contains("index-read-timeout")
+                && e.Message.Contains("index-not-found")
                 && e.Message.Contains(hashPrefix),
-            "the read timeout must be logged at Warning with the failing stage and hash prefix — never a silent null");
+            "the rejection must be logged at Warning with the failing stage and hash prefix — never a silent null");
         logs.Entries.Should().NotContain(e => e.Message.Contains(unknownToken),
             "the raw token must never appear in any log line");
     }
