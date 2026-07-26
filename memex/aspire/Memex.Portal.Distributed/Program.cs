@@ -5,6 +5,7 @@ using Memex.Portal.Shared;
 using MeshWeaver.Hosting.Embeddings;
 using Microsoft.AspNetCore.DataProtection;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Hosting.PostgreSql;
@@ -228,7 +229,27 @@ builder.UseOrleansMeshServer(address, silo =>
                 }
                 : null))
     .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment())
-    .ConfigureMemexPortal();
+    .ConfigureMemexPortal()
+    // 🚨 Register the "storage" SOURCE collection at mesh level — the backing store that every
+    // per-node MapContentCollection("x", "storage", …) mapping resolves against
+    // (ContentService.ResolveMappedConfig looks the source up on the parent content service and
+    // returns NULL when it is absent, so the mapped collection silently reports
+    // "collection 'x' not found"). The Monolith has always registered this from the same
+    // `Storage` config section (Memex.Portal.Monolith/Program.cs); the Distributed portal never
+    // did — so on memex EVERY mapped per-node collection was dead: ReinsuranceDemo/Setup's
+    // packs zip (the demo could not be imported at all), Reinsurance/Cedent + Underwriting/
+    // Submission `content`, and Claims/Claim `files`. The AKS values already supply
+    // Storage__SourceType=FileSystem + Storage__BasePath=/mnt/content, so this reads config that
+    // is deployed today. Same shape as the Monolith: a read-only static backing store, hidden
+    // from children (IsEditable / ExposeInChildren stay false — the per-node MAPPING is the
+    // writable view).
+    .ConfigureHub(hub =>
+    {
+        var storageConfig = builder.Configuration.GetSection("Storage").Get<ContentCollectionConfig>();
+        return storageConfig is null
+            ? hub
+            : hub.AddContentCollection(_ => storageConfig with { IsStatic = true });
+    });
 
 // Hard gate: refuse to start if the DB isn't migrated. Aspire's
 // WaitForCompletion(dbMigration) is a soft hint at deploy time — Container
