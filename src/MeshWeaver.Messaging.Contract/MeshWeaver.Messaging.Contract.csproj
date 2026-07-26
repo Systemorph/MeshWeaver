@@ -4,6 +4,13 @@
     <RootNamespace>MeshWeaver.Messaging</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Allow NSubstitute's DynamicProxy to access internal members for testing
+         (same grant as MeshWeaver.Messaging.Hub / MeshWeaver.Mesh.Contract) —
+         without it, auto-substituting IMessageDelivery (internal ChangeState)
+         throws TypeLoadException at proxy generation. -->
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging" />
   </ItemGroup>
   <ItemGroup>
