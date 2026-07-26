@@ -155,8 +155,14 @@ internal static class NodeTypeEnrichmentHelpers
                         logger?.LogWarning(
                             "EnrichWithNodeType: NodeType '{NodeType}' has no static registration and no persisted node at that path — applying error overlay to '{InstancePath}'",
                             nodeType, node.Path);
+                        // Self-heal with a NULL version gate — there is no type
+                        // node at all yet; the first usable state (the type gets
+                        // registered/imported and compiled later) recycles this
+                        // instance off the overlay.
                         return Observable.Return(
-                            WithCompilationErrorOverlay(node, nodeType, msg, meshConfiguration));
+                            WithOverlaySelfHeal(
+                                WithCompilationErrorOverlay(node, nodeType, msg, meshConfiguration),
+                                meshHub, nodeType, typeVersionAtOverlay: null, logger));
                     }
                     return BuildEnrichmentChain(meshHub, meshConfiguration, compilationService, node, nodeType, logger);
                 });
@@ -227,14 +233,27 @@ internal static class NodeTypeEnrichmentHelpers
                 // Build a user-actionable message — TimeoutException's bare
                 // "The operation has timed out." gives the operator nothing
                 // to act on. Tell them which NodeType, which budget, and
-                // where to look.
-                var userMessage = ex is TimeoutException
-                    ? $"NodeType '{nodeType}' compile did not settle within {SlowPathTimeout.TotalSeconds:0}s.\n"
-                      + $"Instance '{node.Path}' is rendering this fallback. Check the NodeType's source code, "
-                      + $"its Code nodes' compilation diagnostics, or trigger a fresh release."
+                // where to look. The timeout is NOT a compile error — the
+                // build simply hasn't settled (mesh restart in progress,
+                // recompile storm-queued, per-NodeType hub unreachable) — so
+                // that page swaps the "correct the code" copy for the
+                // auto-recovery story (see UnsettledBuildIntro/Guidance).
+                var timedOut = ex is TimeoutException;
+                var userMessage = timedOut
+                    ? $"NodeType '{nodeType}' build did not settle within {SlowPathTimeout.TotalSeconds:0}s.\n"
+                      + $"Instance '{node.Path}' is rendering this fallback until the type's build settles."
                     : $"NodeType '{nodeType}' enrichment failed for instance '{node.Path}': {ex.Message}";
+                // Self-heal with a NULL version gate: no type node is in hand
+                // here, and a currently-usable state would have settled instead
+                // of timing out — so the first usable emission is genuine news
+                // and recycles this instance off the overlay.
                 return Observable.Return(
-                    WithCompilationErrorOverlay(node, nodeType, userMessage, meshConfiguration));
+                    WithOverlaySelfHeal(
+                        WithCompilationErrorOverlay(node, nodeType, userMessage, meshConfiguration,
+                            guidance: timedOut ? UnsettledBuildGuidance : null,
+                            intro: timedOut ? UnsettledBuildIntro : null,
+                            callToAction: timedOut ? UnsettledBuildCallToAction : null),
+                        meshHub, nodeType, typeVersionAtOverlay: null, logger));
             });
     }
 
@@ -525,10 +544,16 @@ internal static class NodeTypeEnrichmentHelpers
                         logger?.LogWarning(
                             "EnrichWithNodeType: pinned release {ReleasePath} for {NodeType} could not be resolved",
                             requestedReleasePath, nodeType);
+                        // Version-gated self-heal (typeNode.Version): the type's
+                        // LATEST build may already be usable while the pin is
+                        // broken — without the gate the watcher would fire on
+                        // the replayed current state and hot-loop the recycle.
                         return Observable.Return(
-                            WithCompilationErrorOverlay(node, nodeType,
-                                $"Pinned release '{requestedReleasePath}' for '{nodeType}' could not be resolved.",
-                                meshConfiguration));
+                            WithOverlaySelfHeal(
+                                WithCompilationErrorOverlay(node, nodeType,
+                                    $"Pinned release '{requestedReleasePath}' for '{nodeType}' could not be resolved.",
+                                    meshConfiguration),
+                                meshHub, nodeType, typeNode.Version, logger));
                     }
                     // Use the persisted integer version the IAssemblyStore.Put used,
                     // not a parse of the display Version string.
@@ -555,10 +580,16 @@ internal static class NodeTypeEnrichmentHelpers
                                     logger?.LogWarning(
                                         "EnrichWithNodeType: pinned release {ReleasePath} bytes still not found in store after {Attempts} recompile attempt(s) (collection={Coll}, version={Version})",
                                         requestedReleasePath, recompileAttempts, release.AssemblyCollection, releaseVersion);
+                                    // Version-gated self-heal — same rationale as
+                                    // the unresolved-pin overlay above: the latest
+                                    // build may satisfy HasUsableBuild right now,
+                                    // so only a Version ADVANCE may recycle.
                                     return Observable.Return(
-                                        WithCompilationErrorOverlay(node, nodeType,
-                                            $"Pinned release '{requestedReleasePath}' assembly not found in store.",
-                                            meshConfiguration));
+                                        WithOverlaySelfHeal(
+                                            WithCompilationErrorOverlay(node, nodeType,
+                                                $"Pinned release '{requestedReleasePath}' assembly not found in store.",
+                                                meshConfiguration),
+                                            meshHub, nodeType, typeNode.Version, logger));
                                 }
                                 return TriggerRecompileAndRetry(
                                     node, nodeType, meshConfiguration, compilationService, meshHub,
@@ -629,9 +660,39 @@ internal static class NodeTypeEnrichmentHelpers
                             logger?.LogWarning(
                                 "EnrichWithNodeType: latest assembly for {NodeType} still not found in store after {Attempts} recompile attempt(s) (collection={Coll}, version={Version}) — falling back to default config",
                                 nodeType, recompileAttempts, def.LatestAssemblyCollection, compileVersion);
-                            return Observable.Return(ApplyEntry(
+                            // 🚨 The SECOND sticky class (memex two-pod evidence,
+                            // 2026-07-26): this silent default-config fallback is
+                            // cached for the grain's lifetime exactly like the
+                            // error overlay — an instance on a pod whose local
+                            // store lacks the type's bytes serves only generic
+                            // areas until a manual recycle (and each recycle
+                            // re-rolls placement). Attach the same self-heal
+                            // watcher. The version gate is MANDATORY here, not
+                            // optional: HasUsableBuild is already TRUE in this
+                            // state (only the byte resolution missed), so an
+                            // ungated watcher would fire on the replayed current
+                            // state and hot-loop the recycle. Gated, the instance
+                            // self-recycles once per NodeType write — when the
+                            // compile eventually lands on this pod, re-enrichment
+                            // resolves the bytes and heals.
+                            //
+                            // Only wrap when a hub configuration will actually be
+                            // composed (the node's own, or the mesh default the
+                            // factory adds underneath). With NEITHER, the null
+                            // HubConfiguration must survive: routing/grain key
+                            // the fail-fast NACK-fallback hub on it, and that
+                            // hub's DeactivateOnIdle already retries on next
+                            // access — wrapping would swap fail-fast for a bare
+                            // hub that Ignores typed requests (the park class).
+                            var fallback = ApplyEntry(
                                 node, localAssemblyPath: null, hubConfig: null,
-                                nodeType, meshConfiguration));
+                                nodeType, meshConfiguration);
+                            return Observable.Return(
+                                fallback.HubConfiguration is null
+                                && meshConfiguration.DefaultNodeHubConfiguration is null
+                                    ? fallback
+                                    : WithOverlaySelfHeal(
+                                        fallback, meshHub, nodeType, typeNode.Version, logger));
                         }
                         return TriggerRecompileAndRetry(
                             node, nodeType, meshConfiguration, compilationService, meshHub,
@@ -705,11 +766,16 @@ internal static class NodeTypeEnrichmentHelpers
                     "EnrichWithNodeType: {NodeType} assembly is compiled against framework {Compiled} but the live framework is {Live}; still ABI-stale after {Attempts} recompile attempt(s) — overlaying recompile prompt",
                     nodeType, def.CompiledFrameworkVersion ?? "(null)",
                     NodeTypeCompilationHelpers.FrameworkVersion, recompileAttempts);
+                // Version-gated self-heal: when the operator's recompile lands
+                // (a Version-advancing write with a framework-matching build),
+                // every instance stuck on this prompt recycles itself.
                 return Observable.Return(
-                    WithCompilationErrorOverlay(node, nodeType,
-                        "Built against a previous framework version",
-                        meshConfiguration,
-                        guidance: "This type's compiled assembly targets an older MeshWeaver build, so the current process can't load it. Click **Recompile** (or call `compile` via MCP) to rebuild it against the current framework — no source changes are needed."));
+                    WithOverlaySelfHeal(
+                        WithCompilationErrorOverlay(node, nodeType,
+                            "Built against a previous framework version",
+                            meshConfiguration,
+                            guidance: "This type's compiled assembly targets an older MeshWeaver build, so the current process can't load it. Click **Recompile** (or call `compile` via MCP) to rebuild it against the current framework — no source changes are needed."),
+                        meshHub, nodeType, typeNode.Version, logger));
             }
             return TriggerRecompileAndRetry(
                 node, nodeType, meshConfiguration, compilationService, meshHub,
@@ -719,8 +785,15 @@ internal static class NodeTypeEnrichmentHelpers
         }
 
         var error = def.CompilationError ?? "Compilation failed";
+        // Genuine compile failure — the page wording stays as-is ("correct the
+        // code"), but the instance still self-heals: once the author fixes the
+        // source and a SUCCESSFUL compile writes back (Version advances +
+        // HasUsableBuild turns true), every instance stuck on this overlay
+        // recycles itself instead of waiting for a manual Recycle.
         return Observable.Return(
-            WithCompilationErrorOverlay(node, nodeType, error, meshConfiguration));
+            WithOverlaySelfHeal(
+                WithCompilationErrorOverlay(node, nodeType, error, meshConfiguration),
+                meshHub, nodeType, typeNode.Version, logger));
     }
 
     /// <summary>
@@ -927,12 +1000,128 @@ internal static class NodeTypeEnrichmentHelpers
         return node with { HubConfiguration = node.HubConfiguration ?? hubConfig };
     }
 
+    /// <summary>
+    /// Self-healing wrap for a STUCK per-instance binding — the fix for the
+    /// memex 2026-07-25/26 incident: an instance enriched while its NodeType
+    /// was unsettled (pod restart wiped pod-local assemblies, recompile
+    /// storm-delayed, per-NodeType hub unreachable) binds the compilation-error
+    /// overlay — or the silent default-config fallback — ONCE, and the
+    /// <see cref="EnrichWithNodeType"/> re-enrichment short-circuit keeps that
+    /// binding for the grain's whole lifetime, even after the type compiles
+    /// green seconds later. Operators had to post manual DisposeRequests per
+    /// instance (the Underwriting root sat on "This page can't be displayed"
+    /// for ~14h).
+    ///
+    /// <para>The wrap adds a <c>WithInitialization</c> to the enriched node's
+    /// HubConfiguration that arms a BACKGROUND watcher on the instance hub:
+    /// it observes the NodeType's MeshNode stream — the SAME
+    /// <c>meshHub.GetWorkspace().GetMeshNodeStream(nodeType)</c> source the
+    /// slow path reads — and on the first GENUINELY USABLE state
+    /// (<see cref="NodeTypeCompilationHelpers.HasUsableBuild"/>) past
+    /// <paramref name="typeVersionAtOverlay"/> posts a <see cref="DisposeRequest"/>
+    /// to the instance's OWN address — the exact recycle idiom of
+    /// <see cref="RecycleLayoutArea"/>. The hub tears down, the grain
+    /// deactivates, and the NEXT access re-enriches from scratch against the
+    /// now-usable NodeType. The watcher never blocks initialization and is
+    /// disposed with the hub (<c>RegisterForDisposal</c>).</para>
+    ///
+    /// <para>🚨 <paramref name="typeVersionAtOverlay"/> is the anti-loop gate.
+    /// At the call sites that hold a type node (pinned-release, ABI-stale,
+    /// genuine Error, bytes-missing default fallback) the CURRENT replayed
+    /// state can ALREADY satisfy HasUsableBuild — e.g. a pinned release is
+    /// missing while the latest build is fine, or the bytes are absent only on
+    /// THIS pod — so an ungated watcher would fire on the replay and
+    /// recycle → re-overlay → recycle in a hot loop. Requiring the type's
+    /// Version to ADVANCE bounds it to at most one self-recycle per NodeType
+    /// write. Pass null ONLY where no type node was in hand (slow-path
+    /// timeout / probe-missing): a currently-usable state would have settled
+    /// instead of timing out, so the first usable emission is genuine news
+    /// there.</para>
+    ///
+    /// <para>Works on a null HubConfiguration too (the silent default-config
+    /// fallback): the wrap then starts from the bare configuration and
+    /// <c>MeshNodeHubFactory</c> still composes
+    /// <c>DefaultNodeHubConfiguration</c> underneath, so the instance keeps
+    /// serving the generic areas until it heals.</para>
+    /// </summary>
+    internal static MeshNode WithOverlaySelfHeal(
+        MeshNode overlaid,
+        IMessageHub meshHub,
+        string nodeType,
+        long? typeVersionAtOverlay,
+        ILogger? logger)
+    {
+        var baseConfig = overlaid.HubConfiguration;
+        Func<MessageHubConfiguration, MessageHubConfiguration> withWatcher = config =>
+            (baseConfig is null ? config : baseConfig(config))
+                .WithInitialization(instanceHub =>
+                {
+                    // Fire-and-forget: a watcher that cannot be armed must never
+                    // fault hub initialization — worst case is the pre-fix world
+                    // ("manual Recycle heals it"), never a dead instance hub.
+                    try
+                    {
+                        instanceHub.RegisterForDisposal(ArmOverlaySelfHeal(
+                            meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
+                            instanceHub, nodeType, typeVersionAtOverlay, logger));
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.LogWarning(ex,
+                            "Overlay self-heal: could not arm the NodeType watcher for '{NodeType}' on instance '{InstancePath}'",
+                            nodeType, instanceHub.Address);
+                    }
+                });
+        return overlaid with { HubConfiguration = withWatcher };
+    }
+
+    /// <summary>
+    /// Watcher core of <see cref="WithOverlaySelfHeal"/>, split out so the
+    /// firing contract is unit-testable without building a hub
+    /// (<c>OverlaySelfHealWatcherTest</c>): the FIRST emission whose content is
+    /// a <see cref="NodeTypeDefinition"/> with a genuinely usable build
+    /// (<see cref="NodeTypeCompilationHelpers.HasUsableBuild"/>) AND — when
+    /// <paramref name="typeVersionAtOverlay"/> is set — a Version strictly past
+    /// it posts exactly ONE self-<see cref="DisposeRequest"/> (Take(1));
+    /// everything else (unsettled states, the replayed at-overlay state,
+    /// non-advancing versions, non-NodeTypeDefinition content) is ignored.
+    /// Errors are logged, never rethrown — the watcher is best-effort by
+    /// design.
+    /// </summary>
+    internal static IDisposable ArmOverlaySelfHeal(
+        IObservable<MeshNode> typeStream,
+        IMessageHub instanceHub,
+        string nodeType,
+        long? typeVersionAtOverlay,
+        ILogger? logger)
+        => typeStream
+            .Where(t => t?.Content is NodeTypeDefinition d
+                && NodeTypeCompilationHelpers.HasUsableBuild(t, d)
+                && (typeVersionAtOverlay is null || t.Version > typeVersionAtOverlay.Value))
+            .Take(1)
+            .Subscribe(
+                t =>
+                {
+                    logger?.LogInformation(
+                        "Overlay self-heal: NodeType '{NodeType}' reached a usable build (version {Version}, at-overlay {VersionAtOverlay}) — recycling stuck instance '{InstancePath}'",
+                        nodeType, t.Version, typeVersionAtOverlay, instanceHub.Address);
+                    // The RecycleLayoutArea idiom: the hub disposes itself, the
+                    // grain deactivates, and the next access re-enriches from
+                    // scratch against the now-usable NodeType.
+                    instanceHub.Post(new DisposeRequest(), o => o.WithTarget(instanceHub.Address));
+                },
+                ex => logger?.LogWarning(ex,
+                    "Overlay self-heal watcher for NodeType '{NodeType}' (instance '{InstancePath}') faulted — falling back to manual Recycle",
+                    nodeType, instanceHub.Address));
+
     public static MeshNode WithCompilationErrorOverlay(
         MeshNode node,
         string nodeType,
         string? error,
         MeshConfiguration meshConfiguration,
-        string? guidance = null)
+        string? guidance = null,
+        string? intro = null,
+        string? callToAction = null)
     {
         var baseConfig = string.IsNullOrEmpty(error)
             ? (node.HubConfiguration ?? meshConfiguration.DefaultNodeHubConfiguration)
@@ -941,7 +1130,7 @@ internal static class NodeTypeEnrichmentHelpers
         if (string.IsNullOrEmpty(error))
             return node with { HubConfiguration = baseConfig };
 
-        var overlay = CreateCompilationErrorConfiguration(error, guidance);
+        var overlay = CreateCompilationErrorConfiguration(error, guidance, intro, callToAction);
         // Fallback-hub contract: the overlay hub serves what its default config CAN
         // (the error Overview layout, node data binding, Ping) — but everything else,
         // notably typed requests the broken assembly would have registered (which
@@ -964,15 +1153,36 @@ internal static class NodeTypeEnrichmentHelpers
     private const string DefaultCompilationErrorGuidance =
         "Fix the source code or the NodeType's `sources` list, then use the **Recycle** menu to flush the cached grain (or call `GetDiagnostics` via MCP to re-check).";
 
+    // Overlay copy for the UNSETTLED-build case (the slow-path timeout in
+    // BuildEnrichmentChain). The genuine-error page's "There was a compilation
+    // error… Please correct the code" is WRONG there — nothing is broken, the
+    // build just hasn't settled yet (mesh restart in progress, recompile
+    // storm-queued, per-NodeType hub unreachable). Keeps the ⚠ headline and a
+    // "compilation" token — the overlay contract CompileErrorOverviewTest
+    // asserts — while telling the operator the page self-recovers (the
+    // WithOverlaySelfHeal watcher) with manual Recycle only as fallback.
+    private const string UnsettledBuildIntro =
+        "This item's type has not finished **compilation** yet, so its page couldn't be built.";
+    private const string UnsettledBuildCallToAction =
+        "**No code change is needed for this.** ";
+    private const string UnsettledBuildGuidance =
+        "This usually happens while a mesh restart or a bulk recompile is still in progress. "
+        + "The page recovers automatically: once the type's build settles, this instance recycles "
+        + "itself and shows the real page on the next load. If it stays stuck, use the **Recycle** "
+        + "menu to refresh it manually.";
+
     private static Func<MessageHubConfiguration, MessageHubConfiguration>
-        CreateCompilationErrorConfiguration(string errorMessage, string? guidance)
+        CreateCompilationErrorConfiguration(
+            string errorMessage, string? guidance, string? intro = null, string? callToAction = null)
     {
         return config => config.AddLayout(layout =>
             layout.WithView(MeshNodeLayoutAreas.OverviewArea, (host, ctx) =>
-                Observable.Return<UiControl?>(BuildCompilationErrorMarkdown(errorMessage, guidance))));
+                Observable.Return<UiControl?>(
+                    BuildCompilationErrorMarkdown(errorMessage, guidance, intro, callToAction))));
     }
 
-    private static UiControl BuildCompilationErrorMarkdown(string errorMessage, string? guidance)
+    private static UiControl BuildCompilationErrorMarkdown(
+        string errorMessage, string? guidance, string? intro = null, string? callToAction = null)
         => Controls.Stack
             // Card-style emergency page: an error accent, a comfortable reading
             // width and generous padding so a broken instance gets a real
@@ -982,7 +1192,8 @@ internal static class NodeTypeEnrichmentHelpers
                 "max-width: 820px; margin: 1.5rem auto; padding: 24px 28px; " +
                 "border: 1px solid var(--error, #d13438); border-left: 4px solid var(--error, #d13438); " +
                 "border-radius: 8px; background: var(--neutral-layer-2);")
-            .WithView(Controls.Markdown(BuildCompilationErrorMarkdownText(errorMessage, guidance)));
+            .WithView(Controls.Markdown(
+                BuildCompilationErrorMarkdownText(errorMessage, guidance, intro, callToAction)));
 
     /// <summary>
     /// Builds the markdown body of the emergency compile-error page: a friendly
@@ -991,8 +1202,13 @@ internal static class NodeTypeEnrichmentHelpers
     /// can be unit-tested directly (<c>CompileErrorPageTest</c>). The <c>⚠</c> and
     /// <c>compilation</c> tokens are part of the overlay contract
     /// <c>CompileErrorOverviewTest</c> asserts — keep them.
+    /// <para><paramref name="intro"/> / <paramref name="callToAction"/> override the
+    /// genuine-error reason line and the "Please correct the code." lead-in for
+    /// call sites where a code fix is NOT the remedy (the unsettled-build timeout
+    /// overlay). Null keeps the genuine-Error wording byte-for-byte.</para>
     /// </summary>
-    internal static string BuildCompilationErrorMarkdownText(string errorMessage, string? guidance)
+    internal static string BuildCompilationErrorMarkdownText(
+        string errorMessage, string? guidance, string? intro = null, string? callToAction = null)
     {
         var newlineIdx = errorMessage.IndexOf('\n');
         var header = newlineIdx >= 0 ? errorMessage[..newlineIdx].TrimEnd(':') : errorMessage;
@@ -1000,7 +1216,8 @@ internal static class NodeTypeEnrichmentHelpers
 
         var sb = new System.Text.StringBuilder();
         sb.Append("# ⚠ This page can't be displayed\n\n");
-        sb.Append("There was a **compilation error** in this item's code, so its page couldn't be built.\n\n");
+        sb.Append(intro ?? "There was a **compilation error** in this item's code, so its page couldn't be built.")
+            .Append("\n\n");
         sb.Append("**").Append(header).Append("**\n");
         // Only emit the diagnostics code fence when there's actually a body to show.
         // A single-line message (the generic "Compilation failed" fallback or the
@@ -1009,7 +1226,8 @@ internal static class NodeTypeEnrichmentHelpers
         if (!string.IsNullOrEmpty(body))
             sb.Append("\n```text\n").Append(body).Append("\n```\n");
         sb.Append("\n---\n\n");
-        sb.Append("**Please correct the code.** ").Append(guidance ?? DefaultCompilationErrorGuidance).Append('\n');
+        sb.Append(callToAction ?? "**Please correct the code.** ")
+            .Append(guidance ?? DefaultCompilationErrorGuidance).Append('\n');
         return sb.ToString();
     }
 }
