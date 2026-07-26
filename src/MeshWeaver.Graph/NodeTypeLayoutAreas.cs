@@ -713,8 +713,8 @@ public static class NodeTypeLayoutAreas
     /// each containing the file tree its queries resolved to. Files under the group's
     /// namespace root are displayed at their relative path (folders by namespace
     /// segment); files outside it — shared code pulled in via <c>@path</c> or
-    /// cross-NodeType <c>namespace:</c> queries — go under a "(shared)" folder at their
-    /// absolute path so their origin remains obvious.
+    /// cross-NodeType <c>namespace:</c> queries — group under one folder PER PACKAGE
+    /// (the owning partition root), whose header links to the package's page.
     /// </summary>
     internal static NavGroupControl BuildCodeNavGroup(
         string groupLabel,
@@ -766,14 +766,18 @@ public static class NodeTypeLayoutAreas
 
     /// <summary>
     /// Groups resolved code nodes into a tree: local files (paths starting with
-    /// <c>{rootPath}/</c>) are relativised; foreign files go under a single
-    /// "(shared)" folder with their absolute path preserved.
+    /// <c>{rootPath}/</c>) are relativised; foreign files are grouped under one
+    /// folder PER PACKAGE — the partition root (first path segment) that owns
+    /// them — with their package-relative path preserved. The old single
+    /// "(shared)" umbrella buried the origin under full absolute paths
+    /// ("shared → (shared) → Underwriting → SampleData → Source → …"); naming
+    /// the package directly lets the renderer give the folder the package icon
+    /// and link its header to the package's page.
     /// </summary>
     internal static CodeTreeFolder BuildCodeTreeForNavigation(string rootPath, IReadOnlyCollection<MeshNode> nodes)
     {
         var rootPrefix = rootPath + "/";
         var tree = new CodeTreeFolder("");
-        CodeTreeFolder? sharedFolder = null;
 
         foreach (var node in nodes.OrderBy(n => n.Path, StringComparer.Ordinal))
         {
@@ -784,14 +788,16 @@ public static class NodeTypeLayoutAreas
             }
             else
             {
-                if (sharedFolder == null)
-                {
-                    sharedFolder = new CodeTreeFolder("(shared)");
-                    tree.AddFolder(sharedFolder);
-                }
-                // Preserve full absolute path so operators can tell which NodeType
-                // owns this shared file. Split on '/' gives a nested folder tree.
-                sharedFolder.Insert(node.Path.Split('/'), 0, node);
+                // One folder per package. GetOrAddFolder (not a fresh folder +
+                // AddFolder) so a package whose name collides with a local
+                // relative folder MERGES instead of silently replacing it —
+                // no file may ever drop out of the tree.
+                var segments = node.Path.Split('/');
+                var packageFolder = tree.GetOrAddFolder(segments[0]);
+                packageFolder.MarkAsPackage(segments[0]);
+                // Package-relative insert; a degenerate single-segment path
+                // (a top-level Code node) becomes a leaf named like the package.
+                packageFolder.Insert(segments, segments.Length == 1 ? 0 : 1, node);
             }
         }
         return tree;
@@ -841,12 +847,44 @@ public static class NodeTypeLayoutAreas
         }
 
         var folder = (CodeTreeFolder)node;
-        var group = new NavGroupControl(folder.Name)
-            .WithIcon(FluentIcons.Folder())
+        var (label, current) = CompressChain(folder);
+
+        var group = new NavGroupControl(label)
+            .WithIcon(folder.PackagePath is not null ? FluentIcons.Box() : FluentIcons.Folder())
             .WithSkin(s => s.WithExpanded(true));
-        foreach (var child in folder.OrderedChildren())
+        // A package folder's header navigates to the package's own page — the
+        // user asked for "which package is this from, and take me there".
+        if (folder.PackagePath is not null)
+            group = group.WithUrl($"/{folder.PackagePath}");
+        foreach (var child in current.OrderedChildren())
             group = AppendCodeTreeNode(group, child, hubAddress);
         return parent.WithGroup(group);
+    }
+
+    /// <summary>
+    /// Path-compresses a pure pass-through chain: a folder with no files and a
+    /// single sub-folder renders as one "A/B" group instead of two nesting
+    /// levels ("SampleData → Source → file" becomes "SampleData/Source" — the
+    /// children rendered are the chain end's). Package folders never compress —
+    /// in neither direction — because their header IS the package identity
+    /// (icon + link to the package page). Pure helper so <c>CodeTreeTest</c>
+    /// can pin the contract without walking the UI control tree.
+    /// </summary>
+    internal static (string Label, CodeTreeFolder Effective) CompressChain(CodeTreeFolder folder)
+    {
+        var label = folder.Name;
+        var current = folder;
+        while (current.PackagePath is null
+               && current.Leaves.Count == 0
+               && current.Folders.Count == 1)
+        {
+            var only = current.Folders.Values.First();
+            if (only.PackagePath is not null)
+                break;
+            label = label.Length == 0 ? only.Name : $"{label}/{only.Name}";
+            current = only;
+        }
+        return (label, current);
     }
 
     /// <summary>
@@ -891,10 +929,27 @@ public static class NodeTypeLayoutAreas
         public IReadOnlyList<CodeTreeLeaf> Leaves => _leaves;
 
         /// <summary>
-        /// Splices an externally-built folder into this tree under its own name.
-        /// Used to attach the synthetic "(shared)" folder for foreign code files.
+        /// Set when this folder represents a PACKAGE — the partition root (first
+        /// path segment) owning shared files pulled in from outside the NodeType's
+        /// subtree. The renderer gives such folders the package icon and links
+        /// their header to the package's page; they sort after local folders and
+        /// never path-compress.
         /// </summary>
-        public void AddFolder(CodeTreeFolder folder) => _folders[folder.Name] = folder;
+        public string? PackagePath { get; private set; }
+
+        public void MarkAsPackage(string packagePath) => PackagePath = packagePath;
+
+        /// <summary>
+        /// Returns the sub-folder of that name, creating it when absent — the
+        /// merge-safe way to attach package folders (a name collision with a
+        /// local relative folder must merge, never replace).
+        /// </summary>
+        public CodeTreeFolder GetOrAddFolder(string name)
+        {
+            if (!_folders.TryGetValue(name, out var folder))
+                _folders[name] = folder = new CodeTreeFolder(name);
+            return folder;
+        }
 
         public void Insert(string[] segments, int index, MeshNode node)
         {
@@ -910,7 +965,8 @@ public static class NodeTypeLayoutAreas
         }
 
         public IEnumerable<CodeTreeNode> OrderedChildren()
-            => _folders.Values.OrderBy(f => f.Name, StringComparer.Ordinal)
+            => _folders.Values.Where(f => f.PackagePath is null).OrderBy(f => f.Name, StringComparer.Ordinal)
+                .Concat(_folders.Values.Where(f => f.PackagePath is not null).OrderBy(f => f.Name, StringComparer.Ordinal))
                 .Cast<CodeTreeNode>()
                 .Concat(_leaves.OrderBy(l => l.Name, StringComparer.Ordinal));
     }
