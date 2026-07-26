@@ -2,8 +2,25 @@ parameters: {}
 # Local dev only (memex-local sets this true via --set): persist /data — the DataProtection keys under
 # /data/dataprotection-keys plus the nuget/compile caches — on a node hostPath, so a pod restart does NOT
 # wipe the keys and invalidate every session (the "have to refresh / Anonymous resubscribe loop" churn).
-# Prod (AKS) leaves this false (default) and persists DataProtection keys to Azure Blob instead.
+# Prod (AKS) leaves this false and mounts PVCs via `persistence:` below instead.
 persistDataVolume: false
+# ---- Persistent volumes (production) ----------------------------------------
+# Pre-created PVC claim names the CHART mounts directly — the single source of truth for durable
+# storage. When a claimName is set the deployment renders a persistentVolumeClaim volume for it;
+# empty claimNames fall back to persistDataVolume (data) / emptyDir. `data` and `users` mount at
+# fixed paths (/data, /mnt/users); any other entry needs BOTH claimName and mountPath and is
+# rendered as an extra volume + mount (content, attachments, workspace, …). With multiple portal
+# replicas every claim MUST be ReadWriteMany — all replicas share /data (DataProtection keys, the
+# NodeType assembly cache, the NuGet cache); a per-pod /data forces a full recompile storm per pod.
+# PVC creation stays out of the chart (deploy/aks/manifests/portal-pvcs.yaml or aks-extras.yaml) so
+# a `helm uninstall` can never take the data with it. Previously these mounts were bolted on by
+# per-env kubectl JSON patches AFTER helm — any unpatched `helm upgrade` silently reverted /data to
+# emptyDir, wiping the caches on every restart.
+persistence:
+  data:
+    claimName: ""
+  users:
+    claimName: ""
 # ---- Self-update (in-pod patch of the portal's own deployment) -------------
 # The portal polls the registry and, on Kubernetes, patches its own deployment to a newer image per
 # the Admin/UpdatePolicy node (see Doc/Architecture/ReleaseStrategy). The chart always creates the

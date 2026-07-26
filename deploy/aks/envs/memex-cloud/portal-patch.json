@@ -1,12 +1,8 @@
 [
   { "op": "add", "path": "/spec/template/spec/nodeSelector", "value": { "workload": "silos" } },
 
-  { "op": "replace", "path": "/spec/template/spec/volumes/0",
-    "value": { "name": "memex-data", "persistentVolumeClaim": { "claimName": "memex-data" } } },
-  { "op": "replace", "path": "/spec/template/spec/volumes/1",
-    "value": { "name": "memex-users", "persistentVolumeClaim": { "claimName": "memex-users" } } },
-  { "op": "add", "path": "/spec/template/spec/volumes/-",
-    "value": { "name": "memex-content", "persistentVolumeClaim": { "claimName": "memex-content" } } },
+  { "_comment": "data/users/content PVC volumes + mounts now render from the CHART (persistence: in values.aks.yaml) — this patch only adds the memex-cloud-specific extras below.",
+    "op": "test", "path": "/spec/template/spec/volumes/0/name", "value": "memex-data" },
   { "op": "add", "path": "/spec/template/spec/volumes/-",
     "value": { "name": "memex-attachments", "persistentVolumeClaim": { "claimName": "memex-attachments" } } },
   { "op": "add", "path": "/spec/template/spec/volumes/-",
@@ -16,8 +12,6 @@
                "csi": { "driver": "secrets-store.csi.k8s.io", "readOnly": true,
                         "volumeAttributes": { "secretProviderClass": "memexcloud-portal-ai-secrets" } } } },
 
-  { "op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-",
-    "value": { "name": "memex-content", "mountPath": "/mnt/content" } },
   { "op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-",
     "value": { "name": "memex-attachments", "mountPath": "/mnt/attachments" } },
   { "op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-",
