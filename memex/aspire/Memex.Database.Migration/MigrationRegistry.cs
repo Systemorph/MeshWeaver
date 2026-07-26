@@ -57,6 +57,7 @@ public static class MigrationRegistry
         new V46_AddExcludeFromContextColumn(),
         new V47_SerializeUepRebuildAdvisoryLock(),
         new V48_RetypeBuiltinFeedbackToPlugin(),
+        new V49_FixAccessAssignmentMainNode(),
     ];
 
     /// <summary>
