@@ -48,12 +48,13 @@ const nextConfig = {
   // it's declining to re-type-check vendored source through the wrong tsconfig.
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
+  // Monorepo root for standalone output tracing (clients/) — server.js lands under
+  // .next/standalone/portal-next/server.js (see Dockerfile). Top-level since Next 15
+  // (was `experimental.outputFileTracingRoot` in 14).
+  outputFileTracingRoot: path.join(here, ".."),
   experimental: {
     // Compile the ../react and ../grpc-web sources (outside this app dir).
     externalDir: true,
-    // Monorepo root for standalone output tracing (clients/) — server.js lands under
-    // .next/standalone/portal-next/server.js (see Dockerfile).
-    outputFileTracingRoot: path.join(here, ".."),
   },
   webpack: (config) => {
     config.resolve.alias = {

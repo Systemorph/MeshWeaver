@@ -23,13 +23,15 @@ function all(v: string | string[] | undefined): string[] {
   return Array.isArray(v) ? v : v ? [v] : [];
 }
 
-export default function SearchPage({ searchParams }: { searchParams: SearchParams }) {
-  const limitRaw = Number.parseInt(first(searchParams.limit), 10);
+// Next 15: `searchParams` is a Promise — awaited here (resolves from the already-parsed URL).
+export default async function SearchPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
+  const params = await searchParams;
+  const limitRaw = Number.parseInt(first(params.limit), 10);
   return (
     <SearchResults
-      query={first(searchParams.q)}
-      hiddenQuery={all(searchParams.hq).filter(Boolean).join(" ")}
-      namespace={first(searchParams.ns)}
+      query={first(params.q)}
+      hiddenQuery={all(params.hq).filter(Boolean).join(" ")}
+      namespace={first(params.ns)}
       limit={Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 50}
     />
   );

@@ -13,8 +13,10 @@ import { AreaSnapshot } from "./AreaSnapshot";
 // Every request depends on the caller's cookies (per-request token mint) — never prerender.
 export const dynamic = "force-dynamic";
 
-export default function MeshPage({ params }: { params: { meshPath?: string[] } }) {
-  const path = meshPathFromSegments(params.meshPath);
+// Next 15: dynamic route `params` is a Promise — awaited here, before the Suspense boundary, so the
+// skeleton still flushes first (the await resolves from the already-parsed URL, it does no I/O).
+export default async function MeshPage({ params }: { params: Promise<{ meshPath?: string[] }> }) {
+  const path = meshPathFromSegments((await params).meshPath);
   return (
     <Suspense fallback={<AreaSkeleton path={path} />}>
       <AreaSnapshot path={path} />

@@ -24,8 +24,9 @@ import {
 import { LiveArea } from "../../src/client/LiveArea";
 
 export async function AreaSnapshot({ path }: { path: string }) {
-  const origin = resolvePortalOrigin(headers());
-  const cookieHeader = cookies()
+  // Next 15: `headers()` / `cookies()` are async.
+  const origin = resolvePortalOrigin(await headers());
+  const cookieHeader = (await cookies())
     .getAll()
     .map((c) => `${c.name}=${c.value}`)
     .join("; ");

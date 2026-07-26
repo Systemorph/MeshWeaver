@@ -22,7 +22,11 @@ namespace MeshWeaver.Graph;
 ///     subscription node itself (Pending → Fired), so nothing is lost.</item>
 /// </list>
 /// Continuations are idempotent (create-or-update grant, pin is a set-add, the terminal <c>Fired</c>
-/// write gates re-entry), so the two paths can't double-apply.
+/// write gates re-entry), so the paths can't double-APPLY — but idempotent is not the same as free, and
+/// the <c>Fired</c> gate only closes once that write has round-tripped. Until then every path is looking
+/// at the same still-Pending snapshot, so they would each launch the continuation. A per-subscription
+/// in-flight reservation (the <c>executing</c> registry) makes firing at-most-once instead: exactly one
+/// continuation per subscription, no unobserved duplicate writes trailing behind it.
 ///
 /// <para>🚨 The runner has NO ambient <c>AccessContext</c> (it's a background hosted service, not a
 /// request). Every read AND write goes through <see cref="AsSystem{T}"/> — <c>Using(ImpersonateAsSystem,
@@ -59,6 +63,21 @@ public sealed class EventSubscriptionRunner(
     // deferred invite fires even when the in-process/Orleans change feed's best-effort cross-silo relay
     // never delivers the User/Created event to this runner. Same lifecycle contract as timerSubs/statusSubs.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IDisposable> nodeChangeSubs = new();
+    // 🚨 Subscriptions whose continuation is currently IN FLIGHT — the at-most-once guard for Execute.
+    // EVERY firing path (change feed, cold-start reconcile, pending-set reconcile, trigger-node watch)
+    // fires off the same `pending` snapshot, and a subscription only LEAVES that snapshot once its
+    // terminal Fired write has round-tripped through the Admin partition. At startup all of those paths
+    // evaluate within a few ms of each other — i.e. while the subscription is still Pending in every
+    // snapshot — so ONE subscription launched N concurrent continuations, each issuing a duplicate
+    // upsert of the same membership/grant node plus its own SetStatus write. Idempotence made those
+    // writes harmless, never free: they are fire-and-forget requests nobody observes, they serialise
+    // behind each other on the target node's hub, and they outlive whatever triggered them (they were
+    // the CreateOrUpdateNodeRequest callbacks still pending at test teardown). The remedy is the same
+    // instance-scoped TryAdd reservation the timer / status / trigger-node registries already use:
+    // reserved before the chain starts, released on failure so a later emission retries, and pruned
+    // when the subscription leaves the pending set — so it stays bounded by the pending set rather than
+    // growing for the runner's whole uptime.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> executing = new();
     private IDisposable? pendingSub;
     private IDisposable? feedSub;
     private IDisposable? legacySub;
@@ -117,6 +136,12 @@ public sealed class EventSubscriptionRunner(
                     foreach (var id in subs.Keys.Where(id => !pendingIds.Contains(id)).ToList())
                         if (subs.TryRemove(id, out var d))
                             d.Dispose();
+                // The in-flight reservation is keyed the same way: a subscription that has left the
+                // pending set reached a terminal state (Fired / Failed / Cancelled) and can never fire
+                // again — every firing path draws its candidates from `pending` — so drop its entry.
+                // That keeps `executing` bounded by the pending set instead of the runner's uptime.
+                foreach (var id in executing.Keys.Where(id => !pendingIds.Contains(id)).ToList())
+                    executing.TryRemove(id, out _);
             }, ex => logger?.LogWarning(ex, "Event-subscriptions query failed"));
 
         // 🚨 Cold-start authoritative reconcile — the fix for the memex 2026-07-20 stranded-invite incident.
@@ -292,6 +317,11 @@ public sealed class EventSubscriptionRunner(
 
     private void Execute(EventSubscription subscription, string userId)
     {
+        // At-most-once per subscription: reserve the id BEFORE building the chain (see `executing`).
+        // Whichever firing path gets here first owns this subscription's continuation; the others —
+        // which are looking at the same still-Pending snapshot — must not launch a duplicate.
+        if (!executing.TryAdd(subscription.Id, 0))
+            return;
         BuildContinuation(subscription, userId)
             .SelectMany(_ => AsSystem(() => EventSubscriptionOps.SetStatus(
                 hub, EventSubscriptionNodeType.Path(subscription.Id), EventSubscriptionStatus.Fired)))
@@ -301,6 +331,10 @@ public sealed class EventSubscriptionRunner(
                     subscription.Id, subscription.ContinuationType, subscription.Role, userId, subscription.TargetPath),
                 ex =>
                 {
+                    // Release the reservation so a later pending-set emission can retry a TRANSIENT
+                    // failure — the same rule MigrateLegacyScheduledActions applies to its own id guard.
+                    // (A permanent failure writes Failed below and leaves the pending set anyway.)
+                    executing.TryRemove(subscription.Id, out _);
                     logger?.LogWarning(ex, "Event subscription {Id} failed", subscription.Id);
                     AsSystem(() => EventSubscriptionOps.SetStatus(
                             hub, EventSubscriptionNodeType.Path(subscription.Id), EventSubscriptionStatus.Failed, ex.Message))
@@ -497,5 +531,6 @@ public sealed class EventSubscriptionRunner(
             foreach (var id in subs.Keys.ToList())
                 if (subs.TryRemove(id, out var d))
                     d.Dispose();
+        executing.Clear();
     }
 }

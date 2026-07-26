@@ -96,7 +96,7 @@ jobs:
         run: npm install --no-audit --no-fund && npm run gen
       # Targeted install: RN types for typecheck; react-test-renderer for the render test
       # (react-native mocked — vitest.config.ts); expo-av types the speech recorder.
-      - run: npm install --no-save --no-audit --no-fund react-native@0.76.5 react@18.3.1 react-test-renderer@18.3.1 @types/react@18.3.12 @types/react-test-renderer@18.3.0 expo-av@15.0.2 vitest@2.1.9 typescript@5.6.3
+      - run: npm install --no-save --no-audit --no-fund react-native@0.76.5 react@18.3.1 react-test-renderer@18.3.1 @types/react@18.3.12 @types/react-test-renderer@18.3.0 expo-av@15.0.2 vitest@4.1.9 typescript@5.6.3
       - run: npx tsc --noEmit
       # Headless render of the sample area + the speech pipeline (transcription client, push-to-talk→submit).
       - run: npx vitest run
@@ -124,6 +124,36 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npx tsc --noEmit # vite build transpiles without type-checking — check types explicitly
       - run: npm run build
+
+  portal-next:
+    name: "Portal-next (typecheck + test + build)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/portal-next
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the Dockerfile's node:22-alpine — build the app on the runtime it ships on.
+          node-version: 22
+      # vitest.config.ts source-aliases the renderer (../react/src); its own deps must resolve.
+      - name: Install renderer deps
+        working-directory: clients/react
+        run: npm install --no-audit --no-fund
+      # next.config.mjs + vitest.config.ts alias @meshweaver/client-web to ../grpc-web/src, whose
+      # src/gen is GENERATED (gitignored) from the canonical mesh.proto — without it the build fails
+      # with "Can't resolve './gen/mesh_pb'".
+      - name: Install + generate grpc-web client
+        working-directory: clients/grpc-web
+        run: npm install --no-audit --no-fund && npm run gen
+      # `npm ci` (not install) — this is the only client with a committed lockfile, and it is what
+      # the Dockerfile runs; drift between package.json and the lock fails here rather than in the
+      # image build.
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck # next build skips type-checking by design (see next.config.mjs)
+      - run: npm test # vitest: server snapshot, SSR shell, token mint, redirect decision, mesh paths
+      - run: npm run build # the standalone production bundle the Docker image ships
 
   rn-web-e2e:
     name: "RN web (Playwright)"

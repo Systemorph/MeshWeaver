@@ -18,8 +18,8 @@
     "@fluentui/react-icons": "^2.0.260",
     "@monaco-editor/react": "^4.7.0",
     "chart.js": "^4.4.1",
-    "mermaid": "^11.4.1",
-    "next": "^14.2.5",
+    "mermaid": "^11.16.0",
+    "next": "^15.5.22",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
@@ -36,5 +36,16 @@
     "jsdom": "^29.1.1",
     "typescript": "^5.6.0",
     "vitest": "^4.1.9"
+  },
+  "_overrides_note": [
+    "Transitive pins our direct deps hold below their patched versions (Dependabot alerts).",
+    "postcss: next pins 8.4.31 exactly (both 15.x and 16.x) — forced to the 8.5.x patch line.",
+    "dompurify: monaco-editor pins 3.2.7 exactly (0.56.0 still pins 3.4.8) — forced to 3.4.12.",
+    "sharp: next declares ^0.34.3 (optional, image optimization — unused here) — forced past the libvips CVEs."
+  ],
+  "overrides": {
+    "postcss": "^8.5.23",
+    "dompurify": "^3.4.12",
+    "sharp": "^0.35.3"
   }
 }
