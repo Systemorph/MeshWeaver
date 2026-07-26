@@ -67,10 +67,44 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
     {
         if (string.IsNullOrEmpty(path)) return false;
         foreach (var seg in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
-            if (seg.Length > 1 && seg[0] == '_'
-                && Defaults.Any(m => m.Segment.Length > 0 && m.Segment[0] == '_'
-                                     && string.Equals(m.Segment, seg, StringComparison.Ordinal)))
+            if (IsSatelliteSegment(seg))
                 return true;
         return false;
     }
+
+    /// <summary>
+    /// The owning MAIN node of <paramref name="path"/>: everything BEFORE its first satellite
+    /// segment — <c>Space/_Access/alice_Access</c> → <c>Space</c>, <c>Space/_Access</c> →
+    /// <c>Space</c>, <c>Doc/_Thread/t1/_ThreadMessage/m1</c> → <c>Doc</c>. A path that holds no
+    /// satellite segment IS a main node and is returned unchanged; a root-level satellite
+    /// (<c>_Access/{id}</c> — the root-scope grant) has no owner and yields <c>""</c>.
+    ///
+    /// <para>This is what <see cref="MeshNode.MainNode"/> must hold for a satellite, and why the cut
+    /// is at the FIRST satellite segment rather than the last: a satellite's MainNode is the node its
+    /// permissions DELEGATE to (<c>SatelliteAccessRule</c>) and the prefix its grants project at
+    /// (<c>COALESCE(main_node, namespace)</c> in <c>rebuild_user_effective_permissions</c>), so it has
+    /// to be a real main node. A MainNode left pointing at a satellite CONTAINER
+    /// (<c>{owner}/_Access</c>) names a node that does not exist — it made the access-granted mail
+    /// read "you've been given access to X/_Access" and projected the grant one level too deep, below
+    /// the node it was granted on.</para>
+    /// </summary>
+    public static string OwnerOfSatellitePath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return "";
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < segments.Length; i++)
+            if (IsSatelliteSegment(segments[i]))
+                return string.Join('/', segments[..i]);
+        return path;
+    }
+
+    /// <summary>
+    /// True if <paramref name="segment"/> is exactly one of the underscore-prefixed
+    /// <see cref="Defaults"/> satellite segments — the shared test behind
+    /// <see cref="IsSatellitePath"/> and <see cref="OwnerOfSatellitePath"/>.
+    /// </summary>
+    private static bool IsSatelliteSegment(string segment)
+        => segment.Length > 1 && segment[0] == '_'
+           && Defaults.Any(m => m.Segment.Length > 0 && m.Segment[0] == '_'
+                                && string.Equals(m.Segment, segment, StringComparison.Ordinal));
 }

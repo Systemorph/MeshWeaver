@@ -109,7 +109,8 @@ public sealed class AccessGrantNotifier(
     /// <summary>
     /// Pure decision: should the created <paramref name="assignmentNode"/> raise an access-granted
     /// notification, and to whom / for what? Returns <c>true</c> only for an actual grant (a
-    /// non-denied role) that is NOT a self-grant (creator == subject) and carries a target node.
+    /// non-denied role) that is NOT a self-grant (creator == subject) and governs a real node
+    /// (see <see cref="ResolveGrantedNode"/> — a root-scope grant has none).
     /// Does not resolve whether the subject is a user (that needs a read). Pure + unit-testable.
     /// </summary>
     internal static bool TryResolveGrant(
@@ -133,13 +134,37 @@ public sealed class AccessGrantNotifier(
         if (string.Equals(assignmentNode.CreatedBy, assignment.AccessObject, StringComparison.Ordinal))
             return false;
 
-        if (string.IsNullOrEmpty(assignmentNode.MainNode))
+        var scope = ResolveGrantedNode(assignmentNode);
+        if (string.IsNullOrEmpty(scope))
             return false;
 
         recipient = assignment.AccessObject;
-        grantedNodePath = assignmentNode.MainNode;
+        grantedNodePath = scope;
         roleText = string.Join(", ", grantedRoles);
         return true;
+    }
+
+    /// <summary>
+    /// The node the grant GOVERNS — what the recipient is told they can now open, and what the
+    /// notification links to. An assignment lives at <c>{scope}/_Access/{subject}_Access</c> (legacy
+    /// shape: <c>{scope}/{subject}_Access</c>), so the governed node is
+    /// <see cref="SatelliteTableMapping.OwnerOfSatellitePath"/> of its namespace — the same owner
+    /// the create handler now stamps into <see cref="MeshNode.MainNode"/>.
+    ///
+    /// <para>🚨 Derived from the NAMESPACE, not read from MainNode, because rows written before that
+    /// stamp was fixed still carry the <c>_Access</c> CONTAINER there — which is how the recipient
+    /// got "You've been given access to CollaborationNotus/_Access" with a link to the container
+    /// instead of the space. MainNode is only a fallback for an assignment with no namespace.</para>
+    ///
+    /// <para>A ROOT-scope grant (namespace <c>_Access</c> or empty — e.g. the global-admin seed)
+    /// resolves to <c>""</c>: there is no node to name or link to, so no notification is raised.</para>
+    /// </summary>
+    internal static string ResolveGrantedNode(MeshNode assignmentNode)
+    {
+        var fromNamespace = SatelliteTableMapping.OwnerOfSatellitePath(assignmentNode.Namespace).Trim('/');
+        return fromNamespace.Length > 0
+            ? fromNamespace
+            : SatelliteTableMapping.OwnerOfSatellitePath(assignmentNode.MainNode).Trim('/');
     }
 
     /// <summary>

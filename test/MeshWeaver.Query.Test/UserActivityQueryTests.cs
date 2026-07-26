@@ -363,11 +363,15 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
-    /// Verify that the satellite MainNode auto-setting works correctly:
-    /// satellite types created via NodeFactory.CreateNode should have MainNode == Namespace (not Path).
+    /// Verify that the satellite MainNode auto-setting works correctly: a satellite created via
+    /// NodeFactory.CreateNode gets MainNode = the OWNING MAIN NODE — the namespace with its
+    /// satellite segment cut off — never its own Path and never the satellite CONTAINER.
+    /// The container stamp (`{p}/_Access`) is a path no node lives at, and MainNode is read as a
+    /// real node: permissions delegate to it and an AccessAssignment's grant projects at prefix
+    /// COALESCE(main_node, namespace), so a container stamp granted access one level too deep.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task SatelliteTypes_HaveMainNodeSetToNamespace()
+    public async Task SatelliteTypes_HaveMainNodeSetToOwningNode()
     {
         var p = P();
 
@@ -387,16 +391,17 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
         threadNodes.Should().ContainSingle();
         var threadNode = threadNodes[0];
         threadNode.MainNode.Should().NotBe(threadNode.Path,
-            "Thread is a satellite type — MainNode should be set to namespace, not path");
-        threadNode.MainNode.Should().Be($"{p}/_Thread",
-            "Thread's MainNode should point to the parent namespace");
+            "Thread is a satellite type — MainNode is set to its owner, never self-referencing");
+        threadNode.MainNode.Should().Be(p,
+            "Thread's MainNode should point to the node it hangs off, not the _Thread container");
 
         var accessNodes = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Access/a1")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         accessNodes.Should().ContainSingle();
         var accessNode = accessNodes[0];
         accessNode.MainNode.Should().NotBe(accessNode.Path,
-            "AccessAssignment is a satellite type — MainNode should be set to namespace, not path");
-        accessNode.MainNode.Should().Be($"{p}/_Access",
-            "AccessAssignment's MainNode should point to the parent namespace");
+            "AccessAssignment is a satellite type — MainNode is set to its owner, never self-referencing");
+        accessNode.MainNode.Should().Be(p,
+            "the grant's MainNode is the node it was granted ON — the _Access container would project "
+            + "the grant below that node and name a non-existent node in the invitation");
     }
 }

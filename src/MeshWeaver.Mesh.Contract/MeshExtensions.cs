@@ -372,13 +372,24 @@ public static class MeshExtensions
                     return Observable.Empty<(string mode, MeshNode node)>();
                 }
 
-                // 1b. Auto-set MainNode for satellite types before validation.
+                // 1b. Auto-set MainNode for satellite types before validation: the OWNING MAIN NODE —
+                // the namespace with its satellite tail cut off (`{owner}/_Access` → `{owner}`), which
+                // for the legacy no-segment placement (`{owner}` itself) is the namespace unchanged.
+                // NOT the raw namespace: that is the satellite CONTAINER, a path no node lives at, and
+                // every consumer of MainNode reads it as a real node — SatelliteAccessRule DELEGATES the
+                // satellite's permissions to it, `rebuild_user_effective_permissions` projects an
+                // AccessAssignment's grant at prefix COALESCE(main_node, namespace) (so a container
+                // stamp granted access one level too deep — under `{scope}/_Access` instead of on
+                // `{scope}`), satellite-table scope filters match `main_node` as the attachment point,
+                // and the access-granted notification named "{scope}/_Access" instead of the node that
+                // was shared. A root-level satellite (`_Access/{id}`, the root-scope grant) has no
+                // owner: MainNode = "" is that shape's documented value (see ActivityNodeGuard).
                 if (!string.IsNullOrEmpty(node.NodeType)
                     && !string.IsNullOrEmpty(node.Namespace)
                     && meshConfig.IsSatelliteNodeType(node.NodeType)
                     && node.MainNode == node.Path)
                 {
-                    node = node with { MainNode = node.Namespace };
+                    node = node with { MainNode = SatelliteTableMapping.OwnerOfSatellitePath(node.Namespace) };
                 }
                 // 1b'. Repair a STALE BARE-ID self-default MainNode on a MAIN (non-satellite) node.
                 // MainNode is a STORED property: unlike the computed Path/Segments it does NOT follow
