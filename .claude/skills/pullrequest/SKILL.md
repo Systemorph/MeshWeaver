@@ -1,6 +1,6 @@
 ---
 name: pullrequest
-description: Open a PR, get a GitHub Copilot code review, and merge it — and the NON-NEGOTIABLE rule that the PR's CI must be GREEN before you merge, because the pull-based self-update (memex-local autoroll + the AKS portals) deploys main's image. A red or still-pending main blocks the self-update from rolling forward and can wedge the deployment. Use whenever you create/review/merge a PR, when a merge "went through" but CI later failed, or when main is red and the auto-update is stuck. Covers the exact gh/API commands (Copilot reviewer can ONLY be requested via the REST API, not `gh pr edit --add-reviewer`), the merge-only-when-green gate, and the half-committed-WIP trap that turns main red on a clean CI checkout.
+description: Open a PR and merge it — and the NON-NEGOTIABLE rule that the PR's CI must be GREEN before you merge, because the pull-based self-update (memex-local autoroll + the AKS portals) deploys main's image. A red or still-pending main blocks the self-update from rolling forward and can wedge the deployment. Use whenever you create/review/merge a PR, when a merge "went through" but CI later failed, or when main is red and the auto-update is stuck. Covers the exact gh/API commands, the never-auto-request-a-Copilot-review rule (it costs credits), the merge-only-when-green gate, and the half-committed-WIP trap that turns main red on a clean CI checkout.
 user-invocable: true
 allowed-tools:
   - Bash
@@ -8,7 +8,7 @@ allowed-tools:
   - Grep
 ---
 
-# /pullrequest — open → Copilot-review → merge, and NEVER merge a red or pending main
+# /pullrequest — open → wait for CI → merge, and NEVER merge a red or pending main
 
 ## 🚨🚨🚨 The one rule: main must be GREEN before you merge
 
@@ -58,11 +58,13 @@ git add src/MeshWeaver.Documentation/Data/WhatsNew/${DATE}-<slug>.md
 git push -u origin "$(git branch --show-current)"
 gh pr create --base main --head "$(git branch --show-current)" --title "…" --body "…"
 
-# 2. REQUEST the Copilot review — ONLY via the REST API. `gh pr edit --add-reviewer copilot`
-#    FAILS ("Could not resolve user 'copilot'"). The reviewer is a bot:
-gh api -X POST repos/Systemorph/MeshWeaver/pulls/<PR>/requested_reviewers \
-  -f "reviewers[]=copilot-pull-request-reviewer[bot]"
-#    Confirm it took: the response reviewers list contains "login":"Copilot".
+# 2. DO NOT request a Copilot review. 🚫 Maintainer decision (2026-07-26): each requested review
+#    consumes paid Copilot credits, so an agent must never request one automatically — the human
+#    asks for it when they want it. If one was requested by mistake, withdraw it:
+#      gh api -X DELETE repos/Systemorph/MeshWeaver/pulls/<PR>/requested_reviewers \
+#        -f "reviewers[]=copilot-pull-request-reviewer[bot]"
+#    (For the record, requesting one is REST-only — `gh pr edit --add-reviewer copilot` fails with
+#    "Could not resolve user 'copilot'" — but that is a note about HOW, not permission to do it.)
 
 # 3. WAIT for CI via GraphQL — this is the gate. NOT `gh run watch` (it polls REST every ~3s and
 #    drains the shared 5000/hr user-token budget → 403s that look like CI-red). GraphQL has its OWN
@@ -86,7 +88,8 @@ c=$(suite conclusion); echo "PR $PR CI: $c"; [ "$c" = "SUCCESS" ]   # exit 0 iff
 # 4. ADDRESS findings BEFORE merge:
 #    - CI red  → pull the failing job log (REST, but ONE call — not a poll — so it's fine), fix, push, GOTO 3.
 #        gh run view <run-id> --log-failed | grep -iE 'error|##\[error\]'
-#    - Copilot review → read its comments, address actionable ones, resolve threads, push, GOTO 3.
+#    - Human/Copilot review, if one was left → read its comments, address actionable ones, resolve
+#      threads, push, GOTO 3. (You never request one — see step 2.)
 #        gh pr view <PR> --json reviews,comments
 
 # 5. MERGE — only now, only if step 3 was green.
