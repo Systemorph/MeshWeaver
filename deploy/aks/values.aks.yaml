@@ -275,21 +275,28 @@ keda:
 # MUST be ReadWriteMany. They use the custom `azurefile-memex` StorageClass
 # (manifests/storageclass-azurefile.yaml) which pins uid/gid=1654 so the non-root
 # portal user can write. The Postgres data volume is single-writer and uses
-# managed-csi (Premium SSD) for IOPS. The chart ships these as emptyDir today;
-# ./manifests/portal-pvcs.yaml creates the real PVCs.
+# managed-csi (Premium SSD) for IOPS. ./manifests/portal-pvcs.yaml (or
+# aks-extras.yaml on the memex ns) creates the PVCs; the CHART mounts every
+# entry with a claimName — a plain `helm upgrade` renders the PVC volumes
+# directly, no post-apply kubectl patch needed (the old bolt-on patches meant
+# any unpatched apply silently reverted /data to emptyDir and every restart
+# wiped the assembly/nuget/DataProtection caches).
 #
 # One Azure Files "drive" per concern, mounted at an explicit path:
 #   data        -> /data            framework caches only (DP keys, asm + nuget cache)
 #   content     -> /mnt/content     the content collection (Storage__BasePath)
-#   attachments -> /mnt/attachments dedicated attachments drive (forward-looking)
+#   attachments -> /mnt/attachments dedicated attachments drive (memex-cloud only —
+#                                   claimName stays empty here; its env patch adds it)
 #   users       -> /mnt/users       co-hosted CLI configs
 persistence:
   data:
+    claimName: "memex-data"           # chart-mounted at /data
     storageClass: "azurefile-memex"   # RWX, uid/gid 1654
     accessMode: "ReadWriteMany"
     mountPath: "/data"
     size: "16Gi"                      # shrunk: content moved off /data
   content:
+    claimName: "memex-content"        # chart-mounted at mountPath
     storageClass: "azurefile-memex"   # RWX, uid/gid 1654
     accessMode: "ReadWriteMany"
     mountPath: "/mnt/content"
@@ -300,6 +307,7 @@ persistence:
     mountPath: "/mnt/attachments"
     size: "64Gi"
   users:
+    claimName: "memex-users"          # chart-mounted at /mnt/users
     storageClass: "azurefile-memex"   # RWX, uid/gid 1654
     accessMode: "ReadWriteMany"
     mountPath: "/mnt/users"
