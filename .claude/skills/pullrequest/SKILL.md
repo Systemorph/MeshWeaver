@@ -1,6 +1,6 @@
 ---
 name: pullrequest
-description: Open a PR and merge it — and the NON-NEGOTIABLE rule that the PR's CI must be GREEN before you merge, because the pull-based self-update (memex-local autoroll + the AKS portals) deploys main's image. A red or still-pending main blocks the self-update from rolling forward and can wedge the deployment. Use whenever you create/review/merge a PR, when a merge "went through" but CI later failed, or when main is red and the auto-update is stuck. Covers the exact gh/API commands, the never-auto-request-a-Copilot-review rule (it costs credits), the merge-only-when-green gate, and the half-committed-WIP trap that turns main red on a clean CI checkout.
+description: Open a PR and merge it — and the NON-NEGOTIABLE rule that the PR's CI must be GREEN before you merge, because the pull-based self-update (memex-local autoroll + the AKS portals) deploys main's image. A red or still-pending main blocks the self-update from rolling forward and can wedge the deployment. Use whenever you create/review/merge a PR, when a merge "went through" but CI later failed, or when main is red and the auto-update is stuck. Covers the exact gh/API commands, the automatic ruleset-driven Copilot review (never hand-request or withdraw it; a 402 quota error leaves the PR unreviewed), the merge-only-when-green gate, and the half-committed-WIP trap that turns main red on a clean CI checkout.
 user-invocable: true
 allowed-tools:
   - Bash
@@ -58,13 +58,22 @@ git add src/MeshWeaver.Documentation/Data/WhatsNew/${DATE}-<slug>.md
 git push -u origin "$(git branch --show-current)"
 gh pr create --base main --head "$(git branch --show-current)" --title "…" --body "…"
 
-# 2. DO NOT request a Copilot review. 🚫 Maintainer decision (2026-07-26): each requested review
-#    consumes paid Copilot credits, so an agent must never request one automatically — the human
-#    asks for it when they want it. If one was requested by mistake, withdraw it:
-#      gh api -X DELETE repos/Systemorph/MeshWeaver/pulls/<PR>/requested_reviewers \
-#        -f "reviewers[]=copilot-pull-request-reviewer[bot]"
-#    (For the record, requesting one is REST-only — `gh pr edit --add-reviewer copilot` fails with
-#    "Could not resolve user 'copilot'" — but that is a note about HOW, not permission to do it.)
+# 2. The Copilot review is AUTOMATIC — do not request it, and never withdraw it.
+#    The `main pr protection` branch RULESET carries a `copilot_code_review` rule, so every PR
+#    against the default branch is reviewed without you lifting a finger (plugins has the same via
+#    its "Copilot review for default branch" ruleset). Reviews ARE wanted on every PR — maintainer,
+#    2026-07-26. So:
+#      • Never POST to `/requested_reviewers` — a hand-requested review DUPLICATES the ruleset's and
+#        burns extra Copilot credits.
+#      • Never DELETE the request "to save credits" — that cancels a review the maintainer wants.
+#      • Just wait for it: it lands as the "Running Copilot Code Review" run / a Copilot review on
+#        the PR. Address it in step 4.
+#    If that run FAILED, find out why before merging unreviewed:
+#      gh run view <run-id> --log-failed | grep -iE "quota|errorType|statusCode"
+#    `statusCode: 402, errorType: 'quota'` ("You have exceeded your monthly quota") = the org's
+#    monthly Copilot allowance is spent — seen 2026-07-26, when it silently left PRs unreviewed.
+#    That is a billing matter to RAISE WITH THE MAINTAINER, not something to work around; say
+#    explicitly that the PR merged unreviewed if it does.
 
 # 3. WAIT for CI via GraphQL — this is the gate. NOT `gh run watch` (it polls REST every ~3s and
 #    drains the shared 5000/hr user-token budget → 403s that look like CI-red). GraphQL has its OWN
@@ -88,8 +97,8 @@ c=$(suite conclusion); echo "PR $PR CI: $c"; [ "$c" = "SUCCESS" ]   # exit 0 iff
 # 4. ADDRESS findings BEFORE merge:
 #    - CI red  → pull the failing job log (REST, but ONE call — not a poll — so it's fine), fix, push, GOTO 3.
 #        gh run view <run-id> --log-failed | grep -iE 'error|##\[error\]'
-#    - Human/Copilot review, if one was left → read its comments, address actionable ones, resolve
-#      threads, push, GOTO 3. (You never request one — see step 2.)
+#    - Copilot review (arrives automatically — see step 2) → read its comments, address the
+#      actionable ones, resolve threads, push, GOTO 3. Same for any human review.
 #        gh pr view <PR> --json reviews,comments
 
 # 5. MERGE — only now, only if step 3 was green.
