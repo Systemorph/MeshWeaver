@@ -248,7 +248,15 @@ builder.UseOrleansMeshServer(address, silo =>
         var storageConfig = builder.Configuration.GetSection("Storage").Get<ContentCollectionConfig>();
         return storageConfig is null
             ? hub
-            : hub.AddContentCollection(_ => storageConfig with { IsStatic = true });
+            // Force the well-known SOURCE name "storage" — NOT storageConfig.Name. The `Storage`
+            // section's Name is already spoken for: ConfigureMemexMesh uses this same section as
+            // the per-node content-collection root, and on AKS it is set to "content"
+            // (values.aks.yaml Storage__Name), which is what makes @{node}/content/… work. The
+            // mapped-collection SOURCE that every plugin references is a different, mesh-level
+            // thing and is always called "storage" (the Monolith's appsettings names it so).
+            // Registering it under the configured name would both shadow the per-node collection
+            // and still leave MapContentCollection(…, "storage", …) unresolved.
+            : hub.AddContentCollection(_ => storageConfig with { Name = "storage", IsStatic = true });
     });
 
 // Hard gate: refuse to start if the DB isn't migrated. Aspire's
