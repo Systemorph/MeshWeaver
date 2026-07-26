@@ -24,8 +24,11 @@ kubectl -n "$NS" scale statefulset memex-postgres-statefulset --replicas=0 || tr
 # The chart hardcodes the ghcr image path -> repoint to the shared ACR.
 kubectl -n "$NS" set image deployment/memex-portal-deployment    memex-portal="$ACR/memex-portal-ai:latest"
 kubectl -n "$NS" set image deployment/memex-migration-deployment memex-migration="$ACR/memex-migration:latest" || true
-# 1-replica baseline + mount the Azure Files PVCs (/data already mounted by the chart; add /mnt/content).
-kubectl -n "$NS" patch deployment memex-portal-deployment --type=json -p '[{"op":"replace","path":"/spec/replicas","value":1},{"op":"replace","path":"/spec/template/spec/volumes/0","value":{"name":"memex-data","persistentVolumeClaim":{"claimName":"memex-data"}}},{"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"memex-content","persistentVolumeClaim":{"claimName":"memex-content"}}},{"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"memex-content","mountPath":"/mnt/content"}}]'
+# 1-replica baseline. The PVC volumes/mounts (data, users, content) render from the CHART itself
+# (persistence: in values.aks.yaml) — no volume patching here any more: the old bolt-on patch meant
+# any plain `helm upgrade` reverted /data to emptyDir until the patch re-ran, wiping the
+# assembly/nuget/DataProtection caches on every restart in the gap.
+kubectl -n "$NS" patch deployment memex-portal-deployment --type=json -p '[{"op":"replace","path":"/spec/replicas","value":1}]'
 # Chart-gen gap: the secret template hardcodes the in-cluster pg connection string -> repoint
 # both portal + migration at the external Flexible Server (private IP + password + SSL).
 for s in memex-portal-secrets memex-migration-secrets; do

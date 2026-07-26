@@ -96,6 +96,15 @@ spec:
               mountPath: "/data"
             - name: "memex-users"
               mountPath: "/mnt/users"
+{{- /* Extra persistent mounts (content, attachments, workspace, …) declared under
+       .Values.persistence. data + users are mounted above at fixed paths — their
+       persistence entries only supply the claim for the volumes below. */}}
+{{- range $name, $spec := .Values.persistence }}
+{{- if and $spec $spec.claimName $spec.mountPath (ne $name "data") (ne $name "users") }}
+            - name: "memex-{{ $name }}"
+              mountPath: "{{ $spec.mountPath }}"
+{{- end }}
+{{- end }}
             - name: "memex-dumps"
               mountPath: "/data/dumps"
           imagePullPolicy: "IfNotPresent"
@@ -156,13 +165,22 @@ spec:
 {{- end }}
 {{- end }}
       volumes:
+        # 💾 /data holds the framework caches that MUST survive restarts and be SHARED across
+        # replicas (DataProtection keys, the NodeType assembly cache, the NuGet package cache).
+        # Priority: persistence.data.claimName (a pre-created RWX PVC — the production path,
+        # rendered by the CHART so a plain `helm upgrade` never reverts /data to ephemeral;
+        # previously this was bolted on by per-env kubectl JSON patches, and any unpatched
+        # apply silently ran emptyDir — every restart wiped the caches) → persistDataVolume
+        # (single-node k3s hostPath) → emptyDir (dev/tests only).
         - name: "memex-data"
-{{- if .Values.persistDataVolume }}
+{{- if ((.Values.persistence).data).claimName }}
+          persistentVolumeClaim:
+            claimName: "{{ .Values.persistence.data.claimName }}"
+{{- else if .Values.persistDataVolume }}
           # Local dev only: keep /data (the DataProtection keys under /data/dataprotection-keys, plus the
           # nuget/compile caches) on a node hostPath so a pod restart does NOT wipe the keys and invalidate
           # every session (the "have to refresh / Anonymous resubscribe loop" churn). Single-node k3s;
-          # multiple pods during a rollout share the same node dir. Prod (AKS) leaves this false and
-          # persists keys to Azure Blob instead, so /data can stay ephemeral there.
+          # multiple pods during a rollout share the same node dir.
           hostPath:
             path: /var/lib/memex-portal-data
             type: DirectoryOrCreate
@@ -170,7 +188,22 @@ spec:
           emptyDir: {}
 {{- end }}
         - name: "memex-users"
+{{- if ((.Values.persistence).users).claimName }}
+          persistentVolumeClaim:
+            claimName: "{{ .Values.persistence.users.claimName }}"
+{{- else }}
           emptyDir: {}
+{{- end }}
+{{- /* Extra persistent volumes declared under .Values.persistence (content, attachments,
+       workspace, …). Rendered between users and dumps so the historical volume order
+       (data=0, users=1) stays stable for any remaining per-env index patches. */}}
+{{- range $name, $spec := .Values.persistence }}
+{{- if and $spec $spec.claimName $spec.mountPath (ne $name "data") (ne $name "users") }}
+        - name: "memex-{{ $name }}"
+          persistentVolumeClaim:
+            claimName: "{{ $spec.claimName }}"
+{{- end }}
+{{- end }}
         # 🩺 Crash-dump target (DOTNET_DbgMiniDumpName=/data/dumps/…). createdump does NOT create
         # directories — without this mount every crash failed with "Could not create output file …:
         # No such file or directory", destroying its own evidence (and burning ~6s + a ~350k-line
