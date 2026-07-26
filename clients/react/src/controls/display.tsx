@@ -5,7 +5,7 @@ import { Badge, Button, Text, Tooltip, MessageBar, MessageBarBody, MessageBarTit
 import { Play16Regular } from "@fluentui/react-icons";
 import type { UiControl } from "../area/types.js";
 import { ScopeProvider, useAreaState, useResolve } from "../area/context.js";
-import { useHtmlLinkInterceptor } from "../area/navigation.js";
+import { isExternalTarget, normalizeTarget, useHtmlLinkInterceptor, useNavigation } from "../area/navigation.js";
 import { RenderArea } from "../render/ControlRenderer.js";
 import { useAreaSourceFactory, type EmbeddedAreaHandle } from "../render/embeddedArea.js";
 import { useMeshOps } from "../live/meshOps.js";
@@ -636,6 +636,111 @@ function Spacer(): ReactNode {
   return <div style={{ flex: 1 }} />;
 }
 
+/**
+ * VideoControl — the port of Blazor's VideoView.razor: a media source rendered either as a native
+ * `<video controls>` (VideoKind.Video, the default) or an embeddable player `<iframe>`
+ * (VideoKind.Embed), sized by the skin-free `aspectRatio` (default "16/9"). Enums arrive as their
+ * name on the wire, so `kind` is matched case-insensitively — the same shape SplitterSkin reads
+ * `orientation` with.
+ */
+function VideoView({ control }: { control: UiControl }): ReactNode {
+  const src = useText(control.src);
+  const poster = useText(control.poster);
+  const title = useText(control.title);
+  const ratio = useText(control.aspectRatio);
+  // Blazor renders nothing for an empty Src — hooks first, so the early return stays legal.
+  if (!src) return null;
+  const style = {
+    width: "100%",
+    aspectRatio: ratio || "16/9",
+    border: 0,
+    background: "#000",
+    ...controlStyle(control),
+  };
+  const className = controlClass(control);
+  return String(control.kind ?? "").toLowerCase() === "embed" ? (
+    <iframe
+      src={src}
+      title={title}
+      className={className}
+      style={style}
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+      allowFullScreen
+    />
+  ) : (
+    <video controls src={src} poster={poster || undefined} title={title || undefined} className={className} style={style} />
+  );
+}
+
+/** Presentation keys → action, mirroring SlideShowView.razor.js's `actionForKey`. */
+const PRESENT_KEY_ACTIONS: Record<string, "next" | "prev" | "first" | "last" | "exit"> = {
+  ArrowRight: "next",
+  ArrowDown: "next",
+  PageDown: "next",
+  " ": "next",
+  Spacebar: "next", // legacy Edge/IE spelling of the space key
+  Enter: "next",
+  ArrowLeft: "prev",
+  ArrowUp: "prev",
+  PageUp: "prev",
+  Home: "first",
+  End: "last",
+  Escape: "exit",
+  Esc: "exit", // legacy spelling
+};
+
+/**
+ * SlideShowControl — the port of Blazor's SlideShowView (+ its .razor.js keyboard driver): an
+ * INVISIBLE presenter-mode driver placed in a deck's `Present` area. It renders no chrome; it only
+ * binds the standard PowerPoint keys to the hrefs the control carries, and a null href makes that
+ * key a no-op (Next is null on the last slide).
+ *
+ * Blazor needs a module-level "most recently registered wins" registry because its JS module is
+ * cached across circuits and re-renders; React does not — the effect owns exactly one listener and
+ * its cleanup removes it, so re-rendering the Present area swaps rather than stacks listeners.
+ */
+function SlideShowView({ control }: { control: UiControl }): ReactNode {
+  const navigation = useNavigation();
+  const first = useText(control.firstHref);
+  const previous = useText(control.previousHref);
+  const next = useText(control.nextHref);
+  const last = useText(control.lastHref);
+  const exit = useText(control.exitHref);
+
+  // Read the current hrefs from a ref so the listener is bound ONCE per navigation context — a
+  // slide change updates the ref rather than tearing down and re-adding the document listener.
+  const hrefs = useRef({ first, previous, next, last, exit });
+  hrefs.current = { first, previous, next, last, exit };
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Never hijack keys while the user is typing in a field.
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.isContentEditable ||
+          target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT")
+      )
+        return;
+      const action = PRESENT_KEY_ACTIONS[e.key];
+      if (!action) return;
+      const h = hrefs.current;
+      const href = action === "next" ? h.next : action === "prev" ? h.previous : h[action];
+      if (!href) return; // a null href disables that key (e.g. Next on the last slide)
+      e.preventDefault();
+      const normalized = normalizeTarget(href);
+      if (isExternalTarget(normalized)) window.location.assign(normalized);
+      else navigation.navigate(normalized);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [navigation]);
+
+  return null;
+}
+
 export const displayControls = {
   Label,
   Badge: BadgeView,
@@ -646,6 +751,8 @@ export const displayControls = {
   Highlight: CodeSample,
   Exception: ExceptionView,
   Spacer,
+  Video: VideoView,
+  SlideShow: SlideShowView,
 };
 
 export { Tooltip };

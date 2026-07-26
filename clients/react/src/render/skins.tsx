@@ -1,6 +1,7 @@
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Button,
   Card,
   Divider,
   Tab,
@@ -15,6 +16,7 @@ import { ChevronDown20Regular, ChevronRight20Regular } from "@fluentui/react-ico
 import type { Skin, UiControl } from "../area/types.js";
 import { useResolve } from "../area/context.js";
 import { MeshIcon } from "../controls/MeshIcon.js";
+import { useClick } from "../controls/common.js";
 import { ControlRenderer, RenderArea, useChildAreas } from "./ControlRenderer.js";
 import { controlClass, controlStyle, cssAlign, cssSize, mergeClass } from "./style.js";
 import { GRID_BREAKPOINTS } from "./meshStyles.js";
@@ -342,6 +344,71 @@ function NavGroupSkin({ skin, control }: SkinProps): ReactNode {
   );
 }
 
+/**
+ * MenuItemSkin — the port of Blazor's MenuItemView. A MenuItemControl is a CONTAINER control that
+ * always carries a MenuItemSkin (see MenuItemControl.cs), so the renderer pops the skin before it
+ * ever reaches a leaf: without this entry a live nav item fell through to `__default` passthrough
+ * and rendered its children with NO title, icon or click. Title/icon/width therefore come off the
+ * SKIN here, not the control.
+ *
+ * Blazor's three sub-menu shapes collapse to one here: a button that fires the control's click when
+ * it is clickable, plus a chevron that expands the child areas when it has any (`iconOnly` drops
+ * the label and the chevron, matching MenuItemSkin.IconOnly).
+ */
+function MenuItemSkin({ skin, control }: SkinProps): ReactNode {
+  const title = useResolve(skin.title);
+  const children = useChildAreas(control);
+  const [open, setOpen] = useState(false);
+  const hasSubMenus = children.length > 0;
+  const iconOnly = skin.iconOnly === true;
+  const label = iconOnly ? null : String(title ?? "");
+  const onClick = useClick(control);
+  const width = cssSize(skin.width);
+
+  return (
+    <div
+      className={mergeClass("mw-menu-item", controlClass(control))}
+      style={{ position: "relative", width: width ?? "auto", ...controlStyle(control) }}
+    >
+      <div style={{ display: "flex", gap: 0 }}>
+        <Button
+          appearance={skin.appearance ? (String(skin.appearance).toLowerCase() as "primary" | "subtle" | "outline" | "transparent") : undefined}
+          icon={<MeshIcon value={skin.icon as never} size={20} />}
+          onClick={onClick ?? (hasSubMenus ? () => setOpen((o) => !o) : undefined)}
+          style={{ flex: 1, justifyContent: "flex-start", textAlign: "left" }}
+        >
+          {label}
+        </Button>
+        {hasSubMenus && !iconOnly && onClick ? (
+          // Clickable AND expandable → Blazor renders a split button: main action + chevron.
+          <Button appearance="subtle" icon={<ChevronDown20Regular />} onClick={() => setOpen((o) => !o)} />
+        ) : null}
+      </div>
+      {hasSubMenus && open ? (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 999 }} onClick={() => setOpen(false)} />
+          <div
+            className="mw-menu-item-dropdown"
+            style={{
+              position: "absolute",
+              top: "100%",
+              left: 0,
+              zIndex: 1000,
+              minWidth: "100%",
+              padding: "4px 0",
+              borderRadius: 4,
+              background: "var(--colorNeutralBackground1)",
+              boxShadow: "0 4px 8px rgba(0,0,0,0.2)",
+            }}
+          >
+            <Children control={control} />
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function CardSkin({ control }: SkinProps): ReactNode {
   return (
     <Card className={controlClass(control)} style={{ padding: 16, rowGap: 8, ...controlStyle(control) }}>
@@ -415,6 +482,7 @@ export const skinRegistry: Record<string, SkinComponent> = {
   NavMenu: NavMenuSkin,
   NavGroup: NavGroupSkin,
   Card: CardSkin,
+  MenuItem: MenuItemSkin,
   Property: PropertySkin,
   EditForm: EditFormSkin,
   Editor: PlainLayoutSkin,
