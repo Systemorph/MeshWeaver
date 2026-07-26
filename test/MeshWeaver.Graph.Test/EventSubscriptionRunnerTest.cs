@@ -325,6 +325,101 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         Assert.NotNull(membership);
     }
 
+    /// <summary>
+    /// Regression for the duplicate-continuation defect behind the
+    /// <see cref="PreExistingUserAndSubscription_FireOnRunnerStartup_WithoutTheChangeFeed"/> flake: ONE
+    /// pending subscription must produce EXACTLY ONE continuation, however many of the runner's firing
+    /// paths happen to see it. At startup the cold-start reconcile, the pending-set reconcile and the
+    /// trigger-node watch all evaluate the SAME still-Pending snapshot (it only clears once the terminal
+    /// Fired write round-trips), so before the fix all three launched the continuation and the runner
+    /// issued three concurrent upserts of the same membership node plus three SetStatus writes. Nothing
+    /// observes the losers, so the last of them was still in flight when the test class disposed — the
+    /// "left Observe subscriptions pending past the Quiescing budget /
+    /// CreateOrUpdateNodeRequest@mesh/…" teardown failure, which turned into a CI flake as soon as
+    /// full-suite load stretched that tail past the drain budget.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task StartupFiresEachSubscriptionExactlyOnce_NotOncePerFiringPath()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var fires = new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+        var groupPath = $"{Space}/Team4";
+        using (accessService.ImpersonateAsSystem())
+            await meshService.CreateNode(new MeshNode("Team4", Space)
+            {
+                NodeType = "Group",
+                Name = "Team4",
+                Content = new AccessObject { Description = "Test group" },
+            }).Should().Emit();
+
+        var subscription = new EventSubscription
+        {
+            TriggerType = EventTriggerType.NodeChange,
+            TriggerNodeType = "User",
+            TriggerKind = MeshChangeKind.Created,
+            MatchField = "email",
+            MatchValue = InviteeEmail,
+            ContinuationType = EventContinuationType.AddToGroup,
+            TargetPath = groupPath,
+        };
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+        using (accessService.ImpersonateAsSystem())
+        {
+            await meshService.CreateNode(new MeshNode(InviteeId)
+            {
+                NodeType = "User",
+                Name = "Newcomer",
+                Content = new User { Email = InviteeEmail, FullName = "Newcomer" },
+            }).Should().Emit();
+        }
+
+        // Every firing path is armed: the change feed IS live here (unlike the silent-feed tests), and
+        // both reconciles plus the trigger-node watch see the pre-existing, already-matching user.
+        using var runner = new EventSubscriptionRunner(Mesh,
+            Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>(), meshService, accessService,
+            new CountingRunnerLogger(fires));
+        await runner.StartAsync(default);
+
+        var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
+            .Select(n => n?.Content as EventSubscription)
+            .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
+            .FirstAsync().Timeout(40.Seconds());
+        Assert.True(final!.Status == EventSubscriptionStatus.Fired,
+            $"subscription ended {final.Status}: {final.LastError}");
+
+        var membershipPath = $"{groupPath}/{InviteeId}_Membership";
+        await Mesh.GetWorkspace().GetMeshNodeStream(membershipPath)
+            .Where(n => n?.Content is GroupMembership gm && gm.Member == InviteeId)
+            .FirstAsync().Timeout(10.Seconds());
+
+        // Observation window for a MUST-NOT-HAPPEN assertion: the duplicate fires this pins arrive within
+        // ~50ms of the first, so the window can only ever hide the defect, never invent it. (Before the
+        // fix this reports 3 fires; after it, 1.)
+        await Task.Delay(3.Seconds());
+        Assert.True(fires.Count == 1,
+            $"the subscription's continuation ran {fires.Count} times — one per firing path instead of once. "
+            + $"Each extra run is an unobserved duplicate write that outlives the test:{Environment.NewLine}"
+            + string.Join(Environment.NewLine, fires));
+    }
+
+    /// <summary>Captures the runner's "fired" lines so a test can count continuations.</summary>
+    private sealed class CountingRunnerLogger(System.Collections.Concurrent.ConcurrentQueue<string> fires)
+        : Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var line = formatter(state, exception);
+            if (line.Contains(" fired: ", StringComparison.Ordinal))
+                fires.Enqueue(line);
+        }
+    }
+
     [Fact(Timeout = 60000)]
     public async Task LegacyScheduledAction_IsMigratedAndFires()
     {
