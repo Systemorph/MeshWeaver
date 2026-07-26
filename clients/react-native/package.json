@@ -39,6 +39,21 @@
     "@types/react-test-renderer": "~18.3.0",
     "react-test-renderer": "18.3.1",
     "typescript": "^5.6.0",
-    "vitest": "^2.1.0"
+    "vitest": "^4.1.9"
+  },
+  "_overrides_note": [
+    "postcss: expo 52 → @expo/metro-config pins 8.4.49, below the 8.5.x patch line. This is the one",
+    "advisory in the Expo tree that is BOTH reachable from what we build (the web export bundles CSS",
+    "through metro-config) and safe to force — same major, no API change.",
+    "The rest of the Expo-toolchain advisories (tar, @xmldom/xmldom, uuid, brace-expansion) are NOT",
+    "overridden on purpose: each patched version is a breaking major for its CJS consumer inside",
+    "@expo/cli / native prebuild (brace-expansion@5 is ESM-only and minimatch requires() it; uuid@11",
+    "likewise breaks xcode's require; tar 6→7 and xmldom 0.7→0.9 are breaking API changes). They are",
+    "reachable only from `expo prebuild` / `expo run:*`, not from the web export or the test run.",
+    "Forcing them would break the build to quiet a scanner — the real fix is the Expo SDK upgrade",
+    "(expo@57 + react-native@0.86), which is its own migration."
+  ],
+  "overrides": {
+    "postcss": "^8.5.23"
   }
 }
