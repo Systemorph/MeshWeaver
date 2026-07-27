@@ -201,6 +201,29 @@ public class RecursiveCompilationTest
         folded.Keys.Should().Equal("Store/Order/Source/OrderContent");
     }
 
+    /// <summary>
+    /// 🚨 An EMPTY discovery result must never be treated as a valid source set. Every leg of the
+    /// uncached probe degrades to empty on error, so a probe that hit a cold partition or a
+    /// permission wall could otherwise report "no sources", beat the cached query, and compile the
+    /// type against NOTHING — strictly worse than the stall the probe exists to dodge. The fold
+    /// returning empty is exactly the state the probe must stay silent on.
+    /// </summary>
+    [Fact]
+    public void EmptyDiscovery_IsNotAValidSourceSet()
+    {
+        var nothing = Fold(
+            new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial },
+            new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Reset });
+
+        nothing.Should().BeEmpty(
+            "a probe whose queries all came back empty has found NO sources — and 'no sources' must "
+            + "never win the race against the cached query, or the type compiles against nothing");
+
+        // The moment one real source arrives, the set is usable and may be raced.
+        Fold(Change(QueryChangeType.Initial, "Store/Coupon/Source/CouponContent"))
+            .Should().NotBeEmpty();
+    }
+
     /// <summary>Empty and malformed changes are inert — discovery must not throw on a heartbeat or
     /// an empty chunk, because an exception there fails the whole compile.</summary>
     [Fact]

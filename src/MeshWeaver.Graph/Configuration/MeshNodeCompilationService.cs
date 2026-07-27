@@ -562,14 +562,20 @@ internal class MeshNodeCompilationService(
                         .Take(1)
                         .Select(map => (IReadOnlyCollection<MeshNode>)map.Values.ToList())
                         .Catch((Exception _) => Observable.Return<IReadOnlyCollection<MeshNode>>([]))))
-                .Select(results =>
+                .Select(results => results
+                    .SelectMany(r => r ?? [])
+                    .Where(n => !string.IsNullOrEmpty(n.Path))
+                    .GroupBy(n => n.Path)
+                    .Select(g => g.First())
+                    .ToList())
+                // 🚨 NEVER win the race with an EMPTY set. Every per-query leg degrades to empty on
+                // error, so a probe that hit a cold partition or a permission wall would otherwise
+                // emit "no sources", beat the cached query, and compile the type against NOTHING —
+                // strictly worse than the stall it exists to dodge. No sources found ⇒ stay silent
+                // and let the cached query (and the outer Timeout) decide.
+                .Where(merged => merged.Count > 0)
+                .Select(merged =>
                 {
-                    var merged = results
-                        .SelectMany(r => r ?? [])
-                        .Where(n => !string.IsNullOrEmpty(n.Path))
-                        .GroupBy(n => n.Path)
-                        .Select(g => g.First())
-                        .ToList();
                     logger.LogWarning(
                         "Source discovery for '{SelfPath}' fell back to the UNCACHED probe after {Delay}s — "
                         + "the cached synced query stalled (a missed Initial idles until the {Heartbeat}s "
