@@ -193,11 +193,21 @@ public static class MeshDataSourceExtensions
                                 // Likewise when this hub has no OwnNodeCache registered — then
                                 // there is nowhere hub-scoped to keep the stream, and a
                                 // process-lifetime cache is exactly what must not be built.
-                                var ownStreams = workspace.Hub.ServiceProvider
-                                    .GetService<OwnNodeCache>()?.OwnNodeStreams;
-                                if (configuration is not null || ownStreams is null)
+                                // A DISPOSING hub never populates the cache: its teardown may
+                                // already have run HookDisposal's clear, and an entry added after
+                                // that would never be released. The stream such a hub builds is a
+                                // dead one either way (the SynchronizationStream ctor short-circuits
+                                // on RunLevel > Started), so bypassing the cache changes nothing but
+                                // the retention.
+                                var cache = workspace.Hub.ServiceProvider.GetService<OwnNodeCache>();
+                                if (configuration is not null || cache is null || workspace.Hub.IsDisposing)
                                     return BuildOwnNodeStream(workspace, ownPath, configuration);
 
+                                // Tie the cache's lifetime to the hub before anything lands in it,
+                                // so the shared streams are released on teardown rather than
+                                // outliving the hub (MeshHubDisposalLeakTest).
+                                cache.HookDisposal(workspace.Hub);
+                                var ownStreams = cache.OwnNodeStreams;
                                 return ownStreams.GetOrAdd(
                                     ownPath,
                                     p => new Lazy<ISynchronizationStream<MeshNode>?>(
@@ -466,7 +476,7 @@ public static class MeshDataSourceExtensions
     /// lifetime; updates flow through naturally as the workspace's MeshNode
     /// reducer re-emits.
     /// </summary>
-    public sealed class OwnNodeCache
+    public sealed class OwnNodeCache : IDisposable
     {
         /// <summary>The currently cached own-node snapshot (null until first emission).</summary>
         public volatile MeshNode? Current;
@@ -505,6 +515,39 @@ public static class MeshDataSourceExtensions
         /// <c>Workspace._remoteStreamCache</c>).
         /// </summary>
         internal ConcurrentDictionary<string, Lazy<ISynchronizationStream<MeshNode>?>> OwnNodeStreams { get; } = new();
+
+        private int disposalHooked;
+
+        /// <summary>
+        /// 🚨 Gives <see cref="OwnNodeStreams"/> a DEFINED LIFETIME END, exactly once per cache.
+        /// A cache that outlives its hub would convert the old per-call stream churn into a
+        /// permanent leak, which is precisely what <c>MeshHubDisposalLeakTest</c> exists to catch.
+        /// <para>The hook is the hub's own <c>RegisterForDisposal</c> composite — NOT the DI
+        /// container. A hub does not dispose its <c>ServiceProvider</c> (the call is deliberately
+        /// commented out in <c>MessageHub.HandleShutdownCore</c>: it re-resolves from an often
+        /// already-disposed parent scope), so a singleton's <see cref="IDisposable"/> would never
+        /// run on hub teardown. Registering after disposal has begun disposes immediately, so a
+        /// late first read cannot leak either.</para>
+        /// </summary>
+        internal void HookDisposal(IMessageHub hub)
+        {
+            if (Interlocked.Exchange(ref disposalHooked, 1) == 0)
+                hub.RegisterForDisposal(this);
+        }
+
+        /// <summary>
+        /// Drops every cached own-node stream so the cache holds nothing once its hub is gone.
+        /// <para>Deliberately does NOT dispose the streams: each reduced stream is already owned
+        /// by its parent (<c>WorkspaceStreams.CreateReducedStream</c> does
+        /// <c>parent.RegisterForDisposal(reduced)</c>, and the chain roots in the data source's
+        /// primary stream, disposed with the data context). Disposing them from here would make
+        /// this cache a SECOND owner and tear the own-node stream down at whatever point in the
+        /// hub's disposal composite the first read happened to register — ahead of teardown steps
+        /// that still read the own node (persistence flush, own-deletion handling). Releasing the
+        /// references is what this cache owes; destroying the streams is the parent's job.</para>
+        /// Idempotent.
+        /// </summary>
+        public void Dispose() => OwnNodeStreams.Clear();
     }
 
     /// <summary>

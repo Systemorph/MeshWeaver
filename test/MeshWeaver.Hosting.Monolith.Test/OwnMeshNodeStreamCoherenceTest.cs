@@ -7,9 +7,11 @@ using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -122,6 +124,46 @@ public class OwnMeshNodeStreamCoherenceTest(ITestOutputHelper output) : Monolith
             + "inverted on ~25% of commits, so a component that reacts on the own-node stream "
             + "(ThreadInboxChannel.OfferFromNode, fed by the AI submission watcher) could still be "
             + "un-run after another own-node reader had already observed the same commit.");
+    }
+
+    /// <summary>
+    /// LIFETIME END: the shared streams are released when their hub disposes, and a fresh hub at
+    /// the same path builds a new, working one. A cache without this turns the old per-call stream
+    /// churn into a permanent leak — the failure mode <c>MeshHubDisposalLeakTest</c> guards.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task OwnNodeStream_IsReleasedOnHubDisposal_AndRebuiltForANewHub()
+    {
+        var id = "lifetime-node";
+        var path = $"{TestPartition}/{id}";
+        var workspace = await ActivateNodeWorkspaceAsync(id);
+        var hub = workspace.Hub;
+
+        // Populate the cache, and prove it holds the stream.
+        var before = workspace.GetStream(new MeshNodeReference());
+        var cache = hub.ServiceProvider.GetRequiredService<MeshDataSourceExtensions.OwnNodeCache>();
+        cache.OwnNodeStreams.Should().NotBeEmpty("reading the own node caches its reduced stream");
+
+        // Dispose the hub — the cache must let go.
+        hub.Dispose();
+        await hub.DisposalCompleted
+            .Catch<System.Reactive.Unit, Exception>(_ => Observable.Return(System.Reactive.Unit.Default))
+            .FirstOrDefaultAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask(TestContext.Current.CancellationToken);
+
+        cache.OwnNodeStreams.Should().BeEmpty(
+            "the own-node stream cache must be released on hub disposal — otherwise it converts the "
+            + "old per-call stream churn into a permanent leak (MeshHubDisposalLeakTest).");
+
+        // A fresh hub at the same path must get a NEW, working stream — the cache must not have
+        // poisoned the path with a dead entry.
+        await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
+            .Should().Within(60.Seconds()).Emit();
+        var freshHub = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
+        freshHub.Should().NotBeNull();
+        var after = freshHub!.GetWorkspace().GetStream(new MeshNodeReference());
+        ReferenceEquals(before, after).Should().BeFalse("a new hub must not be served the dead hub's stream");
+        await freshHub!.GetWorkspace().GetMeshNodeStream()
+            .Should().Within(60.Seconds()).Match(n => n is not null);
     }
 
     private async Task<IWorkspace> ActivateNodeWorkspaceAsync(string id)
