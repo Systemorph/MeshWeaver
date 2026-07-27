@@ -88,6 +88,11 @@ public class GetMeshNodeTimeoutSurfacingTest(ITestOutputHelper output) : Monolit
             + "that never arrived, as opposed to a hub busy with something else");
         ex.Message.Should().Contain("RunLevel",
             "the snapshot must carry the hub's run level and queue state");
+        ex.Message.Should().Contain("Reader:",
+            "the reader's state must be labelled — it is only half the verdict");
+        ex.Message.Should().Contain("Target:",
+            "the OWNER's state is what separates 'never activated' from 'answered but the reply "
+            + "was lost'; without it the reader snapshot alone cannot close the diagnosis");
     }
 
     /// <summary>
