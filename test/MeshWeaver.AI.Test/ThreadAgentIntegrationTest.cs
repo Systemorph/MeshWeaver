@@ -278,6 +278,11 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         await agentChat.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(ct);
 
         var contextNode = await ReadNode("ACME/ProductLaunch").FirstAsync().ToTask(ct);
+        // Parity with the streaming sibling above. Without this assertion a stalled read
+        // (which used to surface as a silent null) let the whole flow run against a NULL
+        // context and still pass every assertion below — the failure only appeared 60 s
+        // later as a dispose-time watchdog blaming the CancellationToken.
+        contextNode.Should().NotBeNull("ACME/ProductLaunch node should exist in test data");
 
         agentChat.SetContext(new AgentContext
         {

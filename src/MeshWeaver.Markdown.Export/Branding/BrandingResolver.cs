@@ -53,7 +53,10 @@ public class BrandingResolver
         }
 
         // One-shot read — GetDataRequest, no SubscribeRequest round-trip.
-        return hub.GetMeshNode(brandNodePath, TimeSpan.FromSeconds(10))
+        // EmitNull: branding is cosmetic and this method's contract is "Default on any miss" —
+        // a slow brand read must degrade to portal defaults, never fail the export. The
+        // timeout is still logged at Warning by the read itself.
+        return hub.GetMeshNode(brandNodePath, TimeSpan.FromSeconds(10), ReadTimeoutBehavior.EmitNull)
             .SelectMany(node =>
             {
                 if (node is null)

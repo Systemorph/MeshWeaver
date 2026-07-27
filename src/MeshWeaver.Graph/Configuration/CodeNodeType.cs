@@ -110,6 +110,11 @@ public static class CodeNodeType
         // true request/response, no SubscribeRequest+immediate-unsubscribe. Handler
         // itself returns Processed() immediately; the callback below fires when the
         // response arrives.
+        // Strict timeout (the default): a stalled read must NOT be answered as
+        // "Not executable" — that tells the caller the script is misconfigured when in
+        // fact the mesh never replied, and it is unfixable by the user. The error sink
+        // below turns the timeout into a truthful failure response (and, being a
+        // handler, gives the OnError somewhere to land instead of the timer thread).
         hub.GetMeshNode(hub.Address.ToString())
             .Subscribe(node =>
             {
@@ -322,6 +327,18 @@ public static class CodeNodeType
                                 },
                                 o => o.ResponseFor(request));
                         });
+            },
+            readError =>
+            {
+                // The self-read failed (timeout / access denial). Answer the caller with what
+                // actually happened instead of the misleading "Not executable" verdict above.
+                hub.Post(
+                    new ExecuteScriptResponse
+                    {
+                        Success = false,
+                        Error = $"Could not read the code node to execute: {readError.Message}"
+                    },
+                    o => o.ResponseFor(request));
             });
         return request.Processed();
     }

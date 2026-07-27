@@ -374,7 +374,10 @@ public static class UserActivityLayoutAreas
         var backHref = MeshNodeLayoutAreas.BuildUrl(hubPath, ActivityArea);
         var userAddress = host.Hub.Address;
 
-        host.Hub.GetMeshNode(hubPath, TimeSpan.FromSeconds(10))
+        // EmitNull: fire-and-forget click action with no error sink — an OnError would
+        // rethrow on the timeout's timer thread. Stall behaviour unchanged (the reset does
+        // not happen); the read logs the timeout + hub diagnostics at Warning.
+        host.Hub.GetMeshNode(hubPath, TimeSpan.FromSeconds(10), ReadTimeoutBehavior.EmitNull)
             .Subscribe(node =>
             {
                 if (node?.Content is not User user || string.IsNullOrWhiteSpace(user.Body))
@@ -395,7 +398,9 @@ public static class UserActivityLayoutAreas
     private static Func<UiActionContext, Task> ClearBodyAction(string userPath) => ctx =>
     {
         var userAddress = new Address(userPath);
-        ctx.Host.Hub.GetMeshNode(userPath, TimeSpan.FromSeconds(10))
+        // EmitNull — same reason as ResetHomeAction above: no error sink on this
+        // fire-and-forget subscription.
+        ctx.Host.Hub.GetMeshNode(userPath, TimeSpan.FromSeconds(10), ReadTimeoutBehavior.EmitNull)
             .Subscribe(node =>
             {
                 if (node?.Content is not User user) return;
