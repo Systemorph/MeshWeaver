@@ -264,7 +264,12 @@ public static class GroupsLayoutArea
 
                             // Existence check via one-shot GetDataRequest — true
                             // request/response, no SubscribeRequest+immediate-unsubscribe.
-                            saveCtx.Hub.GetMeshNode(path, TimeSpan.FromSeconds(5))
+                            // EmitNull: fire-and-forget save action with no error sink — an
+                            // OnError would rethrow on the timeout's timer thread. On a stall
+                            // the existence probe reads as "absent" (unchanged behaviour: the
+                            // create below is guarded by the mesh's own uniqueness handling);
+                            // the read logs the timeout + hub diagnostics at Warning.
+                            saveCtx.Hub.GetMeshNode(path, TimeSpan.FromSeconds(5), ReadTimeoutBehavior.EmitNull)
                                 .Subscribe(existing =>
                                 {
                                     saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
@@ -276,7 +281,10 @@ public static class GroupsLayoutArea
                                     }
 
                                     // Look up member icon via one-shot GetDataRequest (best-effort).
-                                    saveCtx.Hub.GetMeshNode(selectedMember, TimeSpan.FromSeconds(2))
+                                    // EmitNull — best-effort icon lookup (the comment above says
+                                    // so) on a subscription with no error sink; a stall must
+                                    // degrade to "no icon", not throw on the timer thread.
+                                    saveCtx.Hub.GetMeshNode(selectedMember, TimeSpan.FromSeconds(2), ReadTimeoutBehavior.EmitNull)
                                         .Subscribe(memberNode =>
                                         {
                                             var newNode = new MeshNode(nodeId, nodePath)
