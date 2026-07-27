@@ -291,6 +291,67 @@ public class MessageService : IMessageService
     }
 
 
+    /// <summary>
+    /// Posts a transient <see cref="ErrorType.ShuttingDown"/> <see cref="DeliveryFailure"/> for
+    /// <paramref name="delivery"/> through the PARENT hub — our own <see cref="Post"/> would
+    /// re-enter this service's shutdown gate and be dropped.
+    ///
+    /// <para>Used by BOTH paths on which a hub going down abandons a delivery a sender is
+    /// awaiting: the intake gate (a message arriving after RunLevel flipped) and disposal
+    /// (a message already parked in the deferred queue behind a closed init gate). Both used
+    /// to vanish silently, leaving the sender's <c>hub.Observe(...)</c> to burn its full
+    /// request budget with nothing to show for it.</para>
+    ///
+    /// <para>Gated to deliveries a caller can actually be awaiting:
+    /// <list type="bullet">
+    ///   <item>typed <see cref="IRequest"/> messages (request/response);</item>
+    ///   <item><see cref="RawJson"/> — cross-hub deliveries reach us UNDESERIALIZED, so the
+    ///     payload type cannot be inspected: fail LOUD rather than reintroduce the silent
+    ///     hang. The one RawJson skipped is a payload that looks like a DeliveryFailure
+    ///     itself (cheap content sniff) — NACKing a NACK between two concurrently-disposing
+    ///     hubs would ping-pong.</item>
+    /// </list>
+    /// Typed fire-and-forget events (DataChangedEvent &amp; co) keep the historical silent
+    /// drop — nobody awaits them, and NACKing them was pure disposal noise. Cascade-safe by
+    /// the same exclusions <see cref="ReportFailure"/> applies.</para>
+    ///
+    /// <para>🚨 The NACK is a TRANSIENT rejection — <see cref="ErrorType.ShuttingDown"/>, never
+    /// NotFound, never a generic terminal failure. A disposing hub cannot know whether its
+    /// address is gone for good (node deleted) or about to REACTIVATE (recycle / restart);
+    /// the sender's next probe gets the authoritative answer. Consumers with their own
+    /// recovery machinery ride it out (SynchronizationStream keeps the stream ALIVE on this
+    /// ErrorType so its change-feed resubscribe latch rehydrates after the reactivation).</para>
+    /// </summary>
+    private void NackThroughParent(IMessageDelivery delivery, string reason)
+    {
+        if (delivery.Message is not IRequest
+            && !(delivery.Message is RawJson rawJson
+                 && !rawJson.Content.Contains(nameof(DeliveryFailure), StringComparison.Ordinal)))
+            return;
+        if (delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
+            return;
+        if (delivery.Sender is null || delivery.Sender.Equals(Address))
+            return;
+        // No live parent ⇒ nothing can carry the NACK. At a full mesh teardown the parent is
+        // itself past DisposeHostedHubs, so this correctly stays silent: every sender is going
+        // away too. Only a TARGETED hub disposal (recycle, node delete) under a live parent
+        // NACKs — exactly the case where a sender is still there to hear it.
+        if (ParentHub is not { } parent || parent.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+            return;
+        try
+        {
+            parent.Post(
+                new DeliveryFailure(delivery) { ErrorType = ErrorType.ShuttingDown, Message = reason },
+                o => o.ResponseFor(delivery));
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex,
+                "Failed to NACK {MessageType} (ID: {MessageId}) abandoned by shutting-down hub {Address}",
+                delivery.Message.GetType().Name, delivery.Id, Address);
+        }
+    }
+
     private IMessageDelivery ReportFailure(IMessageDelivery delivery, ErrorType errorType = ErrorType.Unknown)
     {
         var error = delivery.Properties.TryGetValue("Error", out var e) ? e?.ToString() : null;
@@ -443,31 +504,9 @@ public class MessageService : IMessageService
             // a NotFound NACK faulted the stream cache's shared Replay(1) with no re-probe
             // path, and ANY terminal treatment killed the sync stream's resubscribe latch —
             // each wedged every read of the mid-recycle NodeType.
-            if ((delivery.Message is IRequest
-                    || (delivery.Message is RawJson rawJson
-                        && !rawJson.Content.Contains(nameof(DeliveryFailure), StringComparison.Ordinal)))
-                && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
-                && delivery.Sender is not null
-                && !delivery.Sender.Equals(Address)
-                && ParentHub is { } parent
-                && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
-            {
-                try
-                {
-                    parent.Post(new DeliveryFailure(delivery)
-                    {
-                        ErrorType = ErrorType.ShuttingDown,
-                        Message = $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — cannot process "
-                                  + $"{typeName}; the address may reactivate (recycle / restart). Rejecting now."
-                    }, o => o.ResponseFor(delivery));
-                }
-                catch (Exception ex)
-                {
-                    logger.LogDebug(ex,
-                        "Failed to NACK {MessageType} (ID: {MessageId}) dropped by shutting-down hub {Address}",
-                        typeName, delivery.Id, Address);
-                }
-            }
+            NackThroughParent(delivery,
+                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — cannot process "
+                + $"{typeName}; the address may reactivate (recycle / restart). Rejecting now.");
             return delivery.Failed("Hub is shutting down");
         }
 
@@ -1249,13 +1288,36 @@ public class MessageService : IMessageService
                 hangDetectionStopwatch.ElapsedMilliseconds, Address);
         }
 
-        // Cancel every outstanding deferral-timeout timer so they don't post
-        // a DeliveryFailure into a hub that's already disposing (would race
-        // with the buffer.Complete below and produce noise).
+        // 🚨 ANSWER the deferred backlog — never just silence it.
+        //
+        // Everything still in deferredDeliveries is a delivery this hub ACCEPTED and parked
+        // behind a closed init gate. Disposal throws that queue away. Cancelling the
+        // deferral-timeout timers (which we must — they would fire ReportFailure into a hub
+        // that can no longer post) without answering the deliveries made the abandonment
+        // TOTALLY SILENT: the sender's hub.Observe(...) had nothing to resolve on and burned
+        // its entire request budget.
+        //
+        // That is a production hang, not a test artefact: DisposeRequest is deliberately
+        // exempt from the init gate (see the gate bypass in ScheduleNotify's deferral path)
+        // while an ordinary request is NOT — so any recycle that lands during activation
+        // (WithOverlaySelfHeal's self-recycle, RecycleLayoutArea, the MCP recycle tool, a
+        // node delete) jumps the queue and annihilates the very request that triggered the
+        // activation. The caller — a page load, a GetMeshNode read — then spins for its full
+        // budget with no error to show. Proven by ThreadAgentIntegrationTest: the instance
+        // hub was created, handed the routed GetDataRequest, and self-disposed 13 ms later;
+        // the reader sat idle for its whole 60 s and the target probe reported NO LOCAL HUB.
+        //
+        // The NACK is transient (ErrorType.ShuttingDown) — a recycled address reactivates on
+        // the next access, so the sender must read this as "ask again", never as "gone".
         foreach (var (_, tracker) in deferredDeliveries)
         {
             tracker.TimeoutCts.Cancel();
             tracker.TimeoutCts.Dispose();
+            NackThroughParent(tracker.Delivery,
+                $"Hub {Address} was disposed while {tracker.Delivery.Message.GetType().Name} "
+                + $"(id={tracker.Delivery.Id}) was still deferred behind its initialization gates "
+                + $"[{string.Join(",", gates.Keys)}] — the message was never processed. The address "
+                + "may reactivate (recycle / restart); retry to get the authoritative answer.");
         }
         deferredDeliveries.Clear();
 
