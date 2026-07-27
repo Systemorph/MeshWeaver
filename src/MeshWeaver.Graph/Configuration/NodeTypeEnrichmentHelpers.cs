@@ -1,3 +1,5 @@
+using System.Reactive.Concurrency;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -1124,30 +1126,62 @@ internal static class NodeTypeEnrichmentHelpers
     /// <summary>
     /// Watcher core of <see cref="WithOverlaySelfHeal"/>, split out so the
     /// firing contract is unit-testable without building a hub
-    /// (<c>OverlaySelfHealWatcherTest</c>): the FIRST emission whose content is
-    /// a <see cref="NodeTypeDefinition"/> with a genuinely usable build
-    /// (<see cref="NodeTypeCompilationHelpers.HasUsableBuild"/>) AND — when
-    /// <paramref name="typeVersionAtOverlay"/> is set — a Version strictly past
-    /// it posts exactly ONE self-<see cref="DisposeRequest"/> (Take(1));
-    /// everything else (unsettled states, the replayed at-overlay state,
-    /// non-advancing versions, non-NodeTypeDefinition content) is ignored.
-    /// Errors are logged, never rethrown — the watcher is best-effort by
-    /// design.
+    /// (<c>OverlaySelfHealWatcherTest</c>). It posts exactly ONE self-
+    /// <see cref="DisposeRequest"/> (Take(1)) when the NodeType reaches a
+    /// genuinely usable build (<see cref="NodeTypeCompilationHelpers.HasUsableBuild"/>),
+    /// by EITHER route:
+    /// <list type="bullet">
+    ///   <item><b>Version advance</b> — a new build landed past
+    ///     <paramref name="typeVersionAtOverlay"/>: heal immediately.</item>
+    ///   <item><b>Grace</b> (<see cref="SelfHealGrace"/>) — the type is usable but its version
+    ///     never moved. A recompile of an already-<c>Ok</c> type does NOT rewrite its node, so
+    ///     after a pod restart the version equals the one captured at overlay time and the
+    ///     version-only gate could never fire: the overlay stayed until someone restarted the
+    ///     pods (memex, 2026-07-27). Re-reading after a delay heals it while keeping the
+    ///     anti-hot-loop property — never instant, so an instance that still cannot build
+    ///     recycles at most once per grace window.</item>
+    /// </list>
+    /// Unsettled states and non-<see cref="NodeTypeDefinition"/> content are ignored. Errors are
+    /// logged, never rethrown — the watcher is best-effort by design.
     /// </summary>
     internal static IDisposable ArmOverlaySelfHeal(
         IObservable<MeshNode> typeStream,
         IMessageHub instanceHub,
         string nodeType,
         long? typeVersionAtOverlay,
-        ILogger? logger)
-        => typeStream
-            .Where(t => t?.Content is NodeTypeDefinition d
-                && NodeTypeCompilationHelpers.HasUsableBuild(t, d)
-                && (typeVersionAtOverlay is null || t.Version > typeVersionAtOverlay.Value))
+        ILogger? logger,
+        IScheduler? scheduler = null)
+    {
+        var usable = typeStream.Where(t => t?.Content is NodeTypeDefinition d
+            && NodeTypeCompilationHelpers.HasUsableBuild(t, d));
+
+        // FAST path — the version advanced past the overlay: a genuinely NEW build landed, heal now.
+        var advanced = usable.Where(t =>
+            typeVersionAtOverlay is null || t.Version > typeVersionAtOverlay.Value);
+
+        // GRACE path — the version NEVER advances. A recompile of an already-`Ok` type does not
+        // rewrite its node, so after a pod restart the type reports a usable build at the SAME
+        // version the overlay captured. The old version-only gate could then never fire, and the
+        // overlay was permanent until someone restarted the pods — the memex 2026-07-27 outage
+        // (Store/Plugin stuck at v796 all day; compile SUCCEEDED at 20:47:35 and every plugin root
+        // still rendered "did not settle" until a scale-to-zero; five recycles did nothing, because
+        // each re-activation re-armed the same unsatisfiable predicate).
+        //
+        // So: re-read the type AFTER a grace window and heal if it is usable by then. The delay is
+        // what keeps the original anti-hot-loop guarantee — an instance that overlays again because
+        // it STILL cannot build recycles at most once per grace period instead of spinning.
+        var graced = Observable
+            .Timer(SelfHealGrace, scheduler ?? Scheduler.Default)
+            .SelectMany(_ => usable.Take(1));
+
+        var healed = 0;
+        var heal = advanced
+            .Merge(graced)
             .Take(1)
             .Subscribe(
                 t =>
                 {
+                    Interlocked.Exchange(ref healed, 1);
                     logger?.LogInformation(
                         "Overlay self-heal: NodeType '{NodeType}' reached a usable build (version {Version}, at-overlay {VersionAtOverlay}) — recycling stuck instance '{InstancePath}'",
                         nodeType, t.Version, typeVersionAtOverlay, instanceHub.Address);
@@ -1159,6 +1193,78 @@ internal static class NodeTypeEnrichmentHelpers
                 ex => logger?.LogWarning(ex,
                     "Overlay self-heal watcher for NodeType '{NodeType}' (instance '{InstancePath}') faulted — falling back to manual Recycle",
                     nodeType, instanceHub.Address));
+
+        // AND IF IT DOES NOT HEAL, SAY SO. The 2026-07-27 outage was invisible from the inside:
+        // no log line carried the overlay text, no notification was raised, and the first signal
+        // was a user reporting a dead page. A page that is still serving the fallback well past
+        // the heal window is a platform fault, so it now raises ONE admin-scoped notification
+        // naming the type and the instance. Best-effort and self-contained: reporting can never
+        // throw back onto the enrichment path.
+        var report = Observable
+            .Timer(StuckReportDelay, scheduler ?? Scheduler.Default)
+            .Subscribe(
+                _ =>
+                {
+                    if (Volatile.Read(ref healed) != 0)
+                        return;
+                    ReportStuckOverlayToAdmins(instanceHub, nodeType, logger);
+                },
+                ex => logger?.LogWarning(ex,
+                    "Overlay stuck-reporter for NodeType '{NodeType}' faulted", nodeType));
+
+        return new CompositeDisposable(heal, report);
+    }
+
+    /// <summary>
+    /// Raise ONE platform-admin notification for an instance still serving the compile fallback
+    /// after the self-heal window — anchored under the <c>Admin</c> partition, whose RLS scopes it
+    /// to platform admins (the same anchoring <c>StartupErrorNotifier</c> and
+    /// <c>NodeTypeCompileParkRegistry</c> use). Wrapped whole: an unavailable notification service,
+    /// a failed write, anything — degrades to a log line and never disturbs rendering.
+    /// </summary>
+    private static void ReportStuckOverlayToAdmins(
+        IMessageHub instanceHub, string nodeType, ILogger? logger)
+    {
+        try
+        {
+            var instance = instanceHub.Address.ToString();
+            NotificationService.Dispatch(
+                instanceHub,
+                recipient: null,
+                mainNodePath: StartupErrorNotifier.AdminPartition,
+                title: $"Type '{nodeType}' is serving a fallback page",
+                message:
+                    $"The instance '{instance}' has been rendering the \"build did not settle\" "
+                    + $"fallback for over {StuckReportDelay.TotalSeconds:0}s and did not self-heal. "
+                    + "Its NodeType has no usable build on this pod. Users see a broken page until "
+                    + "the type builds or the instance is recycled.",
+                type: NotificationType.System,
+                targetNodePath: nodeType);
+            logger?.LogWarning(
+                "Overlay self-heal: instance '{InstancePath}' still stuck on NodeType '{NodeType}' after {Delay}s — platform admins notified",
+                instanceHub.Address, nodeType, StuckReportDelay.TotalSeconds);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex,
+                "Overlay self-heal: could not notify admins that '{InstancePath}' is stuck on '{NodeType}'",
+                instanceHub.Address, nodeType);
+        }
+    }
+
+    /// <summary>
+    /// How long an instance may keep serving the fallback before platform admins are told. Sits
+    /// past <see cref="SelfHealGrace"/> so the notification means "self-heal already failed",
+    /// not "healing is in progress".
+    /// </summary>
+    private static readonly TimeSpan StuckReportDelay = TimeSpan.FromSeconds(120);
+
+    /// <summary>
+    /// How long the self-heal waits before healing a stuck overlay on a type whose VERSION never
+    /// advances (the post-restart recompile case). Long enough that a genuinely-still-broken
+    /// instance cannot spin, short enough that a deploy heals itself well inside a support call.
+    /// </summary>
+    private static readonly TimeSpan SelfHealGrace = TimeSpan.FromSeconds(45);
 
     public static MeshNode WithCompilationErrorOverlay(
         MeshNode node,
