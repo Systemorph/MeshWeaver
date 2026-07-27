@@ -39,6 +39,22 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
     private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData");
     private const string FakeResponseText = "This is a test response from the fake agent.";
 
+    // This class INSTALLS ITS OWN AGENT and selects it BY NAME. The picker's registry is the UNION
+    // of the built-in catalog (BuiltInAgentProvider, shipped from content/ai/Agent) and whatever
+    // has been persisted — and every AI.Test class shares ONE file-system persistence root
+    // (AppContext.BaseDirectory/TestData — see the same constant in AgentChatClientTest,
+    // AttachmentContextTest, …), which additionally survives between runs because it lives under
+    // bin/. So `agents[0]` selected by POSITION out of a set whose membership and ordering depend
+    // on class ordering, shard assignment and leftover on-disk state. Owning the agent and
+    // selecting it by name makes the choice deterministic and any extra agent harmless.
+    // Run-unique, and xUnit builds a fresh class instance per [Fact], so each test owns a distinct
+    // agent. Both halves matter: the mesh is shared across this class's facts
+    // (ShareMeshAcrossTests), and TestDataPath lives under bin/ so it also survives BETWEEN runs —
+    // a fixed id collides with itself on the second fact AND on the second run
+    // ("Node already exists"). ExportImportRoundTripTest documents the same run-unique-id need.
+    private readonly string testAgentId = $"ThreadAgentIntegrationTestAgent-{Guid.NewGuid().AsString()}";
+    private const string AgentContextPath = "ACME/ProductLaunch";
+
     public ThreadAgentIntegrationTest(ITestOutputHelper output) : base(output) { }
 
     // Share Mesh/SP across [Fact]s â€” see MonolithMeshTestBase.ShareMeshAcrossTests.
@@ -135,6 +151,72 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
 
     #endregion
 
+    #region Own-agent fixture
+
+    /// <summary>
+    /// Seeds this class's own agent into the namespace the picker actually queries
+    /// (AgentPickerProjection.BuildAgentQuery → <c>namespace:ACME/Agent|…|Agent nodeType:Agent</c>).
+    /// Called once per [Fact], against the run-unique <see cref="testAgentId"/> — the create is NOT
+    /// idempotent (it throws "Node already exists"), which is why the id must not be a constant.
+    /// </summary>
+    private Task<MeshNode> SeedOwnAgent() =>
+        SeedTopLevel(MeshNode.FromPath($"ACME/Agent/{testAgentId}") with
+        {
+            NodeType = AgentNodeType.NodeType,
+            Name = testAgentId,
+            Content = new AgentConfiguration
+            {
+                Id = testAgentId,
+                Description = "Fixture agent owned by ThreadAgentIntegrationTest",
+            },
+        });
+
+    /// <summary>
+    /// Builds a chat client on the fixture context with THIS class's agent selected, and waits for
+    /// that agent to actually be in the picker's set — NOT merely for
+    /// <see cref="AgentChatClient.WhenInitialized"/> to fire once.
+    ///
+    /// That distinction is the second half of the flake. The synced agent query emits `Initial`
+    /// first, and Initial-with-0-agents is a legitimate steady state that deliberately fires
+    /// readiness (see the comment in <c>AgentChatClient.Initialize</c>: gating on count&gt;0 would
+    /// hang forever when no agents are configured). So `WhenInitialized.FirstAsync()` returns
+    /// before any agent has landed, and the very next line read an empty list. WhenInitialized
+    /// re-emits on every refresh, so filtering for our agent is the real ready-gate.
+    /// </summary>
+    private async Task<AgentChatClient> StartChatWithOwnAgent(string threadPath, CancellationToken ct)
+    {
+        await SeedOwnAgent();
+
+        var contextNode = await ReadNode(AgentContextPath).FirstAsync().ToTask(ct);
+        contextNode.Should().NotBeNull($"{AgentContextPath} node should exist in test data");
+
+        var agentChat = new AgentChatClient(Mesh.ServiceProvider);
+        // Context BEFORE Initialize: Initialize defaults its NodeType-search namespace from
+        // Context.Node.NodeType, so setting it first makes the query fully determined.
+        agentChat.SetContext(new AgentContext
+        {
+            Address = new Address("ACME", "ProductLaunch"),
+            Node = contextNode
+        });
+        agentChat.Initialize(AgentContextPath);
+
+        var agents = await agentChat.WhenInitialized
+            .SelectMany(c => Observable.FromAsync(c.GetOrderedAgentsAsync))
+            .Where(a => a.Any(x => x.Name == testAgentId))
+            .Timeout(TimeSpan.FromSeconds(30))
+            .FirstAsync()
+            .ToTask(ct);
+
+        agents.Should().Contain(a => a.Name == testAgentId,
+            "the test installs its own agent rather than depending on whatever the shared registry holds");
+
+        agentChat.SetThreadId(threadPath);
+        agentChat.SetSelectedAgent(testAgentId);
+        return agentChat;
+    }
+
+    #endregion
+
     #region End-to-End Integration Tests
 
     /// <summary>
@@ -178,24 +260,9 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             Content = userMessage
         });
 
-        // 3. Initialize AgentChatClient with context
-        var agentChat = new AgentChatClient(Mesh.ServiceProvider);
-        await agentChat.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(ct);
-
-        var contextNode = await ReadNode("ACME/ProductLaunch").FirstAsync().ToTask(ct);
-        contextNode.Should().NotBeNull("ACME/ProductLaunch node should exist in test data");
-
-        agentChat.SetContext(new AgentContext
-        {
-            Address = new Address("ACME", "ProductLaunch"),
-            Node = contextNode
-        });
-        agentChat.SetThreadId(threadPath);
-
-        // 4. Choose agent â€” first ordered agent is the best match for context
-        var agents = await agentChat.GetOrderedAgentsAsync();
-        agents.Should().NotBeEmpty("agents should be loaded from mesh test data");
-        agentChat.SetSelectedAgent(agents[0].Name);
+        // 3./4. Initialize AgentChatClient on the fixture context with THIS class's own agent
+        // selected (see StartChatWithOwnAgent — no dependency on the shared ambient registry).
+        var agentChat = await StartChatWithOwnAgent(threadPath, ct);
 
         // 5. Send message and collect streaming response
         var chatMessages = new ChatMessage[]
@@ -219,7 +286,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         var replyMessage = new ThreadMessage
         {
             Role = "assistant",
-            AuthorName = agents[0].Name,
+            AuthorName = testAgentId,
             Text = responseText,
             Timestamp = DateTime.UtcNow,
             Type = ThreadMessageType.AgentResponse
@@ -273,27 +340,12 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             Content = new Thread()
         });
 
-        // Initialize agent
-        var agentChat = new AgentChatClient(Mesh.ServiceProvider);
-        await agentChat.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(ct);
-
-        var contextNode = await ReadNode("ACME/ProductLaunch").FirstAsync().ToTask(ct);
-        // Parity with the streaming sibling above. Without this assertion a stalled read
-        // (which used to surface as a silent null) let the whole flow run against a NULL
-        // context and still pass every assertion below — the failure only appeared 60 s
-        // later as a dispose-time watchdog blaming the CancellationToken.
-        contextNode.Should().NotBeNull("ACME/ProductLaunch node should exist in test data");
-
-        agentChat.SetContext(new AgentContext
-        {
-            Address = new Address("ACME", "ProductLaunch"),
-            Node = contextNode
-        });
-        agentChat.SetThreadId(threadPath);
-
-        var agents = await agentChat.GetOrderedAgentsAsync();
-        agents.Should().NotBeEmpty();
-        agentChat.SetSelectedAgent(agents[0].Name);
+        // Initialize agent — this class's own, not the shared ambient registry. The context-node
+        // null-check that used to live here now sits in StartChatWithOwnAgent, so both flows keep
+        // it: without it a stalled read (a silent null) let the whole flow run against a NULL
+        // context and still pass every assertion below — the failure only appeared 60 s later as
+        // a dispose-time watchdog blaming the CancellationToken.
+        var agentChat = await StartChatWithOwnAgent(threadPath, ct);
 
         // Send via non-streaming path
         var chatMessages = new ChatMessage[]
@@ -344,20 +396,10 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             Content = new Thread()
         });
 
-        // Initialize agent
-        var agentChat = new AgentChatClient(Mesh.ServiceProvider);
-        await agentChat.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(ct);
-
-        var contextNode = await ReadNode("ACME/ProductLaunch").FirstAsync().ToTask(ct);
-
-        agentChat.SetContext(new AgentContext
-        {
-            Address = new Address("ACME", "ProductLaunch"),
-            Node = contextNode
-        });
-
-        var agents = await agentChat.GetOrderedAgentsAsync();
-        agentChat.SetSelectedAgent(agents[0].Name);
+        // Initialize agent — this class's own, not the shared ambient registry. This test used to
+        // index agents[0] with no NotBeEmpty guard at all, so an empty ambient registry surfaced as
+        // an IndexOutOfRangeException rather than a readable failure.
+        var agentChat = await StartChatWithOwnAgent(threadPath1, ct);
 
         // Send message on thread 1
         agentChat.SetThreadId(threadPath1);
