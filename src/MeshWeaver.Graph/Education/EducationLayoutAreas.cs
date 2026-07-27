@@ -254,8 +254,10 @@ public static class EducationLayoutAreas
 
     /// <summary>
     /// The course side-nav (table of contents) — the WHOLE course: every module as a collapsible group,
-    /// the current module expanded and the current page marked active, so the learner sees where they are
-    /// AND what else the course holds. Standalone area so it can also be embedded.
+    /// the current module expanded and the current position marked active, so the learner sees where they
+    /// are AND what else the course holds. The index is the SAME at every depth — drilling into a module,
+    /// an exercise index or a page inside the learner's own copy only moves the highlight, it never
+    /// re-scopes the rail. Standalone area so it can also be embedded.
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> CourseNav(LayoutAreaHost host, RenderingContext ctx)
@@ -469,7 +471,9 @@ public static class EducationLayoutAreas
     /// <param name="ResolveFromPath">The source path to run <see cref="EnsurePersonalCopy"/> on when clicked
     /// (set only when <paramref name="Href"/> is null); <c>null</c> together with a null Href means the entry
     /// is listed but not navigable — the rail shows the exercise exists without ever linking the template.</param>
-    /// <param name="IsActive">Whether this entry is the page currently being read.</param>
+    /// <param name="IsActive">Whether this entry is where the learner currently stands — the page being read,
+    /// or (when that page is not itself a rail entry) the deepest entry containing it. See
+    /// <see cref="ResolveActivePath"/>.</param>
     /// <param name="IsExercise">Whether this entry is an exercise (personal-copy target) rather than a page.</param>
     /// <param name="Icon">The node's icon, or null.</param>
     public sealed record CourseNavLink(
@@ -484,8 +488,9 @@ public static class EducationLayoutAreas
     /// <summary>One module of the course rail: a collapsible group of page + exercise links.</summary>
     /// <param name="Title">The module's name (the group heading).</param>
     /// <param name="Path">The module's path in the central course.</param>
-    /// <param name="Expanded">Whether the group renders expanded — true only for the module being read, so a
-    /// long course stays scannable.</param>
+    /// <param name="Expanded">Whether the group renders expanded — true only for the module the learner is
+    /// inside (at ANY depth below it), so a long course stays scannable. Collapsing the others hides links,
+    /// never modules: the group is still there and one click away.</param>
     /// <param name="Links">The module home, its pages, then its exercises (each ordered by Order then Name).</param>
     public sealed record CourseNavModule(
         string Title,
@@ -511,15 +516,21 @@ public static class EducationLayoutAreas
     /// <summary>
     /// Builds the whole course index from one <c>scope:subtree</c> query result. Pure and total:
     /// <list type="bullet">
-    ///   <item>EVERY module of the course is listed (a direct child that has children), ordered by
-    ///   <see cref="MeshNode.Order"/> then name; a childless direct child is a course-level page.</item>
-    ///   <item>Only the module containing the current page is <see cref="CourseNavModule.Expanded"/>, and the
-    ///   current page's link is <see cref="CourseNavLink.IsActive"/> — computed on the CENTRAL path, so it
-    ///   holds while the learner reads their own copy.</item>
+    ///   <item><b>The index does not depend on where the learner stands.</b> EVERY module of the course is
+    ///   listed (a direct child that has children), ordered by <see cref="MeshNode.Order"/> then name, with
+    ///   the same links under it, whatever <paramref name="currentPath"/> is — course root, module page,
+    ///   a page inside a module, a module's <see cref="ExerciseSubNamespace"/> index, an exercise inside
+    ///   <c>{viewer}/…</c>, or anything deeper. Navigating in only moves the <em>markers</em>
+    ///   (<see cref="CourseNavLink.IsActive"/> / <see cref="CourseNavModule.Expanded"/>); it never re-scopes
+    ///   or shrinks the rail.</item>
+    ///   <item>Only the module containing the current page is <see cref="CourseNavModule.Expanded"/>, and
+    ///   exactly one entry is <see cref="CourseNavLink.IsActive"/> — the page itself, or the deepest entry
+    ///   containing it when the page is not a rail entry of its own (<see cref="ResolveActivePath"/>). Both
+    ///   are computed on the CENTRAL path, so they hold while the learner reads their own copy.</item>
     ///   <item>Exercises (<see cref="IsExercise"/>, including everything in a module's
     ///   <see cref="ExerciseSubNamespace"/> folder) link into the learner's own copy: a direct href when the
     ///   copy exists (<paramref name="personalPaths"/>), otherwise a resolve-or-copy click. NEVER the
-    ///   template.</item>
+    ///   template — at course level too, where a childless exercise is still an exercise and not a page.</item>
     /// </list>
     /// </summary>
     /// <param name="coursePath">The central course root (see <see cref="ResolveCourseRoot"/>).</param>
@@ -544,7 +555,7 @@ public static class EducationLayoutAreas
             coursePath,
             LearnHref(coursePath),
             null,
-            string.Equals(current, coursePath, StringComparison.Ordinal),
+            false,
             false,
             root?.Icon);
 
@@ -556,16 +567,81 @@ public static class EducationLayoutAreas
             var childPages = SelectCoursePages(child.Path, mainNodes);
             if (childPages.Count == 0)
             {
-                // A leaf directly under the course — a cover/outline page, not a module.
-                pages.Add(PageLink(child, current));
+                // A leaf directly under the course. Usually a cover/outline page — but an EXERCISE leaf
+                // (by node type, or a course-level Exercise/ folder that holds nothing) is an exercise
+                // wherever it sits, so it resolves into the learner's copy instead of becoming a plain page
+                // link at the template. That is the one thing the rail never emits.
+                pages.Add(IsExercise(child) || IsExerciseSegment(LastSegment(child.Path))
+                    ? ExerciseLink(child, coursePath, viewer, personalPaths)
+                    : PageLink(child));
                 continue;
             }
 
             modules.Add(BuildModule(child, childPages, coursePath, current, viewer, mainNodes, personalPaths));
         }
 
-        return new CourseNavModel(coursePath, home, pages, modules);
+        // The index above is built WITHOUT any position marker — it is the same for every page of the course.
+        // Only now is "you are here" resolved and stamped onto exactly one entry, so drilling down can move
+        // the highlight but can never re-scope or shrink the rail.
+        return MarkActive(new CourseNavModel(coursePath, home, pages, modules), current);
     }
+
+    /// <summary>
+    /// Which rail entry marks "you are here": the entry whose path IS the current page, or — when that page
+    /// is not a rail entry of its own — the DEEPEST entry that contains it. That fallback is what makes the
+    /// rail work at any depth: a module's <see cref="ExerciseSubNamespace"/> index page (whose own entry is
+    /// replaced by the exercises it holds, e.g. <c>{course}/{module}/Exercises</c>), a sub-page below the
+    /// level the rail lists, or a page inside an exercise all highlight the nearest thing that IS listed
+    /// instead of leaving the learner with no position at all. Returns <c>null</c> when nothing contains the
+    /// page. Pure.
+    /// </summary>
+    /// <param name="currentPath">The CENTRAL path of the page being read (see <see cref="ToSourcePath"/>).</param>
+    /// <param name="entryPaths">The <see cref="CourseNavLink.SourcePath"/> of every entry the rail emits.</param>
+    public static string? ResolveActivePath(string currentPath, IEnumerable<string> entryPaths)
+    {
+        string? deepestAncestor = null;
+        foreach (var entry in entryPaths)
+        {
+            if (string.IsNullOrEmpty(entry))
+                continue;
+            if (string.Equals(entry, currentPath, StringComparison.Ordinal))
+                return entry;                                       // an exact entry always wins
+            if (currentPath.StartsWith(entry + "/", StringComparison.Ordinal)
+                && (deepestAncestor is null || entry.Length > deepestAncestor.Length))
+                deepestAncestor = entry;
+        }
+        return deepestAncestor;
+    }
+
+    // Stamps IsActive onto the single entry ResolveActivePath picks. A post-pass over the finished index
+    // rather than a flag threaded through the build, so there is exactly ONE rule for "where am I" and the
+    // index itself is provably independent of the current page.
+    private static CourseNavModel MarkActive(CourseNavModel model, string current)
+    {
+        var active = ResolveActivePath(current, EnumerateLinks(model).Select(l => l.SourcePath));
+        if (active is null)
+            return model;
+
+        CourseNavLink Mark(CourseNavLink link)
+            => string.Equals(link.SourcePath, active, StringComparison.Ordinal)
+                ? link with { IsActive = true }
+                : link;
+
+        return model with
+        {
+            Home = Mark(model.Home),
+            Pages = model.Pages.Select(Mark).ToList(),
+            Modules = model.Modules
+                .Select(m => m with { Links = m.Links.Select(Mark).ToList() })
+                .ToList(),
+        };
+    }
+
+    /// <summary>Every link the rail emits, in render order — the course home, its course-level pages, then
+    /// each module's links. The set a caller checks invariants over (position, never-link-the-template).</summary>
+    /// <param name="model">The course index.</param>
+    public static IEnumerable<CourseNavLink> EnumerateLinks(CourseNavModel model)
+        => new[] { model.Home }.Concat(model.Pages).Concat(model.Modules.SelectMany(m => m.Links));
 
     private static CourseNavModule BuildModule(
         MeshNode module,
@@ -579,9 +655,10 @@ public static class EducationLayoutAreas
         var title = module.Name ?? module.Id;
         var links = new List<CourseNavLink>
         {
-            // Module home first (active when we're on the module root itself).
-            new(title, module.Path, LearnHref(module.Path), null,
-                string.Equals(current, module.Path, StringComparison.Ordinal), false, module.Icon)
+            // Module home first. It is also the entry that carries the highlight for any page of the module
+            // the rail does not list individually — the module's Exercise/ index, or a deeper sub-page
+            // (MarkActive / ResolveActivePath).
+            new(title, module.Path, LearnHref(module.Path), null, false, false, module.Icon)
         };
 
         // Exercises are collected separately so they always land at the END of the module — the reading
@@ -597,18 +674,18 @@ public static class EducationLayoutAreas
                 // folder at all — it IS the module's single exercise.
                 var contained = SelectCoursePages(page.Path, mainNodes);
                 exercises.AddRange(contained.Count > 0
-                    ? contained.Select(x => ExerciseLink(x, coursePath, current, viewer, personalPaths))
-                    : [ExerciseLink(page, coursePath, current, viewer, personalPaths)]);
+                    ? contained.Select(x => ExerciseLink(x, coursePath, viewer, personalPaths))
+                    : [ExerciseLink(page, coursePath, viewer, personalPaths)]);
                 continue;
             }
 
             if (IsExercise(page))
             {
-                exercises.Add(ExerciseLink(page, coursePath, current, viewer, personalPaths));
+                exercises.Add(ExerciseLink(page, coursePath, viewer, personalPaths));
                 continue;
             }
 
-            links.Add(PageLink(page, current));
+            links.Add(PageLink(page));
         }
 
         links.AddRange(exercises);
@@ -621,9 +698,8 @@ public static class EducationLayoutAreas
         return new CourseNavModule(title, module.Path, expanded, links);
     }
 
-    private static CourseNavLink PageLink(MeshNode page, string current)
-        => new(page.Name ?? page.Id, page.Path, LearnHref(page.Path), null,
-            string.Equals(current, page.Path, StringComparison.Ordinal), false, page.Icon);
+    private static CourseNavLink PageLink(MeshNode page)
+        => new(page.Name ?? page.Id, page.Path, LearnHref(page.Path), null, false, false, page.Icon);
 
     // An exercise entry. NEVER links the template: it points at the learner's own copy when that copy
     // exists, and otherwise carries the resolve-or-copy source for the click (the same EnsurePersonalCopy
@@ -631,7 +707,6 @@ public static class EducationLayoutAreas
     private static CourseNavLink ExerciseLink(
         MeshNode exercise,
         string coursePath,
-        string current,
         string? viewer,
         IReadOnlySet<string> personalPaths)
     {
@@ -642,7 +717,7 @@ public static class EducationLayoutAreas
             exercise.Path,
             hasCopy ? LearnHref(personal!) : null,
             hasCopy || personal is null ? null : exercise.Path,
-            string.Equals(current, exercise.Path, StringComparison.Ordinal),
+            false,
             true,
             exercise.Icon);
     }
