@@ -1053,6 +1053,37 @@ public class MessageService : IMessageService
                         cbEx => logger.LogWarning(cbEx,
                             "ExceptionCallback for ExecutionRequest itself threw in {Address}; original execution error: {Original}",
                             Address, e.Message));
+                else if (HubDisposingException.IsHubDisposal(e))
+                {
+                    // 🚨 TRANSIENT, not a fault: the handler needed machinery a disposing hub
+                    // can no longer create (hosted-hub creation is frozen from the first
+                    // instant of Dispose, and the freeze CASCADES to the whole subtree — so
+                    // this fires while RunLevel can still read Started and the intake gate at
+                    // ScheduleNotify, which only rejects from DisposeHostedHubs on, has let the
+                    // message through). Canonical case: a SubscribeRequest for a layout area
+                    // landing in the overlay self-heal's recycle window — LayoutAreaHost's ctor
+                    // could not build its SynchronizationStream.
+                    //
+                    // It MUST reach the sender as ErrorType.ShuttingDown, exactly like the
+                    // intake/deferred NACKs (#672): the address is about to REACTIVATE, so the
+                    // honest answer is "ask again". Reported as Unknown it was terminal — the
+                    // subscriber's sync stream OnError'd, killing the keep-alive + change-feed
+                    // resubscribe latch that would have rehydrated it after the recycle, and
+                    // the page stayed dead (it surfaced as a DeliveryFailureException wrapping
+                    // an NRE before SynchronizationStream's ctor started refusing).
+                    //
+                    // Debug, not Error: a recycle race is routine and self-healing; logging it
+                    // at Error paged operators for normal teardown traffic and bled Loki ingest
+                    // on every recycle. A genuine failure still logs Error below.
+                    //
+                    // Message TYPE + id, never LogText(delivery): serializing the payload for a
+                    // Debug line is evaluated even when Debug is off and was itself a hot-path
+                    // regression (the LogText storm, core #608).
+                    logger.LogDebug(e,
+                        "{MessageType} (ID: {MessageId}) raced hub disposal in {Address} after {Duration}ms — NACKing as transient (ShuttingDown).",
+                        messageTypeName, delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
+                    ReportFailure(delivery.Failed(e.ToString()), ErrorType.ShuttingDown);
+                }
                 else
                 {
                     logger.LogError("An exception occurred during the processing of {Delivery} after {Duration}ms. Exception: {Exception}. Address: {Address}.",

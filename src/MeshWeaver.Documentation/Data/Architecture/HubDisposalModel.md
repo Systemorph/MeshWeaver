@@ -290,8 +290,47 @@ order of how early they stop the work:
 > **The principle:** a teardown is a terminal signal that must propagate *outward* to
 > producers — silently dropping their writes leaves them spinning, and letting their write
 > throw kills the process. Error the write, let the producer stop, and make the drop layers
-> below it inert. Repros: `DeadStreamSafetyTest.Update_OnDeadStream_SignalsDisposedToProducer`
+> below it inert. Repros: `DeadStreamSafetyTest.Update_OnDisposedStream_SignalsDisposedToProducer`
 > and `Post_OnDisposingHost_DropsWithoutInvokingPipeline`.
+
+## The creation window: a disposing hub accepts work it can no longer perform
+
+There is a gap the phases above open by design, and every stream-creating request falls
+into it:
+
+- **Hosted-hub creation is frozen on the FIRST statement of `Dispose()`**
+  (`HostedHubsCollection.CloseCreation`), *before* the `ShutdownRequest` that moves
+  `RunLevel` off `Started` is even posted — and the freeze **cascades through the whole
+  subtree**, so a child hub is frozen while its own `RunLevel` still reads `Started`.
+- **Message intake stays open until `DisposeHostedHubs`** — `ScheduleNotify`'s shutdown
+  gate. The entire `Quiescing` drain (up to `QuiesceTimeout`) sits inside the gap.
+
+So from the first instant of disposal until several phases later the hub **accepts requests
+it structurally cannot serve**. A `SubscribeRequest` for a layout area is the canonical one:
+serving it means constructing a `SynchronizationStream`, and a synchronization stream owns a
+hosted sub-hub.
+
+**The rule: refuse, typed and transient — never fabricate a half-built object.**
+`SynchronizationStream`'s constructor throws `HubDisposingException` (an
+`ObjectDisposedException`, so teardown-aware callers such as Blazor's
+`catch (ObjectDisposedException)` around `BindStream()` keep working), and
+`JsonSynchronizationStream.CreateExternalClient` throws the same type for the same reason.
+`MessageService` then classifies any handler exception that *is or wraps* one as
+`ErrorType.ShuttingDown` — the same transient "the address may reactivate, ask again" answer
+the intake and deferred-queue NACKs give — so `SynchronizationStream`'s keep-alive and
+change-feed resubscribe latch **stay armed** and the subscriber rehydrates after the recycle.
+
+> The predecessor built a "dead stream" here instead: `isDisposed`, completed store, and
+> `Hub = null!`, with a comment requiring every consumer to go through `TryGetActiveHub`. No
+> consumer did — `grep -rn TryGetActiveHub src` matched only the stream itself, against ~96
+> sites dereferencing the interface's **non-nullable** `Hub` — and `ISynchronizationStream`
+> exposes no liveness member for a consumer to check even if it wanted to. The result was a
+> `NullReferenceException` in `LayoutAreaHost`'s constructor whenever a page subscribed during
+> a recycle (the overlay self-heal posts a self-`DisposeRequest`), surfacing to the subscriber
+> as a **terminal** `DeliveryFailure`. Deterministic repros:
+> `SubscribeDuringRecycleTest` (Layout.Test, end-to-end) and
+> `HubDisposalFailureClassificationTest` (Messaging.Hub.Test, the classification, including
+> the reflection-wrapped case).
 
 ---
 
