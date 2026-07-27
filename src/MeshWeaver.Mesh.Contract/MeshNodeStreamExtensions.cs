@@ -1,4 +1,5 @@
-﻿using System.Reactive.Disposables;
+﻿using System.Diagnostics;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -1341,12 +1342,19 @@ public static class MeshNodeStreamExtensions
     /// click actions that just need the current value once.
     ///
     /// <para>
-    /// Emits <c>null</c> on timeout, on routing failure (the node does not exist â€”
-    /// routing returns DeliveryFailure with NotFound; routing NEVER falls back to
-    /// an ancestor, so a returned non-null node is always the requested path), or
-    /// when the response carries no data. Failures during deserialisation also fall
-    /// through as <c>null</c>; turn on debug-level logging on this type to see the
+    /// Emits <c>null</c> when the node is genuinely absent: routing failure (routing
+    /// returns DeliveryFailure with NotFound; routing NEVER falls back to an ancestor, so a
+    /// returned non-null node is always the requested path), a read-validator verdict that
+    /// hides the node, or a response carrying no data. Failures during deserialisation also
+    /// fall through as <c>null</c>; turn on debug-level logging on this type to see the
     /// underlying exception.
+    /// </para>
+    ///
+    /// <para>
+    /// 🚨 A <b>timeout is NOT</b> one of those: by default it surfaces as a
+    /// <see cref="TimeoutException"/> naming the path, the elapsed time and the hub's
+    /// in-flight snapshot (see <paramref name="onTimeout"/>). "The read gave up" and
+    /// "the node does not exist" are different facts and callers get to tell them apart.
     /// </para>
     ///
     /// <para>
@@ -1355,11 +1363,24 @@ public static class MeshNodeStreamExtensions
     /// subscribed (no <c>.Take(1)</c>). See <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </para>
     /// </summary>
+    /// <param name="hub">The hub that posts the read.</param>
+    /// <param name="path">The mesh path to read.</param>
+    /// <param name="timeout">Wall-clock budget for the read; defaults to 10 seconds.</param>
+    /// <param name="onTimeout">
+    /// What happens when the budget elapses. Defaults to
+    /// <see cref="ReadTimeoutBehavior.Throw"/>. Pass <see cref="ReadTimeoutBehavior.EmitNull"/>
+    /// ONLY where "indeterminate ⇒ treat as absent" is the documented, deliberate contract of
+    /// the caller (a cosmetic fallback, an idempotent-upsert existence probe) — never to
+    /// silence a stall you have not reasoned about.
+    /// </param>
     public static IObservable<MeshNode?> GetMeshNode(this IMessageHub hub, string path,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        ReadTimeoutBehavior onTimeout = ReadTimeoutBehavior.Throw)
         => Observable.Create<MeshNode?>(observer =>
         {
-            var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(10));
+            var budget = timeout ?? TimeSpan.FromSeconds(10);
+            var started = Stopwatch.StartNew();
+            var cts = new CancellationTokenSource(budget);
             var emitted = 0;
             // Inner hub.Observe subscription tracker. Captured so the returned
             // disposable can tear it down â€” without this, the outer CTS-timeout
@@ -1384,7 +1405,66 @@ public static class MeshNodeStreamExtensions
                 observer.OnError(error);
             }
 
-            cts.Token.Register(() => EmitOnce(null));
+            // ⏱️ TIMEOUT IS NOT "NOT FOUND". A read that gave up knows nothing about the node;
+            // collapsing that into the same `null` the not-found path emits made every caller
+            // silently substitute "missing" for "the mesh stalled" — and made the stall itself
+            // invisible (a Debug log nobody reads). Surface it, loudly, with the hub's own
+            // in-flight snapshot so the next occurrence says WHY: our GetDataRequest still
+            // outstanding = the reply never came (dead per-node hub / dropped response);
+            // the hub Executing(...) something else for seconds = action-block congestion or
+            // ThreadPool starvation. Callers that genuinely want "indeterminate ⇒ absent"
+            // opt in explicitly via ReadTimeoutBehavior.EmitNull — and even they get the
+            // warning below, so no stall is ever fully silent.
+            cts.Token.Register(() =>
+            {
+                if (Volatile.Read(ref emitted) != 0) return;
+                var elapsed = started.Elapsed;
+                string diagnostics;
+                try { diagnostics = hub.GetPendingRequestDiagnostics(); }
+                catch (Exception diagEx) { diagnostics = $"<diagnostics unavailable: {diagEx.GetType().Name}>"; }
+                // …and the OWNER's state, which is what actually decides the verdict. The reader's
+                // snapshot alone proves only that the reader is innocent (idle queues + our request
+                // still pending = "the reply never came"), leaving "owner never activated" and
+                // "owner answered, reply lost" indistinguishable. HostedHubCreation.Never is a pure
+                // probe — a dictionary lookup that must NEVER activate the hub as a side effect of
+                // diagnosing it.
+                string targetState;
+                try
+                {
+                    targetState = string.Equals(hub.Address.ToString(), path, StringComparison.Ordinal)
+                        ? "Target: this hub itself."
+                        : hub.GetHostedHub(new Address(path), HostedHubCreation.Never) is { } owner
+                            ? $"Target: {owner.GetPendingRequestDiagnostics()}"
+                            : $"Target: NO LOCAL HUB at '{path}' — it never activated here (or is owned "
+                              + "by another silo), so no reply was ever going to be produced.";
+                }
+                catch (Exception targetEx)
+                {
+                    targetState = $"<target diagnostics unavailable: {targetEx.GetType().Name}>";
+                }
+                var message =
+                    $"GetMeshNode('{path}') timed out after {elapsed.TotalSeconds:F1}s "
+                    + $"(budget {budget.TotalSeconds:F0}s) — the owning per-node hub never answered the "
+                    + $"GetDataRequest. This is NOT 'node not found'. Reader: {diagnostics} {targetState}";
+                // Best-effort log. This runs on the CTS timer thread and the hub (with its
+                // ServiceProvider) may already be torn down — an exception escaping here would
+                // be an unobserved fault on a pool thread, i.e. exactly the class of failure
+                // this change exists to remove. The emission below must happen regardless.
+                try
+                {
+                    hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode")
+                        ?.LogWarning("{Message}", message);
+                }
+                catch
+                {
+                    // Logging must never mask the timeout it is reporting.
+                }
+                if (onTimeout == ReadTimeoutBehavior.EmitNull)
+                    EmitOnce(null);
+                else
+                    EmitError(new TimeoutException(message));
+            });
 
             try
             {

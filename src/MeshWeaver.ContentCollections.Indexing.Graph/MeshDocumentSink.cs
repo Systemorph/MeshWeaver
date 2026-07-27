@@ -90,7 +90,7 @@ public sealed class MeshDocumentSink(IMessageHub hub) : IDocumentSink
         // One-shot request/response read of the node at the deterministic path; null (not found,
         // timeout, routing failure) counts as absent — per the interface contract, indeterminate
         // leans towards a heal because the write is an idempotent upsert.
-        return hub.GetMeshNode(path, ExistsProbeTimeout)
+        return hub.GetMeshNode(path, ExistsProbeTimeout, ReadTimeoutBehavior.EmitNull)
             .Select(node =>
             {
                 if (node is not null)
