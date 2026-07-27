@@ -40,6 +40,22 @@ public static class JsonSynchronizationStream
     // System-bypass short-circuit.
     private const string SystemUserId = "system-security";
 
+    /// <summary>
+    /// How long a freshly subscribed stream may stay EMPTY before the subscribe is re-sent.
+    /// Well above a warm cache hit or one cold storage read, and far below the heartbeat — the
+    /// point is to stop a lost first delivery from costing a full
+    /// <see cref="SyncStreamOptions.HeartbeatInterval"/> (45s, measured on memex 2026-07-27).
+    /// </summary>
+    internal static readonly TimeSpan MissingInitialProbe = TimeSpan.FromSeconds(4);
+
+    /// <summary>
+    /// How many times a silent stream re-sends its subscribe before giving up. Bounded on purpose:
+    /// this nudges a MISSED WAKEUP, it is not a retry loop. An owner that genuinely cannot answer
+    /// faults the stream through the subscribe's own error path; one that is merely slow satisfies
+    /// the probe with its first delivery.
+    /// </summary>
+    internal const int MaxMissingInitialResubscribes = 3;
+
     // Hub-shaped principals leak from the workspace emission scheduler when an
     // upstream notification fires under a hub's own AsyncLocal (e.g. a `sync/{guid}`
     // inner sync hub stamped during its own initialization). Those addresses
@@ -458,6 +474,59 @@ public static class JsonSynchronizationStream
                             });
                 }
             }
+
+            // 🚨 THE LOST INITIAL. Everything above recovers a stream whose OWNER announced
+            // something (change feed → latch). Nothing recovers a stream whose owner ACKED the
+            // SubscribeRequest and then never delivered the first DataChangedEvent: no announce
+            // ever comes, so the latch never trips and the read simply waits — in practice until
+            // the 45s heartbeat happens to shake something loose.
+            //
+            // memex, 2026-07-27, measured off the compile activity log: source discovery took
+            // 45.20s on a healthy mesh and 90.19s (two misses) during the outage, against 2.6s of
+            // Roslyn — 97% of every compile was a lost Initial waiting for a heartbeat. Types then
+            // crossed the 60s settle window and every plugin root served the "did not settle"
+            // fallback. The same silence keeps an instance's NodeType stream from ever seeing a
+            // fresh build, which is why the overlay self-heal had nothing to fire on and only a
+            // process restart cleared it.
+            //
+            // So: if NOTHING has arrived shortly after subscribing, re-send the SubscribeRequest
+            // through the SAME proven Resubscribe path. Bounded (a few attempts) — this is a
+            // missing-wakeup nudge, not a retry storm; a genuinely absent owner already faults the
+            // stream above, and a slow-but-alive owner satisfies the probe on its first delivery.
+            var initialArrived = 0;
+            keepAlive.Add(reduced.Subscribe(
+                ci =>
+                {
+                    // Same shape as the version tracker below: TReduced is unconstrained, so read
+                    // the value as object before null-testing it.
+                    object? value = ci is null ? null : ci.Value;
+                    if (value is not null)
+                        Interlocked.Exchange(ref initialArrived, 1);
+                },
+                // Passive tracker (see the version tracker below): never rethrow on the emission
+                // thread — the stream's real subscribers own error propagation.
+                _ => { }));
+
+            // Bounded by Take(): the timer completes and self-disposes after the last attempt, so
+            // this can never become the process-global TimerQueue root that the heartbeat comment
+            // below documents (the MeshHub_IsCollected leak).
+            var initialWatchdog = new System.Reactive.Disposables.SingleAssignmentDisposable();
+            initialWatchdog.Disposable = Observable
+                .Timer(MissingInitialProbe, MissingInitialProbe)
+                .Take(MaxMissingInitialResubscribes)
+                .Subscribe(
+                    _ =>
+                    {
+                        if (Interlocked.CompareExchange(ref initialArrived, 0, 0) != 0)
+                        {
+                            initialWatchdog.Dispose();
+                            return;
+                        }
+                        Resubscribe("acked the subscribe but delivered no initial snapshot");
+                    },
+                    _ => initialWatchdog.Dispose(),
+                    () => initialWatchdog.Dispose());
+            keepAlive.Add(initialWatchdog);
 
             var heartbeatInterval = hub.ServiceProvider
                 .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
