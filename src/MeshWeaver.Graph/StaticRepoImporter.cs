@@ -17,8 +17,10 @@ namespace MeshWeaver.Graph;
 
 /// <summary>Outcome of a <see cref="StaticRepoImporter.Import"/> run. <paramref name="Preserved"/> is
 /// the number of live nodes a two-way import kept because they were newer on the server (see
-/// <see cref="ImportConflictPolicy"/>) — non-zero means the mesh is now AHEAD of the repo, so the
-/// caller must NOT advance its last-sync baseline until those edits are committed back.</summary>
+/// <see cref="ImportConflictPolicy"/>) — BOTH kinds: kept-not-overwritten (the repo's copy differs) and
+/// kept-not-pruned (the repo has no copy at all — a server-side addition). Non-zero means the mesh is
+/// now AHEAD of the repo, so the caller must NOT advance its last-sync baseline until those changes are
+/// committed back.</summary>
 public sealed record StaticRepoImportResult(string Partition, string Fingerprint, string Outcome, int Count = 0, int Preserved = 0);
 
 /// <summary>
@@ -858,8 +860,27 @@ public static class StaticRepoImporter
                     // Two-way: never prune a node CREATED/changed on the server since the last sync. It
                     // isn't in the repo yet, but it's a local addition to be committed back — not a stale
                     // extra to remove. A forced import prunes it (the repo state wins).
+                    // 🚨 A node KEPT here counts as PRESERVED exactly like a kept upsert conflict — it is
+                    // the same statement: "this local change is not in the repo yet, so the mesh is AHEAD".
+                    // Reporting 0 here let GitHubSyncService.ReimportAtCommit advance the sync baseline
+                    // (LastSyncedAt) past the node it had just protected, so on the NEXT import the node was
+                    // no longer "newer on the server" and got PRUNED — the server addition silently deleted
+                    // one cycle later, which is precisely what that baseline guard exists to prevent.
+                    // Deterministic repro: TwoWaySyncTest.TwoWay_ServerAddition_SurvivesEveryLaterRepoPush.
+                    var keptFromPrune = Array.Empty<MeshNode>();
                     if (policy is { PreserveServerNewer: true, Force: false, Since: { } pruneSince })
+                    {
+                        keptFromPrune = toPrune.Where(n => n.LastModified > pruneSince).ToArray();
                         toPrune = toPrune.Where(n => n.LastModified <= pruneSince).ToArray();
+                        foreach (var kept in keptFromPrune)
+                        {
+                            logger?.LogInformation(
+                                "[StaticRepoImport] {Partition}: two-way — keeping server-added {Path} (not pruned).",
+                                source.Partition, kept.Path);
+                            NodeTypeCompilationActivity.AppendLog(hub, activityPath,
+                                $"↩ Kept {kept.Path} (added on the server — commit to sync it back).", logger!);
+                        }
+                    }
 
                     var pruned = toPrune.Count == 0
                         ? Observable.Return(0)
@@ -900,8 +921,10 @@ public static class StaticRepoImporter
                             // full diagnostic log (no torn "Succeeded but the ⚠ lines didn't land yet").
                             var failed = count.Failed;
                             var status = failed > 0 ? ActivityStatus.Warning : ActivityStatus.Succeeded;
-                            // Two-way preserved local edits (kept, not overwritten) noted only when any.
-                            var preservedNote = count.Preserved > 0 ? $", kept {count.Preserved} local edit(s)" : "";
+                            // Two-way preserved local changes: kept-not-overwritten (upsert conflicts) PLUS
+                            // kept-not-pruned (server additions). Both leave the mesh ahead of the repo.
+                            var preserved = count.Preserved + keptFromPrune.Length;
+                            var preservedNote = preserved > 0 ? $", kept {preserved} local change(s)" : "";
                             var summary = failed > 0
                                 ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}, pruned {prunedCount}, synced {contentCount} content file(s)."
                                 : $"Imported {count.Imported} node(s){preservedNote}, pruned {prunedCount}, synced {contentCount} content file(s).";
@@ -918,7 +941,7 @@ public static class StaticRepoImporter
                                 "[StaticRepoImport] {Partition}: imported {Count}, failed {Failed}, pruned {Pruned}, content {Content} at {Fingerprint}.",
                                 source.Partition, count.Imported, failed, prunedCount, contentCount, fingerprint);
                             return new StaticRepoImportResult(source.Partition, fingerprint,
-                                failed > 0 ? "ImportedWithErrors" : "Imported", count.Imported, count.Preserved);
+                                failed > 0 ? "ImportedWithErrors" : "Imported", count.Imported, preserved);
                         });
                         })));
                 });
