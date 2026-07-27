@@ -232,6 +232,17 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     string GetDisposalDiagnostics();
 
     /// <summary>
+    /// Single-line snapshot of THIS hub's in-flight state — queue depths, the message
+    /// currently executing, and the outstanding response callbacks (request type, target
+    /// and age). Unlike <see cref="GetDisposalDiagnostics"/> it does NOT walk the hosted-hub
+    /// tree, so it is cheap enough to attach to a live request timeout: a read that gave up
+    /// can say whether its own request is still outstanding (reply never arrived), whether
+    /// the hub is stuck executing something else, or whether the queue is backed up.
+    /// </summary>
+    /// <returns>A one-line diagnostic string; never null.</returns>
+    string GetPendingRequestDiagnostics();
+
+    /// <summary>
     /// True if this hub or any hosted hub hit Quiescing-phase timeout — i.e. there
     /// were Observe-registered response callbacks still pending when the dispose
     /// drain budget elapsed. Tests should treat this as a dispose failure: a

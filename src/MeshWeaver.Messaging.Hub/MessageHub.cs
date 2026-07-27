@@ -1565,6 +1565,36 @@ public sealed class MessageHub : IMessageHub
     }
 
     /// <summary>
+    /// Single-line snapshot of THIS hub's in-flight state — queue depths, the message
+    /// currently executing on the action block, and the outstanding response callbacks.
+    /// Deliberately NOT recursive (unlike <see cref="GetDisposalDiagnostics"/>, which walks
+    /// the whole hosted-hub tree): this one is cheap enough to attach to a live request
+    /// timeout on a portal mesh hub that hosts hundreds of per-node hubs.
+    /// </summary>
+    /// <returns>A one-line diagnostic string; never null.</returns>
+    public string GetPendingRequestDiagnostics()
+    {
+        var snapshot = (messageService is MessageService ms)
+            ? ms.GetQueueSnapshot()
+            : (Buffer: -1, Deferred: -1, Execution: -1, OpenGates: -1, DeliveryCompleted: false,
+               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L);
+        var pending = SnapshotPendingCallbacks();
+        var sb = new System.Text.StringBuilder();
+        sb.Append("Hub ").Append(Address)
+          .Append(" RunLevel=").Append(RunLevel)
+          .Append(" Queue(buffer=").Append(snapshot.Buffer)
+          .Append(",deferred=").Append(snapshot.Deferred)
+          .Append(",exec=").Append(snapshot.Execution)
+          .Append(')');
+        if (snapshot.CurrentMessage != null)
+            sb.Append(" Executing(").Append(snapshot.CurrentMessage)
+              .Append(", ").Append(snapshot.CurrentMessageElapsedMs).Append("ms)");
+        sb.Append(" PendingCallbacks=").Append(pending.Length)
+          .Append('[').Append(FormatPendingCallbacks(pending)).Append(']');
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Hard cap on hosted-hub tree recursion. Real hierarchies are at most a few
     /// levels deep; anything beyond this is almost certainly a cycle (e.g. hub A
     /// hosts hub B whose configuration re-creates A). Without this guard the
