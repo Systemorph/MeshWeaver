@@ -55,6 +55,19 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     private bool _disposed;
     private readonly CompositeDisposable _pendingFlushSubscriptions = new();
 
+    /// <summary>
+    /// Severable indirection between the debounce <see cref="Timer"/>'s callback and this source.
+    /// The callback captures the CELL, never <c>this</c>; teardown nulls <see cref="Target"/>, so a
+    /// timer the TimerQueue is still holding after <c>Dispose</c> can no longer reach the hub graph.
+    /// See the note in <c>ResetDebounceTimer</c>.
+    /// </summary>
+    private sealed class FlushCell
+    {
+        public MeshNodeTypeSource? Target;
+    }
+
+    private readonly FlushCell _flushCell = new();
+
     // Paths just deleted via IDataChangeNotifier — short-window block list so a
     // workspace UpdateImpl that fires AFTER storage.Delete (per-node hub starting
     // up to handle a recursive delete sees the node in its initial instances
@@ -131,6 +144,8 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // GC-root: TimerQueue → TimerQueueTimer → TimerCallback → MeshNodeTypeSource
         // → Workspace → MessageHub). The async FlushOnDispose re-arm guard alone was
         // too late — UpdateImpl re-armed the timer before the async phase ran.
+        _flushCell.Target = this;
+
         workspace.Hub.RegisterForDisposal(_ =>
         {
             lock (_timerLock)
@@ -138,6 +153,11 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 _disposed = true;
                 _debounceTimer?.Dispose();
                 _debounceTimer = null;
+                // Sever the cell too: Timer.Dispose does not evict a one-shot timer from the
+                // TimerQueue before its due time, so the queue can still hold the callback's
+                // state for up to DebounceInterval. Nulling the target makes that residue
+                // unable to reach this source (and through it the whole hub graph).
+                _flushCell.Target = null;
             }
         });
 
@@ -156,6 +176,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 _disposed = true; // block any further ResetDebounceTimer re-arm
                 _debounceTimer?.Dispose();
                 _debounceTimer = null;
+                _flushCell.Target = null; // see the sync hook above
             }
             return FlushPendingWrites()
                 .Timeout(TimeSpan.FromSeconds(10))
@@ -345,6 +366,21 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         }
     }
 
+    /// <summary>
+    /// The debounce timer's actual work, reached only through <see cref="FlushCell"/>. Subscribe
+    /// drives the flush — the observable returns Unit when all ops have settled; the disposable is
+    /// retained so FlushOnDispose can wait on in-flight subscriptions during hub teardown. A
+    /// faulted flush is unpersisted data — never silent.
+    /// </summary>
+    private void RunDebouncedFlush()
+    {
+        var sub = FlushPendingWrites().Subscribe(
+            _ => { },
+            ex => _logger?.LogWarning(ex,
+                "Debounced flush of pending writes failed for {HubPath}", _hubPath));
+        _pendingFlushSubscriptions.Add(sub);
+    }
+
     private void ResetDebounceTimer()
     {
         if (_persistenceCore is null) return;
@@ -359,18 +395,26 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             // action ordering.
             if (_workspace.Hub.RunLevel > MessageHubRunLevel.Started) return;
             _debounceTimer?.Dispose();
-            _debounceTimer = new Timer(_ =>
+            // 🚨 The callback reaches this source through a SEVERABLE CELL, never by capturing
+            // `this`. Disposing a one-shot Timer does NOT immediately remove it from the
+            // process-wide TimerQueue — the queue can keep the TimerQueueTimer (and therefore
+            // its TimerCallback's captured state) until the due time passes. With `this`
+            // captured, that residue is a live non-stack GC root
+            // `TimerQueue → TimerQueueTimer → TimerCallback → MeshNodeTypeSource → Workspace
+            // → MessageHub` for up to DebounceInterval after teardown — which is exactly what
+            // MeshHubDisposalLeakTest samples, and it cannot tell a self-clearing TimerQueue
+            // residue from a permanent static root. Measured: with `this` captured the ClrMD
+            // probe finds 9 disposed-but-pinned hubs immediately after teardown and 0 once the
+            // debounce interval has elapsed; through the cell it finds 0 immediately.
+            // Same severable-indirection idiom as the console-capture fix pinned by
+            // ConsoleCaptureExecutionContextLeakTest.
+            var cell = _flushCell;
+            _debounceTimer = new Timer(static state =>
             {
-                // Subscribe drives the flush — observable returns Unit when all
-                // ops have settled. Disposable retained so FlushOnDispose can
-                // wait on in-flight subscriptions during hub teardown.
-                // A faulted flush is unpersisted data — must never be silent.
-                var sub = FlushPendingWrites().Subscribe(
-                    _ => { },
-                    ex => _logger?.LogWarning(ex,
-                        "Debounced flush of pending writes failed for {HubPath}", _hubPath));
-                _pendingFlushSubscriptions.Add(sub);
-            }, null, DebounceInterval, Timeout.InfiniteTimeSpan);
+                // Null once the source is torn down (FlushOnDispose severs the cell), so a
+                // queued-but-disposed timer that still fires is a no-op instead of a resurrection.
+                if (state is FlushCell { Target: { } src }) src.RunDebouncedFlush();
+            }, cell, DebounceInterval, Timeout.InfiniteTimeSpan);
         }
     }
 
