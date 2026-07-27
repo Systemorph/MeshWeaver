@@ -141,7 +141,11 @@ public static class PinLayoutArea
                     // userAddress, not this host's hub). One-shot read, apply transform,
                     // post DataChangeRequest. The owning hub broadcasts to subscribers, so
                     // the viewer's dashboard re-renders and the card disappears.
-                    ctx.Host.Hub.GetMeshNode(userPath, TimeSpan.FromSeconds(10))
+                    // EmitNull: a fire-and-forget click action with no error sink — an OnError
+                    // here would rethrow on the timeout's timer thread and take the process
+                    // down. Behaviour on a stall is unchanged (the unpin does not happen);
+                    // the read logs the timeout + hub diagnostics at Warning.
+                    ctx.Host.Hub.GetMeshNode(userPath, TimeSpan.FromSeconds(10), ReadTimeoutBehavior.EmitNull)
                         .Subscribe(n =>
                         {
                             if (n?.Content is not User user) return;
@@ -179,7 +183,9 @@ public static class PinLayoutArea
         // Single-op remote write: one-shot read via GetDataRequest, apply the
         // pin/unpin transform, post DataChangeRequest to the owning user hub. The
         // viewer's dashboard subscribes to that user node and re-renders on the echo.
-        host.Hub.GetMeshNode(userPath, TimeSpan.FromSeconds(10))
+        // EmitNull — same reason as the unpin action above: no error sink on this
+        // fire-and-forget subscription, so a stall must not throw on the timer thread.
+        host.Hub.GetMeshNode(userPath, TimeSpan.FromSeconds(10), ReadTimeoutBehavior.EmitNull)
             .Subscribe(node =>
             {
                 if (node?.Content is not User user) return;

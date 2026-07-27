@@ -228,7 +228,11 @@ internal class MeshNodeCompilationService(
                 if (!resolved.Add(path))
                     return Observable.Return(current.Replace(matchValue, string.Empty));
 
-                return hub.GetMeshNode(path, TimeSpan.FromSeconds(15))
+                // EmitNull — see the note on the NodeType-definition reads below: this is the
+                // hub-ACTIVATION path, where turning a transient stall into a hard fault would
+                // park the type. Behaviour is unchanged (the include stays unresolved and the
+                // LogWarning below fires); the read itself now also logs the stall + diagnostics.
+                return hub.GetMeshNode(path, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
                     .SelectMany(referencedNode =>
                     {
                         if (referencedNode?.Content is CodeConfiguration cf
@@ -294,7 +298,15 @@ internal class MeshNodeCompilationService(
         }
         else
         {
-            resolveDef = hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15))
+            // ⚠️ EmitNull here is a DELIBERATE HOLD, not an endorsement. A stalled read of the
+            // NodeType definition currently yields ntDef == null and the compile proceeds
+            // against a null definition — a silently wrong compile. Making it throw is the
+            // right end state, but this runs on the hub-ACTIVATION path where compile status
+            // is cached: a transient stall would flip from "wrong compile" to "PARKED type"
+            // (the UWDeepfield outage class), which needs its own retry/park semantics and its
+            // own tests. Held at today's behaviour on purpose; the stall is no longer silent
+            // (the read logs it at Warning with hub diagnostics). See the report.
+            resolveDef = hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
                 .Select(typeNode => typeNode.ContentAs<NodeTypeDefinition>(JsonOptions));
             selfPath = node.NodeType;
         }
@@ -948,7 +960,8 @@ internal class MeshNodeCompilationService(
         NodeTypeDefinition? selfDef = node.ContentAs<NodeTypeDefinition>(JsonOptions);
         IObservable<NodeTypeDefinition?> resolveDef = selfDef != null
             ? Observable.Return<NodeTypeDefinition?>(selfDef)
-            : hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15))
+            // EmitNull — same deliberate hold as GetCompilationInputs above (activation path).
+            : hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
                 .Select(typeNode => typeNode.ContentAs<NodeTypeDefinition>(JsonOptions));
         string selfPath = selfDef != null ? node.Path : node.NodeType;
 
