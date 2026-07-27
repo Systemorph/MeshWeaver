@@ -501,19 +501,13 @@ public static class JsonSynchronizationStream
             // through the SAME proven Resubscribe path. Bounded (a few attempts) — this is a
             // missing-wakeup nudge, not a retry storm; a genuinely absent owner already faults the
             // stream above, and a slow-but-alive owner satisfies the probe on its first delivery.
+            // 🚨 NO EXTRA SUBSCRIPTION. The first version of this rode its own reduced.Subscribe to
+            // notice the first delivery, and that broke unrelated tests across three CI shards: an
+            // additional early subscriber changes WHEN a ref-counted stream starts, so the stream
+            // under test behaved differently just by being watched. The arrival flag is therefore
+            // set from the EXISTING passive tracker further down (the one that records
+            // receivedVersion) — one subscription, two observations.
             var initialArrived = 0;
-            keepAlive.Add(reduced.Subscribe(
-                ci =>
-                {
-                    // Same shape as the version tracker below: TReduced is unconstrained, so read
-                    // the value as object before null-testing it.
-                    object? value = ci is null ? null : ci.Value;
-                    if (value is not null)
-                        Interlocked.Exchange(ref initialArrived, 1);
-                },
-                // Passive tracker (see the version tracker below): never rethrow on the emission
-                // thread — the stream's real subscribers own error propagation.
-                _ => { }));
 
             // Bounded by Take(): the timer completes and self-disposes after the last attempt, so
             // this can never become the process-global TimerQueue root that the heartbeat comment
@@ -643,7 +637,13 @@ public static class JsonSynchronizationStream
                 ci =>
                 {
                     object? value = ci is null ? null : ci.Value;
-                    if (value is not null && reducedVersionProperty?.GetValue(value) is long v)
+                    if (value is null)
+                        return;
+                    // ANY delivery stands the missing-Initial watchdog down (see above): the owner
+                    // is talking to us, so there is no lost wakeup to nudge. Piggybacked here so the
+                    // stream carries ONE passive subscription, not two.
+                    Interlocked.Exchange(ref initialArrived, 1);
+                    if (reducedVersionProperty?.GetValue(value) is long v)
                         InterlockedMax(ref receivedVersion, v);
                 },
                 // Passive tracker: the stream's fault (e.g. owner NotFound) is surfaced by the
