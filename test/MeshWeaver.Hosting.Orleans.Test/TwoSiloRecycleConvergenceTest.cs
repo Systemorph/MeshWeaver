@@ -235,11 +235,32 @@ public class TwoSiloRecycleConvergenceTest : IClassFixture<TwoSiloCacheUpdateFix
             .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
 
     /// <summary>Polls the shared in-memory store until the node's version has advanced beyond
-    /// <paramref name="beyondVersion"/> (the post-recycle write persisted) and returns it.</summary>
+    /// <paramref name="beyondVersion"/> (the post-recycle write persisted) and returns it.
+    /// <para>On timeout, reports what the STORE actually holds. Without that, this wait fails as a
+    /// bare "operation has timed out" and the two very different causes are indistinguishable: the
+    /// write never landed (a routing/convergence problem) versus the store was rolled BACKWARD onto a
+    /// pre-recycle snapshot (durable loss of acked writes — the defect that produced
+    /// <c>Version=12/sk-v6 → Version=2/sk-v0</c>). Diagnostics only; it changes no assertion.</para>
+    /// </summary>
     private static async Task<MeshNode> WaitForPersistedBeyond(string path, long beyondVersion, CancellationToken ct)
-        => await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .Select(_ => TwoSiloCacheUpdateFixture.SharedNodes.TryGetValue(path, out var n) ? n : null)
-            .Where(n => n is not null && n.Version > beyondVersion)
-            .Select(n => n!)
-            .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+    {
+        try
+        {
+            return await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .Select(_ => TwoSiloCacheUpdateFixture.SharedNodes.TryGetValue(path, out var n) ? n : null)
+                .Where(n => n is not null && n.Version > beyondVersion)
+                .Select(n => n!)
+                .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+        }
+        catch (TimeoutException ex)
+        {
+            var present = TwoSiloCacheUpdateFixture.SharedNodes.TryGetValue(path, out var stored);
+            var apiKey = (stored?.Content as ModelProviderConfiguration)?.ApiKey ?? "(none)";
+            throw new TimeoutException(
+                $"Store never advanced past version {beyondVersion} for '{path}'. "
+                + $"STORE-DUMP present={present} version={stored?.Version.ToString() ?? "(n/a)"} apiKey={apiKey}. "
+                + "A version BELOW the pre-recycle one means the store was rolled back onto a stale "
+                + "snapshot — durable loss of acknowledged writes, not a convergence lag.", ex);
+        }
+    }
 }
