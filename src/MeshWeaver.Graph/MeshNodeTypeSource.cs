@@ -268,7 +268,18 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                     _hubPath, node.Path);
                 continue;
             }
-            var nodeWithVersion = node with { Version = hubVersion };
+            // 🚨 #325: the SAME forward-only floor the updates branch below applies. An "add" is
+            // add-relative-to-THIS-source-instance, NOT globally new: after an idle-recycle the
+            // reactivated hub's _lastSaved starts empty, so its own already-durable node is
+            // classified here as a create. A plain `Version = hubVersion` then stamps it with the
+            // fresh per-activation hub clock (which resets toward 0) and the debounce flush writes
+            // that REGRESSED version over the durable row — the write-rollback of #325, this time
+            // through the create path. MeshNode.NextVersion floors at the node's own carried
+            // version, so a genuinely new node (Version 0) is unaffected (max(hubVersion, 1) ==
+            // hubVersion for any live clock) while a re-added durable node can never go backward.
+            // Doc/Architecture/MeshNodeVersioning.md: the floor applies at EVERY place the owner
+            // mints a node Version — this is the persistence re-stamp it names.
+            var nodeWithVersion = node with { Version = MeshNode.NextVersion(hubVersion, node.Version) };
             _pendingSaves[node.Path] = nodeWithVersion;
         }
 
@@ -364,6 +375,22 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     }
 
     /// <summary>
+    /// Resolves the freshest known state for a queued save: the entry from <see cref="_lastSaved"/>
+    /// (this source's authoritative post-diff collection) when it is still present and carries a
+    /// Version at-or-above the queued snapshot, else the queued snapshot itself. Never lets a stale
+    /// queued node overwrite newer state — see <see cref="FlushPendingWrites"/>.
+    /// </summary>
+    private MeshNode CurrentStateFor(MeshNode queued)
+    {
+        if (_lastSaved.Instances.TryGetValue(queued.Id, out var live)
+            && live is MeshNode current
+            && current.Version >= queued.Version
+            && string.Equals(current.Path, queued.Path, StringComparison.OrdinalIgnoreCase))
+            return current;
+        return queued;
+    }
+
+    /// <summary>
     /// Drains <see cref="_pendingSaves"/> and <see cref="_pendingDeletes"/> into
     /// a composed IObservable&lt;Unit&gt; — each save/delete becomes one step
     /// in a Concat chain that completes only after every op has acked. The
@@ -376,10 +403,23 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         if (_persistenceCore is null)
             return Observable.Return(System.Reactive.Unit.Default);
 
+        // 🚨 Flush the node's CURRENT state, never the enqueue-time snapshot. _pendingSaves is
+        // populated by the ADD branch of UpdateImpl only; later UPDATES to the same node
+        // deliberately bypass this queue (the own-node persistence sampler saves those), so a
+        // queued entry is NEVER refreshed. ResetDebounceTimer re-arms the one-shot 200 ms timer on
+        // EVERY UpdateImpl, so under sustained churn a create-time entry can sit here across many
+        // subsequent acked writes and then be drained by FlushOnDispose at hub teardown — writing
+        // the CREATE-time node over a durable row that has since advanced. That is a durable
+        // rollback of acked writes (observed: a node at Version 12 / ApiKey "sk-v6" rolled back to
+        // Version 2 / ApiKey "sk-v0" by an idle-recycle) and IStorageAdapter.Write has no
+        // monotonic guard to catch it. _lastSaved is this source's authoritative post-diff
+        // collection, so re-resolving the path against it makes the flush write what the node
+        // actually IS at flush time; the queued snapshot is only the fallback for a node that has
+        // since left the collection.
         var saves = new List<MeshNode>();
         foreach (var key in _pendingSaves.Keys.ToArray())
             if (_pendingSaves.TryRemove(key, out var node))
-                saves.Add(node);
+                saves.Add(CurrentStateFor(node));
 
         var deletes = new List<string>();
         while (_pendingDeletes.TryTake(out var path))
