@@ -21,6 +21,16 @@ spec:
         azure.workload.identity/use: "true"
         {{- end }}
         {{- end }}
+      annotations:
+        # Keep the STATEFUL portal (live Blazor circuits + an Orleans silo) off the cluster
+        # autoscaler's scale-down list. Draining a portal pod for node consolidation tore its silo
+        # down mid-flight, and each abrupt departure left a ZOMBIE entry in the Orleans membership
+        # table: the cluster kept placing new grain activations on the dead silo, so writes timed out
+        # ("no initial state arrived within 30s") mesh-wide — which surfaced as GitSync imports
+        # reporting "Imported Failed (0 nodes)" and flaky reads. Pods still move on a rollout or a
+        # node image-upgrade, but gracefully and one at a time (the PDB beside this file + the 120s
+        # terminationGracePeriod above), never on every autoscaler bin-packing pass.
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
       # The in-pod self-updater patches this deployment via the Kubernetes API using this SA's
       # projected token (RBAC in rbac.yaml). See Doc/Architecture/ReleaseStrategy.

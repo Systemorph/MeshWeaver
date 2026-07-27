@@ -638,8 +638,21 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     private DateTimeOffset _testMethodStartedAt;
     /// <summary>Soft cap — anything above this gets a warning in the test log.</summary>
     protected virtual TimeSpan TestSoftDeadline => TimeSpan.FromSeconds(30);
-    /// <summary>Hard cap — anything above this throws at DisposeAsync, failing the test class.</summary>
-    protected virtual TimeSpan TestHardDeadline => TimeSpan.FromSeconds(60);
+    /// <summary>
+    /// Hard cap — anything above this throws at DisposeAsync, failing the test class.
+    ///
+    /// <para>🚨 MUST stay strictly ABOVE every in-test operation budget, above all
+    /// <see cref="ReadNodeTimeout"/> (60 s). It used to be EQUAL to it, and that collision
+    /// hid the real cause of a whole class of failures: a read that burned its full budget
+    /// tripped this watchdog at the same instant, so the only error the author ever saw was
+    /// the generic "you probably ignored your CancellationToken" — while the actual fault was
+    /// a mesh read that never got its reply (ThreadAgentIntegrationTest, CI 2026-07-26). The
+    /// operation's own loud, specific timeout must win the race; this watchdog is the
+    /// backstop for hangs that have NO budget of their own, not a competitor to the ones
+    /// that do. Widening it does not weaken any assertion — the test still fails, it just
+    /// fails naming the operation instead of the harness.</para>
+    /// </summary>
+    protected virtual TimeSpan TestHardDeadline => TimeSpan.FromSeconds(90);
 
     /// <summary>
     /// xUnit async lifecycle hook run before each test: records the start time and performs any
@@ -878,16 +891,23 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// <summary>
     /// Authoritative single-node read as an <see cref="IObservable{T}"/>: the owner-hub round-trip via
     /// <c>Mesh.GetMeshNode</c> — NOT the cache stream (which can serve a stale Replay(1) buffer). Emits the
-    /// node, or <c>null</c> when the routing service reports NotFound or the read exceeds
-    /// <see cref="ReadNodeTimeout"/>. Assert reactively: <c>ReadNode(path).Should().Emit()</c> /
-    /// <c>.Match(...)</c>. Never bridge back to a Task. (Replaced the old cache-stream ReadNode +
-    /// the deleted ReadNodeAsync.)
+    /// node, or <c>null</c> when the routing service reports NotFound. Assert reactively:
+    /// <c>ReadNode(path).Should().Emit()</c> / <c>.Match(...)</c>. Never bridge back to a Task.
+    /// (Replaced the old cache-stream ReadNode + the deleted ReadNodeAsync.)
+    ///
+    /// <para>🚨 A read that exceeds <see cref="ReadNodeTimeout"/> FAULTS with a
+    /// <see cref="TimeoutException"/> naming the path and the reading hub's in-flight state — it
+    /// does NOT emit null. Mapping the timeout to null (as this helper used to) meant a stalled
+    /// mesh read was indistinguishable from a deleted node, so a test could burn its whole budget,
+    /// silently assert against a null it never expected, PASS, and then die in DisposeAsync
+    /// blaming the CancellationToken. A test that legitimately expects "absent" still gets null
+    /// from the NotFound path.</para>
     /// </summary>
     protected IObservable<MeshNode?> ReadNode(string path)
         => Mesh.GetMeshNode(path, ReadNodeTimeout)
             .Select(n => (MeshNode?)n)
             .Catch((Exception ex) =>
-                ex is TimeoutException || IsNotFoundFailure(ex)
+                IsNotFoundFailure(ex)
                     ? Observable.Return<MeshNode?>(null)
                     : Observable.Throw<MeshNode?>(ex));
 
