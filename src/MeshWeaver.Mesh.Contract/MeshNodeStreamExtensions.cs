@@ -1422,10 +1422,30 @@ public static class MeshNodeStreamExtensions
                 string diagnostics;
                 try { diagnostics = hub.GetPendingRequestDiagnostics(); }
                 catch (Exception diagEx) { diagnostics = $"<diagnostics unavailable: {diagEx.GetType().Name}>"; }
+                // …and the OWNER's state, which is what actually decides the verdict. The reader's
+                // snapshot alone proves only that the reader is innocent (idle queues + our request
+                // still pending = "the reply never came"), leaving "owner never activated" and
+                // "owner answered, reply lost" indistinguishable. HostedHubCreation.Never is a pure
+                // probe — a dictionary lookup that must NEVER activate the hub as a side effect of
+                // diagnosing it.
+                string targetState;
+                try
+                {
+                    targetState = string.Equals(hub.Address.ToString(), path, StringComparison.Ordinal)
+                        ? "Target: this hub itself."
+                        : hub.GetHostedHub(new Address(path), HostedHubCreation.Never) is { } owner
+                            ? $"Target: {owner.GetPendingRequestDiagnostics()}"
+                            : $"Target: NO LOCAL HUB at '{path}' — it never activated here (or is owned "
+                              + "by another silo), so no reply was ever going to be produced.";
+                }
+                catch (Exception targetEx)
+                {
+                    targetState = $"<target diagnostics unavailable: {targetEx.GetType().Name}>";
+                }
                 var message =
                     $"GetMeshNode('{path}') timed out after {elapsed.TotalSeconds:F1}s "
                     + $"(budget {budget.TotalSeconds:F0}s) — the owning per-node hub never answered the "
-                    + $"GetDataRequest. This is NOT 'node not found'. {diagnostics}";
+                    + $"GetDataRequest. This is NOT 'node not found'. Reader: {diagnostics} {targetState}";
                 // Best-effort log. This runs on the CTS timer thread and the hub (with its
                 // ServiceProvider) may already be torn down — an exception escaping here would
                 // be an unobserved fault on a pool thread, i.e. exactly the class of failure
