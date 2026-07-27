@@ -1,5 +1,6 @@
 using System;
 using System.Reactive.Subjects;
+using Microsoft.Reactive.Testing;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -179,6 +180,72 @@ public class OverlaySelfHealWatcherTest
         // floor (the timeout/probe-missing sites hold no type node, and a
         // currently-usable state would have settled instead of timing out).
         typeStream.OnNext(TypeNode(version: 102, usable: true));
+        AssertDisposedExactlyOnce(hub);
+    }
+
+    /// <summary>
+    /// 🚨 THE 2026-07-27 memex OUTAGE. A CD deploy replaced both portal pods; every NodeType had to
+    /// recompile on first activation; <c>Store/Plugin</c> missed the 60s settle window, so every
+    /// plugin root (AgenticEngineering, Claims, DataModelling, Reinsurance, Underwriting, …) bound
+    /// the "did not settle" overlay. The recompile then SUCCEEDED — but recompiling an
+    /// already-<c>Ok</c> type does not rewrite its node, so the type stayed at the SAME version the
+    /// overlay had captured (v796, untouched since 08:34). The version-only gate could therefore
+    /// never fire: the overlay outlived the condition it described, five manual recycles changed
+    /// nothing (each re-activation re-armed the same unsatisfiable predicate), and only a
+    /// scale-to-zero brought the site back.
+    ///
+    /// <para>The grace path is the fix: a usable build at an UNCHANGED version heals the instance
+    /// once the window elapses. Time is driven by a TestScheduler, so this pins the behaviour
+    /// deterministically rather than by sleeping.</para>
+    /// </summary>
+    [Fact]
+    public void UsableBuildAtUnchangedVersion_HealsAfterTheGrace()
+    {
+        var hub = BuildInstanceHub(out _);
+        var typeStream = new ReplaySubject<MeshNode>(1);
+        var scheduler = new TestScheduler();
+        using var watcher = NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal(
+            typeStream, hub, NodeTypePath, typeVersionAtOverlay: 796, logger: null, scheduler);
+
+        // The post-restart reality: the type reports a usable build at EXACTLY the version the
+        // overlay captured. Nothing advances, ever — this is what stayed broken all day.
+        typeStream.OnNext(TypeNode(version: 796, usable: true));
+
+        // Still nothing immediately: the anti-hot-loop guarantee is preserved, so an instance that
+        // re-overlays because it genuinely cannot build does not spin on recycle.
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(30).Ticks);
+        AssertNoDispose(hub);
+
+        // Once the grace elapses the stuck instance heals ITSELF — no operator, no pod restart.
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(20).Ticks);
+        AssertDisposedExactlyOnce(hub);
+
+        // Take(1) still holds across both routes — one recycle, never a storm.
+        typeStream.OnNext(TypeNode(version: 796, usable: true));
+        scheduler.AdvanceBy(TimeSpan.FromMinutes(5).Ticks);
+        AssertDisposedExactlyOnce(hub);
+    }
+
+    /// <summary>
+    /// The grace must not paper over a type that is still broken: if no usable build exists when
+    /// the window elapses, nothing is recycled — the overlay stays and keeps telling the truth.
+    /// </summary>
+    [Fact]
+    public void StillUnusableWhenTheGraceElapses_DoesNotRecycle()
+    {
+        var hub = BuildInstanceHub(out _);
+        var typeStream = new ReplaySubject<MeshNode>(1);
+        var scheduler = new TestScheduler();
+        using var watcher = NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal(
+            typeStream, hub, NodeTypePath, typeVersionAtOverlay: 796, logger: null, scheduler);
+
+        typeStream.OnNext(TypeNode(version: 796, usable: false));
+        scheduler.AdvanceBy(TimeSpan.FromMinutes(2).Ticks);
+        AssertNoDispose(hub);
+
+        // …and when the build finally lands, the still-armed watcher heals on the next read.
+        typeStream.OnNext(TypeNode(version: 796, usable: true));
+        scheduler.AdvanceBy(TimeSpan.FromMinutes(2).Ticks);
         AssertDisposedExactlyOnce(hub);
     }
 
