@@ -158,8 +158,13 @@ public static class JsonSynchronizationStream
     where TReference : WorkspaceReference
     {
         var hub = workspace.Hub;
+        // Typed since 2026-07-27: same condition, same ObjectDisposedException base (so the
+        // Blazor circuit's `catch (ObjectDisposedException)` around BindStream still applies),
+        // but now CLASSIFIABLE as the transient ErrorType.ShuttingDown when it escapes a
+        // handler — the sibling refusal in SynchronizationStream's constructor throws the same
+        // type, so "the host is going down, ask again" has ONE shape across stream creation.
         if (hub.RunLevel > MessageHubRunLevel.Started)
-            throw new ObjectDisposedException($"ParentHub {hub.Address} is disposing, cannot create stream for {reference}.");
+            throw new HubDisposingException(hub.Address, reference);
 
         var logger = GetLogger(hub.ServiceProvider);
         // link to deserialized world. Will also potentially link to workspace.

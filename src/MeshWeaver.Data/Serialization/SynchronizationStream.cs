@@ -649,10 +649,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
            && !string.Equals(ctx.ObjectId, SystemUserId, StringComparison.Ordinal);
 
     /// <summary>
-    /// Resolves the synchronization hub if the stream is alive and the hub is
-    /// non-null. Dead streams (constructed against a disposing parent) have
-    /// no hub; calling Hub.Post would NRE. Returns false in that case so
-    /// callers can no-op gracefully.
+    /// Resolves the synchronization hub if the stream is still alive. A stream that has been
+    /// DISPOSED must not post — its hub is gone — so callers no-op gracefully instead.
+    /// <para>The <c>Hub is null</c> arm is belt-and-braces only: since the constructor REFUSES
+    /// (<see cref="HubDisposingException"/>) rather than fabricating a hub-less "dead stream",
+    /// a constructed instance always has a hub. Cheap to keep, and it documents that nothing
+    /// downstream may assume otherwise.</para>
     /// </summary>
     private bool TryGetActiveHub(out IMessageHub hub)
     {
@@ -718,8 +720,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 logger.LogDebug(ex, "[SYNC_STREAM] Exception from Store.OnError propagation for {StreamId}", StreamId);
             }
             // Always fault startup and open gate, even if Store.OnError throws.
-            // Dead-stream guard: Hub may be null on a stream constructed against
-            // a disposing parent — there's nothing to fault or unblock there.
+            // (Hub is non-null on every constructed stream — the ctor refuses rather
+            // than fabricating a hub-less one; the guard is belt-and-braces.)
             if (Hub is not null)
             {
                 Hub.FailStartup(error);
@@ -771,7 +773,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (isDisposed || Hub is null)
         {
-            // Dead stream — no hub to register on. Dispose the registrant
+            // Disposed stream — no hub to register on. Dispose the registrant
             // immediately so the caller doesn't leak it. The caller's intent
             // (couple this disposable to the stream's lifetime) is satisfied
             // because the stream is already terminal.
@@ -804,9 +806,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// <param name="value">The change item to publish.</param>
     public void OnNext(ChangeItem<TStream> value)
     {
-        // Dead stream (created against a disposing parent — see ctor) has no
-        // Hub. Propagate the dead state to subscribers via Store.OnCompleted
-        // instead of NRE'ing on Hub.Post.
+        // A DISPOSED stream has no hub to post to; drop the value rather than
+        // NRE'ing on Hub.Post. (Subscribers already saw Store.OnCompleted.)
         if (isDisposed || Hub is null)
         {
             logger.LogDebug("[SYNC_STREAM] OnNext skipped for {StreamId} — stream is dead/disposed", StreamId);
@@ -864,14 +865,17 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     /// <summary>
     /// Creates a synchronization stream hosted under <paramref name="Host"/>. Spins up a dedicated
-    /// hosted hub for the stream and captures the creating user's identity; if the host is already
-    /// shutting down the stream is created dead-on-arrival (subscriptions complete immediately, writes no-op).
+    /// hosted hub for the stream and captures the creating user's identity.
     /// </summary>
     /// <param name="StreamIdentity">Identity (owner + partition) of the stream.</param>
     /// <param name="Host">The hub hosting this stream.</param>
     /// <param name="Reference">The projected reference selecting what this stream represents.</param>
     /// <param name="ReduceManager">The reduce manager for deriving reduced streams and applying patches.</param>
     /// <param name="configuration">Optional configuration of the stream (client id, subscriber, initialization, …).</param>
+    /// <exception cref="HubDisposingException">
+    /// <paramref name="Host"/> (or an ancestor of it) has begun disposing, so the stream's own
+    /// sub-hub can no longer be created. TRANSIENT — see the constructor body.
+    /// </exception>
     public SynchronizationStream(
         StreamIdentity StreamIdentity,
         IMessageHub Host,
@@ -892,49 +896,55 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         logger = Host.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
 
-        // Disposing parent hub: don't throw — that surfaced as an unhandled
-        // ObjectDisposedException at every call site (including Blazor circuit
-        // teardowns where the IDE breaks on user-unhandled). The stream is
-        // dead-on-arrival; mark it disposed so any Subscribe completes
-        // immediately and any Update is a no-op. Callers walking the parent's
-        // disposal chain will dispose this child too via the registration
-        // chain — this is just defensive belt-and-braces for the late-arrival
-        // race where someone calls Reduce on a parent that just started
-        // disposing.
-        if (Host.RunLevel > MessageHubRunLevel.Started)
-        {
-            logger.LogDebug(
-                "[SYNC_STREAM] Parent hub {Host} disposing (RunLevel={RunLevel}); creating dead stream for {Reference}",
-                Host.Address, Host.RunLevel, Reference);
-            isDisposed = true;
-            // Hub stays null on a dead stream — every code path that touches
-            // Hub goes through TryGetActiveHub (guards isDisposed first) or
-            // the explicit null check in OnNext. The null! tells the
-            // compiler we accept the non-null contract gap; the runtime
-            // guards enforce it.
-            Hub = null!;
-            Store.OnCompleted();
-            return;
-        }
-
         logger.LogDebug("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
-        var syncHub = Host.GetHostedHub(
-            SynchronizationAddress.Create(ClientId), ConfigureSynchronizationHub, HostedHubCreation.Always);
+        // 🚨 A stream that cannot own its sub-hub is NOT a stream — REFUSE, never fabricate.
+        //
+        // The condition below is one fact: hosted-hub creation is frozen, so
+        // GetHostedHub cannot give us the Hub this type declares as non-null. The freeze is
+        // flipped by HostedHubsCollection.CloseCreation at the FIRST instant of
+        // MessageHub.Dispose — strictly BEFORE RunLevel leaves Started — and it CASCADES
+        // through the entire hosted-hub subtree, so an ancestor's disposal freezes us while
+        // our own RunLevel still reads Started. That is why the RunLevel probe alone is not
+        // sufficient and why GetHostedHub returning null is the authoritative signal.
+        //
+        // The predecessor of this code answered that by building a DEAD stream — isDisposed,
+        // Store completed, `Hub = null!` — and documenting that "every code path that touches
+        // Hub goes through TryGetActiveHub". NO CONSUMER HONOURED THAT: `grep -rn
+        // TryGetActiveHub src` found only this file, while ~96 sites dereference
+        // ISynchronizationStream.Hub, which the interface declares NON-NULLABLE. And a
+        // consumer cannot even detect the corpse: ISynchronizationStream exposes no
+        // liveness/disposal member. Handing one out is a contract violation by construction —
+        // it cost a production NRE inside LayoutAreaHost's constructor
+        // (`Stream.Hub.ServiceProvider…`) on the overlay self-heal recycle window, which
+        // escaped to the subscriber as a TERMINAL DeliveryFailure. A page that subscribed
+        // during a recycle got "this failed forever" instead of "ask again".
+        //
+        // Throwing is also what the sibling creation path already does — CreateExternalClient
+        // has always thrown here, and the Blazor circuit already catches ObjectDisposedException
+        // around BindStream() for exactly this ("old circuit's hub may already be disposing").
+        // HubDisposingException IS an ObjectDisposedException, so that existing handling keeps
+        // working; what is new is the CLASSIFICATION: escaping a message handler it becomes an
+        // ErrorType.ShuttingDown DeliveryFailure (MessageService), i.e. the transient "the
+        // address may reactivate — retry" answer #672 established one layer down, instead of a
+        // terminal fault. See Doc/Architecture/HubDisposalModel.
+        //
+        // The RunLevel probe stays as the cheap FIRST gate — it also covers the (vanishingly
+        // rare) case where GetHostedHub would hand back a PRE-EXISTING sub-hub at our address
+        // while the Host is already winding down: an existing-hub lookup is a pure read and is
+        // deliberately not refused by the freeze.
+        var syncHub = Host.RunLevel > MessageHubRunLevel.Started
+            ? null
+            : Host.GetHostedHub(
+                SynchronizationAddress.Create(ClientId), ConfigureSynchronizationHub, HostedHubCreation.Always);
         if (syncHub is null)
         {
-            // Creation was refused: an ANCESTOR hub began disposing and the
-            // creation-freeze cascade closed this collection before the Host's
-            // own RunLevel moved (the gap the RunLevel check above cannot see).
-            // Same dead-stream semantics as that check — without this, Hub
-            // would be a null on a LIVE stream and every downstream touch NREs.
             logger.LogDebug(
-                "[SYNC_STREAM] Hosted-hub creation refused for {Reference} on {Host} (teardown creation freeze); creating dead stream",
-                Reference, Host.Address);
+                "[SYNC_STREAM] Cannot host stream for {Reference} on {Host} (RunLevel={RunLevel}, hosted-hub creation frozen); refusing to create the stream",
+                Reference, Host.Address, Host.RunLevel);
             isDisposed = true;
-            Hub = null!;
             Store.OnCompleted();
-            return;
+            throw new HubDisposingException(Host.Address, Reference);
         }
         Hub = syncHub;
 
