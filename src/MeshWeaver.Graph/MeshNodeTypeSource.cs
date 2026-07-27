@@ -36,6 +36,25 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     private readonly MeshDataSourceExtensions.OwnNodeCache? _ownNodeCache;
     private InstanceCollection _lastSaved = new();
 
+    // Highest own-node Version this hub has adopted — from the activation seed, from a routing
+    // emission, AND from a local write committed through UpdateImpl. Own-node emissions below it
+    // are stale snapshots and are dropped (see AcceptOwnNodeEmission).
+    //
+    // 🚨 UpdateImpl MUST feed this too, not just the Initialize chain. The durable activation
+    // seed is an async read on a real backend: it can land AFTER the routing stream seeded and
+    // after a local write already advanced the in-RAM node. A floor that only tracked the
+    // Initialize chain would then accept that older durable emission and BuildInstanceCollection
+    // would reset _lastSaved onto it — clobbering the newer in-RAM commit. Raising the floor on
+    // every committed change makes the gate "never move this hub's own node backward", whatever
+    // the source.
+    private long _ownNodeVersionFloor;
+
+    // 0 until this hub holds own-node state at all — set by RaiseOwnVersionFloor, so it covers
+    // BOTH the Initialize chain and a UpdateImpl commit that raced ahead of it. Gates only the
+    // "durable seed replaces on strictly-newer" rule in AcceptOwnNodeEmission; a plain int is
+    // enough because it is one-way (0 → 1) and never read for mutual exclusion.
+    private int _ownNodeAdopted;
+
     // Pending create / delete buffer. UpdateImpl enqueues here; a debounce
     // timer drains via FlushPendingWrites every DebounceInterval. The dict
     // collapses rapid retargets of the same path into the latest version,
@@ -332,8 +351,35 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         ResetDebounceTimer();
 
+        // Own-node monotonicity: a committed change is the newest state this hub holds, so it
+        // raises the floor that AcceptOwnNodeEmission gates the (possibly late, possibly stale)
+        // activation-seed / routing emissions against.
+        foreach (var value in instances.Instances.Values)
+            if (value is MeshNode n && string.Equals(n.Path, _hubPath, StringComparison.OrdinalIgnoreCase))
+            {
+                RaiseOwnVersionFloor(n.Version);
+                break;
+            }
+
         _lastSaved = instances;
         return instances;
+    }
+
+    /// <summary>Records that this hub now holds own-node state at <paramref name="version"/>:
+    /// monotonically (max) raises <see cref="_ownNodeVersionFloor"/> and marks the node adopted.
+    /// Lock-free — the workspace pipeline and the Initialize chain both call it, from different
+    /// threads.</summary>
+    private void RaiseOwnVersionFloor(long version)
+    {
+        _ownNodeAdopted = 1;
+        var current = Volatile.Read(ref _ownNodeVersionFloor);
+        while (version > current)
+        {
+            var prior = Interlocked.CompareExchange(ref _ownNodeVersionFloor, version, current);
+            if (prior == current)
+                return;
+            current = prior;
+        }
     }
 
     private void PruneRecentlyDeleted(DateTimeOffset nowUtc)
@@ -511,14 +557,30 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     }
 
     /// <summary>
-    /// Seeds the workspace with the own MeshNode and follows subsequent emissions.
+    /// Seeds the workspace with the own MeshNode — from DURABLE STORAGE — and follows the
+    /// routing-supplied stream for subsequent live updates.
     /// <para>
     /// The routing layer (Orleans <c>MessageHubGrain</c>, Monolith
     /// <c>MonolithRoutingService</c>) attaches an own-node observable via
-    /// <see cref="OwnNodeStreamExtensions.WithOwnNodeStream"/> at hub
-    /// instantiation; that stream is the source of truth — its first emission
-    /// seeds the workspace and subsequent emissions push live updates into the
-    /// MeshNodeReference reducer without a separate change-feed subscription.
+    /// <see cref="OwnNodeStreamExtensions.WithOwnNodeStream"/> at hub instantiation. That
+    /// stream carries LIVE updates (and, on Orleans, the enriched node whose non-serialisable
+    /// <c>HubConfiguration</c> delegate storage cannot hold) — but it is NOT durable state:
+    /// both of its legs are caches. <c>PathResolutionService</c> memoizes the resolved
+    /// <c>AddressResolution</c> (including its MeshNode snapshot), invalidated only by the
+    /// per-silo change feed; <c>MeshNodeStreamCache</c> replays its last seen value. A
+    /// reactivation that adopted such a snapshot as its live own-node state loaded an
+    /// arbitrarily old node — which the persistence sampler then wrote back OVER newer durable
+    /// data. Observed in production shape as <c>Version=12 / ApiKey=sk-v6</c> →
+    /// <c>Version=2 / ApiKey=sk-v0</c>: six acknowledged writes destroyed.
+    /// </para>
+    /// <para>
+    /// So the seed is the durable row (<c>Doc/Architecture/MeshNodeVersioning.md</c>: "the node
+    /// loads its persisted Version verbatim on activation"), MERGED with — not replaced by —
+    /// the routing stream, and every emission passes <see cref="AcceptOwnNodeEmission"/>, which
+    /// drops any node whose <see cref="MeshNode.Version"/> regresses below the highest already
+    /// held. Merge (rather than Concat) is deliberate: a slow or faulted storage read can never
+    /// delay or block activation — the routing stream still seeds, exactly as before — while a
+    /// stale routing emission loses to the durable one on version.
     /// </para>
     /// <para>
     /// When no stream is supplied (fixtures that bypass routing), falls back
@@ -530,16 +592,16 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken cancellationToken)
     {
-        // Prefer the routing-supplied stream when available (live updates,
-        // catalog stream). Fall back to a one-shot persistence read for test
-        // fixtures that construct this TypeSource directly without going
-        // through MeshDataSource's MonolithRoutingService wiring.
         if (_ownNodeStream is not null)
-        {
-            return _ownNodeStream
-                .Where(n => n != null)
-                .Select(rawNode => BuildInstanceCollection(rawNode));
-        }
+            // Tag the source and filter DOWNSTREAM of the merge: Observable.Merge serialises
+            // notifications through its gate, so the version bookkeeping and
+            // BuildInstanceCollection stay single-threaded — a Where placed on each leg
+            // instead would run on that leg's own thread, outside the gate.
+            return Observable.Merge(
+                    DurableSeed().Select(n => (Node: n, Durable: true)),
+                    _ownNodeStream.Select(n => (Node: n, Durable: false)))
+                .Where(e => AcceptOwnNodeEmission(e.Node, e.Durable))
+                .Select(e => BuildInstanceCollection(e.Node));
 
         if (_persistenceCore is not null)
         {
@@ -551,6 +613,126 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // queued CreateNodeRequest / GetDataResponse traffic isn't held forever.
         _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
         return Observable.Return(_lastSaved);
+    }
+
+    /// <summary>
+    /// One-shot read of this node's DURABLE row — the authoritative activation seed.
+    ///
+    /// <para><b>This is a raw <see cref="IStorageAdapter.Read"/>, NOT
+    /// <c>MeshNodeStreamExtensions.GetMeshNode</c>.</b> It reads the row directly out of the
+    /// store; there is no owner round-trip, no routing, and therefore no
+    /// <c>ReadTimeoutBehavior</c> in play. The distinction matters because the two APIs sit on
+    /// opposite sides of the very hub this seed is bringing up: a mesh read of our OWN path
+    /// during our own activation would be circular.</para>
+    ///
+    /// <para><b>It degrades; it never throws — deliberately.</b> This runs on the activation
+    /// path of EVERY per-node hub. An OnError here propagates into the routing layer's
+    /// activation subscription (<c>MessageHubGrain.OnActivateAsync</c> →
+    /// <c>_hubReadyRaw.OnError</c> + <c>DeactivateOnIdle</c>), so a storage hiccup would stop
+    /// being a read error and start being a PARKED node type — the outage class the new strict
+    /// <c>GetMeshNode</c> timeout deliberately kept the compile path away from via
+    /// <c>ReadTimeoutBehavior.EmitNull</c>. Same reasoning, same choice: an absent row (a
+    /// brand-new node whose <c>CreateNodeRequest</c> is still in flight behind the init gate, a
+    /// transient node, a read-only partition) emits <c>null</c> and is dropped, and a FAULT is
+    /// logged at Warning with the exception and then dropped. Either way the routing stream
+    /// still seeds and the hub comes up exactly as it did before this change.</para>
+    ///
+    /// <para><b>No wall-clock bound, on purpose.</b> The merge (not concat) in
+    /// <c>Initialize</c> already makes a stalled read harmless: it cannot delay or block
+    /// activation, it just never contributes. A <c>Timeout</c> would therefore change nothing
+    /// about liveness — it would only be able to make things worse, because a cold-partition
+    /// read under a boot storm legitimately takes tens of seconds and a budget short enough to
+    /// be a useful signal would start SKIPPING the seed on exactly the slow activations that
+    /// need it most. The stall does not go unguarded: <c>MonotonicWriteGuardStorageAdapter</c>
+    /// is the independent backstop — a hub that never got its seed and adopts a stale snapshot
+    /// still cannot roll the store back. That is why the fix is two changes and not one.</para>
+    /// </summary>
+    private IObservable<MeshNode?> DurableSeed()
+    {
+        if (_persistenceCore is null)
+            return Observable.Empty<MeshNode?>();
+
+        return _persistenceCore.Read(_hubPath, _workspace.Hub.JsonSerializerOptions)
+            .Take(1)
+            .Do(seed => _logger?.LogDebug(
+                "MeshNodeTypeSource[{HubPath}]: durable activation seed {Outcome} (version={Version})",
+                _hubPath, seed is null ? "found no row" : "read", seed?.Version))
+            .Catch<MeshNode?, Exception>(ex =>
+            {
+                _logger?.LogWarning(ex,
+                    "MeshNodeTypeSource[{HubPath}]: durable activation seed read FAILED — this hub falls back to "
+                    + "the routing-supplied own-node stream alone, which is cache-backed and may be stale. The "
+                    + "storage-level monotonic write guard remains the backstop against a rollback.",
+                    _hubPath);
+                return Observable.Empty<MeshNode?>();
+            });
+    }
+
+    /// <summary>
+    /// Own-node monotonicity gate: accepts an emission only when its
+    /// <see cref="MeshNode.Version"/> is at or above the highest this hub has already
+    /// adopted. Nulls (no node at this path yet) are dropped.
+    ///
+    /// <para><b>Strict regressions only.</b> An EQUAL version passes — a never-mutated node
+    /// sits at its seed version forever, and content can legitimately change without a
+    /// version-minting write path having run. Only a strictly-lower version is a stale
+    /// snapshot, because every mint goes through <see cref="MeshNode.NextVersion"/>, which
+    /// floors at <c>current.Version + 1</c>.</para>
+    ///
+    /// <para><b>Named escape hatch: delete-then-recreate.</b> A same-path recreate legitimately
+    /// restarts at <c>Version = 1</c>. The mesh-scoped tombstone (<see cref="RecentlyDeletedRegistry"/>)
+    /// is the framework's existing record of exactly that, so a tombstoned path resets the floor
+    /// instead of dropping the emission. This mirrors the forward-only own-node refresh the
+    /// change-notification handler in <c>MeshDataSourceExtensions.SubscribeToOwnDeletion</c>
+    /// already applies ("a persisted snapshot may only REPLACE the in-RAM commit when it is
+    /// STRICTLY NEWER").</para>
+    ///
+    /// <para><b>The durable seed replaces only when STRICTLY newer.</b> The routing-supplied node
+    /// is ENRICHED — on Orleans it carries the <c>HubConfiguration</c> delegate and whatever else
+    /// <c>ResolveHubConfiguration</c> computed, none of which survives a round-trip through
+    /// storage. The durable read is asynchronous on a real backend, so it can land AFTER the
+    /// routing stream already seeded at the SAME version; adopting it then would silently swap the
+    /// enriched node for the raw row for no gain. So a durable emission is taken when nothing has
+    /// been adopted yet, or when it genuinely carries a higher version — the same "strictly newer"
+    /// rule the persisted-change refresh in <c>SubscribeToOwnDeletion</c> uses.</para>
+    /// </summary>
+    /// <param name="node">The emitted own-node candidate.</param>
+    /// <param name="isDurableSeed">True for the activation read straight from storage.</param>
+    private bool AcceptOwnNodeEmission(MeshNode? node, bool isDurableSeed)
+    {
+        if (node is null)
+            return false;
+
+        var floor = Volatile.Read(ref _ownNodeVersionFloor);
+
+        if (isDurableSeed && _ownNodeAdopted != 0 && node.Version <= floor)
+            return false;
+        if (node.Version < floor)
+        {
+            if (_recentlyDeletedRegistry?.IsRecentlyDeleted(node.Path) ?? false)
+            {
+                _logger?.LogDebug(
+                    "MeshNodeTypeSource[{HubPath}]: own-node emission version {Version} is below the floor "
+                    + "{Floor}, but the path carries a delete tombstone — treating it as a recreate and "
+                    + "resetting the floor.",
+                    _hubPath, node.Version, floor);
+                _ownNodeAdopted = 1;
+                Interlocked.Exchange(ref _ownNodeVersionFloor, node.Version);
+                return true;
+            }
+
+            _logger?.LogWarning(
+                "MeshNodeTypeSource[{HubPath}]: DROPPED a stale own-node emission (Version={Version}) below the "
+                + "version this hub already holds (Version={Floor}). The routing-supplied own-node stream is "
+                + "cache-backed (path-resolution memo / mesh-node stream replay) and can replay a snapshot from "
+                + "before a recycle; adopting it would let the persistence sampler write it back over newer "
+                + "durable data.",
+                _hubPath, node.Version, floor);
+            return false;
+        }
+
+        RaiseOwnVersionFloor(node.Version);
+        return true;
     }
 
     private InstanceCollection BuildInstanceCollection(MeshNode? rawNode)
