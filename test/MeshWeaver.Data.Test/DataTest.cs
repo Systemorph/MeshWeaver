@@ -2,9 +2,9 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
-using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -39,7 +39,24 @@ public record MyData(
 public class DataTest(ITestOutputHelper output) : HubTestBase(output)
 {
 
-    private ImmutableDictionary<object, object> storage = ImmutableDictionary<object, object>.Empty;
+    // 🚨 The type source's WithUpdate hook is an ASYNCHRONOUS write-back, NOT part of the
+    // change's publication. SynchronizationStream.SetCurrent assigns Current and then calls
+    // Store.OnNext(...) on a ReplaySubject; the data source's own subscription
+    // (TypeSourceBasedUnpartitionedDataSource.SetupDataSourceStream) is just one more
+    // subscriber, and every reduced read stream the workspace hands out is another —
+    // created lazily, per GetObservable(...) call. A ReplaySubject does not hold its gate
+    // across the fan-out, so a reader can replay/receive the new value on its own thread
+    // WHILE the write-back subscriber is still running. (DataSourceWithStorage makes the
+    // asynchrony explicit: it dispatches the write onto a separate persistence hub.)
+    // So "the host workspace surfaced the new state" says NOTHING about whether the
+    // write-back has run yet — the tests must await the write-back itself. Exposed as an
+    // observable so they can wait on that actual condition instead of sampling a field at
+    // an arbitrary moment — which raced, and failed 3 of 8 full-project runs.
+    private readonly BehaviorSubject<ImmutableDictionary<object, object>> storage =
+        new(ImmutableDictionary<object, object>.Empty);
+
+    /// <summary>The type source's persisted state; emits on every write-back.</summary>
+    private IObservable<ImmutableDictionary<object, object>> Persisted => storage;
 
     /// <summary>
     /// Configures the host message hub for data plugin testing
@@ -134,9 +151,12 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .ToArray();
 
         data.ToArray().Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
-        // The host workspace surfacing count == 3 means the committed update
-        // (which runs SaveMyData → storage) has already landed — no Task.Delay needed.
-        storage.Values.Cast<MyData>().OrderBy(x => x.Id).Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
+        // The write-back runs asynchronously alongside the read path (see the `storage`
+        // field note), so await it rather than sampling it.
+        var persisted = await Persisted
+            .Should().Within(10.Seconds())
+            .Match(s => s.Count == expectedItems.Length);
+        persisted.Values.Cast<MyData>().OrderBy(x => x.Id).Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
     }
 
     /// <summary>
@@ -169,8 +189,12 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .Should().Within(10.Seconds())
             .Match(i => i.Count == 1);
         data.Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
-        // count == 1 surfacing means the commit (SaveMyData → storage) already ran.
-        storage.Values.Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
+        // The write-back runs asynchronously alongside the read path (see the `storage`
+        // field note), so await it rather than sampling it.
+        var persisted = await Persisted
+            .Should().Within(10.Seconds())
+            .Match(s => s.Count == expectedItems.Length);
+        persisted.Values.Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
     }
 
     /// <summary>
@@ -212,8 +236,12 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .Should().Within(10.Seconds())
             .Match(i => i?.Text == TextChange);
         instance.Should().NotBeNull();
-        // host observing the changed text means the commit (SaveMyData → storage) already ran.
-        storage.Values.Should().Contain(i => ((MyData)i).Text == TextChange);
+        // The write-back runs asynchronously alongside the read path (see the `storage`
+        // field note), so await it rather than sampling it.
+        var persisted = await Persisted
+            .Should().Within(10.Seconds())
+            .Match(s => s.Values.Any(i => ((MyData)i).Text == TextChange));
+        persisted.Values.Should().Contain(i => ((MyData)i).Text == TextChange);
     }
 
     /// <summary>
@@ -222,7 +250,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// <returns>An observable yielding the initialized MyData instances</returns>
     private IObservable<IEnumerable<MyData>> InitializeMyData()
     {
-        storage = MyData.InitialData.ToImmutableDictionary(x => (object)x.Id, x => (object)x);
+        storage.OnNext(MyData.InitialData.ToImmutableDictionary(x => (object)x.Id, x => (object)x));
         return Observable.Return<IEnumerable<MyData>>(MyData.InitialData);
     }
 
@@ -233,12 +261,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// <returns>The saved instance collection</returns>
     private InstanceCollection SaveMyData(InstanceCollection instanceCollection)
     {
-        // Simple file logging to verify if this method is called
-        var logPath = "/tmp/savedata.log";
-        var itemsInfo = string.Join(", ", instanceCollection.Instances.Select(kvp => $"{kvp.Key}:{((MyData)kvp.Value).Text}"));
-        File.AppendAllText(logPath, $"{DateTime.Now:HH:mm:ss.fff} SaveMyData called with {instanceCollection.Instances.Count} instances: {itemsInfo}\n");
-
-        storage = instanceCollection.Instances;
+        storage.OnNext(instanceCollection.Instances);
         return instanceCollection;
     }
     /// <summary>
