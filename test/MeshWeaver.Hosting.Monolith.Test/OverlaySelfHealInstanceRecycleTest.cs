@@ -140,8 +140,26 @@ public class OverlaySelfHealInstanceRecycleTest(ITestOutputHelper output) : Mono
         //    with fresh clients — each probe is a new subscription, i.e. a new
         //    activation once the stuck hub disposed; a probe that lands before
         //    the recycle sees the overlay and times out its bounded window, so
-        //    retry. Before the fix EVERY probe hit the still-alive overlay hub
-        //    and this wait exhausted all attempts (the prod 14h symptom).
+        //    retry. Before the self-heal fix EVERY probe hit the still-alive
+        //    overlay hub and this wait exhausted all attempts (the prod 14h
+        //    symptom).
+        //
+        //    🚨 Only TimeoutException is caught, deliberately. A probe that
+        //    lands INSIDE the self-recycle window must still end up retryable:
+        //    the owner answers the SubscribeRequest with a transient
+        //    ErrorType.ShuttingDown NACK, which the client's sync stream rides
+        //    out (keep-alive + resubscribe latch stay armed), so the probe
+        //    simply produces nothing and times out here. A DeliveryFailure-
+        //    Exception reaching this loop is therefore a REGRESSION and must
+        //    fail the test loudly — never be swallowed as "retry".
+        //
+        //    That is exactly how this test failed 1-4 runs in 8 before
+        //    2026-07-27: LayoutAreaHost's ctor NRE'd on a hub-less "dead
+        //    stream" and the terminal DeliveryFailureException escaped this
+        //    catch on the FIRST probe. The earlier reading — "the wait
+        //    exhausted all attempts" — was wrong: the loop never got to
+        //    attempt 1, and a 2.1-2.6 s failure is far too fast for six 15 s
+        //    windows. See SubscribeDuringRecycleTest for the deterministic pin.
         string? healedHtml = null;
         for (var attempt = 0; attempt < 6 && healedHtml is null; attempt++)
         {
