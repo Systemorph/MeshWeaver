@@ -42,11 +42,19 @@ public static class JsonSynchronizationStream
 
     /// <summary>
     /// How long a freshly subscribed stream may stay EMPTY before the subscribe is re-sent.
-    /// Well above a warm cache hit or one cold storage read, and far below the heartbeat — the
-    /// point is to stop a lost first delivery from costing a full
-    /// <see cref="SyncStreamOptions.HeartbeatInterval"/> (45s, measured on memex 2026-07-27).
+    /// Far below the heartbeat — the point is to stop a lost first delivery from costing a full
+    /// <see cref="SyncStreamOptions.HeartbeatInterval"/> (45s, measured on memex 2026-07-27) — but
+    /// comfortably ABOVE the slowest LEGITIMATE cold read.
+    ///
+    /// <para>🚨 Calibrated by a CI failure, not by taste. At 4s this fired on healthy streams on
+    /// loaded CI runners, where a genuine cold read outruns the probe. That is the dangerous
+    /// direction: under a mass cold start (i.e. every deploy) an eager probe re-subscribes healthy
+    /// streams, and each re-subscribe creates a <c>sync/{ClientId}</c> hub on the owner's
+    /// single-threaded action block — the storm <c>ChangeFeedResubscribeCoalesceTest</c> exists to
+    /// prevent, and worse than the 45s stall. When in doubt, be LATE: a stall that costs 15s is a
+    /// slow page, a storm is an outage.</para>
     /// </summary>
-    internal static readonly TimeSpan MissingInitialProbe = TimeSpan.FromSeconds(4);
+    internal static readonly TimeSpan MissingInitialProbe = TimeSpan.FromSeconds(15);
 
     /// <summary>
     /// How many times a silent stream re-sends its subscribe before giving up. Bounded on purpose:
