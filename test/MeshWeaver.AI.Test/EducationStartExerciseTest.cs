@@ -91,7 +91,11 @@ public class EducationStartExerciseTest(ITestOutputHelper output) : MonolithMesh
                 new MeshNode("Drill1", "TestCourse/Module2/Exercise")
                 { Name = "Drill One", NodeType = "Markdown", Order = 1, Content = new MarkdownContent { Content = "# Drill 1" } },
                 new MeshNode("Drill2", "TestCourse/Module2/Exercise")
-                { Name = "Drill Two", NodeType = "Markdown", Order = 2, Content = new MarkdownContent { Content = "# Drill 2" } }
+                { Name = "Drill Two", NodeType = "Markdown", Order = 2, Content = new MarkdownContent { Content = "# Drill 2" } },
+                // A page BELOW the deepest level the rail lists — the rail must still show the whole index
+                // and fall back to the nearest listed entry (the exercise) for "where am I".
+                new MeshNode("Step1", "TestCourse/Module2/Exercise/Drill1")
+                { Name = "Step One", NodeType = "Markdown", Order = 1, Content = new MarkdownContent { Content = "# Step 1" } }
             );
 
     // The layout-client config so GetClient().GetWorkspace() + GetControlStream can render an area to a
@@ -427,6 +431,154 @@ public class EducationStartExerciseTest(ITestOutputHelper output) : MonolithMesh
             "course home + the Introduction page + one group for each of the two modules");
     }
 
+    // Every depth a learner can stand at, and the entry that must carry the "you are here" highlight there.
+    // Depths 1-4 are pages the rail lists outright; 5 is a module's Exercise/ INDEX page (the live
+    // .../Introduction/Exercises shape — the folder's own entry is replaced by the exercises it holds, so the
+    // module home carries the highlight); 6-7 are the same exercise read from the template and from the
+    // learner's own copy; 8 is a page BELOW everything the rail lists.
+    public static TheoryData<string, string, string?> EveryDepth() => new()
+    {
+        { "TestCourse",                                            "TestCourse",                          null },
+        { "TestCourse/Intro",                                      "TestCourse/Intro",                    null },
+        { "TestCourse/Module2",                                    "TestCourse/Module2",                  "TestCourse/Module2" },
+        { "TestCourse/Module2/Theory",                             "TestCourse/Module2/Theory",           "TestCourse/Module2" },
+        { "TestCourse/Module2/Exercise",                           "TestCourse/Module2",                  "TestCourse/Module2" },
+        { "TestCourse/Module2/Exercise/Drill1",                    "TestCourse/Module2/Exercise/Drill1",  "TestCourse/Module2" },
+        { $"{LearnerId}/TestCourse/Module2/Exercise/Drill1",       "TestCourse/Module2/Exercise/Drill1",  "TestCourse/Module2" },
+        { $"{LearnerId}/TestCourse/Module2/Exercise/Drill1/Step1", "TestCourse/Module2/Exercise/Drill1",  "TestCourse/Module2" },
+    };
+
+    [Theory(Timeout = 120_000)]
+    [MemberData(nameof(EveryDepth))]
+    public async Task CourseNav_AtEveryDepth_TheIndexIsIdentical_AndOnlyTheMarkersMove(
+        string currentPath, string expectedActive, string? expectedExpandedModule)
+    {
+        // THE requirement: "should only highlight where we stand, not reduce menu". Drilling down must not
+        // re-scope or shrink the rail — at every depth the SAME index is emitted (same modules, same links,
+        // same hrefs), and the only thing that changes is which entry is active and which module is open.
+        var nodes = await QueryCourseSubtree();
+
+        var atCourseRoot = EducationLayoutAreas.BuildCourseNavModel(
+            "TestCourse", "TestCourse", LearnerId, nodes, NoCopies);
+        var here = EducationLayoutAreas.BuildCourseNavModel(
+            "TestCourse", currentPath, LearnerId, nodes, NoCopies);
+
+        // 1. The index itself — module list, per-module links, hrefs, resolve targets — is byte-identical to
+        //    the one rendered on the course home. It can never shrink as you go deeper.
+        IndexSignature(here).Should().Be(IndexSignature(atCourseRoot),
+            $"the course index must be the same at '{currentPath}' as at the course root — only the " +
+            "highlight moves");
+        here.Modules.Select(m => m.Path).Should().Equal("TestCourse/Module1", "TestCourse/Module2");
+
+        // 2. Exactly ONE entry marks where we stand — the page itself, or the deepest entry containing it
+        //    when the page is not a rail entry of its own.
+        AllLinks(here).Where(l => l.IsActive).Select(l => l.SourcePath).Should().Equal(expectedActive);
+
+        // 3. Collapsing hides links, never modules: every module is still listed, at most one is open.
+        here.Modules.Where(m => m.Expanded).Select(m => m.Path)
+            .Should().Equal(expectedExpandedModule is null ? [] : new[] { expectedExpandedModule });
+
+        AssertNoExerciseLinksTheTemplate(here, "TestCourse");
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task CourseNav_OnAModulesExerciseIndexPage_ShowsTheWholeIndex_AndItsOwnPosition()
+    {
+        // The live https://…/AgenticEngineering/Introduction/Exercises shape: the page IS a module's
+        // exercise-folder index. Its own entry is replaced in the rail by the exercises it holds, so it gets
+        // no exact link — and before the position fallback it left the learner with NOTHING highlighted.
+        var nodes = await QueryCourseSubtree();
+
+        var model = EducationLayoutAreas.BuildCourseNavModel(
+            "TestCourse", "TestCourse/Module2/Exercise", LearnerId, nodes, NoCopies);
+
+        // The whole course, exactly as on any other page.
+        model.Modules.Select(m => m.Path).Should().Equal("TestCourse/Module1", "TestCourse/Module2");
+        model.Pages.Select(p => p.SourcePath).Should().Equal("TestCourse/Intro");
+
+        // Its own position: the module it belongs to is open and highlighted, with its exercises visible.
+        var module2 = model.Modules.Single(m => m.Path == "TestCourse/Module2");
+        module2.Expanded.Should().BeTrue("the learner is inside Module 2");
+        // The nearest LISTED entry is the module itself — the folder's own entry is replaced by its exercises.
+        AllLinks(model).Where(l => l.IsActive).Select(l => l.SourcePath).Should().Equal("TestCourse/Module2");
+        module2.Links.Where(l => l.IsExercise).Select(l => l.SourcePath).Should().Equal(
+            "TestCourse/Module2/Exercise/Drill1", "TestCourse/Module2/Exercise/Drill2");
+
+        // And the exercises it lists still resolve into the learner's own copy, never the template.
+        module2.Links.Where(l => l.IsExercise).Should().OnlyContain(l => l.Href == null);
+        AssertNoExerciseLinksTheTemplate(model, "TestCourse");
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task CourseNav_Area_RendersTheWholeCourseRail_OnAnExerciseIndexPage()
+    {
+        // End-to-end proof of depth-invariance through the REAL area (course query + personal-copies query +
+        // render): rendering the rail ON a module's exercise-index page yields the same NavMenu shape as on
+        // a module page — course home + the course-level page + one group per module.
+        var control = await RenderControl(
+            EducationLayoutAreas.CourseNavArea,
+            c => c is NavMenuControl { Areas.Count: 4 },
+            node: "TestCourse/Module2/Exercise");
+
+        var menu = control.Should().BeOfType<NavMenuControl>("the course rail is a NavMenu").Subject;
+        menu.Areas.Count.Should().Be(4,
+            "the index does not shrink on an exercise-index page — home + Introduction + both module groups");
+    }
+
+    [Fact]
+    public void ResolveActivePath_PrefersTheExactEntry_ThenTheDeepestAncestor()
+    {
+        string[] entries =
+        [
+            "Course", "Course/M1", "Course/M1/Theory", "Course/M1/Exercise/Drill1", "Course/M2",
+        ];
+
+        // An entry that IS the page wins outright, however many ancestors also match.
+        EducationLayoutAreas.ResolveActivePath("Course/M1/Theory", entries).Should().Be("Course/M1/Theory");
+        EducationLayoutAreas.ResolveActivePath("Course", entries).Should().Be("Course");
+
+        // No exact entry → the DEEPEST containing one, never a shallower ancestor.
+        EducationLayoutAreas.ResolveActivePath("Course/M1/Exercise", entries).Should().Be("Course/M1");
+        EducationLayoutAreas.ResolveActivePath("Course/M1/Exercise/Drill1/Step1", entries)
+            .Should().Be("Course/M1/Exercise/Drill1");
+        EducationLayoutAreas.ResolveActivePath("Course/Cover/Deep", entries).Should().Be("Course");
+
+        // A sibling that merely shares a prefix is NOT an ancestor.
+        EducationLayoutAreas.ResolveActivePath("Course/M11/Page", ["Course/M1"]).Should().BeNull();
+        // Nothing contains the page → no position at all (the index still renders).
+        EducationLayoutAreas.ResolveActivePath("Other/Page", entries).Should().BeNull();
+        EducationLayoutAreas.ResolveActivePath("Course/M1", []).Should().BeNull();
+    }
+
+    [Fact]
+    public void CourseNav_ACourseLevelExercise_IsAnExercise_NotATemplatePageLink()
+    {
+        // A childless exercise sitting directly under the COURSE (by node type, or a course-level Exercise/
+        // folder that holds nothing) used to fall through to a plain page link — a live href straight at the
+        // read-only template, the one thing the rail must never emit.
+        var nodes = new[]
+        {
+            new MeshNode("Course") { Name = "Course" },
+            new MeshNode("Cover", "Course") { Name = "Cover", Order = 0 },
+            new MeshNode("Kata", "Course") { Name = "Kata", NodeType = "Edu/Exercise", Order = 1 },
+            new MeshNode("Exercise", "Course") { Name = "Course Exercise", Order = 2 },
+            new MeshNode("M1", "Course") { Name = "Module 1", Order = 3 },
+            new MeshNode("Theory", "Course/M1") { Name = "Theory", Order = 1 },
+        };
+
+        var model = EducationLayoutAreas.BuildCourseNavModel("Course", "Course", "u1", nodes, NoCopies);
+
+        model.Pages.Select(p => p.SourcePath).Should().Equal("Course/Cover", "Course/Kata", "Course/Exercise");
+        model.Pages.Where(p => p.IsExercise).Select(p => p.SourcePath)
+            .Should().Equal("Course/Kata", "Course/Exercise");
+        model.Pages.Where(p => p.IsExercise).Should().OnlyContain(
+            p => p.Href == null, "with no copy yet a course-level exercise resolves on click, never by href");
+        // The plain cover page is untouched — only exercises are gated.
+        model.Pages.Single(p => p.SourcePath == "Course/Cover").Href
+            .Should().Be($"Course/Cover/{EducationLayoutAreas.LearnArea}");
+        AssertNoExerciseLinksTheTemplate(model, "Course");
+    }
+
     [Fact]
     public void PersonalExercisePath_ResolvesToTheViewersCopy_OrNothing()
     {
@@ -582,7 +734,20 @@ public class EducationStartExerciseTest(ITestOutputHelper output) : MonolithMesh
 
     private static IEnumerable<EducationLayoutAreas.CourseNavLink> AllLinks(
         EducationLayoutAreas.CourseNavModel model)
-        => new[] { model.Home }.Concat(model.Pages).Concat(model.Modules.SelectMany(m => m.Links));
+        => EducationLayoutAreas.EnumerateLinks(model);
+
+    // The rail's CONTENT, with the position markers (IsActive / Expanded) deliberately left OUT: everything
+    // that must NOT change as the learner drills down. Two models with the same signature render the same
+    // index.
+    private static string IndexSignature(EducationLayoutAreas.CourseNavModel model)
+        => string.Join("\n", new[] { $"HOME {model.Home.SourcePath} -> {model.Home.Href}" }
+            .Concat(model.Pages.Select(Describe))
+            .Concat(model.Modules.SelectMany(m =>
+                new[] { $"MODULE {m.Path} '{m.Title}'" }.Concat(m.Links.Select(l => "  " + Describe(l))))));
+
+    private static string Describe(EducationLayoutAreas.CourseNavLink link)
+        => $"{(link.IsExercise ? "EXERCISE" : "PAGE")} {link.SourcePath} '{link.Title}' " +
+           $"-> {link.Href ?? "(none)"} resolve={link.ResolveFromPath ?? "(none)"}";
 
     // THE invariant the maintainer cares about: an exercise entry may point into the learner's own
     // partition or nowhere at all — never at the central course template.
@@ -597,12 +762,14 @@ public class EducationStartExerciseTest(ITestOutputHelper output) : MonolithMesh
         }
     }
 
-    // Renders one area on the TestCourse/Module1/Ex1 node through the layout client (GetControlStream), so
-    // the assertion inspects the real deserialized UiControl the browser would receive.
-    private async Task<UiControl?> RenderControl(string area, Func<UiControl, bool>? until = null)
+    // Renders one area on a course node (TestCourse/Module1/Ex1 by default) through the layout client
+    // (GetControlStream), so the assertion inspects the real deserialized UiControl the browser would
+    // receive. The node is a parameter so the rail can be rendered at different DEPTHS.
+    private async Task<UiControl?> RenderControl(
+        string area, Func<UiControl, bool>? until = null, string node = "TestCourse/Module1/Ex1")
     {
         var client = GetClient();
-        var nodeAddress = new Address("TestCourse/Module1/Ex1");
+        var nodeAddress = new Address(node);
         await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress))
             .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
 
