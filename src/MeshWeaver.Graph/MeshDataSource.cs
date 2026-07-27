@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -154,16 +155,53 @@ public static class MeshDataSourceExtensions
                                 // GetCompilationPathRequest occasionally returned a Release
                                 // MeshNode — fresh instance hubs ended up bound to the
                                 // wrong assembly (V1 vs V2 in the recompile tests).
-                                var ownDataSource = workspace.DataContext
-                                    .GetDataSourceForType(typeof(MeshNode));
-                                var primary = ownDataSource?.GetStreamForPartition(null);
-                                var collectionStream = primary
-                                    ?.Reduce<InstanceCollection>(new CollectionReference(nameof(MeshNode)));
-                                var ownPathReference = string.IsNullOrEmpty(meshRef.Path)
-                                    ? new MeshNodeReference(workspace.Hub.Address.Path)
-                                    : meshRef;
-                                return collectionStream
-                                    ?.Reduce((WorkspaceReference<MeshNode>)ownPathReference, configuration);
+                                //
+                                // 🚨 OWN-NODE COHERENCE — the reduced chain is built ONCE per
+                                // (workspace, path) and shared by every own-node reader.
+                                // Reducing "directly from the primary" (above) is NOT by itself
+                                // enough to keep readers "pinned to the same stream": every
+                                // Reduce() call MINTS A NEW SynchronizationStream, and each of
+                                // those pumps its values through its OWN hosted sync/<id> hub
+                                // (SynchronizationStream.OnNext → Hub.Post(SetCurrentRequest)).
+                                // Two callers therefore observed the SAME commit on two
+                                // independent action blocks, in arbitrary relative order — with
+                                // ~25% inversions measured (OwnMeshNodeStreamCoherenceTest).
+                                // That broke every "react on the own node, then act" component:
+                                // the AI submission watcher's ThreadInboxChannel.OfferFromNode
+                                // could still be un-run while another own-node reader had already
+                                // seen the follow-up land, so check_inbox answered "(no new
+                                // messages)" for a message that was demonstrably on the node
+                                // (InboxToolIntegrationTest.CheckInbox_DrainMidExecution…).
+                                // Sharing one stream makes fan-out a single synchronous
+                                // ReplaySubject dispatch in SUBSCRIPTION order, so a reader that
+                                // subscribed first is always served first — the same coherence the
+                                // cross-hub branch above already gets free from
+                                // Workspace._remoteStreamCache. It also stops leaking two hosted
+                                // sync/ hubs + subscriptions per own-node read (nothing ever
+                                // disposed those chains; they lived until the primary died).
+                                var ownPath = string.IsNullOrEmpty(meshRef.Path)
+                                    ? workspace.Hub.Address.Path
+                                    : meshRef.Path!;
+
+                                // A caller that supplies its own StreamConfiguration wants a
+                                // BESPOKE stream (different null-return / subscriber semantics),
+                                // so it must not be served the shared one — and must not poison
+                                // the cache for everyone else. Nothing in the tree does this
+                                // today: every own-node reader uses the no-configuration overload
+                                // (workspace.GetStream(new MeshNodeReference())), which arrives
+                                // here as null. Keep the old per-call construction for them.
+                                // Likewise when this hub has no OwnNodeCache registered — then
+                                // there is nowhere hub-scoped to keep the stream, and a
+                                // process-lifetime cache is exactly what must not be built.
+                                var ownStreams = workspace.Hub.ServiceProvider
+                                    .GetService<OwnNodeCache>()?.OwnNodeStreams;
+                                if (configuration is not null || ownStreams is null)
+                                    return BuildOwnNodeStream(workspace, ownPath, configuration);
+
+                                return ownStreams.GetOrAdd(
+                                    ownPath,
+                                    p => new Lazy<ISynchronizationStream<MeshNode>?>(
+                                        () => BuildOwnNodeStream(workspace, p, null))).Value;
                             }))
                     .WithDataSource(_ => dataSource)
                     .WithDefaultDataReference(workspace =>
@@ -454,6 +492,19 @@ public static class MeshDataSourceExtensions
         /// redundant (now lossless) echo.</para>
         /// </summary>
         public volatile MeshNode? PersistedSnapshot;
+
+        /// <summary>
+        /// 🚨 The hub's ONE own-node reduced stream per referenced path — the coherence
+        /// guarantee behind <c>workspace.GetMeshNodeStream()</c>. See the OWN-NODE COHERENCE
+        /// note in <c>AddMeshDataSource</c>'s <c>MeshNodeReference</c> reducer for why every
+        /// own-node reader MUST be handed the same stream. Lives here so its lifetime is the
+        /// hub's DI container — it dies with the hub, exactly like the fields above, and can
+        /// never bleed across hubs or outlive one (which a closure captured in a possibly
+        /// shared hub CONFIGURATION could). <c>Lazy&lt;T&gt;</c> so a check-then-act race can't
+        /// build two chains: the loser's factory never runs (same pattern, same reason, as
+        /// <c>Workspace._remoteStreamCache</c>).
+        /// </summary>
+        internal ConcurrentDictionary<string, Lazy<ISynchronizationStream<MeshNode>?>> OwnNodeStreams { get; } = new();
     }
 
     /// <summary>
@@ -1405,6 +1456,25 @@ public static class MeshDataSourceExtensions
             });
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Builds the own-node reduced chain: the MeshNode data source's PRIMARY EntityStore stream
+    /// → <c>CollectionReference("MeshNode")</c> → <c>MeshNodeReference(path)</c>. Called once per
+    /// (workspace, path) by the cache in <c>AddMeshDataSource</c>; see the OWN-NODE COHERENCE
+    /// note there for why sharing the result is load-bearing and not just a saving.
+    /// </summary>
+    private static ISynchronizationStream<MeshNode>? BuildOwnNodeStream(
+        IWorkspace workspace,
+        string ownPath,
+        Func<StreamConfiguration<MeshNode>, StreamConfiguration<MeshNode>>? configuration)
+    {
+        var ownDataSource = workspace.DataContext.GetDataSourceForType(typeof(MeshNode));
+        var primary = ownDataSource?.GetStreamForPartition(null);
+        var collectionStream = primary
+            ?.Reduce<InstanceCollection>(new CollectionReference(nameof(MeshNode)));
+        return collectionStream
+            ?.Reduce((WorkspaceReference<MeshNode>)new MeshNodeReference(ownPath), configuration);
     }
 
     /// <summary>

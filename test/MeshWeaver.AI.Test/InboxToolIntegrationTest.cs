@@ -222,7 +222,10 @@ public class InboxToolIntegrationTest : AITestBase
 
         // Queue a follow-up while round 1 streams. Gate on the thread hub's OWN stream so
         // the submission watcher's OfferFromNode (Stage 1, subscribed to the same own
-        // stream) has buffered it into the in-memory channel before we drain.
+        // stream at thread-hub init) has buffered it into the in-memory channel before we
+        // drain. That is a real happens-before, not a hope: own-node readers share ONE
+        // reduced stream, whose fan-out is a single synchronous dispatch in subscription
+        // order, and the watcher subscribed first. See OwnMeshNodeStreamCoherenceTest.
         client.SubmitMessage(threadPath, "Follow-up while you work",
             modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
         var queued = await WaitForOwnAsync(threadHub,
@@ -300,26 +303,14 @@ public class InboxToolIntegrationTest : AITestBase
             t => t.IsExecuting && t.PendingUserMessages.Count >= 2, 30_000, ct);
         var bothPending = afterSecond.PendingUserMessages.Keys.ToHashSet();
 
-        // check_inbox: both delivered inline from the channel. Seeing PendingUserMessages.Count>=2
-        // on the NODE does NOT prove both are in the in-memory channel yet: the submission watcher's
-        // Stage-1 OfferFromNode buffers each follow-up on a SEPARATE subscription to the same own
-        // stream, so it can lag the test's own-stream read by a beat. check_inbox is explicitly
-        // designed to be polled between steps, and DrainPending returns only newly-offered messages,
-        // so we poll the (in-memory, node-write-free) drain reactively and accumulate until BOTH
-        // follow-ups have been delivered inline. Accumulation = the union actually delivered — the
-        // intent ("both delivered inline, none lost, with the 💬 marker") is unchanged; only the
-        // wait is robust against the Stage-1 buffering beat.
+        // check_inbox: ONE call delivers both inline from the channel. Seeing
+        // PendingUserMessages.Count>=2 on the own stream DOES prove both are in the in-memory
+        // channel: own-node readers share a single reduced stream and the submission watcher
+        // (Stage 1, subscribed at thread-hub init) is served first, so its OfferFromNode has run
+        // for every frame this wait observed. See OwnMeshNodeStreamCoherenceTest — this used to
+        // be a poll-and-accumulate loop precisely because that ordering did NOT hold.
         var tool = InboxTool.CreateCheckInboxTool(threadHub);
-        var acc = new System.Text.StringBuilder();
-        var toolResult = await Observable.Interval(50.Milliseconds()).StartWith(0L)
-            .SelectMany(_ => Observable.FromAsync(() => tool.InvokeAsync(new AIFunctionArguments(), ct).AsTask()))
-            .Do(r => acc.Append(r?.ToString()))
-            .Select(_ => acc.ToString())
-            .Where(s => s.Contains("Follow-up ONE") && s.Contains("Follow-up TWO"))
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .SubscribeOn(TaskPoolScheduler.Default)
-            .ToTask(ct);
+        var toolResult = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
         toolResult.Should().Contain("Follow-up ONE");
         toolResult.Should().Contain("Follow-up TWO");
         toolResult.Should().Contain("💬");
@@ -772,14 +763,23 @@ public class InboxToolIntegrationTest : AITestBase
     }
 
     /// <summary>
-    /// Stream-based wait on the thread hub's OWN node stream — the EXACT stream
-    /// <c>check_inbox</c> reads (<c>threadHub.GetWorkspace().GetMeshNodeStream()</c>).
-    /// The mesh-side <see cref="WaitForThreadAsync"/> uses a separate remote stream
-    /// with its own replay buffer, so a condition satisfied there isn't guaranteed
-    /// visible on the tool's own stream yet. Gating the tool call on the OWN stream
-    /// means the tool reads the same snapshot the wait just observed — closing the
-    /// window where the submission watcher could drain between a mesh-side wait and
-    /// the tool's own-stream read.
+    /// Stream-based wait on the thread hub's OWN node stream — the EXACT stream that FEEDS
+    /// <c>check_inbox</c> (<c>threadHub.GetWorkspace().GetMeshNodeStream()</c>, the stream the
+    /// submission watcher's Stage-1 <c>OfferFromNode</c> reacts on). The mesh-side
+    /// <see cref="WaitForThreadAsync"/> uses a separate remote stream with its own replay
+    /// buffer, so a condition satisfied there isn't guaranteed visible to the tool yet.
+    ///
+    /// <para>🚨 Why waiting here ORDERS against the watcher — the property this whole file
+    /// depends on. <c>check_inbox</c> is a pure in-memory dequeue from the
+    /// <c>ThreadInboxChannel</c>; a message is visible to it only once the watcher's
+    /// <c>OfferFromNode</c> has run for the frame that carries it. Own-node readers share ONE
+    /// reduced stream (<c>MeshDataSourceExtensions.AddMeshDataSource</c>), so a commit fans out
+    /// as a single synchronous ReplaySubject dispatch in SUBSCRIPTION order — and the watcher
+    /// subscribed at thread-hub init, before this wait. So any frame this wait observes has
+    /// already been offered. Until that sharing landed, every own-node read minted its own
+    /// independently-pumped stream and this wait raced the watcher on ~25% of commits — the
+    /// flake in <see cref="CheckInbox_DrainMidExecution_DeliversInline_NoCellSplit"/>. Pinned by
+    /// <c>OwnMeshNodeStreamCoherenceTest</c>.</para>
     /// </summary>
     private static async Task<MeshThread> WaitForOwnAsync(
         IMessageHub threadHub, Func<MeshThread, bool> predicate, int timeoutMs, CancellationToken ct)
