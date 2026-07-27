@@ -53,6 +53,29 @@ public class AdminPartitionAdminTests(ITestOutputHelper output) : MonolithMeshTe
         await Mesh.GetEffectivePermissions("someuser/Underwriting", "AdminBoss").Should().Match(p => p == Permission.None);
     }
 
+    /// <summary>
+    /// 🚨 The invariant the STORE depends on, named in the terms the business states it:
+    /// being a global admin must not grant READ on any node. Gated/purchased content is gated
+    /// for admins too — entitlement is a record, never a side effect of administering the
+    /// platform. Asserted on Read specifically (not just "no permissions") so the guarantee is
+    /// greppable and cannot be weakened to "well, read-only is harmless".
+    /// </summary>
+    [Fact]
+    public async Task PlatformAdmin_GrantsNoReadOnAnyOtherNode()
+    {
+        await Mesh.GetEffectivePermissions("ACME", "AdminBoss")
+            .Should().Match(p => !p.HasFlag(Permission.Read));
+        // A purchasable plugin and its gated child — the store's paywall must hold for an admin
+        // who has not bought it, exactly as it does for any other signed-in visitor.
+        await Mesh.GetEffectivePermissions("AgenticEngineering", "AdminBoss")
+            .Should().Match(p => !p.HasFlag(Permission.Read));
+        await Mesh.GetEffectivePermissions("AgenticEngineering/Introduction", "AdminBoss")
+            .Should().Match(p => !p.HasFlag(Permission.Read));
+        // Another user's home stays private from the platform admin as well.
+        await Mesh.GetEffectivePermissions("someuser/Notes", "AdminBoss")
+            .Should().Match(p => !p.HasFlag(Permission.Read));
+    }
+
     [Fact]
     public async Task NonPlatformUser_IsNotGlobalAdmin()
     {

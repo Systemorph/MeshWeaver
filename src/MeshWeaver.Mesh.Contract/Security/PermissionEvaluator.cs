@@ -47,11 +47,25 @@ internal static class PermissionEvaluator
     /// <summary>
     /// The platform scope. A "global admin" is, canonically, an admin on the
     /// <b>Admin partition</b> — <see cref="Permission.All"/> at this scope, granted
-    /// by an <c>AccessAssignment</c> in the <c>Admin/_Access</c> namespace. The
-    /// Admin partition is a standard partition that holds platform-level data; being
-    /// admin on it makes you a platform superuser (see the global-admin short-circuit
-    /// in <see cref="GetEffectivePermissions(IMessageHub,string,string)"/> and
-    /// <c>hub.IsGlobalAdmin()</c>). Documented in Doc/Architecture/AccessControl.md.
+    /// by an <c>AccessAssignment</c> in the <c>Admin/_Access</c> namespace, reported by
+    /// <c>hub.IsGlobalAdmin()</c>. The Admin partition is a standard partition holding
+    /// platform-level data (invitations, inbox, models, global settings).
+    ///
+    /// <para>🚨 A global admin is NOT a data superuser, and there is NO global-admin
+    /// short-circuit in <see cref="GetEffectivePermissions(IMessageHub,string,string)"/>.
+    /// Being admin here grants NOTHING anywhere else — in particular <b>no Read on any
+    /// other node</b>. That falls straight out of how scope works: a grant's scope is its
+    /// own <c>{scope}/_Access</c> namespace (see <c>ComputeScopeRoles</c>) and only the
+    /// ancestors of the target path are consulted (<c>GetScopeHierarchy</c>), so an
+    /// <c>Admin/_Access</c> grant is simply never in a space's or user's scope walk.
+    /// Purchased/gated content is therefore gated for admins too — entitlement is a record,
+    /// never a side effect of being an admin. The ONLY blanket short-circuits below are for
+    /// <see cref="WellKnownUsers.System"/> and a hub's own sync credential.</para>
+    ///
+    /// <para>Pinned by <c>AdminPartitionAdminTests.PlatformAdmin_HasNoStandingAccessToSpacesOrUsers</c>
+    /// and <c>…_GrantsNoReadOnAnyOtherNode</c>. Documented in Doc/Architecture/AccessControl.md.
+    /// Emergency cross-partition access is an explicit elevation (break-glass), never standing
+    /// permission — do not "restore" a superuser branch here.</para>
     /// </summary>
     internal const string AdminScope = "Admin";
 
