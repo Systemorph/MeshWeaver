@@ -40,6 +40,11 @@ public static class PersistenceExtensions
     /// persistence cull (2026-05-12) — without this, every save path skipped the
     /// version-history snapshot.
     ///
+    /// <para>This is also the ONE composition point for the write-integrity chain, so the
+    /// <see cref="MonotonicWriteGuardStorageAdapter"/> is layered on here as the outermost
+    /// decorator: every consumer that resolves <see cref="IStorageAdapter"/> from DI gets a
+    /// store that refuses a backward <see cref="MeshNode.Version"/> write.</para>
+    ///
     /// <para>Idempotency is via the <see cref="VersionWritingDecoratedMarker"/> singleton:
     /// the previous <c>descriptor.ImplementationType == typeof(VersionWritingStorageAdapter)</c>
     /// check never fired because the decorator is registered as a factory (so
@@ -85,10 +90,16 @@ public static class PersistenceExtensions
             return;
         }
 
+        // 🚨 MonotonicWriteGuard is the OUTERMOST decorator — a refused (backward) write must
+        // not produce a version-history snapshot either, so it has to sit ABOVE the
+        // version writer, not below it. See MonotonicWriteGuardStorageAdapter for why a
+        // regressing MeshNode.Version is never a legitimate newer state.
         services.AddSingleton<IStorageAdapter>(sp =>
-            new VersionWritingStorageAdapter(
-                sp.GetRequiredKeyedService<IStorageAdapter>(InnerStorageAdapterKey),
-                sp.GetService<IVersionQuery>()));
+            new MonotonicWriteGuardStorageAdapter(
+                new VersionWritingStorageAdapter(
+                    sp.GetRequiredKeyedService<IStorageAdapter>(InnerStorageAdapterKey),
+                    sp.GetService<IVersionQuery>()),
+                sp.GetService<ILogger<MonotonicWriteGuardStorageAdapter>>()));
 
         // Sentinel so repeat calls (Orleans default + host-explicit persistence)
         // see the prior decoration and bail above instead of stacking another
