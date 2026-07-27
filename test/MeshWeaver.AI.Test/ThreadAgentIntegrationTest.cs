@@ -39,15 +39,14 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
     private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData");
     private const string FakeResponseText = "This is a test response from the fake agent.";
 
-    // This class INSTALLS ITS OWN AGENT and selects it BY NAME. Agents ship from plugins, not from
-    // the core AI package (src/MeshWeaver.AI/Data/Agent no longer exists), so there is no "platform
-    // registry is always populated" guarantee to lean on. Worse, every AI.Test class shares ONE
-    // file-system persistence root (AppContext.BaseDirectory/TestData — see the same constant in
-    // AgentChatClientTest, AttachmentContextTest, …), which also survives between runs because it
-    // lives under bin/. Taking `agents[0]` off that shared registry meant the selected agent was
-    // whatever another class had last written — so the test passed or failed on class ordering,
-    // shard assignment and leftover on-disk state. Owning the agent makes the set deterministic
-    // and makes any extra ambient agent harmless.
+    // This class INSTALLS ITS OWN AGENT and selects it BY NAME. The picker's registry is the UNION
+    // of the built-in catalog (BuiltInAgentProvider, shipped from content/ai/Agent) and whatever
+    // has been persisted — and every AI.Test class shares ONE file-system persistence root
+    // (AppContext.BaseDirectory/TestData — see the same constant in AgentChatClientTest,
+    // AttachmentContextTest, …), which additionally survives between runs because it lives under
+    // bin/. So `agents[0]` selected by POSITION out of a set whose membership and ordering depend
+    // on class ordering, shard assignment and leftover on-disk state. Owning the agent and
+    // selecting it by name makes the choice deterministic and any extra agent harmless.
     // Run-unique, and xUnit builds a fresh class instance per [Fact], so each test owns a distinct
     // agent. Both halves matter: the mesh is shared across this class's facts
     // (ShareMeshAcrossTests), and TestDataPath lives under bin/ so it also survives BETWEEN runs —
@@ -157,7 +156,8 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
     /// <summary>
     /// Seeds this class's own agent into the namespace the picker actually queries
     /// (AgentPickerProjection.BuildAgentQuery → <c>namespace:ACME/Agent|…|Agent nodeType:Agent</c>).
-    /// Idempotent across the [Fact]s — the mesh is shared, so a re-seed rewrites the same node.
+    /// Called once per [Fact], against the run-unique <see cref="testAgentId"/> — the create is NOT
+    /// idempotent (it throws "Node already exists"), which is why the id must not be a constant.
     /// </summary>
     private Task<MeshNode> SeedOwnAgent() =>
         SeedTopLevel(MeshNode.FromPath($"ACME/Agent/{testAgentId}") with
