@@ -594,7 +594,8 @@ internal static class NodeTypeEnrichmentHelpers
                                 return TriggerRecompileAndRetry(
                                     node, nodeType, meshConfiguration, compilationService, meshHub,
                                     logger, recompileAttempts,
-                                    reason: $"pinned release '{requestedReleasePath}' bytes missing from store (collection={release.AssemblyCollection}, version={releaseVersion})");
+                                    reason: $"pinned release '{requestedReleasePath}' bytes missing from store (collection={release.AssemblyCollection}, version={releaseVersion})",
+                                    staleVersion: typeNode.Version);
                             }
                             return compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType)
                                 .Take(1)
@@ -697,7 +698,8 @@ internal static class NodeTypeEnrichmentHelpers
                         return TriggerRecompileAndRetry(
                             node, nodeType, meshConfiguration, compilationService, meshHub,
                             logger, recompileAttempts,
-                            reason: $"latest assembly for '{nodeType}' missing from store (collection={def.LatestAssemblyCollection}, version={compileVersion})");
+                            reason: $"latest assembly for '{nodeType}' missing from store (collection={def.LatestAssemblyCollection}, version={compileVersion})",
+                            staleVersion: typeNode.Version);
                     }
                     if (compilationService is null)
                         return Observable.Return(ApplyEntry(
@@ -821,6 +823,7 @@ internal static class NodeTypeEnrichmentHelpers
         ILogger? logger,
         int recompileAttempts,
         string reason,
+        long? staleVersion = null,
         bool requireUsableBuild = false)
     {
         logger?.LogInformation(
@@ -858,62 +861,29 @@ internal static class NodeTypeEnrichmentHelpers
             // recompile is in flight, so wait for it to FINISH — never fault-and-cache
             // if the (possibly queue-delayed) compile outlasts the wall-clock. The
             // wall-clock only bounds the case where no compile ever goes in flight.
-            .SelectMany(_ => WaitForCompileSettled(typeStream, typeStream
-                .Where(typeNode =>
-                {
-                    if (typeNode.Content is not NodeTypeDefinition d)
-                        return true; // not a NodeTypeDefinition — nothing left to wait on
-
-                    // 🚨 Never settle on an IN-FLIGHT compile, and never re-snap the
-                    // STALE pre-flip node. The Ok→Pending flip above is a cross-hub
-                    // JSON-merge patch — it does NOT round-trip synchronously, so for
-                    // a few ms after we flip, THIS stream still replays the pre-flip
-                    // node (status Ok, OLD assembly/framework). A naive "terminal Ok
-                    // with an assembly" match re-snaps that stale Ok and recurses on
-                    // it before the recompile even starts → recompileAttempts hits the
-                    // cap → the instance lands on the bare overlay (the
-                    // rbuergi/CatBond/AtlanticBond symptom; observed as the recursion
-                    // capping 5ms after the flip). So: skip in-flight states, surface
-                    // a real Error, and for the framework-stale heal require the
-                    // rebuild to be GENUINELY USABLE (HasUsableBuild — the framework
-                    // version now matches), which the stale Ok can never satisfy.
-                    if (d.CompilationStatus is CompilationStatus.Pending
-                                             or CompilationStatus.Compiling)
-                        return false;
-
-                    // 🚨 Framework-stale heal: the ONLY acceptable terminal is a
-                    // GENUINELY USABLE build (the framework version now matches).
-                    // This MUST be checked BEFORE the Error short-circuit below.
-                    // While a stale-Ok type is rebuilt, a CONCURRENT self-heal
-                    // recompile (the instance is enriched twice — routing AND
-                    // activation — so two Ok→Pending flips race) can collide and
-                    // transiently flip the NodeType to Error ("Failed to load
-                    // assembly … corrupt cached .dll") for a few ms before the next
-                    // compile lands the healed Ok. Settling on that transient Error
-                    // (the old `if Error return true` ordering) froze the INSTANCE on
-                    // the compilation-error overlay for its whole lifetime — even
-                    // though the NodeType reaches Ok ~80ms later — because enrichment
-                    // binds HubConfiguration ONCE and never re-observes. That is the
-                    // exact rbuergi/CatBond/AtlanticBond symptom this test pins
-                    // (FrameworkStaleInstanceRenderTest line 182). The source is
-                    // known-good (it produced the stale-but-valid assembly), so an
-                    // Error here is transient — ride through it to HasUsableBuild
-                    // rather than giving up (the /debug "re-establish, never give up
-                    // on a non-terminal-for-your-purpose state" rule). If the rebuild
-                    // genuinely never lands, the Timeout below surfaces the overlay
-                    // (the graceful sink) — never a longer hang.
-                    if (requireUsableBuild)
-                        return NodeTypeCompilationHelpers.HasUsableBuild(typeNode, d);
-
-                    if (d.CompilationStatus == CompilationStatus.Error)
-                        return true;
-
-                    return (typeNode.HubConfiguration != null
-                            && !string.IsNullOrEmpty(d.LatestAssemblyPath))
-                        || (d.CompilationStatus == CompilationStatus.Ok
-                            && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
-                            && !string.IsNullOrEmpty(d.LatestAssemblyPath));
-                })
+            .SelectMany(flipped =>
+            {
+                // 🚨 Arm the stale-re-snap version gate ONLY when a recompile is genuinely
+                // coming. The gate says "the state I already rejected is not an answer — keep
+                // waiting", which is right only if something is going to produce a NEW state.
+                //
+                // The flip lambda above is conditional (it only moves a terminal Ok), and the
+                // Update hands back the resulting node, so that node tells us which world we
+                // are in:
+                //  • Pending — either we just flipped it, or another caller already kicked it.
+                //    Either way a compile is in flight and will write a version-advancing
+                //    terminal state. Gate ON.
+                //  • anything else (e.g. a Status=Error that still carries assembly
+                //    coordinates, which HasUsableBuild deliberately accepts) — the flip was a
+                //    no-op, no compile is coming, and gating would only burn the whole
+                //    no-progress budget before reaching the same conclusion. Gate OFF, so the
+                //    terminal state we already have settles immediately, exactly as before.
+                var gate = flipped?.Content is NodeTypeDefinition flippedDef
+                           && flippedDef.CompilationStatus == CompilationStatus.Pending
+                    ? staleVersion
+                    : null;
+                return WaitForCompileSettled(typeStream, typeStream
+                .Where(typeNode => IsRecompileSettled(typeNode, gate, requireUsableBuild))
                 .Take(1),
                 SlowPathTimeout,
                 () => new TimeoutException(
@@ -921,7 +891,83 @@ internal static class NodeTypeEnrichmentHelpers
                     $"in flight (within {SlowPathTimeout.TotalSeconds:0}s)."))
                 .SelectMany(newTypeNode => ApplyStreamResult(
                     newTypeNode, node, nodeType, meshConfiguration,
-                    compilationService, meshHub, logger, recompileAttempts + 1)));
+                    compilationService, meshHub, logger, recompileAttempts + 1));
+            });
+    }
+
+    /// <summary>
+    /// Terminal-state predicate for the self-heal recompile started by
+    /// <see cref="TriggerRecompileAndRetry"/>: decides whether an emission on the NodeType's
+    /// stream is a genuine ANSWER to the recompile we just kicked off, or must be waited past.
+    /// Split out so the contract is unit-testable without a mesh (<c>RecompileSettlePredicateTest</c>),
+    /// exactly as <see cref="ArmOverlaySelfHeal"/> is.
+    ///
+    /// <para>🚨 The hazard this exists for: the Ok→Pending flip that starts the recompile is a
+    /// cross-hub JSON-merge patch and does NOT round-trip synchronously, so for a few ms the
+    /// stream still replays the PRE-FLIP node — the very state we already rejected. Accepting it
+    /// "settles" the wait in ~0 ms, burns the single <see cref="MaxRecompileAttempts"/> retry
+    /// before the recompile has even started, and drops the instance onto the error overlay or
+    /// the silent default-config fallback. Worse, that fallback arms a
+    /// <see cref="WithOverlaySelfHeal"/> watcher gated at the SAME version, so when the
+    /// recompile we started lands a newer usable build the watcher immediately recycles the
+    /// freshly-created instance hub — destroying the request that triggered the activation
+    /// (the ThreadAgentIntegrationTest 60 s stall).</para>
+    ///
+    /// <para>The rules, in order:</para>
+    /// <list type="bullet">
+    ///   <item>Content that is not a <see cref="NodeTypeDefinition"/> — nothing left to wait on.</item>
+    ///   <item>An IN-FLIGHT compile (Pending / Compiling) is never a terminal.</item>
+    ///   <item><paramref name="requireUsableBuild"/> (the framework-stale heal): the ONLY
+    ///     acceptable terminal is a genuinely usable build — checked BEFORE the Error
+    ///     short-circuit, so a transient collision Error from a concurrent self-heal is ridden
+    ///     through rather than frozen onto the instance.</item>
+    ///   <item>Otherwise, when <paramref name="staleVersion"/> is set (the bytes-missing heals),
+    ///     an emission whose Version has not ADVANCED past it is the stale re-snap — not news.</item>
+    ///   <item>Then: a real Error is terminal, and so is an Ok carrying assembly coordinates.</item>
+    /// </list>
+    /// Bounded either way: <see cref="WaitForCompileSettled"/> disarms its wall clock only once a
+    /// compile is genuinely in flight, and a compile always writes a version-advancing terminal
+    /// state; if no compile starts, the no-progress deadline surfaces the overlay.
+    /// </summary>
+    internal static bool IsRecompileSettled(
+        MeshNode typeNode, long? staleVersion, bool requireUsableBuild)
+    {
+        if (typeNode.Content is not NodeTypeDefinition d)
+            return true; // not a NodeTypeDefinition — nothing left to wait on
+
+        // An in-flight compile is transitional. Settling here would freeze the instance's
+        // HubConfiguration onto a mid-recompile state for the hub's whole lifetime (enrichment
+        // binds ONCE and never re-observes) — the rbuergi/CatBond/AtlanticBond symptom.
+        if (d.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling)
+            return false;
+
+        // 🚨 Framework-stale heal: the ONLY acceptable terminal is a GENUINELY USABLE build (the
+        // framework version now matches), and this MUST be checked BEFORE the Error short-circuit
+        // below. While a stale-Ok type is rebuilt, a CONCURRENT self-heal recompile (the instance
+        // is enriched twice — routing AND activation — so two Ok→Pending flips race) can collide
+        // and transiently flip the NodeType to Error ("Failed to load assembly … corrupt cached
+        // .dll") for a few ms before the next compile lands the healed Ok. Settling on that
+        // transient Error (the old `if Error return true` ordering) froze the INSTANCE on the
+        // compilation-error overlay for its whole lifetime even though the NodeType reaches Ok
+        // ~80 ms later. The source is known-good (it produced the stale-but-valid assembly), so
+        // ride through to HasUsableBuild rather than giving up. Pinned by
+        // FrameworkStaleInstanceRenderTest. If the rebuild genuinely never lands,
+        // WaitForCompileSettled's no-progress deadline surfaces the overlay — never a longer hang.
+        if (requireUsableBuild)
+            return NodeTypeCompilationHelpers.HasUsableBuild(typeNode, d);
+
+        // The stale pre-flip re-snap (see the remarks above): not news, keep waiting.
+        if (staleVersion is { } stale && typeNode.Version <= stale)
+            return false;
+
+        if (d.CompilationStatus == CompilationStatus.Error)
+            return true;
+
+        return (typeNode.HubConfiguration != null
+                && !string.IsNullOrEmpty(d.LatestAssemblyPath))
+            || (d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
+                && !string.IsNullOrEmpty(d.LatestAssemblyPath));
     }
 
     /// <summary>
