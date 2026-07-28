@@ -51,7 +51,7 @@ spec:
             - "-c"
             - "until nc -z memex-postgres-service 5432; do echo 'waiting for postgres'; sleep 2; done"
       containers:
-        - image: "ghcr.io/systemorph/memex-portal-ai:latest"
+        - image: "{{ .Values.portal.image }}"
           name: "memex-portal"
           # On rollout, endpoint removal propagates to the ingress-nginx upstreams asynchronously —
           # without this grace window the pod stops accepting the instant it is SIGTERMed and
@@ -126,10 +126,16 @@ spec:
           startupProbe:
             # Generous window for a cold boot (schema provisioning + static import). While this is
             # failing, readiness/liveness are suspended, so a slow boot is never flagged unhealthy.
+            #
+            # ⚠️ This budget is what bounds a NodeType BAKE (PreWarm__GateReadiness). A cold compile
+            # is ~90 s per NodeType and the sweep is strictly sequential, so a mesh with dozens of
+            # types needs HOURS here, not minutes. periodSeconds × failureThreshold is the ceiling:
+            # the default 5 × 60 = 5 minutes is right for a plain boot and far too small for a cold
+            # bake — turning the gate on without raising this kills the pod mid-bake, every time.
             httpGet: { path: /health, port: 8080 }
-            periodSeconds: 5
-            timeoutSeconds: 5
-            failureThreshold: 60
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
           readinessProbe:
             # ⚠️ /alive (light: process-up), NOT /health (heavy: DB + mesh checks). /health as the
             # readiness probe is the "probe death-spiral": under load a heavy /health times out (5s) →

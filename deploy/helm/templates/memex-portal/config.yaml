@@ -31,6 +31,22 @@ data:
 {{- end }}
   Deployment__Backend: "{{ .Values.config.memex_portal.Deployment__Backend }}"
   Deployment__DataRoot: "{{ .Values.config.memex_portal.Deployment__DataRoot }}"
+  # ---- NodeType bake ------------------------------------------------------
+  # PreWarm__DynamicTypes: compile every dynamic NodeType at startup, sequentially and in
+  #   dependency order, RESUMING from the shared assembly cache under Deployment__DataRoot
+  #   (already-baked types for this framework are skipped). Off → types compile lazily on
+  #   first access, which is what makes the first visitor after each image roll wait.
+  # PreWarm__GateReadiness: hold /health RED until that bake is green. With the
+  #   startupProbe on /health and maxUnavailable:0, a NodeType that REGRESSED on the new
+  #   image stalls the rollout with the previous image still serving, instead of erroring
+  #   in front of users. Only a type that WAS working can gate — a pre-existing broken type
+  #   is logged and skipped, so one abandoned NodeType can't freeze every future deploy.
+  #
+  # ⚠️ Enabling GateReadiness REQUIRES a startupProbe budget covering a full COLD bake
+  #    (~90 s per NodeType, sequential). See probes.startup in values — turning the gate on
+  #    without raising it means Kubernetes kills the pod mid-bake, every time, forever.
+  PreWarm__DynamicTypes: "{{ .Values.config.memex_portal.PreWarm__DynamicTypes }}"
+  PreWarm__GateReadiness: "{{ .Values.config.memex_portal.PreWarm__GateReadiness }}"
   Deployment__Orleans__Clustering: "{{ .Values.config.memex_portal.Deployment__Orleans__Clustering }}"
   Storage__Name: "{{ .Values.config.memex_portal.Storage__Name }}"
   Storage__SourceType: "{{ .Values.config.memex_portal.Storage__SourceType }}"
