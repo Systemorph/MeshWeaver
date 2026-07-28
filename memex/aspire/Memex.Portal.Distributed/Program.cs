@@ -274,9 +274,27 @@ builder.Services.AddHealthChecks()
 
 // Front-load dynamic NodeType compiles at startup so a fresh pod (every image roll /
 // self-update spins one up) doesn't make the first visitor of each type wait out a cold
-// Roslyn compile. Best-effort, non-blocking, does NOT gate readiness — Part 2
-// (enrichment awaits the in-flight compile) handles anything still compiling on arrival.
+// Roslyn compile. The sweep is sequential, in dependency order, and RESUMES from the shared
+// assembly cache — types already baked for this framework are skipped, so a second replica
+// (or a restart) inherits the first pod's work instead of repeating it.
 builder.Services.AddDynamicTypePreWarming();
+// Shared bake state the sweep writes and the readiness gate below reads.
+builder.Services.AddNodeTypeBakeGate();
+
+// 🚦 "Fail before prod, not in prod." Opt-in (PreWarm:GateReadiness) gate that holds /health
+// RED until this pod's NodeTypes are built against ITS image. Combined with the deployment's
+// startupProbe on /health and maxUnavailable:0, a NodeType that regressed on the new image
+// stalls the ROLLOUT — the new pod never takes traffic and the previous image keeps serving —
+// instead of surfacing as user-facing errors after the switch.
+//
+// Registered only when explicitly enabled: a gate that can withhold readiness should be an
+// intentional deployment choice, not something a self-host inherits by accident. It also
+// REQUIRES a startupProbe budget large enough for a full cold bake (see values.aks.yaml) —
+// without that, Kubernetes kills the pod mid-bake and it never converges.
+if (bool.TryParse(builder.Configuration[NodeTypeBakeGateExtensions.EnabledConfigKey], out var gateBake)
+    && gateBake)
+    builder.Services.AddHealthChecks()
+        .AddCheck<Memex.Portal.Distributed.NodeTypeBakeHealthCheck>("nodetype_bake");
 
 var app = builder.Build();
 

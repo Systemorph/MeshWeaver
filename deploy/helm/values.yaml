@@ -81,6 +81,22 @@ ollama:
 #     the portal's own pod (the shipped node / bun / python gates). Reachability IS the
 #     authentication: no API token, nothing to rotate; deliveries may carry through the requesting
 #     user's AccessContext (see GrpcOptions.TrustedPort).
+# ---- Startup probe budget ------------------------------------------------------------------------
+# periodSeconds × failureThreshold is the HARD ceiling on how long a pod may take to serve /health
+# before Kubernetes kills it. Defaults (5 × 60) = 5 minutes: right for a plain cold boot (schema
+# provisioning + static import).
+#
+# ⚠️ If you enable config.memex_portal.PreWarm__GateReadiness, raise failureThreshold in the SAME
+# change. The bake compiles every dynamic NodeType sequentially at ~90 s each, so a mesh with 60-100
+# types needs 2-3 HOURS. Suggested paired setting: periodSeconds 10, failureThreshold 1080 (3h).
+# Under-budgeting here is not a slow rollout — it is a pod that is killed mid-bake and never
+# converges, on every single attempt.
+probes:
+  startup:
+    periodSeconds: 5
+    timeoutSeconds: 5
+    failureThreshold: 60
+
 grpc:
   enabled: true
   port: 8081
@@ -191,6 +207,12 @@ config:
     ASPNETCORE_HTTP_PORTS: "8080"
     Deployment__Backend: "Filesystem"
     Deployment__DataRoot: "/data"
+    # Both OFF by default. The bake is a deliberate operational choice, not something a
+    # self-host should inherit: it front-loads every NodeType compile into startup, and the
+    # gate can hold a pod out of rotation. Enable them together, and raise probes.startup
+    # in the same change. See config.yaml for what each one does.
+    PreWarm__DynamicTypes: "false"
+    PreWarm__GateReadiness: "false"
     Deployment__Orleans__Clustering: "Localhost"
     Storage__Name: "content"
     Storage__SourceType: "FileSystem"
