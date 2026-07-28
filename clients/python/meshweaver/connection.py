@@ -181,7 +181,15 @@ class MeshConnection:
 #: an address win, so two concurrent client processes sharing one machine-wide id would silently
 #: steal each other's pushes. Set ``MESHWEAVER_CLIENT_ID`` to pin a stable id across process
 #: invocations (a long-lived agent or CLI session reconnecting to its own hub).
-_CLIENT_ID = os.environ.get("MESHWEAVER_CLIENT_ID") or uuid.uuid4().hex
+#:
+#: The value is sanitised to ``[A-Za-z0-9_-]`` (mirroring ``SessionHubResolver.Sanitize`` on the
+#: server): an operator-supplied id containing ``/`` would otherwise claim a multi-segment address
+#: like ``portal/a/b`` — a different address shape than intended, which would not round-trip
+#: through the server's ``Address`` parsing.
+_CLIENT_ID = "".join(
+    c if (c.isascii() and c.isalnum()) or c in "-_" else "-"
+    for c in (os.environ.get("MESHWEAVER_CLIENT_ID") or uuid.uuid4().hex)
+)
 
 
 def client_address() -> str:

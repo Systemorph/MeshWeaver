@@ -36,7 +36,15 @@ export interface ConnectOptions {
 // an address win, so two concurrent client processes sharing one machine-wide id would silently
 // steal each other's pushes. Set MESHWEAVER_CLIENT_ID to pin a stable id across process
 // invocations (a long-lived agent or CLI session reconnecting to its own hub).
-const CLIENT_ID = process.env.MESHWEAVER_CLIENT_ID || randomUUID().replace(/-/g, "");
+//
+// Sanitised to [A-Za-z0-9_-] (mirroring SessionHubResolver.Sanitize on the server): an
+// operator-supplied id containing "/" would otherwise claim a multi-segment address like
+// "portal/a/b" — a different address shape than intended, which would not round-trip through the
+// server's Address parsing.
+const CLIENT_ID = (process.env.MESHWEAVER_CLIENT_ID || randomUUID().replace(/-/g, "")).replace(
+  /[^A-Za-z0-9_-]/g,
+  "-",
+);
 
 /** This process's stable `portal/<id>` participant address. */
 export function clientAddress(): string {

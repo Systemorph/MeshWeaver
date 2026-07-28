@@ -74,11 +74,20 @@ public sealed class GrpcConnectionRegistry : IDisposable, IParticipantPresence
     /// <para>Resolution is a hosted-hubs dictionary lookup that creates on first use and returns
     /// the same instance afterwards, so this needs no gate of its own — and creating it lazily
     /// (rather than in the constructor) keeps hub construction out of DI construction.</para>
+    ///
+    /// <para>🚨 <c>RegisterStream</c> is REQUIRED, not decoration: <c>portal</c> is a stream-routed
+    /// address type (<c>MeshConfiguration.DefaultStreamRoutedAddressTypes</c>), so on Orleans
+    /// the RoutingGrain dispatches to this address over the cluster-wide memory stream. Without the
+    /// registration the RESPONSE (e.g. <c>ValidateTokenResponse</c>) has nowhere to land cross-silo
+    /// and the request times out — reintroducing the very failure this hub exists to avoid. The
+    /// monolith masks it (routing short-circuits on <c>GetHostedHub</c>), so tests would not catch
+    /// it. Same wiring as <c>SessionHubResolver</c>'s session hubs.</para>
     /// </summary>
     private IMessageHub TransportHub =>
         hub.GetHostedHub(
             AddressExtensions.CreatePortalAddress($"grpc-{instanceId}"),
-            c => c,
+            c => c.WithInitialization(h =>
+                h.RegisterForDisposal(routingService.RegisterStream(h))),
             HostedHubCreation.Always)
         ?? throw new InvalidOperationException(
             "Failed to materialise the gRPC transport portal hub.");
