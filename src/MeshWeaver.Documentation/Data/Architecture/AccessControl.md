@@ -66,8 +66,64 @@ MeshWeaver implements row-level security through **AccessAssignment MeshNodes** 
 A user is a **global (platform) admin** iff they hold `Permission.All` at scope `Admin` — i.e. there is an `AccessAssignment` granting them the `Admin` role in the **`Admin/_Access`** namespace:
 
 ```
-Admin/_Access/{user}_Access   →   AccessObject = {user}, Roles = [ Admin ],  MainNode = ""
+Admin/_Access/{user}_Access   →   AccessObject = {user}, Roles = [ Admin ],  MainNode = "Admin"
 ```
+
+> ## 🚨🚨 NEVER MAKE ANYONE A GLOBAL ADMIN
+>
+> **Global admin is not a convenience, a default, or something onboarding hands out. It is the
+> single most dangerous grant in the system and it must be granted to a named human, deliberately,
+> and essentially never.** If you are about to add a row to `Admin/_Access`, stop: the answer is
+> almost always a **partition admin** on the one partition they actually need.
+>
+> ### `MainNode` is the whole ballgame — `""` means ROOT, not "Admin"
+>
+> | `mainNode` | Scope it resolves to | What the user actually gets |
+> |---|---|---|
+> | `"Admin"` | `Admin` partition | ✅ platform management only — the intended shape |
+> | `""` (empty) | **ROOT** | 🔴 **DATA SUPERUSER — All on every partition, every space, every user's private home, by scope inheritance** |
+>
+> An empty `mainNode` does **not** mean "scoped to the folder it sits in". The grant is scoped by
+> `mainNode`, **not** by its path — so `Admin/_Access/{user}_Access` with `mainNode: ""` is a
+> **root grant that happens to be filed under `Admin/`**. It reads as harmless and is catastrophic.
+>
+> **Verify in Postgres, never by eyeballing the folder** — the materialised truth is
+> `admin.user_effective_permissions`, and an **empty `node_path_prefix` means root**:
+>
+> ```sql
+> -- 🔴 Anyone listed here is a DATA SUPERUSER over the entire mesh:
+> select user_id, permission from admin.user_effective_permissions
+> where node_path_prefix = '' order by user_id;
+>
+> -- ✅ Correctly-scoped platform admins:
+> select user_id, permission from admin.user_effective_permissions
+> where node_path_prefix = 'Admin' order by user_id;
+> ```
+>
+> This is not hypothetical. On 2026-07-28 memex had **43 accounts with an empty `node_path_prefix`**
+> — holding `Delete`, `Update`, `Create`, `Compile`, `Execute` and `Export` on everything —
+> against exactly **one** correctly-scoped platform admin. Most were created minutes after the
+> holder first signed in, so **user onboarding was minting mesh-wide superusers**, including
+> external course participants who had merely redeemed a coupon.
+
+### Where to look — global vs. partition admins
+
+| Question | Where to look | Correct shape |
+|---|---|---|
+| Who is a **global/platform admin**? | `Admin/_Access/*` | `mainNode: "Admin"`, role `Admin`. Predicate: `hub.IsGlobalAdmin()` |
+| Who administers **one partition** (a space, a plugin, a course)? | `{partition}/_Access/*` | `mainNode: "{partition}"`, role `Admin` |
+| Who administers **their own home**? | `{user}/_Access/{user}_Access` | `mainNode: "{user}"`, role `Admin` |
+| Who is a **root superuser** (should be nobody)? | `admin.user_effective_permissions` where `node_path_prefix = ''` | 🔴 must be **empty** |
+
+### Every user is admin of their own partition — and of nothing else
+
+Each user's home partition (`{user}/…`) carries exactly one grant — **`{user}/_Access/{user}_Access`,
+role `Admin`, `mainNode: "{user}"`**. That is what lets someone manage their own space: their
+installed courses, their exercises, their notes. It is the *only* admin grant an ordinary user
+should ever hold. Onboarding must create this and **must not** touch `Admin/_Access`.
+
+A grant elsewhere is a deliberate act: partition admin on a space they own, or — very rarely, for a
+named platform operator — `Admin/_Access` with `mainNode: "Admin"`.
 
 Such a user is a **platform admin — NOT a data superuser.** The `Admin/_Access` grant is scoped to the Admin partition (it covers `Admin/Invitation`, version tracking, the role catalogue, …) and **does not** confer access to **spaces** or **user partitions** — nor to the top-level catalog partitions (`Agent`, `Provider`), which carry their own grants (e.g. the `Provider/_Access` Admin grant seeded by `GlobalAdminSeed`). Standing access is platform management (send invites, delete things, platform config); emergency changes to space/user *data* require an explicit **elevation (break-glass)** — a separate, auditable step, never standing permission. `IsGlobalAdmin()` reports "is a platform admin" and gates the platform features; it is **not** a permission override (a root `_Access` grant — *that* is the data-superuser shape — is deliberately NOT how platform admins are provisioned).
 
