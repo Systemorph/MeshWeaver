@@ -371,11 +371,9 @@ public static class MeshDataSourceExtensions
                         // Fail closed: a throwing validator is a denial, not a pass-through.
                         // Without this handler the fault was unobserved and the caller sat
                         // on the request timeout instead of getting a clean error response.
-                        hub.ServiceProvider.GetService<ILoggerFactory>()
-                            ?.CreateLogger(typeof(MeshDataSource))
-                            .LogWarning(ex,
-                                "Read validator faulted for {MessageType} on {Hub} — failing closed",
-                                delivery.Message.GetType().Name, hub.Address);
+                        TryLogWarning(hub, ex,
+                            "Read validator faulted for {MessageType} on {Hub} — failing closed",
+                            delivery.Message.GetType().Name, hub.Address);
                         hub.Post(
                             new GetDataResponse(null, 0)
                             {
@@ -390,11 +388,9 @@ public static class MeshDataSourceExtensions
                             // otherwise vanish unobserved inside the validator pipeline.
                             next.Invoke(delivery, ct).Subscribe(
                                 _ => { },
-                                ex => hub.ServiceProvider.GetService<ILoggerFactory>()
-                                    ?.CreateLogger(typeof(MeshDataSource))
-                                    .LogError(ex,
-                                        "Downstream pipeline faulted after validator pass for {MessageType} on {Hub}",
-                                        delivery.Message.GetType().Name, hub.Address));
+                                ex => TryLogError(hub, ex,
+                                    "Downstream pipeline faulted after validator pass for {MessageType} on {Hub}",
+                                    delivery.Message.GetType().Name, hub.Address));
                         else
                             hub.Post(
                                 new GetDataResponse(null, 0)
@@ -696,6 +692,52 @@ public static class MeshDataSourceExtensions
             .FirstOrDefault(n => !n.IsDefinitionOnly
                 && string.Equals(n.Path, hubPath, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// Emits a diagnostic that can NEVER take down its caller — the ONLY sanctioned way to log from
+    /// an error path in this file (a <c>catch</c> body or an Rx <c>onError</c> handler).
+    ///
+    /// <para>🚨 Why the empty catch here is legitimate, and why it is the only one allowed:
+    /// resolving and using a logger is itself fallible. <c>GetService&lt;ILoggerFactory&gt;()</c> and
+    /// <c>CreateLogger(...)</c> both throw <c>ObjectDisposedException</c> once the container is
+    /// disposing, and a provider can throw on write if the sink is gone. On an error path the
+    /// caller is ALREADY handling a failure, so a throwing logger converts a handled fault into an
+    /// unhandled one — thrown out of a catch block or out of an Rx onError, where nothing is left
+    /// to observe it. During hub teardown or a re-entrant hub build (see SubscribeToOwnDeletion)
+    /// that is precisely when logging is least available and a secondary throw is most damaging.</para>
+    ///
+    /// <para>This swallow hides ONLY a logging failure — never the original error, which the caller
+    /// has already dealt with. It is deliberately the single place that risk is absorbed, instead of
+    /// an empty catch at every call site.</para>
+    /// </summary>
+    private static void TryLogWarning(IMessageHub hub, Exception error, string message, params object?[] args)
+    {
+        try
+        {
+            hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(MeshDataSource))
+                .LogWarning(error, message, args);
+        }
+        catch
+        {
+            // Intentionally empty — see the note above. Logging must not be able to escalate.
+        }
+    }
+
+    /// <summary>Error-severity twin of <see cref="TryLogWarning"/>; same never-escalate contract.</summary>
+    private static void TryLogError(IMessageHub hub, Exception error, string message, params object?[] args)
+    {
+        try
+        {
+            hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(MeshDataSource))
+                .LogError(error, message, args);
+        }
+        catch
+        {
+            // Intentionally empty — see TryLogWarning.
+        }
+    }
+
     private static void SubscribeToOwnDeletion(IMessageHub hub)
     {
         var cache = hub.ServiceProvider.GetService<OwnNodeCache>();
@@ -921,10 +963,24 @@ public static class MeshDataSourceExtensions
                 hub.RegisterForDisposal(sourcesSub);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Workspace has no MeshNodeReference reducer (e.g., hub without
-            // MeshDataSource) — leave Current = null; pipeline falls through.
+            // The EXPECTED case is a workspace with no MeshNodeReference reducer (a hub without
+            // MeshDataSource) — leave Current = null and let the pipeline fall through.
+            //
+            // 🚨 It must still be VISIBLE. This block guards the whole own-node subscription setup
+            // above, and that setup is not cheap: `ownStream.Subscribe(...)` synchronously
+            // materialises the reduced stream, which can lazily construct ANOTHER hub
+            // (HostedHubsCollection.CreateHub → MessageHub..ctor → full type registration). A bare
+            // `catch {}` therefore swallowed every failure of a re-entrant hub build during THIS
+            // hub's initialization and left the hub running in a partial state with no breadcrumb —
+            // which is why the FutuRe.Test SIGSEGV (exit=139, issue #613) has no precursor in any
+            // log. Logging here does not change control flow; it just stops the failure being
+            // invisible. If the next dump is preceded by this line, the crash has a cause we can
+            // name instead of a stack we have to guess from.
+            TryLogWarning(hub, ex,
+                "Own-node subscription setup failed on {Hub} — OwnNodeCache stays empty and the "
+                + "persistence sampler is not installed for this hub", hub.Address);
         }
 
         // Per-node hub reconciles its own cached state when the mesh hub
@@ -1004,15 +1060,17 @@ public static class MeshDataSourceExtensions
                                     : newNode)
                             .Subscribe(
                                 _ => { },
-                                ex => hub.ServiceProvider.GetService<ILoggerFactory>()
-                                    ?.CreateLogger(typeof(MeshDataSource))
-                                    .LogWarning(ex,
-                                        "Own-node refresh from change notification failed on {Hub}",
-                                        hub.Address));
+                                ex => TryLogWarning(hub, ex,
+                                    "Own-node refresh from change notification failed on {Hub}",
+                                    hub.Address));
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        /* workspace has no MeshNodeReference reducer */
+                        // Expected: workspace has no MeshNodeReference reducer. Logged for the same
+                        // reason as the setup guard above — this path also reaches stream
+                        // materialisation, so a silent swallow here hides a real fault.
+                        TryLogWarning(hub, ex,
+                            "Own-node change-notification reconcile failed on {Hub}", hub.Address);
                     }
                     return;
             }
