@@ -81,4 +81,31 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
         broken.Status.Should().Be(PreWarmStatus.CompileError,
             "a non-compiling type surfaces a bounded CompileError — never a hang, never blocking the good type");
     }
+
+    /// <summary>
+    /// 🚨 THE STORM GUARD. The warm-up must default to ONE activation at a time.
+    ///
+    /// <para>It shipped defaulting to 4, and 4 is measurably harmful: on 2026-07-28 04:05 four
+    /// compiles fired at memex in quick succession — the identical load shape — and within minutes
+    /// SIX plugin roots fell to the "did not settle" overlay and needed a scale-to-zero. That is the
+    /// storm this class's own summary cites as the reason it ships disabled, and the same one behind
+    /// the 2026-07-22 "told I am dead" restart loop.</para>
+    ///
+    /// <para>Concurrency buys nothing here — the compiles already serialize on the Compile IoPool —
+    /// so the only thing it adds is simultaneous cold ACTIVATIONS, which is the expensive part
+    /// (issue #686: the same NodeType shape is 0ms discovery on a fresh mesh and 45.20s on memex).
+    /// Pinned as a value because the damage only shows up at production scale, where no test runs.</para>
+    /// </summary>
+    [Fact]
+    public void DefaultConcurrency_IsOne_AndTypesArePaced()
+    {
+        DynamicTypePreWarmer.DefaultMaxConcurrency.Should().Be(1,
+            "warming several cold NodeType hubs at once is what knocks roots offline; the sweep has "
+            + "no deadline, so it must trickle");
+
+        DynamicTypePreWarmer.BetweenTypes.Should().BeGreaterThan(TimeSpan.Zero,
+            "back-to-back cold activations still read as a burst even at concurrency 1");
+        DynamicTypePreWarmer.BetweenTypes.Should().BeLessThan(TimeSpan.FromSeconds(30),
+            "…but the sweep must still finish in a sensible time on a mesh with many types");
+    }
 }
