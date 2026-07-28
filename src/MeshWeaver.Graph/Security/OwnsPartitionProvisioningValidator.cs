@@ -1,5 +1,3 @@
-using System.Reactive;
-using MeshWeaver.Data;
 using System.Reactive.Linq;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -117,85 +115,6 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
             .Do(_ => _logger.LogInformation(
                 "Provisioned partition '{Partition}' for new {NodeType} across {Count} provider(s)",
                 partitionName, nodeType, providers.Count))
-            // 🚨 REGISTER it as well — a schema nobody can ROUTE TO is not a usable partition.
-            //
-            // Creating the schema is only half of owning a partition. Routing learns which
-            // partitions exist from the `Admin/Partition/*` nodes (the subscription started in
-            // PostgreSqlExtensions so writes can route); without one, every address in the new
-            // partition answers "No node found at '{partition}'" — the per-node hub then FAULTS on
-            // activation, and because the lookup can never succeed it fails on every retry, not
-            // once. The symptom is not an error the user sees: reads hang for the full 60s
-            // SubscribeRequest timeout and the page dies blank.
-            //
-            // Packages got this for free (PackageInstaller writes the definition alongside the
-            // install) and configured inclusions get it from IncludedPartitionStaticProvider — so
-            // Space/package partitions routed while SELF-PROVISIONED USER partitions did not.
-            // Observed 2026-07-29: schema "e2e-admin" existed, "e2e-admin".mesh_nodes held the
-            // User node, auth.mesh_nodes mirrored it, and Admin/Partition held eleven entries —
-            // every one a package or space, not one user. The install page hung for 3.5 minutes.
-            //
-            // This validator is documented above as the ONE place a partition's backing store is
-            // created, so it is also the one place the partition must be made routable. Doing it
-            // here keeps the two halves atomic instead of leaving a schema that only some code
-            // paths know about.
-            .SelectMany(_ => RegisterPartitionNode(partitionName, nodeType))
             .Select(_ => NodeValidationResult.Valid());
-    }
-
-    /// <summary>
-    /// Writes the <c>Admin/Partition/{name}</c> definition that makes the partition ROUTABLE.
-    ///
-    /// <para>Idempotent by upsert: provisioning is re-entered on every top-level create of an
-    /// owning type, and a partition that already routes must not fail the create.</para>
-    ///
-    /// <para>Best-effort on the write itself: the schema is already provisioned at this point, so
-    /// failing the whole create because the registration write raced would trade a routable
-    /// partition for no partition at all. A failure is logged loudly — it means addresses in this
-    /// partition will not resolve until it is registered, which is exactly the state this exists to
-    /// prevent, and it must be visible rather than silent.</para>
-    /// </summary>
-    private IObservable<Unit> RegisterPartitionNode(string partitionName, string? nodeType)
-    {
-        var node = new MeshNode(partitionName, PartitionNodeType.Namespace)
-        {
-            NodeType = PartitionNodeType.NodeType,
-            Name = partitionName,
-            State = MeshNodeState.Active,
-            Content = new PartitionDefinition
-            {
-                Namespace = partitionName,
-                DataSource = "default",
-                Schema = partitionName.ToLowerInvariant(),
-                Table = "mesh_nodes",
-                TableMappings = PartitionDefinition.DefaultSegmentTableMappings(),
-                NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
-                Versioned = true,
-                Description = $"Partition owned by {nodeType ?? "node"} '{partitionName}'",
-            },
-        };
-
-        // Under the SYSTEM identity: registering a partition is framework bookkeeping triggered by
-        // the create, not an act of the user creating it — they have no rights on Admin/Partition,
-        // and requiring them would fail exactly the self-provisioning case this fixes.
-        var access = _hub.ServiceProvider.GetService<AccessService>();
-        return Observable.Using(
-                () => access?.ImpersonateAsSystem() ?? System.Reactive.Disposables.Disposable.Empty,
-                _ => _hub.GetWorkspace()
-                    .GetMeshNodeStream(node.Path)
-                    .Update(_ => node)
-                    .Take(1))
-            .Select(_ => Unit.Default)
-            .Do(_ => _logger.LogInformation(
-                "Registered partition '{Partition}' at {Path} — it is now routable",
-                partitionName, node.Path))
-            .Catch<Unit, Exception>(ex =>
-            {
-                _logger.LogError(ex,
-                    "Partition '{Partition}' was provisioned but could NOT be registered at {Path}. "
-                    + "Addresses in it will not route (reads hang to the SubscribeRequest timeout) "
-                    + "until a definition exists.",
-                    partitionName, node.Path);
-                return Observable.Return(Unit.Default);
-            });
     }
 }
