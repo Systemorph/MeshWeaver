@@ -201,6 +201,20 @@ jobs:
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration
           -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
+      # nodetype-bake — compiles every dynamic NodeType against THIS build into the shared assembly
+      # cache before the portal rolls onto it, and fails the release on a regression. It must be
+      # built from the SAME commit as the portal: the framework identity it bakes against is the
+      # Graph MVID of these binaries, so an image built from a different commit would warm a cache
+      # the portal cannot use. Same multi-arch publish; <RuntimeIdentifiers> is project-local.
+      - name: Build + push nodetype-bake
+        run: >
+          dotnet publish memex/aspire/Memex.NodeType.Bake/Memex.NodeType.Bake.csproj
+          -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
+          -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
+          -p:CIRun=true
+          -p:ContainerRegistry=${{ env.ACR }}
+          -p:ContainerRepository=memex-bake
+          -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
 
   # The MeshWeaver.Plugins PR gate image: `mw-plugin-test` (tools/MeshWeaver.PluginTester)
   # imports a node-repo checkout into a fresh in-process mesh, asserts every NodeType compiles,
