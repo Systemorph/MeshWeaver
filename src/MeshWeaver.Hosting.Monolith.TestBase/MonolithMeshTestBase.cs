@@ -904,12 +904,29 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// from the NotFound path.</para>
     /// </summary>
     protected IObservable<MeshNode?> ReadNode(string path)
-        => Mesh.GetMeshNode(path, ReadNodeTimeout)
+        => ReadHub.GetMeshNode(path, ReadNodeTimeout)
             .Select(n => (MeshNode?)n)
             .Catch((Exception ex) =>
                 IsNotFoundFailure(ex)
                     ? Observable.Return<MeshNode?>(null)
                     : Observable.Throw<MeshNode?>(ex));
+
+    /// <summary>
+    /// 🚨 Reads are issued HERE, never on <see cref="Mesh"/>. `Mesh` resolves the ROOT
+    /// <c>mesh/{id}</c> hub, and a call routed through the root mesh hub always faults — it is
+    /// transient routing infrastructure, not a call target. Every API surface (REST, MCP, gRPC,
+    /// CLI) uses the portal hub for exactly this reason; this stable hosted hub is the test-side
+    /// equivalent, and <see cref="ReadHubAddress"/> is deliberately CONSTANT so every read reuses
+    /// one hub rather than minting a fresh one per call.
+    ///
+    /// <para>The symptom this cures is a <c>GetDataRequest</c> that never gets an answer, surfacing
+    /// 60 s later as <c>GetMeshNode('…') timed out … the owning per-node hub never answered</c>.
+    /// The diagnostic's <c>Hub mesh/…</c> field names the root hub as the caller — that field IS
+    /// the diagnosis, and misreading it as "caller healthy, target silent" sends you hunting a
+    /// load-dependent race that does not exist (ThreadAgentIntegrationTest, which never reproduced
+    /// locally at any load).</para>
+    /// </summary>
+    private IMessageHub ReadHub => Mesh.GetHostedHub(ReadHubAddress, c => c.AddData());
 
     private static readonly Address ReadHubAddress = new("test-reader", "shared");
 
