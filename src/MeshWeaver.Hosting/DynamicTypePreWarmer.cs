@@ -263,9 +263,9 @@ public static class DynamicTypePreWarmer
                 _ => WarmPending(workspace, accessService, definitions, report, budget, logger));
 
         logger?.LogInformation(
-            "DynamicTypePreWarmer: another pod is baking framework {Framework} — following the shared "
-            + "assembly store instead of compiling ({Pending} type(s) outstanding)",
-            report.Summary, report.Pending.Count);
+            "DynamicTypePreWarmer: another pod holds the bake lease — following the shared assembly "
+            + "store instead of compiling ({Pending} type(s) outstanding). {Report}",
+            report.Pending.Count, report.Summary);
 
         // Re-enter after a pause: re-probe (has the baker finished?) and re-attempt the lease (has
         // the baker died?). Recursion, not a loop, because each round's decision depends on the fresh
