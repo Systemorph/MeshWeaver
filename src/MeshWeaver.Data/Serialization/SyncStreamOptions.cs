@@ -18,6 +18,28 @@ public class SyncStreamOptions
     public TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(45);
 
     /// <summary>
+    /// When the FIRST heartbeat fires on a fresh subscription; the rest keep
+    /// <see cref="HeartbeatInterval"/>. Taken as the SOONER of the two, so a short configured
+    /// cadence is never delayed by it.
+    ///
+    /// <para>🚨 This is the fix for the memex 2026-07-27 outage. An owner that acked the
+    /// SubscribeRequest and then went quiet delivers nothing until something pokes it, and every
+    /// other recovery path here is event-driven — so a stream with no announce simply waited for
+    /// the first heartbeat. Measured from the compile activity log: <b>45.20s</b> of source
+    /// discovery on a healthy mesh (one full interval, to within 200ms) and <b>90.19s</b> during
+    /// the outage, against <b>2.83s</b> of Roslyn. Types then crossed the 60s settle window and
+    /// every plugin root served the "did not settle" fallback.</para>
+    ///
+    /// <para>Deliberately a heartbeat and not a re-subscribe: each SubscribeRequest creates a
+    /// <c>sync/{ClientId}</c> hub on the owner's single-threaded action block, so probing that way
+    /// becomes a storm under mass cold start (every deploy) — the failure
+    /// <c>ChangeFeedResubscribeCoalesceTest</c> guards. A heartbeat costs one fire-and-forget
+    /// message and creates nothing. Default: 5 seconds; tests set it far shorter so the behaviour
+    /// is observable inside a test budget.</para>
+    /// </summary>
+    public TimeSpan FirstHeartbeat { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Coalescing window for change-feed-triggered resubscribes. The mesh change feed fires
     /// one event per owner write; high-frequency owner writes (e.g. a per-HTTP-request
     /// <c>_UserActivity</c> update) produce a BURST of events. A single resubscribe already
