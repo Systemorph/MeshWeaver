@@ -507,11 +507,16 @@ When the sync source has two-way enabled, `update` never overwrites a node chang
         var opRun = new System.Reactive.Disposables.SingleAssignmentDisposable();
         using (accessService.SwitchAccessContext(user))
         {
+            // 🚨 Issued on the SESSION hub, never on rootHub. These extensions call
+            // hub.RunActivity(...), which creates and drives an Activity node from the hub
+            // it is invoked on — and the root mesh/{id} hub is transient routing
+            // infrastructure on which request-shaped work never answers. The GUI's
+            // GitHubActionArea calls the same extensions on its portal host hub.
             IObservable<string> action = operation switch
             {
-                "commit" => rootHub.CommitToGitHub(spacePath, userId, OnCreated, normalizedSource),
-                "update" => rootHub.UpdateToLatestFromGitHub(spacePath, userId, OnCreated, normalizedSource, force),
-                _ => rootHub.CheckBranchStateOnGitHub(spacePath, userId, OnCreated, normalizedSource),
+                "commit" => sessionHub.CommitToGitHub(spacePath, userId, OnCreated, normalizedSource),
+                "update" => sessionHub.UpdateToLatestFromGitHub(spacePath, userId, OnCreated, normalizedSource, force),
+                _ => sessionHub.CheckBranchStateOnGitHub(spacePath, userId, OnCreated, normalizedSource),
             };
             opRun.Disposable = action
                 .Finally(() => opRun.Dispose())

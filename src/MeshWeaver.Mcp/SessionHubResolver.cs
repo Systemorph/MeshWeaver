@@ -16,8 +16,16 @@ namespace MeshWeaver.Mcp;
 /// <para>
 /// Both transports must share this helper so their routing semantics stay
 /// identical — same address shape, same <see cref="DataExtensions.AddData(MessageHubConfiguration)"/>
-/// + <see cref="IRoutingService.RegisterStream(IMessageHub)"/> wiring, same fallback to the
-/// root hub when no session is resolvable.
+/// + <see cref="IRoutingService.RegisterStream(IMessageHub)"/> wiring, and the same
+/// guarantee that the returned hub is ALWAYS a <c>portal/…</c> hub.
+/// </para>
+///
+/// <para>
+/// 🚨 This helper NEVER returns the root <c>mesh/{id}</c> hub. That hub is transient
+/// routing infrastructure, not a call target: request-shaped work issued on it never
+/// answers — the caller's queue stays empty at <c>RunLevel=Started</c> while the pending
+/// callback runs out its timeout, which reads misleadingly like "the target never
+/// replied". Every API surface (MCP, REST, gRPC, CLI) issues on a portal hub.
 /// </para>
 /// </summary>
 public static class SessionHubResolver
@@ -34,12 +42,24 @@ public static class SessionHubResolver
     private static readonly string InstanceId = Guid.NewGuid().ToString("N")[..8];
 
     /// <summary>
-    /// Materialises (or reuses) a hosted hub for the calling user × protocol session
-    /// at address <c>portal/{prefix}-{sessionId}-{instance}</c>. Falls back to
-    /// <paramref name="rootHub"/> if no caller / session can be derived from
-    /// <paramref name="ctx"/>.
+    /// Session-segment used when no caller / session can be derived from the request.
+    /// Combined with <see cref="InstanceId"/> this yields ONE process-stable shared
+    /// anonymous hub at <c>portal/{prefix}-anon-{instance}</c> — never the root mesh hub,
+    /// and never a fresh hub per request (which would leak a hub + routing registration
+    /// on every anonymous call).
     /// </summary>
-    /// <param name="rootHub">Portal-level hub from which to host the child.</param>
+    private const string AnonymousSession = "anon";
+
+    /// <summary>
+    /// Materialises (or reuses) a hosted hub for the calling user × protocol session
+    /// at address <c>portal/{prefix}-{sessionId}-{instance}</c>. When no caller / session
+    /// can be derived from <paramref name="ctx"/>, falls back to the process-stable shared
+    /// anonymous portal hub — NEVER to <paramref name="rootHub"/>.
+    /// </summary>
+    /// <param name="rootHub">
+    /// The hub that HOSTS the returned child (typically the root mesh hub). Used only as the
+    /// hosting parent and as a service-provider handle — never as the hub a call is issued on.
+    /// </param>
     /// <param name="ctx">Current HTTP context (claims + Mcp-Session-Id header).</param>
     /// <param name="prefix">Transport label used in the address segment: <c>"mcp"</c>, <c>"api"</c>, …</param>
     /// <param name="logger">Diagnostic sink.</param>
@@ -52,11 +72,15 @@ public static class SessionHubResolver
         var sessionId = ResolveSessionId(ctx);
         if (sessionId is null)
         {
+            // 🚨 NEVER return rootHub here. It is the root mesh/{id} hub, on which
+            // request-shaped work never answers. Anonymous callers share one stable
+            // portal hub instead: it has the routing + lifetime mesh operations need.
+            sessionId = AnonymousSession;
             logger.LogWarning(
-                "No {Prefix} session id resolvable from request — falling back to root hub. "
-                + "Some routing rules (kernel dispatch, etc.) will not fire.",
+                "No {Prefix} session id resolvable from request — using the shared anonymous "
+                + "portal hub. Callers that authenticate (or send an Mcp-Session-Id header) "
+                + "get their own isolated session hub.",
                 prefix);
-            return rootHub;
         }
 
         var routingService = rootHub.ServiceProvider.GetRequiredService<IRoutingService>();
