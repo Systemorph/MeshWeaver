@@ -45,6 +45,13 @@ public class EarlyFirstHeartbeatTest(ITestOutputHelper output) : HubTestBase(out
     /// </summary>
     private static readonly TimeSpan ProductionHeartbeat = TimeSpan.FromSeconds(45);
 
+    /// <summary>
+    /// Slack for loaded CI runners. Generous, but still far below <see cref="ProductionHeartbeat"/> —
+    /// so a heartbeat observed inside the window can ONLY have come from the early first tick, and
+    /// the assertion stays a real detector rather than a stopwatch on the runner.
+    /// </summary>
+    private static readonly TimeSpan CiHeadroom = TimeSpan.FromSeconds(15);
+
     private int _heartbeats;
     private int _subscribeCount;
 
@@ -92,7 +99,7 @@ public class EarlyFirstHeartbeatTest(ITestOutputHelper output) : HubTestBase(out
             .Match(x => x.Count > 0, "the owner must serve the initial snapshot");
 
         // Wait past the early tick but nowhere near the 45s cadence.
-        await Task.Delay(JsonSynchronizationStream.FirstHeartbeat + TimeSpan.FromSeconds(5));
+        await Task.Delay(JsonSynchronizationStream.FirstHeartbeat + CiHeadroom);
 
         Volatile.Read(ref _heartbeats).Should().BeGreaterThan(0,
             "the owner must be poked within seconds of subscribing — on the old Interval() schedule "
@@ -118,11 +125,38 @@ public class EarlyFirstHeartbeatTest(ITestOutputHelper output) : HubTestBase(out
             .Match(x => x.Count > 0, "the owner must serve the initial snapshot");
 
         var afterInitial = Volatile.Read(ref _subscribeCount);
-        await Task.Delay(JsonSynchronizationStream.FirstHeartbeat + TimeSpan.FromSeconds(5));
+        await Task.Delay(JsonSynchronizationStream.FirstHeartbeat + CiHeadroom);
 
         Volatile.Read(ref _subscribeCount).Should().Be(afterInitial,
             "poking with a heartbeat must never turn into a re-subscribe — each SubscribeRequest "
             + "creates a sync/{ClientId} hub on the owner's single-threaded action block");
+    }
+
+    /// <summary>
+    /// The early tick is a floor-lowering for LONG intervals, never a delay imposed on short ones.
+    /// A caller configuring a 200ms heartbeat (HeartbeatFireAndForgetTest does) must still get its
+    /// first tick at 200ms — taking the sooner of the two keeps every existing cadence unchanged.
+    /// Pinned because getting this backwards silently slowed every short-interval stream, which is
+    /// exactly how the first version of this change broke an unrelated heartbeat test.
+    /// </summary>
+    [Fact]
+    public void EarlyTick_NeverDelaysAShorterConfiguredInterval()
+    {
+        var shortInterval = TimeSpan.FromMilliseconds(200);
+        var firstTick = shortInterval < JsonSynchronizationStream.FirstHeartbeat
+            ? shortInterval
+            : JsonSynchronizationStream.FirstHeartbeat;
+
+        firstTick.Should().Be(shortInterval,
+            "a 200ms cadence must fire at 200ms, not be pushed out to the early-tick floor");
+
+        var longInterval = TimeSpan.FromSeconds(45);
+        var longFirst = longInterval < JsonSynchronizationStream.FirstHeartbeat
+            ? longInterval
+            : JsonSynchronizationStream.FirstHeartbeat;
+
+        longFirst.Should().Be(JsonSynchronizationStream.FirstHeartbeat,
+            "a 45s cadence must be front-run by the early tick — that is the whole fix");
     }
 
     /// <summary>The early tick must sit far below the cadence it front-runs, and still be late

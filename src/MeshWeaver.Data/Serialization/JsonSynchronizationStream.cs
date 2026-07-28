@@ -516,7 +516,12 @@ public static class JsonSynchronizationStream
             // once the hub is unreferenced the next tick self-disposes the timer and releases it.
             var weakHub = new WeakReference<IMessageHub>(hub);
             var sub = new System.Reactive.Disposables.SingleAssignmentDisposable();
-            sub.Disposable = Observable.Timer(FirstHeartbeat, heartbeatInterval)
+            // NEVER later than the configured cadence: a caller that asks for a 200ms heartbeat
+            // (HeartbeatFireAndForgetTest) must still get its first tick at 200ms. The early tick is
+            // a floor-lowering for LONG intervals, not a delay imposed on short ones — taking the
+            // sooner of the two keeps every existing cadence exactly as it was.
+            var firstTick = heartbeatInterval < FirstHeartbeat ? heartbeatInterval : FirstHeartbeat;
+            sub.Disposable = Observable.Timer(firstTick, heartbeatInterval)
                 .Subscribe(_ =>
                 {
                     if (!weakHub.TryGetTarget(out var h)
