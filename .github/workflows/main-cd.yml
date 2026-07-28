@@ -29,6 +29,9 @@ on:
 permissions:
   contents: read
   id-token: write
+  # packages: write — the mw-plugin-test image is ALSO published to GHCR so the
+  # MeshWeaver.Plugins CI can pull it with a GitHub token instead of ACR credentials.
+  packages: write
 
 # Never let two main merges deploy concurrently — a later merge waits for the in-flight
 # rollout rather than racing it. cancel-in-progress:false so we don't abort a half-done deploy.
@@ -254,7 +257,7 @@ jobs:
       # Lean console image on the standard multi-arch base; <RuntimeIdentifiers> lives in the
       # csproj (project-local — a global -p:RuntimeIdentifiers breaks referenced libs, see above).
       # `latest` rides along so the plugins repo can pin MW_TEST_IMAGE=…/mw-plugin-test:latest.
-      - name: Build + push mw-plugin-test
+      - name: Build + push mw-plugin-test (ACR)
         run: >
           dotnet publish tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
@@ -262,6 +265,29 @@ jobs:
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=mw-plugin-test
+          -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main;latest"'
+
+      # ALSO publish to GHCR. The MeshWeaver.Plugins CI runs its `test-repos` gate INSIDE this
+      # image, and that repo has no ACR credentials — it used to gate the whole job on a repo
+      # variable nobody had set, so the gate reported "skipping" on every PR and every plugin's
+      # `Tests` area was compiled but never executed. Publishing here gives that repo a registry
+      # it can reach with a GitHub token, so the gate runs by default.
+      - name: Lowercase image namespace (GHCR requires lowercase)
+        run: echo "IMAGE_NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build + push mw-plugin-test (GHCR)
+        run: >
+          dotnet publish tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj
+          -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
+          -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
+          -p:CIRun=true
+          -p:ContainerRegistry=ghcr.io
+          -p:ContainerRepository=$IMAGE_NS/mw-plugin-test
           -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main;latest"'
 
   # ───────────────────────────── FAILURE ALERTING ────────────────────────────
