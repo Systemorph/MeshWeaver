@@ -116,10 +116,23 @@ public static class AccessControlLayoutArea
             .WithView(Controls.H3(currentName).WithStyle("margin: 8px 0 0 0;"))
             .WithView(AccessList(nodePath));
 
-        if (isAdmin)
+        // 🚨 A grant MUST refer to a partition. `nodePath` is the NAVIGATION CONTEXT
+        // (host.Hub.Address) — and in a ROOT context it is EMPTY, which AccessNamespace turns into
+        // a root-level "_Access" folder and both creation sites turn into MainNode = "". That is
+        // the DATA-SUPERUSER shape: All on every partition, every space and every user's private
+        // home, by scope inheritance — creatable from a button, and indistinguishable in the UI
+        // from a normal grant. So the add/advanced surfaces are not offered at root at all; the
+        // write boundary refuses the shape too (AccessAssignmentGuard), but the UI must not invite
+        // it in the first place.
+        if (isAdmin && AccessAssignmentGuard.CanGrantAt(nodePath))
             stack = stack
                 .WithView(BuildAddRow(host, nodePath))
                 .WithView(BuildAdvancedSection(host, nodePath));
+        else if (isAdmin)
+            stack = stack.WithView(Controls.Markdown(
+                "_Access is granted **on a partition**. This is the root context, which has no "
+                + "partition to scope a grant to — navigate to the space, plugin or user partition "
+                + "you want to grant on. (A root-scoped grant would be a platform-wide superuser.)_"));
 
         return stack;
     }

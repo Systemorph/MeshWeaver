@@ -158,6 +158,28 @@ public class AccessAssignmentGuardTest
         AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse();
     }
 
+    // ── The navigation context that produces the shape ───────────────────────────────────
+    //
+    // `nodePath` in the access-control area is host.Hub.Address — the NAVIGATION CONTEXT, not the
+    // URL. At root it is EMPTY, AccessNamespace("") becomes a root-level "_Access" folder, and both
+    // creation sites set MainNode = nodePath = "". That is a superuser mintable from a button.
+
+    [Theory]
+    [InlineData("Admin")]
+    [InlineData("AgenticEngineering")]
+    [InlineData("Store/Plugin")]
+    [InlineData("rbuergi")]
+    public void CanGrantAt_APartitionContext_IsAllowed(string scope) =>
+        AccessAssignmentGuard.CanGrantAt(scope).Should().BeTrue();
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void CanGrantAt_TheRootContext_IsRefused(string? scope) =>
+        AccessAssignmentGuard.CanGrantAt(scope).Should().BeFalse(
+            "at root there is no partition to scope to — a grant there is a platform-wide superuser");
+
     [Fact]
     public void EnsureScopeValid_ThrowsOnTheRootShape()
     {

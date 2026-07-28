@@ -97,6 +97,18 @@ public static class AccessAssignmentGuard
         return true;
     }
 
+    /// <summary>
+    /// A grant can be made at <paramref name="scopePath"/> — i.e. it names a partition/node to
+    /// scope to. FALSE for the ROOT context (an empty navigation context), where a grant would be
+    /// scoped to root and therefore a platform-wide superuser.
+    ///
+    /// <para>Used by the access-control UI so the add-grant surface is not even offered at root:
+    /// the write boundary refuses the shape anyway, but a button that silently mints a superuser
+    /// should not exist. The navigation context (<c>host.Hub.Address</c>) is empty at root, and
+    /// both creation sites derive both the namespace and <c>MainNode</c> from it.</para>
+    /// </summary>
+    public static bool CanGrantAt(string? scopePath) => !string.IsNullOrWhiteSpace(scopePath);
+
     /// <summary>Throws when <see cref="IsScopeInvalid"/> holds. For call sites that cannot return a
     /// structured rejection.</summary>
     public static void EnsureScopeValid(MeshNode node)
