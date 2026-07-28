@@ -191,11 +191,22 @@ public static class NodeTypeBakeStatus
         if (!hasRecordedAssembly)
             return BakeState.NeverBuilt;
 
+        // 🚨 BYTES WIN OVER THE RECORD, in both directions — this is the whole premise.
+        //
+        // The store is looked up as (nodeTypePath, version) with the LIVE framework tag baked into
+        // the key, so a hit means "bytes compiled against THIS framework exist", whatever the record
+        // claims. A record can name another framework while the share already holds our build —
+        // another replica compiled it and its write-back lagged, failed, or was never made at all.
+        // Reporting that FrameworkStale would rebuild something already sitting on the volume, which
+        // is exactly the wasted work this probe exists to avoid.
+        if (storeHasBytes)
+            return BakeState.Baked;
+
         if (!string.Equals(definition.CompiledFrameworkVersion, liveFrameworkVersion, StringComparison.Ordinal))
             return BakeState.FrameworkStale;
 
-        // The record claims a live-framework build. Only the store can say whether that is true.
-        return storeHasBytes ? BakeState.Baked : BakeState.BytesMissing;
+        // The record claims a live-framework build and the store does not have it.
+        return BakeState.BytesMissing;
     }
 
     /// <summary>
@@ -250,18 +261,22 @@ public static class NodeTypeBakeStatus
         ILogger? logger)
         => Observable.Defer(() =>
         {
-            // Only a record that claims a LIVE-framework build is worth a store round-trip: every
-            // other state is decided by the record alone, and the store key for a stale framework
-            // could not match anyway (the tag is part of the key).
-            var claimsLiveBuild =
+            // Probe whenever there is a version to probe WITH — not only when the record already
+            // agrees we are current. The store key carries the LIVE framework tag, so the lookup
+            // answers "are there bytes for THIS framework?" independently of what the record claims,
+            // and a record naming another framework can still be sitting on top of a usable build
+            // (another replica compiled it; its write-back lagged or never landed).
+            //
+            // A type with no recorded assembly has no key to ask about, and one that terminally
+            // failed keeps its PreviouslyBroken label — both are decided by the record alone.
+            var probeable =
                 !string.IsNullOrEmpty(definition.LatestAssemblyCollection)
                 && !string.IsNullOrEmpty(definition.LatestAssemblyPath)
                 && definition.LastCompiledVersion is { } version
                 && version >= 0
-                && string.Equals(definition.CompiledFrameworkVersion, framework, StringComparison.Ordinal)
                 && definition.CompilationStatus != CompilationStatus.Error;
 
-            if (!claimsLiveBuild)
+            if (!probeable)
                 return Observable.Return(Describe(typePath, definition, Classify(definition, false, framework)));
 
             return store
