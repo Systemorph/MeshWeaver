@@ -231,7 +231,24 @@ public class InboxToolIntegrationTest : AITestBase
 
         // Mid-execution check_inbox → in-memory drain + inline delivery (no split, no node write).
         var tool = InboxTool.CreateCheckInboxTool(threadHub);
-        var toolResult = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
+        // 🚨 POLL, don't single-shot. The gate above observes PendingUserMessages on the NODE, but
+        // check_inbox drains the in-memory ThreadInboxChannel that Stage 1 (OfferFromNode) fills.
+        // Those are two INDEPENDENT subscribers to the same own-stream emission, so seeing the node
+        // state proves only that OUR subscriber ran — never that OfferFromNode has buffered yet. A
+        // single call therefore raced the producer and returned "(no new messages)" (bulk-run flake).
+        //
+        // Polling is correct rather than a workaround: check_inbox is documented as a high-frequency
+        // mid-round poll, and an EMPTY drain consumes nothing, so retrying is side-effect free and is
+        // exactly how a real round consumes it. Fixing this in the TOOL is not an option — it is
+        // deliberately a pure in-memory dequeue with no node read and no hub round-trip, because the
+        // old hub-bridged drain deadlocked the round ("thread disappears").
+        var toolResult = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(async () =>
+                (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString()))
+            .Where(r => r != null && r.Contains("Follow-up"))
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(ct);
         toolResult.Should().Contain("Follow-up", "the tool returns the in-flight message text to the agent");
 
         // 🚨 During the round (still Executing) the follow-up is STILL pending on the node —

@@ -313,7 +313,20 @@ public static class MeshDataSourceExtensions
             // subscription to workspace.GetMeshNodeStream() — synchronous read,
             // no per-delivery Take(1).
             var cache = hub.ServiceProvider.GetService<OwnNodeCache>();
-            if (cache?.IsDeleted == true)
+            // 🚨 Two gates, because one of them is asynchronous. `cache.IsDeleted` is set from the
+            // storage.Changes feed (see the delSub below) — i.e. AFTER the delete has already been
+            // acked to the caller. A read that lands in that window found IsDeleted == false and was
+            // served the stale `cache.Current`, so a Delete that returned "Deleted:" was immediately
+            // followed by a Get that returned the node
+            // (MeshPluginTest.FullCrudWorkflow_CreateGetUpdateDelete).
+            //
+            // RecentlyDeletedRegistry is populated SYNCHRONOUSLY by the delete handler, before the
+            // fan-out that reaches this hub, so it is authoritative exactly in the window the change
+            // feed has not covered yet. The persistence sampler already consults it to stop a
+            // resurrecting activation-save; the READ path has to consult it for the same reason.
+            var recentlyDeleted = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
+            if (cache?.IsDeleted == true
+                || recentlyDeleted?.IsRecentlyDeleted(hub.Address.Path) == true)
             {
                 hub.Post(new GetDataResponse(null, 0), o => o.ResponseFor(delivery));
                 return Observable.Return(delivery.Processed());
