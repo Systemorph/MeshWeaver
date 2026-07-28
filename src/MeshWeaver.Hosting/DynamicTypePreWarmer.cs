@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -56,29 +57,20 @@ public record PreWarmOutcome(string TypePath, PreWarmStatus Status, string? Deta
 public static class DynamicTypePreWarmer
 {
     /// <summary>
-    /// How many dynamic NodeType hubs to activate concurrently. <b>ONE.</b>
-    ///
-    /// <para>🚨 This was 4, and 4 is measurably harmful on a real mesh. On 2026-07-28 04:05 four
-    /// compiles were triggered on memex in quick succession — nothing to do with this warmer, but
-    /// the identical load shape — and within minutes SIX plugin roots (Claims, Edu, Underwriting,
-    /// Chess, Publish, Training) fell to the "did not settle" overlay and needed a scale-to-zero to
-    /// recover. That is the same storm this class's own summary warns about as the reason it ships
-    /// disabled, and the same one behind the 2026-07-22 "I have been told I am dead" restart
-    /// loop.</para>
-    ///
-    /// <para>The compiles already serialize on the Compile IoPool, so concurrency here buys nothing
-    /// except simultaneous cold ACTIVATIONS — which is exactly the expensive part: source discovery
-    /// on a large mesh is dominated by cold cross-partition hub activation (109ms and 0ms discovery
-    /// for the same NodeType shape on a fresh mesh, versus 45.20s on memex — issue #686). Warming
-    /// one at a time still removes the first-visitor stall; doing four at once trades a slow page
-    /// for an outage.</para>
-    /// </summary>
-    public const int DefaultMaxConcurrency = 1;
-
-    /// <summary>
     /// Pause between types, so a long warm sweep stays a background trickle rather than a queue of
     /// back-to-back cold activations. Cheap insurance: the sweep is a latency optimisation with no
     /// deadline, so there is no reason for it to ever look like load.
+    ///
+    /// <para>🚨 Why there is no concurrency knob beside it (there was one, defaulting to 4, and 4 is
+    /// measurably harmful): on 2026-07-28 04:05 four compiles were triggered on memex in quick
+    /// succession — nothing to do with this warmer, but the identical load shape — and within
+    /// minutes SIX plugin roots (Claims, Edu, Underwriting, Chess, Publish, Training) fell to the
+    /// "did not settle" overlay and needed a scale-to-zero to recover. The compiles already
+    /// serialize on the Compile IoPool, so concurrency bought nothing except simultaneous cold
+    /// ACTIVATIONS — the expensive part (109ms/0ms discovery for the same NodeType shape on a fresh
+    /// mesh, versus 45.20s on memex — issue #686). A dependency ORDER cannot be honoured while its
+    /// members run in parallel either, so the sweep is now strictly sequential and the knob is
+    /// gone rather than left lying about what it does.</para>
     /// </summary>
     public static readonly TimeSpan BetweenTypes = TimeSpan.FromSeconds(2);
 
@@ -96,11 +88,17 @@ public static class DynamicTypePreWarmer
     /// <see cref="PreWarmOutcome"/> per type and completes when all have settled or timed
     /// out. Never throws — enumeration/activation failures fold into an outcome or an empty
     /// completion so a subscriber can simply log the summary.
+    ///
+    /// <para>Types are warmed STRICTLY SEQUENTIALLY in
+    /// <see cref="NodeTypeDependencyGraph.TopologicalOrder(IReadOnlyDictionary{string, ImmutableHashSet{string}}, out ImmutableList{string})"/>
+    /// order — dependencies before dependents. There is deliberately no concurrency knob: a
+    /// dependency order cannot be honoured while its members run in parallel, and concurrent cold
+    /// activations are what produced the 60s <c>SubscribeRequest</c> timeouts this warmer exists to
+    /// prevent.</para>
     /// </summary>
     public static IObservable<PreWarmOutcome> WarmDynamicTypes(
         IMessageHub mesh,
         ILogger? logger = null,
-        int maxConcurrency = DefaultMaxConcurrency,
         TimeSpan? perTypeBudget = null)
     {
         var budget = perTypeBudget ?? DefaultPerTypeBudget;
@@ -125,32 +123,53 @@ public static class DynamicTypePreWarmer
                 .Timeout(EnumerationBudget)
                 .SelectMany(change =>
                 {
-                    var typePaths = change.Items
+                    var definitions = change.Items
                         .Where(n => !string.IsNullOrEmpty(n.Path)
                             && n.State == MeshNodeState.Active
                             && n.Content is NodeTypeDefinition d
                             // Only DYNAMIC types have source to compile. Static/framework
                             // NodeTypes ship their assembly with the process — nothing to warm.
                             && HasCompilableSource(d))
-                        .Select(n => n.Path!)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .ToArray();
+                        .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(
+                            g => g.Key,
+                            g => (NodeTypeDefinition?)g.First().Content,
+                            StringComparer.OrdinalIgnoreCase);
+
+                    // 🚨 DEPENDENCIES FIRST, ONE AT A TIME. A NodeType can compile ANOTHER type's
+                    // Code into its own assembly (Store/Plugin declares shared=@Store/Coupon/Source,
+                    // @Store/Order/Source, @Store/BillingProfile/Source), and every plugin ROOT is
+                    // itself an instance of such a type — so warming them in arbitrary order makes
+                    // dependents wait on dependencies that have not been built yet, and they blow
+                    // the 60s activation budget:
+                    //     [STALE-CALLBACK] … SubscribeRequest@Store/Plugin(45028ms)
+                    //     TimeoutException: No response received … within 00:01:00 → Store/Plugin
+                    // The order is computed from the DECLARED sources, so it stays correct as
+                    // plugins add cross-type sources without anyone maintaining a list.
+                    var order = NodeTypeDependencyGraph.TopologicalOrder(
+                        NodeTypeDependencyGraph.Build(definitions), out var cyclic);
 
                     logger?.LogInformation(
-                        "DynamicTypePreWarmer: warming {Count} dynamic NodeType hub(s) (maxConcurrency={Max}, perTypeBudget={Budget})",
-                        typePaths.Length, maxConcurrency, budget);
+                        "DynamicTypePreWarmer: warming {Count} dynamic NodeType hub(s) in dependency order "
+                        + "(sequential, perTypeBudget={Budget}): {Order}",
+                        order.Count, budget, string.Join(" → ", order));
+                    if (!cyclic.IsEmpty)
+                        logger?.LogWarning(
+                            "DynamicTypePreWarmer: {Count} NodeType(s) form a source dependency CYCLE and "
+                            + "cannot be ordered — warmed last, in path order: {Cyclic}",
+                            cyclic.Count, string.Join(", ", cyclic));
 
-                    return typePaths.Length == 0
+                    // Concat, never Merge: the next type is SUBSCRIBED only after the previous one
+                    // has completed, so "dependencies first" is structural rather than a convention.
+                    // The gap between types keeps the sweep a background trickle rather than a queue
+                    // of back-to-back cold activations; it costs nothing, since the warm-up has no
+                    // deadline and Part 2 compiles lazily regardless.
+                    return order.Count == 0
                         ? Observable.Empty<PreWarmOutcome>()
-                        : typePaths
-                            // Space the types out as well as capping concurrency. With
-                            // maxConcurrency=1 the Merge already serializes them, but back-to-back
-                            // cold activations still read as a burst to the hubs being woken; the
-                            // delay makes the sweep a trickle. It costs nothing — the warm-up has
-                            // no deadline and Part 2 compiles lazily regardless.
+                        : order
                             .Select((p, i) => WarmOne(workspace, accessService, p, budget, logger)
-                                .DelaySubscription(TimeSpan.FromTicks(BetweenTypes.Ticks * i)))
-                            .Merge(Math.Max(1, maxConcurrency));
+                                .DelaySubscription(i == 0 ? TimeSpan.Zero : BetweenTypes))
+                            .Concat();
                 })
                 .Catch<PreWarmOutcome, Exception>(ex =>
                 {

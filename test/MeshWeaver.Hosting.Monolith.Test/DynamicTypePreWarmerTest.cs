@@ -63,7 +63,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
         // ASSERT). The broken type must not stop the good one from being reported — if
         // a failure blocked the Merge, we'd never receive both and would time out.
         var outcomes = await DynamicTypePreWarmer
-            .WarmDynamicTypes(Mesh, logger, maxConcurrency: 4, perTypeBudget: TimeSpan.FromSeconds(90))
+            .WarmDynamicTypes(Mesh, logger, perTypeBudget: TimeSpan.FromSeconds(90))
             .Where(o => o.TypePath == GoodPath || o.TypePath == BrokenPath)
             .Take(2)
             .ToList()
