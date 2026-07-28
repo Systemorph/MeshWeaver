@@ -51,7 +51,7 @@ spec:
             - "-c"
             - "until nc -z memex-postgres-service 5432; do echo 'waiting for postgres'; sleep 2; done"
       containers:
-        - image: "ghcr.io/systemorph/memex-portal-ai:latest"
+        - image: "{{ .Values.portal.image }}"
           name: "memex-portal"
           # On rollout, endpoint removal propagates to the ingress-nginx upstreams asynchronously —
           # without this grace window the pod stops accepting the instant it is SIGTERMed and

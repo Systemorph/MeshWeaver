@@ -81,6 +81,16 @@ ollama:
 #     the portal's own pod (the shipped node / bun / python gates). Reachability IS the
 #     authentication: no API token, nothing to rotate; deliveries may carry through the requesting
 #     user's AccessContext (see GrpcOptions.TrustedPort).
+# ---- Images --------------------------------------------------------------------------------------
+# Defaults are the published tags, so an unchanged install behaves exactly as before. They are
+# overridable so a local or CI cluster can run images built from a working tree WITHOUT `docker tag`
+# -ing over the shared ghcr names — retagging those is global to the Docker daemon, so it silently
+# swaps whatever else on the machine is already running them at its next restart.
+portal:
+  image: "ghcr.io/systemorph/memex-portal-ai:latest"
+migration:
+  image: "ghcr.io/systemorph/memex-migration:latest"
+
 # ---- NodeType bake job ---------------------------------------------------------------------------
 # Compiles every dynamic NodeType against the image being deployed, into the shared /data assembly
 # cache, BEFORE the portal rolls onto it — and fails the release when a type that USED TO compile no

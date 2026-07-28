@@ -65,6 +65,46 @@ if (string.IsNullOrWhiteSpace(dataRoot))
 }
 var assemblyCache = Path.Combine(dataRoot, "assembly-cache");
 
+// Block until the database migration has recorded a db_version.
+//
+// 🚨 The bake and the migration are separate Jobs with NO ordering between them, and both only gate
+// on Postgres accepting TCP. Racing them is not a slow start — it is a SILENT PASS: the mesh comes
+// up against an unmigrated database, the NodeType query returns nothing, and the bake reports
+// "0 of 0 types" and exits 0 in a tenth of a second, while the portal goes on to compile everything
+// lazily. Observed on the first real run (bake-test, 2026-07-28): four NodeTypes compiled in the
+// portal AFTER a green bake.
+//
+// Same condition the portal's own DbVersionGate enforces, so the two cannot disagree about what
+// "migrated" means.
+static async Task<bool> WaitForMigratedDatabase(NpgsqlDataSource source, TimeSpan budget, ILogger log)
+{
+    var deadline = DateTimeOffset.UtcNow + budget;
+    while (DateTimeOffset.UtcNow < deadline)
+    {
+        try
+        {
+            await using var cmd = source.CreateCommand("""
+                SELECT (content->>'Version')::int FROM admin.mesh_nodes
+                 WHERE id = 'db_version' AND namespace = '' LIMIT 1
+                """);
+            if ((await cmd.ExecuteScalarAsync()) switch { int v => v, long l => (int)l, _ => 0 } is > 0 and var version)
+            {
+                log.LogInformation("Database is migrated (db_version={Version})", version);
+                return true;
+            }
+            log.LogInformation("Waiting for the migration to record a db_version...");
+        }
+        catch (Exception ex)
+        {
+            // The admin schema may not exist yet — that IS the state we are waiting out.
+            log.LogInformation("Waiting for the database schema ({Error}: {Message})",
+                ex.GetType().Name, ex.Message);
+        }
+        await Task.Delay(TimeSpan.FromSeconds(5));
+    }
+    return false;
+}
+
 builder.UseMeshWeaver(
     AddressExtensions.CreateMeshAddress(),
     mesh => mesh
@@ -82,6 +122,17 @@ builder.UseMeshWeaver(
 
 var host = builder.Build();
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Bake");
+
+// Before StartAsync — resolving a singleton does not start hosted services, so the mesh never comes
+// up against an unmigrated schema in the first place.
+if (!await WaitForMigratedDatabase(
+        host.Services.GetRequiredService<NpgsqlDataSource>(), TimeSpan.FromMinutes(15), logger))
+{
+    logger.LogCritical(
+        "Database still not migrated after 15 minutes. Refusing to bake — an unmigrated database "
+        + "yields an EMPTY NodeType set, which would look exactly like a clean bake.");
+    return 2;
+}
 
 await host.StartAsync();
 
@@ -120,7 +171,24 @@ try
             + "this image, so it does not fail the bake",
             stale.TypePath, stale.Status, stale.Detail);
 
-    if (regressions.Count > 0)
+    // 🚨 FINDING NOTHING IS NOT PASSING. An empty outcome set means the enumeration returned no
+    // dynamic NodeTypes — and that is indistinguishable from the ways it FAILS: an unmigrated or
+    // wrong database, a query that timed out (WarmDynamicTypes catches enumeration errors and
+    // completes empty, by design, because in the portal a failed warm must not be fatal), a mesh
+    // that has not finished seeding. A gate that certifies "I verified nothing" is worse than no
+    // gate, because the rollout proceeds with a green light nobody earned.
+    //
+    // Real deployments always have dynamic NodeTypes. A genuinely empty mesh must say so explicitly.
+    var allowEmpty = bool.TryParse(builder.Configuration["Bake:AllowEmpty"], out var parsed) && parsed;
+    if (outcomes.Count == 0 && !allowEmpty)
+    {
+        logger.LogCritical(
+            "Bake found NO dynamic NodeTypes. Refusing to report success: an empty result is what a "
+            + "failed enumeration, an unseeded mesh and a wrong database all look like. If this mesh "
+            + "genuinely has none, set Bake__AllowEmpty=true.");
+        exitCode = 3;
+    }
+    else if (regressions.Count > 0)
     {
         exitCode = 1;
         foreach (var regression in regressions)
