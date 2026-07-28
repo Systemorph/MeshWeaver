@@ -107,7 +107,7 @@ tempting to fix that and declare victory. Discipline:
 
 If a bare `catch {}` wraps the failing region, nothing is logged before the crash. That is not an
 accident of the dump — it is a defect in the code. Error paths must log (see
-[ErrorPropagationAndWedges](../Architecture/ErrorPropagationAndWedges)), and the logging itself must
+[ErrorPropagationAndWedges](../ErrorPropagationAndWedges)), and the logging itself must
 be unable to escalate: resolving a logger can throw `ObjectDisposedException` on a disposing
 container, so a diagnostic emitted from inside a `catch` or an Rx `onError` can convert a handled
 fault into an unhandled one. Route such emissions through a guarded helper whose single empty catch
@@ -115,8 +115,8 @@ swallows only the *logging* failure.
 
 ## Related
 
-- [DebuggingMessageFlow](../Architecture/DebuggingMessageFlow) — for hangs and lost messages (a
+- [DebuggingMessageFlow](../DebuggingMessageFlow) — for hangs and lost messages (a
   timeout, not a signal).
-- [DebuggingDisposalAndLeaks](../Architecture/DebuggingDisposalAndLeaks) — teardown stragglers and
+- [DebuggingDisposalAndLeaks](../DebuggingDisposalAndLeaks) — teardown stragglers and
   retention.
-- [WritingTests](../Architecture/WritingTests) — why a flake is a real race and re-running hides it.
+- [WritingTests](../WritingTests) — why a flake is a real race and re-running hides it.
