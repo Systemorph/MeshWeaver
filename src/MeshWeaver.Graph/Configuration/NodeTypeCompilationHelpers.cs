@@ -433,6 +433,38 @@ internal static class NodeTypeCompilationHelpers
                 && !IsStaticOnlyNodeType(node, def)
                 && parkRegistry?.IsParked(hubPath) != true)
             .Take(1)
+            // 🚨 ASK THE STORE BEFORE REBUILDING. The record's CompiledFrameworkVersion says which
+            // framework the LAST WRITE-BACK came from; it does not say whether bytes for OUR
+            // framework exist. Those are different questions, and the assembly store answers the one
+            // that matters — its key carries the live framework tag, so a hit IS a usable build.
+            //
+            // They diverge whenever something else compiled for this framework without this hub
+            // seeing the write-back: another replica, or a dedicated bake service that pre-fills the
+            // share ahead of a rollout. Flipping to Pending on the version mismatch alone then
+            // recompiles what is already on the volume — and, while two images are live at once,
+            // does it on BOTH sides: each pod rebuilds to stamp its own version, the other sees the
+            // stamp and rebuilds back. A pre-bake would not merely be wasted, it would storm the pods
+            // currently serving production.
+            //
+            // So: mismatch is the CHEAP pre-filter (a pure record read on every emission, unchanged),
+            // and the store probe runs at most once per hub lifetime, here, after Take(1).
+            .SelectMany(node => ResolveAssemblyStore(hub)
+                .TryGetAssemblyPath(hubPath, DefinitionOf(hub, node)?.LastCompiledVersion ?? node.Version)
+                .Take(1)
+                .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
+                .Select(path => (Node: node, HasBytes: !string.IsNullOrEmpty(path))))
+            .Where(probe =>
+            {
+                if (!probe.HasBytes)
+                    return true;
+                logger?.LogInformation(
+                    "Framework-stale kickoff SKIPPED for {HubPath}: its record names framework {Compiled} "
+                    + "but the assembly store already holds a build for the live framework {Live} — "
+                    + "nothing to rebuild",
+                    hubPath, DefinitionOf(hub, probe.Node)?.CompiledFrameworkVersion ?? "(null)", FrameworkVersion);
+                return false;
+            })
+            .Select(probe => probe.Node)
             .Subscribe(node =>
             {
                 logger?.LogInformation(
@@ -986,6 +1018,18 @@ internal static class NodeTypeCompilationHelpers
     /// <para>Distinct from <see cref="HasUsableBuild"/>: a NodeType that was never compiled
     /// (no assembly fields) is NOT "stale" — it is handled by the first-build kickoff.</para>
     /// </summary>
+    /// <summary>
+    /// The shared assembly store, or <see cref="NullAssemblyStore"/> when the host registered none.
+    /// A null store reports every lookup as a miss, so callers fall back to their pre-store behaviour
+    /// (rebuild) rather than wrongly concluding a build exists.
+    /// </summary>
+    private static IAssemblyStore ResolveAssemblyStore(IMessageHub hub) =>
+        hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
+
+    /// <summary>The node's content as a <see cref="NodeTypeDefinition"/>, or null.</summary>
+    private static NodeTypeDefinition? DefinitionOf(IMessageHub hub, MeshNode? node) =>
+        node?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+
     internal static bool HasStaleFrameworkBuild(NodeTypeDefinition def) =>
         !string.IsNullOrEmpty(def.LatestAssemblyCollection)
         && !string.IsNullOrEmpty(def.LatestAssemblyPath)
