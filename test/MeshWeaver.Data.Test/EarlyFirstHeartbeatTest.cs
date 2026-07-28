@@ -46,11 +46,11 @@ public class EarlyFirstHeartbeatTest(ITestOutputHelper output) : HubTestBase(out
     private static readonly TimeSpan ProductionHeartbeat = TimeSpan.FromSeconds(45);
 
     /// <summary>
-    /// Slack for loaded CI runners. Generous, but still far below <see cref="ProductionHeartbeat"/> —
-    /// so a heartbeat observed inside the window can ONLY have come from the early first tick, and
-    /// the assertion stays a real detector rather than a stopwatch on the runner.
+    /// How long the test waits for the early beat before giving up. Generous for loaded CI runners,
+    /// yet far below <see cref="ProductionHeartbeat"/> — so a heartbeat seen inside it can ONLY have
+    /// come from the early first tick, and the assertion stays a detector rather than a stopwatch.
     /// </summary>
-    private static readonly TimeSpan CiHeadroom = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan HeartbeatDeadline = TimeSpan.FromSeconds(30);
 
     private int _heartbeats;
     private int _subscribeCount;
@@ -87,7 +87,7 @@ public class EarlyFirstHeartbeatTest(ITestOutputHelper output) : HubTestBase(out
     /// early first tick.
     /// </summary>
     [HubFact]
-    public async Task FirstHeartbeat_ArrivesLongBeforeAFullInterval()
+    public async Task FirstHeartbeat_ArrivesEarly_AndNeverResubscribes()
     {
         GetHost();
         var client = GetClient();
@@ -98,38 +98,26 @@ public class EarlyFirstHeartbeatTest(ITestOutputHelper output) : HubTestBase(out
             .Should().Within(10.Seconds())
             .Match(x => x.Count > 0, "the owner must serve the initial snapshot");
 
-        // Wait past the early tick but nowhere near the 45s cadence.
-        await Task.Delay(JsonSynchronizationStream.FirstHeartbeat + CiHeadroom);
+        var afterInitial = Volatile.Read(ref _subscribeCount);
+
+        // POLL, never sleep-then-assert. A fixed delay measures the runner, not the schedule —
+        // that is why the first version of this test passed locally and failed on CI. Polling to a
+        // deadline keeps the detector exact: the deadline is far below the 45s cadence, so a
+        // heartbeat seen here can ONLY be the early first tick. On the old Interval() schedule the
+        // count stays 0 for the full 45s and this still fails.
+        var deadline = DateTime.UtcNow + HeartbeatDeadline;
+        while (Volatile.Read(ref _heartbeats) == 0 && DateTime.UtcNow < deadline)
+            await Task.Delay(250);
 
         Volatile.Read(ref _heartbeats).Should().BeGreaterThan(0,
-            "the owner must be poked within seconds of subscribing — on the old Interval() schedule "
-            + "the first poke was a full 45s away, which is exactly the stall that took the site "
-            + "down (45.20s of every compile, against 2.83s of Roslyn)");
-    }
+            $"the owner must be poked within {HeartbeatDeadline.TotalSeconds:0}s of subscribing — on "
+            + "the old Interval() schedule the first poke was a full 45s away, which is exactly the "
+            + "stall that took the site down (45.20s of every compile, against 2.83s of Roslyn)");
 
-    /// <summary>
-    /// The storm guard. Starting the heartbeat early must NOT re-subscribe anything: one
-    /// SubscribeRequest opens the stream and that stays true however long it runs. A fix that
-    /// re-subscribed instead would create a sync hub per attempt on the owner's single action
-    /// block — worse than the bug, under mass cold start.
-    /// </summary>
-    [HubFact]
-    public async Task EarlyHeartbeat_NeverResubscribes()
-    {
-        GetHost();
-        var client = GetClient();
-        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
-
-        await workspace.GetObservable<BusinessUnit>()
-            .Should().Within(10.Seconds())
-            .Match(x => x.Count > 0, "the owner must serve the initial snapshot");
-
-        var afterInitial = Volatile.Read(ref _subscribeCount);
-        await Task.Delay(JsonSynchronizationStream.FirstHeartbeat + CiHeadroom);
-
+        // …and poking must never become a re-subscribe: each SubscribeRequest creates a
+        // sync/{ClientId} hub on the owner's single-threaded action block.
         Volatile.Read(ref _subscribeCount).Should().Be(afterInitial,
-            "poking with a heartbeat must never turn into a re-subscribe — each SubscribeRequest "
-            + "creates a sync/{ClientId} hub on the owner's single-threaded action block");
+            "starting the heartbeat early must not re-subscribe anything");
     }
 
     /// <summary>
