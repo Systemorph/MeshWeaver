@@ -70,9 +70,17 @@ public sealed class DynamicTypePreWarmerHostedService(
 
         var startedAt = DateTimeOffset.UtcNow;
         var compiled = 0;
+        var alreadyBaked = 0;
         var errored = 0;
         var timedOut = 0;
+        var skipped = 0;
         var faulted = 0;
+
+        // The readiness gate reads this. Resolved (not required) so a host that never called
+        // AddNodeTypeBakeGate simply warms without gating — the warmer stays a latency optimisation
+        // unless a deployment explicitly opts into making it a rollout gate.
+        var gate = services.GetService<NodeTypeBakeGateState>();
+        gate?.MarkRunning("enumerating dynamic NodeTypes");
 
         logger.LogInformation("DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs");
         _warmSubscription = DynamicTypePreWarmer
@@ -80,20 +88,50 @@ public sealed class DynamicTypePreWarmerHostedService(
             .Subscribe(
                 outcome =>
                 {
+                    gate?.MarkOutcome(outcome);
                     switch (outcome.Status)
                     {
                         case PreWarmStatus.Compiled: Interlocked.Increment(ref compiled); break;
+                        case PreWarmStatus.AlreadyBaked: Interlocked.Increment(ref alreadyBaked); break;
                         case PreWarmStatus.CompileError: Interlocked.Increment(ref errored); break;
                         case PreWarmStatus.TimedOut: Interlocked.Increment(ref timedOut); break;
+                        // A type skipped because its upstream failed is not a FAULT — it is a
+                        // deliberate, reported outcome. Counting it as one made the summary read
+                        // like the warmer had crashed N times when one dependency was broken.
+                        case PreWarmStatus.UpstreamFailed: Interlocked.Increment(ref skipped); break;
                         default: Interlocked.Increment(ref faulted); break;
                     }
                 },
-                ex => logger.LogWarning(ex, "DynamicTypePreWarmer: warm-up stream faulted (best-effort — lazy compile still works)"),
-                () => logger.LogInformation(
-                    "DynamicTypePreWarmer: warm-up complete in {Elapsed} — compiled={Compiled} compileErrors={Errored} timedOut={TimedOut} faulted={Faulted}",
-                    DateTimeOffset.UtcNow - startedAt,
-                    Volatile.Read(ref compiled), Volatile.Read(ref errored),
-                    Volatile.Read(ref timedOut), Volatile.Read(ref faulted)));
+                ex =>
+                {
+                    logger.LogWarning(ex, "DynamicTypePreWarmer: warm-up stream faulted (best-effort — lazy compile still works)");
+                    // A faulted sweep proved nothing. Release the gate rather than hold the pod out
+                    // of rotation forever on a stream error: the lazy compile path still works, so
+                    // an un-provable bake must not become an outage. A genuine broken type is caught
+                    // by MarkOutcome above, which is what the gate is actually for.
+                    gate?.MarkComplete("warm-up stream faulted — gate released, lazy compile applies");
+                },
+                () =>
+                {
+                    var elapsed = DateTimeOffset.UtcNow - startedAt;
+                    logger.LogInformation(
+                        "DynamicTypePreWarmer: warm-up complete in {Elapsed} — compiled={Compiled} alreadyBaked={AlreadyBaked} "
+                        + "compileErrors={Errored} timedOut={TimedOut} skipped={Skipped} faulted={Faulted}",
+                        elapsed,
+                        Volatile.Read(ref compiled), Volatile.Read(ref alreadyBaked), Volatile.Read(ref errored),
+                        Volatile.Read(ref timedOut), Volatile.Read(ref skipped), Volatile.Read(ref faulted));
+
+                    // MarkComplete keeps a recorded regression red — completion is not absolution.
+                    gate?.MarkComplete(
+                        $"baked in {elapsed:hh\\:mm\\:ss} — compiled={Volatile.Read(ref compiled)} "
+                        + $"alreadyBaked={Volatile.Read(ref alreadyBaked)}");
+                    if (gate is { Phase: BakePhase.Regressed })
+                        logger.LogCritical(
+                            "DynamicTypePreWarmer: REFUSING READINESS — {Detail}. The rollout will stall "
+                            + "with the previous image still serving. Regressions: {Regressions}",
+                            gate.Detail,
+                            string.Join(" | ", gate.Regressions.Select(r => $"{r.Key} → {r.Value}")));
+                });
     }
 
     /// <inheritdoc />

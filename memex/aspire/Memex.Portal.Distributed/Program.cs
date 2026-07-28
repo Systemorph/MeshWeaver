@@ -88,7 +88,15 @@ else
     // AddBlobAssemblyStore() runs; both use TryAddSingleton<IAssemblyStore>, so this
     // first registration wins and the blob factory (which needs a keyed BlobServiceClient
     // we deliberately don't register here) is never constructed.
-    builder.Services.AddFileSystemAssemblyStore(Path.Combine(dataRoot, "assembly-cache"));
+    var assemblyCache = Path.Combine(dataRoot, "assembly-cache");
+    builder.Services.AddFileSystemAssemblyStore(assemblyCache);
+
+    // 🚨 ONE POD BAKES. The compile cache is shared but the decision to rebuild is per-process, so
+    // without a lease every replica on a new image starts the SAME sweep over the SAME NodeTypes
+    // into this SAME directory — concurrent cold compiles of one type, which is the storm the
+    // sequential sweep exists to prevent. Any rollout with maxSurge hits this by default.
+    // The lease lives beside the assemblies it guards, so it is shared exactly when they are.
+    builder.Services.AddSingleton(new BakeCoordination(assemblyCache));
 
     // NuGet package cache → filesystem (zip-per-version, shared-volume safe).
     builder.Services.Replace(ServiceDescriptor.Singleton<INuGetPackageCache>(sp =>
@@ -274,9 +282,27 @@ builder.Services.AddHealthChecks()
 
 // Front-load dynamic NodeType compiles at startup so a fresh pod (every image roll /
 // self-update spins one up) doesn't make the first visitor of each type wait out a cold
-// Roslyn compile. Best-effort, non-blocking, does NOT gate readiness — Part 2
-// (enrichment awaits the in-flight compile) handles anything still compiling on arrival.
+// Roslyn compile. The sweep is sequential, in dependency order, and RESUMES from the shared
+// assembly cache — types already baked for this framework are skipped, so a second replica
+// (or a restart) inherits the first pod's work instead of repeating it.
 builder.Services.AddDynamicTypePreWarming();
+// Shared bake state the sweep writes and the readiness gate below reads.
+builder.Services.AddNodeTypeBakeGate();
+
+// 🚦 "Fail before prod, not in prod." Opt-in (PreWarm:GateReadiness) gate that holds /health
+// RED until this pod's NodeTypes are built against ITS image. Combined with the deployment's
+// startupProbe on /health and maxUnavailable:0, a NodeType that regressed on the new image
+// stalls the ROLLOUT — the new pod never takes traffic and the previous image keeps serving —
+// instead of surfacing as user-facing errors after the switch.
+//
+// Registered only when explicitly enabled: a gate that can withhold readiness should be an
+// intentional deployment choice, not something a self-host inherits by accident. It also
+// REQUIRES a startupProbe budget large enough for a full cold bake (see values.aks.yaml) —
+// without that, Kubernetes kills the pod mid-bake and it never converges.
+if (bool.TryParse(builder.Configuration[NodeTypeBakeGateExtensions.EnabledConfigKey], out var gateBake)
+    && gateBake)
+    builder.Services.AddHealthChecks()
+        .AddCheck<Memex.Portal.Distributed.NodeTypeBakeHealthCheck>("nodetype_bake");
 
 var app = builder.Build();
 
