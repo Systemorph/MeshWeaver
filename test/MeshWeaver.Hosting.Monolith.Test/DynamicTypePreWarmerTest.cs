@@ -76,8 +76,12 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
         Output.WriteLine($"Good  → {good.Status} {good.Detail}");
         Output.WriteLine($"Broken → {broken.Status} {broken.Detail}");
 
-        good.Status.Should().Be(PreWarmStatus.Compiled,
-            "the pre-warmer must drive a healthy dynamic type to a usable compiled build");
+        // ReachedUsableBuild, not == Compiled: the type is equally fine whether THIS sweep compiled
+        // it or found it already on the shared assembly store (AlreadyBaked) — which is exactly what
+        // happens when the create-time compile landed before the sweep reached it. Asserting the
+        // status verbatim would make this test a race against the store probe.
+        good.ReachedUsableBuild.Should().BeTrue(
+            "the pre-warmer must leave a healthy dynamic type with a usable build");
         broken.Status.Should().Be(PreWarmStatus.CompileError,
             "a non-compiling type surfaces a bounded CompileError — never a hang, never blocking the good type");
     }
@@ -193,9 +197,9 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
         blocked.Detail.Should().Contain(upstream,
             "the outcome must NAME the blocker — 'something upstream failed' is not actionable");
 
-        outcomes.Single(o => o.TypePath == unrelated).Status
-            .Should().Be(PreWarmStatus.Compiled,
+        outcomes.Single(o => o.TypePath == unrelated).ReachedUsableBuild
+            .Should().BeTrue(
                 "a broken type contains its blast radius to its own dependents; unrelated types "
-                + "must still be warmed");
+                + "must still end up with a usable build");
     }
 }
