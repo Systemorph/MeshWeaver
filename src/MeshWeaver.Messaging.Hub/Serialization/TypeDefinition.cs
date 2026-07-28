@@ -35,24 +35,8 @@ public record TypeDefinition : ITypeDefinition
             Icon = new Icon(iconAttribute.Provider, iconAttribute.Id);
 
         Key = new(() => keyFunctionBuilder.GetKeyFunction(Type)!);
-
-        // 🚨 LAZY, and it must stay lazy — this is the FutuRe.Test teardown SIGSEGV (exit=139).
-        // XmlDocs.Summary reflects into the type's assembly XML documentation. Constructing a
-        // TypeDefinition happens for EVERY type registered on EVERY hub, i.e. squarely on the hub
-        // CONSTRUCTION path (MessageHub.ctor → Register → WithTypeAndRelatedTypesFor →
-        // TypeRegistry.WithType → here). Compiled scope NodeTypes live in COLLECTIBLE ALCs, so when
-        // one is unloading while another hub is being built, that read walks metadata for an
-        // assembly whose image is going away and the process dies with SIGSEGV inside
-        // Namotion.Reflection (dump: ToXmlDocsContent → StringBuilder.ToString on the GC thread).
-        //
-        // HostedHubsCollection.CloseCreation() does NOT cover this: it is a TEARDOWN guard, flipped
-        // when the owning hub's disposal begins. The crash reproduces on a BUILD path
-        // (MeshBuilder.BuildHub → … → HostedHubsCollection.CreateHub), where creation is legitimate
-        // and refusing it would be wrong. Keeping the XML-docs read off the construction path is
-        // what actually closes the window.
-        //
-        // Description is pure display metadata with a single consumer, so deferring costs nothing.
-        description = new(() => XmlDocs.Summary(Type));
+        
+        Description = XmlDocs.Summary(Type);
     }
 
     /// <summary>
@@ -84,19 +68,8 @@ public record TypeDefinition : ITypeDefinition
     public int? Order { get; }
     /// <summary>The display group name, from <see cref="DisplayAttribute"/>, if specified.</summary>
     public string? GroupName { get; }
-    /// <summary>
-    /// The description, taken from the type's XML documentation summary. Resolved on FIRST READ,
-    /// never during construction — see the note in the constructor (FutuRe.Test teardown SIGSEGV).
-    /// </summary>
-    public string Description
-    {
-        get => description.Value;
-        init => description = new(value);
-    }
-
-    // Backing store. `init` accepts an already-materialised value (record `with` / deserialization),
-    // so an explicitly-supplied Description still wins and is never recomputed from XML docs.
-    private readonly Lazy<string> description = new(string.Empty);
+    /// <summary>The description, taken from the type's XML documentation summary.</summary>
+    public string Description { get; init; }
 
     /// <summary>
     /// Returns the key identifying the given instance using the type's configured key function.
