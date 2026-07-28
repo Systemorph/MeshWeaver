@@ -312,6 +312,24 @@ public static class MeshExtensions
             return request.Processed();
         }
 
+        // 0d. Structural fail-fast: an AccessAssignment must be scoped to the node it is filed
+        // under. A grant is scoped by MainNode, NOT by its folder — so `Admin/_Access/{user}_Access`
+        // with an EMPTY MainNode is a ROOT grant (All on every partition, every space, every user's
+        // private home) that merely looks like a platform-admin grant. memex 2026-07-28: 43 accounts
+        // held exactly that shape against ONE correctly-scoped admin, and they were still being
+        // created that day. Every KNOWN writer sets MainNode correctly, so an unknown path produces
+        // them — which is precisely why this belongs at the boundary rather than in each writer.
+        // Runs with the other STRUCTURAL invariants: before the validators and before their System
+        // bypass, because a root grant is catastrophic regardless of who writes it.
+        if (AccessAssignmentGuard.IsScopeInvalid(node, out var scopeReason))
+        {
+            logger.LogError("[CreateNode] REFUSED mis-scoped AccessAssignment {Path}: {Reason}", node.Path, scopeReason);
+            hub.Post(
+                CreateNodeResponse.Fail(scopeReason, NodeCreationRejectionReason.InvalidPath),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
         // 1. Read existing — persistence first (catalog.GetNode auto-creates from templates),
         //    then fall back to the in-memory config. persistence.GetNode is already
         //    IObservable so we don't need to wrap it in Observable.FromAsync.

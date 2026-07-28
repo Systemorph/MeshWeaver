@@ -1,0 +1,180 @@
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using Xunit;
+
+namespace MeshWeaver.Graph.Test;
+
+/// <summary>
+/// Pins the ACCESS-GRANT SCOPE INVARIANT: a grant must be scoped to the node it is filed under.
+///
+/// <para><b>What went wrong.</b> A grant is scoped by <c>MainNode</c>, NOT by its folder. So
+/// <c>Admin/_Access/{user}_Access</c> with an EMPTY <c>MainNode</c> is not "admin of the Admin
+/// partition" — it is a <b>ROOT</b> grant: All on every partition, every space and every user's
+/// private home, by scope inheritance. It reads as harmless in the node tree.</para>
+///
+/// <para>memex, 2026-07-28: <b>43 accounts</b> held that shape (empty <c>node_path_prefix</c> in
+/// <c>admin.user_effective_permissions</c>) against exactly ONE correctly-scoped platform admin —
+/// including external course participants who had merely redeemed a coupon. They accrued one per
+/// user over two weeks and were still being created that day.</para>
+///
+/// <para>Every KNOWN writer sets <c>MainNode</c> correctly, so an unknown path produces them. That
+/// is why this is guarded structurally at the create boundary rather than fixed writer by writer.</para>
+/// </summary>
+public class AccessAssignmentGuardTest
+{
+    private static MeshNode Grant(string path, string? mainNode, string nodeType = "AccessAssignment")
+    {
+        var slash = path.LastIndexOf('/');
+        return new MeshNode(slash < 0 ? path : path[(slash + 1)..], slash < 0 ? "" : path[..slash])
+        {
+            NodeType = nodeType,
+            MainNode = mainNode
+        };
+    }
+
+    // ── ScopeFromPath ────────────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("Admin/_Access/rbuergi_Access", "Admin")]
+    [InlineData("AgenticEngineering/_Access/sglauser_Access", "AgenticEngineering")]
+    [InlineData("Store/Plugin/_Access/x_Access", "Store/Plugin")]   // scopes nest
+    [InlineData("rbuergi/_Access/rbuergi_Access", "rbuergi")]       // a user's own home
+    public void ScopeFromPath_ReadsTheScopeBeforeTheAccessFolder(string path, string expected) =>
+        AccessAssignmentGuard.ScopeFromPath(path).Should().Be(expected);
+
+    /// <summary>A root-level <c>_Access/{id}</c> encodes the ROOT scope — the data-superuser shape.</summary>
+    [Fact]
+    public void ScopeFromPath_RootLevelAccessIsTheEmptyScope() =>
+        AccessAssignmentGuard.ScopeFromPath("_Access/rbuergi_Access").Should().Be("");
+
+    [Theory]
+    [InlineData("Admin/Invitation/abc")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void ScopeFromPath_NonGrantPathsAreNotGrantPaths(string? path) =>
+        AccessAssignmentGuard.ScopeFromPath(path).Should().BeNull();
+
+    // ── The invariant ────────────────────────────────────────────────────────────────────
+
+    /// <summary>🚨 THE 43-SUPERUSER BUG: empty MainNode under a scope folder means ROOT.</summary>
+    [Fact]
+    public void EmptyMainNode_IsRejected_BecauseItGrantsRootNotTheFolder()
+    {
+        var node = Grant("Admin/_Access/rbuergi_Access", mainNode: "");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out var reason).Should().BeTrue(
+            "an empty MainNode grants ROOT — every partition — not the Admin partition");
+        reason.Should().Contain("ROOT");
+        reason.Should().Contain("MainNode='Admin'", "the message must say exactly how to fix it");
+    }
+
+    [Fact]
+    public void NullMainNode_IsRejectedToo()
+    {
+        var node = Grant("Admin/_Access/x_Access", mainNode: null);
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeTrue();
+    }
+
+    /// <summary>The correct platform-admin shape — the one row on memex that was right.</summary>
+    [Fact]
+    public void MainNodeMatchingThePath_IsValid()
+    {
+        var node = Grant("Admin/_Access/rsalzmann_Access", mainNode: "Admin");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse();
+    }
+
+    /// <summary>Every user is admin of their OWN partition — that shape must keep working.</summary>
+    [Fact]
+    public void UsersOwnHomeGrant_IsValid()
+    {
+        var node = Grant("albiona.emiri/_Access/albiona.emiri_Access", mainNode: "albiona.emiri");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse();
+    }
+
+    /// <summary>Course entitlement grants (PluginGate.Enroll) must keep working.</summary>
+    [Fact]
+    public void PluginEntitlementGrant_IsValid()
+    {
+        var node = Grant("AgenticEngineering/_Access/sglauser_Access", mainNode: "AgenticEngineering");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse();
+    }
+
+    /// <summary>A grant pointing somewhere OTHER than its folder silently grants elsewhere —
+    /// arguably worse than the empty case, because it looks deliberate.</summary>
+    [Fact]
+    public void MismatchedMainNode_IsRejected()
+    {
+        var node = Grant("AgenticEngineering/_Access/x_Access", mainNode: "Underwriting");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out var reason).Should().BeTrue();
+        reason.Should().Contain("Underwriting");
+        reason.Should().Contain("AgenticEngineering");
+    }
+
+    /// <summary>A ROOT grant is never a legitimate provisioning shape, even if MainNode agrees with
+    /// the path — that is precisely the data-superuser the docs forbid.</summary>
+    [Fact]
+    public void RootGrant_IsRejected_EvenWhenSelfConsistent()
+    {
+        var node = Grant("_Access/rbuergi_Access", mainNode: "");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out var reason).Should().BeTrue();
+        reason.Should().Contain("data-superuser");
+    }
+
+    /// <summary>Case must not decide whether someone becomes a superuser.</summary>
+    [Fact]
+    public void ScopeComparison_IsCaseInsensitive()
+    {
+        var node = Grant("Admin/_Access/x_Access", mainNode: "admin");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse();
+    }
+
+    /// <summary>The guard is about AccessAssignments only — it must not reject unrelated nodes that
+    /// happen to live under an _Access folder.</summary>
+    [Fact]
+    public void NonAccessAssignmentNodes_AreIgnored()
+    {
+        var node = Grant("Admin/_Access/readme", mainNode: "", nodeType: "Markdown");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void NullNode_IsIgnored() =>
+        AccessAssignmentGuard.IsScopeInvalid(null, out _).Should().BeFalse();
+
+    /// <summary>An AccessAssignment that is not on a grant path at all is not this guard's business.</summary>
+    [Fact]
+    public void AssignmentOffAGrantPath_IsIgnored()
+    {
+        var node = Grant("Admin/Invitation/abc", mainNode: "");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void EnsureScopeValid_ThrowsOnTheRootShape()
+    {
+        var node = Grant("Admin/_Access/x_Access", mainNode: "");
+
+        var act = () => AccessAssignmentGuard.EnsureScopeValid(node);
+
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void EnsureScopeValid_PassesTheCorrectShape()
+    {
+        var node = Grant("Admin/_Access/x_Access", mainNode: "Admin");
+
+        var act = () => AccessAssignmentGuard.EnsureScopeValid(node);
+
+        act.Should().NotThrow();
+    }
+}
