@@ -83,29 +83,119 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// 🚨 THE STORM GUARD. The warm-up must default to ONE activation at a time.
+    /// 🚨 THE STORM GUARD. The warm-up must never activate several cold NodeType hubs at once.
     ///
-    /// <para>It shipped defaulting to 4, and 4 is measurably harmful: on 2026-07-28 04:05 four
-    /// compiles fired at memex in quick succession — the identical load shape — and within minutes
-    /// SIX plugin roots fell to the "did not settle" overlay and needed a scale-to-zero. That is the
-    /// storm this class's own summary cites as the reason it ships disabled, and the same one behind
-    /// the 2026-07-22 "told I am dead" restart loop.</para>
+    /// <para>It shipped with a concurrency knob defaulting to 4, and 4 is measurably harmful: on
+    /// 2026-07-28 04:05 four compiles fired at memex in quick succession — the identical load shape
+    /// — and within minutes SIX plugin roots fell to the "did not settle" overlay and needed a
+    /// scale-to-zero. That is the storm this class's own summary cites as the reason it ships
+    /// disabled, and the same one behind the 2026-07-22 "told I am dead" restart loop.</para>
     ///
-    /// <para>Concurrency buys nothing here — the compiles already serialize on the Compile IoPool —
-    /// so the only thing it adds is simultaneous cold ACTIVATIONS, which is the expensive part
-    /// (issue #686: the same NodeType shape is 0ms discovery on a fresh mesh and 45.20s on memex).
-    /// Pinned as a value because the damage only shows up at production scale, where no test runs.</para>
+    /// <para>The knob is now GONE rather than set to 1: the sweep runs through <c>Concat</c> in
+    /// dependency order, so concurrency is structurally impossible instead of merely defaulted
+    /// away — a dependency order cannot be honoured while its members run in parallel. What is
+    /// still a tunable value, and so still worth pinning, is the PACING between types: the damage
+    /// only shows at production scale, where no test runs.</para>
     /// </summary>
     [Fact]
-    public void DefaultConcurrency_IsOne_AndTypesArePaced()
+    public void TypesArePaced_AndThereIsNoConcurrencyKnobToTurnUp()
     {
-        DynamicTypePreWarmer.DefaultMaxConcurrency.Should().Be(1,
-            "warming several cold NodeType hubs at once is what knocks roots offline; the sweep has "
-            + "no deadline, so it must trickle");
-
         DynamicTypePreWarmer.BetweenTypes.Should().BeGreaterThan(TimeSpan.Zero,
-            "back-to-back cold activations still read as a burst even at concurrency 1");
+            "back-to-back cold activations still read as a burst even when strictly sequential");
         DynamicTypePreWarmer.BetweenTypes.Should().BeLessThan(TimeSpan.FromSeconds(30),
             "…but the sweep must still finish in a sensible time on a mesh with many types");
+
+        typeof(DynamicTypePreWarmer).GetField("DefaultMaxConcurrency").Should().BeNull(
+            "re-introducing a concurrency knob would silently re-enable the storm — the sweep is "
+            + "sequential by construction now");
+        typeof(DynamicTypePreWarmer)
+            .GetMethod(nameof(DynamicTypePreWarmer.WarmDynamicTypes))!
+            .GetParameters().Should().NotContain(p => p.ParameterType == typeof(int),
+                "no int knob on the warm entry point — concurrency is not a dial any more");
+    }
+
+    /// <summary>
+    /// FAIL GRACEFULLY DOWNSTREAM — exercised through the warmer itself, not a re-implementation of
+    /// its loop in the test.
+    ///
+    /// <para>A type that draws sources from a BROKEN type cannot build: its assembly would be
+    /// missing exactly the sources the upstream owns. It must therefore be reported immediately as
+    /// <see cref="PreWarmStatus.UpstreamFailed"/>, NAMING the blocker, instead of being attempted
+    /// and burning its whole per-type budget on a guaranteed failure. And the blast radius must
+    /// stay local: an unrelated healthy type still compiles.</para>
+    ///
+    /// <para>This closes the gap the pure graph tests cannot: they pin
+    /// <c>FirstBlockedBy</c> and the topological order, but the propagation only holds because the
+    /// warmer adds each SKIPPED type to the failed set as it goes. That wiring lives here.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task WarmDynamicTypes_SkipsDependentOfABrokenType_AndNamesTheBlocker()
+    {
+        const string upstream = $"{Partition}Down/BrokenUpstream";
+        const string dependent = $"{Partition}Down/Dependent";
+        const string unrelated = $"{Partition}Down/Unrelated";
+
+        await NodeFactory.CreateNode(new MeshNode("BrokenUpstream", $"{Partition}Down")
+        {
+            Name = "Broken Upstream",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Never compiles — the upstream everything downstream waits on.",
+                Configuration = "config => this is not valid C# at all (("
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        // Draws source OUT of the broken type's subtree — that is the dependency edge.
+        await NodeFactory.CreateNode(new MeshNode("Dependent", $"{Partition}Down")
+        {
+            Name = "Dependent",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Compiles the upstream's source into its own assembly.",
+                Configuration = "config => config",
+                Sources = ["namespace:Source scope:subtree", $"shared=@{upstream}/Source"]
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        await NodeFactory.CreateNode(new MeshNode("Unrelated", $"{Partition}Down")
+        {
+            Name = "Unrelated",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Depends on nothing.",
+                Configuration = "config => config"
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        var logger = Mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("PreWarmDownstream");
+
+        var outcomes = await DynamicTypePreWarmer
+            .WarmDynamicTypes(Mesh, logger, perTypeBudget: TimeSpan.FromSeconds(90))
+            .Where(o => o.TypePath == upstream || o.TypePath == dependent || o.TypePath == unrelated)
+            .Take(3)
+            .ToList()
+            .Timeout(TimeSpan.FromSeconds(110))
+            .ToTask();
+
+        foreach (var o in outcomes)
+            Output.WriteLine($"{o.TypePath} → {o.Status} {o.Detail}");
+
+        outcomes.Single(o => o.TypePath == upstream).Status
+            .Should().Be(PreWarmStatus.CompileError);
+
+        var blocked = outcomes.Single(o => o.TypePath == dependent);
+        blocked.Status.Should().Be(PreWarmStatus.UpstreamFailed,
+            "a dependent of a broken type must be skipped up front, not attempted for a full "
+            + "per-type budget on a build that cannot succeed");
+        blocked.Detail.Should().Contain(upstream,
+            "the outcome must NAME the blocker — 'something upstream failed' is not actionable");
+
+        outcomes.Single(o => o.TypePath == unrelated).Status
+            .Should().Be(PreWarmStatus.Compiled,
+                "a broken type contains its blast radius to its own dependents; unrelated types "
+                + "must still be warmed");
     }
 }

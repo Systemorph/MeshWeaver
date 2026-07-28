@@ -145,6 +145,32 @@ public static class NodeTypeDependencyGraph
         IReadOnlyDictionary<string, ImmutableHashSet<string>> dependencies) =>
         TopologicalOrder(dependencies, out _);
 
+    /// <summary>
+    /// The dependency that BLOCKS <paramref name="path"/> — the first (path-ordered, so the answer
+    /// is stable) direct dependency already known to have failed — or <c>null</c> when nothing
+    /// upstream is broken.
+    ///
+    /// <para>Only DIRECT dependencies are examined, and that is deliberate: walk the types in
+    /// <see cref="TopologicalOrder(IReadOnlyDictionary{string, ImmutableHashSet{string}}, out ImmutableList{string})"/>
+    /// and add each blocked type to <paramref name="failed"/> as you skip it, and the block
+    /// propagates TRANSITIVELY on its own — a dependent of a skipped type sees its direct
+    /// dependency already in the set. No second traversal, and no way for the two notions of
+    /// "reachable" to disagree.</para>
+    ///
+    /// <para>Building a dependent whose upstream is broken cannot succeed: its assembly is missing
+    /// the very sources the upstream owns. Detecting that up front turns a guaranteed per-type
+    /// timeout into an immediate, named outcome.</para>
+    /// </summary>
+    public static string? FirstBlockedBy(
+        string path,
+        IReadOnlyDictionary<string, ImmutableHashSet<string>> dependencies,
+        IReadOnlySet<string> failed) =>
+        dependencies.TryGetValue(path, out var deps)
+            ? deps.Where(failed.Contains)
+                  .OrderBy(d => d, StringComparer.OrdinalIgnoreCase)
+                  .FirstOrDefault()
+            : null;
+
     /// <summary><c>path</c> is <paramref name="root"/> itself or lives under it.</summary>
     private static bool IsSelfOrUnder(string path, string root) =>
         path.Equals(root, StringComparison.OrdinalIgnoreCase)
