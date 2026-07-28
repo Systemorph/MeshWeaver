@@ -20,6 +20,14 @@ public enum PreWarmStatus
     CompileError,
     /// <summary>The per-type warm budget elapsed before the compile settled — Part 2 handles the late arrival.</summary>
     TimedOut,
+    /// <summary>
+    /// NOT ATTEMPTED: a NodeType this one draws sources from did not reach a usable build, so this
+    /// type cannot build either — its assembly would be missing exactly the sources the upstream
+    /// owns. <see cref="PreWarmOutcome.Detail"/> names the blocking type. Skipping is the graceful
+    /// outcome: warming it anyway burns the whole per-type budget on a guaranteed failure, and
+    /// doing that for a fan-out of dependents is how one broken type used to stall a whole sweep.
+    /// </summary>
+    UpstreamFailed,
     /// <summary>The warm subscription faulted (best-effort — the lazy path still works).</summary>
     Faulted
 }
@@ -146,8 +154,8 @@ public static class DynamicTypePreWarmer
                     //     TimeoutException: No response received … within 00:01:00 → Store/Plugin
                     // The order is computed from the DECLARED sources, so it stays correct as
                     // plugins add cross-type sources without anyone maintaining a list.
-                    var order = NodeTypeDependencyGraph.TopologicalOrder(
-                        NodeTypeDependencyGraph.Build(definitions), out var cyclic);
+                    var dependencies = NodeTypeDependencyGraph.Build(definitions);
+                    var order = NodeTypeDependencyGraph.TopologicalOrder(dependencies, out var cyclic);
 
                     logger?.LogInformation(
                         "DynamicTypePreWarmer: warming {Count} dynamic NodeType hub(s) in dependency order "
@@ -159,6 +167,18 @@ public static class DynamicTypePreWarmer
                             + "cannot be ordered — warmed last, in path order: {Cyclic}",
                             cyclic.Count, string.Join(", ", cyclic));
 
+                    // FAIL GRACEFULLY DOWNSTREAM. A type whose upstream did not reach a usable build
+                    // cannot build either, so it is not attempted: it is reported as UpstreamFailed
+                    // naming the blocker, and joins the failed set so ITS dependents are skipped too
+                    // — the propagation is transitive purely because we walk in topological order.
+                    // Without this, one broken type costs every dependent a full per-type budget of
+                    // waiting for something that cannot succeed.
+                    //
+                    // The set is mutated inside a Concat, which subscribes strictly one at a time,
+                    // so there is no concurrent access — and each step is wrapped in Defer so it
+                    // reads the set as it stands WHEN ITS TURN COMES, not when the chain was built.
+                    var failed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
                     // Concat, never Merge: the next type is SUBSCRIBED only after the previous one
                     // has completed, so "dependencies first" is structural rather than a convention.
                     // The gap between types keeps the sweep a background trickle rather than a queue
@@ -167,8 +187,33 @@ public static class DynamicTypePreWarmer
                     return order.Count == 0
                         ? Observable.Empty<PreWarmOutcome>()
                         : order
+<<<<<<< HEAD
                             .Select((p, i) => WarmOne(workspace, accessService, p, budget, logger)
                                 .DelaySubscription(i == 0 ? TimeSpan.Zero : BetweenTypes))
+=======
+                            .Select(p => Observable.Defer(() =>
+                            {
+                                var blocker = NodeTypeDependencyGraph.FirstBlockedBy(p, dependencies, failed);
+                                if (blocker is not null)
+                                {
+                                    failed.Add(p);
+                                    logger?.LogWarning(
+                                        "DynamicTypePreWarmer: skipping {TypePath} — its dependency {Blocker} "
+                                        + "did not reach a usable build, so it cannot compile either "
+                                        + "(lazy compile still applies if the upstream recovers)",
+                                        p, blocker);
+                                    return Observable.Return(new PreWarmOutcome(
+                                        p, PreWarmStatus.UpstreamFailed, $"blocked by {blocker}"));
+                                }
+
+                                return WarmOne(workspace, accessService, p, budget, logger)
+                                    .Do(o =>
+                                    {
+                                        if (o.Status != PreWarmStatus.Compiled)
+                                            failed.Add(p);
+                                    });
+                            }))
+>>>>>>> 477482393 (Fail gracefully downstream when an upstream NodeType fails)
                             .Concat();
                 })
                 .Catch<PreWarmOutcome, Exception>(ex =>
