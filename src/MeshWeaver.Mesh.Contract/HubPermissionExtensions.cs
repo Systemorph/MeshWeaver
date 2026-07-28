@@ -86,8 +86,14 @@ public static class HubPermissionExtensions
     /// <c>Admin</c>, granted by an <c>AccessAssignment</c> in <c>Admin/_Access</c>).
     /// <para>This is the ONE canonical platform-admin predicate — every "is this user a
     /// global/platform admin?" check goes through here, never an ad-hoc role-name or
-    /// root-scope check. A global admin is a platform superuser (All on every path; see
-    /// the short-circuit in <see cref="PermissionEvaluator"/>). Doc/Architecture/AccessControl.md.</para>
+    /// root-scope check.</para>
+    ///
+    /// <para>🚨 It answers "may this user run platform actions?", NOT "may this user read
+    /// this data". A global admin is NOT a superuser: the grant is scoped to the Admin
+    /// partition and confers <b>no Read on any other node</b> — spaces and user partitions
+    /// evaluate to <see cref="Permission.None"/> for them, so gated content stays gated for
+    /// admins too. Use this predicate to gate admin UI and platform operations; never as a
+    /// stand-in for a read check on content. Doc/Architecture/AccessControl.md.</para>
     /// </summary>
     public static IObservable<bool> IsGlobalAdmin(this IMessageHub hub)
     {
