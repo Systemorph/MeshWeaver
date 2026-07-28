@@ -41,28 +41,23 @@ public static class JsonSynchronizationStream
     private const string SystemUserId = "system-security";
 
     /// <summary>
-    /// How long a freshly subscribed stream may stay EMPTY before the subscribe is re-sent.
-    /// Far below the heartbeat — the point is to stop a lost first delivery from costing a full
-    /// <see cref="SyncStreamOptions.HeartbeatInterval"/> (45s, measured on memex 2026-07-27) — but
-    /// comfortably ABOVE the slowest LEGITIMATE cold read.
+    /// When the FIRST heartbeat fires on a fresh subscription. The rest keep the configured
+    /// <see cref="SyncStreamOptions.HeartbeatInterval"/> cadence.
     ///
-    /// <para>🚨 Calibrated by a CI failure, not by taste. At 4s this fired on healthy streams on
-    /// loaded CI runners, where a genuine cold read outruns the probe. That is the dangerous
-    /// direction: under a mass cold start (i.e. every deploy) an eager probe re-subscribes healthy
-    /// streams, and each re-subscribe creates a <c>sync/{ClientId}</c> hub on the owner's
-    /// single-threaded action block — the storm <c>ChangeFeedResubscribeCoalesceTest</c> exists to
-    /// prevent, and worse than the 45s stall. When in doubt, be LATE: a stall that costs 15s is a
-    /// slow page, a storm is an outage.</para>
+    /// <para>🚨 This number is the fix for the memex 2026-07-27 outage. A stream whose owner acked
+    /// the subscribe and then went quiet delivered nothing until the first heartbeat poked it —
+    /// 45.20s of every compile, measured, against 2.83s of Roslyn. Starting the heartbeat early
+    /// turns that into a few seconds without inventing a new mechanism: it is the same
+    /// fire-and-forget [SystemMessage] the stream already sends forever, just not withheld for a
+    /// full interval first.</para>
+    ///
+    /// <para>Deliberately NOT a re-subscribe: each SubscribeRequest creates a
+    /// <c>sync/{ClientId}</c> hub on the owner's single-threaded action block, so a re-subscribe
+    /// probe becomes a storm under mass cold start (every deploy) — the failure
+    /// <c>ChangeFeedResubscribeCoalesceTest</c> guards, and one an earlier version of this fix hit
+    /// on CI. A heartbeat costs one message and creates nothing.</para>
     /// </summary>
-    internal static readonly TimeSpan MissingInitialProbe = TimeSpan.FromSeconds(15);
-
-    /// <summary>
-    /// How many times a silent stream re-sends its subscribe before giving up. Bounded on purpose:
-    /// this nudges a MISSED WAKEUP, it is not a retry loop. An owner that genuinely cannot answer
-    /// faults the stream through the subscribe's own error path; one that is merely slow satisfies
-    /// the probe with its first delivery.
-    /// </summary>
-    internal const int MaxMissingInitialResubscribes = 3;
+    internal static readonly TimeSpan FirstHeartbeat = TimeSpan.FromSeconds(5);
 
     // Hub-shaped principals leak from the workspace emission scheduler when an
     // upstream notification fires under a hub's own AsyncLocal (e.g. a `sync/{guid}`
@@ -483,53 +478,30 @@ public static class JsonSynchronizationStream
                 }
             }
 
-            // 🚨 THE LOST INITIAL. Everything above recovers a stream whose OWNER announced
-            // something (change feed → latch). Nothing recovers a stream whose owner ACKED the
-            // SubscribeRequest and then never delivered the first DataChangedEvent: no announce
-            // ever comes, so the latch never trips and the read simply waits — in practice until
-            // the 45s heartbeat happens to shake something loose.
+            // 🚨 THE LOST INITIAL — and why the first heartbeat comes EARLY.
             //
-            // memex, 2026-07-27, measured off the compile activity log: source discovery took
-            // 45.20s on a healthy mesh and 90.19s (two misses) during the outage, against 2.6s of
-            // Roslyn — 97% of every compile was a lost Initial waiting for a heartbeat. Types then
-            // crossed the 60s settle window and every plugin root served the "did not settle"
-            // fallback. The same silence keeps an instance's NodeType stream from ever seeing a
-            // fresh build, which is why the overlay self-heal had nothing to fire on and only a
-            // process restart cleared it.
+            // Measured on memex 2026-07-27 from the compile activity log's microsecond timestamps:
+            // source discovery took 45.20s on a healthy mesh and 90.19s (two misses) during the
+            // outage, against 2.6s of actual Roslyn work. 45.20s is one HeartbeatInterval to within
+            // 200ms. Types then crossed the 60s settle window and every plugin root served the
+            // "did not settle" fallback; the same silence keeps an instance's NodeType stream from
+            // ever seeing a fresh build, which is why the overlay self-heal had nothing to fire on
+            // and only a process restart cleared it. One bug, three symptoms.
             //
-            // So: if NOTHING has arrived shortly after subscribing, re-send the SubscribeRequest
-            // through the SAME proven Resubscribe path. Bounded (a few attempts) — this is a
-            // missing-wakeup nudge, not a retry storm; a genuinely absent owner already faults the
-            // stream above, and a slow-but-alive owner satisfies the probe on its first delivery.
-            // 🚨 NO EXTRA SUBSCRIPTION. The first version of this rode its own reduced.Subscribe to
-            // notice the first delivery, and that broke unrelated tests across three CI shards: an
-            // additional early subscriber changes WHEN a ref-counted stream starts, so the stream
-            // under test behaved differently just by being watched. The arrival flag is therefore
-            // set from the EXISTING passive tracker further down (the one that records
-            // receivedVersion) — one subscription, two observations.
-            var initialArrived = 0;
-
-            // Bounded by Take(): the timer completes and self-disposes after the last attempt, so
-            // this can never become the process-global TimerQueue root that the heartbeat comment
-            // below documents (the MeshHub_IsCollected leak).
-            var initialWatchdog = new System.Reactive.Disposables.SingleAssignmentDisposable();
-            initialWatchdog.Disposable = Observable
-                .Timer(MissingInitialProbe, MissingInitialProbe)
-                .Take(MaxMissingInitialResubscribes)
-                .Subscribe(
-                    _ =>
-                    {
-                        if (Interlocked.CompareExchange(ref initialArrived, 0, 0) != 0)
-                        {
-                            initialWatchdog.Dispose();
-                            return;
-                        }
-                        Resubscribe("acked the subscribe but delivered no initial snapshot");
-                    },
-                    _ => initialWatchdog.Dispose(),
-                    () => initialWatchdog.Dispose());
-            keepAlive.Add(initialWatchdog);
-
+            // The tell is WHERE the data finally arrives: exactly on a heartbeat. The owner is not
+            // slow — it is holding the delivery until something pokes it, and the heartbeat is the
+            // poke. Every other recovery path here is event-driven (change feed → latch), and a
+            // stream whose owner ACKED the SubscribeRequest and then went quiet produces no event
+            // at all, so nothing runs until the first HeartBeatEvent 45s later.
+            //
+            // So POKE SOONER. Not a re-subscribe — that creates a sync/{ClientId} hub on the
+            // owner's single-threaded action block per attempt, which is the storm
+            // ChangeFeedResubscribeCoalesceTest exists to prevent (and an earlier version of this
+            // fix did exactly that, firing on healthy streams under CI load). Just start the
+            // EXISTING heartbeat early: same fire-and-forget [SystemMessage] this stream already
+            // sends every 45s forever, merely with its first tick at FirstHeartbeat instead of a
+            // full interval. One extra cheap message per stream, no new subscription, no new
+            // protocol, and it targets the mechanism that demonstrably delivers the data.
             var heartbeatInterval = hub.ServiceProvider
                 .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
                 ?.Value?.HeartbeatInterval ?? TimeSpan.FromSeconds(45);
@@ -544,7 +516,7 @@ public static class JsonSynchronizationStream
             // once the hub is unreferenced the next tick self-disposes the timer and releases it.
             var weakHub = new WeakReference<IMessageHub>(hub);
             var sub = new System.Reactive.Disposables.SingleAssignmentDisposable();
-            sub.Disposable = Observable.Interval(heartbeatInterval)
+            sub.Disposable = Observable.Timer(FirstHeartbeat, heartbeatInterval)
                 .Subscribe(_ =>
                 {
                     if (!weakHub.TryGetTarget(out var h)
@@ -637,13 +609,7 @@ public static class JsonSynchronizationStream
                 ci =>
                 {
                     object? value = ci is null ? null : ci.Value;
-                    if (value is null)
-                        return;
-                    // ANY delivery stands the missing-Initial watchdog down (see above): the owner
-                    // is talking to us, so there is no lost wakeup to nudge. Piggybacked here so the
-                    // stream carries ONE passive subscription, not two.
-                    Interlocked.Exchange(ref initialArrived, 1);
-                    if (reducedVersionProperty?.GetValue(value) is long v)
+                    if (value is not null && reducedVersionProperty?.GetValue(value) is long v)
                         InterlockedMax(ref receivedVersion, v);
                 },
                 // Passive tracker: the stream's fault (e.g. owner NotFound) is surfaced by the
