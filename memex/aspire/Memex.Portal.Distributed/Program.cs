@@ -88,7 +88,15 @@ else
     // AddBlobAssemblyStore() runs; both use TryAddSingleton<IAssemblyStore>, so this
     // first registration wins and the blob factory (which needs a keyed BlobServiceClient
     // we deliberately don't register here) is never constructed.
-    builder.Services.AddFileSystemAssemblyStore(Path.Combine(dataRoot, "assembly-cache"));
+    var assemblyCache = Path.Combine(dataRoot, "assembly-cache");
+    builder.Services.AddFileSystemAssemblyStore(assemblyCache);
+
+    // 🚨 ONE POD BAKES. The compile cache is shared but the decision to rebuild is per-process, so
+    // without a lease every replica on a new image starts the SAME sweep over the SAME NodeTypes
+    // into this SAME directory — concurrent cold compiles of one type, which is the storm the
+    // sequential sweep exists to prevent. Any rollout with maxSurge hits this by default.
+    // The lease lives beside the assemblies it guards, so it is shared exactly when they are.
+    builder.Services.AddSingleton(new BakeCoordination(assemblyCache));
 
     // NuGet package cache → filesystem (zip-per-version, shared-volume safe).
     builder.Services.Replace(ServiceDescriptor.Singleton<INuGetPackageCache>(sp =>
