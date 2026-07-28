@@ -84,7 +84,7 @@ result as-is — to change which nodes appear or their order, change the **query
 ### The standard skills are authored as `.md` files
 
 `/agent`, `/model`, `/harness` ship as `Pick` skill nodes, authored the **same way as agents**: a markdown
-file with a YAML frontmatter header (`src/MeshWeaver.AI/Data/Skill/*.md` — e.g. `agent.md` → `/agent`),
+file with a YAML frontmatter header (`content/ai/Skill/*.md` — e.g. `agent.md` → `/agent`),
 loaded by `BuiltInSkillProvider`. A behaviour skill puts its `action:` block in the frontmatter; an
 instruction skill puts its how-to in the markdown body:
 
@@ -128,7 +128,7 @@ This guidance lives in the shared agent base prompt (`AgentChatClient`); the age
 - **`OpenContent`** — load a node/manual into the content window (side panel) via the navigation bridge
   (`SidePanelState.SetContentPath`). Set `action.contentPath`, or pair a `Pick` with the content window.
 - **`Navigate`** — **take me there.** Navigate the UI to a node, doc, or page. Ships as the built-in
-  **`/navigate`** skill (`src/MeshWeaver.AI/Data/Skill/navigate.md`). Two properties make it robust:
+  **`/navigate`** skill (`content/ai/Skill/navigate.md`). Two properties make it robust:
   - **Pane-aware** — the target opens in the pane *opposite* the thread, so the conversation and where it
     sent you sit side by side (the same rule as the context chip, `OnContextChipClicked`):
     a thread in the **main pane** opens the target in the **side panel**; a thread in the **side panel**
@@ -145,7 +145,7 @@ This guidance lives in the shared agent base prompt (`AgentChatClient`); the age
   honestly no matter who asks. Tested by `NavigationTargetResolverTest` (the pure algorithm) and
   `MeshPluginTest` (resilient + honest resolution against the live mesh).
 - **`NewThread`** — **start a fresh chat.** Ships as the built-in **`/clear`** skill
-  (`src/MeshWeaver.AI/Data/Skill/clear.md`). It REPLACES whatever is showing in the **side panel** with an
+  (`content/ai/Skill/clear.md`). It REPLACES whatever is showing in the **side panel** with an
   empty new-chat composer and **leaves the main pane alone** — the same target as the "+" button
   (`SidePanelState.SetContentPath(null)` drops the open thread so `ThreadSidePanelContent` swaps in the
   composer; the panel is opened if it was closed). No navigation. Handled by `ThreadChatView.RunSkill`.
