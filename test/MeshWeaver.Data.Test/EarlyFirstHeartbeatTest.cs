@@ -46,11 +46,18 @@ public class EarlyFirstHeartbeatTest(ITestOutputHelper output) : HubTestBase(out
     private static readonly TimeSpan ProductionHeartbeat = TimeSpan.FromSeconds(45);
 
     /// <summary>
-    /// How long the test waits for the early beat before giving up. Generous for loaded CI runners,
-    /// yet far below <see cref="ProductionHeartbeat"/> — so a heartbeat seen inside it can ONLY have
-    /// come from the early first tick, and the assertion stays a detector rather than a stopwatch.
+    /// The early tick under test. Deliberately tiny: this repo enforces a 5s per-test budget, so a
+    /// test that waits for the production 5s beat can NEVER pass — that is what failed CI, not the
+    /// fix. Making the value configurable keeps the behaviour observable inside the budget AND gives
+    /// operators a knob.
     /// </summary>
-    private static readonly TimeSpan HeartbeatDeadline = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan TestFirstHeartbeat = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>
+    /// Poll ceiling for the early beat. Far below <see cref="ProductionHeartbeat"/>, so a heartbeat
+    /// seen inside it can ONLY have come from the early tick — and comfortably inside the 5s budget.
+    /// </summary>
+    private static readonly TimeSpan HeartbeatDeadline = TimeSpan.FromSeconds(2);
 
     private int _heartbeats;
     private int _subscribeCount;
@@ -76,7 +83,13 @@ public class EarlyFirstHeartbeatTest(ITestOutputHelper output) : HubTestBase(out
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration)
             .WithServices(services => services
-                .Configure<SyncStreamOptions>(o => o.HeartbeatInterval = ProductionHeartbeat))
+                .Configure<SyncStreamOptions>(o =>
+                {
+                    // Production-length cadence with a tiny FIRST tick: the only thing that can
+                    // deliver a beat inside the deadline is the early tick under test.
+                    o.HeartbeatInterval = ProductionHeartbeat;
+                    o.FirstHeartbeat = TestFirstHeartbeat;
+                }))
             .AddData(data => data.AddHubSource(CreateHostAddress(),
                 ds => ds.WithType<BusinessUnit>().WithType<LineOfBusiness>()));
 
@@ -130,20 +143,17 @@ public class EarlyFirstHeartbeatTest(ITestOutputHelper output) : HubTestBase(out
     [Fact]
     public void EarlyTick_NeverDelaysAShorterConfiguredInterval()
     {
+        var configured = new SyncStreamOptions().FirstHeartbeat;
         var shortInterval = TimeSpan.FromMilliseconds(200);
-        var firstTick = shortInterval < JsonSynchronizationStream.FirstHeartbeat
-            ? shortInterval
-            : JsonSynchronizationStream.FirstHeartbeat;
+        var firstTick = shortInterval < configured ? shortInterval : configured;
 
         firstTick.Should().Be(shortInterval,
             "a 200ms cadence must fire at 200ms, not be pushed out to the early-tick floor");
 
         var longInterval = TimeSpan.FromSeconds(45);
-        var longFirst = longInterval < JsonSynchronizationStream.FirstHeartbeat
-            ? longInterval
-            : JsonSynchronizationStream.FirstHeartbeat;
+        var longFirst = longInterval < configured ? longInterval : configured;
 
-        longFirst.Should().Be(JsonSynchronizationStream.FirstHeartbeat,
+        longFirst.Should().Be(configured,
             "a 45s cadence must be front-run by the early tick — that is the whole fix");
     }
 
@@ -152,11 +162,11 @@ public class EarlyFirstHeartbeatTest(ITestOutputHelper output) : HubTestBase(out
     [Fact]
     public void FirstHeartbeat_IsWellInsideTheInterval()
     {
-        JsonSynchronizationStream.FirstHeartbeat.Should().BeLessThan(
+        new SyncStreamOptions().FirstHeartbeat.Should().BeLessThan(
             new SyncStreamOptions().HeartbeatInterval,
             "a first tick at or past the interval would leave the 45s stall exactly as it was");
 
-        JsonSynchronizationStream.FirstHeartbeat.Should().BeGreaterThan(TimeSpan.FromSeconds(1),
+        new SyncStreamOptions().FirstHeartbeat.Should().BeGreaterThan(TimeSpan.FromSeconds(1),
             "poking instantly on every stream creation adds noise without fixing anything");
     }
 }
