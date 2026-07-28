@@ -28,7 +28,9 @@ public class AccessAssignmentGuardTest
         return new MeshNode(slash < 0 ? path : path[(slash + 1)..], slash < 0 ? "" : path[..slash])
         {
             NodeType = nodeType,
-            MainNode = mainNode
+            // Deliberately null in some cases: a null MainNode is one of the shapes under test
+            // (it reaches the evaluator as root scope exactly like the empty string does).
+            MainNode = mainNode!
         };
     }
 
