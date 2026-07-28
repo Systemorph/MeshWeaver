@@ -53,9 +53,21 @@ public class NodeTypeBakeStatusTest
             .Should().Be(BakeState.BytesMissing);
 
     [Fact]
-    public void Classify_AssemblyBuiltAgainstAnotherFramework_IsFrameworkStale() =>
-        NodeTypeBakeStatus.Classify(Healthy(Previous), storeHasBytes: true, Live)
+    public void Classify_AssemblyBuiltAgainstAnotherFramework_AndNoBytes_IsFrameworkStale() =>
+        NodeTypeBakeStatus.Classify(Healthy(Previous), storeHasBytes: false, Live)
             .Should().Be(BakeState.FrameworkStale);
+
+    /// <summary>
+    /// 🚨 Bytes win over the record. The store is keyed with the LIVE framework tag, so a hit means
+    /// "a build for THIS framework exists" no matter what the record says — another replica compiled
+    /// it and its write-back lagged, failed, or never happened. Rebuilding it would recompile
+    /// something already sitting on the shared volume, which is the exact waste this probe exists to
+    /// prevent.
+    /// </summary>
+    [Fact]
+    public void Classify_RecordNamesAnotherFramework_ButStoreHasOurBytes_IsBaked() =>
+        NodeTypeBakeStatus.Classify(Healthy(Previous), storeHasBytes: true, Live)
+            .Should().Be(BakeState.Baked);
 
     [Fact]
     public void Classify_NoAssemblyRecorded_IsNeverBuilt() =>
@@ -204,18 +216,32 @@ public class NodeTypeBakeStatusTest
         report.Pending.Select(e => e.TypePath).Should().Equal("Edu/Course");
     }
 
-    /// <summary>
-    /// A framework roll must not consult the store at all: the framework tag is part of the store key,
-    /// so a lookup is a guaranteed miss that tells us nothing and costs a round-trip per type.
-    /// </summary>
+    /// <summary>A framework roll with an empty share: everything is stale and must be rebuilt.</summary>
     [Fact]
-    public void Probe_FrameworkRoll_ReportsStaleWithoutTouchingTheStore()
+    public void Probe_FrameworkRoll_WithEmptyShare_ReportsStale()
     {
         var store = new FakeStore();
         var report = Probe(store, ("Store/Plugin", Healthy(Previous)), ("Edu/Course", Healthy(Previous, 12)));
 
         report.Entries.Should().OnlyContain(e => e.State == BakeState.FrameworkStale);
-        store.Lookups.Should().BeEmpty();
+        report.IsComplete.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The share is still consulted on a framework roll — that is what lets a pod inherit a build
+    /// another replica already produced for this framework, instead of repeating it because the
+    /// record has not caught up.
+    /// </summary>
+    [Fact]
+    public void Probe_FrameworkRoll_ButShareAlreadyWarm_ReportsComplete()
+    {
+        var store = new FakeStore();
+        store.Add("Store/Plugin", 845);
+
+        var report = Probe(store, ("Store/Plugin", Healthy(Previous)));
+
+        report.IsComplete.Should().BeTrue("bytes for the live framework outrank a lagging record");
+        store.Lookups.Should().NotBeEmpty("the share must actually be consulted");
     }
 
     /// <summary>Fail SAFE: an unreadable store means "bake it", never "trust the record and serve".</summary>
