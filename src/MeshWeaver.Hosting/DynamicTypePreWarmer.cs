@@ -55,9 +55,32 @@ public record PreWarmOutcome(string TypePath, PreWarmStatus Status, string? Deta
 /// </summary>
 public static class DynamicTypePreWarmer
 {
-    /// <summary>How many dynamic NodeType hubs to activate concurrently. The compiles
-    /// themselves serialize on the Compile IoPool; this just caps in-flight activations.</summary>
-    public const int DefaultMaxConcurrency = 4;
+    /// <summary>
+    /// How many dynamic NodeType hubs to activate concurrently. <b>ONE.</b>
+    ///
+    /// <para>🚨 This was 4, and 4 is measurably harmful on a real mesh. On 2026-07-28 04:05 four
+    /// compiles were triggered on memex in quick succession — nothing to do with this warmer, but
+    /// the identical load shape — and within minutes SIX plugin roots (Claims, Edu, Underwriting,
+    /// Chess, Publish, Training) fell to the "did not settle" overlay and needed a scale-to-zero to
+    /// recover. That is the same storm this class's own summary warns about as the reason it ships
+    /// disabled, and the same one behind the 2026-07-22 "I have been told I am dead" restart
+    /// loop.</para>
+    ///
+    /// <para>The compiles already serialize on the Compile IoPool, so concurrency here buys nothing
+    /// except simultaneous cold ACTIVATIONS — which is exactly the expensive part: source discovery
+    /// on a large mesh is dominated by cold cross-partition hub activation (109ms and 0ms discovery
+    /// for the same NodeType shape on a fresh mesh, versus 45.20s on memex — issue #686). Warming
+    /// one at a time still removes the first-visitor stall; doing four at once trades a slow page
+    /// for an outage.</para>
+    /// </summary>
+    public const int DefaultMaxConcurrency = 1;
+
+    /// <summary>
+    /// Pause between types, so a long warm sweep stays a background trickle rather than a queue of
+    /// back-to-back cold activations. Cheap insurance: the sweep is a latency optimisation with no
+    /// deadline, so there is no reason for it to ever look like load.
+    /// </summary>
+    public static readonly TimeSpan BetweenTypes = TimeSpan.FromSeconds(2);
 
     /// <summary>Per-type warm budget — generous, because a cold Roslyn compile queued behind
     /// others on the Compile IoPool can legitimately take a while. On elapse we log
@@ -120,7 +143,13 @@ public static class DynamicTypePreWarmer
                     return typePaths.Length == 0
                         ? Observable.Empty<PreWarmOutcome>()
                         : typePaths
-                            .Select(p => WarmOne(workspace, accessService, p, budget, logger))
+                            // Space the types out as well as capping concurrency. With
+                            // maxConcurrency=1 the Merge already serializes them, but back-to-back
+                            // cold activations still read as a burst to the hubs being woken; the
+                            // delay makes the sweep a trickle. It costs nothing — the warm-up has
+                            // no deadline and Part 2 compiles lazily regardless.
+                            .Select((p, i) => WarmOne(workspace, accessService, p, budget, logger)
+                                .DelaySubscription(TimeSpan.FromTicks(BetweenTypes.Ticks * i)))
                             .Merge(Math.Max(1, maxConcurrency));
                 })
                 .Catch<PreWarmOutcome, Exception>(ex =>
