@@ -169,7 +169,59 @@ kubectl -n monitoring port-forward svc/loki-grafana 3000:80    # http://localhos
 In Grafana → Explore → Loki, the portal logs are `{namespace="memex"}` (e.g. add
 `|= "error"` or `|~ "signin-microsoft"`).
 
+## 7. Rolling a new image — and the traps
+
+```bash
+# a) The manifest MUST carry every arch leg. A partial manifest list = ImagePullBackOff on the
+#    missing arch, which presents as "the deploy hung" (memex-cloud V46 outage, 2026-07-19).
+az acr manifest show -r meshweaver -n memex-portal-ai:<tag> \
+  | jq -r '.manifests[]?.platform | "\(.os)/\(.architecture)"'   # expect linux/amd64 AND linux/arm64
+
+# b) Roll.
+az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+  "kubectl set image deploy/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag> -n <env> \
+   && kubectl rollout status deploy/memex-portal-deployment -n <env> --timeout=600s"
+
+# c) Verify with REAL signals, looped. HTTP 200 is the Blazor shell and proves nothing.
+for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " https://<host>/static/<space>/content/<file>; done
+```
+
+**Expect a cold-compile window.** Fresh pods invalidate every dynamic NodeType's cached assembly
+(the framework MVID changed), so they all recompile. During it, pages and `/static/…` can fail with
+*"No response received … `GetDataRequest`/`SubscribeRequest` → target X"*. This is normal; it is not
+a bad image.
+
+- **Do not cycle pods while it warms** — that restarts the compile work from cold.
+- **Converging vs. stuck:** warm-up trends toward 100%. A *stable* ~50% over many minutes means one
+  replica is consistently failing — investigate that replica instead of waiting.
+- **Probes:** `startupProbe` gives 300s and gates liveness/readiness, so a slow boot is safe; a hang
+  or crash after startup is killed by liveness in 90s.
+
+### Scaling: KEDA wins
+`kubectl scale --replicas=0` (the documented heal for a wedged mesh) is **silently reverted** by a
+`ScaledObject` with `minReplicaCount: 2` — you conclude the heal failed when it never ran.
+`kubectl get scaledobject -n <env>` first, and check `PAUSED`.
+
+### Crash dumps: verify the MOUNT
+`DOTNET_DbgEnableMiniDump` + `DOTNET_DbgMiniDumpName=/data/dumps/…` do nothing without a volume at
+that path — `createdump` does not create directories, so the crash destroys its own evidence. The
+chart mounts a dedicated `memex-dumps` emptyDir; verify the LIVE pod actually has it:
+
+```bash
+kubectl get deploy memex-portal-deployment -n <env> \
+  -o jsonpath='{range .spec.template.spec.containers[0].volumeMounts[*]}{.name} -> {.mountPath}{"\n"}{end}' \
+  | grep dumps || echo "NO DUMP MOUNT — every crash will produce nothing"
+```
+
+⚠️ `envs/<env>/portal-patch.json` replaces volumes **by index**, so adding or reordering a chart
+volume silently misaligns an environment and a cluster can run an older volume set while the chart
+in git looks right. Diff live mounts against the chart after every deploy.
+
 ## Known gaps / follow-ups
+- **Dump mount not applied to the live clusters** (2026-07-28): all three namespaces carry the dump
+  env vars while no pod mounts `/data/dumps`, so every production `exit=139` so far produced no
+  dump. Applying the current chart fixes it; until then a `mkdir /data/dumps` on the `/data` PVC is
+  a stopgap that puts heap-sized dumps on a shared 16Gi share instead of the size-bounded emptyDir.
 - **Multi-replica HA**: needs Orleans `AzureTables` clustering wired on the Filesystem backend
   (the portal currently registers the clustering table client only in the Azure-backend branch).
 - **Chart connection string**: `../helm/templates/memex-portal/secrets.yaml` hardcodes the

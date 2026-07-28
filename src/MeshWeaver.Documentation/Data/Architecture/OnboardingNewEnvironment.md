@@ -170,6 +170,63 @@ See [Memex Cloud Deployment](/Doc/Architecture/MemexCloudDeployment) for the pro
   and scrape **every** namespace — query `{namespace="<env>"}` in Grafana Explore (reach it via
   the P2S VPN + `kubectl -n monitoring port-forward svc/loki-grafana 3000:80`). Loki retains logs
   across pod restarts, unlike `kubectl logs`.
+- **🩺 Crash dumps need the MOUNT, not just the env vars.** `DOTNET_DbgEnableMiniDump` +
+  `DOTNET_DbgMiniDumpName=/data/dumps/…` are worthless on their own: `createdump` does **not create
+  directories**, so without a volume mounted at that path every crash fails with *"Could not create
+  output file … No such file or directory"* — **destroying its own evidence** — and burns ~6s plus a
+  ~350k-line log storm on the way down. The chart mounts a dedicated `memex-dumps` emptyDir there;
+  an env whose live pod lacks it produces **zero dumps while looking fully instrumented**. Verified
+  2026-07-28: all three environments had the env vars pointing at a non-existent directory, so every
+  production `exit=139` since had left nothing to analyse. Check the MOUNT, never the env:
+  ```bash
+  kubectl get deploy memex-portal-deployment -n <env> \
+    -o jsonpath='{range .spec.template.spec.containers[0].volumeMounts[*]}{.name} -> {.mountPath}{"\n"}{end}' \
+    | grep dumps || echo "NO DUMP MOUNT — crashes will produce nothing"
+  ```
+- **The per-env patch replaces volumes BY INDEX.** `deploy/aks/envs/<env>/portal-patch.json` targets
+  `/spec/template/spec/volumes/0`, `/1`, … so **adding or reordering a volume in the chart silently
+  misaligns every environment**, and a cluster can keep running an older volume set while the chart
+  in git looks correct. After any deploy, diff the live mounts against the chart — do not assume the
+  chart is what is running.
+- **KEDA overrides `kubectl scale`.** A `ScaledObject` with `minReplicaCount: 2` silently restores
+  replicas, so "scale to zero" (the documented heal for a wedged mesh) **does not take** and you
+  conclude the heal failed when it never ran. Check first — and note `PAUSED`:
+  ```bash
+  kubectl get scaledobject -n <env>
+  ```
+- **HTTP 200 proves nothing.** The Blazor shell returns 200 for a page that renders an error, a
+  paywall redirect, or nothing at all. Verify a deploy with response **headers** for static assets
+  and with actual rendered content (`get @<Node>/area/<Area>` through the MCP, or a real browser) —
+  never with a status code.
+
+## Verifying a rollout (and what "normal turbulence" looks like)
+
+A new image means **fresh pods**, and every dynamic NodeType's cached assembly is ABI-stale against
+the new framework build — so they all recompile. Expect a window where pages and `/static/…` return
+errors like *"No response received … for request `GetDataRequest`/`SubscribeRequest` → target X"*.
+That is cold-compile, not a bad image.
+
+```bash
+# 1. BEFORE rolling: the manifest must have every arch leg. A partial manifest list is an
+#    ImagePullBackOff on the missing arch, which reads as "the deploy hung".
+az acr manifest show -r <registry> -n memex-portal-ai:<tag> \
+  | jq -r '.manifests[]?.platform | "\(.os)/\(.architecture)"'
+
+# 2. Roll and wait.
+kubectl set image deploy/memex-portal-deployment memex-portal=<registry>/memex-portal-ai:<tag> -n <env>
+kubectl rollout status deploy/memex-portal-deployment -n <env> --timeout=600s
+
+# 3. Verify with real signals, in a LOOP (one probe can hit a warm pod and lie).
+for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " https://<host>/static/<space>/content/<file>; done
+```
+
+- **Do not cycle pods while it warms.** Deleting or scaling pods restarts the compile work from
+  cold and makes the window longer, not shorter.
+- **A steady ratio is a signal, not warm-up.** Warm-up converges toward 100%; a stable ~50% across
+  many minutes means *one replica is failing consistently* — investigate that, do not wait it out.
+- **Probe budgets** (`startupProbe` 300s, `liveness` 90s, `readiness` 30s): liveness and readiness
+  do not run until the startup probe succeeds, so a **slow boot is safe**. What is not safe is a
+  hang or crash *after* startup — 90s of failed `/alive` and kubelet restarts the container.
 
 ## Related
 
