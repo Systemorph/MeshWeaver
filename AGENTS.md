@@ -153,7 +153,7 @@ All docs embedded in `src/MeshWeaver.Documentation/` and served under `Doc/` at 
 | DataMesh | `src/MeshWeaver.Documentation/Data/DataMesh/` |
 | GUI | `src/MeshWeaver.Documentation/Data/GUI/` |
 | AI Integration | `src/MeshWeaver.Documentation/Data/AI/` |
-| Agent definitions | `src/MeshWeaver.AI/Data/Agent/` |
+| Agent definitions | `content/ai/Agent/` |
 
 **Writing/editing a doc page:** follow [AuthoringDocumentation.md](src/MeshWeaver.Documentation/Data/Architecture/AuthoringDocumentation.md). Links resolve against the page's FULL node path at render time — sibling links need `../Sibling`, absolute links start `/Doc/…`; `xref:` and `.md` suffixes never resolve. `DocumentationLinkIntegrityTest` (test/MeshWeaver.Documentation.Test) fails on any broken internal link — run it after doc edits.
 
@@ -508,7 +508,7 @@ For detailed patterns with code examples, read:
 
 ## Testing Guidelines
 
-Before building NodeTypes, data models, layout areas, or CSV loaders — read the [/code skill](src/MeshWeaver.AI/Data/Skill/code.md) first (canonical guide + non-negotiable testing standards).
+Before building NodeTypes, data models, layout areas, or CSV loaders — read the [/code skill](content/ai/Skill/code.md) first (canonical guide + non-negotiable testing standards).
 
 **No mocking.** Use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshService`, or core interfaces.  
 **Always `run_in_background: true`** for test runs (they take minutes).  
