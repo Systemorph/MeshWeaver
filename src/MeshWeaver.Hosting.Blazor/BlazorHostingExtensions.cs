@@ -67,10 +67,24 @@ public static class BlazorHostingExtensions
         //app.MapRazorComponents<ApplicationPage>();
     }
 
-    private static string GetContentType(string path)
+    internal static string GetContentType(string path)
     {
         return Path.GetExtension(path).ToLowerInvariant() switch
         {
+            // 🎬 Media. Without these a video served from a content collection falls to
+            // application/octet-stream, and a browser will not play an octet-stream in a
+            // <video> element — the course cover renders an empty player.
+            ".mp4" => "video/mp4",
+            ".m4v" => "video/mp4",
+            ".webm" => "video/webm",
+            ".ogv" => "video/ogg",
+            ".mov" => "video/quicktime",
+            ".mp3" => "audio/mpeg",
+            ".m4a" => "audio/mp4",
+            ".wav" => "audio/wav",
+            ".oga" => "audio/ogg",
+            ".ogg" => "audio/ogg",
+            ".vtt" => "text/vtt",
             ".css" => "text/css",
             ".js" => "application/javascript",
             ".html" => "text/html",
@@ -102,6 +116,18 @@ public static class BlazorHostingExtensions
             _ => "application/octet-stream"
         };
     }
+
+    /// <summary>
+    /// The <c>fileDownloadName</c> to hand to <c>Results.File</c>/<c>Results.Stream</c>:
+    /// the file name ONLY when a download was explicitly requested, otherwise <c>null</c>.
+    ///
+    /// <para>This is the whole inline-vs-attachment decision. Supplying a name always emits
+    /// <c>Content-Disposition: attachment</c>, and a browser will not render an attachment inline —
+    /// which is why every content-collection video played nowhere while the bytes were perfectly
+    /// fine. Pure, so the rule is pinned without an HTTP round trip.</para>
+    /// </summary>
+    internal static string? DownloadNameFor(bool isDownloadRequested, string fileName) =>
+        isDownloadRequested ? fileName : null;
 
     private static bool IsTextContentType(string contentType)
     {
@@ -297,10 +323,18 @@ public static class BlazorHostingExtensions
                 var contentType = GetContentType(filePath);
                 var fileName = Path.GetFileName(filePath);
 
-                // Check if download is requested via query parameter
-                var isDownload = context.Request.Query.ContainsKey("download");
-                if (isDownload)
-                    context.Response.Headers.ContentDisposition = $"attachment; filename=\"{fileName}\"";
+                // 🚨 INLINE unless a download was explicitly asked for.
+                //
+                // Passing a fileDownloadName to Results.File/Results.Stream ALWAYS emits
+                // `Content-Disposition: attachment`, and a browser will not render an attachment
+                // inline — a <video> or <img> pointing at it shows nothing. Every content-collection
+                // file was served that way, so the AgenticEngineering cover's player stayed blank
+                // while the bytes themselves were fine (9.89MB, decodable, HTTP 200).
+                //
+                // The `?download` query parameter is what asks for the attachment; without it the
+                // name is omitted so the response is inline and the element renders.
+                var downloadName = DownloadNameFor(
+                    context.Request.Query.ContainsKey("download"), fileName);
 
                 // Small files: re-read fully buffered through the collection's pooled leaf so the
                 // ETag hash never buffers on this thread.
@@ -317,7 +351,13 @@ public static class BlazorHostingExtensions
                             context.Response.Headers.Expires = DateTime.UtcNow.AddDays(30).ToString("R");
                             var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(bytes));
                             context.Response.Headers.ETag = $"\"{hash}\"";
-                            return Results.File(bytes, contentType, fileName);
+                            // Range processing on this branch too: a file under the buffering
+                            // threshold is still seekable media (the 9.89MB course intro is), and
+                            // Safari refuses to play a video whose response advertises no
+                            // Accept-Ranges. Chromium tolerates it, which is exactly why this
+                            // survived a headless check while a real browser showed nothing.
+                            return Results.File(bytes, contentType, downloadName,
+                                enableRangeProcessing: true);
                         });
                 }
 
@@ -325,7 +365,7 @@ public static class BlazorHostingExtensions
                 return Observable.Return(Results.Stream(
                     stream,
                     contentType,
-                    fileName,
+                    downloadName,
                     enableRangeProcessing: true));
             });
 
