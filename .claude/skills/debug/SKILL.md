@@ -87,6 +87,58 @@ keep digging in the bulk run.**
    | `SubscribeAck` then silence until a heartbeat | Initial `Full` dropped | owner-side echo filter / `ChangedBy` (see doc §"never sent the initial Full") |
    | `type … is not registered in this hub's TypeRegistry` | Type-registry mismatch | `WithType(typeof(T), nameof(T))` on **every** hub the message transits |
 
+## Read the DURATION first — it separates a hang from a real failure
+
+Before any tracing, look at how long the failing case took. This is the cheapest signal there is and
+it is decisive:
+
+| Duration | What it is |
+|---|---|
+| **seconds** | a REAL assertion failure — the code ran and produced a wrong answer |
+| **minutes, no assertion output** | a HANG — something never arrived and the harness timed out |
+
+Observed 2026-07-28 on the education suite: 251 tests, 6 failures, **every one of them 1-3.5 minutes
+with no assertion text**, while the one genuine content bug in the same suite failed in **2.4s**. Six
+multi-minute failures across four different courses were ONE broken edge wearing six hats — not six
+bugs, and not "flaky tests to retry".
+
+🚨 **Do not read a slow failure as "the CI runner is slow".** That reading is seductive (it even
+explains the durations) and it is how this class hides: a bigger timeout or a beefier runner makes it
+rarer without fixing anything, so it comes back later and less reproducibly. Same-machine proof that
+load was NOT the cause: the portal answered `/health` in **6 ms** while the hang still reproduced —
+the identical suite had shown 5.1 s under genuine load earlier that day.
+
+## Retry belongs in the CALLER, never in the shared cache
+
+Once you find a transient `NotFound` / `DeliveryFailureException`, the obvious fix — "resubscribe
+automatically at the stream layer" — is the one that has already taken production down twice. Do not
+write it.
+
+- `MeshNodeStreamCache` is deliberately **evict-only**: its negative entry EXPIRES and the next
+  *natural* read re-probes. Its own comment is explicit — *"Self-healing, NEVER a watchdog … an
+  auto-resubscribe watchdog is exactly what caused the 2026-06-08 prod outage; this only ever evicts,
+  never re-subscribes."*
+- Unbounded caller-side retry is the OTHER outage: *"resubscribing forever to an inexistent address
+  produced an endless `[ROUTE] NotFound` message storm that burned a core and wedged the partition's
+  hub"* (atioz, 2026-06-14).
+
+So the shape that is actually safe is the one `MeshWeaver.Layout/AreaStreamRetry` already implements:
+**bounded** retries, exponential backoff on `Observable.Timer` (never `Task.Delay`), a caller-supplied
+`shouldRetry` predicate, and the last error surfaced after giving up so the UI reports a real failure
+instead of spinning. It is wired for layout-area streams; a caller on another stream type needs the
+same wrapper, not a new mechanism and not a change to the cache.
+
+## A green CI badge is not a green suite
+
+Check the JOBS, not the run conclusion. A job marked `continue-on-error: true` fails while its
+workflow still reports **success** — observed 2026-07-28: `Education Content CI` green with **3/3**
+e2e shards red, which is how the hang above sat unnoticed. Before trusting a gate, confirm it can
+actually fail:
+
+```bash
+gh run view <run-id> --json jobs --jq '.jobs[] | "\(.conclusion)\t\(.name)"'
+```
+
 ## Is it a lock, or a missed observation? (they look identical from the outside)
 
 Most "deadlocks" in this codebase are **not** locks — they are a reactive emission that nobody

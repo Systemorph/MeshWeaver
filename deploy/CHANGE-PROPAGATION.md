@@ -125,3 +125,43 @@ Properties that bound the damage:
 
 See `deploy/helm/values.yaml` (`bake`, `probes.startup`) — all bake flags default **off**, and
 enabling the readiness gate requires raising the startup-probe budget in the same change.
+
+---
+
+# Bootstrapping a fresh mesh: nobody is a global admin
+
+A brand-new mesh has **no global admin at all**, and the way that fails is circular enough to burn an
+afternoon, so it is written down here rather than rediscovered.
+
+- **`Admin` is a framework BUILT-IN partition** (`DefaultPartitionProvider`, listed among the reserved
+  names), so it exists on every mesh from first boot.
+- **A fresh mesh has no grants on it.** Verified against a disposable mesh's Postgres:
+  `Admin/Partition/Admin`, `Admin/PlatformVersion`, `Admin/UpdatePolicy` — and **no `_Access` rows at
+  all**. (`samples/Graph/Data/Admin/_Access/*` grants `Roland`/`Samuel`/`TestUser`, but that is dev
+  sample data and does **not** ship in the portal image.)
+- **`IsGlobalAdmin` is defined as `Permission.All` at scope `Admin`** — so with no grant on `Admin`,
+  nobody holds it.
+
+**The circularity:** anything that writes under `Admin/…` (seeding a Store coupon at the fixed
+`Admin/Coupons/{CODE}`, say) is denied. The obvious escape — create the `Admin` Space, since a Space
+grants Admin to its creator — **cannot work**: `Admin` already exists, so the create is a tolerated
+no-op and no grant is ever issued. Writing under `Admin` requires a grant obtainable only by writing
+under `Admin`.
+
+**The supported way in is `Auth:GlobalAdmins`.** `GlobalAdminSeed` materialises a root-scope Admin
+`AccessAssignment` for each configured id through `AddMeshNodes`, which bypasses exactly that
+circularity because seeded nodes are not permission-checked:
+
+```yaml
+Auth__GlobalAdmins__0: "the-user-id"
+```
+
+Dev-login does **not** confer this. Self-provisioning gives a user their own space and nothing more —
+"the first user becomes the platform admin" is folklore, and a harness that assumes it will fail on
+the first write into a framework partition.
+
+> ⚠️ **Env-var gotcha.** Logging categories are DOTTED keys, so
+> `Logging__LogLevel__MeshWeaver__Messaging` silently creates a *nested* `MeshWeaver:Messaging`
+> section and changes nothing. The category is `"MeshWeaver.Messaging"` — write
+> `Logging__LogLevel__MeshWeaver.Messaging=Trace`. Symptom: you raise the level, re-run, and the
+> trace file has zero `MESSAGE_FLOW` lines.
