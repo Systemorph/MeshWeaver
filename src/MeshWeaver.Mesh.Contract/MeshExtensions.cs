@@ -1949,6 +1949,17 @@ public static class MeshExtensions
             return request.Processed();
         }
 
+        // Same STRUCTURAL invariant as CreateNode: an AccessAssignment's MainNode must name the
+        // partition/scope its path sits under. Guarding only the create path would leave the hole
+        // open — an upsert could set MainNode back to empty afterwards, which silently converts a
+        // partition grant into a ROOT grant (All on every partition). Both write paths, or neither.
+        if (AccessAssignmentGuard.IsScopeInvalid(node, out var upsertScopeReason))
+        {
+            logger.LogError("[UpsertNode] REFUSED mis-scoped AccessAssignment {Path}: {Reason}", node.Path, upsertScopeReason);
+            PostFail(upsertScopeReason, NodeUpsertRejectionReason.InvalidPath);
+            return request.Processed();
+        }
+
         if (inboundRequest.Patch is not null)
         {
             PostFail("Patch-mode upserts are not yet supported.",
