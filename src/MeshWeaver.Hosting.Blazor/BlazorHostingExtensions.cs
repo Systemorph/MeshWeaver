@@ -129,6 +129,24 @@ public static class BlazorHostingExtensions
     internal static string? DownloadNameFor(bool isDownloadRequested, string fileName) =>
         isDownloadRequested ? fileName : null;
 
+    /// <summary>
+    /// Shapes the HTTP result for a content-collection file: content type, inline-vs-attachment,
+    /// and range processing, in ONE place.
+    ///
+    /// <para>This exists so the contract can be pinned at the level it actually broke — the
+    /// RESPONSE. Testing <see cref="GetContentType"/> and <see cref="DownloadNameFor"/> in
+    /// isolation would not have caught the original defect, because neither was wrong: the bug was
+    /// that the file name was handed to <c>Results.File</c> unconditionally, which forces
+    /// <c>Content-Disposition: attachment</c>. A test that asserts the emitted headers catches that
+    /// reintroduction; a test of the helpers alone stays green while the video breaks.</para>
+    /// </summary>
+    internal static IResult FileResultFor(byte[] bytes, string filePath, bool isDownloadRequested) =>
+        Results.File(
+            bytes,
+            GetContentType(filePath),
+            DownloadNameFor(isDownloadRequested, Path.GetFileName(filePath)),
+            enableRangeProcessing: true);
+
     private static bool IsTextContentType(string contentType)
     {
         var textTypes = new[]
@@ -333,8 +351,8 @@ public static class BlazorHostingExtensions
                 //
                 // The `?download` query parameter is what asks for the attachment; without it the
                 // name is omitted so the response is inline and the element renders.
-                var downloadName = DownloadNameFor(
-                    context.Request.Query.ContainsKey("download"), fileName);
+                var isDownloadRequested = context.Request.Query.ContainsKey("download");
+                var downloadName = DownloadNameFor(isDownloadRequested, fileName);
 
                 // Small files: re-read fully buffered through the collection's pooled leaf so the
                 // ETag hash never buffers on this thread.
@@ -356,8 +374,7 @@ public static class BlazorHostingExtensions
                             // Safari refuses to play a video whose response advertises no
                             // Accept-Ranges. Chromium tolerates it, which is exactly why this
                             // survived a headless check while a real browser showed nothing.
-                            return Results.File(bytes, contentType, downloadName,
-                                enableRangeProcessing: true);
+                            return FileResultFor(bytes, filePath, isDownloadRequested);
                         });
                 }
 

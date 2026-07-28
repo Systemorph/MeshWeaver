@@ -1,4 +1,9 @@
+using System.IO;
+using System.Net.Http;
+using System.Threading.Tasks;
 using MeshWeaver.Hosting.Blazor;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Blazor.Test;
@@ -80,4 +85,81 @@ public class StaticMediaServingTest
         BlazorHostingExtensions.DownloadNameFor(true, "module1-intro.mp4")
             .Should().Be("module1-intro.mp4",
                 "?download is the explicit ask for an attachment — that behaviour must survive");
+
+    // ────────────────────────────────────────────────────────────────────────────────────────
+    //  RESPONSE-LEVEL — the layer the bug actually lived in.
+    //
+    //  The helpers above were never wrong: the defect was that the file name was handed to
+    //  Results.File unconditionally, forcing Content-Disposition: attachment. A test of the
+    //  helpers alone stays green through that reintroduction while the video breaks, so the
+    //  contract has to be pinned on the EMITTED HEADERS.
+    // ────────────────────────────────────────────────────────────────────────────────────────
+
+    private static async Task<HttpResponse> ExecuteAsync(
+        string filePath, bool isDownload, string? range = null)
+    {
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection().AddLogging().BuildServiceProvider(),
+        };
+        context.Response.Body = new MemoryStream();
+        // Range is only honoured for GET/HEAD, and DefaultHttpContext leaves Method empty —
+        // without this the range assertion would pass/fail for the wrong reason.
+        context.Request.Method = HttpMethods.Get;
+        if (range is not null)
+            context.Request.Headers.Range = range;
+
+        var bytes = new byte[2048];
+        await BlazorHostingExtensions.FileResultFor(bytes, filePath, isDownload).ExecuteAsync(context);
+        return context.Response;
+    }
+
+    /// <summary>🚨 THE REGRESSION GUARD: a video must be served INLINE, typed, and seekable.</summary>
+    [Fact]
+    public async Task VideoResponse_IsInline_Typed_AndAdvertisesRanges()
+    {
+        var response = await ExecuteAsync("videos/module1-intro.mp4", isDownload: false);
+
+        response.Headers.ContentDisposition.ToString().Should().BeEmpty(
+            "an attachment is not rendered inline — this single header is why the player was blank");
+        response.ContentType.Should().StartWith("video/mp4",
+            "a browser will not play application/octet-stream in a <video> element");
+        response.Headers.AcceptRanges.ToString().Should().Be("bytes",
+            "Safari refuses to play a video whose response advertises no byte-range support");
+    }
+
+    /// <summary>A range request must yield 206 Partial Content, not the whole body — that is what
+    /// seeking (and Safari playing at all) depends on.</summary>
+    [Fact]
+    public async Task RangeRequest_YieldsPartialContent()
+    {
+        var response = await ExecuteAsync("videos/module1-intro.mp4", isDownload: false, range: "bytes=0-1023");
+
+        response.StatusCode.Should().Be(StatusCodes.Status206PartialContent,
+            "production returned 200 with the full 9,891,614 bytes for a 1KB range request");
+        response.ContentLength.Should().Be(1024L, "a 1KB range must return 1KB, not the whole file");
+    }
+
+    /// <summary>And <c>?download</c> must still produce a real download — the fix must not remove
+    /// the ability to save the file.</summary>
+    [Fact]
+    public async Task DownloadRequest_StillAttaches_WithTheFileName()
+    {
+        var response = await ExecuteAsync("videos/module1-intro.mp4", isDownload: true);
+
+        var disposition = response.Headers.ContentDisposition.ToString();
+        disposition.Should().Contain("attachment");
+        disposition.Should().Contain("module1-intro.mp4");
+    }
+
+    /// <summary>Images were equally affected — every content-collection asset was an attachment,
+    /// so a poster or cover image could not render either.</summary>
+    [Fact]
+    public async Task ImageResponse_IsAlsoInline()
+    {
+        var response = await ExecuteAsync("videos/module1-intro.poster.png", isDownload: false);
+
+        response.Headers.ContentDisposition.ToString().Should().BeEmpty();
+        response.ContentType.Should().StartWith("image/png");
+    }
 }
