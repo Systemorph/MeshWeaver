@@ -163,7 +163,7 @@ mcp update --nodes '[{
 
 ## Recipe 2 — Grant a user Global (Platform) Admin
 
-Global/platform admin has **one** canonical shape: an `AccessAssignment` granting the `Admin` role **on the Admin partition** — namespace `Admin/_Access`, `mainNode` left empty. This is exactly what `GlobalAdminSeed` (config-driven admins via `Auth:GlobalAdmins`) and `UserOnboardingService.GrantPlatformAdmin` (first user) write, and what `hub.IsGlobalAdmin()` reads.
+🚨 **NEVER make anyone a global admin** unless it is a named platform operator and you mean it — see [Access Control](/Doc/Architecture/AccessControl). Global/platform admin has **one** canonical shape: an `AccessAssignment` granting the `Admin` role **on the Admin partition** — namespace `Admin/_Access`, **`mainNode: "Admin"`**. ⚠️ An EMPTY `mainNode` is NOT "scoped to Admin" — it is a **ROOT** grant, i.e. a data superuser over every partition. Verify with `select user_id from admin.user_effective_permissions where node_path_prefix = ''` — that result must be empty. This is exactly what `GlobalAdminSeed` (config-driven admins via `Auth:GlobalAdmins`) and `UserOnboardingService.GrantPlatformAdmin` (first user) write, and what `hub.IsGlobalAdmin()` reads.
 
 ```bash
 mcp create --node '{
