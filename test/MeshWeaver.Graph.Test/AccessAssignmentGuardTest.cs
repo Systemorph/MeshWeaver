@@ -117,15 +117,46 @@ public class AccessAssignmentGuardTest
         reason.Should().Contain("AgenticEngineering");
     }
 
-    /// <summary>A ROOT grant is never a legitimate provisioning shape, even if MainNode agrees with
-    /// the path — that is precisely the data-superuser the docs forbid.</summary>
+    /// <summary>
+    /// THE MEMEX SHAPE, and the reason this guard exists: a grant filed in the Admin partition —
+    /// where it reads as an ordinary platform-admin grant — whose empty MainNode silently scopes it
+    /// to ROOT instead. 34 accounts held exactly this, 21 of them course participants who had only
+    /// redeemed a coupon. It is a MISMATCH (path says "Admin", MainNode says root), so the
+    /// consistency rule catches it; no separate root-grant rule is needed for the incident.
+    /// </summary>
     [Fact]
-    public void RootGrant_IsRejected_EvenWhenSelfConsistent()
+    public void TheAdminFolderRootGrant_IsRejected()
+    {
+        var node = Grant("Admin/_Access/rbuergi_Access", mainNode: "");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out var reason).Should().BeTrue();
+        reason.Should().Contain("ROOT");
+        reason.Should().Contain("Admin");
+    }
+
+    /// <summary>
+    /// A SELF-CONSISTENT root grant passes the write boundary — deliberately, and this pins it so
+    /// the decision is visible rather than looking like an oversight.
+    ///
+    /// <para>It is still the superuser shape, but it is not what produced the incident (those were
+    /// mismatches, above) and it is how the test harness grants mesh-wide rights —
+    /// <c>AssignmentNodeFactory.UserRole(user, role)</c> with no scope, at ~200 call sites, plus
+    /// <c>TestUsers.PublicAdminAccess()</c>'s root entry. Refusing it here failed four of six CI
+    /// shards, because those tests could then be granted nothing at all.</para>
+    ///
+    /// <para>What keeps it out of reach in practice is <see cref="AccessAssignmentGuard.CanGrantAt"/>:
+    /// the access UI offers no grant surface in a root context, so this shape cannot be produced by
+    /// a human clicking. Narrowing it further means rescoping those call sites first.</para>
+    /// </summary>
+    [Fact]
+    public void ASelfConsistentRootGrant_IsAllowedAtTheWriteBoundary_ButNeverOfferedInTheUi()
     {
         var node = Grant("_Access/rbuergi_Access", mainNode: "");
 
-        AccessAssignmentGuard.IsScopeInvalid(node, out var reason).Should().BeTrue();
-        reason.Should().Contain("data-superuser");
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse(
+            "the harness grants mesh-wide rights this way; the incident shape was a MISMATCH");
+        AccessAssignmentGuard.CanGrantAt("").Should().BeFalse(
+            "…and the UI must never offer it — that is what closes the hole a human could open");
     }
 
     /// <summary>Case must not decide whether someone becomes a superuser.</summary>

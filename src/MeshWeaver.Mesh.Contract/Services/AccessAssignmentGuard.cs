@@ -55,7 +55,8 @@ public static class AccessAssignmentGuard
 
     /// <summary>
     /// The grant is internally inconsistent — its <c>MainNode</c> does not match the scope its path
-    /// encodes — or it is a ROOT grant, which is never a legitimate provisioning shape.
+    /// encodes. That mismatch is the dangerous shape: a grant filed under one partition while
+    /// actually conferring rights somewhere else, most catastrophically at ROOT.
     ///
     /// <para>Non-AccessAssignment nodes, and nodes that are not on a grant path at all, are not this
     /// guard's business and always pass.</para>
@@ -72,18 +73,31 @@ public static class AccessAssignmentGuard
         if (pathScope is null)
             return false;                       // not a grant path — leave it alone
 
-        // 🔴 A root grant is the data-superuser shape. Platform admins are scoped to the Admin
-        // partition; nothing should ever be provisioned at root.
-        if (pathScope.Length == 0)
-        {
-            reason = $"AccessAssignment '{node.Path}' is a ROOT grant (scope \"\") — that is the "
-                   + "data-superuser shape (All on every partition via scope inheritance), never a "
-                   + "valid provisioning shape. Scope it to a partition: place it at "
-                   + "'{scope}/_Access/{subject}_Access' with MainNode='{scope}'.";
-            return true;
-        }
-
         var mainNode = node.MainNode ?? "";
+
+        // 🔴 The ROOT path (`_Access/{subject}_Access`, scope "") is the data-superuser shape, and an
+        // earlier revision of this guard refused it outright. It does not, because that rule is both
+        // WIDER than the incident and load-bearing elsewhere:
+        //
+        //   • Every memex offender was a MISMATCH, not a consistent root grant. They sat in
+        //     `admin.access` — i.e. `Admin/_Access/{user}_Access`, path scope "Admin" — with
+        //     MainNode = "". The consistency rule below catches all of them, which is the whole
+        //     point: the danger was a grant that LOOKED like a platform-admin grant while silently
+        //     being scoped to root.
+        //   • The deliberate, self-consistent root grant is how the test harness gives a subject
+        //     mesh-wide rights: `AssignmentNodeFactory.UserRole(user, role)` with no scope, used at
+        //     ~200 call sites, plus `TestUsers.PublicAdminAccess()`'s root entry. Refusing it here
+        //     failed four of six CI shards — not because those tests were wrong about permissions,
+        //     but because they could no longer be granted any.
+        //
+        // So the write boundary enforces CONSISTENCY (MainNode == the scope the path encodes), and
+        // the root shape is kept off the interactive surface by `CanGrantAt` — a human clicking
+        // through the access UI in a root context is offered no grant at all. What remains possible
+        // is a root grant written deliberately, in code, with both halves agreeing; that is the
+        // harness's convention, and narrowing it further means rescoping those call sites first.
+        if (mainNode.Length == 0 && pathScope.Length == 0)
+            return false;
+
         if (string.Equals(mainNode, pathScope, StringComparison.OrdinalIgnoreCase))
             return false;                       // consistent — the good case
 

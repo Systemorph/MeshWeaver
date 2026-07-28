@@ -75,14 +75,33 @@ be filed under it: All on every partition, every space, every plugin and every u
 by scope inheritance. It looks harmless in the node tree.
 
 > ### 🚨 The rule
-> **`MainNode` must be non-empty and must refer to a partition — the same one its path encodes.**
-> An empty `MainNode` is not a valid state and is **rejected at every write path**
-> (`AccessAssignmentGuard`, enforced in both `CreateNode` and the upsert handler, with the
-> structural invariants — before the validators and before their System bypass).
+> **`MainNode` must name the same scope its path encodes.** A grant filed at
+> `{scope}/_Access/…` with any other `MainNode` — above all an empty one — is **rejected at every
+> write path** (`AccessAssignmentGuard`, enforced in both `CreateNode` and the upsert handler, with
+> the structural invariants — before the validators and before their System bypass).
+>
+> That mismatch is the whole danger, and it is what the mesh actually had: the offending rows sat in
+> `admin.access` — i.e. `Admin/_Access/{user}_Access`, reading as ordinary platform-admin grants —
+> with `MainNode = ""` scoping them to root instead.
 >
 > **Admin partition ⇒ global admin.** A grant with `MainNode = "Admin"` IS the platform-admin
 > grant. There is no other shape, and it must be given deliberately to a named operator —
 > essentially never. See the section below.
+
+> ### What is *not* refused, and why
+> A **self-consistent** root grant — path `_Access/{subject}_Access` **and** `MainNode = ""` — passes
+> the write boundary. It is still the superuser shape, so it is worth being explicit that this is a
+> decision rather than a gap:
+>
+> - it is not what produced the incident (those were mismatches, above);
+> - it is how the test harness grants mesh-wide rights — `AssignmentNodeFactory.UserRole(user, role)`
+>   with no scope, at ~200 call sites, plus `TestUsers.PublicAdminAccess()`'s root entry — so
+>   refusing it leaves those tests unable to be granted anything at all;
+> - a human cannot produce it: `AccessAssignmentGuard.CanGrantAt` gives the access UI **no grant
+>   surface** in a root context.
+>
+> Closing this remaining path means rescoping the harness's call sites first — a mechanical change
+> worth doing, and one that should land on its own rather than inside a boundary fix.
 
 ### What it actually confers (measured, memex 2026-07-28)
 
