@@ -99,8 +99,12 @@ public static class NodeTypeDependencyGraph
     /// mesh always warms in the same sequence and a failure is reproducible.
     ///
     /// <para>A dependency CYCLE cannot be ordered, so it must not be able to drop or duplicate a
-    /// type: the cycle's members are appended in path order after everything orderable, and reported
-    /// through <paramref name="cyclic"/>. Every input path is emitted exactly once, always.</para>
+    /// type. When the peel stalls, ONLY the types genuinely in a cycle (self-reachable through the
+    /// remaining edges) are released — in path order — and the peel then RESUMES. Types merely
+    /// DOWNSTREAM of a cycle are not cyclic and must not be treated as such: flushing the whole
+    /// remainder in path order would put a dependent ahead of the dependency it waits on, so it gets
+    /// attempted instead of failing fast, burning a full per-type budget on a build that cannot
+    /// succeed. Every input path is emitted exactly once, always.</para>
     /// </summary>
     public static ImmutableList<string> TopologicalOrder(
         IReadOnlyDictionary<string, ImmutableHashSet<string>> dependencies,
@@ -114,6 +118,7 @@ public static class NodeTypeDependencyGraph
             StringComparer.OrdinalIgnoreCase);
 
         var ordered = ImmutableList.CreateBuilder<string>();
+        var cyclicBuilder = ImmutableList.CreateBuilder<string>();
         while (remaining.Count > 0)
         {
             var ready = remaining
@@ -123,7 +128,21 @@ public static class NodeTypeDependencyGraph
                 .ToArray();
 
             if (ready.Length == 0)
-                break;                                   // only cycles left
+            {
+                // Stalled: release the actual cycle members so their dependents can order behind
+                // them on the next pass.
+                ready = remaining.Keys
+                    .Where(p => IsInCycle(p, remaining))
+                    .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
+                // Defensive: a stall with nothing self-reachable is not reachable by construction,
+                // but breaking out beats looping forever — the leftovers are still emitted below.
+                if (ready.Length == 0)
+                    break;
+
+                cyclicBuilder.AddRange(ready);
+            }
 
             foreach (var path in ready)
             {
@@ -135,9 +154,35 @@ public static class NodeTypeDependencyGraph
                     deps.Remove(path);
         }
 
-        cyclic = remaining.Keys.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToImmutableList();
-        ordered.AddRange(cyclic);
+        var stranded = remaining.Keys.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
+        cyclicBuilder.AddRange(stranded);
+        ordered.AddRange(stranded);
+
+        cyclic = cyclicBuilder.ToImmutable();
         return ordered.ToImmutable();
+    }
+
+    /// <summary>
+    /// Is <paramref name="start"/> genuinely part of a cycle — can it reach ITSELF by following
+    /// remaining dependency edges? Distinguishes a cycle member from a type that merely depends on
+    /// one, which is the difference between "cannot be ordered" and "must be ordered later".
+    /// </summary>
+    private static bool IsInCycle(string start, IReadOnlyDictionary<string, HashSet<string>> remaining)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var stack = new Stack<string>(remaining[start]);
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (current.Equals(start, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (!seen.Add(current))
+                continue;
+            if (remaining.TryGetValue(current, out var deps))
+                foreach (var next in deps)
+                    stack.Push(next);
+        }
+        return false;
     }
 
     /// <summary>Convenience overload for callers that do not care which types were cyclic.</summary>

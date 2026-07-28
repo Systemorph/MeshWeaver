@@ -379,12 +379,22 @@ public class NodeTypeDependencyGraphTest
     }
 
     /// <summary>
-    /// A type that DEPENDS ON a cycle can never be ordered either. It must still be emitted and
-    /// reported — dropping it is the original bug (a type nobody compiles), and claiming it is
-    /// orderable would place it before the dependency it is waiting on.
+    /// 🚨 A type DOWNSTREAM of a cycle is not itself cyclic, and it must still be ordered AFTER the
+    /// cycle it waits on.
+    ///
+    /// <para>The bug this pins: when the topological peel stalls, everything left over used to be
+    /// flushed in PATH order. With <c>X↔Y</c> a real cycle and <c>W</c> merely depending on
+    /// <c>X</c>, path order yields <c>W, X, Y</c> — so W is warmed BEFORE the dependency it is
+    /// waiting on. Nothing upstream has failed yet at that point, so W is ATTEMPTED and burns its
+    /// whole per-type budget on a build that cannot succeed, which is exactly the graceful-downstream
+    /// failure this work exists to provide. It also mislabels W as cyclic when it is not.</para>
+    ///
+    /// <para>Correct: the true cycle members go first (they are the ones that genuinely cannot be
+    /// ordered), and everything downstream of them then orders normally behind them — so W is
+    /// reported <c>UpstreamFailed</c> by the warmer instead of attempted.</para>
     /// </summary>
     [Fact]
-    public void TopologicalOrder_DependentOfACycleIsReported_NotDropped()
+    public void TopologicalOrder_DependentOfACycleIsOrderedAfterIt_AndIsNotItselfCyclic()
     {
         var types = new Dictionary<string, NodeTypeDefinition?>
         {
@@ -397,11 +407,77 @@ public class NodeTypeDependencyGraphTest
         var order = NodeTypeDependencyGraph.TopologicalOrder(
             NodeTypeDependencyGraph.Build(types), out var cyclic);
 
-        order.Should().HaveCount(4);
+        order.Should().HaveCount(4, "every type is emitted exactly once");
         order.IndexOf("Free").Should().Be(0);
-        cyclic.Should().Equal(["W", "X", "Y"],
-            "W is not itself in the cycle but is downstream of one, so it is equally unorderable "
-            + "— reporting it is honest; silently ordering it would be a lie");
+        cyclic.Should().Equal(["X", "Y"],
+            "only X and Y are genuinely in a cycle; W merely depends on one and is orderable");
+        order.IndexOf("W").Should().BeGreaterThan(order.IndexOf("X"),
+            "W depends on X — warming it first attempts a build that cannot succeed and wastes "
+            + "its entire per-type budget instead of failing fast as UpstreamFailed");
+        order.IndexOf("W").Should().BeGreaterThan(order.IndexOf("Y"));
+    }
+
+    /// <summary>
+    /// A whole CHAIN downstream of a cycle must order behind it, not just the first hop — the peel
+    /// has to RESUME after releasing the cycle, otherwise the rest of the chain is flushed in path
+    /// order too.
+    /// </summary>
+    [Fact]
+    public void TopologicalOrder_ChainDownstreamOfACycleOrdersBehindIt()
+    {
+        var types = new Dictionary<string, NodeTypeDefinition?>
+        {
+            ["Xc"] = new NodeTypeDefinition { Sources = ["shared=@Yc/Source"] },
+            ["Yc"] = new NodeTypeDefinition { Sources = ["shared=@Xc/Source"] },
+            ["Bmid"] = new NodeTypeDefinition { Sources = ["shared=@Xc/Source"] },
+            ["Alast"] = new NodeTypeDefinition { Sources = ["shared=@Bmid/Source"] },
+        };
+
+        var order = NodeTypeDependencyGraph.TopologicalOrder(
+            NodeTypeDependencyGraph.Build(types), out var cyclic);
+
+        cyclic.Should().Equal(["Xc", "Yc"]);
+        order.Should().Equal(["Xc", "Yc", "Bmid", "Alast"],
+            "path order alone would have emitted Alast and Bmid FIRST — ahead of the cycle they "
+            + "transitively wait on");
+    }
+
+    /// <summary>Two unrelated cycles are both reported, and neither swallows the other.</summary>
+    [Fact]
+    public void TopologicalOrder_TwoIndependentCyclesAreBothReported()
+    {
+        var types = new Dictionary<string, NodeTypeDefinition?>
+        {
+            ["A1"] = new NodeTypeDefinition { Sources = ["shared=@A2/Source"] },
+            ["A2"] = new NodeTypeDefinition { Sources = ["shared=@A1/Source"] },
+            ["B1"] = new NodeTypeDefinition { Sources = ["shared=@B2/Source"] },
+            ["B2"] = new NodeTypeDefinition { Sources = ["shared=@B1/Source"] },
+            ["Ok"] = new NodeTypeDefinition(),
+        };
+
+        var order = NodeTypeDependencyGraph.TopologicalOrder(
+            NodeTypeDependencyGraph.Build(types), out var cyclic);
+
+        cyclic.Should().Equal(["A1", "A2", "B1", "B2"]);
+        order.IndexOf("Ok").Should().Be(0);
+        order.Should().HaveCount(5);
+    }
+
+    /// <summary>A three-node cycle is still a cycle — the self-reachability walk must be transitive,
+    /// not just a check for a mutual pair.</summary>
+    [Fact]
+    public void TopologicalOrder_LongCycleIsDetected()
+    {
+        var types = new Dictionary<string, NodeTypeDefinition?>
+        {
+            ["P"] = new NodeTypeDefinition { Sources = ["shared=@Q/Source"] },
+            ["Q"] = new NodeTypeDefinition { Sources = ["shared=@R/Source"] },
+            ["R"] = new NodeTypeDefinition { Sources = ["shared=@P/Source"] },
+        };
+
+        NodeTypeDependencyGraph.TopologicalOrder(NodeTypeDependencyGraph.Build(types), out var cyclic);
+
+        cyclic.Should().Equal(["P", "Q", "R"], "a 3-cycle is self-reachable only via two hops");
     }
 
     /// <summary>A null definition falls back to the DEFAULT own-subtree queries — never a crash,

@@ -187,11 +187,7 @@ public static class DynamicTypePreWarmer
                     return order.Count == 0
                         ? Observable.Empty<PreWarmOutcome>()
                         : order
-<<<<<<< HEAD
-                            .Select((p, i) => WarmOne(workspace, accessService, p, budget, logger)
-                                .DelaySubscription(i == 0 ? TimeSpan.Zero : BetweenTypes))
-=======
-                            .Select(p => Observable.Defer(() =>
+                            .Select((p, i) => Observable.Defer(() =>
                             {
                                 var blocker = NodeTypeDependencyGraph.FirstBlockedBy(p, dependencies, failed);
                                 if (blocker is not null)
@@ -202,18 +198,20 @@ public static class DynamicTypePreWarmer
                                         + "did not reach a usable build, so it cannot compile either "
                                         + "(lazy compile still applies if the upstream recovers)",
                                         p, blocker);
+                                    // No pacing for a skip: it activates nothing, so there is no
+                                    // burst to spread out and no reason to slow the sweep down.
                                     return Observable.Return(new PreWarmOutcome(
                                         p, PreWarmStatus.UpstreamFailed, $"blocked by {blocker}"));
                                 }
 
                                 return WarmOne(workspace, accessService, p, budget, logger)
+                                    .DelaySubscription(i == 0 ? TimeSpan.Zero : BetweenTypes)
                                     .Do(o =>
                                     {
                                         if (o.Status != PreWarmStatus.Compiled)
                                             failed.Add(p);
                                     });
                             }))
->>>>>>> 477482393 (Fail gracefully downstream when an upstream NodeType fails)
                             .Concat();
                 })
                 .Catch<PreWarmOutcome, Exception>(ex =>
