@@ -57,6 +57,8 @@ public static class JsonSynchronizationStream
     /// <c>ChangeFeedResubscribeCoalesceTest</c> guards, and one an earlier version of this fix hit
     /// on CI. A heartbeat costs one message and creates nothing.</para>
     /// </summary>
+    /// <summary>Fallback used only when no <see cref="SyncStreamOptions"/> is registered (bare
+    /// Data-layer hosts). The configured <see cref="SyncStreamOptions.FirstHeartbeat"/> wins.</summary>
     internal static readonly TimeSpan FirstHeartbeat = TimeSpan.FromSeconds(5);
 
     // Hub-shaped principals leak from the workspace emission scheduler when an
@@ -502,9 +504,10 @@ public static class JsonSynchronizationStream
             // sends every 45s forever, merely with its first tick at FirstHeartbeat instead of a
             // full interval. One extra cheap message per stream, no new subscription, no new
             // protocol, and it targets the mechanism that demonstrably delivers the data.
-            var heartbeatInterval = hub.ServiceProvider
-                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
-                ?.Value?.HeartbeatInterval ?? TimeSpan.FromSeconds(45);
+            var syncOptions = hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()?.Value;
+            var heartbeatInterval = syncOptions?.HeartbeatInterval ?? TimeSpan.FromSeconds(45);
+            var firstHeartbeat = syncOptions?.FirstHeartbeat ?? FirstHeartbeat;
             // 🚨 The heartbeat must NOT strongly pin `hub`. Observable.Interval's timer lives
             // on the process-global Rx TimerQueue (a GC root); capturing `hub` in the tick
             // closure keeps an ABANDONED hub alive forever — e.g. a RunLevel=1 partial
@@ -520,7 +523,7 @@ public static class JsonSynchronizationStream
             // (HeartbeatFireAndForgetTest) must still get its first tick at 200ms. The early tick is
             // a floor-lowering for LONG intervals, not a delay imposed on short ones — taking the
             // sooner of the two keeps every existing cadence exactly as it was.
-            var firstTick = heartbeatInterval < FirstHeartbeat ? heartbeatInterval : FirstHeartbeat;
+            var firstTick = heartbeatInterval < firstHeartbeat ? heartbeatInterval : firstHeartbeat;
             sub.Disposable = Observable.Timer(firstTick, heartbeatInterval)
                 .Subscribe(_ =>
                 {
