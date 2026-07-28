@@ -311,11 +311,23 @@ internal class MeshNodeCompilationService(
             selfPath = node.NodeType;
         }
 
+        // ⏱️ Two clocks, because the 45s has to be SOMEWHERE and every guess so far picked the
+        // wrong somewhere: one for resolving the NodeType definition (a bounded 15s read that
+        // yields null on stall), one for the source-freshness scan that follows it. Both feed the
+        // compile's ActivityLog so a single `get @{Type}/_Activity/compile-…` shows the split.
+        var resolveClock = System.Diagnostics.Stopwatch.StartNew();
         return resolveDef.SelectMany(ntDef =>
+        {
+            var resolveMs = resolveClock.ElapsedMilliseconds;
+            var freshnessClock = System.Diagnostics.Stopwatch.StartNew();
             // Source-aware cache check: discover the LastModified of every source
             // Code node + the NodeType itself. The cache is valid only if the
             // compiled DLL is newer than the most recent source change.
-            DiscoverSourceMaxLastModified(ntDef, selfPath, sourcesOverride)
+            return DiscoverSourceMaxLastModified(ntDef, selfPath, sourcesOverride)
+                .Do(_ => log = AppendInfo(log,
+                    $"⏱ NodeType definition resolved in {resolveMs}ms "
+                    + $"({(ntDef is null ? "NULL — the read stalled or the node is absent" : "ok")}); "
+                    + $"source-freshness scan {freshnessClock.ElapsedMilliseconds}ms."))
                 .SelectMany(maxSourceLastModified =>
                 {
                     var effectiveLastModified = node.LastModified > maxSourceLastModified
@@ -339,7 +351,8 @@ internal class MeshNodeCompilationService(
                     }
 
                     return CompileCore(node, ntDef, selfPath, log, sourcesOverride);
-                }));
+                });
+        });
     }
 
     private static ActivityLog AppendInfo(ActivityLog log, string message)
@@ -614,6 +627,14 @@ internal class MeshNodeCompilationService(
         // could pick up the pre-update Initial emission and the V2 compile would
         // silently consume V1 source — that was the V1↔V2 mismatch root cause in
         // CodeEditRecompileTest.
+        // ⏱️ PHASE TIMING. The 2026-07-27 outage was diagnosed — three times, wrongly — by inferring
+        // WHERE a compile spends its time from the gaps between existing log lines. The activity log
+        // showed 45.20s between "Invoking compiler…" and the source queries resolving, against 2.83s
+        // of Roslyn, but nothing said WHY, so every fix attempted so far has been a guess at the
+        // mechanism. This records the actual split into the compile's own ActivityLog, where it is
+        // readable per compile (`get @{Type}/_Activity/compile-…`) instead of reconstructable only
+        // by subtracting microsecond timestamps.
+        var discoveryClock = System.Diagnostics.Stopwatch.StartNew();
         var discoverCodeFiles = SnapshotSources(ntDef, selfPath, sourcesOverride)
             .Select(matches =>
             {
@@ -689,7 +710,10 @@ internal class MeshNodeCompilationService(
                 // Snapshot the discovery into the activity log: every executed query +
                 // every matched Code path. Lets the response carry "compile saw N
                 // source files from queries [Q1, Q2…]" without re-running the pipeline.
-                var discoveryLog = log;
+                var discoveryLog = AppendInfo(log,
+                    $"⏱ Source discovery took {discoveryClock.ElapsedMilliseconds}ms "
+                    + $"({(sourcesOverride is not null ? "caller-supplied override" : "synced query")}) — "
+                    + "everything below this line is Roslyn.");
                 foreach (var q in executedQueries)
                     discoveryLog = AppendInfo(discoveryLog, $"Source query: {q}");
                 if (matchedCodePaths.Count == 0)
