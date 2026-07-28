@@ -26,13 +26,21 @@ The only route that produces a new **image** and restarts pods.
 | Stage | Cost | |
 |---|---|---|
 | `MeshWeaver Build and Test` (build + 6 test shards) | **22m19s** | *(measured 2026-07-28)* |
-| `Continuous Delivery (main)` — multi-arch publish of portal (~2.2 GB), migration, bake | ~10-20 min | estimate |
+| `Continuous Delivery (main)` — multi-arch publish of portal (~2.2 GB), migration, **bake**, plugin-test | **28m38s** | *(measured 2026-07-28)* |
 | In-pod self-update: detect tag → pull → patch its own Deployment | pull-bound | estimate |
 | Rollout: `maxSurge 1` / `maxUnavailable 0` — the new pod must pass `/health` before the old drains | boot-bound | |
 | **NodeType bake** — only if the framework MVID changed (below) | see [bake](#the-bake-tax) | |
 
 **CI gates CD**: the CD workflow only fires on `workflow_run.conclusion == success` for a push to
 `main`. A red build publishes nothing, so a broken core never reaches an image.
+
+> **CD publishes four images**, and the `memex-bake` leg alone took **12m23s** of that 28m38s
+> *(measured 2026-07-28)* — it is a full portal-sized dependency closure, because reference fidelity
+> requires it to reference `Memex.Portal.Shared` (a NodeType compiles against the assemblies loaded
+> in the process doing the compiling, so a leaner reference set could bake green and still fail in
+> the portal). That is a real, recurring cost on **every** core release, paid whether or not the bake
+> is enabled on any environment. If it ever needs cutting, the lever is publishing it on a schedule
+> or only on release tags — not trimming its references.
 
 ### Not every core release invalidates the compile cache
 
