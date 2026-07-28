@@ -122,6 +122,16 @@ public sealed class AccessGrantNotifier(
         if (assignment is null || string.IsNullOrEmpty(assignment.AccessObject))
             return false;
 
+        // NEVER notify the well-known pseudo-subjects. "Public" (every authenticated user) and
+        // "Anonymous" (unauthenticated visitors) are permission buckets, not people: there is
+        // nobody to email, and making a node publicly readable is a publishing act, not a
+        // person-to-person share. Skipping them HERE (before the recipient lookup) also avoids a
+        // pointless mesh read for a path that is not a user — and stops the odd case where a
+        // real node happens to sit at "Public"/"Anonymous" from producing a bogus notification.
+        if (string.Equals(assignment.AccessObject, WellKnownUsers.Public, StringComparison.Ordinal)
+            || string.Equals(assignment.AccessObject, WellKnownUsers.Anonymous, StringComparison.Ordinal))
+            return false;
+
         // Only actual grants (a non-denied role) — never notify about a denial.
         var grantedRoles = (assignment.Roles ?? [])
             .Where(r => !r.Denied && !string.IsNullOrEmpty(r.Role))

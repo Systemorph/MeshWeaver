@@ -40,6 +40,27 @@ public static class JsonSynchronizationStream
     // System-bypass short-circuit.
     private const string SystemUserId = "system-security";
 
+    /// <summary>
+    /// When the FIRST heartbeat fires on a fresh subscription. The rest keep the configured
+    /// <see cref="SyncStreamOptions.HeartbeatInterval"/> cadence.
+    ///
+    /// <para>🚨 This number is the fix for the memex 2026-07-27 outage. A stream whose owner acked
+    /// the subscribe and then went quiet delivered nothing until the first heartbeat poked it —
+    /// 45.20s of every compile, measured, against 2.83s of Roslyn. Starting the heartbeat early
+    /// turns that into a few seconds without inventing a new mechanism: it is the same
+    /// fire-and-forget [SystemMessage] the stream already sends forever, just not withheld for a
+    /// full interval first.</para>
+    ///
+    /// <para>Deliberately NOT a re-subscribe: each SubscribeRequest creates a
+    /// <c>sync/{ClientId}</c> hub on the owner's single-threaded action block, so a re-subscribe
+    /// probe becomes a storm under mass cold start (every deploy) — the failure
+    /// <c>ChangeFeedResubscribeCoalesceTest</c> guards, and one an earlier version of this fix hit
+    /// on CI. A heartbeat costs one message and creates nothing.</para>
+    /// </summary>
+    /// <summary>Fallback used only when no <see cref="SyncStreamOptions"/> is registered (bare
+    /// Data-layer hosts). The configured <see cref="SyncStreamOptions.FirstHeartbeat"/> wins.</summary>
+    internal static readonly TimeSpan FirstHeartbeat = TimeSpan.FromSeconds(5);
+
     // Hub-shaped principals leak from the workspace emission scheduler when an
     // upstream notification fires under a hub's own AsyncLocal (e.g. a `sync/{guid}`
     // inner sync hub stamped during its own initialization). Those addresses
@@ -158,8 +179,13 @@ public static class JsonSynchronizationStream
     where TReference : WorkspaceReference
     {
         var hub = workspace.Hub;
+        // Typed since 2026-07-27: same condition, same ObjectDisposedException base (so the
+        // Blazor circuit's `catch (ObjectDisposedException)` around BindStream still applies),
+        // but now CLASSIFIABLE as the transient ErrorType.ShuttingDown when it escapes a
+        // handler — the sibling refusal in SynchronizationStream's constructor throws the same
+        // type, so "the host is going down, ask again" has ONE shape across stream creation.
         if (hub.RunLevel > MessageHubRunLevel.Started)
-            throw new ObjectDisposedException($"ParentHub {hub.Address} is disposing, cannot create stream for {reference}.");
+            throw new HubDisposingException(hub.Address, reference);
 
         var logger = GetLogger(hub.ServiceProvider);
         // link to deserialized world. Will also potentially link to workspace.
@@ -454,9 +480,34 @@ public static class JsonSynchronizationStream
                 }
             }
 
-            var heartbeatInterval = hub.ServiceProvider
-                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
-                ?.Value?.HeartbeatInterval ?? TimeSpan.FromSeconds(45);
+            // 🚨 THE LOST INITIAL — and why the first heartbeat comes EARLY.
+            //
+            // Measured on memex 2026-07-27 from the compile activity log's microsecond timestamps:
+            // source discovery took 45.20s on a healthy mesh and 90.19s (two misses) during the
+            // outage, against 2.6s of actual Roslyn work. 45.20s is one HeartbeatInterval to within
+            // 200ms. Types then crossed the 60s settle window and every plugin root served the
+            // "did not settle" fallback; the same silence keeps an instance's NodeType stream from
+            // ever seeing a fresh build, which is why the overlay self-heal had nothing to fire on
+            // and only a process restart cleared it. One bug, three symptoms.
+            //
+            // The tell is WHERE the data finally arrives: exactly on a heartbeat. The owner is not
+            // slow — it is holding the delivery until something pokes it, and the heartbeat is the
+            // poke. Every other recovery path here is event-driven (change feed → latch), and a
+            // stream whose owner ACKED the SubscribeRequest and then went quiet produces no event
+            // at all, so nothing runs until the first HeartBeatEvent 45s later.
+            //
+            // So POKE SOONER. Not a re-subscribe — that creates a sync/{ClientId} hub on the
+            // owner's single-threaded action block per attempt, which is the storm
+            // ChangeFeedResubscribeCoalesceTest exists to prevent (and an earlier version of this
+            // fix did exactly that, firing on healthy streams under CI load). Just start the
+            // EXISTING heartbeat early: same fire-and-forget [SystemMessage] this stream already
+            // sends every 45s forever, merely with its first tick at FirstHeartbeat instead of a
+            // full interval. One extra cheap message per stream, no new subscription, no new
+            // protocol, and it targets the mechanism that demonstrably delivers the data.
+            var syncOptions = hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()?.Value;
+            var heartbeatInterval = syncOptions?.HeartbeatInterval ?? TimeSpan.FromSeconds(45);
+            var firstHeartbeat = syncOptions?.FirstHeartbeat ?? FirstHeartbeat;
             // 🚨 The heartbeat must NOT strongly pin `hub`. Observable.Interval's timer lives
             // on the process-global Rx TimerQueue (a GC root); capturing `hub` in the tick
             // closure keeps an ABANDONED hub alive forever — e.g. a RunLevel=1 partial
@@ -468,7 +519,12 @@ public static class JsonSynchronizationStream
             // once the hub is unreferenced the next tick self-disposes the timer and releases it.
             var weakHub = new WeakReference<IMessageHub>(hub);
             var sub = new System.Reactive.Disposables.SingleAssignmentDisposable();
-            sub.Disposable = Observable.Interval(heartbeatInterval)
+            // NEVER later than the configured cadence: a caller that asks for a 200ms heartbeat
+            // (HeartbeatFireAndForgetTest) must still get its first tick at 200ms. The early tick is
+            // a floor-lowering for LONG intervals, not a delay imposed on short ones — taking the
+            // sooner of the two keeps every existing cadence exactly as it was.
+            var firstTick = heartbeatInterval < firstHeartbeat ? heartbeatInterval : firstHeartbeat;
+            sub.Disposable = Observable.Timer(firstTick, heartbeatInterval)
                 .Subscribe(_ =>
                 {
                     if (!weakHub.TryGetTarget(out var h)

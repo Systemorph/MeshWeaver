@@ -102,4 +102,32 @@ public class AccessGrantNotifierTargetTest
         Assert.True(AccessGrantNotifier.TryResolveGrant(node, Options, out _, out var granted, out _));
         Assert.Equal("Space/_AccessLog", granted);
     }
+
+    [Theory]
+    [InlineData("Public")]
+    [InlineData("Anonymous")]
+    public void WellKnownPseudoSubjects_AreNeverNotified(string subject)
+    {
+        // "Public" (every authenticated user) and "Anonymous" (unauthenticated visitors) are
+        // permission BUCKETS, not people — there is nobody to mail, and publishing a node is not
+        // a person-to-person share. A grant to either must resolve to "no notification".
+        var node = Assignment(subject, "Store/_Access", "Store", role: "Viewer");
+
+        Assert.False(AccessGrantNotifier.TryResolveGrant(
+            node, Options, out _, out _, out _));
+    }
+
+    [Fact]
+    public void RealUser_IsStillNotified_WhenPublicIsSkipped()
+    {
+        // The skip must be exact — a real user keeps their notification, and a name that merely
+        // CONTAINS the bucket name (e.g. "PublicRelations") is a person, not a bucket.
+        var user = Assignment("PublicRelations", "Store/_Access", "Store", role: "Viewer");
+
+        Assert.True(AccessGrantNotifier.TryResolveGrant(
+            user, Options, out var recipient, out var granted, out var roleText));
+        Assert.Equal("PublicRelations", recipient);
+        Assert.Equal("Store", granted);
+        Assert.Equal("Viewer", roleText);
+    }
 }

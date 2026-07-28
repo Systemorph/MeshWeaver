@@ -11,100 +11,98 @@ using Xunit;
 namespace MeshWeaver.Data.Test;
 
 /// <summary>
-/// Regression tests for the dead-stream safety net in
-/// <see cref="SynchronizationStream{TStream}"/>: when a Reduce / construct
-/// races a parent hub that has just started disposing, the resulting
-/// stream's Hub field stays null — every public method that touched Hub
-/// used to NRE. The IDE then surfaced "user-unhandled" first-chance breaks
-/// at the call site (typically inside a Blazor circuit teardown's Rx
-/// pipeline) even when the call site had a Catch downstream.
+/// Pins the disposal contract of <see cref="SynchronizationStream{TStream}"/>.
 ///
-/// <para>The fixes:</para>
-/// <list type="bullet">
-/// <item><description>Constructor on a disposing parent: don't throw — log
-/// Debug, mark <c>isDisposed = true</c>, complete the Store, leave Hub null.</description></item>
-/// <item><description><see cref="SynchronizationStream{TStream}.OnNext"/>,
-/// both <c>ISynchronizationStream&lt;TStream&gt;.Update</c> overloads,
-/// <see cref="ISynchronizationStream.RegisterForDisposal"/>,
-/// <c>DeliverMessage</c>: guard against <c>isDisposed</c> / Hub-null,
-/// log Debug + bail (or in OnNext's case forward the failure to subscribers
-/// via Store.OnError).</description></item>
-/// <item><description>OnError path: don't touch Hub.FailStartup / OpenGate
-/// when Hub is null.</description></item>
-/// <item><description>Dispose: only call Hub.Dispose() when Hub is non-null.</description></item>
-/// </list>
+/// <para><b>Construction against a disposing host REFUSES</b> — it does not hand back a
+/// half-built stream. A synchronization stream owns a hosted sub-hub, and hosted-hub creation
+/// is frozen from the first instant of <c>MessageHub.Dispose</c> (cascading through the whole
+/// subtree), so on a disposing host there is no hub to give. The predecessor of this contract
+/// built a "dead stream" instead — <c>isDisposed</c>, completed store, and <c>Hub = null!</c>
+/// with a comment saying every consumer must go through <c>TryGetActiveHub</c>. NO CONSUMER
+/// DID (<c>grep -rn TryGetActiveHub src</c> found only the stream itself, against ~96 sites
+/// dereferencing the interface's NON-NULLABLE <c>Hub</c>), and <see cref="ISynchronizationStream"/>
+/// exposes no liveness member for them to check even if they wanted to. It cost a production
+/// NullReferenceException in <c>LayoutAreaHost</c>'s constructor whenever a page subscribed
+/// during a hub recycle. Refusing with a TRANSIENT, typed
+/// <see cref="HubDisposingException"/> is what lets the messaging layer answer the caller
+/// "the address may reactivate — ask again" (<see cref="ErrorType.ShuttingDown"/>) instead of
+/// crashing it, and it makes the non-null <c>Hub</c> declaration true again.</para>
 ///
-/// <para>Test strategy: build a host hub, stop it (RunLevel becomes ShutDown),
-/// then construct a SynchronizationStream against it and exercise every
-/// public method. None should throw NRE; all should produce a benign no-op.</para>
+/// <para><b>A stream that is DISPOSED after a healthy life stays inert, never throwing</b> —
+/// <c>OnNext</c>, both <c>Update</c> overloads, <c>RegisterForDisposal</c>, <c>DeliverMessage</c>
+/// and <c>Dispose</c> itself are all no-ops (or signal back to the producer). That half of the
+/// original safety net is unchanged and still covered below.</para>
 /// </summary>
 public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output)
 {
     private record Empty;
 
-    private async Task<SynchronizationStream<Empty>> CreateAgainstDisposingHost()
+    /// <summary>Builds a healthy stream on a live host, then disposes the stream.</summary>
+    private SynchronizationStream<Empty> CreateAndDispose(out bool completed)
     {
         var host = GetHost();
-
-        // Force the host past Started so the dead-stream branch in the ctor
-        // fires. Calling Dispose() bumps RunLevel to DisposeHostedHubs and
-        // ultimately ShutDown — both > Started, both trigger the dead path.
-        host.Dispose();
-        // RunLevel check in ctor compares against MessageHubRunLevel.Started.
-        // Wait briefly for the dispose to begin so RunLevel is past Started.
-        await host.DisposalCompleted
-            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
-            .FirstOrDefaultAsync()
-            .Timeout(2.Seconds())
-            .ToTask(TestContext.Current.CancellationToken);
-
-        var reduceManager = new ReduceManager<Empty>(host);
-        return new SynchronizationStream<Empty>(
+        var stream = new SynchronizationStream<Empty>(
             new StreamIdentity(host.Address, null),
             host,
             new EntityReference("X", "Y"),
-            reduceManager,
+            new ReduceManager<Empty>(host),
             null);
+
+        var sawCompletion = false;
+        // Subscribe BEFORE disposal so the terminal notification is observable.
+        stream.Subscribe(_ => { }, _ => { }, () => sawCompletion = true);
+        stream.Dispose();
+        completed = sawCompletion;
+        return stream;
     }
 
     [HubFact]
-    public async Task Ctor_OnDisposingHost_DoesNotThrow_AndProducesDeadStream()
+    public async Task Ctor_OnDisposingHost_Refuses_WithATransientHubDisposalError()
     {
-        // Pre-fix: ObjectDisposedException at the user's call site (Reduce
-        // chain). Post-fix: ctor returns a "dead" stream, no exception.
-        Func<Task> act = () => CreateAgainstDisposingHost();
-        await act.Should().NotThrowAsync(
-            "the dead-stream branch must replace the throw with a benign no-op stream");
+        var host = GetHost();
+        host.Dispose();
+        await host.DisposalCompleted
+            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+            .FirstOrDefaultAsync()
+            .Timeout(10.Seconds())
+            .ToTask(TestContext.Current.CancellationToken);
+
+        Action act = () => _ = new SynchronizationStream<Empty>(
+            new StreamIdentity(host.Address, null),
+            host,
+            new EntityReference("X", "Y"),
+            new ReduceManager<Empty>(host),
+            null);
+
+        var ex = act.Should().Throw<HubDisposingException>(
+            "a stream that cannot own its sub-hub is not a stream — refusing is what keeps "
+            + "ISynchronizationStream.Hub's non-null declaration honest. Fabricating a hub-less "
+            + "'dead stream' pushed the failure onto consumers as a NullReferenceException.");
+        ex.Which.HubAddress.Should().Be(host.Address,
+            "the failure must name the hub that is going down, so the caller can retry the right address");
+        // The Blazor circuit already catches ObjectDisposedException around BindStream()
+        // ("old circuit's hub may already be disposing"), and SynchronizationStream.OnError
+        // classifies it as benign teardown. Keeping the refusal in that family is what makes it
+        // fit the existing handling instead of blowing past it.
+        (ex.Which is ObjectDisposedException).Should().BeTrue(
+            "the refusal must stay in the ObjectDisposedException family that teardown-aware "
+            + "callers (Blazor's BindStream catch, the stream's own OnError classifier) already handle");
     }
 
     [HubFact]
-    public async Task OnNext_OnDeadStream_DoesNotThrow_AndCompletesSubscribers()
+    public void DisposedStream_CompletesSubscribersAndDropsWrites()
     {
-        var stream = await CreateAgainstDisposingHost();
-        var emitted = false;
-        var errored = false;
-        var completed = false;
-        using var sub = ((IObservable<ChangeItem<Empty>>)stream).Subscribe(
-            _ => emitted = true,
-            _ => errored = true,
-            () => completed = true);
+        var stream = CreateAndDispose(out var completed);
+        completed.Should().BeTrue("disposing a stream must complete its subscribers");
 
         var act = () => stream.OnNext(new ChangeItem<Empty>(new Empty(), stream.StreamId, 0));
-        act.Should().NotThrow(
-            "OnNext on a dead stream must not NRE on the null Hub — " +
-            "this was the original Blazor-circuit-teardown crash");
-
-        // Store.OnCompleted was called from the ctor — subscribers see completion,
-        // never see emissions or errors from the dead stream's OnNext.
-        completed.Should().BeTrue("dead-stream subscribers receive Store.OnCompleted from the ctor");
-        emitted.Should().BeFalse("dead stream cannot emit values");
-        errored.Should().BeFalse("dead stream OnNext must not OnError subscribers — that path is reserved for live-stream Hub.Post failures");
+        act.Should().NotThrow("OnNext on a disposed stream must drop the value, never throw");
     }
 
     [HubFact]
-    public async Task Update_OnDeadStream_SignalsDisposedToProducer()
+    public void Update_OnDisposedStream_SignalsDisposedToProducer()
     {
-        var stream = await CreateAgainstDisposingHost();
+        var stream = CreateAndDispose(out _);
         var updateInvoked = false;
         Exception? signaled = null;
 
@@ -113,41 +111,40 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
             ex => signaled = ex);
 
         act.Should().NotThrow(
-            "Update on a dead stream must not throw — it errors back to the producer instead");
-        // The update delegate itself should NOT have been invoked — the dead
-        // stream's TryGetActiveHub guard returns false BEFORE Hub.Post runs.
+            "Update on a disposed stream must not throw — it errors back to the producer instead");
+        // The update delegate itself should NOT have been invoked — TryGetActiveHub
+        // returns false BEFORE Hub.Post runs.
         updateInvoked.Should().BeFalse(
-            "the update delegate executes on the hub action block; a dead stream has no hub to post to");
-        // New contract: a dead/disposed stream ERRORS incoming writes (ObjectDisposedException) so the
-        // producer — a FileSystemWatcher, a remote subscription — tears down its own source instead of
-        // pushing into a disposed hub. See Doc/Architecture/HubDisposalModel.
+            "the update delegate executes on the hub action block; a disposed stream has no hub to post to");
+        // A disposed stream ERRORS incoming writes (ObjectDisposedException) so the producer — a
+        // FileSystemWatcher, a remote subscription — tears down its own source instead of pushing
+        // into a disposed hub. See Doc/Architecture/HubDisposalModel.
         signaled.Should().BeOfType<ObjectDisposedException>(
-            "incoming writes to a dead stream must error so the producer stops feeding it");
+            "incoming writes to a disposed stream must error so the producer stops feeding it");
     }
 
     [HubFact]
-    public async Task RegisterForDisposal_OnDeadStream_DisposesImmediately()
+    public void RegisterForDisposal_OnDisposedStream_DisposesImmediately()
     {
-        var stream = await CreateAgainstDisposingHost();
+        var stream = CreateAndDispose(out _);
         var disposed = false;
         var disposable = new ActionDisposable(() => disposed = true);
 
         var act = () => stream.RegisterForDisposal(disposable);
 
-        act.Should().NotThrow(
-            "RegisterForDisposal on a dead stream must not NRE on the null Hub");
+        act.Should().NotThrow("RegisterForDisposal on a disposed stream must not throw");
         disposed.Should().BeTrue(
-            "the registrant should be disposed immediately so the caller doesn't leak it — " +
-            "the caller's intent was 'couple this disposable to the stream's lifetime', " +
-            "and a dead stream is already terminal");
+            "the registrant should be disposed immediately so the caller doesn't leak it — "
+            + "the caller's intent was 'couple this disposable to the stream's lifetime', "
+            + "and a disposed stream is already terminal");
     }
 
     [HubFact]
-    public async Task Dispose_OnDeadStream_DoesNotThrow()
+    public void Dispose_IsIdempotent()
     {
-        var stream = await CreateAgainstDisposingHost();
+        var stream = CreateAndDispose(out _);
         var act = () => stream.Dispose();
-        act.Should().NotThrow("Dispose on a dead stream must skip the null Hub branch cleanly");
+        act.Should().NotThrow("a second Dispose must be a clean no-op");
     }
 
     /// <summary>
