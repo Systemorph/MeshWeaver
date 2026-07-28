@@ -81,6 +81,22 @@ ollama:
 #     the portal's own pod (the shipped node / bun / python gates). Reachability IS the
 #     authentication: no API token, nothing to rotate; deliveries may carry through the requesting
 #     user's AccessContext (see GrpcOptions.TrustedPort).
+# ---- NodeType bake job ---------------------------------------------------------------------------
+# Compiles every dynamic NodeType against the image being deployed, into the shared /data assembly
+# cache, BEFORE the portal rolls onto it — and fails the release when a type that USED TO compile no
+# longer does. Same run-once Job shape as memex-migration.
+#
+# OFF by default: it only makes sense where /data is a SHARED, persistent volume
+# (persistence.data.claimName). With an emptyDir it warms a directory that dies with the Job.
+bake:
+  enabled: false
+  image: "ghcr.io/systemorph/memex-bake:latest"
+  # A cold bake is ~90 s per NodeType and strictly sequential — 60-100 types is 2-3 hours. This
+  # deadline kills the Job, so size it above the real worst case: tripping it reports a failure for
+  # work that was only slow, which is the one wrong answer a gate must not give.
+  activeDeadlineSeconds: 14400   # 4h
+  ttlSecondsAfterFinished: 3600
+
 # ---- Startup probe budget ------------------------------------------------------------------------
 # periodSeconds × failureThreshold is the HARD ceiling on how long a pod may take to serve /health
 # before Kubernetes kills it. Defaults (5 × 60) = 5 minutes: right for a plain cold boot (schema
