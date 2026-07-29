@@ -59,6 +59,76 @@ MeshWeaver implements row-level security through **AccessAssignment MeshNodes** 
 
 *Permissions flow top-down via reactive `RemoteStream` subscriptions; each hub's `EffectiveAssignments` merges inherited and local `_Access` nodes and is immediately visible to every descendant hub.*
 
+## 🔒 The scope invariant — `MainNode` MUST name a partition, and is never empty
+
+**A grant is scoped by `MainNode`, NOT by the folder it sits in.** This one sentence is the whole
+model, and getting it wrong is the most dangerous mistake available in the system.
+
+```
+{scope}/_Access/{subject}_Access     MainNode = "{scope}"     ✅ scoped to that partition
+Admin/_Access/{subject}_Access       MainNode = "Admin"       ✅ GLOBAL ADMIN (the Admin partition)
+Admin/_Access/{subject}_Access       MainNode = ""            🔴 ROOT — superuser over EVERYTHING
+```
+
+An **empty `MainNode` is not "scoped to the folder"** — it is a **root** grant that merely happens to
+be filed under it: All on every partition, every space, every plugin and every user's private home,
+by scope inheritance. It looks harmless in the node tree.
+
+> ### 🚨 The rule
+> **`MainNode` must name the same scope its path encodes.** A grant filed at
+> `{scope}/_Access/…` with any other `MainNode` — above all an empty one — is **rejected at every
+> write path** (`AccessAssignmentGuard`, enforced in both `CreateNode` and the upsert handler, with
+> the structural invariants — before the validators and before their System bypass).
+>
+> That mismatch is the whole danger, and it is what the mesh actually had: the offending rows sat in
+> `admin.access` — i.e. `Admin/_Access/{user}_Access`, reading as ordinary platform-admin grants —
+> with `MainNode = ""` scoping them to root instead.
+>
+> **Admin partition ⇒ global admin.** A grant with `MainNode = "Admin"` IS the platform-admin
+> grant. There is no other shape, and it must be given deliberately to a named operator —
+> essentially never. See the section below.
+
+> ### What is *not* refused, and why
+> A **self-consistent** root grant — path `_Access/{subject}_Access` **and** `MainNode = ""` — passes
+> the write boundary. It is still the superuser shape, so it is worth being explicit that this is a
+> decision rather than a gap:
+>
+> - it is not what produced the incident (those were mismatches, above);
+> - it is how the test harness grants mesh-wide rights — `AssignmentNodeFactory.UserRole(user, role)`
+>   with no scope, at ~200 call sites, plus `TestUsers.PublicAdminAccess()`'s root entry — so
+>   refusing it leaves those tests unable to be granted anything at all;
+> - a human cannot produce it: `AccessAssignmentGuard.CanGrantAt` gives the access UI **no grant
+>   surface** in a root context.
+>
+> Closing this remaining path means rescoping the harness's call sites first — a mechanical change
+> worth doing, and one that should land on its own rather than inside a boundary fix.
+
+### What it actually confers (measured, memex 2026-07-28)
+
+Identical permission sets; only the **scope** differs:
+
+| `MainNode` | Materialised `node_path_prefix` | Effective reach |
+|---|---|---|
+| `"Admin"` | `Admin` | Api, Comment, Compile, Create, Delete, Execute, Export, Read, Thread, Update — **inside the Admin partition only** (invitations, version tracking, the role catalogue) |
+| `""` | *(empty)* | **The same ten permissions at ROOT** — every space, every course, every plugin, every user's private home. Including `Delete`. |
+
+On that date **34 accounts** held the root shape — 21 of them external course participants who had
+merely redeemed a coupon — against **two** correctly-scoped platform admins. They accrued one per
+user from 2026-07-06 onward; the two correct rows predate that (2026-05-11, 2026-06-15), which is
+the tell that a writer regressed rather than the model being misunderstood.
+
+### Verify from the materialised truth, not the node tree
+
+```sql
+-- 🔴 MUST return no rows — anyone here is a superuser over the entire mesh:
+select user_id, permission from admin.user_effective_permissions
+ where node_path_prefix = '' order by user_id;
+
+-- the grant rows behind it:
+select path, coalesce(nullif(main_node,''),'<EMPTY=ROOT>')
+  from admin.access where node_type = 'AccessAssignment' and coalesce(main_node,'') = '';
+```
+
 ## 🛡️ The Admin partition — global / platform admin
 
 **"Global admin" has exactly one meaning: an admin on the `Admin` partition.** `Admin` is a standard partition (schema `admin`, created by the migration) that holds platform-level data — version tracking, the role catalogue, and the platform-admin grants themselves. (The shipped catalogs are their own top-level partitions — agents under `Agent`, the AI model/provider catalog under `Provider` — not under `Admin`; see [NodeType Catalogs](/Doc/Architecture/NodeTypeCatalogs).)
