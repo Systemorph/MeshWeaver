@@ -11,6 +11,11 @@ Description: "Declare, open, and bypass hub initialization gates that defer inbo
 > `.Select(...)` or in a `Subscribe` callback. **Never** bridge to `await Task<T>` to
 > open a gate; that captures the calling scheduler and deadlocks the hub action block.
 > The condition must be expressible as a non-blocking observable emission.
+>
+> A gate is **startup-only**: it defers *inbound* deliveries and opens *once*. It cannot suppress
+> anything the hub does in steady state, and gating on work that WRITES nodes can defer the very
+> response that opens it. See [What a gate is NOT for](#-what-a-gate-is-not-for) before reaching
+> for one.
 
 ---
 <svg viewBox="0 0 760 310" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
@@ -287,6 +292,52 @@ the deferred work. Awaiting inside this hook is the same deadlock as awaiting in
 `Initialize`.
 
 ---
+
+## 🚫 What a gate is NOT for
+
+A gate is a **startup** mechanism. Two properties decide everything it can and cannot do:
+
+1. **It defers INBOUND deliveries** — messages arriving at this hub. It has no effect on work the
+   hub *originates* (an `IObservable` subscription, a timer, a reconcile loop).
+2. **It is ONE-WAY.** `OpenGate` is idempotent and there is no `CloseGate`. A gate models "not ready
+   yet → ready", once, per hub lifetime.
+
+So a gate **cannot** throttle, debounce, or suppress anything in steady state. If a hub writes nodes
+in a loop, a gate will not stop it — the gate opened long before, and the writes were never inbound
+messages in the first place.
+
+**The real fix for a write loop is to stop feeding a reconcile its own output.** A reconcile driven
+by a query over a subtree that CONTAINS the nodes it writes re-triggers itself on every write; if any
+predicate in it fails to match, that is an unbounded write storm rather than one wasted write. Filter
+the trigger so the reconcile's own bookkeeping nodes cannot schedule another pass. (Live example: a
+plugin's `_Policy` reached version 257,000 at ~14 writes/minute because one predicate could never
+match — MeshWeaver.Plugins#223.)
+
+## ⚠️ The gate that defers its own opener
+
+Before gating a hub on work that *writes nodes*, check where the responses land.
+
+`IMeshService` is constructed with the **calling** hub (`MeshService(… IMessageHub hub)`, resolved
+from that hub's service provider). So `mesh.CreateNode(...)` / `CreateOrUpdateNode(...)` /
+`DeleteNode(...)` post a request and receive the response **back on the hub that called them**. A
+gate whose opening condition is "my seeding finished" therefore defers the very response that
+completes the seeding:
+
+```csharp
+// ❌ DEADLOCK — the write's response is inbound traffic, and this gate is holding it.
+config
+    .WithInitializationGate(SeedGateName)                      // no bypass for the response
+    .WithInitialization(hub => { Seed(hub).Subscribe(_ => hub.OpenGate(SeedGateName)); … });
+```
+
+Symptom: not an error — a hub where **every** message waits the full 30 s `DeferralTimeout`, then
+fails. Same shape as the `InitializeHubRequest` incident above, and it is why that message is now
+bypassed unconditionally.
+
+If you do need such a gate, the bypass predicate must let through the replies the work depends on
+(`CreateNodeResponse`, `CreateOrUpdateNodeResponse`, `DeleteNodeResponse`, plus the data traffic of
+any query it awaits) — and that set is worth pinning with a test, because a missing entry wedges the
+hub only on the path that actually writes.
 
 ## Gate-bypass predicates
 
