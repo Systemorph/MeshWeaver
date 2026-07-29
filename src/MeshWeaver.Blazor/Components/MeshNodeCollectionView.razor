@@ -56,7 +56,7 @@
                                 var capturedEntry = entry;
                                 <span class="mesh-node-collection-chip @(entry.IsDenied ? "denied" : "")">
                                     @entry.Label
-                                    @if (ViewModel?.Deletable == true)
+                                    @if (ViewModel?.CanDelete(_items.Count) == true)
                                     {
                                         <button type="button" class="mesh-node-collection-chip-x"
                                                 @onclick="() => RemoveSubEntry(capturedNode, capturedEntry.Index)"
@@ -71,7 +71,7 @@
                         <div class="mesh-node-collection-type">@(node.NodeType ?? "")</div>
                     }
                 </div>
-                @if (ViewModel?.Deletable == true)
+                @if (ViewModel?.CanDelete(_items.Count) == true)
                 {
                     <button type="button" class="mesh-node-collection-delete" @onclick="() => DeleteItem(capturedNode.Path)" @onclick:stopPropagation="true">
                         <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" />
@@ -81,7 +81,7 @@
         }
     }
 
-    @if (ViewModel?.ShowAdd == true && ViewModel.IsClickable)
+    @if (ViewModel?.CanAdd(_items.Count) == true && ViewModel.IsClickable)
     {
         <button type="button" class="mesh-node-collection-add" @onclick="OnAddClick">
             <FluentIcon Value="@(new Icons.Regular.Size16.Add())" />
