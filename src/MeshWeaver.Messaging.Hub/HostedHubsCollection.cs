@@ -98,13 +98,46 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
             return newHub;
         }, LazyThreadSafetyMode.ExecutionAndPublication));
 
-        var created = lazy.Value;
-        // The Lazy only guards single-flight DURING construction — messageHubs is
-        // the steady-state map (same as before). Dropping the entry afterwards
-        // also restores the old retry semantics when creation failed/was refused.
-        creations.TryRemove(address, out _);
-        return created;
+        // 🚨 In-flight construction is TRACKED so disposal can FINISH it instead of racing it.
+        // CloseCreation refuses NEW creations the instant disposal begins, but a creation that
+        // passed the IsDisposing check moments earlier keeps building while the owner tears
+        // down — and DisposeHubsReactive's snapshot cannot see it (the hub lands in messageHubs
+        // only after construction). The container then dies UNDER the running Build:
+        // SyncBuildupActions resolves services from the disposed scope (ObjectDisposedException
+        // stragglers; on CI, the TypeRegistry walk over an unloading ALC = the #613 SIGSEGV).
+        // The contract is: finish the requests we started, refuse new ones — so disposal WAITS
+        // for this counter to drain (see the inflight leg in DisposeHubsReactive) and then
+        // disposes whatever the late construction produced, instead of leaking it as a zombie.
+        Interlocked.Increment(ref inflightCreations);
+        try
+        {
+            var created = lazy.Value;
+            return created;
+        }
+        finally
+        {
+            // The Lazy only guards single-flight DURING construction — messageHubs is
+            // the steady-state map (same as before). Dropping the entry afterwards
+            // also restores the old retry semantics when creation failed/was refused.
+            creations.TryRemove(address, out _);
+            // Decrement BEFORE pinging so an observer probing on the ping reads the
+            // post-decrement count.
+            Interlocked.Decrement(ref inflightCreations);
+            try { inflightChanged.OnNext(Unit.Default); } catch { /* disposal-time ping must never throw */ }
+        }
     }
+
+    // In-flight construction tracking (see GetHub): count of callers currently inside a
+    // creation Lazy, and a ping per completion so DisposeHubsReactive can wait reactively
+    // for the drain — no async/await, no blocking wait on the disposal path.
+    //
+    // 🚨 Synchronized: concurrent creations of DIFFERENT addresses complete on different
+    // threads, and a bare Subject's OnNext is not safe under concurrent callers — a torn
+    // notification could drop the very ping that reports the count reaching zero, stalling
+    // the drain leg until the join's Timeout. Subject.Synchronize serialises the
+    // notifications (same pattern as MeshNodeStreamCache).
+    private int inflightCreations;
+    private readonly ISubject<Unit> inflightChanged = Subject.Synchronize(new Subject<Unit>());
 
     /// <summary>
     /// Per-address construction single-flight (see <see cref="GetHub"/>). Entries
@@ -247,9 +280,55 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                 });
         }).ToArray();
 
-        IObservable<Unit> all = childCompletions.Length == 0
-            ? Observable.Return(Unit.Default)
-            : Observable.CombineLatest(childCompletions).Select(_ => Unit.Default).Take(1);
+        // 🚨 FINISH in-flight constructions, don't race them. The snapshot above cannot see a
+        // hub that is mid-Build (it lands in messageHubs only after construction), so without
+        // this leg the collection signalled DisposalCompleted — and the owner tore down the
+        // container — while a creation that had passed the IsDisposing check was still resolving
+        // services (the ObjectDisposedException straggler class / #613 SIGSEGV; the "check-then-
+        // act residue" #488 named). The contract: refuse NEW requests (CloseCreation, above),
+        // properly finish the ones already started. Merge order matters: inflightChanged is
+        // subscribed FIRST, then the immediate probe — so a decrement between the snapshot and
+        // this subscription is caught by the probe, and one after it by the ping. Whatever a
+        // late construction produced is then disposed here, inside the join, so it is never a
+        // zombie outside the disposal snapshot.
+        var inflightDrain = Observable
+            .Merge(inflightChanged, Observable.Return(Unit.Default))
+            .Where(_ => Volatile.Read(ref inflightCreations) == 0)
+            .Take(1)
+            .SelectMany(_ =>
+            {
+                var late = messageHubs.Values.Except(hubs).ToArray();
+                if (late.Length == 0)
+                    return Observable.Return(Unit.Default);
+                logger.LogInformation(
+                    "Disposing {count} hub(s) whose construction completed after disposal began: [{addresses}]",
+                    late.Length, string.Join(", ", late.Select(h => h.Address.ToString())));
+                var lateCompletions = late.Select(h =>
+                {
+                    try
+                    {
+                        h.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Error during disposal of late-constructed hub {address}", h.Address);
+                    }
+                    return h.DisposalCompleted
+                        .Take(1)
+                        .Catch<Unit, Exception>(ex =>
+                        {
+                            logger.LogError(ex, "Late-constructed hub {address} disposal faulted", h.Address);
+                            return Observable.Return(Unit.Default);
+                        });
+                }).ToArray();
+                return Observable.CombineLatest(lateCompletions).Select(_ => Unit.Default).Take(1);
+            });
+
+        var completionLegs = childCompletions.Append(inflightDrain).ToArray();
+        IObservable<Unit> all = Observable
+            .CombineLatest(completionLegs)
+            .Select(_ => Unit.Default)
+            .Take(1);
 
         disposalSubscription = all
             .Timeout(TimeSpan.FromSeconds(5))
