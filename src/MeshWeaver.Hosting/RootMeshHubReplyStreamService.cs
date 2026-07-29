@@ -43,7 +43,17 @@ internal sealed class RootMeshHubReplyStreamService(IServiceProvider services) :
         var hub = services.GetRequiredService<IMessageHub>();
         var routing = services.GetService<IRoutingService>();
         if (routing is not null)
+        {
             registration = routing.RegisterStream(hub);
+            // 🚨 ALSO tie the registration to the HUB's own disposal. The stream callback closes
+            // over the hub and lives in the routing service's table; releasing it only at host
+            // StopAsync leaves a window where a disposed hub is still pinned by the table — under
+            // CI load that window is long enough for MeshHub_IsCollected_AfterMeshAndService-
+            // ProviderDisposal's GC probe to catch it (shard-red on the first CI run of this fix,
+            // green locally: a timing sensitivity, made deterministic here). Disposable.Create's
+            // dispose-once semantics make the double registration (hub disposal + StopAsync) safe.
+            hub.RegisterForDisposal(registration);
+        }
         return Task.CompletedTask;
     }
 
