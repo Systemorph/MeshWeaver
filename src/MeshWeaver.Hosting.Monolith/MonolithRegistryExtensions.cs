@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Hosting.Persistence;
+﻿using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,6 +26,9 @@ public static class MonolithRegistryExtensions
         {
             services.AddMeshCatalog();
             services.TryAddSingleton<IRoutingService, MonolithRoutingService>();
+            // Root-hub reply stream — a no-op for in-process routing but keeps both
+            // transports symmetric (core#694 layer 2; see RootMeshHubReplyStreamService).
+            services.AddRootMeshHubReplyStream();
             return services;
         });
         builder.ConfigureHub(conf =>
