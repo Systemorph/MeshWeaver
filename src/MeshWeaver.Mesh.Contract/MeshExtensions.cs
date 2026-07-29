@@ -321,6 +321,15 @@ public static class MeshExtensions
         // them — which is precisely why this belongs at the boundary rather than in each writer.
         // Runs with the other STRUCTURAL invariants: before the validators and before their System
         // bypass, because a root grant is catastrophic regardless of who writes it.
+        //
+        // 🚨 The guard MUST see the NORMALISED node, hence the call above. MeshNode.MainNode defaults
+        // to Path, so a satellite created the ordinary way (`MeshNode.FromPath("{p}/_Access/a1")`,
+        // no explicit MainNode) arrives with MainNode == its own path while the path encodes scope
+        // "{p}" — a mismatch the guard refuses. Normalising first is what makes the framework's own
+        // documented satellite shape legal; guarding the RAW node rejected every caller that relies
+        // on the auto-derivation this method has always performed.
+        node = NormalizeSatelliteMainNode(node, meshConfig);
+
         if (AccessAssignmentGuard.IsScopeInvalid(node, out var scopeReason))
         {
             logger.LogError("[CreateNode] REFUSED mis-scoped AccessAssignment {Path}: {Reason}", node.Path, scopeReason);
@@ -402,12 +411,16 @@ public static class MeshExtensions
                 // and the access-granted notification named "{scope}/_Access" instead of the node that
                 // was shared. A root-level satellite (`_Access/{id}`, the root-scope grant) has no
                 // owner: MainNode = "" is that shape's documented value (see ActivityNodeGuard).
+                // 🚨 Already APPLIED ABOVE, before the AccessAssignment scope guard — that guard
+                // compares MainNode against the scope the path encodes, so it must run on the
+                // normalised node. Retained here (idempotent: the condition is false once MainNode
+                // has been rewritten) because it is the `if` of the chain whose `else if` is 1b'.
                 if (!string.IsNullOrEmpty(node.NodeType)
                     && !string.IsNullOrEmpty(node.Namespace)
                     && meshConfig.IsSatelliteNodeType(node.NodeType)
                     && node.MainNode == node.Path)
                 {
-                    node = node with { MainNode = SatelliteTableMapping.OwnerOfSatellitePath(node.Namespace) };
+                    node = NormalizeSatelliteMainNode(node, meshConfig);
                 }
                 // 1b'. Repair a STALE BARE-ID self-default MainNode on a MAIN (non-satellite) node.
                 // MainNode is a STORED property: unlike the computed Path/Segments it does NOT follow
@@ -1953,6 +1966,15 @@ public static class MeshExtensions
         // partition/scope its path sits under. Guarding only the create path would leave the hole
         // open — an upsert could set MainNode back to empty afterwards, which silently converts a
         // partition grant into a ROOT grant (All on every partition). Both write paths, or neither.
+        //
+        // 🚨 And — exactly as on the create path — the guard must see the NORMALISED node: MainNode
+        // defaults to Path, so an un-normalised satellite reads as "scoped to itself" and trips the
+        // mismatch branch. Normalising here also fixes a real asymmetry: upsert never derived a
+        // satellite's MainNode, so an upserted satellite pointed at itself instead of its owner.
+        var upsertMeshConfig = hub.ServiceProvider.GetService<MeshConfiguration>();
+        if (upsertMeshConfig != null)
+            node = NormalizeSatelliteMainNode(node, upsertMeshConfig);
+
         if (AccessAssignmentGuard.IsScopeInvalid(node, out var upsertScopeReason))
         {
             logger.LogError("[UpsertNode] REFUSED mis-scoped AccessAssignment {Path}: {Reason}", node.Path, upsertScopeReason);
@@ -2165,6 +2187,30 @@ public static class MeshExtensions
             _ => NodeUpsertRejectionReason.Unknown,
         };
     }
+
+    /// <summary>
+    /// Point a satellite's <c>MainNode</c> at its OWNING main node — the namespace with the
+    /// satellite tail cut off (<c>{owner}/_Access</c> → <c>{owner}</c>) — when it still carries the
+    /// record's self-default (<c>MainNode == Path</c>, i.e. never explicitly set).
+    ///
+    /// <para>Shared by BOTH write paths so they agree. <c>CreateNode</c> has always done this;
+    /// <c>UpsertNode</c> did not, which left a satellite upserted without an explicit MainNode
+    /// pointing at ITSELF — the exact shape every MainNode consumer misreads (SatelliteAccessRule
+    /// delegates permissions to it, <c>rebuild_user_effective_permissions</c> projects a grant at
+    /// <c>COALESCE(main_node, namespace)</c>, satellite scope filters match it as the attachment
+    /// point). The <c>AccessAssignment</c> scope guard runs on BOTH paths, so both must normalise
+    /// before it or the guard rejects the framework's own default shape.</para>
+    ///
+    /// <para>Idempotent: once MainNode differs from Path the node is returned unchanged, so calling
+    /// it twice on one write is safe.</para>
+    /// </summary>
+    private static MeshNode NormalizeSatelliteMainNode(MeshNode node, MeshConfiguration meshConfig) =>
+        !string.IsNullOrEmpty(node.NodeType)
+        && !string.IsNullOrEmpty(node.Namespace)
+        && meshConfig.IsSatelliteNodeType(node.NodeType)
+        && node.MainNode == node.Path
+            ? node with { MainNode = SatelliteTableMapping.OwnerOfSatellitePath(node.Namespace) }
+            : node;
 
     /// <summary>
     /// True when applying <paramref name="sourceNode"/> onto <paramref name="existing"/> via
