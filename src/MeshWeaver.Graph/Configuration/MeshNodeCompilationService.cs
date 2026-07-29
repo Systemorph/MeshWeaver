@@ -502,11 +502,35 @@ internal class MeshNodeCompilationService(
         //
         // So read directly and keep the synced query only as a FALLBACK for the case the direct
         // read finds nothing — never the other way round. An earlier attempt (#682) kept the cache
-        // primary and raced a delayed probe against it; the probe never fired once in production,
+        // primary and raced a DELAYED probe against it; the probe never fired once in production,
         // which is precisely the failure this ordering removes: the fast path is no longer
         // conditional on losing a race.
+        //
+        // 🚨 MERGE, not Concat — both start NOW and the first ANSWER wins.
+        //
+        // Concat is sequential: the synced query is not even subscribed until the probe has
+        // COMPLETED, so every compile paid the probe's full latency up front — and the probe cannot
+        // answer faster than SourceProbeQuietWindow, because each leg has to watch its chunked
+        // Initial go quiet before it may emit. That is a floor of ~1s per compile that the previous
+        // code never paid (the probe was DelaySubscription'd and, on a healthy mesh, never ran).
+        // Measured on Hosting.Monolith.Test, same box, CompileLeafStabilityTest:
+        //
+        //     before #690 (cached primary)          4s
+        //     #690 as merged (probe, then cached)  52s     ← 13×; pushed the suite past CI's 6m cap
+        //     this change (true race)               ~4s
+        //
+        // Merging keeps #690's win intact — a STALLED synced query no longer costs 45s, because the
+        // probe answers in about a read plus the quiet window — while a HEALTHY synced query answers
+        // immediately and the probe's latency never lands on the critical path. Neither source is
+        // privileged, so the fast path does not depend on winning a race: whichever is healthy
+        // answers, and the loser is simply dropped by FirstAsync.
+        //
+        // The probe's `.Where(count > 0)` is what makes this safe to merge: a probe that finds
+        // nothing stays SILENT and completes, so it can never beat the cached query with an empty
+        // set (compiling against no sources is worse than the stall this exists to dodge). That
+        // filter is also the likeliest reason #682's probe "never fired" — not the delay alone.
         return DirectSourceProbe(ntDef, selfPath, TimeSpan.Zero)
-            .Concat(Observable.Defer(() => ResolveSources(ntDef, selfPath, null).Take(1)))
+            .Merge(Observable.Defer(() => ResolveSources(ntDef, selfPath, null).Take(1)))
             .FirstAsync()
             .Timeout(bound)
             .Catch<IEnumerable<MeshNode>, TimeoutException>(ex =>
