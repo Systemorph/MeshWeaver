@@ -24,6 +24,33 @@ export interface ConnectOptions {
   address?: string;
 }
 
+// This process's participant id, minted once and reused by every connect() call.
+//
+// The address a client connects with IS its portal-hub address on the server: the portal
+// materialises a hub there and keeps this participant's subscriptions and per-stream sync sub-hubs
+// alive against it. A fresh id per connect therefore mints a FRESH server-side hub on every
+// connect/reconnect and abandons the previous one's state — so the id is cached, not regenerated.
+// Mirrors stableClientId() in the portal-next web client and _CLIENT_ID in the Python SDK.
+//
+// Process-scoped rather than persisted to disk on purpose: the server lets the LATEST claimant of
+// an address win, so two concurrent client processes sharing one machine-wide id would silently
+// steal each other's pushes. Set MESHWEAVER_CLIENT_ID to pin a stable id across process
+// invocations (a long-lived agent or CLI session reconnecting to its own hub).
+//
+// Sanitised to [A-Za-z0-9_-] (mirroring SessionHubResolver.Sanitize on the server): an
+// operator-supplied id containing "/" would otherwise claim a multi-segment address like
+// "portal/a/b" — a different address shape than intended, which would not round-trip through the
+// server's Address parsing.
+const CLIENT_ID = (process.env.MESHWEAVER_CLIENT_ID || randomUUID().replace(/-/g, "")).replace(
+  /[^A-Za-z0-9_-]/g,
+  "-",
+);
+
+/** This process's stable `portal/<id>` participant address. */
+export function clientAddress(): string {
+  return `portal/${CLIENT_ID}`;
+}
+
 export class MeshConnection {
   readonly address: string;
   private readonly call: DuplexCall;
@@ -37,7 +64,9 @@ export class MeshConnection {
   }
 
   static async connect(url: string, opts: ConnectOptions = {}): Promise<MeshConnection> {
-    const address = opts.address ?? `node/${randomUUID().replace(/-/g, "")}`;
+    // Defaults to this process's cached portal address — stable across reconnects, so the server
+    // keeps ONE hub for this client. Workers pass an explicit stable address (node/node-kernel).
+    const address = opts.address ?? clientAddress();
     const target = url.replace(/^https?:\/\//, "");
     const creds = url.startsWith("https://")
       ? grpc.credentials.createSsl()

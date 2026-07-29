@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
@@ -168,6 +169,34 @@ class MeshConnection:
             self._subscriptions.pop(stream_id, None)
 
 
+#: This process's participant id, minted once and reused by every :func:`connect` call.
+#:
+#: The address a client connects with IS its portal-hub address on the server: the portal
+#: materialises a hub there and keeps this participant's subscriptions and per-stream sync
+#: sub-hubs alive against it. A fresh id per connect therefore mints a FRESH server-side hub on
+#: every connect/reconnect and abandons the previous one's state — so the id is cached, not
+#: regenerated. Mirrors ``stableClientId()`` in the portal-next web client.
+#:
+#: Process-scoped rather than persisted to disk on purpose: the server lets the LATEST claimant of
+#: an address win, so two concurrent client processes sharing one machine-wide id would silently
+#: steal each other's pushes. Set ``MESHWEAVER_CLIENT_ID`` to pin a stable id across process
+#: invocations (a long-lived agent or CLI session reconnecting to its own hub).
+#:
+#: The value is sanitised to ``[A-Za-z0-9_-]`` (mirroring ``SessionHubResolver.Sanitize`` on the
+#: server): an operator-supplied id containing ``/`` would otherwise claim a multi-segment address
+#: like ``portal/a/b`` — a different address shape than intended, which would not round-trip
+#: through the server's ``Address`` parsing.
+_CLIENT_ID = "".join(
+    c if (c.isascii() and c.isalnum()) or c in "-_" else "-"
+    for c in (os.environ.get("MESHWEAVER_CLIENT_ID") or uuid.uuid4().hex)
+)
+
+
+def client_address() -> str:
+    """Return this process's stable ``portal/<id>`` participant address."""
+    return f"portal/{_CLIENT_ID}"
+
+
 async def connect(url: str, token: Optional[str] = None, address: Optional[str] = None,
                   root_certificates: Optional[bytes] = None) -> MeshConnection:
     """Connect a Python process to the mesh as a participant.
@@ -183,13 +212,16 @@ async def connect(url: str, token: Optional[str] = None, address: Optional[str] 
       authentication, and the server honours an ``accessContext`` carried on deliveries.
 
     ``token`` is a MeshWeaver API token; the server validates it and stamps every write with your
-    identity. ``address`` defaults to a fresh ``py/<uuid>`` participant.
+    identity. ``address`` defaults to this process's cached ``portal/<id>`` participant
+    (see :data:`_CLIENT_ID`) — stable across reconnects, so the server keeps ONE hub for this
+    client instead of minting a new one per connect. Workers pass an explicit stable address
+    (e.g. ``py/python-kernel``) that the .NET kernel targets.
     """
     target = url.split("://", 1)[-1]
     if url.startswith("https://"):
         channel = grpc.aio.secure_channel(target, grpc.ssl_channel_credentials(root_certificates))
     else:
         channel = grpc.aio.insecure_channel(target)
-    conn = MeshConnection(channel, address or f"py/{uuid.uuid4().hex}", token)
+    conn = MeshConnection(channel, address or client_address(), token)
     await conn._open()
     return conn
