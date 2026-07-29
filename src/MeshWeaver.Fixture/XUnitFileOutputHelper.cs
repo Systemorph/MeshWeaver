@@ -325,9 +325,12 @@ public class XUnitFileLoggerProvider : ILoggerProvider
         {
             _configuration = serviceProvider?.GetService<IConfiguration>();
         }
-        catch
+        catch (ObjectDisposedException)
         {
             // A provider built from an already-disposed scope: no configuration, default levels.
+            // ONLY the disposed case is tolerated — any other resolution failure (misconfigured
+            // DI, a faulting IConfiguration factory) is a real defect and must surface loudly,
+            // not degrade the log level silently.
             _configuration = null;
         }
     }
