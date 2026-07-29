@@ -20,7 +20,7 @@
            from — the published image's ENTRYPOINT [dotnet mw-plugin-test.dll] then died with
            exec: "dotnet": executable file not found in $PATH.
        The consumer (`MeshWeaver.Plugins` ci.yml, test-repos job) runs the image with
-       `docker run --entrypoint /app/mw-plugin-test`, which needs no PATH at all; leaving the
+       `docker run` with entrypoint /app/mw-plugin-test, which needs no PATH at all; leaving the
        base image's environment untouched also restores the default ENTRYPOINT for anyone
        running the image directly. -->
 
