@@ -293,7 +293,7 @@ public class XUnitFileLoggerProvider : ILoggerProvider
 {
     private readonly ConcurrentDictionary<string, XUnitFileLogger> _loggers = new();
     private readonly Func<XUnitFileOutputHelper?> _outputHelperFactory;
-    private readonly IServiceProvider? _serviceProvider;
+    private readonly IConfiguration? _configuration;
     private bool _disposed = false;
 
     /// <summary>
@@ -304,7 +304,35 @@ public class XUnitFileLoggerProvider : ILoggerProvider
     public XUnitFileLoggerProvider(Func<XUnitFileOutputHelper?> outputHelperFactory, IServiceProvider? serviceProvider = null)
     {
         _outputHelperFactory = outputHelperFactory;
-        _serviceProvider = serviceProvider;
+
+        // 🚨 Resolve the CONFIGURATION OBJECT here — once, while the container is guaranteed alive —
+        // and hand that object to every logger, instead of handing them the container to resolve
+        // from on each call.
+        //
+        // Teardown logs AFTER the container is disposed. Anything that logs from a Dispose path
+        // (CompilationCacheService.Dispose, drained through AsyncDisposeQueue by
+        // MonolithMeshTestBase.DisposeAsync) would otherwise reach GetMinLogLevel → GetService →
+        // Autofac's disposed LifetimeScope → ObjectDisposedException. Measured on Acme.Test:
+        // 23 first-chance ObjectDisposedExceptions per run, every one of them that exact chain.
+        // They were caught (GetMinLogLevel swallows and defaults to Information), so they never
+        // failed a test — they just burned 23 throws plus 23 first-chance stack captures on the
+        // teardown path and buried the log in noise that looks like a real fault.
+        //
+        // IConfiguration is a plain object once resolved: holding a reference to it stays valid
+        // after the scope that produced it is gone, so this removes the post-disposal container
+        // access entirely rather than guarding it.
+        try
+        {
+            _configuration = serviceProvider?.GetService<IConfiguration>();
+        }
+        catch (ObjectDisposedException)
+        {
+            // A provider built from an already-disposed scope: no configuration, default levels.
+            // ONLY the disposed case is tolerated — any other resolution failure (misconfigured
+            // DI, a faulting IConfiguration factory) is a real defect and must surface loudly,
+            // not degrade the log level silently.
+            _configuration = null;
+        }
     }
 
     /// <summary>
@@ -317,7 +345,7 @@ public class XUnitFileLoggerProvider : ILoggerProvider
         if (_disposed)
             throw new ObjectDisposedException(nameof(XUnitFileLoggerProvider));
             
-        return _loggers.GetOrAdd(categoryName, name => new XUnitFileLogger(name, _outputHelperFactory, _serviceProvider));
+        return _loggers.GetOrAdd(categoryName, name => new XUnitFileLogger(name, _outputHelperFactory, _configuration));
     }
 
     /// <summary>
@@ -341,21 +369,28 @@ public class XUnitFileLogger : ILogger
 {
     private readonly string _categoryName;
     private readonly Func<XUnitFileOutputHelper?> _outputHelperFactory;
-    private readonly IServiceProvider? _serviceProvider;
+    private readonly IConfiguration? _configuration;
     private readonly Lazy<LogLevel> _minLogLevel;
 
     /// <summary>
     /// Initializes a new logger for the given category, resolving its minimum log level lazily
-    /// from configuration.
+    /// from the configuration object supplied by the provider.
     /// </summary>
     /// <param name="categoryName">The logger category name.</param>
     /// <param name="outputHelperFactory">Factory returning the current output helper (may return null).</param>
-    /// <param name="serviceProvider">Optional service provider used to resolve log-level configuration.</param>
-    public XUnitFileLogger(string categoryName, Func<XUnitFileOutputHelper?> outputHelperFactory, IServiceProvider? serviceProvider = null)
+    /// <param name="configuration">
+    /// Log-level configuration, already resolved by <see cref="XUnitFileLoggerProvider"/> while the
+    /// container was alive. Deliberately NOT an <see cref="IServiceProvider"/>: a logger that
+    /// resolves from the container is one that throws once teardown disposes it — see the note on
+    /// the provider's constructor.
+    /// </param>
+    public XUnitFileLogger(string categoryName, Func<XUnitFileOutputHelper?> outputHelperFactory, IConfiguration? configuration = null)
     {
         _categoryName = categoryName;
         _outputHelperFactory = outputHelperFactory;
-        _serviceProvider = serviceProvider;
+        _configuration = configuration;
+        // Still lazy: parsing the level rules is pure work over an already-resolved object, so
+        // deferring it costs nothing and touches no container.
         _minLogLevel = new Lazy<LogLevel>(GetMinLogLevel);
     }
 
@@ -377,15 +412,12 @@ public class XUnitFileLogger : ILogger
 
     private LogLevel GetMinLogLevel()
     {
-        if (_serviceProvider == null)
+        var configuration = _configuration;
+        if (configuration == null)
             return LogLevel.Information;
 
         try
         {
-            var configuration = _serviceProvider.GetService<IConfiguration>();
-            if (configuration == null)
-                return LogLevel.Information;
-
             // Get all logging configuration
             var loggingSection = configuration.GetSection("Logging:LogLevel");
             if (!loggingSection.Exists())
