@@ -201,9 +201,22 @@ internal class MeshNodeCompilationService(
     }
 
     /// <summary>
-    /// Regex matching @@path references in code files, consistent with InlineReferenceResolver in MeshWeaver.AI.
+    /// Regex matching @@path references in code files. The capture must LOOK LIKE A NODE PATH —
+    /// it starts with a word character and continues with path characters only — because this
+    /// pattern runs over RAW C# SOURCE, where <c>@@</c> also appears in prose: XML doc comments
+    /// citing the markdown embed idiom (<c>@@("area/Search")</c>) and string literals in tests
+    /// asserting exactly that idiom.
+    ///
+    /// <para>🚨 The permissive predecessor (<c>@@([^\s#\]]+)</c>, shared with the AI
+    /// InlineReferenceResolver, which reads PROSE where that is correct) scraped those fragments
+    /// as include paths — <c>("area/CoverCta")&lt;/c&gt;</c>, <c>("Install/area/CoverCta")"),</c> —
+    /// and each garbage match cost a SERIAL 15s GetMeshNode timeout on the resolving hub. On memex
+    /// 2026-07-29 that stall starved the Store root's activation reads (its subtree holds ~44 Code
+    /// nodes): SubscribeRequest hit its 60s ceiling and the page died with "activation faulted".
+    /// A scanner over source code must reject anything a node path cannot begin with — quotes,
+    /// parentheses, XML markup.</para>
     /// </summary>
-    private static readonly Regex CodeIncludePattern = new(@"@@([^\s#\]]+)", RegexOptions.Compiled);
+    internal static readonly Regex CodeIncludePattern = new(@"@@([\w][\w\-./]*)", RegexOptions.Compiled);
 
     private IObservable<string> ResolveCodeIncludes(string code, HashSet<string> resolved)
     {
