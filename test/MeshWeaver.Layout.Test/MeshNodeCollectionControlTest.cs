@@ -151,4 +151,48 @@ public class MeshNodeCollectionControlTest
 
         resolved.Should().BeEmpty();
     }
+
+    [Fact]
+    public void CanAdd_UnboundedByDefault()
+    {
+        var control = new MeshNodeCollectionControl();
+
+        control.Max.Should().Be(int.MaxValue);
+        control.Min.Should().Be(0);
+        control.CanAdd(0).Should().BeTrue();
+        control.CanAdd(10_000).Should().BeTrue();
+    }
+
+    [Fact]
+    public void CanAdd_StopsAtMax()
+    {
+        var control = new MeshNodeCollectionControl().WithMax(3);
+
+        control.CanAdd(2).Should().BeTrue();
+        control.CanAdd(3).Should().BeFalse("the maximum is reached");
+        control.CanAdd(4).Should().BeFalse();
+    }
+
+    [Fact]
+    public void CanAdd_RespectsShowAdd()
+    {
+        new MeshNodeCollectionControl().WithShowAdd(false).CanAdd(0).Should().BeFalse();
+    }
+
+    [Fact]
+    public void CanDelete_KeepsTheMinimum()
+    {
+        var control = new MeshNodeCollectionControl().WithDeletable(true).WithMin(1);
+
+        control.CanDelete(2).Should().BeTrue();
+        control.CanDelete(1).Should().BeFalse("deleting would breach the minimum");
+        control.CanDelete(0).Should().BeFalse();
+    }
+
+    [Fact]
+    public void CanDelete_RequiresDeletable()
+    {
+        new MeshNodeCollectionControl().WithMin(0).CanDelete(5).Should().BeFalse("deletable is off by default");
+        new MeshNodeCollectionControl().WithDeletable(true).CanDelete(5).Should().BeTrue();
+    }
 }
