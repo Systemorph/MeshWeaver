@@ -10,12 +10,19 @@
     <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
   </PropertyGroup>
 
-  <ItemGroup>
-    <!-- GitHub Actions `container:` jobs run steps through `sh -c`, ignoring the image
-         ENTRYPOINT — `run: mw-plugin-test .` therefore needs the apphost on PATH. -->
-    <ContainerEnvironmentVariable Include="PATH"
-      Value="/app:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" />
-  </ItemGroup>
+  <!-- 🚨 NO ContainerEnvironmentVariable PATH override. The one that used to sit here (added for
+       GitHub Actions `container:` jobs, which run steps through `sh -c` and need the apphost on
+       PATH) BROKE the image twice over, and its reason no longer exists:
+         • the base image is chiseled — no shell, no `tail` — so it can never serve as an Actions
+           job container in the first place (Actions wraps the image with `tail -f /dev/null`;
+           observed 2026-07-29, the day the plugins gate was first armed);
+         • overriding PATH REPLACES the base image's value, which is where `dotnet` is resolved
+           from — the published image's ENTRYPOINT [dotnet mw-plugin-test.dll] then died with
+           exec: "dotnet": executable file not found in $PATH.
+       The consumer (`MeshWeaver.Plugins` ci.yml, test-repos job) runs the image with
+       `docker run` with entrypoint /app/mw-plugin-test, which needs no PATH at all; leaving the
+       base image's environment untouched also restores the default ENTRYPOINT for anyone
+       running the image directly. -->
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
