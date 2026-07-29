@@ -478,35 +478,44 @@ internal class MeshNodeCompilationService(
         NodeTypeDefinition? ntDef, string selfPath, IReadOnlyList<MeshNode>? sourcesOverride)
     {
         var bound = _cacheOptions.SourceSnapshotTimeout;
-        var cached = ResolveSources(ntDef, selfPath, sourcesOverride).Take(1);
 
-        // 🚨 THE 90-SECOND COMPILE. An override is already a direct snapshot, but the CACHED synced
-        // query has a lost-wakeup mode: when its subscription misses the Initial, nothing re-requests
-        // — the read simply idles until the sync stream's periodic HEARTBEAT (45s,
-        // SyncStreamOptions.HeartbeatInterval) re-delivers the content. memex, 2026-07-27: a
-        // Store/Plugin compile spent 90.19s — TWO missed heartbeats — between "Invoking compiler…"
-        // and its source queries resolving, while Roslyn itself took 2.6s. Every plugin root then
-        // blew the 60s settle window and served the "did not settle" fallback; the site was down.
-        //
-        // So RACE the cached query against a direct, uncached mesh read of the SAME expanded
-        // queries. Healthy path: the cache answers instantly and the probe never runs (it is
-        // subscription-delayed, so it costs nothing). Stalled path: the probe answers in about a
-        // read instead of 45 or 90 seconds. Amb takes whichever speaks first and drops the other.
+        // A caller-supplied override is already an authoritative point-in-time snapshot.
         if (sourcesOverride is not null)
-            return cached.Timeout(bound).Catch<IEnumerable<MeshNode>, TimeoutException>(ex =>
-                Observable.Throw<IEnumerable<MeshNode>>(new TimeoutException(
-                    $"Source snapshot for '{selfPath}' did not emit within {bound.TotalSeconds:0}s.", ex)));
+            return Observable.Return<IEnumerable<MeshNode>>(sourcesOverride);
 
-        return cached
-            .Amb(DirectSourceProbe(ntDef, selfPath))
+        // 🚨 DIRECT READ FIRST — measured, not assumed.
+        //
+        // A compile needs a POINT-IN-TIME snapshot of its sources. It was taking that snapshot from
+        // the cached SYNCED query (NodeSources.GetSources → workspace.GetQuery), which exists to
+        // deliver LIVE updates — a guarantee a compile does not need and, on a large mesh, pays
+        // dearly for. Measured on memex 2026-07-27/28, same box, same data:
+        //
+        //     the four discovery queries via IMeshService.Query   ~0.25s   (counts 16 / 4 / 1)
+        //     the same discovery through the cached synced query   45.20s
+        //
+        // 45.20s is one SyncStreamOptions.HeartbeatInterval to within 200ms — the synced
+        // subscription misses its Initial and idles until the periodic heartbeat re-delivers.
+        // Everything else was ruled out by experiment first: the compile path itself is 0ms
+        // discovery on a fresh mesh, with ONE silo and with TWO (so not topology), and the queries
+        // themselves answer in a quarter second on memex (so not scale, ~90 schemas, or data
+        // volume). See issue #686 for the full elimination.
+        //
+        // So read directly and keep the synced query only as a FALLBACK for the case the direct
+        // read finds nothing — never the other way round. An earlier attempt (#682) kept the cache
+        // primary and raced a delayed probe against it; the probe never fired once in production,
+        // which is precisely the failure this ordering removes: the fast path is no longer
+        // conditional on losing a race.
+        return DirectSourceProbe(ntDef, selfPath, TimeSpan.Zero)
+            .Concat(Observable.Defer(() => ResolveSources(ntDef, selfPath, null).Take(1)))
+            .FirstAsync()
             .Timeout(bound)
             .Catch<IEnumerable<MeshNode>, TimeoutException>(ex =>
                 Observable.Throw<IEnumerable<MeshNode>>(new TimeoutException(
                     $"Source snapshot for '{selfPath}' did not emit within {bound.TotalSeconds:0}s — "
-                    + $"the shared synced source query ('{NodeSources.CacheId(selfPath)}') never produced "
-                    + "its Initial (a lost/raced synced-query subscription, not a source-code error). "
-                    + "The compile fails terminally instead of parking at Compiling forever; retry via "
-                    + "the Compile button / a fresh RequestedReleaseAt.", ex)));
+                    + "neither the direct mesh read nor the synced source query "
+                    + $"('{NodeSources.CacheId(selfPath)}') produced a source set. The compile fails "
+                    + "terminally instead of parking at Compiling forever; retry via the Compile "
+                    + "button / a fresh RequestedReleaseAt.", ex)));
     }
 
     /// <summary>
@@ -549,7 +558,7 @@ internal class MeshNodeCompilationService(
     /// racing a primary, and it must never be the thing that fails a compile.
     /// </summary>
     private IObservable<IEnumerable<MeshNode>> DirectSourceProbe(
-        NodeTypeDefinition? ntDef, string selfPath)
+        NodeTypeDefinition? ntDef, string selfPath, TimeSpan? subscriptionDelay = null)
     {
         var queries = CodeQueryResolver
             .ExpandAll(ntDef?.Sources, CodeQueryResolver.DefaultSources, selfPath)
@@ -589,15 +598,13 @@ internal class MeshNodeCompilationService(
                 .Where(merged => merged.Count > 0)
                 .Select(merged =>
                 {
-                    logger.LogWarning(
-                        "Source discovery for '{SelfPath}' fell back to the UNCACHED probe after {Delay}s — "
-                        + "the cached synced query stalled (a missed Initial idles until the {Heartbeat}s "
-                        + "sync heartbeat). Recovered {Count} source node(s).",
-                        selfPath, SourceStallProbeDelay.TotalSeconds, 45, merged.Count);
+                    logger.LogDebug(
+                        "Source discovery for '{SelfPath}': direct mesh read returned {Count} source node(s).",
+                        selfPath, merged.Count);
                     return (IEnumerable<MeshNode>)merged;
                 }))
             .Catch((Exception _) => Observable.Empty<IEnumerable<MeshNode>>())
-            .DelaySubscription(SourceStallProbeDelay);
+            .DelaySubscription(subscriptionDelay ?? SourceStallProbeDelay);
     }
 
     /// <summary>
