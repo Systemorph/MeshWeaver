@@ -247,12 +247,25 @@ public static class BlazorHostingExtensions
             var targetAddress = (Address)resolution.Prefix;
             var qualifiedCollectionName = $"{resolution.Prefix}/{addressCollectionName}";
 
+            // 🚨 STAMP THE CALLER on the post. The user-context middleware deliberately skips
+            // /static/ (perf), so nothing has resolved an identity for this request — and a hub
+            // post with no AccessContext is refused by the never-null PostPipeline guard. That
+            // refusal is INVISIBLE at one replica (local delivery) and killed ~half of all /static
+            // requests at two: whenever the target partition's hub lived on the OTHER silo, the
+            // cross-silo post died with "AccessContext must never be null" and the file 500'd
+            // (#694 — the reason memex runs single-replica). Resolve the caller here (claims →
+            // mesh user; anonymous otherwise) and stamp the DELIVERY — per-request, never the
+            // ambient AccessService (concurrent static requests carry different users). Identity
+            // only names WHO is asking; the owning hub's RLS still decides what they may read, so
+            // anonymous gets exactly the Anonymous grants and gated files stay gated.
+            var caller = UserContextMiddleware.ResolveHttpCaller(context.User, mainHub.ServiceProvider);
+
             // Cached collection config — short-circuit; otherwise compose hub.Observe.
             IObservable<ContentCollectionConfig?> configObs = collectionCache.TryGetValue(qualifiedCollectionName, out var cached)
                 ? Observable.Return<ContentCollectionConfig?>(cached)
                 : mainHub.Observe(
                         new GetDataRequest(new ContentCollectionReference([addressCollectionName])),
-                        o => o.WithTarget(targetAddress))
+                        o => o.WithTarget(targetAddress).WithAccessContext(caller))
                     .Select<IMessageDelivery, ContentCollectionConfig?>(collectionResponse =>
                     {
                         IReadOnlyCollection<ContentCollectionConfig>? configs = collectionResponse?.Message switch

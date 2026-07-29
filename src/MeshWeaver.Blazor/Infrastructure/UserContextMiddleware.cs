@@ -325,6 +325,52 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
     /// observable bridging). Returns <c>null</c> until the cache has received
     /// its first <c>Query</c> emission.
     /// </summary>
+    /// <summary>
+    /// Resolves the ACCESS CONTEXT of an HTTP caller for surfaces this middleware deliberately
+    /// SKIPS (<see cref="ExcludedPrefixes"/> — <c>/static/…</c> above all). Those endpoints post
+    /// hub messages of their own, and a post with no identity is refused by the never-null
+    /// PostPipeline guard — which is invisible same-silo (local delivery) and fatal cross-silo:
+    /// with 2 replicas, ~half of all /static requests died with "AccessContext must never be null"
+    /// (#694), because the identity was never resolved for the request in the first place.
+    ///
+    /// <para>Same rules as the middleware path, NEVER null: authenticated → claims context with the
+    /// mesh User node's Id as ObjectId (cache-resolved; an email-shaped ObjectId is REFUSED —
+    /// better anonymous than mis-partitioned); otherwise — or on any resolution fault — the
+    /// well-known ANONYMOUS context, whose permissions are exactly the Anonymous grants
+    /// (public covers and declared public segments). Fail-closed by construction: this can widen
+    /// nothing, it only names who is asking so RLS can answer.</para>
+    /// </summary>
+    public static AccessContext ResolveHttpCaller(
+        ClaimsPrincipal? user, IServiceProvider services, ILogger? logger = null)
+    {
+        try
+        {
+            var ctx = user is null ? null : ExtractUserContext(user);
+            if (ctx is null)
+                return AnonymousContext;
+            if (!string.IsNullOrEmpty(ctx.Email))
+            {
+                var meshUser = services.GetService<UserIdentityCache>()
+                    ?.TryGetByEmail(ctx.Email);
+                if (meshUser is not null)
+                    ctx = ctx with { ObjectId = meshUser.Id, Name = meshUser.Name ?? meshUser.Id };
+            }
+            if (LooksLikeEmail(ctx.ObjectId))
+            {
+                logger?.LogWarning(
+                    "ResolveHttpCaller: refusing email-shaped ObjectId {ObjectId}; treating as anonymous.",
+                    ctx.ObjectId);
+                return AnonymousContext;
+            }
+            return ctx;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "ResolveHttpCaller failed; treating the request as anonymous.");
+            return AnonymousContext;
+        }
+    }
+
     private MeshNode? TryLoadMeshUser(string email, IMessageHub hub)
     {
         try
@@ -339,7 +385,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         }
     }
 
-    private AccessContext? ExtractUserContext(ClaimsPrincipal user)
+    private static AccessContext? ExtractUserContext(ClaimsPrincipal user)
     {
         if (user?.Identity?.IsAuthenticated != true)
             return null;
