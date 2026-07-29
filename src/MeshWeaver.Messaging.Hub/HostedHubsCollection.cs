@@ -130,8 +130,14 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     // In-flight construction tracking (see GetHub): count of callers currently inside a
     // creation Lazy, and a ping per completion so DisposeHubsReactive can wait reactively
     // for the drain — no async/await, no blocking wait on the disposal path.
+    //
+    // 🚨 Synchronized: concurrent creations of DIFFERENT addresses complete on different
+    // threads, and a bare Subject's OnNext is not safe under concurrent callers — a torn
+    // notification could drop the very ping that reports the count reaching zero, stalling
+    // the drain leg until the join's Timeout. Subject.Synchronize serialises the
+    // notifications (same pattern as MeshNodeStreamCache).
     private int inflightCreations;
-    private readonly Subject<Unit> inflightChanged = new();
+    private readonly ISubject<Unit> inflightChanged = Subject.Synchronize(new Subject<Unit>());
 
     /// <summary>
     /// Per-address construction single-flight (see <see cref="GetHub"/>). Entries
