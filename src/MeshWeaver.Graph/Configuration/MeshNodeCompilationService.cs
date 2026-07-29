@@ -615,7 +615,21 @@ internal class MeshNodeCompilationService(
                     // CHUNKS, so the first emission can be a partial set — and a partial source set
                     // compiles WRONG (missing files → phantom errors), which is worse than slow.
                     // Fold every change, then settle on a quiet window.
-                    mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(q))
+                    //
+                    // 🚨 Defer per LEG — this lambda runs inside CombineLatest's SUBSCRIPTION, and
+                    // the probe's subscription is SCHEDULED (DelaySubscription → a ThreadPool tick).
+                    // When the mesh is disposed between scheduling and firing, mesh.Query →
+                    // CaptureContext → GetService throws SYNCHRONOUSLY on the disposed Autofac
+                    // scope — and Rx routes a synchronous throw during a Producer's subscribe to
+                    // the SUBSCRIBE CALLER, not to OnError, so neither this leg's .Catch nor the
+                    // probe's outer .Catch ever sees it. The caller is the scheduler → unhandled on
+                    // the ThreadPool → xUnit v3's AppDomain handler reports "[FATAL ERROR]
+                    // ObjectDisposedException", waits for the run to finish, and Environment.Exit(2)s
+                    // — the CI "exit=2 with an all-green trx" shard failures (first seen when #690
+                    // made this probe run on every compile). Defer's FACTORY exceptions, by
+                    // contrast, ARE forwarded to OnError — so the throw lands in this leg's .Catch
+                    // below and the leg degrades to empty, exactly like any other faulted leg.
+                    Observable.Defer(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(q)))
                         .Scan(ImmutableDictionary<string, MeshNode>.Empty, ApplyQueryChange)
                         .Throttle(SourceProbeQuietWindow)
                         .Take(1)
