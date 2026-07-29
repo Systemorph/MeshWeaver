@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.GitSync;
@@ -253,9 +254,24 @@ public static class PackageInstaller
             : Observable.Return<MeshNode?>(null);
         return existing
             .Take(1)
-            .SelectMany(current => current is not null && IsUnchanged(current, node, options)
-                ? Observable.Return(false)
-                : Upsert(hub, node).Select(_ => true))
+            .SelectMany(current =>
+            {
+                if (current is not null && IsUnchanged(current, node, options))
+                    return Observable.Return(false);
+                if (current is not null && Environment.GetEnvironmentVariable("MW_INSTALL_DIFF") == "1")
+                {
+                    var cur = ContentSignature(current.Content, options);
+                    var inc = ContentSignature(node.Content ?? current.Content, options);
+                    var at = 0;
+                    while (at < cur.Length && at < inc.Length && cur[at] == inc[at]) at++;
+                    var lo = Math.Max(0, at - 120);
+                    Console.WriteLine($"[DIFF] {node.Path} scalars={ScalarsUnchanged(current, node)} " +
+                        $"lens={cur.Length}/{inc.Length} firstDiff@{at}");
+                    Console.WriteLine($"  cur({current.Content?.GetType().Name}): …{cur[lo..Math.Min(cur.Length, at + 160)]}");
+                    Console.WriteLine($"  inc({node.Content?.GetType().Name}): …{inc[lo..Math.Min(inc.Length, at + 160)]}");
+                }
+                return Upsert(hub, node).Select(_ => true);
+            })
             .Catch<bool, Exception>(_ => Upsert(hub, node).Select(_ => true));
     }
 
@@ -294,10 +310,34 @@ public static class PackageInstaller
         && (incoming.State == default ? current.State : incoming.State) == current.State
         && (incoming.PreRenderedHtml ?? current.PreRenderedHtml) == current.PreRenderedHtml;
 
-    // Content serialized with the hub options ($type discriminators) so typed content compares
-    // structurally (both sides are typed records → deterministic JSON).
+    // Content serialized with the hub options ($type discriminators), then CANONICALIZED — object
+    // keys sorted recursively — so the comparison is order-insensitive. It must be: on a
+    // RE-install the stored side is often the TYPED content (the owning hub re-serialized it, in
+    // record-declaration order) while the incoming side is the repo file's JsonElement (in file
+    // order). Same values, different order — and an order-sensitive compare called every root
+    // "changed" on every sync, which rewrote and RECOMPILED every plugin root forever. That was
+    // the whole idempotence-pin failure the day the plugins gate first executed (2026-07-29):
+    //   cur(PluginContent): {"$type":"PluginContent","body":…,"requires":…}
+    //   inc(JsonElement):   {"$type":"PluginContent","requires":…,"body":…}
     private static string ContentSignature(object? content, JsonSerializerOptions options) =>
-        content is null ? "" : JsonSerializer.Serialize(content, options);
+        content is null ? "" : Canonical(JsonSerializer.SerializeToNode(content, options));
+
+    // Empty members (null / [] / {}) are DROPPED from the signature: a typed record serializes its
+    // defaulted collection as "installPaths": [] while the repo file simply omits the property —
+    // same meaning, and exactly the residue that kept every plugin root "changed" after the
+    // key-order fix. Dropping empties is safe for change DETECTION: clearing a real value ( ["X"]
+    // → [] ) still differs, because only ONE side's member vanishes from the signature.
+    private static string Canonical(System.Text.Json.Nodes.JsonNode? node) => node switch
+    {
+        null => "null",
+        System.Text.Json.Nodes.JsonObject obj => "{" + string.Join(",", obj
+            .OrderBy(p => p.Key, StringComparer.Ordinal)
+            .Select(p => (p.Key, Value: Canonical(p.Value)))
+            .Where(p => p.Value is not ("null" or "[]" or "{}"))
+            .Select(p => JsonSerializer.Serialize(p.Key) + ":" + p.Value)) + "}",
+        System.Text.Json.Nodes.JsonArray arr => "[" + string.Join(",", arr.Select(Canonical)) + "]",
+        _ => node.ToJsonString(),
+    };
 
     // Installs a NODE-NATIVE plugin repo (node-per-file): the files ARE MeshNodes at their canonical
     // paths, so parse them verbatim (no partition rebase), upsert only the changed ones, and request a
@@ -404,10 +444,11 @@ public static class PackageInstaller
                         .Timeout(TimeSpan.FromSeconds(30)))
                     .ToObservable().Concat().LastAsync().Select(_ => System.Reactive.Unit.Default);
 
-        IObservable<IList<bool>> WriteAll(IReadOnlyList<MeshNode> batch) =>
+        IObservable<IList<(string Path, bool Wrote)>> WriteAll(IReadOnlyList<MeshNode> batch) =>
             batch.Count == 0
-                ? Observable.Return((IList<bool>)new List<bool>())
-                : batch.Select(n => UpsertIfChanged(hub, persistence, n, options))
+                ? Observable.Return((IList<(string, bool)>)new List<(string, bool)>())
+                : batch.Select(n => UpsertIfChanged(hub, persistence, n, options)
+                        .Select(wrote => (n.Path, wrote)))
                     .ToObservable().Concat().ToList(); // sequential to respect the ordering
 
         // 🚨 CONFIRM THE SELF-TYPED ROOT'S RETYPE RECONCILED before the install reports success.
@@ -436,8 +477,29 @@ public static class PackageInstaller
 
         // Eager provisioning must also cover the package's OWN partition: with a dynamic root
         // type the placeholder covers it, but belt-and-braces keeps the fresh-mesh pin honest.
+        // 🚨 The Space placeholder is for a FRESH mesh only — it lets the root exist before the
+        // package's own root type has compiled. On a RE-install the root already carries its final
+        // type, and the dance is pure damage: the placeholder differs from the live root BY
+        // CONSTRUCTION, so stage 0 rewrote it and stage 2 retyped it back — one guaranteed churn
+        // write per package per sync (the idempotence pin's "wrote 1 node" on EVERY repo the day
+        // the plugins gate was first executed, 2026-07-29), plus a window in which a LIVE plugin
+        // root is a contentless Space. Decide REACTIVELY off the same authoritative read
+        // UpsertIfChanged uses; a read failure means "not final", so a fresh mesh still gets its
+        // placeholder. When the root is already final, stage 0 writes NOTHING — the root's
+        // (idempotent) content upsert happens in stage 2 like any other node.
+        IObservable<bool> PlaceholderNeeded() =>
+            placeholderRoot is null || root is null || persistence is null
+                ? Observable.Return(placeholderRoot is not null)
+                : persistence.Read(root.Path, options)
+                    .Take(1)
+                    .Select(current => current is null
+                        || !string.Equals(current.NodeType, root.NodeType, StringComparison.Ordinal))
+                    .Catch<bool, Exception>(_ => Observable.Return(true));
+
         return EnsurePartitionsProvisioned(hub, manifest.TargetPartition ?? manifest.Id, InstalledPartition)
-            .SelectMany(_ => WriteAll(stage0))
+            .SelectMany(_ => PlaceholderNeeded())
+            .SelectMany(needed => WriteAll(
+                needed || placeholderRoot is null ? stage0 : Array.Empty<MeshNode>()))
             .SelectMany(rootWrites => Visible(root is null ? [] : [root.Path])
                 .SelectMany(_ => WriteAll(stage1))
                 .SelectMany(typeWrites => Visible(nodeTypePaths)
@@ -445,13 +507,34 @@ public static class PackageInstaller
                     // The retype's optimistic emit is not the reconciled state — wait for the
                     // shared root handle to actually carry the in-package type before reporting.
                     .SelectMany(rest => RootRetypeReconciled().Select(_ => rest))
+                    // 🚨 RECYCLE the retyped root's hub. It was ACTIVATED as the Space placeholder
+                    // (RootRetypeReconciled reads the stream, and readers race the install anyway),
+                    // so the live hub instance still carries the placeholder's configuration — the
+                    // default areas, none of the package type's. Nothing re-activates it: the node's
+                    // stored type changed but the hub does not watch its own NodeType. The symptom
+                    // is a freshly installed package whose ROOT renders without its type's areas
+                    // ("No renderer is registered for area Tests on hub Store" — the plugin gate's
+                    // Store/Catalog RED, 2026-07-29; same family as the freshly-provisioned-Store-
+                    // is-invisible incident) until someone manually recycles it. Dispose is the
+                    // recycle idiom (RecycleLayoutArea): fire-and-forget, next access re-activates
+                    // with the final type. Only when the placeholder dance actually ran.
+                    .Select(rest =>
+                    {
+                        if (placeholderRoot is not null && root is not null)
+                            hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(root.Path)));
+                        return rest;
+                    })
                     // A placeholder's write is bookkeeping, not content — its FINAL retype in
                     // stage 2 is the root's one counted write (keeps Written ≤ node count).
-                    .Select(rest => (IList<bool>)(placeholderRoot is null ? rootWrites : [])
+                    .Select(rest => (IList<(string Path, bool Wrote)>)(placeholderRoot is null ? rootWrites : [])
                         .Concat(typeWrites).Concat(rest).ToList())))
             .SelectMany(writes =>
             {
-                var result = new InstallResult(nodes.Length, writes.Count(w => w));
+                var written = writes.Where(w => w.Wrote).Select(w => w.Path).ToImmutableList();
+                var result = new InstallResult(nodes.Length, written.Count)
+                {
+                    WrittenPaths = written,
+                };
                 logger?.LogInformation(
                     "Installed node-repo plugin {Id}: {Written} written, {Unchanged} unchanged ({Count} node(s)) @ {Ref}",
                     manifest.Id, result.Written, result.Unchanged, nodes.Length, installedFromRef);
@@ -718,4 +801,14 @@ public readonly record struct InstallResult(int Total, int Written)
 {
     /// <summary>Nodes left untouched because their content did not change.</summary>
     public int Unchanged => Total - Written;
+
+    /// <summary>
+    /// The PATHS that were actually written, when the install path tracked them (the node-repo
+    /// flavor does; older flavors leave this empty). A re-install of an unchanged snapshot must
+    /// write nothing — when it does, a bare count is undiagnosable, and an unnamed regression is
+    /// how the placeholder-root churn shipped: every gate run said "wrote 1 node" and nothing said
+    /// WHICH. Named paths turn the idempotence pin's failure into the fix's first line.
+    /// </summary>
+    public System.Collections.Immutable.ImmutableList<string> WrittenPaths { get; init; } =
+        System.Collections.Immutable.ImmutableList<string>.Empty;
 }
