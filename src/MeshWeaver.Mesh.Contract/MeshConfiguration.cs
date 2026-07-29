@@ -49,6 +49,16 @@ public class MeshConfiguration(
     ///   <item><c>portal</c> — Blazor user circuits (PortalApplication).</item>
     ///   <item><c>client</c> — test client hubs / SDK clients.</item>
     ///   <item><c>cache</c> — MeshNodeStreamCache's mesh-node-cache hub.</item>
+    ///   <item><c>mesh</c> — each process's ROOT mesh hub (<c>mesh/{id}</c>). It is a
+    ///   POD-PROCESS hub like the three above, and any surface that still posts requests
+    ///   from it (the static-content endpoint, tooling) needs its REPLIES routed back.
+    ///   Without this entry a cross-silo reply for <c>mesh/{id}</c> fell into the grain
+    ///   path — a black hole, since no grain can reach a hub hosted in another pod's
+    ///   process. Prod signature: at 2 replicas ~half of all /static requests hung
+    ///   silently (core#694 layer 2, memex 2026-07-29, 35/60); the reader's own
+    ///   diagnostic even names it: "owned by another silo, so no reply was ever going
+    ///   to be produced". The root hub registers its reply stream in
+    ///   <c>MeshBuilder.Register</c>.</item>
     /// </list>
     /// Module-owned host-hub types register themselves via
     /// <c>MeshBuilder.AddStreamRoutedAddressType</c> (e.g. Graph registers <c>import</c>
@@ -56,7 +66,7 @@ public class MeshConfiguration(
     /// so this core list stays free of higher-layer knowledge.
     /// </summary>
     public static readonly IReadOnlySet<string> DefaultStreamRoutedAddressTypes =
-        new HashSet<string>(StringComparer.Ordinal) { "portal", "client", "cache" };
+        new HashSet<string>(StringComparer.Ordinal) { "portal", "client", "cache", "mesh" };
 
     // No public Nodes / MeshNodes property. Static nodes registered via
     // MeshBuilder.AddMeshNodes(...) flow through StaticMeshNodeListProvider

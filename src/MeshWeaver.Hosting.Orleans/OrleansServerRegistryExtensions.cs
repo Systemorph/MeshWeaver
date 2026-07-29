@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Connection.Orleans;
+﻿using MeshWeaver.Hosting;
+using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -114,6 +115,9 @@ public static class OrleansServerRegistryExtensions
         // Partition routing is the default (see OrleansConnectionExtensions for rationale).
         services.AddPartitionedInMemoryPersistence();
         services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
+        // The root mesh hub's cross-silo REPLY stream (core#694 layer 2) — see
+        // RootMeshHubReplyStreamService for the full story.
+        services.AddRootMeshHubReplyStream();
 
         // Mesh-scoped registry of the last per-grain activation failure. MessageHubGrain
         // records the real activation error here (the same one it feeds to _hubReadyRaw.OnError);
