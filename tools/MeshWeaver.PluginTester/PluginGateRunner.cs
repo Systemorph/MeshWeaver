@@ -135,7 +135,11 @@ public static class PluginGateRunner
                                     IdempotenceError = second.Written == 0
                                         ? null
                                         : $"re-install of the unchanged snapshot wrote {second.Written} node(s) " +
-                                          "(expected 0 — the unchanged-skip regressed)",
+                                          "(expected 0 — the unchanged-skip regressed): " +
+                                          // NAME the paths — a bare count is undiagnosable, and an
+                                          // unnamed regression is how the placeholder-root churn
+                                          // shipped: every run said "wrote 1" and nothing said WHICH.
+                                          string.Join(", ", second.WrittenPaths.DefaultIfEmpty("(untracked)")),
                                     NodeTypes = typeResults.ToImmutableList(),
                                 })
                                 .Catch((Exception ex) => Observable.Return(new PackageResult(package.Id)
