@@ -23,6 +23,15 @@ Code: `memex/Memex.Portal.Shared/SelfUpdate/` — `SelfUpdateHostedService` (pol
 (ACR via AAD→ACR token exchange), `VersionSelect` (which tag), `KubernetesDeploymentUpdater` (in-cluster
 PATCH). Wired by `AddSelfUpdate()` in `MemexConfiguration.cs`.
 
+**Every self-update roll must compile every dynamic NodeType** — the new image's framework identity
+misses the whole `/data` assembly cache by design, and a lazily-compiled mesh leaves any un-visited
+type hanging its pages ("no definition", 60 s `SubscribeRequest` timeouts — memex-cloud 2026-07-30).
+The self-updater itself only patches the image; the compiling happens on the NEW pod at startup via
+`PreWarm__DynamicTypes` + `PreWarm__GateReadiness` (see `DEPLOY-RUNBOOK.md` §7): the pod bakes
+behind the readiness gate, the old pod keeps serving (`maxSurge 1 / maxUnavailable 0`), and a type
+that regressed on the new image stalls the rollout instead of shipping. Managed envs run BOTH flags
+on — an env with them off has no deploy-time compile at all on this channel.
+
 ## Update policy (Admin → Platform updates)
 
 `Admin/UpdatePolicy` (`UpdatePolicyContent`), editable in the **Platform updates** settings tab:

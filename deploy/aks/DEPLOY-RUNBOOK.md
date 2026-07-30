@@ -186,16 +186,51 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
 for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " https://<host>/static/<space>/content/<file>; done
 ```
 
-**Expect a cold-compile window.** Fresh pods invalidate every dynamic NodeType's cached assembly
-(the framework MVID changed), so they all recompile. During it, pages and `/static/…` can fail with
-*"No response received … `GetDataRequest`/`SubscribeRequest` → target X"*. This is normal; it is not
-a bad image.
+### 🧱 NodeType bake — the deploy MUST compile every dynamic NodeType
 
-- **Do not cycle pods while it warms** — that restarts the compile work from cold.
-- **Converging vs. stuck:** warm-up trends toward 100%. A *stable* ~50% over many minutes means one
-  replica is consistently failing — investigate that replica instead of waiting.
-- **Probes:** `startupProbe` gives 300s and gates liveness/readiness, so a slow boot is safe; a hang
-  or crash after startup is killed by liveness in 90s.
+Fresh pods invalidate every dynamic NodeType's cached assembly (the framework MVID changed), so
+they all need a recompile. Left lazy, that compile happens on user requests after the pod is
+already serving — and a type nothing happens to touch stays **"no definition"** until its pages
+hang with *"No response received … `SubscribeRequest` → target X"* (SocialMedia/Post on
+memex-cloud, 2026-07-30: every post page burned the 60 s timeout all morning while the portal
+looked healthy). **Managed envs therefore run the bake ON — these three knobs travel together**
+(`values.aks.yaml` carries them; keep them in every env overlay so a `helm upgrade` never
+reverts them):
+
+| Knob | What it does |
+|---|---|
+| `config.memex_portal.PreWarm__DynamicTypes: "true"` | every new pod sweeps + compiles ALL dynamic NodeTypes at start (resumes from the shared `/data` cache — warm restarts are cheap) |
+| `config.memex_portal.PreWarm__GateReadiness: "true"` | `/health` stays red until the sweep is green; with `maxSurge 1 / maxUnavailable 0` a regressed type STALLS the rollout with the old image serving |
+| `probes.startup: {periodSeconds: 10, failureThreshold: 1080}` | ⚠️ REQUIRED with the gate: a cold bake is ~90 s/type, sequential — the default 5 min budget kills the pod mid-bake forever |
+
+`bake.enabled: true` additionally renders the run-once bake **Job** (`templates/memex-bake/`) on
+every `helm upgrade` — same compile, paid on a container nobody waits for, and a
+previously-healthy type that no longer compiles fails the release before any traffic moves.
+
+**Verify after every roll** — the bake completing is the deploy signal, not HTTP 200:
+
+```bash
+# The sweep's verdict (compiled=N alreadyBaked=M compileErrors=0 …):
+kubectl -n <env> logs deploy/memex-portal-deployment | grep "DynamicTypePreWarmer: warm-up complete"
+# The gate's verdict (Healthy "baked in …" / Unhealthy "regressed" — rollout stalled on purpose):
+kubectl -n <env> get pods   # new pod 0/1 while baking is CORRECT; investigate only a Regressed log line
+```
+
+Live-env equivalent without a helm apply (what enabled memex-cloud on 2026-07-30):
+
+```bash
+kubectl -n <env> patch configmap memex-portal-config --type merge \
+  -p '{"data":{"PreWarm__DynamicTypes":"true","PreWarm__GateReadiness":"true"}}'
+kubectl -n <env> patch deployment memex-portal-deployment --type json -p \
+  '[{"op":"replace","path":"/spec/template/spec/containers/0/startupProbe/periodSeconds","value":10},
+    {"op":"replace","path":"/spec/template/spec/containers/0/startupProbe/failureThreshold","value":1080}]'
+# the probe patch rolls the deployment; the new pod bakes behind the gate while the old serves
+```
+
+- **Do not cycle pods while a bake runs** — that restarts the compile work from cold.
+- **A pod sitting 0/1 for a long time is the gate doing its job** while a cold bake runs; only a
+  `REFUSING READINESS … Regressions:` log line means a type broke on this image — fix the type,
+  never widen the timeout.
 
 ### Scaling: KEDA wins
 `kubectl scale --replicas=0` (the documented heal for a wedged mesh) is **silently reverted** by a
