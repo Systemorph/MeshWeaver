@@ -30,7 +30,7 @@ Satellites under a thread: `{threadPath}/{messageId}` message cells, `_Usage/*` 
 
 # 2. Mark a thread Done — one patch
 
-```json
+```text
 patch @{owner}/_Thread/{id}   { "content": { "status": "Done" } }
 ```
 
