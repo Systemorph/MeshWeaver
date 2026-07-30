@@ -123,28 +123,40 @@ public static class CommentLayoutAreas
         // for natural conversation order.
         var repliesDataId = $"commentReplies_{hubPath.Replace("/", "_")}";
         host.UpdateData(repliesDataId, Array.Empty<LayoutAreaControl>());
-        host.Workspace.GetQuery(
-                $"replies:{hubPath}",
-                $"namespace:{hubPath} nodeType:{CommentNodeType.NodeType}")
-            .Subscribe(snapshot =>
-            {
-                var replyControls = snapshot
-                    .Where(n => n.Content is Comment)
-                    .OrderBy(n => n.ContentAs<Comment>(host.Hub.JsonSerializerOptions)!.CreatedAt)
-                    .Select(n => Controls.LayoutArea(n.Path, OverviewArea))
-                    .ToArray();
-                session.RepliesControls = replyControls;
-                host.UpdateData(repliesDataId, replyControls);
-            });
-
-        return host.Workspace.GetMeshNodeStream()
-            .CombineLatest(permissionsStream, (node, perms) =>
-            {
-                var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
-                var canDelete = perms.HasFlag(Permission.Delete);
-                return (UiControl?)BuildOverview(host, node, hubPath, editStateId, session,
-                    currentUser, canComment, canDelete, repliesDataId);
-            });
+        // Replies flow ONLY through the repliesDataId data stream (the outer view must not rebuild
+        // per reply tick), but the query subscription's LIFETIME is tied to the area via
+        // Observable.Using — the old fire-and-forget Subscribe leaked one live query subscription
+        // per re-render. The filter materializes through ContentAs: over the query seam a reply's
+        // content arrives as a JsonElement (or typed in a foreign dynamic assembly), and a bare
+        // `is Comment` filter silently dropped those replies from the thread.
+        return Observable.Using(
+            () => host.Workspace.GetQuery(
+                    $"replies:{hubPath}",
+                    $"namespace:{hubPath} nodeType:{CommentNodeType.NodeType}")
+                .Subscribe(
+                    snapshot =>
+                    {
+                        var replyControls = snapshot
+                            .Select(n => (Node: n, Comment: n.ContentAs<Comment>(host.Hub.JsonSerializerOptions)))
+                            .Where(x => x.Comment is not null)
+                            .OrderBy(x => x.Comment!.CreatedAt)
+                            .Select(x => Controls.LayoutArea(x.Node.Path, OverviewArea))
+                            .ToArray();
+                        session.RepliesControls = replyControls;
+                        host.UpdateData(repliesDataId, replyControls);
+                    },
+                    // Log and keep the last-good thread: a faulted query must not become an
+                    // unobserved exception, and clearing would read as "replies vanished".
+                    ex => host.Hub.ServiceProvider.GetService<ILogger<OverviewSession>>()
+                        ?.LogWarning(ex, "Reply query faulted for {Path}", hubPath)),
+            _ => host.Workspace.GetMeshNodeStream()
+                .CombineLatest(permissionsStream, (node, perms) =>
+                {
+                    var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
+                    var canDelete = perms.HasFlag(Permission.Delete);
+                    return (UiControl?)BuildOverview(host, node, hubPath, editStateId, session,
+                        currentUser, canComment, canDelete, repliesDataId);
+                }));
     }
 
     /// <summary>
@@ -224,7 +236,10 @@ public static class CommentLayoutAreas
             rightGroup = rightGroup.WithView(BuildReplyButton(host, hubPath));
         if (canAct && !isResolved && IsTopLevelComment(hubPath, comment))
             rightGroup = rightGroup.WithView(BuildResolveButton(host, hubPath, comment));
-        if (canDelete || canComment)
+        // ✕ only when the click can actually succeed: Delete permission, or the author's own
+        // comment (SatelliteAccessRule's author-may-delete-own). Showing it to every commenter
+        // and letting the click fail into a log was the residue of #391.
+        if (canDelete || (canAct && isAuthor))
             rightGroup = rightGroup.WithView(BuildDeleteButton(host, hubPath));
 
         headerRow = headerRow.WithView(rightGroup);
@@ -704,40 +719,6 @@ public static class CommentLayoutAreas
                         ?.LogWarning(ex, "Failed to delete comment at {Path}", hubPath));
                 return Task.CompletedTask;
             });
-    }
-
-    /// <summary>
-    /// Builds the action menu (Edit / Delete) for a comment, gated by permissions.
-    /// </summary>
-    private static UiControl BuildCommentActionMenu(LayoutAreaHost host, string hubPath, bool canComment, bool canDelete)
-    {
-        var menu = Controls.MenuItem("", FluentIcons.MoreHorizontal(IconSize.Size20))
-            .WithAppearance(Appearance.Stealth)
-            .WithIconOnly();
-
-        // Edit option (requires Comment permission)
-        if (canComment)
-        {
-            var editHref = MeshNodeLayoutAreas.BuildUrl(hubPath, EditArea);
-            menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
-        }
-
-        // Delete option (requires Delete permission)
-        if (canDelete)
-        {
-            menu = menu.WithView(
-                Controls.MenuItem("Delete", FluentIcons.Delete(IconSize.Size16))
-                    .WithClickAction(_ =>
-                    {
-                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                        nodeFactory.DeleteNode(hubPath).Subscribe(
-                            __ => { },
-                            _ => { });
-                        return Task.CompletedTask;
-                    }));
-        }
-
-        return menu;
     }
 
     /// <summary>

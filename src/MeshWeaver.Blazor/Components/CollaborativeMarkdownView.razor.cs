@@ -288,15 +288,17 @@ public partial class CollaborativeMarkdownView
             })
             .Subscribe(list =>
             {
+                // Materialize through ContentAs FIRST, then filter: over the query seam the
+                // content arrives as a JsonElement (or typed in a foreign dynamic assembly), and
+                // a bare `is TrackedChange` pattern silently dropped those changes — no card, no
+                // highlight, no error.
                 var withMarker = list
-                    .Where(n => n.Content is TrackedChange c && !string.IsNullOrEmpty(c.MarkerId))
-                    .DistinctBy(n => n.ContentAs<TrackedChange>(Hub.JsonSerializerOptions)!.MarkerId!);
-                changeNodes = withMarker.ToDictionary(
-                    n => n.ContentAs<TrackedChange>(Hub.JsonSerializerOptions)!.MarkerId!,
-                    n => n.ContentAs<TrackedChange>(Hub.JsonSerializerOptions)!);
-                changePaths = withMarker.ToDictionary(
-                    n => n.ContentAs<TrackedChange>(Hub.JsonSerializerOptions)!.MarkerId!,
-                    n => n.Path);
+                    .Select(n => (Node: n, Change: n.ContentAs<TrackedChange>(Hub.JsonSerializerOptions)))
+                    .Where(x => x.Change is not null && !string.IsNullOrEmpty(x.Change.MarkerId))
+                    .DistinctBy(x => x.Change!.MarkerId!)
+                    .ToList();
+                changeNodes = withMarker.ToDictionary(x => x.Change!.MarkerId!, x => x.Change!);
+                changePaths = withMarker.ToDictionary(x => x.Change!.MarkerId!, x => x.Node.Path);
                 // Tracked changes are overlaid as a diff view from these satellites — re-derive.
                 ProcessContent();
                 InvokeAsync(StateHasChanged);
@@ -337,15 +339,15 @@ public partial class CollaborativeMarkdownView
             })
             .Subscribe(list =>
             {
+                // ContentAs FIRST, then filter — same JsonElement/foreign-assembly tolerance as
+                // SubscribeToChanges above; the old `is Comment` filter silently dropped frames.
                 var withMarker = list
-                    .Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.MarkerId))
-                    .DistinctBy(n => n.ContentAs<Comment>(Hub.JsonSerializerOptions)!.MarkerId!);
-                commentNodes = withMarker.ToDictionary(
-                    n => n.ContentAs<Comment>(Hub.JsonSerializerOptions)!.MarkerId!,
-                    n => n.ContentAs<Comment>(Hub.JsonSerializerOptions)!);
-                commentPaths = withMarker.ToDictionary(
-                    n => n.ContentAs<Comment>(Hub.JsonSerializerOptions)!.MarkerId!,
-                    n => n.Path);
+                    .Select(n => (Node: n, Comment: n.ContentAs<Comment>(Hub.JsonSerializerOptions)))
+                    .Where(x => x.Comment is not null && !string.IsNullOrEmpty(x.Comment.MarkerId))
+                    .DistinctBy(x => x.Comment!.MarkerId!)
+                    .ToList();
+                commentNodes = withMarker.ToDictionary(x => x.Comment!.MarkerId!, x => x.Comment!);
+                commentPaths = withMarker.ToDictionary(x => x.Comment!.MarkerId!, x => x.Node.Path);
                 // Comments are overlaid onto the rendered document from these satellites, so a change
                 // in the set must re-derive the inline highlights, not just the sidebar status.
                 ProcessContent();
@@ -571,10 +573,7 @@ public partial class CollaborativeMarkdownView
     {
         if (!changeNodes.TryGetValue(changeId, out var change))
             return;
-        var clean = MarkdownAnnotationParser.StripAllMarkers(RawContent ?? "");
-        var resolved = ChangeRendering.ResolveEffective(change, clean, _docVersion);
-        var newClean = ChangeRendering.Apply(clean, resolved);
-        ApplyDocContent(newClean, () => DeleteChangeNode(changeId));
+        ApplyChanges(new[] { change }, () => DeleteChangeNode(changeId));
     }
 
     private void OnRejectChange(string changeId) => DeleteChangeNode(changeId);
@@ -585,9 +584,7 @@ public partial class CollaborativeMarkdownView
         var pending = changeNodes.Values.Where(c => c.Status == TrackedChangeStatus.Pending).ToList();
         if (pending.Count == 0)
             return;
-        var clean = MarkdownAnnotationParser.StripAllMarkers(RawContent ?? "");
-        var newClean = ChangeRendering.ApplyAll(clean, pending, _docVersion);
-        ApplyDocContent(newClean, () =>
+        ApplyChanges(pending, () =>
         {
             foreach (var c in pending)
                 if (c.MarkerId is { } id) DeleteChangeNode(id);
@@ -600,27 +597,35 @@ public partial class CollaborativeMarkdownView
             if (c.MarkerId is { } id) DeleteChangeNode(id);
     }
 
-    // Write the document's clean content through the shared stream, then run onApplied (drop the
-    // accepted satellite(s)). The doc node keeps its other fields (Name/Authors/Tags/...).
-    private void ApplyDocContent(string newClean, Action onApplied)
+    // Apply accepted change(s) to the document, then run onApplied (drop the accepted satellite(s)).
+    // The changes are RE-RESOLVED against the LIVE node inside the owner's update lambda — resolving
+    // against the view's RawContent/_docVersion snapshot left a lost-update window (the document may
+    // have moved between render and click). A node that no longer holds markdown throws instead of
+    // silently no-oping (the old `: node` branch read as a lost accept), and the error is surfaced.
+    private void ApplyChanges(IReadOnlyCollection<TrackedChange> changes, Action onApplied)
     {
-        if (string.IsNullOrEmpty(BoundNodePath))
+        if (string.IsNullOrEmpty(BoundNodePath) || changes.Count == 0)
             return;
         Hub.GetMeshNodeStream(BoundNodePath).Update(node =>
-                node.Content is MarkdownContent md
-                    ? node with { Content = md with { Content = newClean } }
-                    : node)
+            {
+                if (node.Content is not MarkdownContent md)
+                    throw new InvalidOperationException(
+                        $"'{node.Path}' does not hold markdown content — cannot apply the suggestion.");
+                var clean = MarkdownAnnotationParser.StripAllMarkers(md.Content);
+                var newClean = ChangeRendering.ApplyAll(clean, changes, node.Version);
+                return node with { Content = md with { Content = newClean } };
+            })
             .Subscribe(
                 _ => onApplied(),
-                ex => Hub.ServiceProvider.GetService<ILoggerFactory>()
-                    ?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView")
-                    .LogWarning(ex, "Accept-change content update failed for {Path}", BoundNodePath));
+                ex => SurfaceError(ex, $"Applying suggestion to {BoundNodePath}"));
     }
 
     private void DeleteChangeNode(string changeId)
     {
         if (changePaths.TryGetValue(changeId, out var path))
-            Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(path).Subscribe(_ => { }, _ => { });
+            Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(path).Subscribe(
+                _ => { },
+                ex => SurfaceError(ex, $"Removing suggestion {changeId}"));
     }
 
     /// <summary>
@@ -859,15 +864,16 @@ public partial class CollaborativeMarkdownView
             return;
         // Write through the shared cache — the lambda fires against the live
         // MeshNode the cache holds, no separate Read → Post round-trip needed.
+        // ContentAs, not `is Comment`: a JsonElement frame made the resolve a
+        // silent no-op (the click "worked" and nothing happened).
         Hub.GetMeshNodeStream(path).Update(n =>
         {
-            if (n.Content is not Comment c) return n;
+            var c = n.ContentAs<Comment>(Hub.JsonSerializerOptions)
+                ?? throw new InvalidOperationException($"'{n.Path}' is not a readable comment.");
             return n with { Content = c with { Status = CommentStatus.Resolved } };
         }).Subscribe(
             _ => { },
-            ex => Hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView")
-                .LogWarning(ex, "Comment resolve failed for {Path}", path));
+            ex => SurfaceError(ex, $"Resolving comment on {path}"));
     }
 
     private void DeleteComment(string markerId)
@@ -877,7 +883,7 @@ public partial class CollaborativeMarkdownView
         var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
         meshQuery?.DeleteNode(path).Subscribe(
             _ => { },
-            _ => { });
+            ex => SurfaceError(ex, $"Deleting comment on {path}"));
     }
 
     private static string Truncate(string text, int maxLength) =>

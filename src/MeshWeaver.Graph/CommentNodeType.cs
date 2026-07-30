@@ -49,16 +49,12 @@ public static class CommentNodeType
             .WithType<Mesh.TrackedChangeStatus>(nameof(Mesh.TrackedChangeStatus))
             .WithType<CreateCommentRequest>(nameof(CreateCommentRequest))
             .WithType<CreateCommentResponse>(nameof(CreateCommentResponse))
-            .WithType<ResolveCommentRequest>(nameof(ResolveCommentRequest))
-            .WithType<ResolveCommentResponse>(nameof(ResolveCommentResponse))
-            .WithType<DeleteCommentRequest>(nameof(DeleteCommentRequest))
-            .WithType<DeleteCommentResponse>(nameof(DeleteCommentResponse))
             .WithType<CreateSuggestedEditRequest>(nameof(CreateSuggestedEditRequest))
-            .WithType<CreateSuggestedEditResponse>(nameof(CreateSuggestedEditResponse))
-            .WithType<AcceptChangeRequest>(nameof(AcceptChangeRequest))
-            .WithType<AcceptChangeResponse>(nameof(AcceptChangeResponse))
-            .WithType<RejectChangeRequest>(nameof(RejectChangeRequest))
-            .WithType<RejectChangeResponse>(nameof(RejectChangeResponse)));
+            .WithType<CreateSuggestedEditResponse>(nameof(CreateSuggestedEditResponse)));
+        // Resolve/Delete/Accept/Reject request records are deliberately NOT registered any more:
+        // they never had a handler, so posting one hung the caller to the timeout. Those operations
+        // are node writes on the satellite / document (see CollaborativeMarkdownView and the
+        // Collaboration plugin), not message verbs.
         return builder;
     }
 
