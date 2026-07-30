@@ -173,15 +173,47 @@ public sealed class LinkedInPublisher : IPlatformPublisher
         return (retryResp, refreshed);
     }
 
+    /// <summary>
+    /// Metrics pulled from <c>memberCreatorPostAnalytics</c>, in the order the refresher reports
+    /// them. IMPRESSION and MEMBERS_REACHED are the reach numbers the socialActions endpoint has
+    /// never carried; RESHARE completes the engagement triple.
+    /// </summary>
+    private static readonly string[] AnalyticsMetrics = ["IMPRESSION", "RESHARE"];
+
     /// <inheritdoc />
+    /// <remarks>
+    /// TWO calls, because LinkedIn splits the numbers across two surfaces:
+    /// <list type="bullet">
+    ///   <item><c>/v2/socialActions/{urn}</c> — likes + comments, available with the publishing
+    ///     scope alone.</item>
+    ///   <item><c>/rest/memberCreatorPostAnalytics</c> — IMPRESSION (views) and RESHARE for the
+    ///     AUTHENTICATED member's own posts. Needs <c>r_member_postAnalytics</c>; when the
+    ///     credential predates that scope the call 403s and impressions stay 0 — the post keeps
+    ///     its like/comment counts rather than the whole refresh failing.</item>
+    /// </list>
+    /// (Until 2025 there was genuinely no member-post impressions API — only
+    /// organizationalEntityShareStatistics for company pages. That is no longer true, and this is
+    /// the call that closes the gap.)
+    /// </remarks>
     public async Task<PostStats> GetStatsAsync(string urn, PlatformCredential credential, CancellationToken ct)
     {
         credential = await EnsureFreshAsync(credential, ct);
 
-        // /v2/socialActions/{urn} returns likes + comments counts for any UGC post the caller can read.
-        // Impressions are NOT available via the member-scoped API — only page/organizational posts expose
-        // organizationalEntityShareStatistics. For member posts, impressions stay 0 until the user also
-        // grants an analytics scope; we record that gap in the result rather than throw.
+        var (likes, comments) = await GetSocialActionsAsync(urn, credential, ct);
+        var (impressions, shares) = await GetMemberAnalyticsAsync(urn, credential, ct);
+
+        return new PostStats(
+            Impressions: impressions,
+            Likes: likes,
+            Comments: comments,
+            Shares: shares,
+            RetrievedAt: DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>Likes + comments off <c>/v2/socialActions/{urn}</c>; (0,0) when the call fails.</summary>
+    private async Task<(int Likes, int Comments)> GetSocialActionsAsync(
+        string urn, PlatformCredential credential, CancellationToken ct)
+    {
         using var req = new HttpRequestMessage(HttpMethod.Get,
             new Uri(ApiBase, $"v2/socialActions/{Uri.EscapeDataString(urn)}"));
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.AccessToken);
@@ -190,8 +222,8 @@ public sealed class LinkedInPublisher : IPlatformPublisher
         using var resp = await _http.SendAsync(req, ct);
         if (!resp.IsSuccessStatusCode)
         {
-            _logger?.LogWarning("LinkedIn stats fetch failed {Status} for {Urn}", (int)resp.StatusCode, urn);
-            return new PostStats(0, 0, 0, 0, DateTimeOffset.UtcNow);
+            _logger?.LogWarning("LinkedIn socialActions fetch failed {Status} for {Urn}", (int)resp.StatusCode, urn);
+            return (0, 0);
         }
 
         using var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
@@ -199,8 +231,60 @@ public sealed class LinkedInPublisher : IPlatformPublisher
             ? lt.GetInt32() : 0;
         var comments = doc.RootElement.TryGetProperty("commentsSummary", out var c) && c.TryGetProperty("aggregatedTotalComments", out var ct1)
             ? ct1.GetInt32() : 0;
+        return (likes, comments);
+    }
 
-        return new PostStats(Impressions: 0, Likes: likes, Comments: comments, Shares: 0, RetrievedAt: DateTimeOffset.UtcNow);
+    /// <summary>
+    /// IMPRESSION + RESHARE off <c>/rest/memberCreatorPostAnalytics</c> (lifetime TOTAL — LinkedIn
+    /// does not serve DAILY impressions for a post, so the caller's periodic snapshots ARE the
+    /// time series). A 403 means the credential lacks <c>r_member_postAnalytics</c>: logged once
+    /// as information, never an exception, so the like/comment refresh still lands.
+    /// </summary>
+    private async Task<(int Impressions, int Shares)> GetMemberAnalyticsAsync(
+        string urn, PlatformCredential credential, CancellationToken ct)
+    {
+        var impressions = 0;
+        var shares = 0;
+        foreach (var metric in AnalyticsMetrics)
+        {
+            var count = await GetMemberMetricAsync(urn, metric, credential, ct);
+            if (count is null)
+                return (impressions, shares);   // scope missing / endpoint unavailable — stop asking
+            if (metric == "IMPRESSION") impressions = count.Value;
+            else shares = count.Value;
+        }
+        return (impressions, shares);
+    }
+
+    /// <summary>One metric's lifetime TOTAL, or null when the call was rejected.</summary>
+    private async Task<int?> GetMemberMetricAsync(
+        string urn, string metric, PlatformCredential credential, CancellationToken ct)
+    {
+        var entity = LinkedInAnalytics.EntityParameter(urn);
+        if (entity is null)
+        {
+            _logger?.LogWarning("Cannot read analytics for unrecognised URN {Urn}", urn);
+            return null;
+        }
+
+        using var req = new HttpRequestMessage(HttpMethod.Get, new Uri(ApiBase,
+            $"rest/memberCreatorPostAnalytics?q=entity&entity={entity}&queryType={metric}&aggregation=TOTAL"));
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.AccessToken);
+        req.Headers.Add("X-Restli-Protocol-Version", "2.0.0");
+        req.Headers.Add("LinkedIn-Version", LinkedInPostsApi.DefaultApiVersion);
+
+        using var resp = await _http.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+            _logger?.LogInformation(
+                "LinkedIn member analytics {Metric} unavailable ({Status}) for {Urn} — "
+                + "the credential likely lacks r_member_postAnalytics; reconnect to grant it",
+                metric, (int)resp.StatusCode, urn);
+            return null;
+        }
+
+        using var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+        return LinkedInAnalytics.SumCounts(doc.RootElement);
     }
 
     /// <inheritdoc />
