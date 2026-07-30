@@ -186,16 +186,73 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
 for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " https://<host>/static/<space>/content/<file>; done
 ```
 
-**Expect a cold-compile window.** Fresh pods invalidate every dynamic NodeType's cached assembly
-(the framework MVID changed), so they all recompile. During it, pages and `/static/…` can fail with
-*"No response received … `GetDataRequest`/`SubscribeRequest` → target X"*. This is normal; it is not
-a bad image.
+### 🧱 NodeType bake — the deploy MUST compile every dynamic NodeType
 
-- **Do not cycle pods while it warms** — that restarts the compile work from cold.
-- **Converging vs. stuck:** warm-up trends toward 100%. A *stable* ~50% over many minutes means one
-  replica is consistently failing — investigate that replica instead of waiting.
-- **Probes:** `startupProbe` gives 300s and gates liveness/readiness, so a slow boot is safe; a hang
-  or crash after startup is killed by liveness in 90s.
+Fresh pods invalidate every dynamic NodeType's cached assembly (the framework MVID changed), so
+they all need a recompile. Left lazy, that compile happens on user requests after the pod is
+already serving — and a type nothing happens to touch stays **"no definition"** until its pages
+hang with *"No response received … `SubscribeRequest` → target X"* (SocialMedia/Post on
+memex-cloud, 2026-07-30: every post page burned the 60 s timeout all morning while the portal
+looked healthy). **Managed envs therefore run the bake ON — these three knobs travel together**
+(`values.aks.yaml` carries them; keep them in every env overlay so a `helm upgrade` never
+reverts them):
+
+| Knob | What it does |
+|---|---|
+| `config.memex_portal.PreWarm__DynamicTypes: "true"` | every new pod sweeps + compiles ALL dynamic NodeTypes at start (resumes from the shared `/data` cache — warm restarts are cheap) |
+| `config.memex_portal.PreWarm__GateReadiness` | `/health` stays red until the sweep is green; with `maxSurge 1 / maxUnavailable 0` a regressed type STALLS the rollout with the old image serving. **⛔ OFF until core #694 is fixed** — the two-silo roll window makes the sweep flake (see below) and the gate then stalls every rollout on FALSE regressions |
+| `probes.startup: {periodSeconds: 10, failureThreshold: 1080}` | ⚠️ REQUIRED with the gate: a cold bake is ~90 s/type, sequential — the default 5 min budget kills the pod mid-bake forever |
+
+⛔ **The bake Job (`bake.enabled`) stays OFF on AKS until core asserts fingerprint-match.** On its
+first AKS run (memex-cloud, 2026-07-30) `memex-bake:3.0.0-ci.1565` computed a **different framework
+fingerprint** than the running `portal-ai:3.0.0-ci.1565` — same version, separately published — so
+its framework-stale kickoff started flipping CURRENT NodeType records to `Pending` and rebuilding
+them for a framework nothing serves. (Killed after ~6 min; the portal's CompileWatcher heals the
+flips; serving pods keep their loaded assemblies throughout.) Until the Job refuses to bake when its
+fingerprint differs from the image being rolled, the pod-side sweep is the ONE deploy-time compile
+mechanism — it runs in the serving process, so its fingerprint is right by construction.
+
+**Verify after every roll** — the bake completing is the deploy signal, not HTTP 200:
+
+```bash
+# The sweep's verdict (compiled=N alreadyBaked=M compileErrors=0 …) — read the NEWEST pod
+# explicitly: `kubectl logs deploy/…` picks an arbitrary pod and mid-rollout that is often the OLD one.
+NEW=$(kubectl -n <env> get pods -l app.kubernetes.io/component=memex-portal \
+  --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}')
+kubectl -n <env> logs "$NEW" | grep "DynamicTypePreWarmer: warm-up complete"
+# The gate's verdict (Healthy "baked in …" / Unhealthy "regressed" — rollout stalled on purpose):
+kubectl -n <env> get pods   # new pod 0/1 while baking is CORRECT; investigate only a Regressed log line
+```
+
+Live-env equivalent without a helm apply (what enabled memex-cloud on 2026-07-30):
+
+```bash
+kubectl -n <env> patch configmap memex-portal-config --type merge \
+  -p '{"data":{"PreWarm__DynamicTypes":"true","PreWarm__GateReadiness":"false"}}'
+kubectl -n <env> patch deployment memex-portal-deployment --type json -p \
+  '[{"op":"replace","path":"/spec/template/spec/containers/0/startupProbe/periodSeconds","value":10},
+    {"op":"replace","path":"/spec/template/spec/containers/0/startupProbe/failureThreshold","value":1080}]'
+# the probe patch rolls the deployment; the new pod bakes behind the gate while the old serves
+```
+
+- **A pod sitting 0/1 for a long time is the gate doing its job** while a cold bake runs; only a
+  `REFUSING READINESS … Regressions:` log line means a type broke on this image — fix the type,
+  never widen the timeout.
+- **Retries are cheap — the sweep resumes from the shared cache.** Every type a sweep DID build is
+  on `/data` for good; deleting a gate-red pod re-runs only what is missing. Progress across
+  attempts is monotonic.
+- **⚠️ Known flake while core #694 is open (cross-silo reply routing):** during a roll the mesh
+  briefly runs TWO silos (old serving + new baking), and in that window the pod-side sweep's
+  shared-source resolution can fail nondeterministically — the symptom is a `CompileError` full of
+  unresolved names that live in a SIBLING type's `Source/` (`shared=@…`), on a type that compiles
+  clean when triggered individually. First verify with a targeted compile (MCP `compile
+  @<type>` — recycle the type's hub first if the subscribe times out; the targeted subscribe rides
+  the SAME cross-silo routing, so it completes reliably only in a single-silo window — delete the
+  baking pod and use the ~2 minutes before its replacement joins), then let the replacement's
+  re-sweep find the fixed types `alreadyBaked`. (Observed live on the first gated roll, memex-cloud
+  2026-07-30: the gate caught 2 types with stale-green records whose newest assemblies were 6 days
+  old — real, invisible breakage — plus sweep failures on shared-source types that compiled clean
+  when triggered individually in a single-silo window.)
 
 ### Scaling: KEDA wins
 `kubectl scale --replicas=0` (the documented heal for a wedged mesh) is **silently reverted** by a
