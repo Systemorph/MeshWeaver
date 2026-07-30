@@ -120,9 +120,10 @@ config:
     # Every image roll changes the framework identity, which misses the whole
     # /data assembly cache BY DESIGN — so without a deploy-time bake, dynamic
     # NodeTypes recompile lazily on user requests after the pod is already
-    # serving, and a type nothing happens to touch stays "no definition" until
-    # its pages hang (SocialMedia/Post on memex-cloud, 2026-07-30: every post
-    # burned the 60 s SubscribeRequest timeout all morning). The pre-warm sweep
+    # serving, and a type that no request happens to touch stays "no
+    # definition" until its pages hang (SocialMedia/Post on memex-cloud,
+    # 2026-07-30: every post burned the 60 s SubscribeRequest timeout all
+    # morning). The pre-warm sweep
     # compiles EVERY dynamic NodeType at pod start, and the readiness gate holds
     # /health red until they are built against THIS image — with the deployment's
     # maxSurge 1 / maxUnavailable 0, a regressed type stalls the ROLLOUT (old

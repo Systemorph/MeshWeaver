@@ -215,8 +215,11 @@ mechanism — it runs in the serving process, so its fingerprint is right by con
 **Verify after every roll** — the bake completing is the deploy signal, not HTTP 200:
 
 ```bash
-# The sweep's verdict (compiled=N alreadyBaked=M compileErrors=0 …):
-kubectl -n <env> logs deploy/memex-portal-deployment | grep "DynamicTypePreWarmer: warm-up complete"
+# The sweep's verdict (compiled=N alreadyBaked=M compileErrors=0 …) — read the NEWEST pod
+# explicitly: `kubectl logs deploy/…` picks an arbitrary pod and mid-rollout that is often the OLD one.
+NEW=$(kubectl -n <env> get pods -l app.kubernetes.io/component=memex-portal \
+  --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}')
+kubectl -n <env> logs "$NEW" | grep "DynamicTypePreWarmer: warm-up complete"
 # The gate's verdict (Healthy "baked in …" / Unhealthy "regressed" — rollout stalled on purpose):
 kubectl -n <env> get pods   # new pod 0/1 while baking is CORRECT; investigate only a Regressed log line
 ```
