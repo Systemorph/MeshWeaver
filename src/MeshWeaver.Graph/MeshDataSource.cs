@@ -265,10 +265,21 @@ public static class MeshDataSourceExtensions
                     // hub was seeded from a stale cache snapshot) — every further write from
                     // this hub's current clock would be refused too, which is the permanent
                     // wedge of 2026-07-30 (the Init watchdog's forced-Idle refused every 90s).
-                    // Rebase THIS owner onto the durable truth so the next write lands.
+                    // Rebase THIS owner onto the durable truth so the next write lands — LIVE
+                    // hubs only, same rule as FlushPendingWrites: a save draining during
+                    // Quiescing/teardown is the stale-snapshot shape the guard exists to drop,
+                    // and rebasing mid-teardown would spin new writes on a dying hub. Either
+                    // way, never fall through to the "persisted" log for a refused write.
                     if (saved is not null && saved.Version > written.Version)
                     {
-                        AdoptDurableTruth(hub, saved, written.Version, logger);
+                        if (hub.RunLevel <= MessageHubRunLevel.Started)
+                            AdoptDurableTruth(hub, saved, written.Version, logger);
+                        else
+                            logger?.LogWarning(
+                                "[SaveMeshNode] write at Version={RefusedVersion} for {Path} was refused "
+                                + "(durable row at Version={StoredVersion}) during teardown — dropped, "
+                                + "the guard's refusal is final for a disposing hub.",
+                                written.Version, saved.Path, saved.Version);
                         return;
                     }
                     logger?.LogDebug("[SaveMeshNode] persisted path={Path} version={Version}",
