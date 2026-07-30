@@ -36,6 +36,11 @@ for (var i = 0; i < args.Length; i++)
             allowlist = GateAllowlist.Load(args[++i]);
             allowApplied = true;
             break;
+        // A value-taking option as the LAST argument would otherwise fall through to the default
+        // case as "Unknown argument" — a misleading message for a missing value.
+        case "--compile-timeout" or "--render-timeout" or "--allow":
+            Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
+            return 2;
         case "--help" or "-h":
             Console.WriteLine(
                 "usage: mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
