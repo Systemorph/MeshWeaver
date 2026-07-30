@@ -111,6 +111,7 @@ public static class LinkedInConnectEndpoints
             IConfiguration config,
             IHttpClientFactory httpFactory,
             IMeshService mesh,
+            IMessageHub hub,
             ILoggerFactory loggers) =>
         {
             var logger = loggers.CreateLogger("LinkedInConnect");
@@ -220,6 +221,31 @@ public static class LinkedInConnectEndpoints
                 }
             };
 
+            // SYNC THE IDENTITY ONTO THE PROFILE ITSELF. When the caller pointed at a
+            // SocialMedia/Profile, LinkedIn's userinfo is the AUTHORITATIVE source for that
+            // profile's display name and photo — so write them there rather than only into the
+            // legacy LinkedInProfile child. Read-merge-write: every field we do not own
+            // (network, headline, owner, handle) survives untouched. Best-effort — a profile
+            // that cannot be read or is of another type is simply left alone.
+            var syncProfileIdentity = hub.GetMeshNodeStream(profilePath)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .SelectMany(existing =>
+                {
+                    if (existing is null
+                        || !string.Equals(existing.NodeType, SocialProfileNodeType, StringComparison.Ordinal))
+                        return Observable.Return(existing ?? profileNode);
+
+                    var merged = LinkedInIdentitySync.Merge(existing.Content, displayName, pictureUrl);
+                    return mesh.UpdateNode(existing with { Content = merged });
+                })
+                .Catch<MeshNode, Exception>(ex =>
+                {
+                    logger.LogInformation(ex,
+                        "Could not sync LinkedIn identity onto {Path} — continuing", profilePath);
+                    return Observable.Return(profileNode);
+                });
+
             // Reactive persistence chain — mesh.CreateNode/UpdateNode return IObservable<MeshNode>
             // (see AsynchronousCalls.md). Each Create attempt falls back to Update on failure
             // via Rx Catch. Profile upsert errors are swallowed (best-effort). The whole chain
@@ -247,6 +273,7 @@ public static class LinkedInConnectEndpoints
 
             upsertCredential
                 .SelectMany(_ => upsertProfile)
+                .SelectMany(_ => syncProfileIdentity)
                 // Never let a stuck reactive write freeze the browser on the callback — a hang
                 // surfaces as an error redirect, not an indefinite spinner (see /async).
                 .Timeout(TimeSpan.FromSeconds(20))
@@ -274,6 +301,9 @@ public static class LinkedInConnectEndpoints
         RandomNumberGenerator.Fill(buf);
         return WebEncoders.Base64UrlEncode(buf);
     }
+
+    /// <summary>The social-suite profile type whose identity LinkedIn's userinfo owns.</summary>
+    private const string SocialProfileNodeType = "SocialMedia/Profile";
 
     private static string BuildRedirectUri(HttpContext http) =>
         $"{http.Request.Scheme}://{http.Request.Host}{CallbackPath}";
