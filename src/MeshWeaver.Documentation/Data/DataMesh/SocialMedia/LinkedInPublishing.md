@@ -11,13 +11,16 @@ Publish LinkedIn posts — and pull their engagement — **directly from the mes
 
 The code lives in the **`MeshWeaver.Social`** module (`LinkedInPostsApi`, `LinkedInPublishService`) with the HTTP surface in `memex/Memex.Portal.Shared/Social` (`LinkedInConnectEndpoints`, `LinkedInPublishEndpoints`, `SocialPostMenuProvider`).
 
-> **Scope of this page:** publishing (writing posts + reading engagement on posts you publish). It does **not** cover reading historical post *impressions* or DMs — see **Limitations** at the end of this page.
+> **Scope of this page:** publishing (writing posts) and reading engagement — **including impressions** — on posts you publish. It does not cover DMs; see **Limitations** at the end.
 
 ---
 
 ## 1. Prerequisites — a LinkedIn app with `w_member_social`
 
-You need a LinkedIn Developer app (<https://www.linkedin.com/developers/apps>) that has been granted the **`w_member_social`** OAuth scope — *"Create, modify, and delete posts, comments, and reactions on your behalf."*
+You need a LinkedIn Developer app (<https://www.linkedin.com/developers/apps>) granted two OAuth scopes:
+
+- **`w_member_social`** — *"Create, modify, and delete posts, comments, and reactions on your behalf."* Publishing.
+- **`r_member_postAnalytics`** — *"Retrieve your posts and their reporting data."* This is what makes **impressions** readable (see [Refresh engagement](#5-refresh-engagement)); without it a stats refresh reports likes and comments only.
 
 - **Products tab** → the *Share on LinkedIn* / *Sign In with LinkedIn using OpenID Connect* products (these carry `w_member_social`, `openid`, `profile`, `email`). Approval is per-app and can take a review cycle.
 - **Auth tab** → note the app's **Client ID** and **Client Secret**, and add the **redirect URL**: `https://{your-portal-host}/connect/linkedin/callback`.
@@ -35,7 +38,7 @@ The portal reads the LinkedIn app credentials from configuration (backed by Key 
 | `Social:LinkedIn:ClientId` | the app's Client ID |
 | `Social:LinkedIn:ClientSecret` | the app's Client Secret |
 
-The requested OAuth scope is fixed in code at `openid profile email w_member_social` (`LinkedInConnectEndpoints`). Widening the scope only takes effect for a user on a **fresh consent** — see the next step.
+The requested OAuth scope is fixed in code at `openid profile email w_member_social r_member_postAnalytics` (`LinkedInConnectEndpoints`). Widening the scope only takes effect for a user on a **fresh consent** — see the next step.
 
 ---
 
@@ -70,7 +73,20 @@ The created post URN (from the `x-restli-id` response header) is written back to
 
 ## 5. Refresh engagement
 
-Once published, the node menu swaps to **"Refresh engagement"** (`GET /linkedin/engagement?postPath={postPath}`), which reads the post's `PublishedUrn` and calls `GET https://api.linkedin.com/rest/socialActions/{urn}`, writing the `likesSummary.totalLikes` and `commentsSummary.count` back onto the node.
+Once published, the node menu swaps to **"Refresh engagement"** (`GET /linkedin/engagement?postPath={postPath}`), which reads the post's `PublishedUrn` and fetches from **two** surfaces, because LinkedIn splits the numbers:
+
+| Call | Gives | Needs |
+|---|---|---|
+| `GET /rest/socialActions/{urn}` | likes, comments | `w_member_social` |
+| `GET /rest/memberCreatorPostAnalytics?q=entity&entity=(share:{urn})&queryType=IMPRESSION&aggregation=TOTAL` | **impressions (views)**, reshares | `r_member_postAnalytics` |
+
+Both land on the node as `PostStats`. A credential without the analytics scope is **not** an error: the analytics call is skipped (logged at Information, "reconnect to grant it") and the post keeps its like/comment counts.
+
+> **Lifetime totals, not daily.** LinkedIn does not serve DAILY impressions for a post — only lifetime `TOTAL`. The periodic refresh below therefore IS the time series: each snapshot is a dated reading we keep.
+
+### Automatic refresh
+
+`PostStatsRefresher` (hosted service, `MeshWeaver.Social`) re-reads stats for every post published within `Social:StatsRefreshWindow` (default 30 days) every `Social:StatsTickInterval` (default 30 minutes), bounded-parallel with a per-target failure backoff. `PastPostIngestJob` pulls post history every `Social:PastPostIngestInterval` (default 24h), deduplicating by URN. Both come up with `AddSocialPublishing` once the host supplies `IStatsRefreshSource` / `IPastPostIngestSource` / `IApprovalPublishBridge`.
 
 ---
 
@@ -90,5 +106,6 @@ A missing `w_member_social` scope short-circuits with a friendly reconnect promp
 ## Limitations
 
 - **Text-only.** Image/media upload uses LinkedIn's separate binary-upload flow and is not yet wired.
-- **No post-impression analytics via API.** LinkedIn closed the read-posts scope broadly; per-post *impressions* are only in the **archive export** (a user's "Download your data"). Live engagement is limited to like/comment counts on posts you published.
+- ~~No post-impression analytics via API.~~ **Resolved.** LinkedIn's `memberCreatorPostAnalytics` endpoint exposes IMPRESSION, MEMBERS_REACHED, REACTION, COMMENT, RESHARE (and, from version 2026-04, POST_SAVE, POST_SEND, LINK_CLICKS, FOLLOWER_GAINED_FROM_CONTENT, PROFILE_VIEW_FROM_CONTENT) for the authenticated member's OWN posts. Impressions no longer require the archive export. Historically this was page-only (`organizationalEntityShareStatistics`), which is why older code hard-coded `Impressions: 0`.
+- **Analytics covers your own posts only.** The member endpoint is scoped to the authenticated member; someone else's post reach is not readable.
 - **No direct messages.** The LinkedIn Messaging API is partner-gated; DMs cannot be sent or read from the mesh.

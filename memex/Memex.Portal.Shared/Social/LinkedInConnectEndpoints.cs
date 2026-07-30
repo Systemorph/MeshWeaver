@@ -92,7 +92,13 @@ public static class LinkedInConnectEndpoints
                 //                         on your behalf" — the publishing scope the app is approved
                 //                         for. Grants the consent-screen "share on your behalf" line;
                 //                         that IS the intent now (POST /linkedin/publish → /rest/posts).
-                + "&scope=" + Uri.EscapeDataString("openid profile email w_member_social");
+                + "&scope=" + Uri.EscapeDataString(
+                    // r_member_postAnalytics is what makes IMPRESSIONS (views) and reshares
+                    // readable for the member's OWN posts — without it the nightly stats refresh
+                    // can only ever report likes + comments. A credential connected before this
+                    // was added keeps working for publishing and silently reports 0 impressions
+                    // until the member re-runs /connect/linkedin and approves the new line.
+                    "openid profile email w_member_social r_member_postAnalytics");
 
             return Results.Redirect(url);
         }).RequireAuthorization();
