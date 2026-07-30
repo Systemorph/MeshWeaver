@@ -85,8 +85,14 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
     /// <summary>Process exit code: 0 = all green.</summary>
     public int ExitCode => Success ? 0 : 1;
 
-    /// <summary>Writes the human-readable per-package summary table.</summary>
-    public void WriteSummary(TextWriter output)
+    /// <summary>
+    /// Writes the human-readable per-package summary table. With a <paramref name="verdict"/>
+    /// (an allowlist was applied), a package or check whose only failures are known debt is
+    /// labeled DEBT rather than FAIL, stale allow entries are listed by name (they fail the
+    /// run — the list must shrink), and the final line states the verdict, never the raw
+    /// pass/fail — two bottom lines disagreeing on "green" is how a gate gets ignored.
+    /// </summary>
+    public void WriteSummary(TextWriter output, GateVerdict? verdict = null)
     {
         output.WriteLine();
         output.WriteLine("=== mw-plugin-test summary ===");
@@ -94,18 +100,19 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
             output.WriteLine($"FATAL: {FatalError}");
         foreach (var package in Packages)
         {
-            output.WriteLine($"[{(package.Success ? "PASS" : "FAIL")}] {package.Id} " +
+            output.WriteLine($"[{Label(package, verdict)}] {package.Id} " +
                              $"({package.NodeCount} node(s), {package.NodeTypes.Count} type(s))");
             if (package.InstallError is not null)
-                output.WriteLine($"    install: {package.InstallError}");
+                output.WriteLine($"    install{Debt(verdict, package.Id, "install")}: {package.InstallError}");
             if (package.IdempotenceError is not null)
-                output.WriteLine($"    idempotence: {package.IdempotenceError}");
+                output.WriteLine($"    idempotence{Debt(verdict, package.Id, "idempotence")}: {package.IdempotenceError}");
             foreach (var type in package.NodeTypes)
             {
                 output.WriteLine(
                     $"    {(type.Success ? "ok " : "RED")} {type.Path}: " +
-                    $"compile={Describe(type.Compile, type.CompilationStatus?.ToString())} " +
-                    $"render={Describe(type.Render)} tests={Describe(type.Tests)}");
+                    $"compile={Describe(type.Compile, type.CompilationStatus?.ToString())}{Debt(verdict, type.Path, "compile")} " +
+                    $"render={Describe(type.Render)}{Debt(verdict, type.Path, "render")} " +
+                    $"tests={Describe(type.Tests)}{Debt(verdict, type.Path, "tests")}");
                 if (type.CompileDetail is not null)
                     output.WriteLine(Indent(type.CompileDetail));
                 if (type.RenderDetail is not null)
@@ -114,8 +121,41 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
                     output.WriteLine(Indent(type.TestsDetail));
             }
         }
-        output.WriteLine(Success ? "ALL GREEN." : "GATE FAILED.");
+        if (verdict is null)
+        {
+            output.WriteLine(Success ? "ALL GREEN." : "GATE FAILED.");
+            return;
+        }
+        foreach (var entry in verdict.Stale)
+            output.WriteLine($"STALE allow entry (now passing — remove it): {entry}");
+        foreach (var entry in verdict.Unverifiable)
+            output.WriteLine($"unverifiable allow entry (check skipped or scope absent this run): {entry}");
+        var green = FatalError is null && verdict.Success;
+        output.WriteLine(green
+            ? verdict.KnownDebt.Count == 0
+                ? "ALL GREEN."
+                : $"GREEN — {verdict.KnownDebt.Count} known-debt failure(s) allowed (shrinking list)."
+            : $"GATE FAILED — {verdict.NewFailures.Count} new failure(s), {verdict.Stale.Count} stale allow entr(ies).");
     }
+
+    private static string Label(PackageResult package, GateVerdict? verdict)
+    {
+        if (package.Success)
+            return "PASS";
+        if (verdict is null)
+            return "FAIL";
+        var allKnown =
+            (package.InstallError is null || verdict.IsKnownDebt(package.Id, "install"))
+            && (package.IdempotenceError is null || verdict.IsKnownDebt(package.Id, "idempotence"))
+            && package.NodeTypes.All(t =>
+                (t.Compile != CheckOutcome.Failed || verdict.IsKnownDebt(t.Path, "compile"))
+                && (t.Render != CheckOutcome.Failed || verdict.IsKnownDebt(t.Path, "render"))
+                && (t.Tests != CheckOutcome.Failed || verdict.IsKnownDebt(t.Path, "tests")));
+        return allKnown ? "DEBT" : "FAIL";
+    }
+
+    private static string Debt(GateVerdict? verdict, string scope, string check) =>
+        verdict is not null && verdict.IsKnownDebt(scope, check) ? " [known-debt]" : "";
 
     private static string Describe(CheckOutcome outcome, string? detail = null) =>
         outcome switch
