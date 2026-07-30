@@ -57,7 +57,21 @@ public sealed class ActivityWriteTracker
     // failed against exactly that first implementation.)
     private ImmutableDictionary<string, int> inFlight =
         ImmutableDictionary<string, int>.Empty;
-    private readonly BehaviorSubject<int> count = new(0);
+
+    // 🚨 Subject.Synchronize — Rx subjects are NOT thread-safe across concurrent OnNext, and both
+    // sides of this one are concurrent by construction: Begin runs on whichever hub handled the
+    // request, Release runs on the detached pipeline's thread whenever that write ends. Same
+    // reasoning as MeshNodeStreamCache's eviction subject.
+    private readonly BehaviorSubject<int> countSubject = new(0);
+    private readonly IObserver<int> count;
+    private readonly IObservable<int> counts;
+
+    /// <summary>Creates an empty tracker.</summary>
+    public ActivityWriteTracker()
+    {
+        count = Observer.Synchronize(countSubject, preventReentrancy: true);
+        counts = countSubject.AsObservable();
+    }
 
     /// <summary>Paths currently being written — what a drain overrun names.</summary>
     public ImmutableHashSet<string> InFlight
@@ -84,27 +98,29 @@ public sealed class ActivityWriteTracker
     public IDisposable Begin(string activityPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(activityPath);
-        int n;
+        // Emit INSIDE the lock so the notification order matches the state transitions. Emitting
+        // outside it would let a Release's "0" overtake a concurrent Begin's "1", and a drain
+        // watching for zero would then complete while a write that had just started was still
+        // running — the exact loss this class exists to prevent. Safe to hold `gate` across the
+        // notification: the observer is synchronized with preventReentrancy, and the only
+        // subscriber is Drain's Where/Take filter, which never calls back in here.
         lock (gate)
         {
             inFlight = inFlight.SetItem(
                 activityPath, inFlight.TryGetValue(activityPath, out var c) ? c + 1 : 1);
-            n = inFlight.Values.Sum();
+            count.OnNext(inFlight.Values.Sum());
         }
-        count.OnNext(n);
         return new Registration(this, activityPath);
     }
 
     private void Release(string activityPath)
     {
-        int n;
         lock (gate)
         {
             if (inFlight.TryGetValue(activityPath, out var c))
                 inFlight = c <= 1 ? inFlight.Remove(activityPath) : inFlight.SetItem(activityPath, c - 1);
-            n = inFlight.Values.Sum();
+            count.OnNext(inFlight.Values.Sum());
         }
-        count.OnNext(n);
     }
 
     /// <summary>
@@ -124,7 +140,7 @@ public sealed class ActivityWriteTracker
                 "Activity drain: waiting for {Count} in-flight write(s) before disposal: {Paths}",
                 Count, string.Join(", ", InFlight));
 
-            return count
+            return counts
                 .Where(n => n == 0)
                 .Take(1)
                 .Select(_ => Unit.Default)

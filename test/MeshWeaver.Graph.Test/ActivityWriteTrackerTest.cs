@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
@@ -151,5 +150,31 @@ public class ActivityWriteTrackerTest
     {
         var tracker = new ActivityWriteTracker();
         Assert.Throws<ArgumentException>(() => tracker.Begin("  "));
+    }
+
+    /// <summary>
+    /// Begin and Release are concurrent by construction — Begin runs on whichever hub handled the
+    /// request, Release on the detached pipeline's thread — and an Rx subject is not thread-safe
+    /// across concurrent OnNext. Hammer both sides and require the count to land exactly at zero:
+    /// a torn or reordered notification stream shows up here as a non-zero residue or a throw.
+    /// </summary>
+    [Fact]
+    public async Task BeginAndRelease_AreSafeUnderConcurrency()
+    {
+        var tracker = new ActivityWriteTracker();
+        const int writers = 16, perWriter = 60;
+
+        await Task.WhenAll(Enumerable.Range(0, writers).Select(w => Task.Run(() =>
+        {
+            for (var i = 0; i < perWriter; i++)
+            {
+                // Deliberately overlapping paths: same-path concurrency is the real-world race.
+                var token = tracker.Begin($"user{w % 4}/_UserActivity/Doc_{i % 3}");
+                token.Dispose();
+            }
+        })));
+
+        tracker.Count.Should().Be(0, "every write released — a torn subject would leave a residue");
+        await tracker.Drain().Timeout(TimeSpan.FromSeconds(3)).FirstAsync();
     }
 }
