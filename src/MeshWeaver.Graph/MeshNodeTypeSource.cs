@@ -319,7 +319,15 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             // hubVersion for any live clock) while a re-added durable node can never go backward.
             // Doc/Architecture/MeshNodeVersioning.md: the floor applies at EVERY place the owner
             // mints a node Version — this is the persistence re-stamp it names.
-            var nodeWithVersion = node with { Version = MeshNode.NextVersion(hubVersion, node.Version) };
+            // For the OWN node, additionally floor on _ownNodeVersionFloor: the highest
+            // own-node version this hub has adopted (activation seed, durable-truth rebase).
+            // A cache-seeded re-add can carry a version BELOW the floor; minting from the
+            // carried version alone would manufacture the backward write the
+            // MonotonicWriteGuard then refuses.
+            var addFloor = string.Equals(node.Path, _hubPath, StringComparison.OrdinalIgnoreCase)
+                ? Math.Max(node.Version, Volatile.Read(ref _ownNodeVersionFloor))
+                : node.Version;
+            var nodeWithVersion = node with { Version = MeshNode.NextVersion(hubVersion, addFloor) };
             _pendingSaves[node.Path] = nodeWithVersion;
         }
 
@@ -342,10 +350,22 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             // rollback / "v113 read back as v3" of #325). MeshNode.NextVersion keeps it strictly
             // increasing across activations WITHOUT touching Hub.Version (so layout Fulls, which
             // ride Hub.Version, are unaffected — the 2026-06-18 wedge cannot recur).
+            // 🚨 Floor on BOTH the node's previously-saved version AND the version the write
+            // path just minted onto the incoming node (UpdateOwn stamps before the commit) —
+            // plus, for the own node, _ownNodeVersionFloor. _lastSaved is reset wholesale by
+            // BuildInstanceCollection from the merge of the durable seed and the CACHE-BACKED
+            // routing stream, so PreviousVersion alone can REGRESS after a reactivation whose
+            // durable seed lost to a stale replay (the "incoming Version=834 is BELOW the
+            // stored Version=2423" refusals of 2026-07-30): re-deriving the stamp from it
+            // manufactured a descending mint that MonotonicWriteGuard then refused forever.
+            var ownFloor = Volatile.Read(ref _ownNodeVersionFloor);
             var stampedUpdates = updates
-                .Select(u => u.Node with
+                .Select(u =>
                 {
-                    Version = MeshNode.NextVersion(hubVersion, u.PreviousVersion)
+                    var floor = Math.Max(u.PreviousVersion, u.Node.Version);
+                    if (string.Equals(u.Node.Path, _hubPath, StringComparison.OrdinalIgnoreCase))
+                        floor = Math.Max(floor, ownFloor);
+                    return u.Node with { Version = MeshNode.NextVersion(hubVersion, floor) };
                 })
                 .ToArray();
             instances = instances with
@@ -526,6 +546,31 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             _persistenceCore.Write(node, options)
                 .Select(saved =>
                 {
+                    // MonotonicWriteGuard refusal: the stored row is AHEAD of what this hub
+                    // just tried to write (forked lineage — see AdoptDurableTruth's doc in
+                    // MeshDataSource). Rebase the own node so subsequent writes land. Live
+                    // hubs only: a dispose-time flush of a stale snapshot is exactly what
+                    // the guard exists to drop, and the refusal is the correct final word.
+                    if (saved is not null && saved.Version > node.Version
+                        && string.Equals(saved.Path, _hubPath, StringComparison.OrdinalIgnoreCase)
+                        && _workspace.Hub.RunLevel <= MessageHubRunLevel.Started)
+                    {
+                        _logger?.LogWarning(
+                            "MeshNodeTypeSource: create-flush at Version={RefusedVersion} for {Path} was refused — "
+                            + "durable row is at Version={StoredVersion}. Rebasing onto the durable truth.",
+                            node.Version, saved.Path, saved.Version);
+                        var accessService = _workspace.Hub.ServiceProvider.GetService<AccessService>();
+                        using (accessService?.ImpersonateAsSystem())
+                        {
+                            _workspace.GetMeshNodeStream(saved.Path)
+                                .Update(current => saved.Version > current.Version ? saved : current)
+                                .Subscribe(
+                                    _ => { },
+                                    ex => _logger?.LogWarning(ex,
+                                        "MeshNodeTypeSource: durable-truth rebase failed for {Path}", saved.Path));
+                        }
+                        return System.Reactive.Unit.Default;
+                    }
                     _logger?.LogDebug("MeshNodeTypeSource: Saved {Path} (version={Version})",
                         saved?.Path, saved?.Version);
                     return System.Reactive.Unit.Default;

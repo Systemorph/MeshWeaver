@@ -668,9 +668,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     // off Hub.Version (which resets to 0 on every reactivation and would stamp a
                     // LOWER version after a recycle → rollback + split-brain). See
                     // MeshNode.NextVersion / Doc/Architecture/MeshNodeVersioning.md.
+                    // Also floor on the version the update lambda RETURNED: a durable-truth
+                    // rebase (AdoptDurableTruth — the owner re-adopting a stored row that is
+                    // AHEAD of its in-memory state after a MonotonicWriteGuard refusal) hands
+                    // back a node carrying the stored Version; re-stamping it off the stale
+                    // in-memory `current` alone would discard that signal and keep minting
+                    // below the durable row forever. Ordinary lambdas (`current with {…}`)
+                    // carry current.Version, so the extra term is a no-op for them; version
+                    // restore writes Version = 0 and is likewise unaffected.
                     updated = updated with
                     {
-                        Version = MeshNode.NextVersion(_workspace.Hub.Version, current.Version)
+                        Version = MeshNode.NextVersion(_workspace.Hub.Version,
+                            Math.Max(current.Version, updated.Version))
                     };
                     // Stamp BEFORE the commit — the echo subscription above only emits
                     // once it can see this write's Version on the target node.
