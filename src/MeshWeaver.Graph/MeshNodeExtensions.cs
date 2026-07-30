@@ -360,12 +360,31 @@ public static class MeshNodeExtensions
                 });
             }));
 
-        // No fire-and-forget: the pipeline is fully observed and faults surface at Error.
-        pipeline.Subscribe(
-            _ => logger?.LogDebug("TrackActivity DONE: {Path}", activityPath),
-            ex => logger?.LogError(ex,
-                "Failed to track activity for user={UserId} path={Path}",
-                req.UserId, req.NodePath));
+        // The write is DETACHED from this request on purpose — TrackLogin sits on the cold-login
+        // hot path and must not stall behind a node write — so the delivery is Processed below
+        // while the pipeline is still running. Faults are observed (they surface at Error, never
+        // as an unobserved exception), but "observed" is not "awaited": nothing about this
+        // subscription belongs to the request any more.
+        //
+        // 🚨 That is why it REGISTERS. Orleans tracks work on an activation's scheduler inside a
+        // request; a detached subscription on the thread pool is precisely what escapes that, so it
+        // cannot keep the activation alive. Without the registration, a deactivation landing in
+        // this window runs CancelCurrentExecution() + Dispose() on the hub the write is using and
+        // kills it mid-flight — invisibly, because the request succeeded long ago. Registering
+        // makes the hub's own disposal wait for it (bounded — see ActivityWriteTracker.Drain).
+        var tracker = activityHub.ServiceProvider.GetService<ActivityWriteTracker>();
+        var inFlight = tracker?.Begin(activityPath);
+        pipeline
+            // Finally, not the observer's onCompleted: the registration must clear on EVERY
+            // termination — success, error, or an unsubscribe forced by disposal — or a single
+            // failed write would keep the tracker non-empty and make every later shutdown burn the
+            // full drain budget waiting for something that already ended.
+            .Finally(() => inFlight?.Dispose())
+            .Subscribe(
+                _ => logger?.LogDebug("TrackActivity DONE: {Path}", activityPath),
+                ex => logger?.LogError(ex,
+                    "Failed to track activity for user={UserId} path={Path}",
+                    req.UserId, req.NodePath));
         return delivery.Processed();
     }
 
