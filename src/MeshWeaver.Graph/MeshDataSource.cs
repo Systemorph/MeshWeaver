@@ -254,13 +254,63 @@ public static class MeshDataSourceExtensions
         // Storage adapter's own Changes feed publishes the Updated event
         // (see IStorageAdapter.Changes / InMemoryStorageAdapter.Write) — no
         // separate fan-out from the handler.
+        var written = node;
         persistence.Write(node, hub.JsonSerializerOptions)
             .Subscribe(
-                saved => logger?.LogDebug("[SaveMeshNode] persisted path={Path} version={Version}",
-                    saved?.Path, saved?.Version),
+                saved =>
+                {
+                    // MonotonicWriteGuard refusal contract: a refused backward write emits the
+                    // STORED (winning) node, whose Version is strictly ABOVE what we wrote. The
+                    // durable row is on another lineage (a second activation's clock, or this
+                    // hub was seeded from a stale cache snapshot) — every further write from
+                    // this hub's current clock would be refused too, which is the permanent
+                    // wedge of 2026-07-30 (the Init watchdog's forced-Idle refused every 90s).
+                    // Rebase THIS owner onto the durable truth so the next write lands.
+                    if (saved is not null && saved.Version > written.Version)
+                    {
+                        AdoptDurableTruth(hub, saved, written.Version, logger);
+                        return;
+                    }
+                    logger?.LogDebug("[SaveMeshNode] persisted path={Path} version={Version}",
+                        saved?.Path, saved?.Version);
+                },
                 ex => logger?.LogWarning(ex, "SaveMeshNode failed for {Path} (version={Version})",
                     node.Path, node.Version));
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Owner-side reconciliation after a <c>MonotonicWriteGuard</c> refusal: the durable row is
+    /// AHEAD of this hub's in-memory own-node state (a forked lineage — stale activation seed or
+    /// a second writer), so re-adopt the stored node through the sanctioned own-write path.
+    /// <c>UpdateOwn</c> floors its mint on the version the lambda returns, so the adopted state
+    /// commits at <c>stored.Version + 1</c>, the workspace pipeline raises
+    /// <c>_ownNodeVersionFloor</c> and re-emits to every mirror, and the persistence sampler's
+    /// next save LANDS — converged in one bounded cycle. This is reconciliation at the point of a
+    /// detected conflict, never a watchdog: it runs only when an actual write was refused, and
+    /// each further cycle requires a NEW foreign write to the row. If the in-memory state already
+    /// advanced past the stored version, the lambda no-ops (UpdateOwn completes with the
+    /// unchanged node and skips the write).
+    /// </summary>
+    private static void AdoptDurableTruth(IMessageHub hub, MeshNode stored, long refusedVersion, ILogger? logger)
+    {
+        logger?.LogWarning(
+            "[SaveMeshNode] write at Version={RefusedVersion} for {Path} was refused — the durable row is at "
+            + "Version={StoredVersion} (forked lineage: stale activation seed or a second writer). Rebasing this "
+            + "owner onto the durable truth so subsequent writes land.",
+            refusedVersion, stored.Path, stored.Version);
+        // Own-node adoption is infrastructure (same class as cache hydration / sync heartbeats):
+        // run it under the system identity, matching MeshNodeStreamCache / PathResolutionService.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        using (accessService?.ImpersonateAsSystem())
+        {
+            hub.GetWorkspace().GetMeshNodeStream(stored.Path)
+                .Update(current => stored.Version > current.Version ? stored : current)
+                .Subscribe(
+                    _ => { },
+                    ex => logger?.LogWarning(ex,
+                        "[SaveMeshNode] durable-truth rebase failed for {Path}", stored.Path));
+        }
     }
 
     /// <summary>
