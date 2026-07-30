@@ -1,29 +1,26 @@
 # MeshWeaver.Markdown.Collaboration
 
-Provides collaborative editing infrastructure for markdown documents: the version-delta position engine that anchors comments and tracked changes to clean text, Operational Transformation (OT) for concurrent edits, and the marker utilities used to keep legacy content clean.
+Provides the anchoring infrastructure for collaborative markdown: the version-delta position engine
+that anchors comments and tracked changes to clean text, plus the marker utilities that keep legacy
+content clean.
 
 ## Features
 
-- `AnchorMath` -- the version-delta engine. Anchors a captured `[start, length)` range to a known text version and recomputes its effective range against the current text by diffing the two versions (`diff_xIndex`-style position mapping). This is what lets comments/changes live as satellites with the document kept clean; see `CommentRendering` / `ChangeRendering` in `MeshWeaver.Graph`.
-- `CollaborativeEditingCoordinator` -- manages document state, applies OT transformations, and tracks active editing sessions with cursor positions
-- Text operations: `InsertOperation`, `DeleteOperation`, `CompositeOperation` with version-based conflict resolution
-- `TextOperationTransformer` for server-side OT transformation of concurrent edits
-- `MarkdownAnnotationParser` -- extracts/strips annotation markers (`<!--comment:id-->…`). Used to keep rendered content clean; the comment/change flow no longer *embeds* markers.
-- `RangeComment` -- a legacy marker-anchored comment model, superseded by the satellite + `AnchorMath` model.
+- `AnchorMath` -- the version-delta engine. Anchors a captured `[start, length)` range to a known
+  text version and recomputes its effective range against the current text by diffing the two
+  versions (`diff_xIndex`-style position mapping). This is what lets comments/changes live as
+  satellites with the document kept clean; see `CommentRendering` / `ChangeRendering` in
+  `MeshWeaver.Graph`.
+- `MarkdownAnnotationParser` -- extracts/strips annotation markers (`<!--comment:id-->…`). Used to
+  keep rendered content clean; the comment/change flow no longer *embeds* markers.
+- `CollaborativeEditingMessages` -- the `CreateCommentRequest` / `CreateSuggestedEditRequest`
+  message contracts handled by `AddComments()` / `AddTracking()` in `MeshWeaver.Graph`.
+- `AnnotationSyncService` / `TrackedChange` -- the legacy marker-based model still used by the
+  Monaco `Suggest` editing surface.
 
-## Usage
-
-```csharp
-var coordinator = new CollaborativeEditingCoordinator();
-
-// Initialize a document
-coordinator.InitializeDocument("doc-1", "# Hello World");
-
-// Apply an edit
-var result = coordinator.ApplyOperation("doc-1",
-    new InsertOperation { Position = 13, Text = "\nNew line", UserId = "user1" },
-    currentContent: "# Hello World");
-```
+The unused Operational-Transformation layer (`CollaborativeEditingCoordinator`, `TextOperation*`,
+`DocumentState`) and the legacy `RangeComment` model were removed — nothing in production reached
+them.
 
 ## Dependencies
 
