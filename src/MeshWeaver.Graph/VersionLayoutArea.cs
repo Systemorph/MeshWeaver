@@ -47,9 +47,18 @@ public static class VersionLayoutArea
                     .WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Version history is not available.</p>")));
         }
 
+        // The chosen baseline rides a data stream (as a string — data streams are reference-typed):
+        // "Set baseline" marks a version, and every other row then offers "Compare to v{baseline}"
+        // (?from/?to), so any two versions can be compared — not just version-vs-current.
+        var baselineId = $"versionBaseline_{hubPath.Replace("/", "_")}";
+        var baseline = host.GetDataStream<string>(baselineId)
+            .Select(s => long.TryParse(s, out var parsed) ? parsed : 0L)
+            .StartWith(0L)
+            .DistinctUntilChanged();
+
         return versionQuery.GetVersions(hubPath)
             .ToList()
-            .Select(versions =>
+            .CombineLatest(baseline, (versions, baselineVersion) =>
         {
             var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
 
@@ -72,6 +81,11 @@ public static class VersionLayoutArea
                 return (UiControl?)stack;
             }
 
+            stack = stack.WithView(Controls.Html(
+                baselineVersion > 0
+                    ? $"<p style=\"color: var(--neutral-foreground-hint); margin: 0 0 12px 0;\">Baseline: <strong>v{baselineVersion}</strong> — pick any other version to compare against it.</p>"
+                    : "<p style=\"color: var(--neutral-foreground-hint); margin: 0 0 12px 0;\">Compare a version with the current document, or set one as the baseline to compare two versions.</p>"));
+
             foreach (var version in versions)
             {
                 var timeStr = access.ToDisplayTime(version.LastModified).ToString("g");
@@ -81,9 +95,12 @@ public static class VersionLayoutArea
                 var compareHref = MeshNodeLayoutAreas.BuildUrl(
                     hubPath, MeshNodeLayoutAreas.VersionDiffArea, $"version={version.Version}");
 
+                var isBaseline = version.Version == baselineVersion;
                 var row = Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
-                    .WithStyle("align-items: center; gap: 16px; padding: 12px 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; margin-bottom: 8px;")
+                    .WithStyle("align-items: center; gap: 16px; padding: 12px 16px; border: 1px solid " +
+                               (isBaseline ? "var(--accent-fill-rest)" : "var(--neutral-stroke-rest)") +
+                               "; border-radius: 6px; margin-bottom: 8px;")
                     .WithView(Controls.Html(
                         $"<div style=\"min-width: 80px;\"><strong>v{version.Version}</strong></div>"))
                     .WithView(Controls.Html(
@@ -93,6 +110,27 @@ public static class VersionLayoutArea
                     .WithView(Controls.Button("Compare")
                         .WithAppearance(Appearance.Outline)
                         .WithNavigateToHref(compareHref));
+
+                var thisVersion = version.Version;
+                row = row.WithView(Controls.Button(isBaseline ? "Baseline ✓" : "Set baseline")
+                    .WithAppearance(isBaseline ? Appearance.Accent : Appearance.Lightweight)
+                    .WithClickAction(ctx =>
+                    {
+                        ctx.Host.UpdateData(baselineId, isBaseline ? "" : thisVersion.ToString());
+                        return Task.CompletedTask;
+                    }));
+
+                if (baselineVersion > 0 && !isBaseline)
+                {
+                    // from = the older of the pair, to = the newer — the diff reads forward in time.
+                    var fromVersion = Math.Min(baselineVersion, thisVersion);
+                    var toVersion = Math.Max(baselineVersion, thisVersion);
+                    row = row.WithView(Controls.Button($"Compare to v{baselineVersion}")
+                        .WithAppearance(Appearance.Outline)
+                        .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(
+                            hubPath, MeshNodeLayoutAreas.VersionDiffArea,
+                            $"from={fromVersion}&to={toVersion}")));
+                }
 
                 stack = stack.WithView(row);
             }
@@ -259,10 +297,14 @@ public static class VersionLayoutArea
                     return;
                 }
 
-                // Post the historical node as an update (version 0 forces a new save)
+                // Post the historical node as an update (version 0 forces a new save), then answer
+                // the caller — without a success response an Observe on RollbackNodeRequest waited
+                // forever even though the rollback landed.
                 hub.Post(
                     new DataChangeRequest { ChangedBy = "rollback" }.WithUpdates(historicalNode with { Version = 0 }),
                     o => o.WithTarget(hub.Address));
+                hub.Post(new DataChangeResponse(hub.Version, new ActivityLog("Rollback")),
+                    o => o.ResponseFor(request));
             },
             ex => hub.Post(new DataChangeResponse(hub.Version,
                 new ActivityLog("Rollback").Fail($"Rollback error: {ex.Message}")),

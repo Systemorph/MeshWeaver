@@ -42,7 +42,7 @@ public static class CollaborativeRenderer
                 if (string.IsNullOrEmpty(c.MarkerId) || c.EffectiveStart < 0 || c.EffectiveEnd <= c.EffectiveStart)
                     continue;
                 inserts.Add(new Insertion(c.EffectiveStart, 1,
-                    $"<span class=\"comment-highlight\" data-comment-id=\"{c.MarkerId}\">"));
+                    $"<span class=\"comment-highlight\" data-comment-id=\"{System.Net.WebUtility.HtmlEncode(c.MarkerId)}\">"));
                 inserts.Add(new Insertion(c.EffectiveEnd, 0, "</span>"));
             }
         }
@@ -53,8 +53,11 @@ public static class CollaborativeRenderer
             {
                 if (ch.Status != TrackedChangeStatus.Pending || string.IsNullOrEmpty(ch.MarkerId) || ch.EffectiveStart < 0)
                     continue;
-                var id = ch.MarkerId;
-                var newText = ch.NewText ?? "";
+                // Encode the satellite-supplied values: NewText is injected into the markdown
+                // BEFORE Markdig parses it, so an unencoded suggestion containing
+                // "</span><script>…" would execute in every reader's browser.
+                var id = System.Net.WebUtility.HtmlEncode(ch.MarkerId);
+                var newText = System.Net.WebUtility.HtmlEncode(ch.NewText ?? "");
                 var hasRange = ch.EffectiveEnd > ch.EffectiveStart;
 
                 switch (ch.ChangeType)
