@@ -3,6 +3,9 @@
 
 @if (ViewModel.IsClickable)
 {
+    @* A clickable stack must be reachable and operable without a mouse: it is a tab stop with
+       link semantics, and Enter activates it (the ARIA link pattern — Enter-only, so no key's
+       browser default has to be suppressed). *@
     <FluentStack
         Class="@Class"
         Orientation="@Orientation"
@@ -13,7 +16,10 @@
         HorizontalGap="@HorizontalGap"
         Style="@ComputedStyle"
         Wrap="@Wrap"
-        @onclick="OnClick">
+        role="link"
+        tabindex="0"
+        @onclick="OnClick"
+        @onkeydown="OnKeyDown">
             <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
     </FluentStack>
 }
@@ -66,5 +72,11 @@ else
         DataBind(Skin.VerticalAlignment, x => x.Vertical);
         DataBind(Skin.HorizontalAlignment, x => x.Horizontal);
         DataBind(Skin?.Orientation, x => x.Orientation);
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            OnClick();
     }
 }
