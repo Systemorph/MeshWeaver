@@ -133,17 +133,22 @@ public static class CommentLayoutAreas
             () => host.Workspace.GetQuery(
                     $"replies:{hubPath}",
                     $"namespace:{hubPath} nodeType:{CommentNodeType.NodeType}")
-                .Subscribe(snapshot =>
-                {
-                    var replyControls = snapshot
-                        .Select(n => (Node: n, Comment: n.ContentAs<Comment>(host.Hub.JsonSerializerOptions)))
-                        .Where(x => x.Comment is not null)
-                        .OrderBy(x => x.Comment!.CreatedAt)
-                        .Select(x => Controls.LayoutArea(x.Node.Path, OverviewArea))
-                        .ToArray();
-                    session.RepliesControls = replyControls;
-                    host.UpdateData(repliesDataId, replyControls);
-                }),
+                .Subscribe(
+                    snapshot =>
+                    {
+                        var replyControls = snapshot
+                            .Select(n => (Node: n, Comment: n.ContentAs<Comment>(host.Hub.JsonSerializerOptions)))
+                            .Where(x => x.Comment is not null)
+                            .OrderBy(x => x.Comment!.CreatedAt)
+                            .Select(x => Controls.LayoutArea(x.Node.Path, OverviewArea))
+                            .ToArray();
+                        session.RepliesControls = replyControls;
+                        host.UpdateData(repliesDataId, replyControls);
+                    },
+                    // Log and keep the last-good thread: a faulted query must not become an
+                    // unobserved exception, and clearing would read as "replies vanished".
+                    ex => host.Hub.ServiceProvider.GetService<ILogger<OverviewSession>>()
+                        ?.LogWarning(ex, "Reply query faulted for {Path}", hubPath)),
             _ => host.Workspace.GetMeshNodeStream()
                 .CombineLatest(permissionsStream, (node, perms) =>
                 {

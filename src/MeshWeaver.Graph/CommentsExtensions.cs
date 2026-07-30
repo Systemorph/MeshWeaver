@@ -236,16 +236,21 @@ public static class CommentsView
             () => host.Workspace.GetQuery(
                     $"comments:{nodePath}",
                     $"namespace:{nodePath}/{CommentsExtensions.CommentPartition} nodeType:{CommentNodeType.NodeType}")
-                .Subscribe(snapshot =>
-                {
-                    var commentControls = snapshot
-                        .Select(n => (Node: n, Comment: n.ContentAs<Comment>(host.Hub.JsonSerializerOptions)))
-                        .Where(x => x.Comment is not null)
-                        .OrderByDescending(x => x.Comment!.CreatedAt)
-                        .Select(x => Controls.LayoutArea(x.Node.Path, CommentLayoutAreas.OverviewArea))
-                        .ToArray();
-                    host.UpdateData(commentsDataId, commentControls);
-                }),
+                .Subscribe(
+                    snapshot =>
+                    {
+                        var commentControls = snapshot
+                            .Select(n => (Node: n, Comment: n.ContentAs<Comment>(host.Hub.JsonSerializerOptions)))
+                            .Where(x => x.Comment is not null)
+                            .OrderByDescending(x => x.Comment!.CreatedAt)
+                            .Select(x => Controls.LayoutArea(x.Node.Path, CommentLayoutAreas.OverviewArea))
+                            .ToArray();
+                        host.UpdateData(commentsDataId, commentControls);
+                    },
+                    // Log and keep the last-good list: a faulted query must not become an
+                    // unobserved exception, and clearing the list would read as "comments gone".
+                    ex => host.Hub.ServiceProvider.GetService<ILogger<CommentsExtensions.CommentsEnabled>>()
+                        ?.LogWarning(ex, "Page-comment query faulted for {Path}", nodePath)),
             _ => permissionsStream.Select(perms =>
             {
                 var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
