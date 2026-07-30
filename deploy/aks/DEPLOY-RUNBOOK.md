@@ -227,10 +227,24 @@ kubectl -n <env> patch deployment memex-portal-deployment --type json -p \
 # the probe patch rolls the deployment; the new pod bakes behind the gate while the old serves
 ```
 
-- **Do not cycle pods while a bake runs** — that restarts the compile work from cold.
 - **A pod sitting 0/1 for a long time is the gate doing its job** while a cold bake runs; only a
   `REFUSING READINESS … Regressions:` log line means a type broke on this image — fix the type,
   never widen the timeout.
+- **Retries are cheap — the sweep resumes from the shared cache.** Every type a sweep DID build is
+  on `/data` for good; deleting a gate-red pod re-runs only what is missing. Progress across
+  attempts is monotonic.
+- **⚠️ Known flake while core #694 is open (cross-silo reply routing):** during a roll the mesh
+  briefly runs TWO silos (old serving + new baking), and in that window the pod-side sweep's
+  shared-source resolution can fail nondeterministically — the symptom is a `CompileError` full of
+  unresolved names that live in a SIBLING type's `Source/` (`shared=@…`), on a type that compiles
+  clean when triggered individually. First verify with a targeted compile (MCP `compile
+  @<type>` — recycle the type's hub first if the subscribe times out), then delete the pod; the
+  re-sweep finds the fixed types `alreadyBaked`. The run-once bake **Job** (`bake.enabled`) does
+  not have this failure mode at all — it bakes on a monolith mesh before any pod rolls — which is
+  why helm-driven rolls should keep it on even with the pod-side gate enabled. (Observed live on
+  the first gated roll, memex-cloud 2026-07-30: the gate caught 2 types with stale-green records
+  whose newest assemblies were 6 days old — real, invisible breakage — plus 2 sweep-window flakes
+  that compiled clean individually.)
 
 ### Scaling: KEDA wins
 `kubectl scale --replicas=0` (the documented heal for a wedged mesh) is **silently reverted** by a
