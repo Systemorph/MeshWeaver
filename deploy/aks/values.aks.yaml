@@ -129,8 +129,17 @@ config:
     # image keeps serving) instead of surfacing as user-facing errors.
     # ⚠️ Enabling the gate REQUIRES the raised probes.startup budget below —
     # paired settings, never change one without the other.
+    # ⛔ Gate OFF until core #694 (cross-silo reply routing) is fixed: during a
+    # roll the baking pod + the serving pod are TWO silos, the sweep's
+    # shared-source resolution flakes across that boundary, and the gate then
+    # accumulates FALSE regressions and stalls every rollout (memex-cloud
+    # 2026-07-30: three sweeps in a row, a different regression set each time,
+    # while every flagged type compiled clean when triggered on one silo).
+    # The sweep itself stays ON — deploys still compile every type at pod
+    # start; failures fall back to lazy compile instead of holding readiness.
+    # Flip to "true" together with the #694 fix.
     PreWarm__DynamicTypes: "true"
-    PreWarm__GateReadiness: "true"
+    PreWarm__GateReadiness: "false"
     Mcp__BaseUrl: "http://memex-portal-service:8080"
     # ---- AI model providers (templated by the chart) ------------------------
     # These seed the system model catalog on deploy (BuiltInLanguageModelProvider

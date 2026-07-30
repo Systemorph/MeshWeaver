@@ -27,10 +27,14 @@ PATCH). Wired by `AddSelfUpdate()` in `MemexConfiguration.cs`.
 misses the whole `/data` assembly cache by design, and a lazily-compiled mesh leaves any un-visited
 type hanging its pages ("no definition", 60 s `SubscribeRequest` timeouts — memex-cloud 2026-07-30).
 The self-updater itself only patches the image; the compiling happens on the NEW pod at startup via
-`PreWarm__DynamicTypes` + `PreWarm__GateReadiness` (see `DEPLOY-RUNBOOK.md` §7): the pod bakes
-behind the readiness gate, the old pod keeps serving (`maxSurge 1 / maxUnavailable 0`), and a type
-that regressed on the new image stalls the rollout instead of shipping. Managed envs run BOTH flags
-on — an env with them off has no deploy-time compile at all on this channel.
+`PreWarm__DynamicTypes` (see `DEPLOY-RUNBOOK.md` §7): every new pod sweeps and compiles all dynamic
+NodeTypes at start, so an un-visited type can no longer sit "no definition" until its pages hang.
+Managed envs run the sweep ON — an env with it off has no deploy-time compile at all on this
+channel. The companion readiness gate (`PreWarm__GateReadiness`) additionally stalls a rollout on a
+type that regressed on the new image (`maxSurge 1 / maxUnavailable 0` keeps the old pod serving) —
+⛔ it stays OFF until core #694 (cross-silo reply routing) is fixed, because the two-silo roll
+window makes the sweep's shared-source resolution flake and the gate then stalls every rollout on
+false regressions.
 
 ## Update policy (Admin → Platform updates)
 
