@@ -3,6 +3,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -80,6 +81,9 @@ public static class ActivityTrackingHub
             // cache. This is the whole point: the tracking write must not spin up a
             // per-connection cache whose responses route through a transient mesh root.
             .AddData()
+            // The in-flight register for activity writes. Singleton on THIS hub because the
+            // writes run on this hub and it is this hub's disposal that must wait for them.
+            .WithServices(services => services.AddSingleton<ActivityWriteTracker>())
             // Graph type registry so ActivityLog / UserActivityRecord Content round-trips
             // typed across the cross-hub write. (WithGraphTypes also re-registers the
             // TrackActivityRequest handler here, which is harmless — a request routed to
@@ -94,5 +98,26 @@ public static class ActivityTrackingHub
                 var routing = h.ServiceProvider.GetService<IRoutingService>();
                 if (routing is not null)
                     h.RegisterForDisposal(routing.RegisterStream(h));
+
+                // 🚨 Make the detached activity writes VISIBLE to this hub's shutdown.
+                //
+                // HandleTrackActivity returns delivery.Processed() the moment it subscribes, so its
+                // write belongs to no request. Orleans only tracks work on an activation's scheduler
+                // INSIDE a request — a detached subscription on the thread pool is exactly what
+                // escapes that, so nothing keeps the activation alive while the write runs. When
+                // deactivation lands in that window, MessageHubGrain.OnDeactivateAsync calls
+                // CancelCurrentExecution() + Dispose() on the hub the write is still using and it
+                // dies mid-flight, silently — the request it belonged to succeeded long ago.
+                //
+                // Registering the drain here composes it into the dispose chain the hub subscribes
+                // at shutdown, so DisposalCompleted — which the grain already awaits, bounded to
+                // 5 s — now accounts for outstanding writes instead of racing them.
+                var tracker = h.ServiceProvider.GetService<ActivityWriteTracker>();
+                if (tracker is not null)
+                {
+                    var logger = h.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Graph.ActivityTracking");
+                    h.RegisterForDisposal(_ => tracker.Drain(logger));
+                }
             });
 }
