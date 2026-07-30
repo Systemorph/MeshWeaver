@@ -116,6 +116,31 @@ config:
     # For the HA Distributed portal, keep Storage__BasePath=/mnt/content.
     Graph__Storage__Type: "PostgreSql"
     Graph__Storage__BasePath: "/data/graph"
+    # ---- NodeType bake at deploy time (managed envs: ON) --------------------
+    # Every image roll changes the framework identity, which misses the whole
+    # /data assembly cache BY DESIGN — so without a deploy-time bake, dynamic
+    # NodeTypes recompile lazily on user requests after the pod is already
+    # serving, and a type that no request happens to touch stays "no
+    # definition" until its pages hang (SocialMedia/Post on memex-cloud,
+    # 2026-07-30: every post burned the 60 s SubscribeRequest timeout all
+    # morning). The pre-warm sweep
+    # compiles EVERY dynamic NodeType at pod start, and the readiness gate holds
+    # /health red until they are built against THIS image — with the deployment's
+    # maxSurge 1 / maxUnavailable 0, a regressed type stalls the ROLLOUT (old
+    # image keeps serving) instead of surfacing as user-facing errors.
+    # ⚠️ Enabling the gate REQUIRES the raised probes.startup budget below —
+    # paired settings, never change one without the other.
+    # ⛔ Gate OFF until core #694 (cross-silo reply routing) is fixed: during a
+    # roll the baking pod + the serving pod are TWO silos, the sweep's
+    # shared-source resolution flakes across that boundary, and the gate then
+    # accumulates FALSE regressions and stalls every rollout (memex-cloud
+    # 2026-07-30: three sweeps in a row, a different regression set each time,
+    # while every flagged type compiled clean when triggered on one silo).
+    # The sweep itself stays ON — deploys still compile every type at pod
+    # start; failures fall back to lazy compile instead of holding readiness.
+    # Flip to "true" together with the #694 fix.
+    PreWarm__DynamicTypes: "true"
+    PreWarm__GateReadiness: "false"
     Mcp__BaseUrl: "http://memex-portal-service:8080"
     # ---- AI model providers (templated by the chart) ------------------------
     # These seed the system model catalog on deploy (BuiltInLanguageModelProvider
@@ -316,6 +341,30 @@ persistence:
     storageClass: "managed-csi"       # RWO, Premium SSD
     accessMode: "ReadWriteOnce"
     size: "128Gi"
+
+# --- NodeType bake: run-once Job on helm upgrade + startup-probe budget ------
+# ⛔ Job DISABLED until core asserts fingerprint-match: on the first AKS attempt
+# (memex-cloud 2026-07-30) memex-bake:3.0.0-ci.1565 computed a DIFFERENT
+# framework fingerprint than the running portal-ai:3.0.0-ci.1565 — same version,
+# separately published — and its framework-stale kickoff began flipping CURRENT
+# NodeType records to Pending and rebuilding them for a framework nothing
+# serves (killed after ~6 min; the portal's CompileWatcher heals the flips).
+# Until the bake Job refuses to run when its fingerprint differs from the
+# image being rolled, the POD-SIDE sweep above is the one deploy-time compile
+# mechanism — it runs in the serving process, so its fingerprint is right by
+# construction.
+bake:
+  enabled: false
+
+# ⚠️ PAIRED with PreWarm__GateReadiness above: the gate holds /health red while
+# the pod bakes, and a cold bake (fresh framework identity, empty cache for it)
+# is ~90 s per NodeType, strictly sequential — 60-100 types needs HOURS. The
+# default budget (5 s × 60 = 5 min) kills the pod mid-bake, on every attempt,
+# forever. 10 s × 1080 = 3 h covers the real worst case.
+probes:
+  startup:
+    periodSeconds: 10
+    failureThreshold: 1080
 
 # --- Ingress with cookie session affinity (Blazor Server is sticky) ---------
 # Blazor Server holds a per-circuit SignalR connection; without sticky sessions
