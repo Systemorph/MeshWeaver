@@ -75,16 +75,21 @@ public static class AnnotationExtensions
             var workspace = hub.GetWorkspace();
             var changeId = Guid.NewGuid().ToString("N")[..8];
 
+            // A read that gave up knows NOTHING about the node — creating the satellite anyway
+            // stamped Version 0 with an empty anchor, a suggestion that could never re-resolve.
+            // Let the timeout surface as a failed CreateSuggestedEditResponse instead.
             workspace.GetMeshNodeStream()
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(5))
-                .Catch<MeshNode, Exception>(_ => Observable.Return((MeshNode)null!))
                 .SelectMany(node =>
                 {
                     var version = node?.Version ?? 0;
-                    var clean = node?.Content is MarkdownContent md && !string.IsNullOrEmpty(md.Content)
-                        ? MarkdownAnnotationParser.StripAllMarkers(md.Content)
-                        : "";
+                    // Shape-tolerant markdown read (typed / string / JsonElement) — a JsonElement
+                    // frame used to collapse every suggestion to offset 0 with an empty anchor.
+                    var markdown = MarkdownOverviewLayoutArea.GetMarkdownContent(node);
+                    var clean = string.IsNullOrEmpty(markdown)
+                        ? ""
+                        : MarkdownAnnotationParser.StripAllMarkers(markdown);
 
                     var changeType = ChangeRendering.Classify(msg.DeletedText, msg.InsertedText);
                     var start = Math.Clamp(msg.Position, 0, clean.Length);

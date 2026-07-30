@@ -33,16 +33,6 @@ public static class CommentsExtensions
     public record CommentsEnabled;
 
     /// <summary>
-    /// Registers the Comment type in the type registry at the mesh level.
-    /// This must be called during mesh configuration to enable polymorphic JSON deserialization.
-    /// </summary>
-    public static TBuilder WithCommentType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-    {
-        // Type registration is now centralized in CommentNodeType.AddCommentType()
-        return builder;
-    }
-
-    /// <summary>
     /// Adds comments support to the message hub configuration.
     /// This registers the Comment type, adds it to the data source, and enables the Comments view area.
     /// Comments are stored as individual JSON files in _Comment/ sub-partition with GUID filenames.
@@ -68,7 +58,8 @@ public static class CommentsExtensions
     ///   2. For a text selection, captures the (<see cref="Comment.Start"/>/<see cref="Comment.Length"/>)
     ///      range plus the anchor text the comment is taken against, and records it on the satellite
     ///   3. Creates the Comment MeshNode in the <c>_Comment</c> sub-partition via meshService.CreateNode
-    ///   4. For a reply (parent is itself a Comment) appends the reply id to the parent's Replies list
+    ///   4. For a reply (parent is itself a Comment) the node is created as a direct child of the
+    ///      parent comment — discovery is the renderer's child query, no Replies-list denormalization
     ///   5. Posts CreateCommentResponse once the node is created
     /// <para>
     /// The document text is never rewritten — the inline highlight is re-derived from the satellite
@@ -100,13 +91,18 @@ public static class CommentsExtensions
 
             // Read the current node once: a reply targets a Comment node, a text/page comment targets
             // a Markdown node. We need its content (to anchor) and Version (to stamp on the comment).
+            // A read that gave up knows NOTHING about the node — creating the comment anyway would
+            // stamp Version 0 and no anchor (and misfile a reply as a top-level comment). Let the
+            // timeout surface as a failed CreateCommentResponse instead of a silently broken satellite.
             workspace.GetMeshNodeStream()
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(5))
-                .Catch<MeshNode, Exception>(_ => Observable.Return((MeshNode)null!))
                 .SelectMany(node =>
                 {
-                    var parentComment = node?.Content as Comment;
+                    // ContentAs, not `as Comment`: over the query seam the parent's content arrives
+                    // as a JsonElement (or typed in a foreign dynamic assembly) — a bare pattern
+                    // match misclassifies a reply as a top-level comment (see AGENTS.md, #189/#225).
+                    var parentComment = node.ContentAs<Comment>(hub.JsonSerializerOptions);
                     var isReply = parentComment is not null;
                     var version = node?.Version ?? 0;
 
@@ -119,10 +115,12 @@ public static class CommentsExtensions
                     var start = -1;
                     var length = 0;
                     string? anchorText = null;
-                    if (hasTextSelection && !isReply
-                        && node?.Content is MarkdownContent mdContent && !string.IsNullOrEmpty(mdContent.Content))
+                    // Shape-tolerant markdown read (typed / string / JsonElement) — a JsonElement
+                    // frame used to silently create the comment UNANCHORED.
+                    var markdown = MarkdownOverviewLayoutArea.GetMarkdownContent(node);
+                    if (hasTextSelection && !isReply && !string.IsNullOrEmpty(markdown))
                     {
-                        anchorText = MarkdownAnnotationParser.StripAllMarkers(mdContent.Content);
+                        anchorText = MarkdownAnnotationParser.StripAllMarkers(markdown);
                         (start, length) = CommentRendering.Capture(
                             anchorText, msg.StartFragment, msg.EndFragment, selectedText);
                     }
@@ -227,25 +225,37 @@ public static class CommentsView
         var commentsDataId = $"pageComments_{nodePath.Replace("/", "_")}";
         host.UpdateData(commentsDataId, Array.Empty<LayoutAreaControl>());
 
-        host.Workspace.GetQuery(
-                $"comments:{nodePath}",
-                $"namespace:{nodePath}/{CommentsExtensions.CommentPartition} nodeType:{CommentNodeType.NodeType}")
-            .Subscribe(snapshot =>
+        // The comment list flows ONLY through the commentsDataId data stream — the outer view must
+        // NOT rebuild per comment tick (that resets the create form / load-more state). But the
+        // query subscription's LIFETIME is tied to the area via Observable.Using: the old
+        // fire-and-forget Subscribe leaked one live query subscription (writing into
+        // host.UpdateData) per re-render. The filter materializes through ContentAs: over the query
+        // seam a comment's content arrives as a JsonElement (or typed in a foreign dynamic
+        // assembly), and a bare `is Comment` filter silently dropped those frames.
+        return Observable.Using(
+            () => host.Workspace.GetQuery(
+                    $"comments:{nodePath}",
+                    $"namespace:{nodePath}/{CommentsExtensions.CommentPartition} nodeType:{CommentNodeType.NodeType}")
+                .Subscribe(
+                    snapshot =>
+                    {
+                        var commentControls = snapshot
+                            .Select(n => (Node: n, Comment: n.ContentAs<Comment>(host.Hub.JsonSerializerOptions)))
+                            .Where(x => x.Comment is not null)
+                            .OrderByDescending(x => x.Comment!.CreatedAt)
+                            .Select(x => Controls.LayoutArea(x.Node.Path, CommentLayoutAreas.OverviewArea))
+                            .ToArray();
+                        host.UpdateData(commentsDataId, commentControls);
+                    },
+                    // Log and keep the last-good list: a faulted query must not become an
+                    // unobserved exception, and clearing the list would read as "comments gone".
+                    ex => host.Hub.ServiceProvider.GetService<ILogger<CommentsExtensions.CommentsEnabled>>()
+                        ?.LogWarning(ex, "Page-comment query faulted for {Path}", nodePath)),
+            _ => permissionsStream.Select(perms =>
             {
-                var commentControls = snapshot
-                    .Where(n => n.Content is Comment)
-                    .OrderByDescending(n => n.ContentAs<Comment>(host.Hub.JsonSerializerOptions)!.CreatedAt)
-                    .Select(n => Controls.LayoutArea(n.Path, CommentLayoutAreas.OverviewArea))
-                    .ToArray();
-                host.UpdateData(commentsDataId, commentControls);
-            });
-
-        // Combine permissions with comment data to build the view
-        return permissionsStream.Select(perms =>
-        {
-            var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
-            return (UiControl?)BuildCommentsSection(host, nodePath, currentUser, canComment, commentsDataId);
-        });
+                var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
+                return (UiControl?)BuildCommentsSection(host, nodePath, currentUser, canComment, commentsDataId);
+            }));
     }
 
     /// <summary>

@@ -1762,30 +1762,3 @@ public static class MeshNodeLayoutAreas
 
 }
 
-/// <summary>
-/// View model for displaying comments in the DataGrid.
-/// </summary>
-public record CommentViewModel
-{
-    /// <summary>The unique identifier of the comment.</summary>
-    public string Id { get; init; } = string.Empty;
-    /// <summary>The display name of the comment's author.</summary>
-    public string Author { get; init; } = string.Empty;
-    /// <summary>The comment body text.</summary>
-    public string Text { get; init; } = string.Empty;
-    /// <summary>The comment creation timestamp, formatted for display.</summary>
-    public string CreatedAt { get; init; } = string.Empty;
-
-    /// <summary>Initializes a new, empty instance of the CommentViewModel record.</summary>
-    public CommentViewModel() { }
-
-    /// <summary>Initializes a new instance of the CommentViewModel record from a comment.</summary>
-    /// <param name="comment">The comment to project into the view model.</param>
-    public CommentViewModel(Comment comment)
-    {
-        Id = comment.Id;
-        Author = comment.Author;
-        Text = comment.Text;
-        CreatedAt = comment.CreatedAt.ToString("g");
-    }
-}
