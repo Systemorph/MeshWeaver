@@ -203,9 +203,14 @@ reverts them):
 | `config.memex_portal.PreWarm__GateReadiness: "true"` | `/health` stays red until the sweep is green; with `maxSurge 1 / maxUnavailable 0` a regressed type STALLS the rollout with the old image serving |
 | `probes.startup: {periodSeconds: 10, failureThreshold: 1080}` | ⚠️ REQUIRED with the gate: a cold bake is ~90 s/type, sequential — the default 5 min budget kills the pod mid-bake forever |
 
-`bake.enabled: true` additionally renders the run-once bake **Job** (`templates/memex-bake/`) on
-every `helm upgrade` — same compile, paid on a container nobody waits for, and a
-previously-healthy type that no longer compiles fails the release before any traffic moves.
+⛔ **The bake Job (`bake.enabled`) stays OFF on AKS until core asserts fingerprint-match.** On its
+first AKS run (memex-cloud, 2026-07-30) `memex-bake:3.0.0-ci.1565` computed a **different framework
+fingerprint** than the running `portal-ai:3.0.0-ci.1565` — same version, separately published — so
+its framework-stale kickoff started flipping CURRENT NodeType records to `Pending` and rebuilding
+them for a framework nothing serves. (Killed after ~6 min; the portal's CompileWatcher heals the
+flips; serving pods keep their loaded assemblies throughout.) Until the Job refuses to bake when its
+fingerprint differs from the image being rolled, the pod-side sweep is the ONE deploy-time compile
+mechanism — it runs in the serving process, so its fingerprint is right by construction.
 
 **Verify after every roll** — the bake completing is the deploy signal, not HTTP 200:
 
@@ -238,13 +243,13 @@ kubectl -n <env> patch deployment memex-portal-deployment --type json -p \
   shared-source resolution can fail nondeterministically — the symptom is a `CompileError` full of
   unresolved names that live in a SIBLING type's `Source/` (`shared=@…`), on a type that compiles
   clean when triggered individually. First verify with a targeted compile (MCP `compile
-  @<type>` — recycle the type's hub first if the subscribe times out), then delete the pod; the
-  re-sweep finds the fixed types `alreadyBaked`. The run-once bake **Job** (`bake.enabled`) does
-  not have this failure mode at all — it bakes on a monolith mesh before any pod rolls — which is
-  why helm-driven rolls should keep it on even with the pod-side gate enabled. (Observed live on
-  the first gated roll, memex-cloud 2026-07-30: the gate caught 2 types with stale-green records
-  whose newest assemblies were 6 days old — real, invisible breakage — plus 2 sweep-window flakes
-  that compiled clean individually.)
+  @<type>` — recycle the type's hub first if the subscribe times out; the targeted subscribe rides
+  the SAME cross-silo routing, so it completes reliably only in a single-silo window — delete the
+  baking pod and use the ~2 minutes before its replacement joins), then let the replacement's
+  re-sweep find the fixed types `alreadyBaked`. (Observed live on the first gated roll, memex-cloud
+  2026-07-30: the gate caught 2 types with stale-green records whose newest assemblies were 6 days
+  old — real, invisible breakage — plus sweep failures on shared-source types that compiled clean
+  when triggered individually in a single-silo window.)
 
 ### Scaling: KEDA wins
 `kubectl scale --replicas=0` (the documented heal for a wedged mesh) is **silently reverted** by a

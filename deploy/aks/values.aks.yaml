@@ -333,14 +333,18 @@ persistence:
     size: "128Gi"
 
 # --- NodeType bake: run-once Job on helm upgrade + startup-probe budget ------
-# The Job compiles every dynamic NodeType against the image being deployed into
-# the shared /data cache BEFORE the portal rolls onto it (chart:
-# templates/memex-bake/job.yaml) — meaningful here because persistence.data is a
-# real RWX claim. The continuous (self-update) channel is covered by the
-# PreWarm__* portal flags in config.memex_portal above: each new pod bakes at
-# start and refuses readiness until green.
+# ⛔ Job DISABLED until core asserts fingerprint-match: on the first AKS attempt
+# (memex-cloud 2026-07-30) memex-bake:3.0.0-ci.1565 computed a DIFFERENT
+# framework fingerprint than the running portal-ai:3.0.0-ci.1565 — same version,
+# separately published — and its framework-stale kickoff began flipping CURRENT
+# NodeType records to Pending and rebuilding them for a framework nothing
+# serves (killed after ~6 min; the portal's CompileWatcher heals the flips).
+# Until the bake Job refuses to run when its fingerprint differs from the
+# image being rolled, the POD-SIDE sweep above is the one deploy-time compile
+# mechanism — it runs in the serving process, so its fingerprint is right by
+# construction.
 bake:
-  enabled: true
+  enabled: false
 
 # ⚠️ PAIRED with PreWarm__GateReadiness above: the gate holds /health red while
 # the pod bakes, and a cold bake (fresh framework identity, empty cache for it)
