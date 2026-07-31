@@ -34,6 +34,14 @@ public static class VersionLayoutArea
     /// Renders the Versions list showing all historical versions of the current node.
     /// Each row has version number, timestamp, and Compare/Restore buttons.
     /// </summary>
+    /// <summary>
+    /// The well-known path of the central Collaboration plugin's review workspace. When it exists
+    /// on the mesh, the Versions page DELEGATES to its TrackChanges area — the whole track-changes
+    /// experience then lives in a git-synced plugin and evolves without core image rolls. Core
+    /// keeps only this thin hook plus the built-in fallback (also reachable via ?builtin=1).
+    /// </summary>
+    internal const string CollaborationWorkspacePath = "Collaboration/Workspace";
+
     [Browsable(false)]
     public static IObservable<UiControl?> Versions(LayoutAreaHost host, RenderingContext _)
     {
@@ -48,6 +56,42 @@ public static class VersionLayoutArea
                     .WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Version history is not available.</p>")));
         }
 
+        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (host.GetQueryStringParamValue("builtin") != "1" && mesh is not null)
+        {
+            return HasCollaborationWorkspace(mesh)
+                .Select(hasWorkspace => hasWorkspace
+                    ? Observable.Return<UiControl?>(DelegatedVersions(host, hubPath))
+                    : BuiltInVersions(host, hubPath, versionQuery, access))
+                .Switch();
+        }
+
+        return BuiltInVersions(host, hubPath, versionQuery, access);
+    }
+
+    /// <summary>Embeds the Collaboration workspace's TrackChanges area for this node, with a
+    /// lightweight link back to the built-in list.</summary>
+    private static UiControl DelegatedVersions(LayoutAreaHost host, string hubPath) =>
+        Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host))
+            .WithView(Controls.LayoutArea(CollaborationWorkspacePath, "TrackChanges", hubPath)
+                .WithShowProgress(false))
+            .WithView(Controls.Html(
+                $"<p style=\"margin-top: 8px;\"><a href=\"{MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.VersionsArea, "builtin=1")}\" " +
+                "style=\"color: var(--neutral-foreground-hint); font-size: .8rem;\">Use the built-in version list</a></p>"));
+
+    /// <summary>One bounded existence probe over the query index (no per-node hub activation —
+    /// probing a MISSING node's hub would cost the full activation timeout).</summary>
+    private static IObservable<bool> HasCollaborationWorkspace(IMeshService mesh) =>
+        mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{CollaborationWorkspacePath}"))
+            .Scan(false, (found, change) =>
+                found || change.Items.Any(n => n.Path == CollaborationWorkspacePath))
+            .StartWith(false)
+            .Throttle(TimeSpan.FromMilliseconds(800))
+            .Take(1);
+
+    private static IObservable<UiControl?> BuiltInVersions(
+        LayoutAreaHost host, string hubPath, IVersionQuery versionQuery, AccessService? access)
+    {
         // The chosen baseline rides a data stream (as a string — data streams are reference-typed):
         // "Set baseline" marks a version, and every other row then offers "Compare to v{baseline}"
         // (?from/?to), so any two versions can be compared — not just version-vs-current.
