@@ -166,8 +166,8 @@ public class StaleActivationSeedRollbackTest(ITestOutputHelper output) : Monolit
 
         Output.WriteLine($"[persisted] name={persisted!.Name} version={persisted.Version}");
         persisted.Version.Should().BeGreaterThan(durableVersion,
-            "the owner's persistence clock is monotonic across activations (MeshNode.NextVersion floors "
-            + "at current+1) — a post-recycle write below the durable version means the hub reactivated "
+            "the node's revision counter is monotonic across activations (MeshNode.NextVersion is "
+            + "current + 1) — a post-recycle write below the durable version means the hub reactivated "
             + "on a stale snapshot");
     }
 }

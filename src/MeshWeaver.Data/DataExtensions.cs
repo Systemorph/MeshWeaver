@@ -743,7 +743,6 @@ public static class DataExtensions
                 request.Message.Patch.Content ?? "{}",
                 hub.JsonSerializerOptions,
                 (string?)stream.StreamId,
-                hub.Version,
                 hub,
                 request
             });
@@ -921,26 +920,25 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// The version the OWNER mints when it applies a cross-hub MeshNode patch. 🚨 #325: advance
-    /// FORWARD-ONLY from the node's OWN current version, not straight off the per-message hub clock
-    /// (<paramref name="hubVersion"/>). <see cref="IMessageHub.Version"/> resets to 0 on every
-    /// (re)activation, so stamping it verbatim rolls the node's Version BACKWARD after a recycle /
-    /// idle-release / replica restart — mirrors holding the higher pre-recycle version then DROP the
-    /// regressed frame under the sync monotonicity guard (the write-rollback + index-vs-resolution
-    /// split-brain of #325). Flooring at <c>currentVersion + 1</c> keeps it strictly increasing
-    /// across activations WITHOUT touching Hub.Version, so layout-area Fulls (which ride Hub.Version)
-    /// are unaffected — the 2026-06-18 "cannot find pinned doc" wedge cannot recur. Mirrors
-    /// <c>MeshNode.NextVersion</c>; inlined because this assembly cannot reference MeshNode
+    /// The version the OWNER mints when it applies a cross-hub MeshNode patch that REALLY changed
+    /// the node: the node's own <c>Version + 1</c>. 🚨 It is derived purely from the node, never
+    /// from the per-message hub clock — <see cref="IMessageHub.Version"/> counts unrelated messages
+    /// and resets to 0 on every (re)activation, so stamping it rolled the node's Version BACKWARD
+    /// after a recycle / idle-release / replica restart; mirrors holding the higher pre-recycle
+    /// version then DROPPED the regressed frame under the sync monotonicity guard (the write-rollback
+    /// + index-vs-resolution split-brain of #325). A node-local counter is monotonic across
+    /// activations by construction, and layout-area Fulls (which ride Hub.Version) stay untouched.
+    /// Mirrors <c>MeshNode.NextVersion</c>; inlined because this assembly cannot reference MeshNode
     /// (same string-keyed approach used throughout this handler).
     /// </summary>
     private static long NextMeshNodeVersion(
-        System.Text.Json.Nodes.JsonObject currentNode, string versionKey, long hubVersion)
+        System.Text.Json.Nodes.JsonObject currentNode, string versionKey)
     {
         long currentVersion = 0;
         if (currentNode[versionKey] is System.Text.Json.Nodes.JsonValue jv
             && jv.TryGetValue<long>(out var parsed))
             currentVersion = parsed;
-        return System.Math.Max(hubVersion, currentVersion + 1);
+        return currentVersion + 1;
     }
 
     /// <summary>
@@ -1085,7 +1083,6 @@ public static class DataExtensions
         string patchText,
         System.Text.Json.JsonSerializerOptions jsonOpts,
         string? streamId,
-        long version,
         IMessageHub hub,
         IMessageDelivery<PatchDataRequest> request)
     {
@@ -1103,7 +1100,7 @@ public static class DataExtensions
             && hub.GetWorkspace().DataContext.GetDataSourceForType(typeof(T))
                 ?.GetStreamForPartition(null) is { } meshPrimary)
         {
-            ApplyMeshNodePatchInTurn(stream, meshPrimary, patchText, jsonOpts, version, hub, request);
+            ApplyMeshNodePatchInTurn(stream, meshPrimary, patchText, jsonOpts, hub, request);
             return;
         }
 
@@ -1138,12 +1135,25 @@ public static class DataExtensions
                     // 🚨 Three-way merge for a cross-hub MeshNode patch (base values carried on the
                     // request) so a reordered/stale write can't flap a field; falls back to the
                     // monotonic-trigger guard + last-write-wins when no base is carried.
+                    var preMergeNode = currentNode.DeepClone();
                     ApplyMeshNodeMerge(currentNode, patchNode,
                         typeof(T).FullName == "MeshWeaver.Mesh.MeshNode",
                         request.Message, jsonOpts,
                         hub.ServiceProvider.GetService<ILoggerFactory>()
                             ?.CreateLogger("MeshWeaver.Data.MergeGuard"),
                         hubPath);
+
+                    // 🚨 No-change backstop (same rule as ApplyMeshNodePatchInTurn): a patch whose
+                    // every value already matches the live state must NOT bump the version or
+                    // commit — the version bump below would otherwise MANUFACTURE the difference
+                    // that makes it look like a change. On THIS deferred path a no-op commit also
+                    // never emits, so the post-commit subscription would time out and NACK a write
+                    // that in fact succeeded. Ack success up front against the untouched state.
+                    if (System.Text.Json.Nodes.JsonNode.DeepEquals(preMergeNode, currentNode))
+                    {
+                        AckOnce(true);
+                        return;
+                    }
 
                     // 🚨 The OWNER mints the fresh monotonic Version on apply.
                     // Per the owned-stream contract — SynchronizationStream
@@ -1178,9 +1188,9 @@ public static class DataExtensions
                     if (typeof(T).FullName == "MeshWeaver.Mesh.MeshNode")
                     {
                         var versionKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Version") ?? "Version";
-                        // 🚨 #325: advance forward-only from the node's own version (max(hub, cur+1)),
-                        // never straight off the per-activation hub clock — see NextMeshNodeVersion.
-                        currentNode[versionKey] = NextMeshNodeVersion(currentNode, versionKey, version);
+                        // 🚨 The node's OWN counter (+1), never the per-activation hub clock —
+                        // see NextMeshNodeVersion. Reached only for a real change (gated above).
+                        currentNode[versionKey] = NextMeshNodeVersion(currentNode, versionKey);
                     }
 
                     var mergedJson = currentNode.ToJsonString(jsonOpts);
@@ -1271,7 +1281,6 @@ public static class DataExtensions
         ISynchronizationStream<EntityStore> primary,
         string patchText,
         System.Text.Json.JsonSerializerOptions jsonOpts,
-        long version,
         IMessageHub hub,
         IMessageDelivery<PatchDataRequest> request)
     {
@@ -1452,11 +1461,24 @@ public static class DataExtensions
                     // 🚨 Three-way merge (MeshNode-only path) — base values carried on the request let a
                     // reordered/stale cross-hub patch merge instead of flapping; falls back to the
                     // monotonic-trigger guard + last-write-wins when no base is carried.
+                    var preMergeNode = currentNode.DeepClone();
                     ApplyMeshNodeMerge(currentNode, patchNode, isMeshNode: true,
                         request.Message, jsonOpts, mergeGuardLogger, hubPath);
-                    // The OWNER mints the monotonic Version on apply (same rule as the deferred path).
-                    // 🚨 #325: forward-only from the node's own version — see NextMeshNodeVersion.
-                    var minted = NextMeshNodeVersion(currentNode, versionKey, version);
+                    // 🚨 Owner-side no-change backstop: a patch whose every value already matches
+                    // the live node (an MCP patch re-asserting current state, a refused three-way
+                    // merge, an importer re-writing unchanged content) must NOT bump the Version,
+                    // persist a history row or tick the change feed. Gate BEFORE the bump — the
+                    // bump itself would otherwise manufacture the difference. Ack success with the
+                    // untouched state; the no-emission path is already handled (AckOnce latches,
+                    // postSub timeout dedupes) exactly like the NotFound no-op above.
+                    if (System.Text.Json.Nodes.JsonNode.DeepEquals(preMergeNode, currentNode))
+                    {
+                        AckOnce(true);
+                        return null;
+                    }
+                    // The OWNER bumps the Version on apply (same rule as the deferred path).
+                    // 🚨 The node's OWN counter (+1) — see NextMeshNodeVersion.
+                    var minted = NextMeshNodeVersion(currentNode, versionKey);
                     currentNode[versionKey] = minted;
                     var merged = System.Text.Json.JsonSerializer
                         .Deserialize<T>(currentNode.ToJsonString(jsonOpts), jsonOpts);

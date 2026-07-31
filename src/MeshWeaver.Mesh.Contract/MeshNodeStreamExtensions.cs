@@ -646,16 +646,22 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
 
                     var updated = update(current);
                     // 🚨 No-op completion. When the update makes no net change to the node
-                    // (a guard `return node`, or an empty drain), the reduced stream emits
-                    // nothing: DistinctUntilChanged drops an identical value, and the Version
-                    // restamp below is ALSO a no-op whenever Hub.Version has not advanced since
-                    // the last write to this node (no intervening hub activity). The refStream
-                    // subscription above then never sees a second emission and this observable
-                    // HANGS forever — the host-hang behind check_inbox's no-timeout TCS
-                    // (InboxToolIntegrationTest.CheckInbox_TwoCallsBackToBack exceeded the 90s
-                    // blame-hang deadline → test-host crash → shard abort). Complete the
-                    // observable directly with the unchanged node and skip the meaningless write.
-                    if (ReferenceEquals(updated, current) || Equals(updated, current))
+                    // (a guard `return node`, an empty drain, or a lambda that rebuilds
+                    // IDENTICAL content), there is nothing to version and nothing to write:
+                    // the reduced stream emits nothing (DistinctUntilChanged drops an
+                    // identical value), the refStream subscription above never sees a second
+                    // emission and this observable would HANG forever — the host-hang behind
+                    // check_inbox's no-timeout TCS (InboxToolIntegrationTest
+                    // .CheckInbox_TwoCallsBackToBack exceeded the 90s blame-hang deadline →
+                    // test-host crash → shard abort). Complete the observable directly with
+                    // the unchanged node and skip the meaningless write.
+                    // 🚨 SerializedEquals is the load-bearing third check: record Equals is
+                    // reference-based for Content / collection fields, so a lambda that
+                    // rebuilds identical content slips past it — and every such "write"
+                    // minted a Version and persisted a history row for an edit that never
+                    // happened (the v1170-without-edits report).
+                    if (ReferenceEquals(updated, current) || Equals(updated, current)
+                        || MeshNode.SerializedEquals(current, updated, _jsonOptions))
                     {
                         EmitOnce(current);
                         return null; // nothing to apply — true no-op
@@ -664,11 +670,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     // by the OWNING hub here (this is an own write on the owner).
                     // DateTime/LastModified is NOT a cross-machine clock, so it must
                     // never drive reconciliation; the owner's monotonic Version does.
-                    // 🚨 #325: advance forward-only from the node's OWN version, not straight
-                    // off Hub.Version (which resets to 0 on every reactivation and would stamp a
-                    // LOWER version after a recycle → rollback + split-brain). See
-                    // MeshNode.NextVersion / Doc/Architecture/MeshNodeVersioning.md.
-                    // Also floor on the version the update lambda RETURNED: a durable-truth
+                    // 🚨 The counter is the NODE's own — `current.Version + 1`, never the hub
+                    // clock (which counts unrelated messages and resets to 0 on reactivation,
+                    // stamping a LOWER version after a recycle → rollback + split-brain, #325).
+                    // See MeshNode.NextVersion / Doc/Architecture/MeshNodeVersioning.md.
+                    // Take the max with the version the update lambda RETURNED: a durable-truth
                     // rebase (AdoptDurableTruth — the owner re-adopting a stored row that is
                     // AHEAD of its in-memory state after a MonotonicWriteGuard refusal) hands
                     // back a node carrying the stored Version; re-stamping it off the stale
@@ -678,8 +684,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     // restore writes Version = 0 and is likewise unaffected.
                     updated = updated with
                     {
-                        Version = MeshNode.NextVersion(_workspace.Hub.Version,
-                            Math.Max(current.Version, updated.Version))
+                        Version = MeshNode.NextVersion(Math.Max(current.Version, updated.Version))
                     };
                     // Stamp BEFORE the commit — the echo subscription above only emits
                     // once it can see this write's Version on the target node.
@@ -887,19 +892,54 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             var updated = update(current);
                             if (ReferenceEquals(updated, current) || Equals(updated, current))
                             {
-                                // 🚨 Lambda returned same instance — usually means
-                                // a typed pattern match (`curr.Content is MeshThread t`)
-                                // failed because Content is still JsonElement
-                                // (framework didn't deserialize to the registered
-                                // type). Log at Warning so the silent no-op is
-                                // visible without enabling Debug — otherwise a
-                                // stream.Update() that "succeeds" with no
-                                // observable effect (see CancelStream test failure
-                                // mode where RequestedCancellationAt stayed null).
-                                diagLogger?.LogWarning(
-                                    "[UpdateRemote] NO-OP hub={Hub} target={Path} contentType={ContentType} — lambda returned unchanged; check the lambda's content-type pattern match",
-                                    _workspace.Hub.Address, _path,
-                                    current.Content?.GetType().Name ?? "<null>");
+                                // A lambda that returns the node unchanged is a legitimate
+                                // no-op (an identical upsert, a guard `return node`, a
+                                // re-import of unchanged content) — it completes without a
+                                // write and without a version bump.
+                                // 🚨 …UNLESS Content is still a raw JsonElement: then the
+                                // no-op is almost certainly a typed pattern match
+                                // (`curr.Content is MeshThread t`) that failed because the
+                                // framework did not deserialize to the registered type, and
+                                // the caller's stream.Update() "succeeds" with no observable
+                                // effect (the CancelStream failure mode where
+                                // RequestedCancellationAt stayed null). Warn for THAT shape
+                                // only, so a real defect stays loud while intentional no-ops
+                                // stay quiet.
+                                if (current.Content is System.Text.Json.JsonElement)
+                                    diagLogger?.LogWarning(
+                                        "[UpdateRemote] NO-OP hub={Hub} target={Path} contentType=JsonElement — lambda returned unchanged; check the lambda's content-type pattern match",
+                                        _workspace.Hub.Address, _path);
+                                else
+                                    diagLogger?.LogDebug(
+                                        "[UpdateRemote] NO-OP hub={Hub} target={Path} contentType={ContentType} — lambda returned the node unchanged; nothing to write",
+                                        _workspace.Hub.Address, _path,
+                                        current.Content?.GetType().Name ?? "<null>");
+                                observer.OnNext(current);
+                                observer.OnCompleted();
+                                return;
+                            }
+
+                            var jsonOpts = _workspace.Hub.JsonSerializerOptions;
+                            var currentNode = System.Text.Json.JsonSerializer
+                                .SerializeToNode(current, jsonOpts) as System.Text.Json.Nodes.JsonObject
+                                ?? new System.Text.Json.Nodes.JsonObject();
+                            var updatedNode = System.Text.Json.JsonSerializer
+                                .SerializeToNode(updated, jsonOpts) as System.Text.Json.Nodes.JsonObject
+                                ?? new System.Text.Json.Nodes.JsonObject();
+                            // 🚨 Diff the lambda's ACTUAL output FIRST — before the audit stamp
+                            // below. The stamp used to run first, so a lambda that changed
+                            // NOTHING (a rebuilt-but-identical content slips past the
+                            // record-Equals check above) still produced a lastModified-only
+                            // patch, and the owner minted a Version + persisted a history row
+                            // for it on every save (the v1170-without-edits report). Only a REAL
+                            // change earns the audit stamp and the send.
+                            var patch = ComputeMergePatchDiff(currentNode, updatedNode);
+
+                            if (patch.Count == 0)
+                            {
+                                diagLogger?.LogDebug(
+                                    "[UpdateRemote] NO-OP hub={Hub} target={Path} — diff empty after serialisation",
+                                    _workspace.Hub.Address, _path);
                                 observer.OnNext(current);
                                 observer.OnCompleted();
                                 return;
@@ -914,33 +954,24 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // the outgoing patch, so a client can't forge a different author.
                             // This preserves the audit trail UpdateNodeRequest used to stamp
                             // from UpdatedBy now that writes go through stream.Update.
+                            var stamped = false;
                             if (updated.LastModified == current.LastModified)
                             {
                                 updated = updated with { LastModified = DateTimeOffset.UtcNow };
+                                stamped = true;
                             }
                             if (updated.LastModifiedBy == current.LastModifiedBy
                                 && !string.IsNullOrEmpty(capturedContextAtEntry?.ObjectId))
                             {
                                 updated = updated with { LastModifiedBy = capturedContextAtEntry.ObjectId };
+                                stamped = true;
                             }
-
-                            var jsonOpts = _workspace.Hub.JsonSerializerOptions;
-                            var currentNode = System.Text.Json.JsonSerializer
-                                .SerializeToNode(current, jsonOpts) as System.Text.Json.Nodes.JsonObject
-                                ?? new System.Text.Json.Nodes.JsonObject();
-                            var updatedNode = System.Text.Json.JsonSerializer
-                                .SerializeToNode(updated, jsonOpts) as System.Text.Json.Nodes.JsonObject
-                                ?? new System.Text.Json.Nodes.JsonObject();
-                            var patch = ComputeMergePatchDiff(currentNode, updatedNode);
-
-                            if (patch.Count == 0)
+                            if (stamped)
                             {
-                                diagLogger?.LogDebug(
-                                    "[UpdateRemote] NO-OP hub={Hub} target={Path} — diff empty after serialisation",
-                                    _workspace.Hub.Address, _path);
-                                observer.OnNext(current);
-                                observer.OnCompleted();
-                                return;
+                                updatedNode = System.Text.Json.JsonSerializer
+                                    .SerializeToNode(updated, jsonOpts) as System.Text.Json.Nodes.JsonObject
+                                    ?? new System.Text.Json.Nodes.JsonObject();
+                                patch = ComputeMergePatchDiff(currentNode, updatedNode);
                             }
 
                             var patchJson = patch.ToJsonString(jsonOpts);

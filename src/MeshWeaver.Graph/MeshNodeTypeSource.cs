@@ -257,13 +257,20 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // content change. The owner re-stamps Version on every update (below), so without
         // this guard each re-fire of the workspace pipeline would look like a fresh change
         // (a new version per dispatch) and spin an infinite re-stamp loop.
+        // 🚨 SerializedEquals is the second, load-bearing half of that guard: record Equals
+        // compares Content (an `object?`) by reference, so a re-parsed JsonElement or a
+        // rebuilt-but-identical typed content reads as "changed" and earned a version bump +
+        // a persisted history row for an edit that never happened. It runs only for the
+        // candidates record-Equals already flagged, so an unchanged collection costs nothing.
         // Pair each updated node with the version it PREVIOUSLY carried (_lastSaved) so the
-        // re-stamp below can advance forward-only from the node's own version (#325) — a fresh
-        // Hub.Version alone regresses it after a recycle.
+        // re-stamp below can advance from the node's own version (#325) — the per-activation
+        // Hub.Version regresses it after a recycle.
+        var jsonOptions = _workspace.Hub.JsonSerializerOptions;
         var updates = instances.Instances
             .Where(x => _lastSaved.Instances.TryGetValue(x.Key, out var existing)
                         && existing is MeshNode ex && x.Value is MeshNode nv
-                        && !ex.Equals(nv with { Version = ex.Version }))
+                        && !ex.Equals(nv with { Version = ex.Version })
+                        && !MeshNode.SerializedEquals(ex, nv with { Version = ex.Version }, jsonOptions))
             .Select(x => (Node: (MeshNode)x.Value,
                           PreviousVersion: ((MeshNode)_lastSaved.Instances[x.Key]).Version))
             .ToArray();
@@ -275,8 +282,6 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         _logger?.LogDebug("MeshNodeTypeSource.UpdateImpl: adds={Adds}, updates={Updates}, deletes={Deletes}",
             adds.Length, updates.Length, deletes.Length);
-
-        var hubVersion = _workspace.Hub.Version;
 
         // Creates: enqueue for the debounce flush. Dict semantics collapse a
         // burst of UpdateImpl emissions for the same path into a single
@@ -291,7 +296,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // recently-deleted list — drop the add.
         var nowUtc = DateTimeOffset.UtcNow;
         PruneRecentlyDeleted(nowUtc);
-        foreach (var node in adds)
+        bool IsTombstoned(MeshNode node)
         {
             var perHubRecentlyDeleted = !string.IsNullOrEmpty(node.Path)
                 && _recentlyDeleted.TryGetValue(node.Path, out var deletedAt)
@@ -300,72 +305,96 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             // AFTER the delete (fresh instance, empty per-hub set) and be about to resurrect
             // the row from a stale Replay(1) own-node snapshot. The owning hub recorded the
             // delete in the shared registry, so drop the add here. See RecentlyDeletedRegistry.
-            if (perHubRecentlyDeleted
-                || (_recentlyDeletedRegistry?.IsRecentlyDeleted(node.Path) ?? false))
-            {
-                _logger?.LogDebug(
-                    "MeshNodeTypeSource[{HubPath}]: skip save for recently-deleted {Path}",
-                    _hubPath, node.Path);
-                continue;
-            }
-            // 🚨 #325: the SAME forward-only floor the updates branch below applies. An "add" is
-            // add-relative-to-THIS-source-instance, NOT globally new: after an idle-recycle the
-            // reactivated hub's _lastSaved starts empty, so its own already-durable node is
-            // classified here as a create. A plain `Version = hubVersion` then stamps it with the
-            // fresh per-activation hub clock (which resets toward 0) and the debounce flush writes
-            // that REGRESSED version over the durable row — the write-rollback of #325, this time
-            // through the create path. MeshNode.NextVersion floors at the node's own carried
-            // version, so a genuinely new node (Version 0) is unaffected (max(hubVersion, 1) ==
-            // hubVersion for any live clock) while a re-added durable node can never go backward.
-            // Doc/Architecture/MeshNodeVersioning.md: the floor applies at EVERY place the owner
-            // mints a node Version — this is the persistence re-stamp it names.
-            // For the OWN node, additionally floor on _ownNodeVersionFloor: the highest
-            // own-node version this hub has adopted (activation seed, durable-truth rebase).
-            // A cache-seeded re-add can carry a version BELOW the floor; minting from the
-            // carried version alone would manufacture the backward write the
-            // MonotonicWriteGuard then refuses.
+            if (!perHubRecentlyDeleted
+                && !(_recentlyDeletedRegistry?.IsRecentlyDeleted(node.Path) ?? false))
+                return false;
+            _logger?.LogDebug(
+                "MeshNodeTypeSource[{HubPath}]: skip save for recently-deleted {Path}",
+                _hubPath, node.Path);
+            return true;
+        }
+
+        var stampedAdds = adds.Where(node => !IsTombstoned(node)).Select(node =>
+        {
+            // 🚨 An "add" is add-relative-to-THIS-source-instance, NOT globally new: after an
+            // idle-recycle the reactivated hub's _lastSaved starts empty, so its own
+            // already-durable node is classified here as a create. Re-persisting that node is
+            // NOT a change, so it must NOT get a new version — only a node that has never been
+            // versioned (Version 0) is genuinely new and starts at 1 (also the serialization
+            // requirement: DefaultIgnoreCondition=WhenWritingDefault OMITS Version 0 from the
+            // persisted JSON). Re-stamping a durable node here bumped its version on every
+            // reactivation, and off the per-activation hub clock it stamped a REGRESSED value
+            // that the debounce flush then wrote over the durable row — the write-rollback of
+            // #325 through the create path.
+            // For the OWN node, lift to _ownNodeVersionFloor: the highest own-node version this
+            // hub has adopted (activation seed, durable-truth rebase). A cache-seeded re-add can
+            // carry a version BELOW the floor; saving that carried version is the backward write
+            // the MonotonicWriteGuard refuses. Writing AT the floor is accepted (the guard only
+            // refuses a strictly-lower version).
             var addFloor = string.Equals(node.Path, _hubPath, StringComparison.OrdinalIgnoreCase)
                 ? Math.Max(node.Version, Volatile.Read(ref _ownNodeVersionFloor))
                 : node.Version;
-            var nodeWithVersion = node with { Version = MeshNode.NextVersion(hubVersion, addFloor) };
-            _pendingSaves[node.Path] = nodeWithVersion;
-        }
+            return node with { Version = addFloor > 0 ? addFloor : MeshNode.NextVersion(0) };
+        }).ToArray();
 
-        // 🚨 Stamp the owning hub's monotonic version onto every UPDATED node too.
-        // The owner is the single version clock (Host.Version == _workspace.Hub.Version,
-        // which initialises from the persisted node and increments once per dispatch).
-        // Adds are stamped above; updates were NOT, so an updated node kept its incoming
-        // (client-carried, deliberately-constant) version. The emitted frame then did not
-        // advance the version, so the change feed / subscriber monotonicity guard treated
-        // it as nothing-new and the reconciled update never reached subscribers' mirrors —
-        // the read-your-writes-after-update bug (create worked because adds were stamped).
-        // Re-emit the stamped nodes so propagation advances; the persistence subscriber
-        // then saves the bumped version.
+        foreach (var node in stampedAdds)
+            _pendingSaves[node.Path] = node;
+
+        // 🚨 The stamped version goes into the LIVE collection too, not just the save queue.
+        // Otherwise the in-RAM node and the durable row disagree: a created node persists at
+        // Version 1 while the owner's collection keeps the incoming 0, and the next write —
+        // which counts from the LIVE node — mints 1 again, landing a second, different payload
+        // on the version-history row {Id}_1 and silently overwriting the create snapshot
+        // (VersionHistoryTest). Same for a re-added durable node lifted to _ownNodeVersionFloor:
+        // the live node must carry the version the store is about to hold.
+        if (stampedAdds.Length > 0)
+            instances = instances with
+            {
+                Instances = instances.Instances.SetItems(
+                    stampedAdds.Select(n => new KeyValuePair<object, object>(n.Id, n)))
+            };
+
+        // 🚨 Advance the version of an UPDATED node whose incoming version did NOT already
+        // advance. The write paths (UpdateOwn, the owner's cross-hub patch apply) bump the
+        // version themselves before they commit, so those nodes arrive already carrying their
+        // new revision and MUST be left alone — re-stamping them here would bump a single edit
+        // TWICE. A node that arrives at its old version came in through a path that did not
+        // mint (a sync-stream value update, a client-carried base version): its frame would
+        // then look like a duplicate to the change feed and every subscriber's monotonicity
+        // guard, and the reconciled update would never reach their mirrors — the
+        // read-your-writes-after-update bug. Re-emit those with the next version so
+        // propagation advances; the persistence subscriber then saves it.
         if (updates.Length > 0)
         {
-            // 🚨 #325: advance forward-only from each node's OWN previous version, never straight
-            // off hubVersion. hubVersion resets to 0 on reactivation, so a plain `Version =
-            // hubVersion` re-stamp regresses the node's version after a recycle — the authoritative
-            // `get`/read then returns a version BELOW the writes it just confirmed (the write-
-            // rollback / "v113 read back as v3" of #325). MeshNode.NextVersion keeps it strictly
-            // increasing across activations WITHOUT touching Hub.Version (so layout Fulls, which
-            // ride Hub.Version, are unaffected — the 2026-06-18 wedge cannot recur).
-            // 🚨 Floor on BOTH the node's previously-saved version AND the version the write
-            // path just minted onto the incoming node (UpdateOwn stamps before the commit) —
-            // plus, for the own node, _ownNodeVersionFloor. _lastSaved is reset wholesale by
-            // BuildInstanceCollection from the merge of the durable seed and the CACHE-BACKED
-            // routing stream, so PreviousVersion alone can REGRESS after a reactivation whose
-            // durable seed lost to a stale replay (the "incoming Version=834 is BELOW the
-            // stored Version=2423" refusals of 2026-07-30): re-deriving the stamp from it
-            // manufactured a descending mint that MonotonicWriteGuard then refused forever.
+            // 🚨 The counter is the node's OWN (previous + 1), never the per-activation hub
+            // clock: that clock resets to 0 on reactivation, so a `Version = hubVersion`
+            // re-stamp regressed the node's version after a recycle and the authoritative
+            // `get`/read then returned a version BELOW the writes it just confirmed (the
+            // write-rollback / "v113 read back as v3" of #325).
+            // 🚨 Take the max of BOTH the node's previously-saved version AND the version the
+            // incoming node carries — plus, for the own node, _ownNodeVersionFloor. _lastSaved
+            // is reset wholesale by BuildInstanceCollection from the merge of the durable seed
+            // and the CACHE-BACKED routing stream, so PreviousVersion alone can REGRESS after a
+            // reactivation whose durable seed lost to a stale replay (the "incoming Version=834
+            // is BELOW the stored Version=2423" refusals of 2026-07-30): deriving the stamp
+            // from it manufactured a descending mint that MonotonicWriteGuard refused forever.
             var ownFloor = Volatile.Read(ref _ownNodeVersionFloor);
             var stampedUpdates = updates
                 .Select(u =>
                 {
+                    var isOwn = string.Equals(u.Node.Path, _hubPath, StringComparison.OrdinalIgnoreCase);
                     var floor = Math.Max(u.PreviousVersion, u.Node.Version);
-                    if (string.Equals(u.Node.Path, _hubPath, StringComparison.OrdinalIgnoreCase))
+                    if (isOwn)
                         floor = Math.Max(floor, ownFloor);
-                    return u.Node with { Version = MeshNode.NextVersion(hubVersion, floor) };
+                    // Already advanced by the write path that produced this change ⇒ that IS the
+                    // new revision. Only a node still sitting at (or below) its previous version
+                    // needs the bump here.
+                    var alreadyAdvanced = u.Node.Version > u.PreviousVersion
+                        && (!isOwn || u.Node.Version >= ownFloor);
+                    return u.Node with
+                    {
+                        Version = alreadyAdvanced ? u.Node.Version : MeshNode.NextVersion(floor)
+                    };
                 })
                 .ToArray();
             instances = instances with

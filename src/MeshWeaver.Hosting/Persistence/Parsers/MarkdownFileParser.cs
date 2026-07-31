@@ -214,6 +214,11 @@ public partial class MarkdownFileParser : IFileFormatParser
             ExcludeFromContext = frontMatter?.ExcludeFromContext is { Count: > 0 } excluded
                 ? excluded
                 : null,
+            // Symmetric with Serialize — a node written by the mesh carries its revision
+            // counter in frontmatter and must load it back, else every reload restarts the
+            // counter and the next write collides with an existing version-history row.
+            // Absent (authored / imported content) ⇒ 0, i.e. "never versioned".
+            Version = frontMatter?.Version ?? 0,
             LastModified = lastModified,
             Content = nodeContent,
             PreRenderedHtml = markdownDocument.PrerenderedHtml
@@ -272,7 +277,11 @@ public partial class MarkdownFileParser : IFileFormatParser
             Background = slideBackground,
             ExcludeFromContext = node.ExcludeFromContext is { Count: > 0 } excluded
                 ? excluded.ToList()
-                : null
+                : null,
+            // Persist the revision counter so a reload does not restart it at 0 — see the
+            // field's declaration. 0 (never versioned) stays absent, so authored content
+            // files are unaffected.
+            Version = node.Version > 0 ? node.Version : null
         };
 
         // Only write YAML block if there's meaningful content
@@ -288,7 +297,8 @@ public partial class MarkdownFileParser : IFileFormatParser
                             frontMatter.Order != null ||
                             frontMatter.Notes != null ||
                             frontMatter.Background != null ||
-                            frontMatter.ExcludeFromContext?.Count > 0;
+                            frontMatter.ExcludeFromContext?.Count > 0 ||
+                            frontMatter.Version != null;
 
         if (hasYamlContent)
         {
@@ -537,6 +547,17 @@ public partial class MarkdownFileParser : IFileFormatParser
         // icon/title/meta header). Declared after the earlier keys for byte-stable
         // serialization of files that don't carry it.
         public List<string>? ExcludeFromContext { get; set; }
+
+        // 🚨 The node's revision counter — MUST round-trip. MeshNode.Version counts REAL
+        // changes to the node and every mint is `current + 1`
+        // (Doc/Architecture/MeshNodeVersioning.md), so a file format that DROPS it makes the
+        // counter restart from 0 on every reload: the next edit re-mints a version the node
+        // already had, and the version-history store (keyed {Id}_{Version}) silently
+        // OVERWRITES the earlier snapshot with the newer payload (VersionHistoryTest). Only
+        // emitted for a node that has actually been versioned (> 0), so authored/imported
+        // content files stay byte-identical. Declared last for the same byte-stability
+        // reason as the keys above.
+        public long? Version { get; set; }
 
         // Legacy aliases. YamlDotNet doesn't follow C# property hierarchy, so we
         // expose them as plain settable properties and fold them in below
