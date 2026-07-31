@@ -83,15 +83,15 @@ jobs:
       # (Release, same warnings-as-errors gate). Faithful repro > speed.
       - name: Build
         run: dotnet build --no-restore -c Release -p:CIRun=true -warnaserror
-      # The mesh-local #r feed some dynamic-compilation tests resolve at runtime
-      # (version-less `#r "nuget:MeshWeaver.X"`), packed exactly as dotnet-test.yml does.
-      - name: Pack mesh-local #r packages
-        run: |
-          set -euo pipefail
-          dotnet pack src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj \
-            -c Release --no-build --no-restore -o dist/packages --nologo
-          dotnet pack src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj \
-            -c Release --no-build --no-restore -o dist/packages --nologo
+      # NO mesh-local #r pack step — deliberately, and this workflow was DEAD without
+      # this removal. It used to pack src/MeshWeaver.BusinessRules{,.Generator} "exactly as
+      # dotnet-test.yml does"; #395 removed that step from dotnet-test.yml (the scope generator
+      # ships in-process, and legacy `#r "nuget:MeshWeaver.BusinessRules.Generator"` directives
+      # are filtered out of the resolve set at compile) and the projects left src/ with it.
+      # This copy kept packing them, so every dispatch died at
+      #   MSBUILD : error MSB1009: Project file does not exist.
+      # BEFORE the loop step, which then showed as `skipped` while the job reported `failure` —
+      # a run that looks exactly like "the flake reproduced" and never ran the test once.
       # 🚨 DO NOT crank the CompileWatcher log levels here. Repro #3/#4 proved it's a HEISENBUG:
       # Debug logging in the watcher hot path changes the scheduling enough to MASK the race
       # (runs #1/#2 caught it at iter 19/4 at the committed Warning level; runs #3/#4 with the
@@ -99,11 +99,23 @@ jobs:
       # rely on the timing-NEUTRAL stuck-state diagnostic in WaitForLatestRelease (it runs only
       # on the 50s timeout, never during the race) to pin the stalled stage.
       - name: Loop the suspect test until it fails
+        # `always()` so a failure in ANY earlier step still reaches this step's own guard below,
+        # which says loudly that the loop did not run. Without it an earlier failure leaves this
+        # `skipped` while the job reports `failure` — indistinguishable from "the flake reproduced"
+        # unless you open the step list, and that is exactly how a harness that had been dead since
+        # #395 kept reading as a successful repro.
+        if: always()
         run: |
           set -uo pipefail
           iters="$REPRO_ITERS"
           proj="$REPRO_PROJECT"
           filt="$REPRO_FILTER"
+          # A repro run that never executed the test is the one outcome that must NOT be silent:
+          # its exit code is identical to a real reproduction.
+          if [ ! -d "$proj" ]; then
+            echo "::error::REPRO DID NOT RUN — project '$proj' not found. Nothing was reproduced; the job's failure is the harness, not the flake."
+            exit 1
+          fi
           echo "Looping '$filt' in $proj up to $iters× on a 2-vCPU runner (nproc=$(nproc))."
           failed=0
           for i in $(seq 1 "$iters"); do
