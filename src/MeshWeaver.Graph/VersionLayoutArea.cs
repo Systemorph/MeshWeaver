@@ -398,7 +398,7 @@ public static class VersionLayoutArea
     /// differently-named string fields (a SocialMedia/Post uses <c>text</c>; markdown-shaped
     /// content uses <c>content</c>; some types use <c>body</c>).
     /// </summary>
-    internal static readonly string[] TextProperties = ["content", "text", "body"];
+    internal static readonly ImmutableArray<string> TextProperties = ["content", "text", "body"];
 
     internal static string ExtractDiffContent(MeshNode? node, JsonSerializerOptions options)
     {
