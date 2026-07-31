@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Application.Styles;
@@ -238,7 +239,7 @@ public static class VersionLayoutArea
 
         var originalContent = ExtractDiffContent(originalNode, options);
         var modifiedContent = ExtractDiffContent(modifiedNode, options);
-        var language = IsMarkdownContent(originalNode) || IsMarkdownContent(modifiedNode)
+        var language = IsMarkdownContent(originalNode, options) || IsMarkdownContent(modifiedNode, options)
             ? "markdown"
             : "json";
 
@@ -392,7 +393,14 @@ public static class VersionLayoutArea
     /// <summary>
     /// Extracts content for diff display. Uses markdown for markdown content, JSON for everything else.
     /// </summary>
-    private static string ExtractDiffContent(MeshNode? node, JsonSerializerOptions options)
+    /// <summary>
+    /// The content-shape text probe order for the diff: dynamic node types carry their prose in
+    /// differently-named string fields (a SocialMedia/Post uses <c>text</c>; markdown-shaped
+    /// content uses <c>content</c>; some types use <c>body</c>).
+    /// </summary>
+    internal static readonly string[] TextProperties = ["content", "text", "body"];
+
+    internal static string ExtractDiffContent(MeshNode? node, JsonSerializerOptions options)
     {
         if (node == null)
             return "";
@@ -402,17 +410,69 @@ public static class VersionLayoutArea
         if (!string.IsNullOrEmpty(markdown))
             return markdown;
 
-        // Fall back to indented JSON of the whole node
+        // Shape-tolerant text probe on the CONTENT: a dynamic type's content arrives TYPED on its
+        // own hub (a runtime-compiled object — not MarkdownContent, not a JsonElement), and its
+        // prose may live in a field GetMarkdownContent doesn't know (a SocialMedia/Post's `text`).
+        // Coerce to an element via the CONCRETE runtime type (never the object overload — that
+        // adopts foreign types into the registry as a read side effect) and probe.
+        var element = ContentElement(node.Content, options);
+        if (element is { ValueKind: JsonValueKind.Object })
+        {
+            foreach (var property in TextProperties)
+            {
+                if (element.Value.TryGetProperty(property, out var value)
+                    && value.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrEmpty(value.GetString()))
+                    return value.GetString()!;
+            }
+        }
+
+        // Fall back to the CONTENT as indented JSON — diffing the whole node envelope buries the
+        // actual change under version/lastModified noise.
         var indentedOptions = new JsonSerializerOptions(options) { WriteIndented = true };
-        return JsonSerializer.Serialize(node, indentedOptions);
+        return element is null
+            ? ""
+            : JsonSerializer.Serialize(element.Value, indentedOptions);
     }
 
     /// <summary>
-    /// Checks if a node contains markdown content.
+    /// Checks if a node's diff content is prose (markdown or a text-bearing content field) rather
+    /// than a JSON fallback — drives the diff editor's language.
     /// </summary>
-    private static bool IsMarkdownContent(MeshNode? node)
+    internal static bool IsMarkdownContent(MeshNode? node, JsonSerializerOptions options)
     {
         if (node == null) return false;
-        return !string.IsNullOrEmpty(MarkdownOverviewLayoutArea.GetMarkdownContent(node));
+        if (!string.IsNullOrEmpty(MarkdownOverviewLayoutArea.GetMarkdownContent(node)))
+            return true;
+        var element = ContentElement(node.Content, options);
+        return element is { ValueKind: JsonValueKind.Object }
+            && TextProperties.Any(p =>
+                element.Value.TryGetProperty(p, out var value)
+                && value.ValueKind == JsonValueKind.String
+                && !string.IsNullOrEmpty(value.GetString()));
+    }
+
+    /// <summary>Coerces content of any shape (typed record, dynamic object, JsonElement, JsonNode)
+    /// into a JsonElement; null when there is no content or it cannot serialize.</summary>
+    private static JsonElement? ContentElement(object? content, JsonSerializerOptions options)
+    {
+        switch (content)
+        {
+            case null:
+                return null;
+            case JsonElement je:
+                return je;
+            case System.Text.Json.Nodes.JsonNode jn:
+                return JsonSerializer.Deserialize<JsonElement>(jn, options);
+            default:
+                try
+                {
+                    return JsonSerializer.SerializeToElement(content, content.GetType(), options);
+                }
+                catch (Exception)
+                {
+                    return null;
+                }
+        }
     }
 }
