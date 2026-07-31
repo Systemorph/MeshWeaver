@@ -27,11 +27,10 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// post-recycle state — with no reload race to confound the measurement.</para>
 ///
 /// <para><b>The fix (what this proves).</b> The node's persistence version is decoupled from the
-/// per-activation hub clock: every place the owner mints a node Version advances it forward-only
-/// from the node's OWN version via <see cref="MeshNode.NextVersion(long, long)"/>
-/// (<c>max(Hub.Version, current.Version + 1)</c>) — the own-write path (UpdateOwn), the persistence
-/// re-stamp (MeshNodeTypeSource.UpdateImpl), and the cross-hub merge apply
-/// (DataExtensions.NextMeshNodeVersion). So a write made while the hub clock sits far below the node
+/// per-activation hub clock: every place the owner mints a node Version derives it from the node's
+/// OWN version via <see cref="MeshNode.NextVersion(long)"/> (<c>current.Version + 1</c>) — the
+/// own-write path (UpdateOwn), the persistence re-stamp (MeshNodeTypeSource.UpdateImpl), and the
+/// cross-hub merge apply (DataExtensions.NextMeshNodeVersion). So a write made while the hub clock sits far below the node
 /// version still lands a Version strictly ABOVE it — the authoritative <c>get</c> never regresses.
 /// Crucially the fix does NOT touch <c>Hub.Version</c> (re-seeding that shared clock backward is
 /// what dropped live layout Fulls, the atioz 2026-06-18 "cannot find pinned doc" wedge), and it
@@ -95,7 +94,7 @@ public class NodeVersionRegressionOnRecycleTest(ITestOutputHelper output)
 
         // Assert — THE FIX. Read the authoritative post-write node from the owner. Its Version must
         // have advanced FORWARD, above the pre-write version — never rolled back to the low hub
-        // clock (MeshNode.NextVersion floors it at current.Version + 1). Before the fix it stamped
+        // clock (MeshNode.NextVersion derives it as current.Version + 1). Before the fix it stamped
         // ~hubClock, so the authoritative get read a version BELOW the confirmed writes ("v113 read
         // back as v3").
         var after = await Observable.Interval(TimeSpan.FromMilliseconds(200)).StartWith(0L)
