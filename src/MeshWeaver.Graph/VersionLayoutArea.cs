@@ -185,8 +185,33 @@ public static class VersionLayoutArea
                 });
         }
 
-        // Mode 2: version=X — compare historical version to current.
         var versionStr = host.GetQueryStringParamValue("version");
+
+        // Mode 3: NO parameters — show the changes since the LAST version. Clicking into the diff
+        // without picking anything should immediately show what changed most recently, not an
+        // "invalid parameter" notice.
+        if (string.IsNullOrEmpty(versionStr))
+        {
+            return host.Hub.GetMeshNode(hubPath)
+                .SelectMany(currentNode =>
+                {
+                    if (currentNode == null)
+                        return Observable.Return<UiControl?>(Controls.Html($"<p>Node {hubPath} not found.</p>"));
+                    return versionQuery.GetVersionBefore(hubPath, currentNode.Version, options)
+                        .Select(previousNode =>
+                        {
+                            if (previousNode == null)
+                                return (UiControl?)Controls.Html(
+                                    "<p style=\"color: var(--neutral-foreground-hint);\">No earlier version to compare — this is the first recorded version.</p>");
+                            return (UiControl?)BuildDiffStack(host, hubPath, previousNode, currentNode, options,
+                                $"Version {previousNode.Version}", "Current",
+                                $"Changes since v{previousNode.Version} (last version)",
+                                restoreVersion: previousNode.Version);
+                        });
+                });
+        }
+
+        // Mode 2: version=X — compare historical version to current.
         if (!long.TryParse(versionStr, out var targetVersion))
         {
             return Observable.Return<UiControl?>(
