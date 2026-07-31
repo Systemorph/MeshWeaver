@@ -257,20 +257,23 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // content change. The owner re-stamps Version on every update (below), so without
         // this guard each re-fire of the workspace pipeline would look like a fresh change
         // (a new version per dispatch) and spin an infinite re-stamp loop.
-        // 🚨 SerializedEquals is the second, load-bearing half of that guard: record Equals
-        // compares Content (an `object?`) by reference, so a re-parsed JsonElement or a
-        // rebuilt-but-identical typed content reads as "changed" and earned a version bump +
-        // a persisted history row for an edit that never happened. It runs only for the
-        // candidates record-Equals already flagged, so an unchanged collection costs nothing.
+        // 🚨 The comparison here stays REFLECTION-FREE — record Equals only, never
+        // MeshNode.SerializedEquals. This runs on the owning hub's data-source pipeline,
+        // including while hubs are tearing down, and a NodeType node's Content is an instance
+        // of a DYNAMICALLY COMPILED type in a collectible ALC: serializing it forces
+        // System.Text.Json to build a JsonTypeInfo by reflecting over a type whose ALC may be
+        // unloading — the documented FutuRe SIGSEGV ("post-dispose hub construction walks
+        // TypeRegistry over unloading collectible-ALC types", CI run 30660214122, exit=139).
+        // The no-op gates that matter run on the WRITE paths (UpdateOwn / UpdateRemote / the
+        // owner's patch apply) and refuse a no-op long before it reaches this pipeline, so the
+        // serialized comparison buys nothing here and costs a crash.
         // Pair each updated node with the version it PREVIOUSLY carried (_lastSaved) so the
         // re-stamp below can advance from the node's own version (#325) — the per-activation
         // Hub.Version regresses it after a recycle.
-        var jsonOptions = _workspace.Hub.JsonSerializerOptions;
         var updates = instances.Instances
             .Where(x => _lastSaved.Instances.TryGetValue(x.Key, out var existing)
                         && existing is MeshNode ex && x.Value is MeshNode nv
-                        && !ex.Equals(nv with { Version = ex.Version })
-                        && !MeshNode.SerializedEquals(ex, nv with { Version = ex.Version }, jsonOptions))
+                        && !ex.Equals(nv with { Version = ex.Version }))
             .Select(x => (Node: (MeshNode)x.Value,
                           PreviousVersion: ((MeshNode)_lastSaved.Instances[x.Key]).Version))
             .ToArray();
