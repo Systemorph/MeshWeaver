@@ -86,7 +86,9 @@ public class AzureClaudeChatClient : IChatClient
         this.modelId = modelId;
         this.logger = logger;
         this.ownsHttpClient = httpClient == null;
-        this.httpClient = httpClient ?? new HttpClient();
+        // Model calls are bounded by round cancellation, not the transport —
+        // HttpClient's default 100s timeout kills long generations mid-round.
+        this.httpClient = httpClient ?? new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
     }
 
     /// <inheritdoc />

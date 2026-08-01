@@ -67,7 +67,13 @@
     max-width: 100%;
     position: relative;
     min-height: 0;
-    overflow: hidden;
+    /* The panel body is the scroll container — the side-panel twin of the main
+       panel's .body-content (overflow: auto). A hosted node area (LayoutAreaView
+       Fill=true) has no scroll container of its own, so overflow: hidden clipped
+       long content with no way to scroll. Chat is unaffected: it fills exactly
+       and scrolls its message list internally. */
+    overflow-x: hidden;
+    overflow-y: auto;
 }
 
 /* Hide the thread full-page header when rendered inside the side panel */

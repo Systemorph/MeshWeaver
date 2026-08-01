@@ -84,10 +84,13 @@ public class AzureOpenAIChatClientAgentFactory(
             "[AzureOpenAI] Creating chat client model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
             modelName, endpoint, source, Fingerprint(apiKey));
 
-        // Create Azure OpenAI client and get chat client
+        // Create Azure OpenAI client and get chat client. Model calls are bounded
+        // by round cancellation, not the transport — the SDK's default 100s network
+        // timeout kills long generations mid-round.
         var azureClient = new AzureOpenAIClient(
             new Uri(endpoint),
-            new AzureKeyCredential(apiKey));
+            new AzureKeyCredential(apiKey),
+            new AzureOpenAIClientOptions { NetworkTimeout = Timeout.InfiniteTimeSpan });
 
         // Get the chat completion client for the model and convert it to IChatClient
         var openAIChatClient = azureClient.GetChatClient(modelName);

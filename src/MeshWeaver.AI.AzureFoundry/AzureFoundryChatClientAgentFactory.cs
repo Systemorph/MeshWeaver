@@ -119,9 +119,14 @@ public class AzureFoundryChatClientAgentFactory(
 
         try
         {
+            // Model calls are bounded by round cancellation, not the transport —
+            // the SDK's default 100s network timeout kills long generations mid-round.
+            var clientOptions = new AzureAIInferenceClientOptions();
+            clientOptions.Retry.NetworkTimeout = Timeout.InfiniteTimeSpan;
             var client = new ChatCompletionsClient(
                 new Uri(endpoint),
-                new AzureKeyCredential(apiKey));
+                new AzureKeyCredential(apiKey),
+                clientOptions);
 
             IChatClient chatClient = client.AsIChatClient(modelName);
 
