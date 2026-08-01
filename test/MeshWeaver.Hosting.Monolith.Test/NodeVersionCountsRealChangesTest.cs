@@ -158,6 +158,12 @@ public class NodeVersionCountsRealChangesTest(ITestOutputHelper output)
             await Task.Delay(300);
         }
         last.Should().NotBeNull($"node {path} must be persisted");
+        // 🚨 The loop can also exit on the iteration cap. Returning an UNSTABLE snapshot would
+        // silently weaken every assertion built on it (a "version unchanged" check would be
+        // reading a value that is still moving), so the cap is a failure, not a result.
+        stable.Should().BeGreaterThanOrEqualTo(4,
+            $"node {path} must settle (4 consecutive samples with the same Version + LastModified) "
+            + "before it can be asserted on — the read hit the iteration cap while still churning");
         return last!;
     }
 }
