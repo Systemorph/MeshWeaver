@@ -105,6 +105,10 @@ public static class BlazorViewRegistry
                 MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
                 DataGridControl dataGrid => StandardView<DataGridControl, DataGridView>(dataGrid, stream, area),
                 CatalogControl catalog => StandardView<CatalogControl, CatalogView>(catalog, stream, area),
+                // Must precede the IContainerControl case below — CommentableControl IS a
+                // container, and the generic container view would render its child area without
+                // the select-to-comment affordance that is the whole point of the wrapper.
+                CommentableControl commentable => StandardView<CommentableControl, CommentableView>(commentable, stream, area),
                 IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
                 NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString()!) ?? throw new InvalidOperationException($"Type not found: {number.Type}")), stream, area),
                 TextFieldControl textbox => StandardView<TextFieldControl, TextFieldView>(textbox, stream, area),

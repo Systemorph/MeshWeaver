@@ -127,6 +127,21 @@ public static class Controls
     /// <returns>A new <see cref="HtmlControl"/>.</returns>
     public static HtmlControl Html(object data) => new(data);
 
+    /// <summary>
+    /// Wraps content in the select-to-comment affordance so a reader can select text in it and
+    /// anchor a comment to that text — the same anchored comments markdown nodes have, available
+    /// to ANY content (a rendered post, an HTML block, a composed stack).
+    /// </summary>
+    /// <param name="nodePath">The node the comment is anchored to (the satellite's MainNode).</param>
+    /// <param name="anchorText">
+    /// The node's plain SOURCE text the selection is captured against — NOT the rendered markup.
+    /// </param>
+    /// <returns>
+    /// A new <see cref="CommentableControl"/>; add the content with <c>.WithView(...)</c>.
+    /// </returns>
+    public static CommentableControl Commentable(string nodePath, string anchorText) =>
+        new() { NodePath = nodePath, AnchorText = anchorText };
+
     /// <summary>Creates an HTML heading element at the specified level wrapping <paramref name="text"/>.</summary>
     /// <param name="text">The heading content.</param>
     /// <param name="headerSize">The heading level (1–6), producing &lt;h1&gt;…&lt;h6&gt;.</param>
