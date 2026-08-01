@@ -1,0 +1,34 @@
+@using MeshWeaver.Layout
+@inherits ContainerView<CommentableControl, CommentableView>
+
+@* The wrapper is the positioning context for the floating "Comment" button (position: relative
+   in the .css), so the button can be placed over the selection. *@
+<div class="commentable-wrapper" @ref="containerRef">
+    <div class="commentable-content">
+        @foreach (var area in ViewModel.Areas)
+        {
+            var resolvedArea = string.IsNullOrEmpty(area.GetArea()) ? $"{Area}/{area.Id}" : area.GetArea();
+            <DispatchView ViewModel="@(area with { Area = resolvedArea })" Stream="@Stream" Area="@resolvedArea" />
+        }
+    </div>
+
+    @* Comment input dialog — appears once the reader picks "Comment" on a selection. *@
+    @if (showCommentInput)
+    {
+        <div class="comment-input-overlay" @onclick="CancelComment">
+            <div class="comment-input-dialog" @onclick:stopPropagation="true">
+                <div class="comment-input-header">Add Comment</div>
+                @if (!string.IsNullOrEmpty(pendingSelectionText))
+                {
+                    <div class="comment-input-quote">&ldquo;@Truncate(pendingSelectionText, 120)&rdquo;</div>
+                }
+                <textarea class="comment-input-textarea" @bind="pendingCommentText" @bind:event="oninput"
+                          placeholder="Write your comment..." rows="3"></textarea>
+                <div class="comment-input-actions">
+                    <button class="comment-btn comment-btn-cancel" @onclick="CancelComment">Cancel</button>
+                    <button class="comment-btn comment-btn-submit" @onclick="SubmitComment">Add Comment</button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
