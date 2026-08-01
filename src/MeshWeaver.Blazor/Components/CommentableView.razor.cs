@@ -1,4 +1,6 @@
+using System.Reactive.Linq;
 using MeshWeaver.Graph;
+using MeshWeaver.Mesh;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -53,6 +55,16 @@ public partial class CommentableView
 
         var accessService = Hub.ServiceProvider.GetService<AccessService>();
         currentAuthor = (accessService?.Context ?? accessService?.CircuitContext)?.Name ?? "";
+
+        // Track the node's LIVE version: an anchored comment is stamped with the version it was
+        // captured against, which is what lets CommentRendering tell "the capture still holds"
+        // from "re-anchor against the newer text". Stamping 0 (the unset default) makes every
+        // anchored comment look like it was never versioned. The markdown view tracks it the same
+        // way — no .Take(1): the binding must follow later edits, not freeze on the first value.
+        if (!string.IsNullOrEmpty(BoundNodePath))
+            AddBinding(Hub.GetMeshNodeStream(BoundNodePath)
+                .Where(node => node is not null)
+                .Subscribe(node => BoundVersion = node!.Version));
     }
 
     /// <inheritdoc />
