@@ -212,7 +212,7 @@ Readers that gate on it: `AdminMenuGate` (Invitations / Inbox tabs), `UserNodeTy
 ### Where the grant comes from (db-init)
 
 - **Config-driven** — `Auth:GlobalAdmins: [ "rbuergi", … ]` → `GlobalAdminSeed` seeds a static `Admin/_Access/{user}_Access` grant at boot. A fresh DB with the config set comes up with each listed user already a platform admin.
-- **First user** — `UserOnboardingService.GrantPlatformAdmin` writes the same shape for the bootstrap user when the deployment has zero existing users.
+- **First user** — `UserOnboardingService.GrantPlatformAdmin` writes the same shape for the bootstrap user when the deployment has **no platform-admin grant yet** (the onboarding page probes `path:Admin/_Access scope:children nodeType:AccessAssignment` — the same path-scoped shape the evaluator itself loads admin grants with; config-seeded admins count, so a seeded deployment never mints a second bootstrap admin). Both writers stamp `MainNode = "Admin"` — the scope the path encodes — which `AccessAssignmentGuard` enforces at the write boundary.
 
 > 🚨 **Platform-admin grants live in `Admin/_Access`, never root `_Access`.** A root `_Access` grant makes a user a **data superuser** (All on every partition via scope inheritance) — which platform admins must NOT be. An `Admin/_Access` grant scopes them to platform management only. Writers (`GlobalAdminSeed`, `GrantPlatformAdmin`) and readers (`hub.IsGlobalAdmin`) both use the Admin partition — they disagreed before 2026-06-08 (writers wrote root, readers checked Admin scope), which silently locked configured admins out of every admin tab.
 

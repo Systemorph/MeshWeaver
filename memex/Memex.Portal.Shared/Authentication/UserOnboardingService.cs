@@ -181,31 +181,31 @@ public sealed class UserOnboardingService(
     /// <summary>
     /// First-user-only: grants the user global admin by making them an admin on the
     /// <b>Admin partition</b> — an <see cref="AccessAssignment"/> at namespace
-    /// <c>Admin/_Access</c> (scope <c>Admin</c>) with <c>MainNode=""</c>. The exact shape
-    /// <see cref="GlobalAdminSeed"/> writes for config-driven admins, and the one
-    /// canonical platform-admin grant: <c>PermissionEvaluator</c>'s global-admin
-    /// short-circuit turns <see cref="MeshWeaver.Mesh.Security.Permission.All"/> at scope
-    /// <c>Admin</c> into a platform superuser (All on every path), and
-    /// <c>hub.IsGlobalAdmin()</c> reads the same scope. See
-    /// Doc/Architecture/AccessControl.md → "The Admin partition".
+    /// <c>Admin/_Access</c> with <c>MainNode="Admin"</c>: the scope the path encodes,
+    /// which <c>AccessAssignmentGuard</c> enforces at the write boundary. The same shape
+    /// <see cref="GlobalAdminSeed"/> writes for config-driven admins. This confers the
+    /// platform gates (<c>hub.IsGlobalAdmin()</c> = <see cref="MeshWeaver.Mesh.Security.Permission.All"/>
+    /// at scope <c>Admin</c>) — it is deliberately NOT a data superuser; an empty
+    /// <c>MainNode</c> would scope the grant to ROOT (every partition) and is refused.
+    /// See Doc/Architecture/AccessControl.md → "The scope invariant".
     ///
-    /// <para>Caller gates this on the "no existing User nodes" check. Subscribe to drive —
-    /// a silent failure would leave the platform with no admins, so callers must surface
-    /// OnError.</para>
+    /// <para>Caller gates this on the platform-bootstrap check (no admin grant exists yet).
+    /// Subscribe to drive — a silent failure would leave the platform with no admins, so
+    /// callers must surface OnError.</para>
     /// </summary>
     public IObservable<MeshNode> GrantPlatformAdmin(string username)
     {
-        // Global admin = admin on the ADMIN PARTITION: namespace "Admin/_Access" (scope
-        // "Admin") + MainNode "". PermissionEvaluator's global-admin short-circuit turns
-        // Permission.All at scope "Admin" into platform superuser (All on every path),
-        // so this single grant gives the first user the platform gates
-        // (hub.IsGlobalAdmin) AND cross-partition power. Mirrors GlobalAdminSeed's
-        // config-admin shape. See Doc/Architecture/AccessControl.md.
+        // Global admin = admin on the ADMIN PARTITION: namespace "Admin/_Access", MainNode
+        // "Admin". MainNode MUST equal the scope the path encodes — AccessAssignmentGuard
+        // refuses the write otherwise (an empty MainNode is a ROOT grant, the 43-superuser
+        // incident shape). hub.IsGlobalAdmin() reads Permission.All at scope "Admin"; the
+        // platform gates come from this grant, cross-partition data access deliberately
+        // does NOT. Mirrors GlobalAdminSeed's config-admin shape. See AccessControl.md.
         var assignment = new MeshNode($"{username}_Access", "Admin/_Access")
         {
             NodeType = "AccessAssignment",
             Name = $"{username} — Admin",
-            MainNode = "",
+            MainNode = "Admin",
             Content = new AccessAssignment
             {
                 AccessObject = username,
@@ -221,7 +221,7 @@ public sealed class UserOnboardingService(
             () => accessService.ImpersonateAsSystem(),
             _ => meshService.CreateOrUpdateNode(assignment)
                 .Do(__ => logger?.LogInformation(
-                    "Onboarding: granted platform Admin (first user) to '{Username}' on the Admin partition (Admin/_Access, MainNode=\"\")", username)));
+                    "Onboarding: granted platform Admin (first user) to '{Username}' on the Admin partition (Admin/_Access, MainNode=\"Admin\")", username)));
     }
 }
 

@@ -1,11 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Graph;
 using MeshWeaver.Blazor.Portal;
+using MeshWeaver.Data;
+using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -82,8 +86,10 @@ public class FirstUserOnboardingTests
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Step 2: Assign global Admin role (simulates the fixed onboarding code)
-        // AddUserRoleAsync(username, Role.Admin.Id, "Admin", username)
-        // → namespace = "Admin/_Access", stored in admin.access table
+        // → namespace = "Admin/_Access", stored in admin.access table. MainNode is the
+        // SCOPE the path encodes — 'Admin' — the only shape AccessAssignmentGuard accepts
+        // (an empty MainNode is a ROOT grant; the old 'Admin/_Access' container value
+        // projected the grant one level too deep, see migration V49).
         var ns = "Admin/_Access";
         var nodeId = $"{username}_Access";
         await adminAdapter.Write(new MeshNode(nodeId, ns)
@@ -91,7 +97,7 @@ public class FirstUserOnboardingTests
             Name = username,
             NodeType = "AccessAssignment",
             State = MeshNodeState.Active,
-            MainNode = ns,
+            MainNode = "Admin",
             Content = new AccessAssignment
             {
                 DisplayName = username,
@@ -150,7 +156,7 @@ public class FirstUserOnboardingTests
             Name = username,
             NodeType = "AccessAssignment",
             State = MeshNodeState.Active,
-            MainNode = "Admin/_Access",
+            MainNode = "Admin",
             Content = new AccessAssignment
             {
                 DisplayName = username,
@@ -206,6 +212,82 @@ public class FirstUserOnboardingTests
         results.Should().HaveCount(2, "Global admin should see all organizations (has partition_access to both)");
         results.Select(n => n.Name).Should().Contain("OrgAlpha Corp");
         results.Select(n => n.Name).Should().Contain("OrgBeta Corp");
+    }
+
+    /// <summary>
+    /// The onboarding bootstrap check ("is there a platform admin yet?") must actually SEE the
+    /// grant on partitioned PG. The old check — <c>namespace:User limit:1</c> — matched NOTHING
+    /// (users are partition roots with namespace <c>''</c>), so every onboarder counted as the
+    /// first user: the invitation gate was bypassed and GrantPlatformAdmin fired for everyone
+    /// (the 43-root-superuser incident; once AccessAssignmentGuard refused that shape, every
+    /// onboarding submit failed instead — memex-cloud, user 'bing', 2026-08-01). The fixed
+    /// check is PATH-scoped on Admin/_Access, the same routing the invitation query relies on.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task BootstrapCheck_PathScopedAdminGrantQuery_SeesTheGrant()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+
+        var partitionDef = new PartitionDefinition
+        {
+            Namespace = "Admin",
+            Schema = "admin",
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(),
+            NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
+        };
+        var (_, adminAdapter) = await _fixture.CreateSchemaAdapter("admin", partitionDef, ct)
+            .Should().Within(60.Seconds()).Emit();
+
+        using var provider = new PostgreSqlPartitionStorageProvider(
+            _fixture.DataSource,
+            _fixture.ConnectionString,
+            new PostgreSqlStorageOptions { ConnectionString = _fixture.ConnectionString },
+            partitions: null);
+        var query = new PostgreSqlPartitionedMeshQuery(
+            new PostgreSqlCrossSchemaQueryProvider(_fixture.DataSource),
+            partitionProvider: provider);
+
+        // The EXACT query string Onboarding.razor uses for onboarding:firstUserCheck.
+        const string bootstrapQuery =
+            "path:Admin/_Access scope:children nodeType:AccessAssignment limit:1";
+
+        // (a) No grant yet → bootstrap: the first onboarder becomes platform admin.
+        var before = await query
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(bootstrapQuery, WellKnownUsers.System), _options)
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(ct);
+        before.Items.Should().BeEmpty(
+            "an empty Admin/_Access means platform bootstrap — the first user must be granted admin");
+
+        // (b) Write the guard-compliant platform-admin grant (the shape GrantPlatformAdmin
+        //     and GlobalAdminSeed produce) — the check must now see it, so the SECOND
+        //     onboarder is NOT treated as first user.
+        await adminAdapter.Write(new MeshNode("firstadmin_Access", "Admin/_Access")
+        {
+            Name = "firstadmin — Admin",
+            NodeType = "AccessAssignment",
+            State = MeshNodeState.Active,
+            MainNode = "Admin",
+            Content = new AccessAssignment
+            {
+                DisplayName = "firstadmin",
+                AccessObject = "firstadmin",
+                Roles = [new RoleAssignment { Role = Role.Admin.Id }]
+            }
+        }, _options).Should().Within(30.Seconds()).Emit();
+
+        var after = await query
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(bootstrapQuery, WellKnownUsers.System), _options)
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(ct);
+        after.Items.Should().ContainSingle(
+            "the bootstrap check MUST see an existing platform-admin grant — matching nothing " +
+            "here is what made every onboarder a 'first user' (gate bypass + root-grant misfire)");
     }
 
     // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

@@ -194,8 +194,17 @@ else
         var invitationOnly = Features.Value.Onboarding.InvitationOnly;
         var needFirstUser = !allowSelfOnboarding || invitationOnly;
 
+        // Bootstrap signal = "does ANY platform-admin grant exist yet". PATH-scoped on
+        // Admin/_Access (like the invitation query below): `namespace:User` matched
+        // NOTHING on partitioned PG — users are partition ROOTS (namespace ''), so every
+        // onboarder read as "first user", which bypassed the invitation gate AND fired
+        // GrantPlatformAdmin for everyone (the 43-root-superuser incident; the guard now
+        // refuses that write, which failed the whole submit). Admin-grant emptiness is
+        // also the truer bootstrap condition: the first-user override exists so the
+        // platform never locks out with NO admin — config-seeded admins count.
         var firstUserQuery = needFirstUser
-            ? workspace.GetQuery("onboarding:firstUserCheck", "namespace:User limit:1")
+            ? workspace.GetQuery("onboarding:firstUserCheck",
+                "path:Admin/_Access scope:children nodeType:AccessAssignment limit:1")
             : Observable.Return(Enumerable.Empty<MeshNode>());
         // PATH-scoped (path:Admin/Invitation scope:children): the PG router routes by the
         // path's first segment, and a path-less nodeType:Invitation query fans out
@@ -329,12 +338,24 @@ else
         // MeshNodes (see Doc/Architecture/SyncedMeshNodeQueries.md). Distinct
         // cache ids per check; the username/email ones live for the page's
         // lifetime, which is fine for one-shot pre-checks.
+        //
+        // Bootstrap signal — MUST match the page-load check above (same cache id ⇒ same
+        // query string). PATH-scoped on Admin/_Access: the old `namespace:User limit:1`
+        // matched NOTHING on partitioned PG (users are partition roots, namespace ''),
+        // so EVERY onboarder counted as "first user" — bypassing the invitation gate and
+        // firing GrantPlatformAdmin for everyone (the 43-root-superuser incident shape,
+        // now refused by AccessAssignmentGuard, which failed the whole submit).
         var firstUserQuery = workspace.GetQuery(
             "onboarding:firstUserCheck",
-            "namespace:User limit:1");
+            "path:Admin/_Access scope:children nodeType:AccessAssignment limit:1");
+        // Username-taken probe: the partition ROOT at the bare `{username}` path. The old
+        // `path:User/{username}` shape matched nothing (no node ever lives there post-V31),
+        // so the check was inert — and CreateUser's atomic CreateOrUpdateNode would have
+        // silently OVERWRITTEN an existing user's partition root on a name collision. Any
+        // Active node at the root path (user, space, reserved segment) blocks the name.
         var usernameQuery = workspace.GetQuery(
             $"onboarding:username:{username}",
-            $"path:User/{username} scope:self");
+            $"path:{username}");
         var emailQuery = workspace.GetQuery(
             $"onboarding:email:{email}",
             $"nodeType:User content.email:{email}");
@@ -378,6 +399,10 @@ else
                             $"This email is already assigned to user '{existingByEmail.Id}'. " +
                             "Please sign in with that account."));
 
+                    // "First user" = platform bootstrap: no admin grant exists yet
+                    // (checks.all is the Admin/_Access grant probe above). Config-seeded
+                    // admins (GlobalAdminSeed) count — with any admin present the
+                    // override is off and the normal gates apply.
                     var isFirstUser = !checks.all.Any();
                     var onboarding = Features.Value.Onboarding;
 
@@ -388,8 +413,8 @@ else
 
                     // Closed-registration gate. The security boundary is HERE (gating
                     // the CreateUser call), not the UI: the page is the only caller that
-                    // orchestrates CreateUser. The first-user bootstrap (zero existing
-                    // User nodes) always succeeds or the platform locks out with no admin.
+                    // orchestrates CreateUser. The first-user bootstrap (no platform
+                    // admin exists) always succeeds or the platform locks out with no admin.
                     //
                     // Invitation-only takes precedence: when on, onboarding requires a
                     // Pending invitation (regardless of AllowSelfOnboarding). Otherwise
