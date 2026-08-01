@@ -78,6 +78,10 @@ public sealed class InstanceSyncWorker : IDisposable
     private (string Url, string Token)? clientKey;
 
     private readonly SerialDisposable retryProbe = new();
+    // 1 while a connectivity retry probe is armed and has not yet fired. Read/written from both
+    // the drain pipeline and the pull loop, so the transitions go through Interlocked. See
+    // ResetRetry — whoever clears this owes the drain a RequestDrain().
+    private int retryArmed;
     private TimeSpan retryDelay;
     private volatile InstanceSyncConfig? lastKnownConfig;
     private volatile bool disposed;
@@ -359,7 +363,11 @@ public sealed class InstanceSyncWorker : IDisposable
                     .ToList())
                 .SelectMany(applied =>
                 {
-                    ResetRetry();
+                    // A successful pull proves the remote is reachable again. Clearing the backoff
+                    // also DISARMS the drain's retry probe, so take over its job: request the drain
+                    // it would have run, or the pending manifest stays stranded. See ResetRetry.
+                    if (ResetRetry())
+                        RequestDrain();
                     var pulled = applied.Count(x => x);
                     return pulled == 0
                         ? Observable.Return(Unit.Default)
@@ -487,7 +495,12 @@ public sealed class InstanceSyncWorker : IDisposable
             DropClient();
             var delay = retryDelay;
             retryDelay = TimeSpan.FromTicks(Math.Min(retryDelay.Ticks * 2, options.RetryMax.Ticks));
-            retryProbe.Disposable = Observable.Timer(delay).Subscribe(_ => RequestDrain());
+            Interlocked.Exchange(ref retryArmed, 1);
+            retryProbe.Disposable = Observable.Timer(delay).Subscribe(_ =>
+            {
+                Interlocked.Exchange(ref retryArmed, 0);
+                RequestDrain();
+            });
             return UpdateConfigAsSystem(c => c with
             {
                 Status = InstanceSyncStatus.Offline,
@@ -503,10 +516,23 @@ public sealed class InstanceSyncWorker : IDisposable
         }).Select(_ => Unit.Default);
     }
 
-    private void ResetRetry()
+    /// <summary>
+    /// Clears the connectivity backoff and disarms the pending probe.
+    /// <para>🚨 Returns whether a probe was actually armed — the caller MUST honour it. The probe
+    /// is the ONLY thing that re-runs the drain after the remote went away, and it lives in a
+    /// <see cref="SerialDisposable"/>, so disarming it silently strands the whole pending
+    /// manifest: the PULL sweep calls this on every successful sweep, which (once the remote is
+    /// back) cancelled the DRAIN's retry before it could fire. The offline edits then sat
+    /// undrained until some unrelated change happened to request a drain — the "landed after a
+    /// long flight, nothing syncs" defect (Offline_long_flight_accumulates_then_drains_and_converges).
+    /// A successful pull PROVES the remote is reachable, so the caller answers a <c>true</c> by
+    /// requesting the drain the probe would have run.</para>
+    /// </summary>
+    private bool ResetRetry()
     {
         retryDelay = options.RetryInitial;
         retryProbe.Disposable = Disposable.Empty;
+        return Interlocked.Exchange(ref retryArmed, 0) == 1;
     }
 
     /// <summary>Transport-level failures (remote down / DNS / timeout) anywhere in the chain.</summary>

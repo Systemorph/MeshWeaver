@@ -12,10 +12,11 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Outermost <see cref="IStorageAdapter"/> decorator that refuses a write whose
 /// <see cref="MeshNode.Version"/> would move a node's durable state BACKWARD.
 ///
-/// <para><b>Why.</b> <c>MeshNode.Version</c> is the owning hub's monotonic persistence
-/// clock (<c>Doc/Architecture/MeshNodeVersioning.md</c>): every mint goes through
-/// <see cref="MeshNode.NextVersion"/>, which floors the stamp at <c>current.Version + 1</c>,
-/// so a correctly-produced write is ALWAYS &gt;= the version already stored. A write that
+/// <para><b>Why.</b> <c>MeshNode.Version</c> is the node's own forward-only revision counter
+/// (<c>Doc/Architecture/MeshNodeVersioning.md</c>): every mint goes through
+/// <see cref="MeshNode.NextVersion"/>, which is <c>current.Version + 1</c>, and an unchanged
+/// node is re-persisted at the version it already carries — so a correctly-produced write is
+/// ALWAYS &gt;= the version already stored. A write that
 /// regresses is therefore never a legitimate newer state — it is a stale snapshot that some
 /// component adopted as live (a cache-seeded reactivation, a lagging change-feed echo, a
 /// debounce buffer that outlived its state) about to overwrite acked, durable data. Before

@@ -2,6 +2,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
@@ -208,34 +209,51 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public string? LastModifiedBy { get; init; }
 
     /// <summary>
-    /// The node's persistence clock — a version that increases <b>monotonically across
-    /// activations</b> and identifies the last operation that mutated this node.
-    /// <para>🚨 This is deliberately NOT the same clock as <see cref="IMessageHub.Version"/>.
-    /// The hub clock resets to 0 on every (re)activation and also stamps the owning hub's
-    /// LAYOUT-render Fulls; stamping <see cref="Version"/> straight from the fresh hub clock
-    /// made it REGRESS after a deactivate → reactivate cycle (idle-release / recycle / replica
-    /// restart) — the write-rollback / "v113 read back as v3" version regression of issue #325.
-    /// The node's Version is advanced forward-only from its OWN persisted value via
-    /// <see cref="NextVersion(long, long)"/>, so it survives a recycle without regressing while
-    /// the hub clock (and thus layout Fulls) is never touched. See
+    /// The node's own revision counter — the number of times this node has actually been
+    /// changed. It increases by exactly one per REAL modification and by nothing at all when a
+    /// write turns out to be a no-op.
+    /// <para>🚨 This is deliberately NOT <see cref="IMessageHub.Version"/>. The hub clock counts
+    /// MESSAGES the owning hub processed, so tying the node version to it made the number jump
+    /// by arbitrary amounts (3 → 47) for unrelated traffic, and made it REGRESS after a
+    /// deactivate → reactivate cycle (the hub clock resets to 0 — the write-rollback /
+    /// "v113 read back as v3" of issue #325). The node version is now derived purely from the
+    /// node's own previous value via <see cref="NextVersion(long)"/>, so it is monotonic across
+    /// activations by construction and means exactly "revision N of this node". See
     /// <c>Doc/Architecture/MeshNodeVersioning.md</c>.</para>
     /// </summary>
     [Editable(false)]
     public long Version { get; init; }
 
     /// <summary>
-    /// Computes the next persistence <see cref="Version"/> for a write to a node that currently
-    /// carries <paramref name="currentVersion"/>, given the owning hub's per-message clock
-    /// <paramref name="hubVersion"/>. The result is <c>max(hubVersion, currentVersion + 1)</c>:
-    /// it tracks the hub clock while that clock leads (preserving the "1 op = 1 version stamp"
-    /// model within an activation), but never falls to or below the version the node already
-    /// carries. After a recycle the hub clock has reset toward 0 while the node loaded its
-    /// persisted <paramref name="currentVersion"/> verbatim, so the <c>+ 1</c> floor keeps the
-    /// node's Version strictly increasing across activations — the fix for issue #325 that does
-    /// NOT re-seed the shared hub clock (which would drop layout Fulls, the 2026-06-18 wedge).
+    /// The next <see cref="Version"/> for a node that currently carries
+    /// <paramref name="currentVersion"/>: simply <c>currentVersion + 1</c>. The owning hub calls
+    /// this only once it has established that the write really changes the node — see
+    /// <see cref="SerializedEquals"/> and the no-op gates on every write path — so the counter
+    /// tracks revisions of the NODE, never the traffic of the hub that happens to own it.
     /// </summary>
-    public static long NextVersion(long hubVersion, long currentVersion)
-        => Math.Max(hubVersion, currentVersion + 1);
+    public static long NextVersion(long currentVersion)
+        => currentVersion + 1;
+
+    /// <summary>
+    /// Value equality at the SERIALIZED-JSON level — the no-op gate every write path uses
+    /// before it mints a <see cref="Version"/>.
+    /// <para>🚨 Record <c>Equals</c> alone is NOT a reliable change detector here:
+    /// <see cref="Content"/> is <c>object?</c>, so a rebuilt-but-identical typed content, a
+    /// re-parsed <c>JsonElement</c> (a struct whose default equality compares the parse
+    /// buffer), or a content record holding collections (compared by reference) all read as
+    /// "changed" while the persisted JSON is byte-identical. Every such write minted a fresh
+    /// Version and persisted a history row for an edit that never happened.</para>
+    /// <para>Serialization is only paid when the cheap reference/record checks already
+    /// disagreed, so the hot no-change path stays allocation-free.</para>
+    /// </summary>
+    public static bool SerializedEquals(MeshNode? a, MeshNode? b, JsonSerializerOptions options)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a is null || b is null) return false;
+        return JsonNode.DeepEquals(
+            JsonSerializer.SerializeToNode(a, options),
+            JsonSerializer.SerializeToNode(b, options));
+    }
 
     /// <summary>
     /// The lifecycle state of this node.

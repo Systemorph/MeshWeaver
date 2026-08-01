@@ -77,13 +77,26 @@ internal static class NodeUpdatePipeline
             // whose base is out of date by the time it lands, so the owner's
             // version-guarded merge mishandles it — the read-your-writes-after-update bug.
             _ => hub.GetMeshNodeStream(node.Path)
-                .Update(live => node with
+                .Update(live =>
                 {
-                    Version = live.Version,
-                    // 🚨 Re-stamp LastModified at APPLY time. NodeFactory.UpdateNode
-                    // carries the caller's node verbatim, whose LastModified is the
-                    // value the caller READ (e.g. `current with { … }`), NOT the edit
-                    // time — so without this the node persists with a stale
+                    // 🚨 No-op gate BEFORE the LastModified re-stamp: an UpdateNode carrying a
+                    // node identical to the live one (an importer re-asserting state, an MCP
+                    // update that changed nothing, a plugin re-install of unchanged content)
+                    // must NOT bump the version or persist a history row. Normalise the two
+                    // framework-owned fields to the live values so only REAL field differences
+                    // count, then return the LIVE instance — the stream's reference-equality
+                    // no-op gate completes the write without touching anything.
+                    var candidate = node with
+                    {
+                        Version = live.Version,
+                        LastModified = live.LastModified,
+                    };
+                    if (MeshNode.SerializedEquals(live, candidate, hub.JsonSerializerOptions))
+                        return live;
+                    // 🚨 Re-stamp LastModified at APPLY time (real change only).
+                    // NodeFactory.UpdateNode carries the caller's node verbatim, whose
+                    // LastModified is the value the caller READ (e.g. `current with { … }`),
+                    // NOT the edit time — so without this the node persists with a stale
                     // LastModified. NodeType IsDirty / CurrentSourceVersions key on
                     // LastModified.UtcTicks, so a stale stamp leaves an edited source
                     // looking clean and the V2 recompile never fires
@@ -91,7 +104,7 @@ internal static class NodeUpdatePipeline
                     // CachingStorageAdapter stamps it too; the in-memory adapter does
                     // not, so the owner-apply lambda here is the one place every
                     // storage config shares.
-                    LastModified = DateTimeOffset.UtcNow,
+                    return candidate with { LastModified = DateTimeOffset.UtcNow };
                 }));
 
     // 2. Run client-side Update validators sequentially (Concat preserves short-circuit:
