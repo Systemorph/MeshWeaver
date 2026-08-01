@@ -73,7 +73,7 @@ public sealed class LinkedInPublishService
             return PublishNodeOutcome.Fail("access-denied");
 
         var text = textOverride ?? Prop(postNode, "body") ?? Prop(postNode, "text");
-        var profilePath = Prop(postNode, "profilePath");
+        var profilePath = ProfilePathOf(postNode);
         if (string.IsNullOrWhiteSpace(profilePath))
             return PublishNodeOutcome.Fail("profile-path-missing");
         if (string.IsNullOrWhiteSpace(text))
@@ -135,7 +135,7 @@ public sealed class LinkedInPublishService
         var urn = Prop(postNode, "publishedUrn");
         if (string.IsNullOrWhiteSpace(urn))
             return EngagementNodeOutcome.Fail("not-published");
-        var profilePath = Prop(postNode, "profilePath");
+        var profilePath = ProfilePathOf(postNode);
         if (string.IsNullOrWhiteSpace(profilePath))
             return EngagementNodeOutcome.Fail("profile-path-missing");
 
@@ -249,6 +249,18 @@ public sealed class LinkedInPublishService
                 dict[p.Name] = p.Value.Clone();
         return dict;
     }
+
+    /// <summary>
+    /// The profile a post publishes as. Reads <c>profilePath</c> (the legacy compiled-in
+    /// <c>SocialMediaPost</c>) and falls back to <c>authorPath</c> — what the node-native
+    /// <c>SocialMedia/Post</c> type stores. Both name a <c>SocialMedia/Profile</c> node whose
+    /// <c>_ApiCredentials/linkedin</c> child holds the member token, so the publish path is
+    /// identical from here on; only the field name differs between the two post shapes. Without
+    /// this a node-native post fails as <c>profile-path-missing</c> even though it names its
+    /// author perfectly well.
+    /// </summary>
+    private static string? ProfilePathOf(MeshNode node) =>
+        Prop(node, "profilePath") ?? Prop(node, "authorPath");
 
     private static string? Prop(MeshNode node, string name)
     {

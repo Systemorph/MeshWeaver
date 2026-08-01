@@ -60,6 +60,38 @@ public class LinkedInPublishServiceTest(ITestOutputHelper output) : MonolithMesh
         StrProp(published, "publishedUrn").Should().Be("urn:li:share:9001");
     }
 
+    /// <summary>
+    /// A node-native <c>SocialMedia/Post</c> publishes too. It names its profile in
+    /// <c>authorPath</c> rather than <c>profilePath</c>, and before this was accepted every such
+    /// post failed as <c>profile-path-missing</c> without ever reaching LinkedIn — the whole
+    /// node-native posting surface was unreachable from the publish endpoint.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task PublishPost_accepts_a_node_native_post_that_names_its_profile_as_authorPath()
+    {
+        var profile = $"TestData/pub_{Guid.NewGuid():N}";
+        var postPath = $"{profile}/posts/post1";
+
+        await SeedCredentialAsync(profile, scope: "openid profile email w_member_social");
+        await SeedNodeNativePostAsync(postPath, profile, text: "Node-native hello 👋");
+
+        var handler = new StubHandler(HttpStatusCode.Created, ("x-restli-id", "urn:li:share:9002"));
+        var svc = new LinkedInPublishService(Mesh, NodeFactory);
+
+        var outcome = await svc.PublishPostAsync(
+            new HttpClient(handler), postPath, textOverride: null, visibility: null,
+            LinkedInPostsApi.DefaultApiVersion, TestContext.Current.CancellationToken);
+
+        outcome.Success.Should().BeTrue(because: outcome.Reason ?? "publish should succeed");
+        outcome.Urn.Should().Be("urn:li:share:9002");
+        handler.CallCount.Should().Be(1);
+
+        var published = await Mesh.GetWorkspace().GetMeshNodeStream(postPath)
+            .Should().Within(30.Seconds())
+            .Match(n => StrProp(n, "status") == "Published");
+        StrProp(published, "publishedUrn").Should().Be("urn:li:share:9002");
+    }
+
     [Fact(Timeout = 60000)]
     public async Task PublishPost_without_w_member_social_scope_makes_no_http_call()
     {
@@ -104,6 +136,29 @@ public class LinkedInPublishServiceTest(ITestOutputHelper output) : MonolithMesh
                 AcquiredAt = DateTimeOffset.UtcNow,
             }
         }).Should().Within(30.Seconds()).Emit();
+
+    /// <summary>
+    /// Seeds a NODE-NATIVE <c>SocialMedia/Post</c>: the text lives in <c>text</c> (not
+    /// <c>body</c>) and the profile reference in <c>authorPath</c> (not <c>profilePath</c>).
+    /// </summary>
+    private Task SeedNodeNativePostAsync(string postPath, string profile, string text)
+    {
+        var (id, ns) = SplitPath(postPath);
+        return NodeFactory.CreateNode(new MeshNode(id, ns)
+        {
+            Name = "Test post",
+            // The node TYPE is irrelevant here (and a type this mesh does not host would never
+            // activate); what is under test is the node-native CONTENT SHAPE.
+            NodeType = "Systemorph/Post",
+            State = MeshNodeState.Active,
+            Content = new Dictionary<string, object?>
+            {
+                ["text"] = text,
+                ["authorPath"] = profile,
+                ["status"] = "Scheduled",
+            }
+        }).Should().Within(30.Seconds()).Emit();
+    }
 
     private Task SeedPostAsync(string postPath, string profile, string body)
     {
