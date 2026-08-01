@@ -159,7 +159,12 @@ public class OpenAIChatClientAgentFactory(
             "[OpenAI] Creating chat client model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
             modelName, endpoint ?? "(default api.openai.com)", source, Fingerprint(apiKey));
 
-        var clientOptions = new OpenAIClientOptions();
+        var clientOptions = new OpenAIClientOptions
+        {
+            // Model calls are bounded by round cancellation, not the transport —
+            // the SDK's default 100s network timeout kills long generations mid-round.
+            NetworkTimeout = Timeout.InfiniteTimeSpan
+        };
         if (!string.IsNullOrEmpty(endpoint))
             clientOptions.Endpoint = new Uri(endpoint);
 

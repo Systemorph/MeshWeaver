@@ -4,7 +4,7 @@ This file provides guidance to AI agents working with this repository.
 
 ## Git Workflow
 
-**NEVER commit or push automatically.** Always wait for the user to explicitly ask.
+**When the task's goal is reached, automatically follow the [`pullrequest` skill](.claude/skills/pullrequest/SKILL.md)** — What's New entry, commit, push, open the PR, wait for green CI, merge. "Goal reached" means the work is implemented, verified, and the touched projects build clean with CI's flags (`-c Release -warnaserror`); don't stop to ask permission for the PR flow at that point. Everything short of that stays manual: never commit or push half-done or unverified work, and the merge gate is absolute — never merge with CI red or pending.
 
 ### 🚨🚨🚨 ABSOLUTE: NEVER work on the primary checkout — it stays on `main`, untouched. EVERYONE creates a worktree.
 
