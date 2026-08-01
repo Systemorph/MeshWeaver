@@ -67,7 +67,11 @@ public static class GlobalAdminSeed
                     DisplayName = userId,
                     Roles = [new RoleAssignment { Role = "Admin" }],
                 },
-                MainNode = "",
+                // Scoped to the Admin partition — MainNode MUST equal the scope the path
+                // encodes (AccessAssignmentGuard refuses the write otherwise). An empty
+                // MainNode here is NOT "the Admin folder": it is a ROOT grant — a data
+                // superuser over every partition (see AccessControl.md → the scope invariant).
+                MainNode = "Admin",
             };
 
             nodes[i * 2 + 1] = new MeshNode(userId + "_Access", "Provider/_Access")
