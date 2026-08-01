@@ -930,6 +930,9 @@ public static class DataExtensions
     /// activations by construction, and layout-area Fulls (which ride Hub.Version) stay untouched.
     /// Mirrors <c>MeshNode.NextVersion</c>; inlined because this assembly cannot reference MeshNode
     /// (same string-keyed approach used throughout this handler).
+    /// <para>🚨 <paramref name="currentNode"/> must be the owner's PRE-MERGE state, never the
+    /// node the client's patch has already been merged into: a patch carrying a <c>version</c>
+    /// field would otherwise steer the counter it is forbidden from setting.</para>
     /// </summary>
     private static long NextMeshNodeVersion(
         System.Text.Json.Nodes.JsonObject currentNode, string versionKey)
@@ -1135,7 +1138,7 @@ public static class DataExtensions
                     // 🚨 Three-way merge for a cross-hub MeshNode patch (base values carried on the
                     // request) so a reordered/stale write can't flap a field; falls back to the
                     // monotonic-trigger guard + last-write-wins when no base is carried.
-                    var preMergeNode = currentNode.DeepClone();
+                    var preMergeNode = currentNode.DeepClone().AsObject();
                     ApplyMeshNodeMerge(currentNode, patchNode,
                         typeof(T).FullName == "MeshWeaver.Mesh.MeshNode",
                         request.Message, jsonOpts,
@@ -1155,42 +1158,43 @@ public static class DataExtensions
                         return;
                     }
 
-                    // 🚨 The OWNER mints the fresh monotonic Version on apply.
+                    // 🚨 The OWNER mints the new Version on apply.
                     // Per the owned-stream contract — SynchronizationStream
                     // ("ONLY the owning hub sets Version", line ~255) and
-                    // NodeUpdatePipeline ("the OWNER assigns the fresh monotonic
-                    // version on apply") — a client/subscriber carries only the
-                    // BASE Version it observed, so the cross-hub JSON-merge patch
-                    // it computed never touches Version. The sync-stream
-                    // value-update path stamps Hub.Version on the owner; this
-                    // PatchDataRequest merge path must do the same, else every
-                    // cross-hub stream.Update reuses the base Version. For
-                    // MeshNode that collapses the version-history store (keyed on
+                    // NodeUpdatePipeline ("the OWNER assigns the fresh version on
+                    // apply") — a client/subscriber carries only the BASE Version
+                    // it observed and never mints. Without a stamp here every
+                    // cross-hub stream.Update would reuse that base Version, which
+                    // for MeshNode collapses the version-history store (keyed on
                     // {Id}_{Version}) onto a single snapshot — the
                     // VersionHistoryTest regression after cross-hub Update moved
-                    // from UpdateViaSyncStream (which stamped the owner Version)
-                    // to UpdateRemote (this merge). `version` is hub.Version
-                    // captured for THIS patch message (monotonic, distinct per
-                    // patch).
+                    // from UpdateViaSyncStream (which stamped on the owner) to
+                    // UpdateRemote (this merge).
+                    //
+                    // 🚨 Count from the PRE-MERGE node, never the merged one. The
+                    // incoming patch is client-supplied: if it carries a `version`
+                    // field, ApplyMeshNodeMerge has already merged that value into
+                    // currentNode, and counting from there would let a caller STEER
+                    // the owner's counter (an MCP `patch` with "version": 9999 would
+                    // mint 10000) — exactly the "only the owner mints" rule this is
+                    // here to enforce. preMergeNode is the owner's own state.
                     //
                     // 🚨 Stamp UNCONDITIONALLY for MeshNode (the only versioned
-                    // reduced stream). The owner's IN-MEMORY MeshNode carries
-                    // Version=0 until a write stamps it (the create's Version=1
-                    // lands only in the persisted file, not the live collection),
-                    // and Version=0 is OMITTED from the serialized `currentNode`
-                    // by DefaultIgnoreCondition=WhenWritingDefault — so a
-                    // ContainsKey guard would never fire and every update would
-                    // keep Version=0, which FileSystemVersionStore.WriteVersion
-                    // skips (Version <= 0) → version-history collapse. Scope to
-                    // MeshNode by type name (this assembly can't reference the
-                    // type — same string-keyed approach used elsewhere here) so
-                    // version-less reduced streams stay untouched.
+                    // reduced stream). Version=0 is OMITTED from the serialized node
+                    // by DefaultIgnoreCondition=WhenWritingDefault — so a ContainsKey
+                    // guard would never fire and a never-yet-stamped node would keep
+                    // Version=0, which FileSystemVersionStore.WriteVersion skips
+                    // (Version <= 0) → version-history collapse. Scope to MeshNode by
+                    // type name (this assembly can't reference the type — same
+                    // string-keyed approach used elsewhere here) so version-less
+                    // reduced streams stay untouched.
                     if (typeof(T).FullName == "MeshWeaver.Mesh.MeshNode")
                     {
                         var versionKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Version") ?? "Version";
-                        // 🚨 The node's OWN counter (+1), never the per-activation hub clock —
-                        // see NextMeshNodeVersion. Reached only for a real change (gated above).
-                        currentNode[versionKey] = NextMeshNodeVersion(currentNode, versionKey);
+                        // The node's OWN counter (+1) off the owner's pre-merge state, never the
+                        // per-activation hub clock and never a client-supplied value — see
+                        // NextMeshNodeVersion. Reached only for a real change (gated above).
+                        currentNode[versionKey] = NextMeshNodeVersion(preMergeNode, versionKey);
                     }
 
                     var mergedJson = currentNode.ToJsonString(jsonOpts);
@@ -1461,7 +1465,7 @@ public static class DataExtensions
                     // 🚨 Three-way merge (MeshNode-only path) — base values carried on the request let a
                     // reordered/stale cross-hub patch merge instead of flapping; falls back to the
                     // monotonic-trigger guard + last-write-wins when no base is carried.
-                    var preMergeNode = currentNode.DeepClone();
+                    var preMergeNode = currentNode.DeepClone().AsObject();
                     ApplyMeshNodeMerge(currentNode, patchNode, isMeshNode: true,
                         request.Message, jsonOpts, mergeGuardLogger, hubPath);
                     // 🚨 Owner-side no-change backstop: a patch whose every value already matches
@@ -1477,8 +1481,11 @@ public static class DataExtensions
                         return null;
                     }
                     // The OWNER bumps the Version on apply (same rule as the deferred path).
-                    // 🚨 The node's OWN counter (+1) — see NextMeshNodeVersion.
-                    var minted = NextMeshNodeVersion(currentNode, versionKey);
+                    // 🚨 Count from the PRE-MERGE node: the patch is client-supplied, and a
+                    // `version` field in it has already been merged into currentNode — counting
+                    // from there would let the caller steer the owner's counter. See
+                    // NextMeshNodeVersion.
+                    var minted = NextMeshNodeVersion(preMergeNode, versionKey);
                     currentNode[versionKey] = minted;
                     var merged = System.Text.Json.JsonSerializer
                         .Deserialize<T>(currentNode.ToJsonString(jsonOpts), jsonOpts);
