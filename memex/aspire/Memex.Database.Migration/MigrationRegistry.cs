@@ -58,6 +58,7 @@ public static class MigrationRegistry
         new V47_SerializeUepRebuildAdvisoryLock(),
         new V48_RetypeBuiltinFeedbackToPlugin(),
         new V49_FixAccessAssignmentMainNode(),
+        new V50_RescopePlatformAdminGrants(),
     ];
 
     /// <summary>

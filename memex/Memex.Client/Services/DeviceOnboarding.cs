@@ -55,12 +55,14 @@ public sealed class DeviceOnboarding(IMessageHub hub)
                         Role = string.IsNullOrWhiteSpace(role) ? null : role.Trim(),
                     },
                 })
-                // Global admin of this instance — Admin/_Access, MainNode="" (the sanctioned shape).
+                // Global admin of this instance — Admin/_Access, MainNode="Admin": the scope
+                // the path encodes, enforced by AccessAssignmentGuard (an empty MainNode is
+                // a ROOT/data-superuser grant and is refused at the write boundary).
                 .SelectMany(_ => meshService.CreateNode(new MeshNode($"{DeviceUserId}_Access", "Admin/_Access")
                 {
                     NodeType = "AccessAssignment",
                     Name = $"{name} — Admin",
-                    MainNode = "",
+                    MainNode = "Admin",
                     Content = new AccessAssignment
                     {
                         AccessObject = DeviceUserId,

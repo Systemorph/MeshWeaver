@@ -186,6 +186,63 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
     }
 
     /// <summary>
+    /// The platform-admin grant must pass the write boundary and land Admin-scoped.
+    /// Regression for the 2026-08-01 memex-cloud onboarding outage: GrantPlatformAdmin
+    /// wrote <c>MainNode=""</c> — a ROOT grant (data superuser over every partition) —
+    /// which <c>AccessAssignmentGuard</c> refuses, so the whole onboarding submit failed
+    /// for every user the (also broken) bootstrap check counted as "first". The canonical
+    /// shape is <c>MainNode="Admin"</c>: the scope the path encodes, which confers the
+    /// platform gates (hub.IsGlobalAdmin) WITHOUT standing cross-partition data access.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task GrantPlatformAdmin_WritesGuardCompliantAdminScopedGrant()
+    {
+        var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+        var service = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        // Pre-fix this OnErrors: the guard refuses the empty-MainNode shape at the
+        // write boundary ("[UpsertNode] REFUSED mis-scoped AccessAssignment").
+        using (accessService.ImpersonateAsSystem())
+        {
+            await service.GrantPlatformAdmin(username).Should().Emit();
+        }
+
+        var grant = await ReadNode($"Admin/_Access/{username}_Access").Should().Emit();
+        grant.Should().NotBeNull("the platform-admin grant must land in Admin/_Access");
+        grant!.MainNode.Should().Be("Admin",
+            "a grant is scoped by MainNode, not its folder — empty means ROOT (every partition), " +
+            "'Admin' is the platform-admin scope hub.IsGlobalAdmin() reads");
+        AccessAssignmentGuard.IsScopeInvalid(grant, out var reason).Should().BeFalse(reason);
+    }
+
+    /// <summary>
+    /// The self-grant scopes the new user to exactly their OWN partition — MainNode is
+    /// the bare username the path encodes, valid under the same guard.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task GrantSelfAdmin_ScopesToOwnPartition()
+    {
+        var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+        var service = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        using (accessService.ImpersonateAsSystem())
+        {
+            await service.CreateUser(new UserOnboardingRequest(
+                    username, $"{username}@example.com", FullName: "Self Grant Test"))
+                .Should().Emit();
+            await service.GrantSelfAdmin(username).Should().Emit();
+        }
+
+        var grant = await ReadNode($"{username}/_Access/{username}_Access").Should().Emit();
+        grant.Should().NotBeNull("the self-grant must land in the user's own _Access satellite");
+        grant!.MainNode.Should().Be(username,
+            "the self-grant scopes the user to their own partition root");
+        AccessAssignmentGuard.IsScopeInvalid(grant, out var reason).Should().BeFalse(reason);
+    }
+
+    /// <summary>
     /// ONBOARD-FIRST (the rule): tracking activity for an identity that has NOT
     /// been onboarded (no partition root / User node) must NOT create the
     /// partition. Reproduces the "partition created before onboarding" bug —
