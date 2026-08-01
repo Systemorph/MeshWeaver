@@ -17,8 +17,10 @@
 @using Memex.Portal.Shared.Authentication
 @using Microsoft.Extensions.DependencyInjection
 @using Microsoft.Extensions.Logging
+@using System.Collections.Immutable
 @using System.Reactive.Disposables
 @using System.Reactive.Linq
+@using System.Text.RegularExpressions
 @using Microsoft.Extensions.Options
 @inject AccessService AccessService
 @inject UserOnboardingService OnboardingService
@@ -317,10 +319,30 @@ else
             return;
         }
 
+        var username = model.Username.Trim().ToLowerInvariant();
+        // STRICT shape gate BEFORE the username reaches any query string or becomes the
+        // partition-root path/schema: exactly one safe path segment. The username is
+        // user-controlled and interpolated into GetQuery(...) strings below — whitespace,
+        // ':', '/' or wildcards would change the query's meaning, and a non-segment value
+        // would land as an invalid partition root. Reserved segments are refused outright:
+        // they name framework partitions/schemas (admin, auth, public, …) or top-level URL
+        // routes the mesh path shape would shadow — the path probe below only catches the
+        // ones that already have a node.
+        if (!UsernamePattern.IsMatch(username))
+        {
+            errorMessage = "Username must be 2–64 characters — lowercase letters, digits, " +
+                           "'.', '-' or '_' — and start and end with a letter or digit.";
+            return;
+        }
+        if (ReservedUsernames.Contains(username))
+        {
+            errorMessage = $"'{username}' is a reserved name. Please choose a different username.";
+            return;
+        }
+
         isSaving = true;
         errorMessage = null;
 
-        var username = model.Username.Trim().ToLowerInvariant();
         var email = model.Email.Trim();
         var fullName = model.FullName?.Trim();
         var workspace = PortalApplication!.Hub.GetWorkspace();
@@ -520,6 +542,24 @@ else
     }
 
     public void Dispose() => subscriptions.Dispose();
+
+    // One safe path segment: 2–64 chars, lowercase alphanumerics with inner '.', '-', '_',
+    // alphanumeric at both ends. Anything outside this can alter an interpolated query
+    // string or escape the partition-root segment. Immutable constants — allowed statics.
+    private static readonly Regex UsernamePattern =
+        new(@"^[a-z0-9][a-z0-9._-]{0,62}[a-z0-9]$", RegexOptions.Compiled);
+
+    // Structurally special segments a username must never claim: framework partitions /
+    // Postgres schemas (a username IS its schema name, lowercased) and top-level URL
+    // routes the `{baseUrl}/{meshpath}` shape would shadow. The path:{username} probe in
+    // HandleSubmit only blocks segments that already hold a node — these are reserved
+    // even when empty.
+    private static readonly ImmutableHashSet<string> ReservedUsernames =
+    [
+        "admin", "auth", "user", "provider", "agent", "doc", "store", "system",
+        "public", "pg_catalog", "information_schema", "pg_toast",
+        "api", "webhooks", "onboarding", "login", "logout", "static", "events", "healthz",
+    ];
 
     private class OnboardingModel
     {
