@@ -1,8 +1,12 @@
+using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI;
 
@@ -85,6 +89,45 @@ public static class HarnessNodeType
             ? null
             : services.GetServices<IHarness>()
                 .FirstOrDefault(h => string.Equals(h.Id, id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>How long the install probe waits for the picked harness node before treating the
+    /// harness as not installed (graceful fallback to the default agent path — never a wedge).</summary>
+    public static readonly TimeSpan InstallProbeTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Resolves the harness for a round AND enforces the per-user install contract: a
+    /// <see cref="Harness.RequiresInstall"/> harness (the CLI ones) runs only when the picked node
+    /// path — <c>{user}/Harness/{id}</c> or <c>{space}/Harness/{id}</c>, localized there by its
+    /// Store plugin — still resolves to an Active node. A missing/deleted node (never installed,
+    /// uninstalled, or a stale global <c>Harness/{id}</c> path from before the catalog gate) emits
+    /// <c>null</c>, which execution treats exactly like an unresolvable harness: log + fall back to
+    /// the default MeshWeaver agent path. The probe is one read off the shared
+    /// <c>IMeshNodeStreamCache</c> handle, bounded by <see cref="InstallProbeTimeout"/> with a
+    /// graceful <c>null</c> sink — a stalled probe degrades, it never wedges the round.
+    /// </summary>
+    public static IObservable<IHarness?> ResolveInstalledHarness(
+        IMessageHub hub, string? harnessPath, ILogger? logger = null)
+    {
+        var harness = ResolveHarness(hub.ServiceProvider, harnessPath);
+        if (harness is null || !harness.Definition.RequiresInstall)
+            return Observable.Return(harness);
+
+        return Observable.Defer(() => hub.GetWorkspace()
+                .GetMeshNodeStream(harnessPath!)
+                .Where(node => node is not null)
+                .Take(1)
+                .Timeout(InstallProbeTimeout)
+                .Select(node => node is { State: MeshNodeState.Active } ? harness : null))
+            .Catch<IHarness?, Exception>(_ => Observable.Return<IHarness?>(null))
+            .Do(resolved =>
+            {
+                if (resolved is null)
+                    logger?.LogWarning(
+                        "[Harness] '{Harness}' requires install but no Active node exists at the picked "
+                        + "path — not installed (or uninstalled); falling back to the default agent path",
+                        harnessPath);
+            });
     }
 
     /// <summary>The type-definition node for nodeType="Harness".</summary>

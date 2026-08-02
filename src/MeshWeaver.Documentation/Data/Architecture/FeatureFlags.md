@@ -52,8 +52,8 @@ Configuration is layered (last wins):
 | `Features:Ai:Providers:AzureFoundry` | bool | `true` | Ships the Azure AI Foundry provider. |
 | `Features:Ai:Providers:AzureOpenAI` | bool | `true` | Ships the Azure OpenAI provider. |
 | `Features:Ai:Providers:OpenAI` | bool | `true` | Ships the OpenAI provider. |
-| `Features:Ai:Clis:ClaudeCode` | bool | `true` | Ships the co-hosted Claude Code CLI provider (per-user Connect login). |
-| `Features:Ai:Clis:Copilot` | bool | `true` | Ships the co-hosted GitHub Copilot CLI provider. |
+| `Features:Ai:Clis:ClaudeCode` | bool | `true` | Deploys the co-hosted Claude Code CLI **runtime** (per-user Connect login). The harness is NOT offered to users by default: its catalog node is install-gated (`Harness.RequiresInstall`) — a user opts in by installing the Claude Code plugin from the Store, which localizes the harness node into `{user}/Harness`. |
+| `Features:Ai:Clis:Copilot` | bool | `true` | Deploys the co-hosted GitHub Copilot CLI **runtime**. Same per-user install gate as Claude Code. |
 | `Features:Onboarding:AllowSelfOnboarding` | bool | `true` | When `false`, registration is **closed** — only the first-ever user may onboard. |
 | `Features:Onboarding:InvitationOnly` | bool | `false` | When `true`, only an email with a Pending invitation may onboard. See [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding). |
 | `Features:Orleans:Clustering` | string | `AzureTables` | Cluster-membership provider: `AzureTables`, `AdoNet` (PostgreSQL), or `Localhost` (single in-process silo; dev only). |

@@ -1361,8 +1361,18 @@ internal static class ThreadExecution
             return chatClient.WhenInitialized
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(60))
-                .SelectMany(client =>
+                // 🚦 Per-user install gate: a RequiresInstall harness (the CLI ones) runs only
+                // while its PICKED node ({user}/Harness/{id}, localized by its Store plugin) is
+                // still Active — so an uninstall (or a stale pre-gate global Harness/{id} path)
+                // revokes it. Resolved reactively BEFORE the round body; a refused/missing node
+                // yields null, which the body treats exactly like an unresolvable harness:
+                // graceful fallback to the default agent path (ResolveInstalledHarness logs why).
+                .SelectMany(initClient => HarnessNodeType
+                    .ResolveInstalledHarness(parentHub, request.Harness, logger)
+                    .Select(installedHarness => (Client: initClient, InstalledHarness: installedHarness)))
+                .SelectMany(init =>
                 {
+                var client = init.Client;
                 logger.LogDebug("[ThreadExec] Agents ready for {ThreadPath}, starting execution", threadPath);
 
                 // 🚦 Harness dispatch. A harness is NOT a model provider: Claude Code /
@@ -1371,7 +1381,7 @@ internal static class ThreadExecution
                 // The MeshWeaver harness returns null → keep the agent/model client.
                 // This is the fix for "harness selected → Azure DeploymentNotFound":
                 // the round no longer routes a harness through a provider.
-                var selectedHarness = HarnessNodeType.ResolveHarness(parentHub.ServiceProvider, request.Harness);
+                var selectedHarness = init.InstalledHarness;
                 // CLI harnesses (Claude Code / Copilot) return their own IChatClient;
                 // the MeshWeaver harness returns null → use the AgentChatClient (which
                 // has its own non-IChatClient streaming signature). harnessClient stays
@@ -1380,8 +1390,10 @@ internal static class ThreadExecution
                 // say it was NOT FOUND (a stale/renamed id, e.g. an old "Claude Code" path before
                 // the slug fix, or a CLI harness whose feature flag is off). Fall back to the
                 // default agent path rather than crashing or silently ignoring it. (Empty harness
-                // ⇒ no selection ⇒ default; not a "not found".)
-                if (selectedHarness is null && !string.IsNullOrEmpty(request.Harness))
+                // ⇒ no selection ⇒ default; not a "not found". The not-INSTALLED case is logged by
+                // ResolveInstalledHarness, so the unregistered check re-resolves to not double-log.)
+                if (selectedHarness is null && !string.IsNullOrEmpty(request.Harness)
+                    && HarnessNodeType.ResolveHarness(parentHub.ServiceProvider, request.Harness) is null)
                     logger.LogWarning(
                         "[ThreadExec] Harness '{Harness}' not found (no registered IHarness with that id) for " +
                         "{ThreadPath} — falling back to the default agent path", request.Harness, threadPath);

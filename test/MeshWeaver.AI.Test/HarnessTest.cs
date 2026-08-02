@@ -20,10 +20,14 @@ namespace MeshWeaver.AI.Test;
 public class HarnessTest
 {
     /// <summary>A CLI-style fake harness for tests — returns a non-null client.</summary>
-    private sealed class FakeCliHarness(string id) : IHarness
+    private sealed class FakeCliHarness(string id, bool requiresInstall = false) : IHarness
     {
         public string Id => id;
-        public Harness Definition => new() { Id = id, DisplayName = id, Order = 9, SupportsAgentSelection = false };
+        public Harness Definition => new()
+        {
+            Id = id, DisplayName = id, Order = 9, SupportsAgentSelection = false,
+            RequiresInstall = requiresInstall
+        };
         public IChatClient? CreateChatClient(HarnessExecutionContext context) => new FakeChatClient();
     }
 
@@ -71,6 +75,53 @@ public class HarnessTest
         ids.Should().Contain(Harnesses.MeshWeaver);
         ids.Should().Contain("Claude Code");
         ids.Should().Contain("GitHub Copilot");
+    }
+
+    /// <summary>
+    /// The per-user install contract at the catalog boundary: a RequiresInstall harness (the CLI
+    /// ones) is NOT projected into the global Harness catalog — its node reaches a user only via
+    /// the Store plugin's localize into {user}/Harness. Dropping it here also prunes the
+    /// previously-shipped global rows on the DB-synced path (Additive sync removes nodes the
+    /// build previously owned).
+    /// </summary>
+    [Fact]
+    public void BuiltInHarnessProvider_SkipsRequiresInstallHarnesses()
+    {
+        var provider = new BuiltInHarnessProvider(new IHarness[]
+        {
+            new MeshWeaverHarness(),
+            new FakeCliHarness("GatedCli", requiresInstall: true),
+        });
+
+        var harnessNodes = provider.GetStaticNodes()
+            .Where(n => n.NodeType == HarnessNodeType.NodeType)
+            .ToList();
+
+        harnessNodes.Should().ContainSingle(n => n.Id == Harnesses.MeshWeaver,
+            "the built-in MeshWeaver harness ships globally");
+        harnessNodes.Should().NotContain(n => n.Id == "GatedCli",
+            "a RequiresInstall harness must never ship in the global catalog — it is installed " +
+            "per user from the Store");
+    }
+
+    /// <summary>
+    /// Shape-lock for the real definitions: the CLI harnesses need a per-user subscription login,
+    /// so they are install-gated; MeshWeaver is not (it is the always-available default).
+    /// </summary>
+    [Fact]
+    public void CliHarnesses_RequireInstall_MeshWeaverDoesNot()
+    {
+        IHarness claude = new MeshWeaver.AI.ClaudeCode.ClaudeCodeHarness(
+            Microsoft.Extensions.Options.Options.Create(new MeshWeaver.AI.ClaudeCode.ClaudeCodeConfiguration()));
+        IHarness copilot = new MeshWeaver.AI.Copilot.CopilotHarness(
+            Microsoft.Extensions.Options.Options.Create(new MeshWeaver.AI.Copilot.CopilotConfiguration()));
+
+        claude.Definition.RequiresInstall.Should().BeTrue(
+            "Claude Code needs a per-user Claude login — offered only after Store install");
+        copilot.Definition.RequiresInstall.Should().BeTrue(
+            "GitHub Copilot needs a per-user GitHub login — offered only after Store install");
+        new MeshWeaverHarness().Definition.RequiresInstall.Should().BeFalse(
+            "the native harness is the default and must always be available");
     }
 
     [Fact]
