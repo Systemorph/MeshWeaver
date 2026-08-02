@@ -32,19 +32,25 @@ NodeTypes at start, so an un-visited type can no longer sit "no definition" unti
 Managed envs run the sweep ON — an env with it off has no deploy-time compile at all on this
 channel.
 
-**The self-update waits for that compile.** The companion readiness gate (`PreWarm__GateReadiness`,
-ON in managed envs since 2026-08-02) holds the new pod's `/health` red until every NodeType is built
-against ITS image; the deployment's `startupProbe` is on `/health` and `maxUnavailable: 0` keeps the
-old pod serving, so traffic only moves once the compile is done. A type that regressed on the new
-image therefore STALLS the roll with the previous image still serving, instead of surfacing as
-user-facing errors after the cutover. Database migration is gated the same way and comes first: the
-unconditional `db_version` health check keeps the pod un-Ready until the schema is migrated, so the
-order on every roll is **migrate → compile → serve**.
+**⛔ The self-update does NOT currently wait for the compile.** The companion readiness gate
+(`PreWarm__GateReadiness`) is designed to do exactly that — hold the new pod's `/health` red until
+every NodeType is built against ITS image, with the `startupProbe` on `/health` and
+`maxUnavailable: 0` keeping the old pod serving — so a regressed type STALLS the roll instead of
+surfacing as user-facing errors. It is **off**.
 
-The gate was held OFF pending core #694 (cross-silo reply routing), fixed by #718 + #719 on
-2026-07-29. ⚠️ Its failure mode is a stalled rollout — no outage, but self-update silently stops
-advancing — so if a roll stalls on types flagged `Regressed` that compile clean on a single silo,
-that is #694 residue: set the flag back to `"false"` and reopen.
+It was enabled on 2026-08-02 and reverted the same day. The first gated roll on memex-cloud stalled
+with `7 NodeType(s) regressed on this image`, and those were **false** regressions: the pod log
+contained no `CS####` compile error at all, only the sweep timing out across the roll window —
+`No response received in hub cache/… within 00:01:00 for request SubscribeRequest → target
+Claims / Reinsurance / SocialMedia / ClaimsDeepfield / RiskTransfer`. During a roll the baking pod
+and the serving pod are two silos and the sweep cannot resolve shared sources across that boundary.
+This is core #694 residue: #718 + #719 (2026-07-29) did NOT close it, so the earlier 2026-07-30
+observation stands unexplained by them.
+
+Until the sweep's cross-silo source resolution is fixed, database migration is the only part of the
+roll that is gated (the unconditional `db_version` health check), and NodeType compiles fall back to
+the pod-side sweep with lazy compile on failure. ⚠️ Do not re-enable the gate by widening the probe
+budget — the sweep is not slow, it is erroring.
 
 ## Update policy (Admin → Platform updates)
 
