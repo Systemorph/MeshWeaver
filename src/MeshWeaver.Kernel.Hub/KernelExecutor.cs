@@ -414,68 +414,22 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         scriptLogger = new ScriptLogger(defaultLogger);
         scriptGlobals = new MeshScriptGlobals { Mesh = publicHub, Log = scriptLogger };
 
-        // Curated anchors + DI-contributed module assemblies. The full reference
-        // set ("every loaded non-dynamic assembly with a usable Location, so
-        // scripts can reach types from packages the host already loaded") comes
-        // from KernelScriptReferences — a process-shared, materialized-ONCE
-        // PortableExecutableReference snapshot. 🚨 Never pass raw Assembly objects
-        // to WithReferences here: Roslyn then materializes a fresh AssemblyMetadata
-        // + native metadata block per reference PER SESSION (~350 refs ≈ 150-200 MiB
-        // of native memory per kernel session, never reclaimed — the CI
-        // memory-pressure leak; see KernelScriptReferences docs).
-        var sessionAssemblies = new HashSet<Assembly>
-        {
-            typeof(IMessageHub).Assembly,
-            typeof(Address).Assembly,
-            typeof(UiControl).Assembly,
-            typeof(DataExtensions).Assembly,
-            typeof(EntityStore).Assembly,
-            typeof(System.ComponentModel.DescriptionAttribute).Assembly,
-            typeof(System.ComponentModel.DataAnnotations.RequiredAttribute).Assembly,
-            typeof(System.Reactive.Linq.Observable).Assembly,
-            typeof(FluentIcons).Assembly,
-            typeof(ILogger).Assembly,
-            typeof(LoggerExtensions).Assembly,
-            typeof(MeshScriptGlobals).Assembly,
-        };
-
-        // Modules that ship script templates (export, import, …) register their
-        // own assembly via DI so it's guaranteed in the references set even if it
-        // hasn't been loaded yet when the shared snapshot was taken. Each module
-        // pushes one <see cref="KernelScriptAssembly"/> singleton (or singletons)
-        // and we enumerate them here.
-        foreach (var contrib in publicHub.ServiceProvider
-                     .GetServices<KernelScriptAssembly>())
-        {
-            sessionAssemblies.Add(contrib.Assembly);
-        }
-
+        // Curated anchors + DI-contributed module assemblies + default imports all come
+        // from MeshScriptEnvironment — the ONE description of the script environment,
+        // shared with the language service's completion workspace so the editor suggests
+        // exactly what the kernel can run. 🚨 Never pass raw Assembly objects to
+        // WithReferences: Roslyn then materializes a fresh AssemblyMetadata + native
+        // metadata block per reference PER SESSION (~350 refs ≈ 150-200 MiB of native
+        // memory per kernel session, never reclaimed — the CI memory-pressure leak; see
+        // KernelScriptReferences docs).
         scriptOptions = ScriptOptions.Default
-            .WithReferences(KernelScriptReferences.GetReferences(sessionAssemblies))
+            .WithReferences(MeshScriptEnvironment.References(publicHub.ServiceProvider))
             // 🚨 Required for the sharing to be complete: the compilation resolves
             // the globals type's transitive closure via ResolveMissingAssembly —
             // with the default resolver that re-materializes every assembly's
             // native metadata PER SESSION (the other half of the leak).
-            .WithMetadataResolver(SharedScriptMetadataResolver.Instance)
-            .WithImports(
-                "System",
-                "System.Linq",
-                "System.Collections.Generic",
-                "System.ComponentModel",
-                "System.ComponentModel.DataAnnotations",
-                "System.Reactive.Linq",
-                "System.Text.Json",
-                "Microsoft.Extensions.Logging",
-                "MeshWeaver.Application.Styles",
-                "MeshWeaver.Layout",
-                // LayoutAreaHost + RenderingContext live here — used by the WithView((host, ctx) => …)
-                // lambda in nearly every `--render` layout cell. Companion to MeshWeaver.Layout above,
-                // so authors don't have to add the extra using for the standard layout-area pattern.
-                "MeshWeaver.Layout.Composition",
-                "MeshWeaver.Layout.DataGrid",
-                "MeshWeaver.Messaging",
-                "MeshWeaver.Mesh"
-            )
+            .WithMetadataResolver(MeshScriptEnvironment.MetadataResolver)
+            .WithImports(MeshScriptEnvironment.Imports)
             .WithEmitDebugInformation(true);
     }
 

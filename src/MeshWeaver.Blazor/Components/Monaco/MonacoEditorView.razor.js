@@ -790,6 +790,116 @@ export function registerCompletionProvider(editorId, config) {
     });
 }
 
+
+// ————————————————————————————————————————————————————————————— code completions
+// LSP CompletionKind (wire values, see IMeshLanguageService.CompletionKind) → Monaco
+// languages.CompletionItemKind. Distinct enums with different numbering — mapped here at the
+// boundary so the .NET side stays LSP-pure.
+const LSP_TO_MONACO_KIND = {
+    1: 18,  // Text
+    2: 0,   // Method
+    3: 1,   // Function
+    4: 2,   // Constructor
+    5: 3,   // Field
+    6: 4,   // Variable
+    7: 5,   // Class
+    8: 7,   // Interface
+    9: 8,   // Module
+    10: 9,  // Property
+    11: 12, // Unit
+    12: 13, // Value
+    13: 15, // Enum
+    14: 17, // Keyword
+    15: 27, // Snippet
+    16: 19, // Color
+    17: 20, // File
+    18: 21, // Reference
+    19: 23, // Folder
+    20: 16, // EnumMember
+    21: 14, // Constant
+    22: 6,  // Struct
+    23: 10, // Event
+    24: 11, // Operator
+    25: 24, // TypeParameter
+};
+
+/**
+ * Registers the POSITION-BASED code-completion provider (Roslyn over the mesh language
+ * service) — distinct from registerCompletionProvider, whose trigger-token model matches a
+ * typed @-reference query and cannot express "complete C# at line/column". Each suggest
+ * request round-trips the full buffer + caret to .NET (GetCodeCompletions), which answers
+ * with LSP-shaped entries; Monaco filters and ranks client-side against the current word.
+ */
+export function registerCodeCompletionProvider(editorId, config) {
+    const state = editorState.get(editorId);
+    if (!state) {
+        console.debug('Monaco editor state not available:', editorId);
+        return;
+    }
+    if (state.codeCompletionDisposable) {
+        state.codeCompletionDisposable.dispose();
+        state.codeCompletionDisposable = null;
+    }
+    const language = config?.language || 'csharp';
+    // Command invoked by Monaco AFTER an item is inserted — the acceptance signal the per-user
+    // suggest memory is built from (same mechanism the @-reference provider uses).
+    if (!state.codeCompletionCommandId && state.editorInstance) {
+        state.codeCompletionCommandId = state.editorInstance.addCommand(0, (_, label, kind, typed) => {
+            const currentState = editorState.get(editorId);
+            if (currentState?.dotNetRef && label) {
+                currentState.dotNetRef
+                    .invokeMethodAsync('HandleCodeCompletionAccepted', label, kind ?? 0, typed ?? '')
+                    .catch(err => console.debug('HandleCodeCompletionAccepted failed (editor disposed?):', err));
+            }
+        });
+    }
+    state.codeCompletionDisposable = monaco.languages.registerCompletionItemProvider(language, {
+        triggerCharacters: ['.'],
+        provideCompletionItems: async (model, position) => {
+            // Providers register globally per language — serve only our own editor's model.
+            const current = editorState.get(editorId);
+            const instance = current?.editorInstance;
+            if (!instance || instance.getModel() !== model || !current.dotNetRef) return null;
+            let items;
+            try {
+                items = await current.dotNetRef.invokeMethodAsync(
+                    'GetCodeCompletions', model.getValue(), position.lineNumber, position.column);
+            } catch (err) {
+                console.debug('GetCodeCompletions failed (editor disposed?):', err);
+                return null;
+            }
+            if (!items || items.length === 0) return { suggestions: [] };
+            const word = model.getWordUntilPosition(position);
+            const range = {
+                startLineNumber: position.lineNumber,
+                endLineNumber: position.lineNumber,
+                startColumn: word.startColumn,
+                endColumn: word.endColumn,
+            };
+            // The word being completed — recorded with the acceptance so the memory can key on
+            // "what I had typed", exactly like VS Code's recentlyUsedByPrefix.
+            const typed = word.word || '';
+            return {
+                suggestions: items.map(i => ({
+                    label: i.label,
+                    insertText: i.insertText || i.label,
+                    kind: LSP_TO_MONACO_KIND[i.kind] ?? 18,
+                    detail: i.detail || undefined,
+                    documentation: i.documentation || undefined,
+                    sortText: i.sortText || undefined,
+                    // The one item this user accepted last time in this situation. Monaco
+                    // highlights it without disturbing the order we returned.
+                    preselect: i.preselect === true,
+                    range,
+                    command: current.codeCompletionCommandId
+                        ? { id: current.codeCompletionCommandId, title: '', arguments: [i.label, i.kind, typed] }
+                        : undefined,
+                })),
+            };
+        },
+    });
+}
+
 export function isAutocompleteVisible(editorId) {
     // Check if async completion is pending
     const state = editorState.get(editorId);
@@ -1242,6 +1352,9 @@ export function dispose(editorId) {
     if (state) {
         if (state.completionDisposable) {
             state.completionDisposable.dispose();
+        }
+        if (state.codeCompletionDisposable) {
+            state.codeCompletionDisposable.dispose();
         }
         if (state._diagnosticsChangeDisposable) {
             state._diagnosticsChangeDisposable.dispose();
