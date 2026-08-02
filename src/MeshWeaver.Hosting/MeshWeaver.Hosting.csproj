@@ -3,7 +3,7 @@
     <ProjectGuid>{93595120-3ccf-45c6-8783-4829a1120166}</ProjectGuid>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="EPS.Extensions.YamlMarkdown" />
+    <PackageReference Include="YamlDotNet" />
     <PackageReference Include="Markdig" />
     <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
