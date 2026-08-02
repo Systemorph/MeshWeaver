@@ -165,9 +165,17 @@ public static class AuthenticationBuilderExtensions
     }
 
     /// <summary>
-    /// Adds Apple authentication via OAuth2.
-    /// Reads from Authentication:Apple section: ClientId, ClientSecret.
+    /// Adds Sign in with Apple via the AspNet.Security.OAuth.Apple handler.
+    /// Reads from Authentication:Apple section: ClientId (the Services ID), TeamId, KeyId,
+    /// PrivateKey (the Sign in with Apple .p8 key content).
     /// </summary>
+    /// <remarks>
+    /// Apple's protocol deviates from generic OAuth in two ways the plain OAuth handler cannot
+    /// serve: requesting the name/email scopes REQUIRES response_mode=form_post (the callback
+    /// arrives as a cross-site POST, not a GET), and there is no static client secret — the
+    /// secret is an ES256-signed JWT minted from the Sign in with Apple key, valid at most six
+    /// months. The Apple handler does both; this method only wires configuration into it.
+    /// </remarks>
     public static AuthenticationBuilder AddAppleAuthentication(
         this AuthenticationBuilder builder, IConfiguration configuration)
     {
@@ -176,35 +184,75 @@ public static class AuthenticationBuilderExtensions
         if (string.IsNullOrEmpty(clientId))
             return builder;
 
-        builder.AddOAuth("Apple", options =>
+        builder.AddApple(options =>
         {
             options.ClientId = clientId;
-            options.ClientSecret = section["ClientSecret"] ?? "";
-            options.CallbackPath = "/signin-apple";
-            options.AuthorizationEndpoint = "https://appleid.apple.com/auth/authorize";
-            options.TokenEndpoint = "https://appleid.apple.com/auth/token";
-            options.Scope.Add("name");
-            options.Scope.Add("email");
-            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.NameIdentifier, "sub");
-            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Name, "name");
-            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Email, "email");
-            options.Events = new OAuthEvents
+            var privateKey = NormalizePrivateKey(section["PrivateKey"]);
+            if (privateKey is not null)
             {
-                OnCreatingTicket = async context =>
-                {
-                    // Apple returns user info in the initial authorization response, not via userinfo endpoint.
-                    // The ID token (if present) contains the claims.
-                    if (context.TokenResponse?.Response?.RootElement is { } root
-                        && root.TryGetProperty("id_token", out _))
-                    {
-                        // Claims already extracted from token by the middleware
-                        return;
-                    }
-                }
+                options.GenerateClientSecret = true;
+                options.TeamId = section["TeamId"] ?? "";
+                options.KeyId = section["KeyId"] ?? "";
+                options.PrivateKey = (_, _) => Task.FromResult(privateKey.AsMemory());
+            }
+            else
+            {
+                // Externally minted client-secret JWT; expires within six months, so
+                // PrivateKey-based generation is the intended configuration.
+                options.ClientSecret = section["ClientSecret"] ?? "";
+            }
+            // The form_post callback is a cross-site POST; same correlation-cookie
+            // rationale as the Microsoft handler above.
+            options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
+            options.Events.OnRemoteFailure = context =>
+            {
+                var logger = context.HttpContext.RequestServices
+                    .GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("AppleAuth");
+                logger.LogError(context.Failure, "Apple OIDC remote failure");
+                context.Response.Redirect("/login?error=auth_failed");
+                context.HandleResponse();
+                return Task.CompletedTask;
             };
         });
 
         return builder;
+    }
+
+    private const string PemHeader = "-----BEGIN PRIVATE KEY-----";
+    private const string PemFooter = "-----END PRIVATE KEY-----";
+
+    /// <summary>
+    /// Accepts the Sign in with Apple key in every shape an environment realistically delivers
+    /// it: the .p8 PEM as-is, PEM with literal \n escapes (single-line env vars), base64 of the
+    /// whole PEM file (kubectl-style), or the bare base64 PKCS#8 body. Returns a well-formed PEM
+    /// for ECDsa.ImportFromPem, or null when no key is configured.
+    /// </summary>
+    internal static string? NormalizePrivateKey(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var key = value.Replace("\\n", "\n").Trim();
+        if (key.Contains(PemHeader))
+            return key;
+
+        var compact = string.Concat(key.Where(c => !char.IsWhiteSpace(c)));
+        try
+        {
+            var decoded = Convert.FromBase64String(compact);
+            var text = System.Text.Encoding.UTF8.GetString(decoded);
+            if (text.Contains(PemHeader))
+                return text.Trim();
+        }
+        catch (FormatException)
+        {
+            // Not base64: pass the trimmed value through so ImportFromPem reports what's wrong.
+            return key;
+        }
+
+        var body = string.Join('\n', compact.Chunk(64).Select(chunk => new string(chunk)));
+        return $"{PemHeader}\n{body}\n{PemFooter}";
     }
 
     /// <summary>
