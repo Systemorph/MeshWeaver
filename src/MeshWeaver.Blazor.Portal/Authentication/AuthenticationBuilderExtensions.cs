@@ -184,15 +184,27 @@ public static class AuthenticationBuilderExtensions
         if (string.IsNullOrEmpty(clientId))
             return builder;
 
+        var privateKey = NormalizePrivateKey(section["PrivateKey"]);
+        var teamId = section["TeamId"];
+        var keyId = section["KeyId"];
+        if (privateKey is not null && (string.IsNullOrEmpty(teamId) || string.IsNullOrEmpty(keyId)))
+            throw new InvalidOperationException(
+                "Authentication:Apple:PrivateKey is set but "
+                + (string.IsNullOrEmpty(teamId) ? "Authentication:Apple:TeamId" : "Authentication:Apple:KeyId")
+                + " is missing — the Apple client-secret JWT is signed with the key identified by TeamId + KeyId.");
+
         builder.AddApple(options =>
         {
             options.ClientId = clientId;
-            var privateKey = NormalizePrivateKey(section["PrivateKey"]);
+            // The Blazor catch-all excludes this literal path (NonfileRouteConstraint), so the
+            // callback endpoint is part of the app's routing contract — pin it rather than
+            // relying on the package default staying identical.
+            options.CallbackPath = "/signin-apple";
             if (privateKey is not null)
             {
                 options.GenerateClientSecret = true;
-                options.TeamId = section["TeamId"] ?? "";
-                options.KeyId = section["KeyId"] ?? "";
+                options.TeamId = teamId!;
+                options.KeyId = keyId;
                 options.PrivateKey = (_, _) => Task.FromResult(privateKey.AsMemory());
             }
             else
