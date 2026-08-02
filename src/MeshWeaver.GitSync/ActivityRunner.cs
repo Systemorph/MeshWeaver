@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
@@ -92,6 +93,9 @@ public static class ActivityRunner
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.GitSync.ActivityRunner");
         var workspace = hub.GetWorkspace();
+        // Resolved once here (on the caller's thread) rather than inside the execution chain:
+        // see ScheduleOffHubTurn for why the execution must not touch the calling hub's turn.
+        var subscribeScheduler = hub.ServiceProvider.GetService<IPooledSubscribeScheduler>();
 
         var id = Guid.NewGuid().ToString("N")[..8];
         var activityPath = $"{partitionPath}/_Activity/{id}";
@@ -130,7 +134,7 @@ public static class ActivityRunner
             // Update to the partition MainNode, so only a principal who can Update
             // the partition — the owner, by construction — may write it.
             var owner = OwnerContextOf(created);
-            return Observable.Using(
+            return ScheduleOffHubTurn(Observable.Using(
                 () => AccessContextScope.FromNode(created, accessService, logger),
                 _ =>
                 {
@@ -171,8 +175,45 @@ public static class ActivityRunner
                             cts.Dispose();
                         })
                         .Select(_ => activityPath);
-                });
+                }));
         });
+
+        // 🚨 THE ACTIVITY EXECUTION MUST NOT RUN ON THE CALLING HUB'S TURN — it self-deadlocks.
+        //
+        // RunActivity is invoked ON a hub (the MCP session hub, the portal host hub behind the
+        // GUI's GitHubActionArea). Under Orleans that hub is a grain with a SINGLE-THREADED
+        // activation scheduler, and `TaskScheduler.Current` inside the call IS that scheduler.
+        // Subscribing the execution inline therefore runs `command(ctx)` on the hub's turn — and
+        // every progress line the command writes (ActivityContext.Log → Append →
+        // GetMeshNodeStream(activityPath).Update) is a ROUND TRIP that needs that same turn to
+        // process the response. The turn is busy running the command, so the write never lands:
+        //
+        //   → the activity node keeps ONLY the first message (the one baked into CreateNode at
+        //     STEP 1), every later Append silently never lands, and Finish never writes a terminal
+        //     Status — the activity reads "Running" forever with no error anywhere.
+        //
+        // That is exactly the shape observed on memex 2026-08-02: GitSync activities frozen at
+        // message 1 while the SYNC ITSELF COMPLETED (its own writes go through IIoPool under the
+        // System identity, on a different path), so `{space}/_GitSync.lastSyncCommitSha` advanced
+        // while the log looked hung. It reproduces under LOAD (many heavy partitions, compiles in
+        // flight) and slips through when the mesh is idle — the classic bulk-only interleaving.
+        //
+        // The fix is a scheduler hop, NOT a timeout: run the subscribe on the drainable I/O pool,
+        // which dispatches on TaskScheduler.Default (Orleans-safe — `TaskScheduler.Current` inside
+        // a grain would re-enter the activation). Then the command and its Append/Finish writes
+        // execute on pool threads while the hub's turn stays free to route their round trips.
+        // Purely reactive — no async/await, no Task.Run, no .Result (AGENTS.md house rule).
+        //
+        // Same contract and same failure mode as LayoutAreaHost.ScheduleRenderSubscribe (a view
+        // generator that queries in-render wedging its own hub) and MeshQuery's change-feed
+        // subscribes; the pool is drainable so teardown cancels + joins in-flight work instead of
+        // letting it run on after the hub's scope disposes.
+        IObservable<T> ScheduleOffHubTurn<T>(IObservable<T> source) =>
+            subscribeScheduler is { } scheduler
+                ? scheduler.SubscribeThroughPool(source)
+                // Messaging-only hubs register no I/O pools; a bare TaskPoolScheduler is also
+                // TaskScheduler.Default-backed, so the grain-escape property still holds.
+                : source.SubscribeOn(TaskPoolScheduler.Default);
     }
 
     /// <summary>
