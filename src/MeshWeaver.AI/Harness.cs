@@ -44,6 +44,17 @@ public record Harness
     /// harnesses run their own agent loop, so they hide the agent/model pickers.
     /// </summary>
     public bool SupportsAgentSelection { get; init; }
+
+    /// <summary>
+    /// True when this harness is NOT shipped in the global <c>Harness</c> catalog and must be
+    /// installed per user (a Store plugin localizes the harness node into <c>{user}/Harness</c>)
+    /// before it appears in that user's picker. The CLI harnesses (Claude Code / GitHub Copilot)
+    /// set this: they need a per-user subscription login, so offering them to every user by
+    /// default only produces "Not logged in" dead ends. Execution verifies the picked node
+    /// still exists (<see cref="HarnessNodeType.ResolveInstalledHarness"/>), so an uninstall
+    /// revokes the harness even for composers that already selected it.
+    /// </summary>
+    public bool RequiresInstall { get; init; }
 }
 
 /// <summary>

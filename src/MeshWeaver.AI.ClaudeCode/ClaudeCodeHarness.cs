@@ -35,7 +35,12 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
         // icon-allowlist plumbing. The renderer treats an Icon starting with '<' as raw markup.
         Icon = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'><rect width='20' height='20' rx='4' fill='#D97757'/><g stroke='#fff' stroke-width='1.4' stroke-linecap='round'><line x1='10' y1='3.6' x2='10' y2='16.4'/><line x1='3.6' y1='10' x2='16.4' y2='10'/><line x1='5.5' y1='5.5' x2='14.5' y2='14.5'/><line x1='14.5' y1='5.5' x2='5.5' y2='14.5'/><line x1='7' y1='4.2' x2='13' y2='15.8'/><line x1='13' y1='4.2' x2='7' y2='15.8'/></g></svg>",
         Order = 1,
-        SupportsAgentSelection = false
+        SupportsAgentSelection = false,
+        // Not in the global catalog: needs a per-user Claude subscription login, so it is
+        // installed per user from the Store (localized into {user}/Harness) — never offered
+        // to users who haven't opted in (a fresh user hitting "Not logged in" was the
+        // 2026-08-01 onboarding-confusion root).
+        RequiresInstall = true
     };
 
     // Claude Code owns its auth slash-commands: /login (re)authenticates the user's Claude

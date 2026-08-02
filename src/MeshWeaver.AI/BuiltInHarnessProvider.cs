@@ -36,7 +36,12 @@ public sealed class BuiltInHarnessProvider(IEnumerable<IHarness> harnesses) : IS
             }
         };
 
-        foreach (var harness in harnesses.OrderBy(h => h.Definition.Order))
+        // RequiresInstall harnesses (the CLI ones) are NOT shipped in the global catalog: a Store
+        // plugin localizes their node into {user}/Harness on install, and the picker's registry
+        // union (namespace:{user}/Harness|{space}/Harness|Harness) surfaces it for that user only.
+        // Dropping them here also PRUNES the previously-shipped global rows on the DB-synced path:
+        // HarnessStaticRepoSource syncs Additive, which removes nodes the build previously owned.
+        foreach (var harness in harnesses.Where(h => !h.Definition.RequiresInstall).OrderBy(h => h.Definition.Order))
         {
             var def = harness.Definition;
             yield return new MeshNode(def.Id, HarnessNodeType.RootNamespace)
