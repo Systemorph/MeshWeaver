@@ -7,6 +7,7 @@
     <PackageVersion Include="AngleSharp" Version="1.5.2" />
     <PackageVersion Include="Appium.WebDriver" Version="8.3.0" />
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.4.0" />
+    <PackageVersion Include="AspNet.Security.OAuth.Apple" Version="10.0.0" />
     <!-- Open-source (MIT) MAUI UI libraries for the native view pack's rich controls (Phase 4+):
          charts, full data grid, and popups/expanders. All MIT-licensed — no Syncfusion/DevExpress/
          Telerik (commercial). Referenced by MeshWeaver.Maui / Memex.Client as the controls land. -->
