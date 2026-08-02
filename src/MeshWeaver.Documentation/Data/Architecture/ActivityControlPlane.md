@@ -374,6 +374,47 @@ hub.GetWorkspace().GetMeshNodeStream(activityPath!)
 >
 > **Do NOT** call `IStorageAdapter.Write` directly — same race, and worse because persistence is invisible to the per-node hub's `MeshNodeReference` cache. The next read off the node stream returns the pre-patch content.
 
+> 🚨 **The outside-write rule is not only about races — under Orleans it DEADLOCKS, silently.**
+> A cross-hub `GetMeshNodeStream(activityPath).Update(…)` is a **round trip**: it posts, and its
+> response has to be processed by the hub that issued it. When the issuing hub is an Orleans grain,
+> that hub has a **single-threaded activation scheduler** — so if the same turn is currently running
+> the long operation, the turn cannot serve the response it is itself waiting on. The write never
+> lands and nothing errors:
+>
+> - the activity keeps **only** the first message (the one baked into `CreateNode`),
+> - every later progress line silently never appears,
+> - the terminal `Status` is never written, so the activity reads **`Running` forever**,
+> - meanwhile the operation itself *completes* — its own writes go through `IIoPool` under the System
+>   identity on a different path — so the side effects land and only the log looks hung.
+>
+> Observed on memex 2026-08-02: GitSync activities frozen at message 1 while
+> `{space}/_GitSync.lastSyncCommitSha` had already advanced to the new commit. Diagnosing this from
+> the activity node alone is misleading — **verify the operation by its own effect, not by its log.**
+> It reproduces under load (many heavy partitions, compiles in flight) and slips through on an idle
+> mesh, which is why it survives review.
+>
+> Two rules follow, and they are separate:
+>
+> 1. **Progress must come FROM the activity hub.** The activity hub owns its content; it appends its
+>    own `Messages` and writes its own terminal `Status`. Other hubs flip `RequestedStatus` and let
+>    the reducer react — they never patch the log.
+> 2. **Never run the activity's execution on the calling hub's turn.** Hop the subscribe onto the
+>    drainable pool (`IPooledSubscribeScheduler.SubscribeThroughPool`, falling back to
+>    `SubscribeOn(TaskPoolScheduler.Default)`) so the command and its writes execute on pool threads
+>    while the hub's turn stays free to route their round trips. This is a **scheduler** fix, never a
+>    timeout — a bigger timeout just hangs longer. `TaskPoolScheduler.Default` is
+>    `TaskScheduler.Default`-backed, which is what makes it Orleans-safe; anything that captures
+>    `TaskScheduler.Current` inside a grain re-enters the activation and reproduces the deadlock.
+>    Purely reactive — no `async`/`await`, no `Task.Run`, no `.Result`.
+>
+> Same failure shape and same remedy as `LayoutAreaHost.ScheduleRenderSubscribe` (a view generator
+> that queries in-render wedging its own hub turn).
+>
+> ⚠️ `ActivityRunner.Append` / `Finish` (`MeshWeaver.GitSync`) still issue their writes from the
+> **calling** hub's workspace — rule 1 above is not yet satisfied there. Rule 2 is (the execution is
+> scheduled off the hub turn), which is what releases the deadlock; moving the writes into the
+> activity hub is the remaining structural fix.
+
 `NodeTypeCompilationActivity.MarkSucceeded` / `MarkFailed` in `MeshWeaver.Graph.Configuration` is the canonical implementation — copy its shape (`Update` through `GetMeshNodeStream`, with a best-effort `try/catch` that logs and swallows so observability never breaks the work).
 
 ### When the activity is just a response field
