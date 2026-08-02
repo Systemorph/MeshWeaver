@@ -58,6 +58,11 @@ internal sealed class MeshNodeLanguageService(
     // Path used as the script document's FilePath — never a real MeshNode path.
     private const string ScriptDocumentPath = "__script__.csx";
 
+    // The likely-usage prior (how often each identifier occurs in the Code nodes this mesh
+    // already runs). Built lazily in the BACKGROUND and never awaited on a request — see
+    // CompletionUsageIndex; until it is ready, ranking simply proceeds without it.
+    private readonly CompletionUsageIndex usageIndex = new(hub, logger);
+
     // Compile pool: Roslyn LSP work is CPU-bound, so it routes through the bounded
     // Compile pool which caps concurrency so it can't starve other schedulers.
     // A bare Observable.FromAsync deadlocks under a blocking subscriber (SubscribeOn
@@ -90,18 +95,20 @@ internal sealed class MeshNodeLanguageService(
             {
                 if (cached is null || !cached.DocumentsByPath.TryGetValue(sourcePath, out var docId))
                     return Observable.Return<IReadOnlyList<CompletionEntry>>(Array.Empty<CompletionEntry>());
-                return _ioPool.Run(ct => GetCompletionsAsync(cached, docId, position, maxResults, ct));
+                return _ioPool.Run(ct => GetCompletionsAsync(cached, docId, position, maxResults, usageIndex, ct));
             });
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<CompletionEntry>> GetCompletions(
         string nodeTypePath, string sourcePath, string proposedCode, SourcePosition position, int maxResults = 20)
-        => ResolveNode(nodeTypePath)
+        // Kick the likely-usage prior's background refresh (never awaited — a cold or wedged
+        // index just means this request ranks without the corpus signal).
+        => Observable.Defer(() => { usageIndex.EnsureFresh(); return ResolveNode(nodeTypePath); })
             .SelectMany(node => IsNodeType(node)
                 ? GetOrBuildWorkspace(nodeTypePath).SelectMany(cached => cached is null
                     ? Observable.Return<IReadOnlyList<CompletionEntry>>(Array.Empty<CompletionEntry>())
                     : _ioPool.Run(ct => GetOverlayCompletionsAsync(
-                        cached, sourcePath, proposedCode, position, maxResults, ct)))
+                        cached, sourcePath, proposedCode, position, maxResults, usageIndex, ct)))
                 // Not a NodeType → a standalone SCRIPT Code node (e.g. a course lesson cell):
                 // complete in the kernel's script environment.
                 : _ioPool.Run(ct => GetScriptCompletionsAsync(proposedCode, position, maxResults, ct)));
@@ -288,11 +295,12 @@ internal sealed class MeshNodeLanguageService(
     }
 
     private static async Task<IReadOnlyList<CompletionEntry>> GetCompletionsAsync(
-        CachedWorkspace cached, DocumentId docId, SourcePosition position, int maxResults, CancellationToken ct)
+        CachedWorkspace cached, DocumentId docId, SourcePosition position, int maxResults,
+        CompletionUsageIndex? usage, CancellationToken ct)
     {
         var document = cached.Workspace.CurrentSolution.GetDocument(docId);
         if (document is null) return Array.Empty<CompletionEntry>();
-        return await CompleteAsync(document, position, maxResults, ct).ConfigureAwait(false);
+        return await CompleteAsync(document, position, maxResults, usage, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -304,7 +312,7 @@ internal sealed class MeshNodeLanguageService(
     /// </summary>
     private static async Task<IReadOnlyList<CompletionEntry>> GetOverlayCompletionsAsync(
         CachedWorkspace cached, string sourcePath, string proposedCode, SourcePosition position,
-        int maxResults, CancellationToken ct)
+        int maxResults, CompletionUsageIndex? usage, CancellationToken ct)
     {
         var solution = cached.Workspace.CurrentSolution;
         Document? document;
@@ -322,7 +330,7 @@ internal sealed class MeshNodeLanguageService(
                 .GetDocument(newId);
         }
         if (document is null) return Array.Empty<CompletionEntry>();
-        return await CompleteAsync(document, position, maxResults, ct).ConfigureAwait(false);
+        return await CompleteAsync(document, position, maxResults, usage, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -334,12 +342,13 @@ internal sealed class MeshNodeLanguageService(
     private async Task<IReadOnlyList<CompletionEntry>> GetScriptCompletionsAsync(
         string proposedCode, SourcePosition position, int maxResults, CancellationToken ct)
     {
+        var usage = usageIndex;
         var script = _scriptWorkspace.Value;
         var document = script.Workspace.CurrentSolution
             .WithDocumentText(script.DocumentId, SourceText.From(StripKernelDirectives(proposedCode)))
             .GetDocument(script.DocumentId);
         if (document is null) return Array.Empty<CompletionEntry>();
-        return await CompleteAsync(document, position, maxResults, ct).ConfigureAwait(false);
+        return await CompleteAsync(document, position, maxResults, usage, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -375,7 +384,8 @@ internal sealed class MeshNodeLanguageService(
     /// position, flattened to <see cref="CompletionEntry"/>.
     /// </summary>
     private static async Task<IReadOnlyList<CompletionEntry>> CompleteAsync(
-        Document document, SourcePosition position, int maxResults, CancellationToken ct)
+        Document document, SourcePosition position, int maxResults, CompletionUsageIndex? usage,
+        CancellationToken ct)
     {
         var text = await document.GetTextAsync(ct).ConfigureAwait(false);
         var offset = TryGetOffset(text, position);
@@ -387,25 +397,42 @@ internal sealed class MeshNodeLanguageService(
         var list = await service.GetCompletionsAsync(document, offset.Value, cancellationToken: ct).ConfigureAwait(false);
         if (list is null || list.ItemsList.Count == 0) return Array.Empty<CompletionEntry>();
 
-        // 🚨 Filter by the word being typed BEFORE truncating. Roslyn returns every symbol in
-        // scope, alphabetically — a bare Take(maxResults) keeps the A's and drops everything
-        // after them, so typing "Mes" could never reach "Mesh" no matter how the client
-        // filters afterwards. The prefix comes from the completion list's own span (the token
-        // Roslyn would replace), so it is exactly what the user has typed at the caret.
+        // 🚨 Rank BEFORE truncating. Roslyn returns every symbol in scope, alphabetically — a
+        // bare Take(maxResults) keeps the A's and drops everything after them, so typing "Mes"
+        // could never reach "Mesh" no matter how the client filters afterwards. The word being
+        // completed comes from the completion list's own span (the token Roslyn would replace),
+        // so it is exactly what the user has typed at the caret.
         var prefix = list.Span.Length > 0 && list.Span.End <= text.Length
             ? text.ToString(list.Span)
             : string.Empty;
 
-        var ranked = (prefix.Length == 0
-                ? (IEnumerable<CompletionItem>)list.ItemsList
-                : list.ItemsList
-                    .Where(i => Matches(i, prefix))
-                    // Prefix matches first (what the user is literally typing), then Roslyn's
-                    // own ranking within each group.
-                    .OrderByDescending(i => (i.FilterText ?? i.DisplayText)
-                        .StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    .ThenBy(i => i.SortText ?? i.DisplayText, StringComparer.OrdinalIgnoreCase))
-            .Take(maxResults);
+        // Two regimes, the same split every editor makes (VS Code: client fuzzy-scorer for the
+        // typed word, server sortText/priority for ties, learned prior otherwise):
+        //
+        //   • The user has TYPED something → MATCH QUALITY decides, and Roslyn's own matcher is
+        //     the authority (exact > prefix > CamelCase hump > substring, honouring the
+        //     MatchPriority that target-typing sets). Popularity must NOT reorder across match
+        //     quality here, or typing "Bad" would surface the popular "Stack" above "Badge".
+        //   • The user has typed NOTHING (just pressed `.`) → there is no match quality to rank
+        //     by and alphabetical is worthless. This is where LIKELY USAGE decides: how often
+        //     each identifier occurs in the code this mesh already runs, plus a locality bonus
+        //     for identifiers already in this very cell (VS Code's locality bonus, and the
+        //     signal IntelliCode models over a public corpus — ours is better, it is the
+        //     MeshWeaver idiom itself).
+        IEnumerable<CompletionItem> ranked;
+        if (prefix.Length > 0)
+        {
+            ranked = service.FilterItems(document, list.ItemsList.ToImmutableArray(), prefix);
+        }
+        else
+        {
+            var local = LocalIdentifierCounts(text.ToString());
+            ranked = list.ItemsList
+                .OrderByDescending(i => UsageScore(i, usage, local))
+                .ThenByDescending(i => i.Rules.MatchPriority)
+                .ThenBy(i => i.SortText ?? i.DisplayText, StringComparer.OrdinalIgnoreCase);
+        }
+        ranked = ranked.Take(maxResults);
 
         var result = new List<CompletionEntry>();
         foreach (var item in ranked)
@@ -421,13 +448,36 @@ internal sealed class MeshNodeLanguageService(
         return result;
     }
 
-    /// <summary>Does a completion item match the typed prefix — by prefix, else by substring
-    /// (so "grid" still finds "DataGrid", the way an editor's fuzzy match behaves)?</summary>
-    private static bool Matches(CompletionItem item, string prefix)
+    /// <summary>
+    /// The likely-usage score for one candidate: how often the identifier appears in THIS cell
+    /// (weighted heavily — the strongest signal about what the author is doing right now, and it
+    /// works on a cold index) plus how often it appears across the mesh's existing Code nodes.
+    /// </summary>
+    private static int UsageScore(
+        CompletionItem item, CompletionUsageIndex? usage, IReadOnlyDictionary<string, int> local)
     {
-        var filterText = item.FilterText ?? item.DisplayText;
-        return filterText.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            || filterText.Contains(prefix, StringComparison.OrdinalIgnoreCase);
+        var name = item.FilterText is { Length: > 0 } f ? f : item.DisplayText;
+        var localCount = local.TryGetValue(name, out var n) ? n : 0;
+        return (LocalityWeight * localCount) + (usage?.Frequency(name) ?? 0);
+    }
+
+    /// <summary>How much an occurrence in the current cell outweighs one in the corpus.</summary>
+    private const int LocalityWeight = 5;
+
+    /// <summary>Identifier occurrences within the cell being edited (VS Code's locality bonus).</summary>
+    private static Dictionary<string, int> LocalIdentifierCounts(string code)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (string.IsNullOrEmpty(code))
+            return counts;
+        foreach (System.Text.RegularExpressions.Match m in
+                 System.Text.RegularExpressions.Regex.Matches(code, @"[A-Za-z_][A-Za-z0-9_]*"))
+        {
+            var token = m.Value;
+            if (token.Length < 2) continue;
+            counts[token] = counts.TryGetValue(token, out var n) ? n + 1 : 1;
+        }
+        return counts;
     }
 
     /// <summary>
