@@ -49,6 +49,7 @@ public static class GraphConfigurationExtensions
                 .AddApprovalType()
                 .AddNotificationType()
                 .AddNotificationSettingsType()
+                .AddCompletionMemoryType()
                 .AddNotificationRuleType()
                 .AddNotificationChannelType()
                 .AddInvitationType()
