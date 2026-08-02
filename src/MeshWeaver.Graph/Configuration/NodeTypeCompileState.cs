@@ -156,12 +156,13 @@ public static class NodeTypeCompileStateMirror
     public static string StatePath(string nodeTypePath) => $"{nodeTypePath}/_Activity/{StateId}";
 
     /// <summary>
-    /// Reads the persisted compile state from the satellite — null when absent or unreadable
-    /// (a missing satellite means "not mirrored yet", never an error). Cold; one emission.
+    /// Reads the persisted compile state from the satellite — null when the satellite is ABSENT
+    /// ("not mirrored yet"; <c>GetMeshNode</c> itself emits null for a missing node) or its
+    /// content unparsable. A timeout or denial PROPAGATES: collapsing those into "no state"
+    /// would hand phase-2 readers a silent wrong answer for a mesh stall. Cold; one emission.
     /// </summary>
     public static IObservable<NodeTypeCompileState?> Read(IMessageHub hub, string nodeTypePath) =>
         hub.GetMeshNode(StatePath(nodeTypePath), TimeSpan.FromSeconds(10))
-            .Catch((Exception _) => Observable.Return<MeshNode?>(null))
             .Take(1)
             .Select(node => Parse(node, hub.JsonSerializerOptions));
 

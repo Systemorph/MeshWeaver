@@ -87,8 +87,9 @@ public class NodeTypeCompileStateMirrorTest(ITestOutputHelper output) : Monolith
     /// the mirror writes asynchronously, so a single read can race it.</summary>
     private async Task WaitForState(string statePath, Func<NodeTypeCompileState, bool> predicate) =>
         await Observable.Interval(TimeSpan.FromMilliseconds(200)).StartWith(0L)
-            .SelectMany(_ => ReadNode(statePath)
-                .Catch((Exception _) => Observable.Return<MeshNode?>(null)))
+            // ReadNode maps the expected not-found to null itself; a genuine read failure
+            // (timeout with diagnostics, denial) must FAIL the test loudly, not poll on.
+            .SelectMany(_ => ReadNode(statePath))
             .Select(n => NodeTypeCompileStateMirror.Parse(n, Mesh.JsonSerializerOptions))
             .Where(s => s is not null && predicate(s))
             .FirstAsync()
