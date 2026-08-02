@@ -192,6 +192,11 @@ data:
   Authentication__Microsoft__TenantId: "{{ .Values.config.memex_portal.Authentication__Microsoft__TenantId | default "" }}"
   Authentication__Google__ClientId: "{{ .Values.config.memex_portal.Authentication__Google__ClientId | default "" }}"
   Authentication__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Authentication__LinkedIn__ClientId | default "" }}"
+  # Apple: ClientId is the Services ID; TeamId/KeyId identify the Sign in with Apple key
+  # whose private key (the secret) is Authentication__Apple__PrivateKey in secrets.yaml.
+  Authentication__Apple__ClientId: "{{ .Values.config.memex_portal.Authentication__Apple__ClientId | default "" }}"
+  Authentication__Apple__TeamId: "{{ .Values.config.memex_portal.Authentication__Apple__TeamId | default "" }}"
+  Authentication__Apple__KeyId: "{{ .Values.config.memex_portal.Authentication__Apple__KeyId | default "" }}"
   Social__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Social__LinkedIn__ClientId | default "" }}"
   # ---- Onboarding: invitation-only gate (first user always bootstraps) ------
   Features__Onboarding__InvitationOnly: "{{ .Values.config.memex_portal.Features__Onboarding__InvitationOnly | default "false" }}"
