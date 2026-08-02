@@ -384,8 +384,9 @@ public record Widget
     public double Price { get; init; }
 }")).Should().Within(60.Seconds()).Emit();
 
-        // Proposed: the same record plus a consumer poised at `w.` — line 8 (0-based),
-        // char 26 = right after the dot in "    public string M(Widget w) => w.".
+        // Proposed: the same record plus a consumer poised at `w.` — line 8 (0-based) is
+        // "    public static string M(Widget w) => w.", whose 42 characters put the caret at
+        // char 42, right after the dot.
         const string proposed = @"
 public record Widget
 {
@@ -697,4 +698,23 @@ var c = Controls.Bad";
     [Fact]
     public void CompletionMemoryPath_IsThePerUserSettingsNode()
         => CompletionMemoryStore.PathFor("alice").Should().Be("alice/_Settings/Completions");
+
+    [Fact]
+    public async Task Completions_UnresolvableOwner_ReturnNothing_NotScriptGuesses()
+    {
+        // An owner that cannot be read leaves the language environment UNKNOWN. Guessing
+        // "script" there would offer the kernel globals (Mesh/Log/Ct) inside what might be a
+        // NodeType source — wrong suggestions, confidently presented. No suggestions is the
+        // honest answer, and the same for diagnostics.
+        var completions = await LanguageService
+            .GetCompletions("does/not/exist", "does/not/exist/Source/Cell", "Mes",
+                new SourcePosition(0, 3), maxResults: 20)
+            .Should().Within(60.Seconds()).Emit();
+        completions.Should().BeEmpty("an unresolvable owner has no known completion environment");
+
+        var diagnostics = await LanguageService
+            .CheckSpeculative("does/not/exist", "does/not/exist/Source/Cell", "var x = notDefined;")
+            .Should().Within(60.Seconds()).Emit();
+        diagnostics.Should().BeEmpty("nor any environment to diagnose in");
+    }
 }
