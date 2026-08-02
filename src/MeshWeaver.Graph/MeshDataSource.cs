@@ -1036,6 +1036,17 @@ public static class MeshDataSourceExtensions
                     .InstallSourcesWatcher(hub, workspace);
                 hub.RegisterForDisposal(sourcesSub);
             }
+
+            // Compile-state mirror (issue #748, phase 1): every real change of a NodeType
+            // node's operational compile members is dual-written onto the fixed-id
+            // satellite at {type}/_Activity/compile-state, so the state gains a home OFF
+            // the repo-authored node. Installed like the compile watchers — on every
+            // per-node hub, filtering per emission — and independent of the compilation
+            // service: the mirror reflects whatever state the node carries, wherever it
+            // was written. Readers still consume the node; phase 2 flips them to the
+            // satellite, phase 3 stops the node writes.
+            var mirrorSub = NodeTypeCompileStateMirror.Install(hub, workspace);
+            hub.RegisterForDisposal(mirrorSub);
         }
         catch (Exception ex)
         {

@@ -43,6 +43,24 @@ public static class MeshNodeContentExtensions
                         typeof(T).Name, node.Path, je.GetRawText());
                     return null;
                 }
+            case System.Text.Json.Nodes.JsonNode jn:
+                // The DOM twin of the JsonElement case. Node builders assign JsonObject content,
+                // and a freshly created node's own stream carries it in that shape until the
+                // materialization pipeline re-types it — falling through to the same-short-name
+                // branch below returned a SILENT null for it ("JsonObject" never matches T), the
+                // exact shape-blindness this accessor exists to prevent (found 2026-08-02: the
+                // compile-state mirror projected nothing for every just-created NodeType node).
+                try
+                {
+                    return jn.Deserialize<T>(options);
+                }
+                catch (JsonException ex)
+                {
+                    logger?.LogError(ex,
+                        "ContentAs<{TargetType}> could not recover Content for {Path}: {RawJson}",
+                        typeof(T).Name, node.Path, jn.ToJsonString());
+                    return null;
+                }
             default:
                 // Content is a typed object, but not OUR T. Recover ONLY when the runtime type has the
                 // SAME short name as T: the same class compiled into a different dynamic node assembly
