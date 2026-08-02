@@ -5,6 +5,10 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="AngleSharp" Version="1.5.2" />
+    <!-- Used DIRECTLY by MeshWeaver.AI (skill/agent front matter) and MeshWeaver.Hosting
+         (MarkdownFileParser). It used to arrive only TRANSITIVELY via EPS.Extensions.YamlMarkdown,
+         so removing that unused package broke the build - an accidental dependency, now explicit. -->
+    <PackageVersion Include="YamlDotNet" Version="16.3.0" />
     <PackageVersion Include="Appium.WebDriver" Version="8.3.0" />
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.4.0" />
     <PackageVersion Include="AspNet.Security.OAuth.Apple" Version="10.0.0" />
@@ -70,9 +74,9 @@
     <PackageVersion Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" Version="1.5.2" />
     <PackageVersion Include="Azure.Extensions.AspNetCore.DataProtection.Keys" Version="1.6.1" />
     <!-- Microsoft.AspNetCore.DataProtection pinned to override transitive 10.0.0 (CVE-2026-40372 / GHSA-9mv3-2cwr-p262) -->
-    <PackageVersion Include="Microsoft.AspNetCore.DataProtection" Version="10.0.7" />
+    <PackageVersion Include="Microsoft.AspNetCore.DataProtection" Version="10.0.10" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.AzureStorage" Version="3.1.24" />
-    <PackageVersion Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="10.0.7" />
+    <PackageVersion Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="10.0.10" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.7" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client.Core" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.7" />
@@ -114,8 +118,8 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Graph" Version="6.1.0" />
-    <PackageVersion Include="Microsoft.Identity.Web" Version="4.9.0" />
-    <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.9.0" />
+    <PackageVersion Include="Microsoft.Identity.Web" Version="4.14.2" />
+    <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.14.2" />
     <PackageVersion Include="Microsoft.Orleans.BroadcastChannel" Version="10.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.2.0" />
