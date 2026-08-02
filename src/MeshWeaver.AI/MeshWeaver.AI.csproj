@@ -16,6 +16,7 @@
                  CopyToOutputDirectory="PreserveNewest" />
     </ItemGroup>
     <ItemGroup>
+        <PackageReference Include="YamlDotNet" />
         <PackageReference Include="Azure.AI.OpenAI" />
         <PackageReference Include="Azure.Core" />
         <PackageReference Include="HtmlAgilityPack" />
