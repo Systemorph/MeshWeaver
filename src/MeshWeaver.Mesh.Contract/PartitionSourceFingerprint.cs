@@ -90,6 +90,15 @@ public static class PartitionSourceFingerprint
     /// </summary>
     private static string NodeContentToken(MeshNode node, JsonSerializerOptions? options)
     {
+        // Mesh-owned compile bookkeeping is NOT source content: a NodeType file whose only diff is
+        // a stale compilationStatus / assembly pointer has not changed — hashing those members made
+        // bookkeeping churn look like authored changes (needless re-imports and recompiles) while
+        // the AUTHORED change signal (configuration, sources, and every Code node's text) is what
+        // this token exists to capture. Changing the token semantics re-hashes every stored
+        // NodeType entry ONCE (the next import re-upserts them); the import-side operational
+        // preserve makes that pass a structural no-op.
+        if (NodeTypeOperationalContent.IsNodeTypeNode(node))
+            node = NodeTypeOperationalContent.StripOperational(node, options ?? DefaultContentOptions);
         var contentJson = node.Content is null
             ? string.Empty
             : JsonSerializer.Serialize(node.Content, options ?? DefaultContentOptions);
