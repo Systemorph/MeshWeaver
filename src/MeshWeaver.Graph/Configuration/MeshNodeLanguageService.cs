@@ -46,6 +46,18 @@ internal sealed class MeshNodeLanguageService(
     private readonly ConcurrentDictionary<string, CachedWorkspace> _cache =
         new(StringComparer.Ordinal);
 
+    // The ONE script workspace — for Code nodes with no NodeType compilation behind them
+    // (course lesson cells). Its reference set is process-shared and fixed for the service's
+    // lifetime, so a single lazily-built project serves every request: each suggest forks the
+    // immutable solution with the in-flight text, nothing is applied back, and concurrent
+    // requests never contend. Bounded: one AdhocWorkspace total, not one per cell.
+    private readonly Lazy<ScriptWorkspace> _scriptWorkspace = new(
+        () => BuildScriptWorkspace(hub.ServiceProvider),
+        LazyThreadSafetyMode.ExecutionAndPublication);
+
+    // Path used as the script document's FilePath — never a real MeshNode path.
+    private const string ScriptDocumentPath = "__script__.csx";
+
     // Compile pool: Roslyn LSP work is CPU-bound, so it routes through the bounded
     // Compile pool which caps concurrency so it can't starve other schedulers.
     // A bare Observable.FromAsync deadlocks under a blocking subscriber (SubscribeOn
@@ -81,16 +93,44 @@ internal sealed class MeshNodeLanguageService(
                 return _ioPool.Run(ct => GetCompletionsAsync(cached, docId, position, maxResults, ct));
             });
 
+    /// <inheritdoc />
+    public IObservable<IReadOnlyList<CompletionEntry>> GetCompletions(
+        string nodeTypePath, string sourcePath, string proposedCode, SourcePosition position, int maxResults = 20)
+        => ResolveNode(nodeTypePath)
+            .SelectMany(node => IsNodeType(node)
+                ? GetOrBuildWorkspace(nodeTypePath).SelectMany(cached => cached is null
+                    ? Observable.Return<IReadOnlyList<CompletionEntry>>(Array.Empty<CompletionEntry>())
+                    : _ioPool.Run(ct => GetOverlayCompletionsAsync(
+                        cached, sourcePath, proposedCode, position, maxResults, ct)))
+                // Not a NodeType → a standalone SCRIPT Code node (e.g. a course lesson cell):
+                // complete in the kernel's script environment.
+                : _ioPool.Run(ct => GetScriptCompletionsAsync(proposedCode, position, maxResults, ct)));
+
     public IObservable<IReadOnlyList<DiagnosticInfo>> CheckSpeculative(
         string nodeTypePath, string sourcePath, string proposedCode)
         => ResolveNode(nodeTypePath)
-            .SelectMany(node => node is null
-                ? Observable.Return<IReadOnlyList<DiagnosticInfo>>(Array.Empty<DiagnosticInfo>())
-                : compilationService.GetCompilationInputsAsync(node)
+            .SelectMany(node => IsNodeType(node)
+                ? compilationService.GetCompilationInputsAsync(node!)
                     .SelectMany(inputs => inputs is null
                         ? Observable.Return<IReadOnlyList<DiagnosticInfo>>(Array.Empty<DiagnosticInfo>())
                         : _ioPool.Run(ct =>
-                            speculativeCompilation.GetDiagnosticsAsync(inputs, sourcePath, proposedCode, ct))));
+                            speculativeCompilation.GetDiagnosticsAsync(inputs, sourcePath, proposedCode, ct)))
+                // Not a NodeType → a standalone script Code node: diagnose in the script
+                // environment so lesson cells get live squiggles too (this used to fall
+                // through to a compilation that parses a cell as REGULAR C#, reporting the
+                // spurious "top-level statements must be in an executable" on every cell).
+                : _ioPool.Run(ct => GetScriptDiagnosticsAsync(proposedCode, ct)));
+
+    /// <summary>
+    /// Is the completion/diagnostics owner an actual NodeType definition (whose sources
+    /// compile as a library), as opposed to any other node — a Markdown lesson page, a bare
+    /// Code node — whose code the kernel runs as a SCRIPT? This is the ONE dispatch between
+    /// the two language environments, and it must key on what the node IS: a plain Code node
+    /// still produces compilation inputs, so "inputs resolved" never distinguished them.
+    /// </summary>
+    private static bool IsNodeType(MeshNode? node)
+        => node is not null
+            && string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal);
 
     /// <inheritdoc />
     public void Evict(string nodeTypePath)
@@ -210,7 +250,6 @@ internal sealed class MeshNodeLanguageService(
 
         var compilation = await project.GetCompilationAsync(ct).ConfigureAwait(false);
         if (compilation is null) return Array.Empty<DiagnosticInfo>();
-
         var diags = compilation.GetDiagnostics(ct);
         if (diags.IsDefaultOrEmpty) return Array.Empty<DiagnosticInfo>();
 
@@ -253,7 +292,91 @@ internal sealed class MeshNodeLanguageService(
     {
         var document = cached.Workspace.CurrentSolution.GetDocument(docId);
         if (document is null) return Array.Empty<CompletionEntry>();
+        return await CompleteAsync(document, position, maxResults, ct).ConfigureAwait(false);
+    }
 
+    /// <summary>
+    /// Overlay completions inside a NodeType's compilation: the CURRENT solution with the one
+    /// document's text substituted by the editor's in-flight code (an unknown
+    /// <paramref name="sourcePath"/> is added as a new document — same tolerance as
+    /// <see cref="CheckSpeculative"/>). Forked solutions are immutable, so concurrent suggest
+    /// requests never contend and nothing needs applying back.
+    /// </summary>
+    private static async Task<IReadOnlyList<CompletionEntry>> GetOverlayCompletionsAsync(
+        CachedWorkspace cached, string sourcePath, string proposedCode, SourcePosition position,
+        int maxResults, CancellationToken ct)
+    {
+        var solution = cached.Workspace.CurrentSolution;
+        Document? document;
+        if (cached.DocumentsByPath.TryGetValue(sourcePath, out var docId))
+        {
+            document = solution
+                .WithDocumentText(docId, SourceText.From(proposedCode))
+                .GetDocument(docId);
+        }
+        else
+        {
+            var newId = DocumentId.CreateNewId(cached.ProjectId);
+            document = solution
+                .AddDocument(newId, sourcePath, SourceText.From(proposedCode), filePath: sourcePath)
+                .GetDocument(newId);
+        }
+        if (document is null) return Array.Empty<CompletionEntry>();
+        return await CompleteAsync(document, position, maxResults, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Completions for a standalone SCRIPT Code node in the environment the kernel executes
+    /// it in — script-kind parsing, the kernel's default imports and process-shared reference
+    /// set, and the script globals type in scope (see <c>MeshScriptEnvironment</c>), so the
+    /// editor suggests exactly what a ▶ Run can use.
+    /// </summary>
+    private async Task<IReadOnlyList<CompletionEntry>> GetScriptCompletionsAsync(
+        string proposedCode, SourcePosition position, int maxResults, CancellationToken ct)
+    {
+        var script = _scriptWorkspace.Value;
+        var document = script.Workspace.CurrentSolution
+            .WithDocumentText(script.DocumentId, SourceText.From(StripKernelDirectives(proposedCode)))
+            .GetDocument(script.DocumentId);
+        if (document is null) return Array.Empty<CompletionEntry>();
+        return await CompleteAsync(document, position, maxResults, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Diagnostics for a standalone SCRIPT Code node — the script-environment sibling of
+    /// <see cref="SpeculativeCompilation"/>, so lesson cells get live squiggles.
+    /// </summary>
+    private async Task<IReadOnlyList<DiagnosticInfo>> GetScriptDiagnosticsAsync(
+        string proposedCode, CancellationToken ct)
+    {
+        var script = _scriptWorkspace.Value;
+        var document = script.Workspace.CurrentSolution
+            .WithDocumentText(script.DocumentId, SourceText.From(StripKernelDirectives(proposedCode)))
+            .GetDocument(script.DocumentId);
+        var compilation = document is null
+            ? null
+            : await document.Project.GetCompilationAsync(ct).ConfigureAwait(false);
+        if (compilation is null) return Array.Empty<DiagnosticInfo>();
+
+
+        var diags = compilation.GetDiagnostics(ct);
+        if (diags.IsDefaultOrEmpty) return Array.Empty<DiagnosticInfo>();
+        var result = new List<DiagnosticInfo>();
+        foreach (var d in diags)
+        {
+            if (d.Severity == RoslynDiagnosticSeverity.Hidden) continue;
+            result.Add(ToDiagnosticInfo(d));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// The shared core: Roslyn <see cref="CompletionService"/> over one document at one
+    /// position, flattened to <see cref="CompletionEntry"/>.
+    /// </summary>
+    private static async Task<IReadOnlyList<CompletionEntry>> CompleteAsync(
+        Document document, SourcePosition position, int maxResults, CancellationToken ct)
+    {
         var text = await document.GetTextAsync(ct).ConfigureAwait(false);
         var offset = TryGetOffset(text, position);
         if (offset is null) return Array.Empty<CompletionEntry>();
@@ -264,11 +387,29 @@ internal sealed class MeshNodeLanguageService(
         var list = await service.GetCompletionsAsync(document, offset.Value, cancellationToken: ct).ConfigureAwait(false);
         if (list is null || list.ItemsList.Count == 0) return Array.Empty<CompletionEntry>();
 
-        var take = Math.Min(maxResults, list.ItemsList.Count);
-        var result = new List<CompletionEntry>(take);
-        for (var i = 0; i < take; i++)
+        // 🚨 Filter by the word being typed BEFORE truncating. Roslyn returns every symbol in
+        // scope, alphabetically — a bare Take(maxResults) keeps the A's and drops everything
+        // after them, so typing "Mes" could never reach "Mesh" no matter how the client
+        // filters afterwards. The prefix comes from the completion list's own span (the token
+        // Roslyn would replace), so it is exactly what the user has typed at the caret.
+        var prefix = list.Span.Length > 0 && list.Span.End <= text.Length
+            ? text.ToString(list.Span)
+            : string.Empty;
+
+        var ranked = (prefix.Length == 0
+                ? (IEnumerable<CompletionItem>)list.ItemsList
+                : list.ItemsList
+                    .Where(i => Matches(i, prefix))
+                    // Prefix matches first (what the user is literally typing), then Roslyn's
+                    // own ranking within each group.
+                    .OrderByDescending(i => (i.FilterText ?? i.DisplayText)
+                        .StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    .ThenBy(i => i.SortText ?? i.DisplayText, StringComparer.OrdinalIgnoreCase))
+            .Take(maxResults);
+
+        var result = new List<CompletionEntry>();
+        foreach (var item in ranked)
         {
-            var item = list.ItemsList[i];
             result.Add(new CompletionEntry(
                 Label: item.DisplayText,
                 Kind: MapTagsToKind(item.Tags),
@@ -278,6 +419,35 @@ internal sealed class MeshNodeLanguageService(
                 SortText: item.SortText));
         }
         return result;
+    }
+
+    /// <summary>Does a completion item match the typed prefix — by prefix, else by substring
+    /// (so "grid" still finds "DataGrid", the way an editor's fuzzy match behaves)?</summary>
+    private static bool Matches(CompletionItem item, string prefix)
+    {
+        var filterText = item.FilterText ?? item.DisplayText;
+        return filterText.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            || filterText.Contains(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Blanks kernel-only directive lines (<c>#r "nuget: …"</c> — restored out of band by the
+    /// kernel, unknown to a workspace compilation) while PRESERVING line numbers, so positions
+    /// and diagnostic locations still line up with the editor's text.
+    /// </summary>
+    internal static string StripKernelDirectives(string code)
+    {
+        if (string.IsNullOrEmpty(code) || !code.Contains("#r", StringComparison.Ordinal))
+            return code;
+        var lines = code.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].TrimStart();
+            if (trimmed.StartsWith("#r", StringComparison.Ordinal)
+                && trimmed.Contains("nuget:", StringComparison.OrdinalIgnoreCase))
+                lines[i] = string.Empty;
+        }
+        return string.Join("\n", lines);
     }
 
     private static DiagnosticInfo ToDiagnosticInfo(Diagnostic d)
@@ -381,6 +551,52 @@ internal sealed class MeshNodeLanguageService(
         }
         return CompletionKind.Text;
     }
+
+    /// <summary>
+    /// Builds the script workspace mirroring the kernel's execution environment
+    /// (<c>MeshScriptEnvironment</c>): script-kind parsing, the default imports as the
+    /// compilation's usings, the process-shared reference set, the shared metadata resolver,
+    /// and the script globals as the submission's host object — so <c>Mesh</c>, <c>Log</c>,
+    /// <c>Ct</c> and <c>Inputs</c> complete as bare identifiers exactly as they run.
+    /// </summary>
+    private static ScriptWorkspace BuildScriptWorkspace(IServiceProvider serviceProvider)
+    {
+        var workspace = new AdhocWorkspace();
+        var projectId = ProjectId.CreateNewId();
+        var docId = DocumentId.CreateNewId(projectId);
+        var projectInfo = ProjectInfo
+            .Create(
+                projectId,
+                VersionStamp.Create(),
+                name: "MeshScript",
+                assemblyName: "MeshScript",
+                language: LanguageNames.CSharp,
+                compilationOptions: new CSharpCompilationOptions(
+                        OutputKind.DynamicallyLinkedLibrary,
+                        metadataReferenceResolver: Kernel.Hub.MeshScriptEnvironment.MetadataResolver)
+                    .WithUsings(Kernel.Hub.MeshScriptEnvironment.Imports),
+                parseOptions: new CSharpParseOptions(kind: SourceCodeKind.Script),
+                metadataReferences: Kernel.Hub.MeshScriptEnvironment.References(serviceProvider),
+                isSubmission: true,
+                hostObjectType: Kernel.Hub.MeshScriptEnvironment.GlobalsType)
+            .WithDocuments(
+            [
+                DocumentInfo.Create(
+                    docId,
+                    name: ScriptDocumentPath,
+                    filePath: ScriptDocumentPath,
+                    sourceCodeKind: SourceCodeKind.Script,
+                    loader: TextLoader.From(TextAndVersion.Create(
+                        SourceText.From(string.Empty), VersionStamp.Create()))),
+            ]);
+        workspace.AddProject(projectInfo);
+        return new ScriptWorkspace(workspace, projectId, docId);
+    }
+
+    private sealed record ScriptWorkspace(
+        AdhocWorkspace Workspace,
+        ProjectId ProjectId,
+        DocumentId DocumentId);
 
     private sealed record CachedWorkspace(
         AdhocWorkspace Workspace,
