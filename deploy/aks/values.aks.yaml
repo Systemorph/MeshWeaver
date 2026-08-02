@@ -130,17 +130,26 @@ config:
     # image keeps serving) instead of surfacing as user-facing errors.
     # ⚠️ Enabling the gate REQUIRES the raised probes.startup budget below —
     # paired settings, never change one without the other.
-    # ⛔ Gate OFF until core #694 (cross-silo reply routing) is fixed: during a
-    # roll the baking pod + the serving pod are TWO silos, the sweep's
-    # shared-source resolution flakes across that boundary, and the gate then
-    # accumulates FALSE regressions and stalls every rollout (memex-cloud
-    # 2026-07-30: three sweeps in a row, a different regression set each time,
-    # while every flagged type compiled clean when triggered on one silo).
-    # The sweep itself stays ON — deploys still compile every type at pod
-    # start; failures fall back to lazy compile instead of holding readiness.
-    # Flip to "true" together with the #694 fix.
+    # Gate ON since 2026-08-02. It was held OFF pending core #694 (cross-silo
+    # reply routing): during a roll the baking pod + the serving pod are TWO
+    # silos, the sweep's shared-source resolution flaked across that boundary,
+    # and the gate accumulated FALSE regressions that stalled every rollout
+    # (memex-cloud 2026-07-30: three sweeps in a row, a different regression set
+    # each time, while every flagged type compiled clean on one silo). #694 is
+    # fixed in TWO layers — #718 (stamp the caller's AccessContext on the
+    # cross-hub post) and #719 (stream-route 'mesh', register the reply stream),
+    # both merged 2026-07-29.
+    # ⚠️ RESIDUAL RISK, verify on the first roll: the 07-30 observation may or
+    # may not postdate those merges (the image it ran, ci.1565, has aged out of
+    # ACR, and the same-day ci.1575 DOES contain both). If the sweep still flakes
+    # across the roll window, the gate's failure mode is a STALLED rollout with
+    # the old image serving — no outage, but self-update silently stops
+    # advancing. Watch the first gated roll (DEPLOY-RUNBOOK.md §7 "Verify after
+    # every roll"); if a type is flagged Regressed here but compiles clean on a
+    # single silo, that is the #694 residue — set this back to "false" and
+    # reopen, do NOT paper over it by widening the probe budget.
     PreWarm__DynamicTypes: "true"
-    PreWarm__GateReadiness: "false"
+    PreWarm__GateReadiness: "true"
     Mcp__BaseUrl: "http://memex-portal-service:8080"
     # ---- AI model providers (templated by the chart) ------------------------
     # These seed the system model catalog on deploy (BuiltInLanguageModelProvider
