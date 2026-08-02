@@ -181,16 +181,19 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // Wait until the reactive menu settles on exactly the Viewer set.
         var items = await FetchAllMenuItems(client, nodeAddress,
-            LabelsAre("Files", "Versions", "Pin"));
+            LabelsAre("Files", "Data", "Versions", "Pin"));
 
         Output.WriteLine($"Menu items for Viewer: {items.Count}");
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            new[] { "Files", "Versions", "Pin" },
+            new[] { "Files", "Data", "Versions", "Pin" },
             JsonSerializerOptions.Default,
-            because: "Viewer has only Read — no Create, Update, Delete, or Export items (Pin requires no permission; Settings is a dedicated header button; Threads moved to the AI menu slot)");
+            because: "Viewer has only Read — no Create, Update, Delete, or Export items, but DATA is "
+                     + "read-gated by design: the underlying record stays visible even when a type's "
+                     + "Overview is a designed page (Pin requires no permission; Settings is a dedicated "
+                     + "header button; Threads moved to the AI menu slot)");
     }
 
     [Fact(Timeout = 30000)]
@@ -210,7 +213,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         // fix for the old flake, where the menu was read before the Editor role propagated.
         var expected = new[]
         {
-            "Edit", "Create", "Copy", "Import", "Files", "Export", "Versions", "Pin", "Recycle",
+            "Edit", "Create", "Copy", "Import", "Files", "Data", "Export", "Versions", "Pin", "Recycle",
             "Stop synchronization"
         };
         var items = await FetchAllMenuItems(client, nodeAddress, LabelsAre(expected));
@@ -238,7 +241,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         var expected = new[]
         {
-            "Edit", "Create", "Copy", "Move", "Import", "Files", "Export", "Versions", "Delete", "Pin", "Recycle",
+            "Edit", "Create", "Copy", "Move", "Import", "Files", "Data", "Export", "Versions", "Delete", "Pin", "Recycle",
             "Stop synchronization"
         };
         var items = await FetchAllMenuItems(client, nodeAddress, LabelsAre(expected));
@@ -247,7 +250,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        items.Should().HaveCount(12, "Admin should see all default menu items across Node and Mesh contexts plus Stop synchronization (Settings is a dedicated header button; Threads moved to the AI menu slot)");
+        items.Should().HaveCount(13, "Admin should see all default menu items across Node and Mesh contexts plus Stop synchronization (Settings is a dedicated header button; Threads moved to the AI menu slot)");
         items.Select(i => i.Label).Should().BeEquivalentTo(expected, JsonSerializerOptions.Default);
     }
 

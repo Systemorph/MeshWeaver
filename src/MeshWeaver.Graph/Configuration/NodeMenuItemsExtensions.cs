@@ -162,6 +162,11 @@ public static class NodeMenuItemsExtensions
             var files = MeshNodeLayoutAreas.GetFilesMenuItem(menuPath, perms);
             if (files != null) items.Add(files with { Order = 30, Icon = "📁" });
 
+            // Read-gated: the underlying record stays reachable for viewers even when the type's
+            // Overview is a designed page and Edit is hidden behind Update permission.
+            var data = MeshNodeLayoutAreas.GetDataMenuItem(menuPath, perms);
+            if (data != null) items.Add(data with { Order = 31, Icon = "🧾" });
+
             var versions = VersionLayoutArea.GetMenuItem(menuPath, perms);
             if (versions != null) items.Add(versions with { Order = 32, Icon = "🕘" });
 
