@@ -136,6 +136,23 @@ public class AppleAuthenticationTest
         AssertImportable(delivered.ToString());
     }
 
+    [Theory]
+    [InlineData(null, "KEY1234567", "Authentication:Apple:TeamId")]
+    [InlineData("TEAM123456", null, "Authentication:Apple:KeyId")]
+    public void AddAppleAuthentication_PrivateKeyWithoutTeamOrKeyId_FailsFastNamingTheKey(
+        string? teamId, string? keyId, string expectedInMessage)
+    {
+        var (pem, _) = CreateKey();
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(new Dictionary<string, string?>
+        {
+            ["Authentication:Apple:ClientId"] = "cloud.meshweaver.memex.signin",
+            ["Authentication:Apple:TeamId"] = teamId,
+            ["Authentication:Apple:KeyId"] = keyId,
+            ["Authentication:Apple:PrivateKey"] = pem,
+        }));
+        Assert.Contains(expectedInMessage, ex.Message);
+    }
+
     [Fact]
     public async Task AddAppleAuthentication_WithStaticSecretOnly_FallsBackToClientSecret()
     {
