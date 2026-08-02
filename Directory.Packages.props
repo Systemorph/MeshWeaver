@@ -25,14 +25,14 @@
     <PackageVersion Include="Aspire.Hosting" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.Docker" Version="13.4.6" />
-    <PackageVersion Include="Aspire.Hosting.Kubernetes" Version="13.4.5-preview.1.26316.12" />
-    <PackageVersion Include="Aspire.Hosting.Azure.CosmosDB" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Hosting.Kubernetes" Version="13.4.6-preview.1.26319.6" />
+    <PackageVersion Include="Aspire.Hosting.Azure.CosmosDB" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.Azure.PostgreSQL" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.Azure.AppContainers" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.Azure.KeyVault" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.Orleans" Version="13.4.6" />
-    <PackageVersion Include="Aspire.Microsoft.Azure.Cosmos" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Microsoft.Azure.Cosmos" Version="13.4.6" />
     <PackageVersion Include="Aspire.Npgsql" Version="13.4.6" />
     <!-- Pinned: Autofac.Extensions.DI 11.0.0 breaks TryAddEnumerable with factory delegates -->
     <PackageVersion Include="Autofac" Version="9.3.2" />
@@ -84,9 +84,12 @@
     <!-- Pin the patched native SQLite engine: Microsoft.Data.Sqlite 10.0.0 pulls
          SQLitePCLRaw.lib.e_sqlite3 2.1.11 transitively, which bundles a SQLite engine with the
          high-severity vuln GHSA-2m69-gcr7-jv3q (NU1903). The native engine package is versioned to
-         track the bundled SQLite version, so 3.50.3 is the patched engine (SQLite >= 3.50, past the
-         vulnerable range). The provider P/Invokes the engine by ABI-stable export name, so the 3.50.3
-         native lib drops in under the 2.1.x managed layer. Pinned explicitly in the Sqlite projects. -->
+         track the bundled SQLite version, so any 3.50+ engine is past the vulnerable range. The
+         provider P/Invokes the engine by ABI-stable export name, so the native lib drops in under
+         the 2.1.x managed layer. Deliberately version-AGNOSTIC prose: naming a specific version
+         here goes stale the moment the pin below is bumped (it said 3.50.3 while the pin read
+         3.53.3). The pin is the source of truth; this comment explains WHY it exists.
+         Pinned explicitly in the Sqlite projects. -->
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
     <PackageVersion Include="Microsoft.Build.Framework" Version="17.11.4" />
     <PackageVersion Include="Microsoft.Build.Utilities.Core" Version="17.11.4" />
