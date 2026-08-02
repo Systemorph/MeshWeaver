@@ -200,7 +200,7 @@ reverts them):
 | Knob | What it does |
 |---|---|
 | `config.memex_portal.PreWarm__DynamicTypes: "true"` | every new pod sweeps + compiles ALL dynamic NodeTypes at start (resumes from the shared `/data` cache — warm restarts are cheap) |
-| `config.memex_portal.PreWarm__GateReadiness` | `/health` stays red until the sweep is green; with `maxSurge 1 / maxUnavailable 0` a regressed type STALLS the rollout with the old image serving. **⛔ OFF until core #694 is fixed** — the two-silo roll window makes the sweep flake (see below) and the gate then stalls every rollout on FALSE regressions |
+| `config.memex_portal.PreWarm__GateReadiness: "true"` | `/health` stays red until the sweep is green; with `maxSurge 1 / maxUnavailable 0` a regressed type STALLS the rollout with the old image serving. **ON since 2026-08-02** (was held off for core #694, fixed by #718 + #719 on 2026-07-29). This is what makes a roll — including a self-update — *wait for the compile* before cutting traffic over. ⚠️ If a roll stalls with types flagged `Regressed` that compile clean on a single silo, that is #694 residue: set back to `"false"` and reopen — do NOT widen the probe budget to hide it |
 | `probes.startup: {periodSeconds: 10, failureThreshold: 1080}` | ⚠️ REQUIRED with the gate: a cold bake is ~90 s/type, sequential — the default 5 min budget kills the pod mid-bake forever |
 
 ⛔ **The bake Job (`bake.enabled`) stays OFF on AKS until core asserts fingerprint-match.** On its
@@ -228,7 +228,7 @@ Live-env equivalent without a helm apply (what enabled memex-cloud on 2026-07-30
 
 ```bash
 kubectl -n <env> patch configmap memex-portal-config --type merge \
-  -p '{"data":{"PreWarm__DynamicTypes":"true","PreWarm__GateReadiness":"false"}}'
+  -p '{"data":{"PreWarm__DynamicTypes":"true","PreWarm__GateReadiness":"true"}}'
 kubectl -n <env> patch deployment memex-portal-deployment --type json -p \
   '[{"op":"replace","path":"/spec/template/spec/containers/0/startupProbe/periodSeconds","value":10},
     {"op":"replace","path":"/spec/template/spec/containers/0/startupProbe/failureThreshold","value":1080}]'
