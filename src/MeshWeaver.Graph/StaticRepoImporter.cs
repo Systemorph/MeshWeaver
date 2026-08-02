@@ -820,6 +820,14 @@ public static class StaticRepoImporter
                                 CreatedDate = target.CreatedDate,
                                 CreatedBy = target.CreatedBy
                             };
+                        // Mesh-owned compile state stays LIVE: a NodeType file in the repo embeds
+                        // whatever bookkeeping it had when exported, and letting it land regressed
+                        // the live node to a STALE GREEN (an assembly pointer weeks old, "Ok" for a
+                        // compile that never ran against these sources) — correct-looking until a
+                        // cold cache parks the type. The repo owns the authored definition; the
+                        // operational members end up exactly as the mesh last wrote them.
+                        materialized = NodeTypeOperationalContent.PreserveLiveOperational(
+                            materialized, target, hub.JsonSerializerOptions);
                         // 🚨 Per-FILE isolation. A single node's upsert faulting (bad content, a
                         // validator reject, a transient owner timeout) must NOT abort the whole
                         // partition import — the first failure used to propagate through Merge and
