@@ -23,8 +23,11 @@ namespace MeshWeaver.GitSync.Test;
 /// while the sync itself completed and advanced <c>_GitSync.lastSyncCommitSha</c>).</para>
 ///
 /// <para>The test makes that dependency explicit and deterministic instead of relying on load: the
-/// command does not complete until it observes its OWN progress line on the node. Inline execution
-/// cannot satisfy that — it deadlocks and the test times out. With the execution scheduled off the
+/// command does not complete until it observes its OWN progress line on the node. Under Orleans —
+/// where a grain turn is single-threaded and the activity hub is grain-hosted — inline execution
+/// cannot satisfy that: the turn is held by the command, so the write can never land, and the test
+/// times out. (A non-Orleans harness with a free-threaded scheduler would not deadlock here; the
+/// regression this pins is specifically the grain-turn one.) With the execution scheduled off the
 /// hub turn the line lands while the command is still subscribed, and the activity finishes.</para>
 /// </summary>
 public class ActivityLiveProgressTest(ITestOutputHelper output) : GitHubSyncTestBase(output)
@@ -91,14 +94,22 @@ public class ActivityLiveProgressTest(ITestOutputHelper output) : GitHubSyncTest
 
     private IObservable<ActivityLog> ObserveMessage(string activityPath, string contains) =>
         Mesh.GetWorkspace().GetMeshNodeStream(activityPath)
-            .Select(n => n?.Content as ActivityLog)
+            // ContentAs, not a cast: on a cross-hub stream the content arrives as a degraded
+            // JsonElement, and a plain `as` yields null forever — the wait would silently never
+            // match and the test would time out with no clue why. Same reason ActivityRunner.Append
+            // and every Blazor reader of this node use ContentAs.
+            .Select(n => n?.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions))
             .Where(l => l is not null && l.Messages.Any(m => m.Message.Contains(contains)))
             .Select(l => l!)
             .Take(1);
 
     private async Task<ActivityLog> WaitForActivity(string activityPath, Func<ActivityLog, bool> predicate) =>
         await Mesh.GetWorkspace().GetMeshNodeStream(activityPath)
-            .Select(n => n?.Content as ActivityLog)
+            // ContentAs, not a cast: on a cross-hub stream the content arrives as a degraded
+            // JsonElement, and a plain `as` yields null forever — the wait would silently never
+            // match and the test would time out with no clue why. Same reason ActivityRunner.Append
+            // and every Blazor reader of this node use ContentAs.
+            .Select(n => n?.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions))
             .Where(l => l is not null && predicate(l))
             .Select(l => l!)
             .FirstAsync()
