@@ -542,4 +542,85 @@ public static class Consumer
         completions.Should().OnlyContain(c => c.Label.Contains("Mes", System.StringComparison.OrdinalIgnoreCase),
             "every returned item must match the typed prefix");
     }
+
+    [Fact]
+    public void UsageTally_CountsIdentifiers_IgnoringKeywordsAndNoise()
+    {
+        var tally = CompletionUsageIndex.Tally(
+        [
+            "var s = Controls.Stack.WithView(Controls.Markdown(\"x\"));",
+            "Controls.Stack.WithView(Controls.DataGrid(rows));",
+            "return Controls.Stack;",
+        ]);
+
+        tally["Stack"].Should().Be(3, "Stack occurs in all three sources");
+        tally["Controls"].Should().Be(5);
+        tally["Markdown"].Should().Be(1);
+        tally.ContainsKey("var").Should().BeFalse("C# keywords carry no ranking signal");
+        tally.ContainsKey("return").Should().BeFalse();
+        tally.ContainsKey("s").Should().BeFalse("single characters are noise");
+    }
+
+    [Fact]
+    public async Task ScriptCompletions_NoPrefix_RankByLikelyUsage_NotTheAlphabet()
+    {
+        // Just typed `Controls.` — there is no word to match on, so alphabetical ordering is
+        // worthless (it leads with Badge/Body/Button). Ranking must instead follow LIKELY USAGE:
+        // the locality bonus from this very cell (the strongest, always-available signal — VS
+        // Code does the same) ahead of the alphabet.
+        await MeshService.CreateNode(new MeshNode("Rank", "script")
+        {
+            NodeType = "Code",
+            Name = "Rank",
+            Content = new CodeConfiguration { Code = "// owner", Language = "csharp" },
+            State = MeshNodeState.Active,
+        }).Should().Within(60.Seconds()).Emit();
+
+        // The cell already builds a Stack twice; the caret sits at the trailing `Controls.`.
+        const string cell = @"var a = Controls.Stack;
+var b = Controls.Stack;
+var c = Controls.";
+
+        var completions = await LanguageService
+            .GetCompletions("script/Rank", "script/Rank/Source/Cell", cell,
+                new SourcePosition(2, 17), maxResults: 10)
+            .Should().Within(60.Seconds()).Emit();
+
+        completions.Should().NotBeEmpty();
+        completions[0].Label.Should().Be("Stack",
+            "the member this cell actually uses must lead, not the alphabetically-first one. Got: {0}",
+            string.Join(", ", completions.Select(c => c.Label)));
+    }
+
+    [Fact]
+    public async Task ScriptCompletions_TypedPrefix_MatchQualityWinsOverPopularity()
+    {
+        // The complement of the rule above: once the user types, MATCH QUALITY decides. A
+        // popular-but-non-matching member must never displace what was literally typed —
+        // otherwise "Bad" would surface "Stack" because the cell is full of Stacks.
+        await MeshService.CreateNode(new MeshNode("Quality", "script")
+        {
+            NodeType = "Code",
+            Name = "Quality",
+            Content = new CodeConfiguration { Code = "// owner", Language = "csharp" },
+            State = MeshNodeState.Active,
+        }).Should().Within(60.Seconds()).Emit();
+
+        const string cell = @"var a = Controls.Stack;
+var b = Controls.Stack;
+var c = Controls.Bad";
+
+        var completions = await LanguageService
+            .GetCompletions("script/Quality", "script/Quality/Source/Cell", cell,
+                new SourcePosition(2, 20), maxResults: 10)
+            .Should().Within(60.Seconds()).Emit();
+
+        completions.Should().NotBeEmpty();
+        completions.Should().Contain(c => c.Label == "Badge",
+            "the typed prefix must be matched. Got: {0}",
+            string.Join(", ", completions.Select(c => c.Label)));
+        completions.Should().NotContain(c => c.Label == "Stack",
+            "a popular member that does not match the typed prefix must not appear. Got: {0}",
+            string.Join(", ", completions.Select(c => c.Label)));
+    }
 }
