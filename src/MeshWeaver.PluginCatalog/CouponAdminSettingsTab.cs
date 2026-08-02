@@ -173,11 +173,10 @@ public static class CouponAdminSettingsTab
     private static UiControl BuildContent(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
         stack = stack
-            .WithView(Controls.Html(
-                "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin-bottom:8px;\">" +
-                "Typed coupon codes at <code>Admin/Coupons/{CODE}</code>. A free coupon unlocks its " +
-                "whole plugin list in one redemption; a priced one applies at payment. Open a coupon " +
-                "to edit or delete it with the standard node actions.</p>"))
+            .WithView(Controls.Markdown(
+                "Typed coupon codes at `Admin/Coupons/{CODE}`. A free coupon unlocks its whole " +
+                "plugin list in one redemption; a priced one applies at payment. Open a coupon " +
+                "to edit or delete it with the standard node actions."))
             .WithView(Controls.Button("＋ New coupon")
                 .WithAppearance(Appearance.Accent)
                 .WithNavigateToHref("/Store/Coupon/Create?type=Store%2FCoupon"), "NewCoupon")
@@ -231,10 +230,9 @@ public static class CouponAdminSettingsTab
             .Select(n => ToRow(n, options))
             .ToImmutableArray();
 
-        var id = Guid.NewGuid().ToString();
-        host.RegisterForDisposal(Observable.Return(rows).Subscribe(data => host.UpdateData(id, data)));
-
-        var grid = Controls.DataGrid(new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)))
+        // Rows bind INLINE — a per-render UpdateData under a fresh id would accumulate orphaned
+        // data entries for the host's lifetime (each snapshot re-renders this grid).
+        var grid = Controls.DataGrid(rows)
             .WithColumn(new PropertyColumnControl<string>
                 { Property = nameof(CouponRow.Code).ToCamelCase() }.WithTitle("Code"))
             .WithColumn(new PropertyColumnControl<string>
@@ -262,9 +260,7 @@ public static class CouponAdminSettingsTab
 
         return Controls.Stack
             .WithView(grid)
-            .WithView(Controls.Html(
-                "<p style=\"font-size:0.8rem;color:var(--neutral-foreground-hint);margin:8px 0 0 0;\">" +
-                "Open a coupon:</p>"))
+            .WithView(Controls.Markdown("Open a coupon:"))
             .WithView(openRow);
     }
 }
