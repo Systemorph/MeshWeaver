@@ -253,6 +253,13 @@ public sealed class GitHubSyncService
     private IObservable<RepoFile?> SerializeOne(
         MeshNode node, string partition, string[] allPaths, Action<string, LogLevel>? progress = null)
     {
+        // A repo file must not carry a compile verdict: the operational members on a NodeType node
+        // (status, assembly pointers, source-version maps) are MESH-owned bookkeeping that would
+        // otherwise ride into git and — being stale the moment the next compile runs — stamp a
+        // stale green back onto any mesh that later imports the file. Export the authored
+        // definition only. (Export-only seam on purpose: the file parsers are shared with the
+        // filesystem persistence backend, which must keep round-tripping the full node.)
+        node = NodeTypeOperationalContent.StripOperational(node, hub.JsonSerializerOptions);
         var serializer = parsers.GetSerializerFor(node);
         if (serializer is null)
         {
