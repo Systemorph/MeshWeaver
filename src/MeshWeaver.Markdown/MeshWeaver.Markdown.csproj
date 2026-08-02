@@ -6,7 +6,6 @@
 
   <ItemGroup>
     <PackageReference Include="Markdig" />
-    <PackageReference Include="EPS.Extensions.YamlMarkdown" />
   </ItemGroup>
 
   <ItemGroup>
