@@ -282,7 +282,8 @@ public static class PackageInstaller
     /// fields (LastModified/Version). This is the content-checksum that makes an update touch only what
     /// really changed.
     /// </summary>
-    private static bool IsUnchanged(MeshNode current, MeshNode incoming, JsonSerializerOptions options)
+    // Internal for the InstallSignatureAlignmentTest pin (InternalsVisibleTo).
+    internal static bool IsUnchanged(MeshNode current, MeshNode incoming, JsonSerializerOptions options)
     {
         if (!ScalarsUnchanged(current, incoming))
             return false;
@@ -295,9 +296,48 @@ public static class PackageInstaller
             return string.Equals(curDef.Configuration, inDef.Configuration, StringComparison.Ordinal)
                 && (curDef.Sources ?? []).SequenceEqual(inDef.Sources ?? [], StringComparer.Ordinal);
         // Otherwise compare the full content, applying the incoming over current so an omitted field
-        // does not read as a change.
-        return ContentSignature(incoming.Content ?? current.Content, options)
+        // does not read as a change — with the incoming ALIGNED to the current content's TYPE first
+        // (see AsCurrentType): the persisted side is often typed and materializes C# property
+        // defaults the repo file legitimately omits.
+        return ContentSignature(AlignedIncoming(current.Content, incoming.Content, options) ?? current.Content, options)
             == ContentSignature(current.Content, options);
+    }
+
+    /// <summary>
+    /// Materialized-default alignment for the content compare. The persisted side is often TYPED —
+    /// the owning hub re-serialized it, materializing C# property defaults (the diagnosed case:
+    /// <c>PluginContent.Currency = "CHF"</c>) — while the incoming side is the repo file's raw
+    /// <c>JsonElement</c>, which legitimately OMITS defaulted properties. Signing them as-is reads
+    /// every materialized default as a change: the NONDETERMINISTIC "re-install of the unchanged
+    /// snapshot wrote 1 node(s)" root churn behind the plugins gate's flapping idempotence check
+    /// (~14 packages allow-listed) — nondeterministic because it fires only once the hub happens to
+    /// have re-serialized the node before the re-install's read. Deserializing the incoming element
+    /// to the CURRENT content's type makes both sides materialize the same defaults.
+    ///
+    /// <para>Guards: alignment happens only when the element's <c>$type</c> matches the current
+    /// content's serialized discriminator (a differing <c>$type</c> IS a real change and must never
+    /// be masked by coercing into the wrong type), and a failed deserialize falls back to the raw
+    /// element — worst case an idempotent rewrite, never a missed change.</para>
+    /// </summary>
+    private static object? AlignedIncoming(object? current, object? incoming, JsonSerializerOptions options)
+    {
+        if (incoming is not JsonElement el
+            || current is null or JsonElement)
+            return incoming;
+        try
+        {
+            if (el.ValueKind == JsonValueKind.Object
+                && el.TryGetProperty("$type", out var incomingType)
+                && JsonSerializer.SerializeToNode(current, options) is System.Text.Json.Nodes.JsonObject curNode
+                && curNode.TryGetPropertyValue("$type", out var currentType)
+                && !string.Equals(incomingType.GetString(), currentType?.GetValue<string>(), StringComparison.Ordinal))
+                return incoming;                    // a REAL type change — compare raw, signatures differ
+            return JsonSerializer.Deserialize(el, current.GetType(), options) ?? incoming;
+        }
+        catch (JsonException)
+        {
+            return incoming;                        // schema drift — raw compare, worst case a rewrite
+        }
     }
 
     // The node's scalar fields, applying the incoming's non-null values over the current (mirrors
