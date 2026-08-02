@@ -475,6 +475,28 @@ public static class PackageInstaller
                     .Timeout(TimeSpan.FromSeconds(30))
                     .Select(_ => System.Reactive.Unit.Default);
 
+        // 🚨 AND the retype must be PERSISTED, not just reconciled on the stream: the owning
+        // hub's persist is DEBOUNCED, and the decisions a LATER install makes — PlaceholderNeeded
+        // and UpsertIfChanged — read the STORAGE ADAPTER, not the stream. Completing the install
+        // on the stream echo alone leaves a window where a re-install still reads the Space
+        // placeholder from persistence, re-runs the placeholder dance, and rewrites the root:
+        // "re-install of the unchanged snapshot wrote 1 node(s)" — the FLAPPING idempotence
+        // failure in the plugin gate (identical packages pass/fail per run purely on whether the
+        // debounced persist flushed in time). Same bounded-poll shape as Visible(); the Timeout
+        // is the graceful sink for a wedged persist, never a fixed sleep.
+        IObservable<System.Reactive.Unit> RootRetypePersisted() =>
+            placeholderRoot is null || root is null || persistence is null
+                || string.IsNullOrEmpty(root.NodeType)
+                ? Observable.Return(System.Reactive.Unit.Default)
+                : Observable
+                    .Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+                    .SelectMany(_ => persistence.Read(root.Path, options))
+                    .Where(n => n is not null
+                        && string.Equals(n.NodeType, root.NodeType, StringComparison.Ordinal))
+                    .FirstAsync()
+                    .Timeout(TimeSpan.FromSeconds(30))
+                    .Select(_ => System.Reactive.Unit.Default);
+
         // Eager provisioning must also cover the package's OWN partition: with a dynamic root
         // type the placeholder covers it, but belt-and-braces keeps the fresh-mesh pin honest.
         // 🚨 The Space placeholder is for a FRESH mesh only — it lets the root exist before the
@@ -505,8 +527,11 @@ public static class PackageInstaller
                 .SelectMany(typeWrites => Visible(nodeTypePaths)
                     .SelectMany(_ => WriteAll(stage2))
                     // The retype's optimistic emit is not the reconciled state — wait for the
-                    // shared root handle to actually carry the in-package type before reporting.
-                    .SelectMany(rest => RootRetypeReconciled().Select(_ => rest))
+                    // shared root handle to carry the in-package type AND for the debounced
+                    // persist to land it in storage (a later install reads persistence).
+                    .SelectMany(rest => RootRetypeReconciled()
+                        .SelectMany(_ => RootRetypePersisted())
+                        .Select(_ => rest))
                     // 🚨 RECYCLE the retyped root's hub. It was ACTIVATED as the Space placeholder
                     // (RootRetypeReconciled reads the stream, and readers race the install anyway),
                     // so the live hub instance still carries the placeholder's configuration — the
