@@ -63,6 +63,10 @@ internal sealed class MeshNodeLanguageService(
     // CompletionUsageIndex; until it is ready, ranking simply proceeds without it.
     private readonly CompletionUsageIndex usageIndex = new(hub, logger);
 
+    // This user's acceptance history — the per-user half of "likely usage" (VS Code's suggest
+    // memory). Used ONLY to preselect; it never reorders what the matcher decided.
+    private readonly CompletionMemoryStore memoryStore = new(hub, logger);
+
     // Compile pool: Roslyn LSP work is CPU-bound, so it routes through the bounded
     // Compile pool which caps concurrency so it can't starve other schedulers.
     // A bare Observable.FromAsync deadlocks under a blocking subscriber (SubscribeOn
@@ -95,7 +99,7 @@ internal sealed class MeshNodeLanguageService(
             {
                 if (cached is null || !cached.DocumentsByPath.TryGetValue(sourcePath, out var docId))
                     return Observable.Return<IReadOnlyList<CompletionEntry>>(Array.Empty<CompletionEntry>());
-                return _ioPool.Run(ct => GetCompletionsAsync(cached, docId, position, maxResults, usageIndex, ct));
+                return _ioPool.Run(ct => GetCompletionsAsync(cached, docId, position, maxResults, usageIndex, CurrentMemory(), ct));
             });
 
     /// <inheritdoc />
@@ -108,7 +112,8 @@ internal sealed class MeshNodeLanguageService(
                 ? GetOrBuildWorkspace(nodeTypePath).SelectMany(cached => cached is null
                     ? Observable.Return<IReadOnlyList<CompletionEntry>>(Array.Empty<CompletionEntry>())
                     : _ioPool.Run(ct => GetOverlayCompletionsAsync(
-                        cached, sourcePath, proposedCode, position, maxResults, usageIndex, ct)))
+                        cached, sourcePath, proposedCode, position, maxResults, usageIndex,
+                        CurrentMemory(), ct)))
                 // Not a NodeType → a standalone SCRIPT Code node (e.g. a course lesson cell):
                 // complete in the kernel's script environment.
                 : _ioPool.Run(ct => GetScriptCompletionsAsync(proposedCode, position, maxResults, ct)));
@@ -138,6 +143,15 @@ internal sealed class MeshNodeLanguageService(
     private static bool IsNodeType(MeshNode? node)
         => node is not null
             && string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal);
+
+    /// <inheritdoc />
+    public void RecordCompletionAccepted(string prefix, string label, CompletionKind kind)
+    {
+        var viewer = memoryStore.Viewer();
+        if (viewer is null || string.IsNullOrEmpty(label))
+            return;
+        memoryStore.Record(viewer, prefix, label, (int)kind);
+    }
 
     /// <inheritdoc />
     public void Evict(string nodeTypePath)
@@ -296,11 +310,11 @@ internal sealed class MeshNodeLanguageService(
 
     private static async Task<IReadOnlyList<CompletionEntry>> GetCompletionsAsync(
         CachedWorkspace cached, DocumentId docId, SourcePosition position, int maxResults,
-        CompletionUsageIndex? usage, CancellationToken ct)
+        CompletionUsageIndex? usage, CompletionMemory? memory, CancellationToken ct)
     {
         var document = cached.Workspace.CurrentSolution.GetDocument(docId);
         if (document is null) return Array.Empty<CompletionEntry>();
-        return await CompleteAsync(document, position, maxResults, usage, ct).ConfigureAwait(false);
+        return await CompleteAsync(document, position, maxResults, usage, memory, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -312,7 +326,7 @@ internal sealed class MeshNodeLanguageService(
     /// </summary>
     private static async Task<IReadOnlyList<CompletionEntry>> GetOverlayCompletionsAsync(
         CachedWorkspace cached, string sourcePath, string proposedCode, SourcePosition position,
-        int maxResults, CompletionUsageIndex? usage, CancellationToken ct)
+        int maxResults, CompletionUsageIndex? usage, CompletionMemory? memory, CancellationToken ct)
     {
         var solution = cached.Workspace.CurrentSolution;
         Document? document;
@@ -330,7 +344,7 @@ internal sealed class MeshNodeLanguageService(
                 .GetDocument(newId);
         }
         if (document is null) return Array.Empty<CompletionEntry>();
-        return await CompleteAsync(document, position, maxResults, usage, ct).ConfigureAwait(false);
+        return await CompleteAsync(document, position, maxResults, usage, memory, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -343,12 +357,13 @@ internal sealed class MeshNodeLanguageService(
         string proposedCode, SourcePosition position, int maxResults, CancellationToken ct)
     {
         var usage = usageIndex;
+        var memory = CurrentMemory();
         var script = _scriptWorkspace.Value;
         var document = script.Workspace.CurrentSolution
             .WithDocumentText(script.DocumentId, SourceText.From(StripKernelDirectives(proposedCode)))
             .GetDocument(script.DocumentId);
         if (document is null) return Array.Empty<CompletionEntry>();
-        return await CompleteAsync(document, position, maxResults, usage, ct).ConfigureAwait(false);
+        return await CompleteAsync(document, position, maxResults, usage, memory, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -385,7 +400,7 @@ internal sealed class MeshNodeLanguageService(
     /// </summary>
     private static async Task<IReadOnlyList<CompletionEntry>> CompleteAsync(
         Document document, SourcePosition position, int maxResults, CompletionUsageIndex? usage,
-        CancellationToken ct)
+        CompletionMemory? memory, CancellationToken ct)
     {
         var text = await document.GetTextAsync(ct).ConfigureAwait(false);
         var offset = TryGetOffset(text, position);
@@ -445,7 +460,31 @@ internal sealed class MeshNodeLanguageService(
                 Documentation: null,
                 SortText: item.SortText));
         }
+
+        // Finally, this user's own history: what they accepted last time in this situation is
+        // PRESELECTED — the order stays exactly as ranked above, only the highlighted row moves
+        // (VS Code's suggest memory works this way, and it is why the memory can be aggressive
+        // without ever hiding a better match).
+        var remembered = memory?.Select(
+            result.Select(r => (r.Label, (int)r.Kind)).ToList(), prefix);
+        if (remembered is not null)
+        {
+            for (var i = 0; i < result.Count; i++)
+            {
+                if (!string.Equals(result[i].Label, remembered, StringComparison.Ordinal))
+                    continue;
+                result[i] = result[i] with { Preselect = true };
+                break;
+            }
+        }
         return result;
+    }
+
+    /// <summary>This viewer's acceptance history, or null when nobody is signed in.</summary>
+    private CompletionMemory? CurrentMemory()
+    {
+        var viewer = memoryStore.Viewer();
+        return viewer is null ? null : memoryStore.For(viewer);
     }
 
     /// <summary>
