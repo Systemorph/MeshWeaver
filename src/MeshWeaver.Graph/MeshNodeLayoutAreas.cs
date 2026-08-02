@@ -102,6 +102,9 @@ public static class MeshNodeLayoutAreas
     public const string ContentArea = "$Content";
     /// <summary>Area name for the UCR Data layout area.</summary>
     public const string DataArea = "$Data";
+
+    /// <summary>Area name of the node's reflected content page (<see cref="ContentData"/>).</summary>
+    public const string ContentDataArea = "Data";
     /// <summary>Area name for the UCR Schema layout area.</summary>
     public const string SchemaArea = "$Schema";
     /// <summary>Area name for the UCR Model layout area.</summary>
@@ -177,6 +180,7 @@ public static class MeshNodeLayoutAreas
             .WithView(GroupsArea, Groups)
             .WithView(CreateNodeArea, CreateNode)
             .WithView(EditArea, EditNode)
+            .WithView(ContentDataArea, ContentData)
             .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
             .WithView(ExportArea, ExportLayoutArea.Export)
             .WithView(CopyArea, CopyLayoutArea.Copy)
@@ -230,6 +234,36 @@ public static class MeshNodeLayoutAreas
                                 $"[Continue here →](/{redirect.TrimStart('/')})"))
                         : BuildAccessDenied(hubPath));
             });
+    }
+
+    /// <summary>
+    /// The node's DATA page — the framework's reflected content view (header + property overview,
+    /// exactly what the default <see cref="Overview"/> renders), always available at
+    /// <c>/{node}/Data</c> even when a type overrides Overview with a designed page. Read-only for
+    /// viewers; editors keep click-to-edit. This is what the read-gated "Data" node-menu item opens,
+    /// so a viewer without Update rights can always see the underlying record.
+    /// </summary>
+    [Browsable(false)]
+    public static IObservable<UiControl?> ContentData(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        return host.Workspace.GetMeshNodeStream().CombineLatest(
+                host.Hub.GetEffectivePermissions(hubPath),
+                (node, permissions) => (Node: node, Permissions: permissions))
+            .Select(t => t.Permissions.HasFlag(Permission.Read)
+                ? (UiControl?)host.BuildDetailsContent(t.Node, null, t.Permissions.HasFlag(Permission.Update))
+                : BuildAccessDenied(hubPath));
+    }
+
+    /// <summary>
+    /// Returns the Data menu item — read-gated: every viewer can open the node's underlying record
+    /// even when the type's Overview is a designed page and Edit is hidden behind Update.
+    /// </summary>
+    public static NodeMenuItemDefinition? GetDataMenuItem(string hubPath, Permission perms)
+    {
+        if (!perms.HasFlag(Permission.Read))
+            return null;
+        return new("Data", ContentDataArea, Order: 31, Href: BuildUrl(hubPath, ContentDataArea));
     }
 
     internal static UiControl BuildAccessDenied(string nodePath)
