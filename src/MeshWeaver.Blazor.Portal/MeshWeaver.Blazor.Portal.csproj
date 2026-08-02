@@ -9,6 +9,7 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.Acme.Test" />
+    <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
@@ -22,6 +23,7 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="AspNet.Security.OAuth.Apple" />
     <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
     <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
   </ItemGroup>
