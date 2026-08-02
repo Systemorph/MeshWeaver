@@ -623,4 +623,78 @@ var c = Controls.Bad";
             "a popular member that does not match the typed prefix must not appear. Got: {0}",
             string.Join(", ", completions.Select(c => c.Label)));
     }
+
+    [Fact]
+    public void CompletionMemory_ByPrefix_LongestStoredPrefixWins()
+    {
+        // VS Code's recentlyUsedByPrefix keeps prefixes in a trie and looks up the LONGEST stored
+        // prefix that still prefixes what you have typed — so accepting Stack after typing "St"
+        // keeps selecting it when you later type "Sta", and a more specific memory beats a
+        // shorter one.
+        var memory = new CompletionMemory()
+            .Record("St", "Stack", (int)CompletionKind.Property)
+            .Record("Sta", "StackPanel", (int)CompletionKind.Class);
+
+        var candidates = new[]
+        {
+            ("Stack", (int)CompletionKind.Property),
+            ("StackPanel", (int)CompletionKind.Class),
+            ("Standard", (int)CompletionKind.Class),
+        };
+
+        memory.Select(candidates, "Stac").Should().Be("StackPanel",
+            "the longer stored prefix 'Sta' is the more specific memory for 'Stac'");
+        memory.Select(candidates, "St").Should().Be("Stack",
+            "'Sta' does not prefix 'St', so the 'St' memory applies");
+    }
+
+    [Fact]
+    public void CompletionMemory_FallsBackToMostRecentlyAccepted()
+    {
+        // With nothing remembered for this word, VS Code's recentlyUsed mode picks the candidate
+        // accepted most recently — regardless of the prefix it was accepted under.
+        var memory = new CompletionMemory()
+            .Record("", "Markdown", (int)CompletionKind.Method)
+            .Record("", "Stack", (int)CompletionKind.Property);
+
+        var candidates = new[]
+        {
+            ("Badge", (int)CompletionKind.Method),
+            ("Markdown", (int)CompletionKind.Method),
+            ("Stack", (int)CompletionKind.Property),
+        };
+
+        memory.Select(candidates, "").Should().Be("Stack", "Stack was accepted last");
+        memory.Record("", "Markdown", (int)CompletionKind.Method)
+            .Select(candidates, "").Should().Be("Markdown", "re-accepting Markdown makes it the most recent");
+    }
+
+    [Fact]
+    public void CompletionMemory_IgnoresWhatIsNotOffered_AndKeysOnKind()
+    {
+        var memory = new CompletionMemory().Record("", "Stack", (int)CompletionKind.Property);
+
+        memory.Select([("Badge", (int)CompletionKind.Method)], "").Should().BeNull(
+            "a remembered item that is not among the candidates must not be selected");
+        memory.Select([("Stack", (int)CompletionKind.Class)], "").Should().BeNull(
+            "memory keys on kind+label, so the class Stack is not the property Stack");
+    }
+
+    [Fact]
+    public void CompletionMemory_IsBounded_DroppingLeastRecent()
+    {
+        var memory = new CompletionMemory();
+        for (var i = 0; i < CompletionMemory.MaxEntries + 25; i++)
+            memory = memory.Record("", $"Item{i}", (int)CompletionKind.Method);
+
+        memory.Entries.Count.Should().Be(CompletionMemory.MaxEntries, "the memory is bounded");
+        memory.Select([("Item0", (int)CompletionKind.Method)], "").Should().BeNull(
+            "the least recently accepted entries are the ones dropped");
+        memory.Select([($"Item{CompletionMemory.MaxEntries + 24}", (int)CompletionKind.Method)], "")
+            .Should().NotBeNull("the most recent acceptance is retained");
+    }
+
+    [Fact]
+    public void CompletionMemoryPath_IsThePerUserSettingsNode()
+        => CompletionMemoryStore.PathFor("alice").Should().Be("alice/_Settings/Completions");
 }

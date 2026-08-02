@@ -505,6 +505,7 @@
                 detail = e.Detail ?? "",
                 documentation = e.Documentation ?? "",
                 sortText = e.SortText ?? "",
+                preselect = e.Preselect,
             }).ToArray();
         }
         catch (Exception ex)
@@ -512,6 +513,21 @@
             Logger.LogDebug(ex, "Code completions failed for editor {EditorId}", EditorId);
             return [];
         }
+    }
+
+    /// <summary>
+    /// Optional callback invoked when the user ACCEPTS a code completion — carries the chosen
+    /// label, its LSP kind, and the word that had been typed. Backs the per-user suggest memory.
+    /// </summary>
+    [Parameter]
+    public Action<string, int, string>? CodeCompletionAccepted { get; set; }
+
+    /// <summary>Called from JS once Monaco has inserted an accepted code completion.</summary>
+    [JSInvokable]
+    public void HandleCodeCompletionAccepted(string? label, int kind, string? typed)
+    {
+        if (!string.IsNullOrEmpty(label))
+            CodeCompletionAccepted?.Invoke(label!, kind, typed ?? string.Empty);
     }
 
     private static object[] MapCompletionsToJs(IReadOnlyList<CompletionItem> items)

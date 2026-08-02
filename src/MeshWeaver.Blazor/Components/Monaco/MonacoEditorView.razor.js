@@ -841,6 +841,18 @@ export function registerCodeCompletionProvider(editorId, config) {
         state.codeCompletionDisposable = null;
     }
     const language = config?.language || 'csharp';
+    // Command invoked by Monaco AFTER an item is inserted — the acceptance signal the per-user
+    // suggest memory is built from (same mechanism the @-reference provider uses).
+    if (!state.codeCompletionCommandId && state.editorInstance) {
+        state.codeCompletionCommandId = state.editorInstance.addCommand(0, (_, label, kind, typed) => {
+            const currentState = editorState.get(editorId);
+            if (currentState?.dotNetRef && label) {
+                currentState.dotNetRef
+                    .invokeMethodAsync('HandleCodeCompletionAccepted', label, kind ?? 0, typed ?? '')
+                    .catch(err => console.debug('HandleCodeCompletionAccepted failed (editor disposed?):', err));
+            }
+        });
+    }
     state.codeCompletionDisposable = monaco.languages.registerCompletionItemProvider(language, {
         triggerCharacters: ['.'],
         provideCompletionItems: async (model, position) => {
@@ -864,6 +876,9 @@ export function registerCodeCompletionProvider(editorId, config) {
                 startColumn: word.startColumn,
                 endColumn: word.endColumn,
             };
+            // The word being completed — recorded with the acceptance so the memory can key on
+            // "what I had typed", exactly like VS Code's recentlyUsedByPrefix.
+            const typed = word.word || '';
             return {
                 suggestions: items.map(i => ({
                     label: i.label,
@@ -872,7 +887,13 @@ export function registerCodeCompletionProvider(editorId, config) {
                     detail: i.detail || undefined,
                     documentation: i.documentation || undefined,
                     sortText: i.sortText || undefined,
+                    // The one item this user accepted last time in this situation. Monaco
+                    // highlights it without disturbing the order we returned.
+                    preselect: i.preselect === true,
                     range,
+                    command: current.codeCompletionCommandId
+                        ? { id: current.codeCompletionCommandId, title: '', arguments: [i.label, i.kind, typed] }
+                        : undefined,
                 })),
             };
         },

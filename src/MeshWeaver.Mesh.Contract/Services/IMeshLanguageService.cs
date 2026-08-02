@@ -90,6 +90,15 @@ public interface IMeshLanguageService
         string proposedCode);
 
     /// <summary>
+    /// Remembers that this user accepted <paramref name="label"/> while <paramref name="prefix"/>
+    /// was the word being completed — the acceptance history that preselects the same choice next
+    /// time (VS Code's <c>editor.suggestSelection: recentlyUsedByPrefix</c>, persisted per user).
+    /// Fire-and-forget: never blocks the editor, never throws, and does nothing for an anonymous
+    /// viewer. Writes are coalesced, so a burst of acceptances costs one save.
+    /// </summary>
+    void RecordCompletionAccepted(string prefix, string label, CompletionKind kind);
+
+    /// <summary>
     /// Drops and disposes the cached Roslyn workspace for <paramref name="nodeTypePath"/>, if any.
     /// Called when the NodeType's hub disposes (node deleted / grain deactivated) so its
     /// <c>AdhocWorkspace</c> — which strongly roots a full <c>CSharpCompilation</c>, every
@@ -137,13 +146,18 @@ public enum DiagnosticSeverity
 public sealed record HoverInfo(string ContentMarkdown, SourceRange? Range);
 
 /// <summary>One code-completion suggestion.</summary>
+/// <param name="Preselect">True on the ONE item the editor should highlight when the list opens —
+/// what this user accepted last time in this situation (see <c>CompletionMemory</c>). Mirrors LSP's
+/// <c>preselect</c> and VS Code's suggest memory: it moves the SELECTION only, never the order, so
+/// the matcher's ranking is left exactly as computed.</param>
 public sealed record CompletionEntry(
     string Label,
     CompletionKind Kind,
     string InsertText,
     string? Detail = null,
     string? Documentation = null,
-    string? SortText = null);
+    string? SortText = null,
+    bool Preselect = false);
 
 /// <summary>
 /// Completion-item kind. Values match the LSP wire protocol so they can be passed through to

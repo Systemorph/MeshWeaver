@@ -24,7 +24,8 @@
                   ValueChanged="@OnValueChanged"
                   DiagnosticsCallback="@diagnosticsCallback"
                   DiagnosticSourcePath="@diagnosticSourcePath"
-                  CodeCompletionCallback="@codeCompletionCallback" />
+                  CodeCompletionCallback="@codeCompletionCallback"
+                  CodeCompletionAccepted="@codeCompletionAccepted" />
 
 @code {
     private MonacoEditorView? editorRef;
@@ -43,6 +44,7 @@
     private Func<string, IObservable<IReadOnlyList<DiagnosticInfo>>>? diagnosticsCallback;
     private string? diagnosticSourcePath;
     private Func<CodeCompletionRequest, IObservable<IReadOnlyList<CompletionEntry>>>? codeCompletionCallback;
+    private Action<string, int, string>? codeCompletionAccepted;
 
     // Store the data pointer for two-way binding
     private JsonPointerReference? ValuePointer;
@@ -158,12 +160,17 @@
                 codeCompletionCallback = request => languageService.GetCompletions(
                     nodeTypePath, sourcePath, request.Text,
                     new SourcePosition(request.Line, request.Character), maxResults: 200);
+                // Acceptances feed this user's suggest memory (persisted per user), which
+                // preselects the same choice next time they are in the same situation.
+                codeCompletionAccepted = (label, kind, typed) =>
+                    languageService.RecordCompletionAccepted(typed, label, (CompletionKind)kind);
             }
             else
             {
                 diagnosticsCallback = null;
                 diagnosticSourcePath = null;
                 codeCompletionCallback = null;
+                codeCompletionAccepted = null;
             }
         }
         else if (ViewModel.Diagnostics is { Count: > 0 } staticDiags)
@@ -187,12 +194,14 @@
             diagnosticsCallback = _ => Observable.Return(infos);
             diagnosticSourcePath = null; // already this file's diagnostics — no filtering
             codeCompletionCallback = null;
+            codeCompletionAccepted = null;
         }
         else
         {
             diagnosticsCallback = null;
             diagnosticSourcePath = null;
             codeCompletionCallback = null;
+            codeCompletionAccepted = null;
         }
     }
 
