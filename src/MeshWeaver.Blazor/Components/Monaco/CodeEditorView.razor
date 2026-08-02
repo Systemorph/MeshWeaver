@@ -23,7 +23,8 @@
                   CodeEditMode="true"
                   ValueChanged="@OnValueChanged"
                   DiagnosticsCallback="@diagnosticsCallback"
-                  DiagnosticSourcePath="@diagnosticSourcePath" />
+                  DiagnosticSourcePath="@diagnosticSourcePath"
+                  CodeCompletionCallback="@codeCompletionCallback" />
 
 @code {
     private MonacoEditorView? editorRef;
@@ -41,6 +42,7 @@
     // different Code node in the same component lifetime) picks up the new paths.
     private Func<string, IObservable<IReadOnlyList<DiagnosticInfo>>>? diagnosticsCallback;
     private string? diagnosticSourcePath;
+    private Func<CodeCompletionRequest, IObservable<IReadOnlyList<CompletionEntry>>>? codeCompletionCallback;
 
     // Store the data pointer for two-way binding
     private JsonPointerReference? ValuePointer;
@@ -149,11 +151,19 @@
                 diagnosticsCallback = text =>
                     languageService.CheckSpeculative(nodeTypePath, sourcePath, text ?? string.Empty);
                 diagnosticSourcePath = sourcePath;
+                // Roslyn code completions over the SAME language service: the editor's
+                // in-flight text plus the caret, answered from the NodeType's compilation —
+                // or, for a standalone script Code node (a lesson cell), from the kernel's
+                // script environment. Monaco filters client-side, so ask for a generous slice.
+                codeCompletionCallback = request => languageService.GetCompletions(
+                    nodeTypePath, sourcePath, request.Text,
+                    new SourcePosition(request.Line, request.Character), maxResults: 200);
             }
             else
             {
                 diagnosticsCallback = null;
                 diagnosticSourcePath = null;
+                codeCompletionCallback = null;
             }
         }
         else if (ViewModel.Diagnostics is { Count: > 0 } staticDiags)
@@ -176,11 +186,13 @@
                 .ToList();
             diagnosticsCallback = _ => Observable.Return(infos);
             diagnosticSourcePath = null; // already this file's diagnostics — no filtering
+            codeCompletionCallback = null;
         }
         else
         {
             diagnosticsCallback = null;
             diagnosticSourcePath = null;
+            codeCompletionCallback = null;
         }
     }
 

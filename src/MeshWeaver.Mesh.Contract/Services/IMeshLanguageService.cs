@@ -49,6 +49,30 @@ public interface IMeshLanguageService
         int maxResults = 20);
 
     /// <summary>
+    /// OVERLAY completions: emits up to <paramref name="maxResults"/> completion entries at
+    /// <paramref name="position"/> WITHIN <paramref name="proposedCode"/> — the editor's
+    /// in-flight text, not the saved source. This is the method a live editor calls on every
+    /// suggest request; the position-only overload above completes against the last SAVED
+    /// text and is only right for read-side tooling.
+    /// <para>
+    /// When <paramref name="nodeTypePath"/> resolves to a NodeType, the completion runs in
+    /// that type's compilation with the one document substituted (the
+    /// <see cref="CheckSpeculative"/> shape). When it does NOT — a standalone script Code
+    /// node, e.g. a course lesson cell under a Markdown page — the completion runs in the
+    /// SCRIPT environment the kernel executes such cells in: script-kind parsing, the
+    /// kernel's default imports and reference set, and the script globals
+    /// (<c>Mesh</c>, <c>Log</c>, <c>Ct</c>, <c>Inputs</c>) in scope. So the editor suggests
+    /// exactly what a ▶ Run can use.
+    /// </para>
+    /// </summary>
+    IObservable<IReadOnlyList<CompletionEntry>> GetCompletions(
+        string nodeTypePath,
+        string sourcePath,
+        string proposedCode,
+        SourcePosition position,
+        int maxResults = 20);
+
+    /// <summary>
     /// Speculative pre-flight check: rebuild the NodeType's compilation with one source
     /// file replaced by <paramref name="proposedCode"/>, return all diagnostics. The
     /// substitute file is identified by <paramref name="sourcePath"/> — if no source at

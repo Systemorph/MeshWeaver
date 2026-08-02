@@ -368,4 +368,178 @@ public class CompletionDemo
             "string.Empty is a static member that must appear in completions. Got: {0}",
             string.Join(", ", completions.Select(c => c.Label)));
     }
+
+    [Fact]
+    public async Task OverlayCompletions_CompleteAgainstProposedText()
+    {
+        // The saved source has no member access anywhere; the completions must run against
+        // the PROPOSED text (the editor's in-flight buffer), not the saved one.
+        await SeedNodeType(
+            "OverlayDemo",
+            new NodeTypeDefinition { Configuration = "config => config.WithContentType<Widget>()" },
+            ("Widget.cs", @"
+public record Widget
+{
+    public string Name { get; init; } = string.Empty;
+    public double Price { get; init; }
+}")).Should().Within(60.Seconds()).Emit();
+
+        // Proposed: the same record plus a consumer poised at `w.` — line 8 (0-based),
+        // char 26 = right after the dot in "    public string M(Widget w) => w.".
+        const string proposed = @"
+public record Widget
+{
+    public string Name { get; init; } = string.Empty;
+    public double Price { get; init; }
+}
+public static class Consumer
+{
+    public static string M(Widget w) => w.
+}";
+
+        var completions = await LanguageService
+            .GetCompletions(
+                "type/OverlayDemo",
+                "type/OverlayDemo/Source/Widget.cs",
+                proposed,
+                new SourcePosition(8, 42),
+                maxResults: 100)
+            .Should().Within(60.Seconds()).Emit();
+
+        completions.Should().NotBeEmpty("member access on the proposed text must complete");
+        completions.Should().Contain(c => c.Label == "Name",
+            "Widget.Name must complete on `w.` in the PROPOSED buffer. Got: {0}",
+            string.Join(", ", completions.Select(c => c.Label)));
+        completions.Should().Contain(c => c.Label == "Price");
+    }
+
+    [Fact]
+    public async Task ScriptCompletions_ForStandaloneCodeNode_GlobalsAndImportsInScope()
+    {
+        // A Code node whose OWNER exists but is not a NodeType — the course lesson-cell
+        // shape (the owner is the lesson page). The language service must fall back to the
+        // kernel's SCRIPT environment: script-kind parsing, the default imports, and the
+        // script globals in scope.
+        await MeshService.CreateNode(new MeshNode("Lesson", "script")
+        {
+            NodeType = "Code",
+            Name = "Lesson",
+            Content = new CodeConfiguration { Code = "// lesson", Language = "csharp" },
+            State = MeshNodeState.Active,
+        }).Should().Within(60.Seconds()).Emit();
+        await MeshService.CreateNode(new MeshNode("Cell", "script/Lesson/Source")
+        {
+            NodeType = "Code",
+            Name = "Cell",
+            Content = new CodeConfiguration { Code = "var x = 1;", Language = "csharp" },
+            State = MeshNodeState.Active,
+        }).Should().Within(60.Seconds()).Emit();
+
+        // `Controls.` — the layout factory from the default imports; char 9 = after the dot.
+        var members = await LanguageService
+            .GetCompletions(
+                "script/Lesson",
+                "script/Lesson/Source/Cell",
+                "Controls.",
+                new SourcePosition(0, 9),
+                maxResults: 200)
+            .Should().Within(60.Seconds()).Emit();
+        members.Should().Contain(c => c.Label == "Stack",
+            "Controls.Stack must complete in the script environment. Got: {0}",
+            string.Join(", ", members.Take(30).Select(c => c.Label)));
+
+        // Bare identifier: the script GLOBALS complete as if they were locals — `Mesh`
+        // is a property of the kernel's globals type, in scope only for a submission
+        // with that host object.
+        var globals = await LanguageService
+            .GetCompletions(
+                "script/Lesson",
+                "script/Lesson/Source/Cell",
+                "Mes",
+                new SourcePosition(0, 3),
+                maxResults: 200)
+            .Should().Within(60.Seconds()).Emit();
+        globals.Should().Contain(c => c.Label == "Mesh",
+            "the script global `Mesh` must complete as a bare identifier. Got: {0}",
+            string.Join(", ", globals.Take(30).Select(c => c.Label)));
+    }
+
+    [Fact]
+    public async Task ScriptDiagnostics_ForStandaloneCodeNode_SurfaceErrors()
+    {
+        // Same non-NodeType owner shape: CheckSpeculative must diagnose in the script
+        // environment instead of silently returning nothing (lesson cells get squiggles).
+        await MeshService.CreateNode(new MeshNode("Diag", "script")
+        {
+            NodeType = "Code",
+            Name = "Diag",
+            Content = new CodeConfiguration { Code = "// owner", Language = "csharp" },
+            State = MeshNodeState.Active,
+        }).Should().Within(60.Seconds()).Emit();
+        await MeshService.CreateNode(new MeshNode("Bad", "script/Diag/Source")
+        {
+            NodeType = "Code",
+            Name = "Bad",
+            Content = new CodeConfiguration { Code = "var ok = 1;", Language = "csharp" },
+            State = MeshNodeState.Active,
+        }).Should().Within(60.Seconds()).Emit();
+
+        var diagnostics = await LanguageService
+            .CheckSpeculative("script/Diag", "script/Diag/Source/Bad", "var x = notDefined;")
+            .Should().Within(60.Seconds()).Emit();
+        diagnostics.Should().Contain(d => d.Severity == LspDiagnosticSeverity.Error
+                && d.Message.Contains("notDefined", System.StringComparison.Ordinal),
+            "an undefined identifier must surface as an error in the script environment. Got: {0}",
+            string.Join("; ", diagnostics.Select(d => $"{d.Id} {d.Severity} {d.Message}")));
+
+        // And a clean script — including the trailing-expression return value and a kernel-only
+        // #r nuget directive (stripped with line numbers preserved) — has no errors.
+        var clean = await LanguageService
+            .CheckSpeculative("script/Diag", "script/Diag/Source/Bad",
+                "#r \"nuget: Some.Package\"\nvar y = 2;\ny + 1")
+            .Should().Within(60.Seconds()).Emit();
+        clean.Where(d => d.Severity == LspDiagnosticSeverity.Error).Should().BeEmpty(
+            "a clean script cell (trailing expression, #r nuget stripped) must not error. Got: {0}",
+            string.Join("; ", clean.Select(d => $"{d.Id} {d.Severity} {d.Message}")));
+    }
+
+    [Fact]
+    public void StripKernelDirectives_PreservesLineNumbers()
+    {
+        const string code = "#r \"nuget: A.B\"\nvar x = 1;\n  #r \"nuget: C\"\nx + 1";
+        var stripped = MeshNodeLanguageService.StripKernelDirectives(code);
+        stripped.Split('\n').Length.Should().Be(code.Split('\n').Length,
+            "blanking directive lines must never shift positions");
+        stripped.Should().NotContain("nuget");
+        stripped.Split('\n')[1].Should().Be("var x = 1;");
+    }
+
+    [Fact]
+    public async Task ScriptCompletions_FilterByTypedPrefix_NotJustTheAlphabet()
+    {
+        // Roslyn returns EVERY symbol in scope, alphabetically. Truncating that to maxResults
+        // before considering the typed word keeps the A's and drops the rest — "Mes" could
+        // never reach "Mesh" however the client filters afterwards. The service must filter by
+        // the completion span's text first; this pins that (a small cap + a late-alphabet word).
+        await MeshService.CreateNode(new MeshNode("Prefix", "script")
+        {
+            NodeType = "Code",
+            Name = "Prefix",
+            Content = new CodeConfiguration { Code = "// owner", Language = "csharp" },
+            State = MeshNodeState.Active,
+        }).Should().Within(60.Seconds()).Emit();
+
+        var completions = await LanguageService
+            .GetCompletions("script/Prefix", "script/Prefix/Source/Cell", "Mes",
+                new SourcePosition(0, 3), maxResults: 15)
+            .Should().Within(60.Seconds()).Emit();
+
+        completions.Should().NotBeEmpty();
+        completions.Count.Should().BeLessThanOrEqualTo(15, "maxResults still caps the result");
+        completions.Should().Contain(c => c.Label == "Mesh",
+            "a late-alphabet match must survive a small cap — filtering happens BEFORE truncation. Got: {0}",
+            string.Join(", ", completions.Select(c => c.Label)));
+        completions.Should().OnlyContain(c => c.Label.Contains("Mes", System.StringComparison.OrdinalIgnoreCase),
+            "every returned item must match the typed prefix");
+    }
 }
