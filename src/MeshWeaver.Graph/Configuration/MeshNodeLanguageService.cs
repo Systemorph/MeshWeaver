@@ -108,41 +108,74 @@ internal sealed class MeshNodeLanguageService(
         // Kick the likely-usage prior's background refresh (never awaited — a cold or wedged
         // index just means this request ranks without the corpus signal).
         => Observable.Defer(() => { usageIndex.EnsureFresh(); return ResolveNode(nodeTypePath); })
-            .SelectMany(node => IsNodeType(node)
-                ? GetOrBuildWorkspace(nodeTypePath).SelectMany(cached => cached is null
-                    ? Observable.Return<IReadOnlyList<CompletionEntry>>(Array.Empty<CompletionEntry>())
-                    : _ioPool.Run(ct => GetOverlayCompletionsAsync(
-                        cached, sourcePath, proposedCode, position, maxResults, usageIndex,
-                        CurrentMemory(), ct)))
-                // Not a NodeType → a standalone SCRIPT Code node (e.g. a course lesson cell):
-                // complete in the kernel's script environment.
-                : _ioPool.Run(ct => GetScriptCompletionsAsync(proposedCode, position, maxResults, ct)));
+            .SelectMany(node => Environment(node, nodeTypePath) switch
+            {
+                CompletionEnvironment.NodeType => GetOrBuildWorkspace(nodeTypePath)
+                    .SelectMany(cached => cached is null
+                        ? Observable.Return<IReadOnlyList<CompletionEntry>>(Array.Empty<CompletionEntry>())
+                        : _ioPool.Run(ct => GetOverlayCompletionsAsync(
+                            cached, sourcePath, proposedCode, position, maxResults, usageIndex,
+                            CurrentMemory(), ct))),
+                // A non-NodeType owner that EXISTS → a standalone SCRIPT Code node (e.g. a course
+                // lesson cell): complete in the kernel's script environment.
+                CompletionEnvironment.Script =>
+                    _ioPool.Run(ct => GetScriptCompletionsAsync(proposedCode, position, maxResults, ct)),
+                // Owner unresolvable → we do not know which language environment applies, and
+                // guessing "script" would suggest globals (Mesh/Log/Ct) that do not exist in a
+                // NodeType source. No suggestions beats wrong ones.
+                _ => Observable.Return<IReadOnlyList<CompletionEntry>>(Array.Empty<CompletionEntry>()),
+            });
 
     public IObservable<IReadOnlyList<DiagnosticInfo>> CheckSpeculative(
         string nodeTypePath, string sourcePath, string proposedCode)
         => ResolveNode(nodeTypePath)
-            .SelectMany(node => IsNodeType(node)
-                ? compilationService.GetCompilationInputsAsync(node!)
+            .SelectMany(node => Environment(node, nodeTypePath) switch
+            {
+                CompletionEnvironment.NodeType => compilationService.GetCompilationInputsAsync(node!)
                     .SelectMany(inputs => inputs is null
                         ? Observable.Return<IReadOnlyList<DiagnosticInfo>>(Array.Empty<DiagnosticInfo>())
                         : _ioPool.Run(ct =>
-                            speculativeCompilation.GetDiagnosticsAsync(inputs, sourcePath, proposedCode, ct)))
-                // Not a NodeType → a standalone script Code node: diagnose in the script
-                // environment so lesson cells get live squiggles too (this used to fall
-                // through to a compilation that parses a cell as REGULAR C#, reporting the
+                            speculativeCompilation.GetDiagnosticsAsync(inputs, sourcePath, proposedCode, ct))),
+                // A non-NodeType owner that EXISTS → a standalone script Code node: diagnose in
+                // the script environment so lesson cells get live squiggles too (this used to
+                // fall through to a compilation that parses a cell as REGULAR C#, reporting the
                 // spurious "top-level statements must be in an executable" on every cell).
-                : _ioPool.Run(ct => GetScriptDiagnosticsAsync(proposedCode, ct)));
+                CompletionEnvironment.Script => _ioPool.Run(ct => GetScriptDiagnosticsAsync(proposedCode, ct)),
+                // Owner unresolvable → no honest environment to diagnose in; stay silent rather
+                // than paint squiggles computed under the wrong language rules.
+                _ => Observable.Return<IReadOnlyList<DiagnosticInfo>>(Array.Empty<DiagnosticInfo>()),
+            });
+
+    /// <summary>Which language environment a Code node's text belongs to.</summary>
+    private enum CompletionEnvironment
+    {
+        /// <summary>The owner could not be read — the environment is genuinely unknown.</summary>
+        Unknown,
+        /// <summary>The owner is a NodeType: its sources compile as a library.</summary>
+        NodeType,
+        /// <summary>The owner exists and is not a NodeType: the kernel runs this text as a script.</summary>
+        Script,
+    }
 
     /// <summary>
-    /// Is the completion/diagnostics owner an actual NodeType definition (whose sources
-    /// compile as a library), as opposed to any other node — a Markdown lesson page, a bare
-    /// Code node — whose code the kernel runs as a SCRIPT? This is the ONE dispatch between
-    /// the two language environments, and it must key on what the node IS: a plain Code node
-    /// still produces compilation inputs, so "inputs resolved" never distinguished them.
+    /// Classifies the owner, and it must key on what the node IS: a plain Code node still
+    /// produces compilation inputs, so "inputs resolved" never distinguished the two
+    /// environments. An owner that cannot be READ is <see cref="CompletionEnvironment.Unknown"/>
+    /// rather than script — inferring an environment from a failed read would offer script
+    /// globals inside a NodeType source. The one exception is an owner we have already compiled:
+    /// a cached workspace proves it is a NodeType, so a transient read failure does not
+    /// interrupt completions in the file the user is actually editing.
     /// </summary>
-    private static bool IsNodeType(MeshNode? node)
-        => node is not null
-            && string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal);
+    private CompletionEnvironment Environment(MeshNode? node, string nodeTypePath)
+    {
+        if (node is not null)
+            return string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal)
+                ? CompletionEnvironment.NodeType
+                : CompletionEnvironment.Script;
+        return _cache.ContainsKey(nodeTypePath)
+            ? CompletionEnvironment.NodeType
+            : CompletionEnvironment.Unknown;
+    }
 
     /// <inheritdoc />
     public void RecordCompletionAccepted(string prefix, string label, CompletionKind kind)
