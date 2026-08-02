@@ -76,4 +76,22 @@ public class InstallSignatureAlignmentTest(ITestOutputHelper output) : MonolithM
         PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
             .Should().BeFalse("a differing $type IS a real change — alignment only applies same-type");
     }
+
+    /// <summary>
+    /// A property the file ADDS but the current type lacks must read as a change: with the ambient
+    /// Skip unmapped-member handling, the alignment deserialize would silently drop it and mask a
+    /// real difference — the strict Disallow clone routes this to the raw compare instead.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void UnknownIncomingProperty_IsStillDetected()
+    {
+        var current = Node(new PluginCatalogContent { SourceRepoPath = "/repo" });
+        var incoming = Node(Element(
+            """{"$type":"PluginCatalogContent","sourceRepoPath":"/repo","brandNewProperty":"x"}"""));
+
+        PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
+            .Should().BeFalse(
+                "an unknown incoming member means the file carries something the persisted shape " +
+                "does not — alignment must fall back to the raw compare, never silently drop it");
+    }
 }

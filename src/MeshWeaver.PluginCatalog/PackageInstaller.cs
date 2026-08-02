@@ -297,7 +297,7 @@ public static class PackageInstaller
                 && (curDef.Sources ?? []).SequenceEqual(inDef.Sources ?? [], StringComparer.Ordinal);
         // Otherwise compare the full content, applying the incoming over current so an omitted field
         // does not read as a change — with the incoming ALIGNED to the current content's TYPE first
-        // (see AsCurrentType): the persisted side is often typed and materializes C# property
+        // (see AlignedIncoming): the persisted side is often typed and materializes C# property
         // defaults the repo file legitimately omits.
         return ContentSignature(AlignedIncoming(current.Content, incoming.Content, options) ?? current.Content, options)
             == ContentSignature(current.Content, options);
@@ -321,22 +321,45 @@ public static class PackageInstaller
     /// </summary>
     private static object? AlignedIncoming(object? current, object? incoming, JsonSerializerOptions options)
     {
-        if (incoming is not JsonElement el
+        if (incoming is not JsonElement { ValueKind: JsonValueKind.Object } el
             || current is null or JsonElement)
             return incoming;
         try
         {
-            if (el.ValueKind == JsonValueKind.Object
-                && el.TryGetProperty("$type", out var incomingType)
-                && JsonSerializer.SerializeToNode(current, options) is System.Text.Json.Nodes.JsonObject curNode
-                && curNode.TryGetPropertyValue("$type", out var currentType)
-                && !string.Equals(incomingType.GetString(), currentType?.GetValue<string>(), StringComparison.Ordinal))
-                return incoming;                    // a REAL type change — compare raw, signatures differ
-            return JsonSerializer.Deserialize(el, current.GetType(), options) ?? incoming;
+            // A differing $type IS a real change — never mask it by coercing into the wrong type.
+            // Both discriminators read defensively: a non-string $type on either side skips
+            // alignment (raw compare → change detected).
+            var incomingType = el.TryGetProperty("$type", out var it) && it.ValueKind == JsonValueKind.String
+                ? it.GetString()
+                : null;
+            var currentType = JsonSerializer.SerializeToNode(current, options)
+                    is System.Text.Json.Nodes.JsonObject curNode
+                && curNode.TryGetPropertyValue("$type", out var ct)
+                && ct is System.Text.Json.Nodes.JsonValue cv
+                && cv.TryGetValue<string>(out var cts)
+                ? cts
+                : null;
+            if (incomingType is not null
+                && !string.Equals(incomingType, currentType, StringComparison.Ordinal))
+                return incoming;
+
+            // Deserialize WITHOUT tolerating unknown members: with the ambient Skip handling, a
+            // property the file ADDS but the current type lacks would be silently dropped and a
+            // real change read as unchanged. Disallow makes that case throw → the catch below →
+            // raw compare → change detected (worst case an idempotent rewrite, never a miss).
+            // The $type discriminator is stripped first — deserializing to the CONCRETE type
+            // treats it as an unmapped member.
+            var strict = new JsonSerializerOptions(options)
+            {
+                UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
+            };
+            var withoutDiscriminator = System.Text.Json.Nodes.JsonObject.Create(el)!;
+            withoutDiscriminator.Remove("$type");
+            return withoutDiscriminator.Deserialize(current.GetType(), strict) ?? incoming;
         }
         catch (JsonException)
         {
-            return incoming;                        // schema drift — raw compare, worst case a rewrite
+            return incoming;                        // schema drift / unknown member — raw compare
         }
     }
 
