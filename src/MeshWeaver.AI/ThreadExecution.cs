@@ -953,6 +953,10 @@ internal static class ThreadExecution
         // stripping the path here defeated it. Keep the model path; the resolver collapses it to the
         // wire id at the exact node. (The cell-stamp display name is normalized to the short name at
         // write time in PushToResponseMessage, so the persisted friendly name is unaffected.)
+        // The ORIGINAL picked harness node path ({user}/Harness/{id} after a Store install,
+        // Harness/{id} for the global catalog) — the install gate probes THIS node; the
+        // id-normalization below erases it from request.Harness.
+        var pickedHarnessPath = request.Harness;
         request = request with
         {
             ModelName = request.ModelName,
@@ -1367,8 +1371,15 @@ internal static class ThreadExecution
                 // revokes it. Resolved reactively BEFORE the round body; a refused/missing node
                 // yields null, which the body treats exactly like an unresolvable harness:
                 // graceful fallback to the default agent path (ResolveInstalledHarness logs why).
+                // 🚨 Probe the PICKED PATH, never request.Harness: the top-of-method
+                // normalization collapsed request.Harness to the bare id, which as a path is a
+                // partition ROOT — probing it would license the harness off the wrong node. A
+                // recovered request may carry its own full path; prefer it over the capture.
                 .SelectMany(initClient => HarnessNodeType
-                    .ResolveInstalledHarness(parentHub, request.Harness, logger)
+                    .ResolveInstalledHarness(
+                        parentHub,
+                        request.Harness is { } rh && rh.Contains('/') ? rh : pickedHarnessPath,
+                        logger)
                     .Select(installedHarness => (Client: initClient, InstalledHarness: installedHarness)))
                 .SelectMany(init =>
                 {

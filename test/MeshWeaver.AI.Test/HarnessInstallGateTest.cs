@@ -1,6 +1,9 @@
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
+using System.Runtime.CompilerServices;
+using System.Reactive.Linq;
 using MeshWeaver.AI;
+using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -9,6 +12,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.AI.Test;
 
@@ -27,6 +31,7 @@ public class HarnessInstallGateTest : AITestBase
     protected override bool ShareMeshAcrossTests => true;
 
     private const string GatedId = "GatedCli";
+    private const string HarnessAck = "GATED HARNESS RAN";
 
     private sealed class GatedCliHarness : IHarness
     {
@@ -36,7 +41,61 @@ public class HarnessInstallGateTest : AITestBase
             Id = GatedId, DisplayName = "Gated CLI", Order = 9,
             SupportsAgentSelection = false, RequiresInstall = true
         };
-        public IChatClient? CreateChatClient(HarnessExecutionContext context) => null;
+        // A distinctive client so a round-level test can tell WHICH path answered:
+        // the harness ack vs the FakeChatClientFactory's agent-path ack.
+        public IChatClient? CreateChatClient(HarnessExecutionContext context) => new AckChatClient(HarnessAck);
+    }
+
+    private sealed class AckChatClient(string ack) : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, ack)));
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            yield return new ChatResponseUpdate(ChatRole.Assistant, ack);
+            await Task.Yield();
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceType == typeof(IChatClient) ? this : null;
+
+        public void Dispose() { }
+    }
+
+    private sealed class FakeChatClientFactory : IChatClientFactory
+    {
+        public const string AgentAck = "agent path ack";
+        public string Name => "FakeFactory";
+        public IReadOnlyList<string> Models => ["fake-model"];
+        public int Order => 0;
+
+        public Microsoft.Agents.AI.ChatClientAgent CreateAgent(
+            AgentConfiguration config,
+            IAgentChat chat,
+            IReadOnlyDictionary<string, Microsoft.Agents.AI.ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents,
+            string? modelName = null)
+            => new(
+                chatClient: new AckChatClient(AgentAck),
+                instructions: config.Instructions ?? "You are a fake test assistant.",
+                name: config.Id,
+                description: config.Description ?? config.Id,
+                tools: [],
+                loggerFactory: null,
+                services: null);
+
+        public Task<Microsoft.Agents.AI.ChatClientAgent> CreateAgentAsync(
+            AgentConfiguration config,
+            IAgentChat chat,
+            IReadOnlyDictionary<string, Microsoft.Agents.AI.ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents,
+            string? modelName = null)
+            => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -44,6 +103,7 @@ public class HarnessInstallGateTest : AITestBase
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IHarness, GatedCliHarness>();
+                services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
                 return services;
             });
 
@@ -107,5 +167,102 @@ public class HarnessInstallGateTest : AITestBase
             .Should().Emit();
         resolved.Should().BeOfType<MeshWeaverHarness>(
             "the default harness needs no install and must resolve immediately");
+    }
+
+    /// <summary>
+    /// THE round-level pin — through the REAL execution pipeline (StartThread →
+    /// ExecuteMessageAsync), not the resolver in isolation: ExecuteMessageAsync normalizes
+    /// request.Harness to the bare id early, so the install gate MUST probe the ORIGINAL picked
+    /// node path. Probing the normalized value would license off the wrong node (the bare id is
+    /// a partition ROOT path) — the exact regression a resolver-only test cannot catch. With the
+    /// installed node present, the round answers from the HARNESS client.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task Round_WithInstalledNode_RunsTheGatedHarness()
+    {
+        var client = GetClient();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var harnessPath = $"{MonolithMeshTestBase.TestPartition}/Harness/{GatedId}";
+
+        await meshService.CreateNode(new MeshNode(GatedId, $"{MonolithMeshTestBase.TestPartition}/Harness")
+        {
+            NodeType = HarnessNodeType.NodeType,
+            Name = "Gated CLI",
+            State = MeshNodeState.Active,
+            Content = new Harness { Id = GatedId, DisplayName = "Gated CLI", Order = 9, RequiresInstall = true }
+        }).Should().Emit();
+
+        var threadCreated = new System.Reactive.Subjects.AsyncSubject<MeshNode>();
+        client.StartThread(
+            namespacePath: MonolithMeshTestBase.TestPartition,
+            userText: "run on the gated harness",
+            agentName: "Agent/Assistant",
+            modelName: "_Provider/Fake/fake-model",
+            harness: harnessPath,
+            contextPath: MonolithMeshTestBase.TestPartition,
+            createdBy: "rbuergi@systemorph.com",
+            onCreated: node => { threadCreated.OnNext(node); threadCreated.OnCompleted(); });
+
+        var created = await threadCreated.Should().Emit();
+        var thread = await WaitForThread(created!.Path!, t => t.Messages.Count >= 2);
+
+        var responseText = await LastAssistantText(created.Path!, thread);
+        responseText.Should().Contain(HarnessAck,
+            "the installed picked-path node licenses the gated harness — the round must run its " +
+            "client, not fall back (falling back here means the gate probed the WRONG path, e.g. " +
+            "the id-normalized value instead of the picked node path)");
+    }
+
+    /// <summary>
+    /// The same round WITHOUT the installed node: the gate refuses and the round answers from the
+    /// default agent path — graceful fallback, no error, no wedge.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task Round_WithoutInstalledNode_FallsBackToAgentPath()
+    {
+        var client = GetClient();
+        // A picked path whose node deliberately does not exist (uninstalled / never installed).
+        var harnessPath = $"{MonolithMeshTestBase.TestPartition}/Harness/never-installed-{GatedId}";
+
+        var threadCreated = new System.Reactive.Subjects.AsyncSubject<MeshNode>();
+        client.StartThread(
+            namespacePath: MonolithMeshTestBase.TestPartition,
+            userText: "run without an install",
+            agentName: "Agent/Assistant",
+            modelName: "_Provider/Fake/fake-model",
+            harness: harnessPath,
+            contextPath: MonolithMeshTestBase.TestPartition,
+            createdBy: "rbuergi@systemorph.com",
+            onCreated: node => { threadCreated.OnNext(node); threadCreated.OnCompleted(); });
+
+        var created = await threadCreated.Should().Emit();
+        var thread = await WaitForThread(created!.Path!, t => t.Messages.Count >= 2);
+
+        var responseText = await LastAssistantText(created.Path!, thread);
+        responseText.Should().NotContain(HarnessAck,
+            "an uninstalled harness must never run — the gate falls back to the agent path");
+        responseText.Should().Contain(FakeChatClientFactory.AgentAck,
+            "the fallback is the default agent path, a graceful degrade rather than an error");
+    }
+
+    private async Task<MeshThread> WaitForThread(string threadPath, Func<MeshThread, bool> predicate)
+        => (await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Select(n => n?.Content as MeshThread)
+            .Where(t => t is not null)
+            .Should().Within(TimeSpan.FromSeconds(45))
+            .Match(t => predicate(t!)))!;
+
+    // The text of the thread's last assistant message cell (messages are satellite nodes).
+    // The cell is created with placeholder text ("Allocating agent...") and streamed into —
+    // wait for the TERMINAL status, not for a first/non-empty emission.
+    private async Task<string> LastAssistantText(string threadPath, MeshThread thread)
+    {
+        var lastId = thread.Messages[^1];
+        var node = await Mesh.GetWorkspace().GetMeshNodeStream($"{threadPath}/{lastId}")
+            .Where(n => n?.ContentAs<ThreadMessage>(Mesh.JsonSerializerOptions) is
+                { Status: ThreadMessageStatus.Completed })
+            .Take(1)
+            .Should().Within(TimeSpan.FromSeconds(30)).Emit();
+        return node!.ContentAs<ThreadMessage>(Mesh.JsonSerializerOptions)!.Text ?? "";
     }
 }

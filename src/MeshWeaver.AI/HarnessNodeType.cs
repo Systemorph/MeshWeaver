@@ -118,15 +118,27 @@ public static class HarnessNodeType
                 .Where(node => node is not null)
                 .Take(1)
                 .Timeout(InstallProbeTimeout)
-                .Select(node => node is { State: MeshNodeState.Active } ? harness : null))
-            .Catch<IHarness?, Exception>(_ => Observable.Return<IHarness?>(null))
-            .Do(resolved =>
-            {
-                if (resolved is null)
+                .Select(node =>
+                {
+                    if (node is { State: MeshNodeState.Active })
+                        return harness;
                     logger?.LogWarning(
-                        "[Harness] '{Harness}' requires install but no Active node exists at the picked "
-                        + "path — not installed (or uninstalled); falling back to the default agent path",
+                        "[Harness] '{Harness}' requires install but the picked node is not Active — "
+                        + "not installed (or uninstalled); falling back to the default agent path",
                         harnessPath);
+                    return (IHarness?)null;
+                }))
+            // The graceful degrade sink — a Timeout here just means "no such node" (never
+            // installed, or a stale pre-gate global path); anything else (denied read, a
+            // stalled stream) is logged WITH the exception so production diagnosis isn't
+            // reduced to a misleading "not installed".
+            .Catch<IHarness?, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[Harness] install probe for '{Harness}' failed or timed out — treating as "
+                    + "not installed; falling back to the default agent path",
+                    harnessPath);
+                return Observable.Return<IHarness?>(null);
             });
     }
 
