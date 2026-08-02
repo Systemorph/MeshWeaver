@@ -164,12 +164,17 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // (WritingTests.md — wait on the condition, not a fixed sleep) instead of
         // a fixed 15s. The query is a LIVE stream, so the count flips 0→1 the
         // moment the activity create lands.
+        // Count compile-RUN activities only: the fixed-id compile-state satellite
+        // (NodeTypeCompileStateMirror, #748 phase 1) is System-written bookkeeping that
+        // lands under _Activity whenever the node carries operational state — the same
+        // "infrastructure, orthogonal to this invariant" category as the kickoff itself,
+        // and it upserts on every status flip, so counting it races firstCount.
         var activityCount = SiloMeshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{activityNamespace} scope:subtree"))
-            .Select(r => r.Items.Count);
+            .Select(r => r.Items.Count(n => n.Id != NodeTypeCompileStateMirror.StateId));
         var firstCount = await activityCount.Should().Within(30.Seconds()).Match(c => c >= 1);
-        Output.WriteLine($"_Activity rows after first background-activation: {firstCount}");
+        Output.WriteLine($"_Activity compile rows after first background-activation: {firstCount}");
 
         // Re-activate by a SECOND background read. If the kickoff is unguarded
         // (the original prod bug), this would fire ANOTHER compile and the
@@ -472,10 +477,15 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // post-denial ambient context that sync subscription does not settle; a
         // one-shot query is the right primitive.)
         var activityNamespace = $"{typePath}/_Activity";
+        // Count compile-RUN activities only: the compile-state satellite
+        // (NodeTypeCompileStateMirror, #748 phase 1) mirrors the SEEDED terminal status
+        // under System on activation — infrastructure orthogonal to user authorization,
+        // exactly like the kickoff this test already excludes by seeding a settled
+        // status. The denial invariant is "no compile activity row", not "no satellite".
         var activityCount = SiloMeshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{activityNamespace} scope:subtree"))
-            .Select(r => r.Items.Count);
+            .Select(r => r.Items.Count(n => n.Id != NodeTypeCompileStateMirror.StateId));
         await activityCount
             .Where(c => c > 0)
             .Should().NotEmit(within: TimeSpan.FromSeconds(5),
