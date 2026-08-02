@@ -30,11 +30,21 @@ The self-updater itself only patches the image; the compiling happens on the NEW
 `PreWarm__DynamicTypes` (see `DEPLOY-RUNBOOK.md` §7): every new pod sweeps and compiles all dynamic
 NodeTypes at start, so an un-visited type can no longer sit "no definition" until its pages hang.
 Managed envs run the sweep ON — an env with it off has no deploy-time compile at all on this
-channel. The companion readiness gate (`PreWarm__GateReadiness`) additionally stalls a rollout on a
-type that regressed on the new image (`maxSurge 1 / maxUnavailable 0` keeps the old pod serving) —
-⛔ it stays OFF until core #694 (cross-silo reply routing) is fixed, because the two-silo roll
-window makes the sweep's shared-source resolution flake and the gate then stalls every rollout on
-false regressions.
+channel.
+
+**The self-update waits for that compile.** The companion readiness gate (`PreWarm__GateReadiness`,
+ON in managed envs since 2026-08-02) holds the new pod's `/health` red until every NodeType is built
+against ITS image; the deployment's `startupProbe` is on `/health` and `maxUnavailable: 0` keeps the
+old pod serving, so traffic only moves once the compile is done. A type that regressed on the new
+image therefore STALLS the roll with the previous image still serving, instead of surfacing as
+user-facing errors after the cutover. Database migration is gated the same way and comes first: the
+unconditional `db_version` health check keeps the pod un-Ready until the schema is migrated, so the
+order on every roll is **migrate → compile → serve**.
+
+The gate was held OFF pending core #694 (cross-silo reply routing), fixed by #718 + #719 on
+2026-07-29. ⚠️ Its failure mode is a stalled rollout — no outage, but self-update silently stops
+advancing — so if a roll stalls on types flagged `Regressed` that compile clean on a single silo,
+that is #694 residue: set the flag back to `"false"` and reopen.
 
 ## Update policy (Admin → Platform updates)
 
