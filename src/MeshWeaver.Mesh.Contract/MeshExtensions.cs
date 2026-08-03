@@ -800,22 +800,7 @@ public static class MeshExtensions
                         var healRoot = rootExists
                             ? Observable.Return(System.Reactive.Unit.Default)
                             : ProvisionAndCreateRoot(hub, partition, meshService, accessService, logger);
-                        // 🚨 The creator grant is minted ONLY when this call actually CREATES the
-                        // partition (its root was absent). Writing a node INTO a partition that
-                        // already exists must never confer ownership of it: `Skill` had existed
-                        // for weeks when a `git_hub_sync update` wrote one activity node into it
-                        // and walked away with Admin — reproducibly, on every sync. A deploy, a
-                        // webhook, an import, an activity: none of them are an ownership claim.
-                        //
-                        // rootExists is read authoritatively above (persistence + static/config),
-                        // so this is "did I just create this partition", not a guess.
-                        var mintGrant = isRealCreator && !grantExists && !rootExists;
-                        if (isRealCreator && !grantExists && rootExists)
-                            logger.LogDebug(
-                                "[PartitionBootstrap] '{Creator}' has no grant on the EXISTING partition "
-                                + "'{Partition}' — writing a child does not make them its owner",
-                                creator, partition);
-                        return healRoot.SelectMany(_ => mintGrant
+                        return healRoot.SelectMany(_ => isRealCreator && !grantExists
                             ? CreateCreatorGrant(partition, creator!, meshService, accessService, logger)
                             : Observable.Return(System.Reactive.Unit.Default));
                     });
