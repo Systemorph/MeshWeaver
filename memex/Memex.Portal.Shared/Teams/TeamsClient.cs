@@ -1,8 +1,12 @@
+using System.Collections.Concurrent;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
@@ -31,13 +35,22 @@ public sealed class TeamsClient : ITeamsClient
 
     private string? _cachedToken;
     private DateTimeOffset _tokenExpiry;
-    private readonly SemaphoreSlim _tokenGate = new(1, 1);
 
-    public TeamsClient(TeamsOptions options, HttpClient http, ILogger<TeamsClient>? logger = null)
+    // Token refresh is a promise-cached one-shot on the HTTP pool, NOT a SemaphoreSlim(1,1) gate.
+    // A gate here parks the awaiting thread — on a hub action block or a grain turn that is a
+    // deadlock, and it bounds nothing that the pool does not already bound. Keyed by the expiry
+    // being replaced, so every caller that sees the SAME stale token shares ONE fetch and replays
+    // its completion; a successful refresh moves the expiry, which is itself the next key.
+    private readonly IIoPool _httpPool;
+    private readonly ConcurrentDictionary<long, IObservable<string?>> _tokenFetch = new();
+
+    public TeamsClient(TeamsOptions options, HttpClient http, ILogger<TeamsClient>? logger = null,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
         _options = options;
         _http = http;
         _logger = logger;
+        _httpPool = ioPoolRegistry?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
         _openIdConfig = new ConfigurationManager<OpenIdConnectConfiguration>(
             OpenIdMetadataUrl, new OpenIdConnectConfigurationRetriever(), new HttpDocumentRetriever());
     }
@@ -74,11 +87,24 @@ public sealed class TeamsClient : ITeamsClient
         }
     }
 
-    public async Task<bool> SendMessageAsync(string serviceUrl, string conversationId, string text, CancellationToken ct)
+    /// <summary>Outbound reply. Composed reactively — the token fetch and the POST are both leaves
+    /// on the HTTP pool, so every <c>await</c> lives inside a pool body. The single <c>ToTask</c> is
+    /// the boundary adapter for the <see cref="ITeamsClient"/> surface, nothing more.</summary>
+    public Task<bool> SendMessageAsync(string serviceUrl, string conversationId, string text, CancellationToken ct)
     {
-        if (!IsConfigured || string.IsNullOrEmpty(serviceUrl) || string.IsNullOrEmpty(conversationId)) return false;
-        var token = await GetConnectorTokenAsync(ct);
-        if (token is null) return false;
+        if (!IsConfigured || string.IsNullOrEmpty(serviceUrl) || string.IsNullOrEmpty(conversationId))
+            return Task.FromResult(false);
+        return GetConnectorToken()
+            .SelectMany(token => token is null
+                ? Observable.Return(false)
+                : _httpPool.Invoke(poolCt => PostActivityAsync(token, serviceUrl, conversationId, text, poolCt)))
+            .FirstAsync()
+            .ToTask(ct);
+    }
+
+    private async Task<bool> PostActivityAsync(string token, string serviceUrl, string conversationId,
+        string text, CancellationToken ct)
+    {
         try
         {
             var url = $"{serviceUrl.TrimEnd('/')}/v3/conversations/{Uri.EscapeDataString(conversationId)}/activities";
@@ -99,15 +125,22 @@ public sealed class TeamsClient : ITeamsClient
         }
     }
 
-    private async Task<string?> GetConnectorTokenAsync(CancellationToken ct)
+    /// <summary>The cached connector token, refreshed at most once per expiry. No gate: racing
+    /// callers all key on the expiry they are replacing, so they share ONE pooled fetch and replay
+    /// its result.</summary>
+    private IObservable<string?> GetConnectorToken()
     {
-        if (_cachedToken is not null && DateTimeOffset.UtcNow < _tokenExpiry.AddMinutes(-2))
-            return _cachedToken;
-        await _tokenGate.WaitAsync(ct);
+        var cached = _cachedToken;
+        if (cached is not null && DateTimeOffset.UtcNow < _tokenExpiry.AddMinutes(-2))
+            return Observable.Return(cached);
+        var replacing = _tokenExpiry.Ticks;
+        return _tokenFetch.GetOrAdd(replacing, key => _httpPool.Run(poolCt => FetchConnectorTokenAsync(key, poolCt)));
+    }
+
+    private async Task<string?> FetchConnectorTokenAsync(long replacing, CancellationToken ct)
+    {
         try
         {
-            if (_cachedToken is not null && DateTimeOffset.UtcNow < _tokenExpiry.AddMinutes(-2))
-                return _cachedToken;
             var form = new Dictionary<string, string>
             {
                 ["grant_type"] = "client_credentials",
@@ -130,6 +163,11 @@ public sealed class TeamsClient : ITeamsClient
             _tokenExpiry = DateTimeOffset.UtcNow.AddSeconds(expires);
             return token;
         }
-        finally { _tokenGate.Release(); }
+        finally
+        {
+            // Drop this generation's promise: the refreshed expiry is the next key, so the entry
+            // can never be reused and the cache cannot grow without bound.
+            _tokenFetch.TryRemove(replacing, out _);
+        }
     }
 }
