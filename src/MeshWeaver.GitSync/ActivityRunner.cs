@@ -110,22 +110,11 @@ public static class ActivityRunner
             },
         };
 
-        // STEP 1: create the activity node, AS SYSTEM.
-        //
-        // 🚨 The activity is infrastructure, not the caller's content: it lands in the TARGET
-        // space ({space}/_Activity/…), and on a GitSynced space nobody but system-security may
-        // write there. Creating it as the caller therefore demanded space rights for a DEPLOY —
-        // and, when the caller happened to hold them, stamped CreatedBy = them, which the
-        // partition bootstrap then read as "the creator" and answered with an Admin grant
-        // (MeshExtensions.CreateCreatorGrant). Both halves of that are wrong: a deploy must
-        // neither require nor confer ownership of what it deploys. Running the create as System
-        // removes both — the operation stops failing with
-        //   "Access denied: Create permission required for node '{space}/_Activity/…'"
-        // for a legitimate deployer who is correctly NOT an admin of the space.
-        //
-        // The caller is still recorded: the activity's OWNER context below comes from the node,
-        // and the sync's own log lines carry the triggering user. Only the write is System.
-        return AsSystem(accessService, () => meshService.CreateNode(node)).SelectMany(created =>
+        // STEP 1: create the activity node. CreateNode captures the caller's
+        // identity synchronously and stamps it as the node's CreatedBy — so the
+        // created node IS the owner record. This step completes on its own; the
+        // execution is a SEPARATE step (below), never nested in the create.
+        return meshService.CreateNode(node).SelectMany(created =>
         {
             onActivityCreated?.Invoke(activityPath);
 
@@ -193,16 +182,6 @@ public static class ActivityRunner
     /// then leave the ambient untouched (the outer <c>FromNode</c> already chose System
     /// for that case).
     /// </summary>
-
-    /// <summary>
-    /// Runs <paramref name="work"/> under the SYSTEM identity, entered at SUBSCRIBE so a deferred
-    /// write carries it. A host without an AccessService runs the work unimpersonated.
-    /// </summary>
-    private static IObservable<T> AsSystem<T>(AccessService? accessService, Func<IObservable<T>> work) =>
-        Observable.Using(
-            () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-            _ => Observable.Defer(work));
-
     private static AccessContext? OwnerContextOf(MeshNode created) =>
         string.IsNullOrEmpty(created.CreatedBy)
             ? null
