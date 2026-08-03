@@ -152,6 +152,14 @@ config:
     # failures fall back to lazy compile instead of holding readiness.
     PreWarm__DynamicTypes: "true"
     PreWarm__GateReadiness: "false"
+    # ---- Platform self-update cadence --------------------------------------
+    # The poller's built-in default is 6h, which is why a freshly published image
+    # could sit unpicked for hours and look like "self-update is broken" (memex,
+    # 2026-08-03: running ci.1672 while ci.1674 had been in ACR since 07:34).
+    # Managed envs track main closely, so poll every 20 minutes. Binding only
+    # works from the image that added SelfUpdateOptions.SectionName — before that
+    # this key is inert, because AddSelfUpdate() constructed its options directly.
+    SelfUpdate__PollInterval: "00:20:00"
     Mcp__BaseUrl: "http://memex-portal-service:8080"
     # ---- AI model providers (templated by the chart) ------------------------
     # These seed the system model catalog on deploy (BuiltInLanguageModelProvider
