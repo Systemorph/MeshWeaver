@@ -29,7 +29,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-    .markdown-body:not([data-theme="light"]) {
+    html:not([data-theme="light"]) .markdown-body:not([data-theme="light"]) {
         --annotation-comment-bg: rgba(187, 128, 9, 0.15);
         --annotation-comment-border: #d29922;
         --annotation-insert-bg: rgba(46, 160, 67, 0.15);
@@ -406,10 +406,10 @@
 }
 
 @media (prefers-color-scheme: dark) {
-    .markdown-body:not([data-theme="light"]) ::deep .svg-theme-container .svg-light {
+    html:not([data-theme="light"]) .markdown-body:not([data-theme="light"]) ::deep .svg-theme-container .svg-light {
         display: none;
     }
-    .markdown-body:not([data-theme="light"]) ::deep .svg-theme-container .svg-dark {
+    html:not([data-theme="light"]) .markdown-body:not([data-theme="light"]) ::deep .svg-theme-container .svg-dark {
         display: block;
     }
 }
