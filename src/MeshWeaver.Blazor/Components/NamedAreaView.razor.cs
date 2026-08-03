@@ -37,6 +37,35 @@ public partial class NamedAreaView
     private string? PageTitle;
     private IDictionary<string, object>? MetaAttributes;
 
+    [Inject] private NavigationManager Navigation { get; set; } = default!;
+
+    /// <summary>Open Graph keys are emitted as <c>property=</c>; everything else as <c>name=</c>.</summary>
+    private static bool IsOpenGraph(string key) => key.StartsWith("og:", StringComparison.OrdinalIgnoreCase);
+
+    // URL-valued meta keys. A scraper fetches these from ITS OWN host, so a site-relative path is
+    // useless to it — they must be absolute.
+    private static readonly string[] UrlMetaKeys = ["og:image", "og:url", "og:video", "twitter:image"];
+
+    /// <summary>
+    /// Resolves a URL-valued meta tag against the REQUEST's own origin, so layout code can supply
+    /// a site-relative path (<c>/static/…</c>) and still emit the absolute URL a scraper needs.
+    /// This is the right seam for it: a plugin's layout area cannot know the public host it is
+    /// being served under (the same content runs on memex, systemorph, atioz and localhost), while
+    /// the component rendering the page knows exactly. Non-URL keys and already-absolute values
+    /// pass through untouched.
+    /// </summary>
+    private string? AbsoluteMetaValue(string key, object? value)
+    {
+        var text = value?.ToString();
+        if (string.IsNullOrEmpty(text)
+            || !UrlMetaKeys.Contains(key, StringComparer.OrdinalIgnoreCase)
+            || Uri.IsWellFormedUriString(text, UriKind.Absolute))
+            return text;
+        return Uri.TryCreate(new Uri(Navigation.BaseUri), text, out var absolute)
+            ? absolute.ToString()
+            : text;
+    }
+
     private string? AreaToBeRendered { get; set; }
 
     /// <summary>
