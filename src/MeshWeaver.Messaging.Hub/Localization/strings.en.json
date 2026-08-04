@@ -615,5 +615,12 @@
   "ui.resetSiteSettings": "Reset site settings",
   "ui.tryNewFrontend": "Try the new frontend",
   "login.pasteToken": "Paste a subscription token or API key",
-  "login.useGateway": "Use a gateway / proxy"
+  "login.useGateway": "Use a gateway / proxy",
+  "ui.siteResetWarning": "Don't worry, this will <strong>only</strong> reset stored data for <strong>this</strong> site. It will not clear any of your browser's cache for other sites!",
+  "ui.periodLabel": "· **Period:**",
+  "ui.groupLabel": "**Group:**",
+  "ui.prevArrow": "◀ Prev",
+  "ui.nextArrow": "Next ▶",
+  "ui.noModelsYet": "_No models yet — enter a base URL + key and click **Fetch models**._",
+  "ui.notCheckedOut": "_Not checked out yet — use **Check out / pull** above._"
 }

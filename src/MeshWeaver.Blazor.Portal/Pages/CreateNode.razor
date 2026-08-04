@@ -65,7 +65,7 @@
 
             @* 3. Type — MeshNodeAutocomplete searching NodeType nodes *@
             <div>
-                <label style="font-weight: 600; display: block; margin-bottom: 4px;">Type *</label>
+                <label style="font-weight: 600; display: block; margin-bottom: 4px;">@Access.Localize("ui.typeRequired")</label>
                 <MeshNodeAutocomplete
                     Options="@typePickerOptions"
                     SelectedItem="@selectedTypeItem"
@@ -74,7 +74,7 @@
 
             @* 4. Location — MeshNodeAutocomplete *@
             <div>
-                <label style="font-weight: 600; display: block; margin-bottom: 4px;">Location *</label>
+                <label style="font-weight: 600; display: block; margin-bottom: 4px;">@Access.Localize("ui.location")</label>
                 <MeshNodeAutocomplete
                     Options="@locationOptions"
                     SelectedItem="@selectedLocation"

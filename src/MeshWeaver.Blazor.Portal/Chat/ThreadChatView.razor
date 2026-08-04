@@ -810,7 +810,7 @@ else
                             case MeshWeaver.AI.Connect.ConnectStatus.Connecting c when !string.IsNullOrEmpty(c.Challenge.VerificationUrl):
                                 <div><strong>1</strong>&nbsp; Open the authorization page and approve:</div>
                                 <FluentAnchor Href="@c.Challenge.VerificationUrl" Target="_blank"
-                                              Appearance="FluentAppearance.Accent">Open authorization page&nbsp;↗</FluentAnchor>
+                                              Appearance="FluentAppearance.Accent">@Access.Localize("login.openAuthPage")</FluentAnchor>
                                 @if (c.Challenge.RequiresPastedCode)
                                 {
                                     <div style="margin-top:4px;"><strong>2</strong>&nbsp; Paste the code shown, then submit:</div>
@@ -822,7 +822,7 @@ else
                                 }
                                 else if (!string.IsNullOrEmpty(c.Challenge.UserCode))
                                 {
-                                    <div>Enter this code in the browser: <strong>@c.Challenge.UserCode</strong></div>
+                                    <div>@Access.Localize("login.enterCodeInBrowser") <strong>@c.Challenge.UserCode</strong></div>
                                     <div style="color:var(--neutral-foreground-hint);">@Access.Localize("login.waitingForAuth")</div>
                                 }
                                 break;

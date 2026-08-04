@@ -22,7 +22,7 @@
                 }
                 else
                 {
-                    <span>Requesting feedback before delegating to <strong>@@@DelegationContent.TargetAgent</strong></span>
+                    <span>@Access.Localize("ui.requestingFeedbackBefore") <strong>@@@DelegationContent.TargetAgent</strong></span>
                 }
             }
             else if (hasTask)
@@ -31,7 +31,7 @@
             }
             else
             {
-                <span>Delegating to <strong>@@@DelegationContent.TargetAgent</strong></span>
+                <span>@Access.Localize("ui.delegatingTo") <strong>@@@DelegationContent.TargetAgent</strong></span>
             }
         </div>
         <div class="delegation-expand-icon @(isExpanded ? "expanded" : "")">

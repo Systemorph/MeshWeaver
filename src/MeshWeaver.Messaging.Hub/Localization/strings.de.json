@@ -615,5 +615,12 @@
   "ui.resetSiteSettings": "Website-Einstellungen zurücksetzen",
   "ui.tryNewFrontend": "Das neue Frontend ausprobieren",
   "login.pasteToken": "Abo-Token oder API-Schlüssel einfügen",
-  "login.useGateway": "Gateway / Proxy verwenden"
+  "login.useGateway": "Gateway / Proxy verwenden",
+  "ui.siteResetWarning": "Keine Sorge: Es werden <strong>nur</strong> die gespeicherten Daten <strong>dieser</strong> Website zurückgesetzt. Der Browser-Cache anderer Websites bleibt unberührt.",
+  "ui.periodLabel": "· **Zeitraum:**",
+  "ui.groupLabel": "**Gruppe:**",
+  "ui.prevArrow": "◀ Zurück",
+  "ui.nextArrow": "Weiter ▶",
+  "ui.noModelsYet": "_Noch keine Modelle — Basis-URL und Schlüssel eingeben und auf **Modelle abrufen** klicken._",
+  "ui.notCheckedOut": "_Noch nicht ausgecheckt — oben **Auschecken / Pull** verwenden._"
 }

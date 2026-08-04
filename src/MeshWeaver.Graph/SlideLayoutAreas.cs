@@ -182,7 +182,7 @@ public static class SlideLayoutAreas
             .WithStyle("display: flex; align-items: center; gap: 10px; margin-top: 14px;");
 
         if (prev is not null)
-            bar = bar.WithView(Controls.Button("◀ Prev")
+            bar = bar.WithView(Controls.Button(LocalizationCatalog.Get("ui.prevArrow", locale))
                     .WithAppearance(Appearance.Neutral)
                     .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(prev.Path, ContentArea)),
                 PrevButtonArea);
@@ -204,7 +204,7 @@ public static class SlideLayoutAreas
             PresentLinkArea);
 
         if (next is not null)
-            bar = bar.WithView(Controls.Button("Next ▶")
+            bar = bar.WithView(Controls.Button(LocalizationCatalog.Get("ui.nextArrow", locale))
                     .WithAppearance(Appearance.Accent)
                     .WithStyle("margin-left: auto;")
                     .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(next.Path, ContentArea)),
