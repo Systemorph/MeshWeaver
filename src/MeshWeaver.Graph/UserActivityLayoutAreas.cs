@@ -295,7 +295,7 @@ public static class UserActivityLayoutAreas
             host.Hub.GetEffectivePermissions(hubPath),
             (node, permissions) => !permissions.HasFlag(Permission.Update)
                 ? (UiControl?)MeshNodeLayoutAreas.BuildAccessDenied(hubPath)
-                : (UiControl?)BuildHomeBodyEditor(node, hubPath, options));
+                : (UiControl?)BuildHomeBodyEditor(node, hubPath, options, locale: host.ViewerLocale()));
     }
 
     /// <summary>
@@ -305,10 +305,10 @@ public static class UserActivityLayoutAreas
     /// read-modify-write to <see cref="User.Body"/> (never a whole-content replace). An empty Body ⇒
     /// the <see cref="UserWelcomeMarkdown"/> default renders (see <see cref="BuildOwnerHome"/>).
     /// </summary>
-    private static UiControl BuildHomeBodyEditor(MeshNode? node, string hubPath, JsonSerializerOptions options)
+    private static UiControl BuildHomeBodyEditor(MeshNode? node, string hubPath, JsonSerializerOptions options, string? locale = null)
     {
         if (node is null)
-            return Controls.Markdown("*Home page not found.*");
+            return Controls.Markdown(LocalizationCatalog.Get("ui.mdHomeNotFound", locale));
 
         var userPath = node.Path ?? hubPath;
         var contentCtx = LayoutAreaReference.GetMeshNodeDataContext(userPath, bindContent: true);
@@ -336,7 +336,7 @@ public static class UserActivityLayoutAreas
         // "Reset to default" — the in-editor twin of the Reset menu item, shown only when the owner has
         // overridden the home. Clears User.Body → the welcome template returns.
         if (hasBody)
-            headerRow = headerRow.WithView(Controls.Button("Reset to default")
+            headerRow = headerRow.WithView(Controls.Button(LocalizationCatalog.Get("ui.resetToDefault", locale))
                 .WithAppearance(Appearance.Stealth)
                 .WithClickAction(ClearBodyAction(userPath)));
 
@@ -782,7 +782,7 @@ public static class UserActivityLayoutAreas
             host.Hub.GetEffectivePermissions(hubPath),
             (node, permissions) => !permissions.HasFlag(Permission.Update)
                 ? (UiControl?)MeshNodeLayoutAreas.BuildAccessDenied(hubPath)
-                : (UiControl?)BuildProfileEditor(node, hubPath, options));
+                : (UiControl?)BuildProfileEditor(node, hubPath, options, locale: host.ViewerLocale()));
     }
 
     /// <summary>
@@ -792,10 +792,10 @@ public static class UserActivityLayoutAreas
     /// <c>/data</c> replica, no save subscription), and the showcase rendered with the inline unpin
     /// overlay so the owner curates pins in place. Built from layout-area controls only.
     /// </summary>
-    internal static UiControl BuildProfileEditor(MeshNode? node, string hubPath, JsonSerializerOptions options)
+    internal static UiControl BuildProfileEditor(MeshNode? node, string hubPath, JsonSerializerOptions options, string? locale = null)
     {
         if (node is null)
-            return Controls.Markdown("*Profile not found.*");
+            return Controls.Markdown(LocalizationCatalog.Get("ui.mdProfileNotFound", locale));
 
         var userPath = node.Path ?? hubPath;
         var ownerId = OwnerIdOf(userPath);
@@ -816,8 +816,8 @@ public static class UserActivityLayoutAreas
                 .WithIconStart(FluentIcons.ArrowLeft())
                 .WithAppearance(Appearance.Stealth)
                 .WithNavigateToHref($"/{userPath}/{ProfileArea}"))
-            .WithView(Controls.H3("Edit your profile").WithStyle("margin: 0; flex: 1;"))
-            .WithView(Controls.Label("Changes are saved automatically")
+            .WithView(Controls.H3(LocalizationCatalog.Get("ui.editYourProfile", locale)).WithStyle("margin: 0; flex: 1;"))
+            .WithView(Controls.Label(LocalizationCatalog.Get("ui.autoSaved", locale))
                 .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.85rem;")));
 
         // Bio — node-bound markdown editor (JsonPointer "bio" against the User content context).
@@ -878,7 +878,7 @@ public static class UserActivityLayoutAreas
     /// </summary>
     internal static UiControl BuildProfile(
         string nodePath, string ownerId, string ownerName, MeshNode? ownerNode,
-        bool isOwner, bool canSeeEmail, JsonSerializerOptions options)
+        bool isOwner, bool canSeeEmail, JsonSerializerOptions options, string? locale = null)
     {
         // ContentAs (not `as User`): the owner-node stream alternates typed↔JsonElement↔null frames.
         var user = ownerNode.ContentAs<User>(options);
@@ -912,14 +912,14 @@ public static class UserActivityLayoutAreas
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(8)
                 .WithStyle("padding: 8px 0;")
-                .WithView(Controls.Button("Edit profile")
+                .WithView(Controls.Button(LocalizationCatalog.Get("menu.editProfile", locale))
                     .WithIconStart(FluentIcons.Edit())
                     .WithAppearance(Appearance.Lightweight)
                     .WithNavigateToHref($"/{nodePath}/{EditProfileArea}")));
 
         if (isEmpty)
         {
-            content = content.WithView(BuildGettingStarted(nodePath, ownerId, ownerName, isOwner));
+            content = content.WithView(BuildGettingStarted(nodePath, ownerId, ownerName, isOwner, locale: locale));
         }
         else
         {
@@ -1030,7 +1030,7 @@ public static class UserActivityLayoutAreas
     /// inspiration; for a visitor it is a gentle "nothing here yet" plus the owner's recent public work.
     /// Built entirely from layout-area controls (Stack / Markdown / Button / MeshSearch) — no HTML.
     /// </summary>
-    internal static UiControl BuildGettingStarted(string nodePath, string ownerId, string ownerName, bool isOwner)
+    internal static UiControl BuildGettingStarted(string nodePath, string ownerId, string ownerName, bool isOwner, string? locale = null)
     {
         var card = Controls.Stack
             .WithId(GettingStartedId)
@@ -1059,7 +1059,7 @@ public static class UserActivityLayoutAreas
             card = card.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(8)
-                .WithView(Controls.Button("Edit profile")
+                .WithView(Controls.Button(LocalizationCatalog.Get("menu.editProfile", locale))
                     .WithIconStart(FluentIcons.Edit())
                     .WithAppearance(Appearance.Accent)
                     .WithNavigateToHref($"/{nodePath}/{EditProfileArea}")));

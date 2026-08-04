@@ -373,7 +373,7 @@ public static class UserNodeType
         // + Add Admin — reuse the Access Control area's Subject/Role picker dialog,
         // scoped to the "Admin" space so a new grant lands at
         // Admin/_Access/{subject}_Access (MainNode = "Admin"), the platform-admin shape.
-        stack = stack.WithView(Controls.Button("+ Add Admin")
+        stack = stack.WithView(Controls.Button(host.Localize("ui.plusAddAdmin"))
             .WithAppearance(Appearance.Accent)
             .WithStyle("align-self: flex-start; margin-top: 8px;")
             .WithClickAction((Action<UiActionContext>)(addCtx =>

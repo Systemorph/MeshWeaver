@@ -128,7 +128,7 @@ public static class CourseLayoutAreas
     /// module page.
     /// </summary>
     private static UiControl BuildModuleCards(
-        IReadOnlyList<MeshNode> modules, JsonSerializerOptions options)
+        IReadOnlyList<MeshNode> modules, JsonSerializerOptions options, string? locale = null)
     {
         var cards = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -143,7 +143,7 @@ public static class CourseLayoutAreas
             if (!string.IsNullOrWhiteSpace(summary))
                 card = card.WithView(Controls.Markdown(summary!)
                     .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.9rem;"));
-            card = card.WithView(Controls.Button("Open module")
+            card = card.WithView(Controls.Button(LocalizationCatalog.Get("ui.openModule", locale))
                 .WithAppearance(Appearance.Accent)
                 .WithNavigateToHref($"/{module.Path}"));
             cards = cards.WithView(card, $"Module-{module.Id}");
@@ -158,7 +158,7 @@ public static class CourseLayoutAreas
     /// </summary>
     private static UiControl BuildProgress(
         IReadOnlyList<MeshNode> modules, IReadOnlyList<MeshNode> exercises,
-        IEnumerable<MeshNode> attempts, JsonSerializerOptions options)
+        IEnumerable<MeshNode> attempts, JsonSerializerOptions options, string? locale = null)
     {
         // Exercise paths the viewer passed (via the attempt's recorded
         // ExercisePath — robust against where the attempt physically lives).
@@ -188,7 +188,7 @@ public static class CourseLayoutAreas
         var percent = total == 0 ? 0 : (int)Math.Round(100.0 * passed / total);
 
         var section = Controls.Stack.WithWidth("100%")
-            .WithView(Controls.H2("Your progress").WithStyle("margin: 16px 0 8px 0;"))
+            .WithView(Controls.H2(LocalizationCatalog.Get("ui.yourProgress", locale)).WithStyle("margin: 16px 0 8px 0;"))
             .WithView(Controls.Progress($"{passed} of {total} exercises passed", percent),
                 ProgressBarArea);
 

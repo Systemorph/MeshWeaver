@@ -88,13 +88,13 @@ public static class ModelsSettingsTab
         var ownerPath = !string.IsNullOrEmpty(node?.Path) ? node!.Path : userId;
 
         stack = stack
-            .WithView(Controls.H2("Language Models"))
+            .WithView(Controls.H2(host.Localize("settings.languageModels")))
             .WithView(Controls.Markdown(
                 "Bring your own AI provider credentials, or connect a co-hosted CLI with your " +
                 "subscription. Keys never leave your namespace."));
 
         if (string.IsNullOrEmpty(ownerPath))
-            return stack.WithView(Controls.Markdown("_No owner identity available._"));
+            return stack.WithView(Controls.Markdown(host.Localize("ui.mdNoOwnerIdentity")));
 
         var catalogOptions = host.Hub.ServiceProvider.GetService<LanguageModelCatalogOptions>();
         var allSources = catalogOptions?.Sources.OrderBy(s => s.Order).ToList()
@@ -184,24 +184,24 @@ public static class ModelsSettingsTab
         // ── CLI providers — login status + connect (owner sections only) ──────
         if (!isPlatform && cliSources.Count > 0)
         {
-            section = section.WithView(Controls.H3("CLI providers"));
-            section = section.WithView(Controls.Markdown("Log in with your subscription — no key, no model list."));
+            section = section.WithView(Controls.H3(host.Localize("ui.cliProviders")));
+            section = section.WithView(Controls.Markdown(host.Localize("ui.loginWithSubscription")));
             foreach (var src in cliSources)
                 section = section.WithView(BuildCliCard(host, src, sessionManager, providerService, ownerPath, userId));
         }
 
         // ── Configured providers ──────────────────────────────────────────────
-        section = section.WithView(Controls.H3("Configured providers"));
+        section = section.WithView(Controls.H3(host.Localize("ui.configuredProviders")));
         section = section.WithView((h, _) =>
             providerService.GetProvidersForOwner(ownerPath, serviceNamespace)
                 .Select(providers => providers.Count == 0
-                    ? (UiControl?)Controls.Markdown("_No providers configured yet._")
-                    : BuildProviderList(providers, providerService, scope)));
+                    ? (UiControl?)Controls.Markdown(host.Localize("ui.mdNoProviders"))
+                    : BuildProviderList(providers, providerService, scope, locale: host.ViewerLocale())));
 
         // ── Active models (provider selection) — a per-user choice, owner sections only ──
         if (!isPlatform)
         {
-            section = section.WithView(Controls.H3("Active models"));
+            section = section.WithView(Controls.H3(host.Localize("ui.activeModels")));
             section = section.WithView(Controls.Markdown(
                 "Choose which providers' models appear in your chat. Models an organisation shared " +
                 "with you work even though their key stays hidden."));
@@ -214,7 +214,7 @@ public static class ModelsSettingsTab
                         .ToList());
                 var selection = providerService.GetSelection(ownerPath).StartWith(ImmutableArray<string>.Empty);
                 return models.CombineLatest(selection, (modelNodes, selected) =>
-                    (UiControl?)BuildModelSelectionList(modelNodes, selected, providerService, ownerPath, scope));
+                    (UiControl?)BuildModelSelectionList(modelNodes, selected, providerService, ownerPath, scope, locale: host.ViewerLocale()));
             });
         }
 
@@ -256,7 +256,7 @@ public static class ModelsSettingsTab
         var card = Controls.Stack.WithWidth("100%")
             .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; gap: 12px; margin-bottom: 12px;");
 
-        card = card.WithView(Controls.H3("Add a provider"));
+        card = card.WithView(Controls.H3(host.Localize("ui.addProvider")));
         card = card.WithView(Controls.Markdown(
             "Pick a type, paste the base URL (including `/v1`) + key, then **Fetch models** and tick the " +
             "ones to bring. For an OpenAI-compatible gateway (e.g. OpenRouter `https://openrouter.ai/api/v1`) " +
@@ -293,7 +293,7 @@ public static class ModelsSettingsTab
         }.WithWidth("200px"));
         card = card.WithView(row);
 
-        card = card.WithView(Controls.Button("Fetch models")
+        card = card.WithView(Controls.Button(host.Localize("ui.fetchModels"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx => { FetchModels(ctx, scope, byName); return Task.CompletedTask; }));
 
@@ -313,7 +313,7 @@ public static class ModelsSettingsTab
             Placeholder = "vendor/model",
             DataContext = formPtr,
         }.WithWidth("220px"));
-        tools = tools.WithView(Controls.Button("Add id")
+        tools = tools.WithView(Controls.Button(host.Localize("ui.addId"))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(ctx => { AddManualModel(ctx, scope); return Task.CompletedTask; }));
         card = card.WithView(tools);
@@ -329,7 +329,7 @@ public static class ModelsSettingsTab
                     f?.GetValueOrDefault("filter")?.ToString() ?? ""));
         });
 
-        card = card.WithView(Controls.Button("Save provider")
+        card = card.WithView(Controls.Button(host.Localize("ui.saveProvider"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx => { SaveProvider(ctx, scope, byName, providerService, ownerPath, targetNamespace); return Task.CompletedTask; }));
 
@@ -542,7 +542,7 @@ public static class ModelsSettingsTab
     // ════════════════════════════════════════════════════════════════════════
 
     private static UiControl BuildProviderList(
-        IReadOnlyList<ProviderInfo> providers, ModelProviderService service, string scope)
+        IReadOnlyList<ProviderInfo> providers, ModelProviderService service, string scope, string? locale = null)
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
         foreach (var p in providers)
@@ -558,7 +558,7 @@ public static class ModelsSettingsTab
                 $"Created {p.CreatedAt:yyyy-MM-dd}").WithStyle("flex: 1;"));
 
             var captured = p;
-            row = row.WithView(Controls.Button("Delete")
+            row = row.WithView(Controls.Button(LocalizationCatalog.Get("common.delete", locale))
                 .WithAppearance(Appearance.Outline)
                 .WithClickAction(ctx =>
                 {
@@ -580,7 +580,7 @@ public static class ModelsSettingsTab
         ImmutableArray<string> selected,
         ModelProviderService service,
         string ownerPath,
-        string scope)
+        string scope, string? locale = null)
     {
         var byProvider = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var n in modelNodes)
@@ -593,7 +593,7 @@ public static class ModelsSettingsTab
         }
 
         if (byProvider.Count == 0)
-            return Controls.Markdown("_No models discovered._");
+            return Controls.Markdown(LocalizationCatalog.Get("ui.mdNoModelsDiscovered", locale));
 
         var selectedSet = selected.IsDefault
             ? new HashSet<string>(StringComparer.Ordinal)
@@ -667,15 +667,15 @@ public static class ModelsSettingsTab
         card = card.WithView(Controls.Markdown($"**{src.EffectiveLabel}** · _CLI_"));
 
         if (sessionManager is null || !sessionManager.Supports(provider))
-            return card.WithView(Controls.Markdown("_Connect is not available in this deployment._"));
+            return card.WithView(Controls.Markdown(host.Localize("ui.mdConnectUnavailable")));
 
-        host.UpdateData(stateDataId, RenderCliBody(provider, src, stateDataId, sessionManager, ownerPath, userId));
+        host.UpdateData(stateDataId, RenderCliBody(provider, src, stateDataId, sessionManager, ownerPath, userId, locale: host.ViewerLocale()));
 
         var configDir = ResolveConfigDir(host, userId, provider);
         sessionManager.IsLoggedIn(provider, configDir).Take(1).Subscribe(loggedIn =>
         {
             if (loggedIn)
-                host.UpdateData(stateDataId, RenderConnectedBody(src, provider, stateDataId, sessionManager, ownerPath, userId, loginName: null));
+                host.UpdateData(stateDataId, RenderConnectedBody(src, provider, stateDataId, sessionManager, ownerPath, userId, loginName: null, locale: host.ViewerLocale()));
         });
 
         return card.WithView((h, _) =>
@@ -685,20 +685,20 @@ public static class ModelsSettingsTab
 
     private static UiControl RenderCliBody(
         ConnectProvider provider, LanguageModelCatalogSource src, string stateDataId,
-        ConnectSessionManager sessionManager, string ownerPath, string userId)
+        ConnectSessionManager sessionManager, string ownerPath, string userId, string? locale = null)
     {
         var body = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
-        body = body.WithView(Controls.Markdown("⚪ Not connected — uses your subscription"));
+        body = body.WithView(Controls.Markdown(LocalizationCatalog.Get("ui.notConnectedSubscription", locale)));
         body = body.WithView(Controls.Button($"Connect {src.EffectiveLabel}")
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
                 var host = ctx.Host;
                 var configDir = ResolveConfigDir(host, userId, provider);
-                host.UpdateData(stateDataId, Controls.Markdown("🟡 Connecting…"));
+                host.UpdateData(stateDataId, Controls.Markdown(host.Localize("ui.connecting")));
                 sessionManager.StartConnect(ownerPath, provider, configDir).Subscribe(
                     st => host.UpdateData(stateDataId, RenderConnectingOrTerminal(provider, st, src, stateDataId, sessionManager, ownerPath, userId)),
-                    ex => host.UpdateData(stateDataId, RenderError(provider, src, ex.Message, stateDataId, sessionManager, ownerPath, userId)));
+                    ex => host.UpdateData(stateDataId, RenderError(provider, src, ex.Message, stateDataId, sessionManager, ownerPath, userId, locale: locale)));
                 return Task.CompletedTask;
             }));
         return body;
@@ -717,17 +717,17 @@ public static class ModelsSettingsTab
 
     private static UiControl RenderConnecting(
         ConnectProvider provider, ConnectChallenge challenge, LanguageModelCatalogSource src, string stateDataId,
-        ConnectSessionManager sessionManager, string ownerPath, string userId)
+        ConnectSessionManager sessionManager, string ownerPath, string userId, string? locale = null)
     {
         var body = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
-        body = body.WithView(Controls.Markdown("🟡 Connecting…"));
+        body = body.WithView(Controls.Markdown(LocalizationCatalog.Get("ui.connecting", locale)));
 
         if (challenge.RequiresPastedCode)
         {
             body = body.WithView(Controls.Markdown(
                 $"1. Authorize in your browser: [{challenge.VerificationUrl}]({challenge.VerificationUrl})  \n" +
                 "2. Paste the code shown:"));
-            body = body.WithView(BuildPasteCodeRow(provider, src, stateDataId, sessionManager, ownerPath, userId));
+            body = body.WithView(BuildPasteCodeRow(provider, src, stateDataId, sessionManager, ownerPath, userId, locale: locale));
         }
         else
         {
@@ -736,12 +736,12 @@ public static class ModelsSettingsTab
                 $"Enter this code at [{challenge.VerificationUrl}]({challenge.VerificationUrl}){code}\n\n⏳ auto-checking…"));
         }
 
-        body = body.WithView(Controls.Button("Cancel")
+        body = body.WithView(Controls.Button(LocalizationCatalog.Get("common.cancel", locale))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(ctx =>
             {
                 sessionManager.Cancel(ownerPath, provider);
-                ctx.Host.UpdateData(stateDataId, RenderCliBody(provider, src, stateDataId, sessionManager, ownerPath, userId));
+                ctx.Host.UpdateData(stateDataId, RenderCliBody(provider, src, stateDataId, sessionManager, ownerPath, userId, locale: locale));
                 return Task.CompletedTask;
             }));
         return body;
@@ -749,7 +749,7 @@ public static class ModelsSettingsTab
 
     private static UiControl BuildPasteCodeRow(
         ConnectProvider provider, LanguageModelCatalogSource src, string stateDataId,
-        ConnectSessionManager sessionManager, string ownerPath, string userId)
+        ConnectSessionManager sessionManager, string ownerPath, string userId, string? locale = null)
     {
         var codeDataId = $"cliCode:{src.ProviderName}";
         var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 8px; align-items: flex-end;");
@@ -759,7 +759,7 @@ public static class ModelsSettingsTab
             Placeholder = "paste here",
             DataContext = LayoutAreaReference.GetDataPointer(codeDataId),
         }.WithWidth("280px"));
-        row = row.WithView(Controls.Button("Submit")
+        row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.submit", locale))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
@@ -774,7 +774,7 @@ public static class ModelsSettingsTab
                     }
                     sessionManager.SubmitCode(ownerPath, provider, code).Subscribe(
                         st => host.UpdateData(stateDataId, RenderConnectingOrTerminal(provider, st, src, stateDataId, sessionManager, ownerPath, userId)),
-                        ex => host.UpdateData(stateDataId, RenderError(provider, src, ex.Message, stateDataId, sessionManager, ownerPath, userId)));
+                        ex => host.UpdateData(stateDataId, RenderError(provider, src, ex.Message, stateDataId, sessionManager, ownerPath, userId, locale: locale)));
                 });
                 return Task.CompletedTask;
             }));
@@ -783,19 +783,19 @@ public static class ModelsSettingsTab
 
     private static UiControl RenderConnectedBody(
         LanguageModelCatalogSource src, ConnectProvider provider, string stateDataId,
-        ConnectSessionManager sessionManager, string ownerPath, string userId, string? loginName)
+        ConnectSessionManager sessionManager, string ownerPath, string userId, string? loginName, string? locale = null)
     {
         var who = string.IsNullOrEmpty(loginName) ? "" : $" as {loginName}";
         var body = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 16px; align-items: center;");
         body = body.WithView(Controls.Markdown($"🟢 Connected{who}").WithStyle("flex: 1;"));
-        body = body.WithView(Controls.Button("Disconnect")
+        body = body.WithView(Controls.Button(LocalizationCatalog.Get("ui.disconnect", locale))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(ctx =>
             {
                 sessionManager.Cancel(ownerPath, provider);
                 var providerService = ctx.Host.Hub.ServiceProvider.GetRequiredService<ModelProviderService>();
                 providerService.DeleteProvider($"{ModelProviderNodeType.UserNamespacePath(ownerPath)}/{src.ProviderName}").Subscribe(
-                    _ => ctx.Host.UpdateData(stateDataId, RenderCliBody(provider, src, stateDataId, sessionManager, ownerPath, userId)),
+                    _ => ctx.Host.UpdateData(stateDataId, RenderCliBody(provider, src, stateDataId, sessionManager, ownerPath, userId, locale: locale)),
                     ex => ctx.Host.UpdateData(ResultId(UserScope), ErrorMd(ex.Message)));
                 return Task.CompletedTask;
             }));
@@ -804,15 +804,15 @@ public static class ModelsSettingsTab
 
     private static UiControl RenderError(
         ConnectProvider provider, LanguageModelCatalogSource src, string reason, string stateDataId,
-        ConnectSessionManager sessionManager, string ownerPath, string userId)
+        ConnectSessionManager sessionManager, string ownerPath, string userId, string? locale = null)
     {
         var body = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
         body = body.WithView(Controls.Markdown($"🔴 {reason}"));
-        body = body.WithView(Controls.Button("Retry")
+        body = body.WithView(Controls.Button(LocalizationCatalog.Get("common.retry", locale))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
-                ctx.Host.UpdateData(stateDataId, RenderCliBody(provider, src, stateDataId, sessionManager, ownerPath, userId));
+                ctx.Host.UpdateData(stateDataId, RenderCliBody(provider, src, stateDataId, sessionManager, ownerPath, userId, locale: locale));
                 return Task.CompletedTask;
             }));
         return body;

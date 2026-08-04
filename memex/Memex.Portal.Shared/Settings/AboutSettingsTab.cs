@@ -40,7 +40,7 @@ public static class AboutSettingsTab
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
     {
-        stack = stack.WithView(Controls.H2("About MeshWeaver").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("ui.aboutMeshWeaver")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Markdown(
             "MeshWeaver is a reactive, mesh-based data and automation platform. This page identifies " +
             "the exact build this portal is running."));

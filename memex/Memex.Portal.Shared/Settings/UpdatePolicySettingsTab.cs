@@ -50,7 +50,7 @@ public static class UpdatePolicySettingsTab
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
     {
-        stack = stack.WithView(Controls.H2("Platform updates").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("ui.platformUpdates")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Markdown(
             "The platform self-updates per the strategy below. **Continuous** rolls to the newest build " +
             "(including build-numbered continuous builds); **Stable** rolls only to clean releases; " +
@@ -69,7 +69,7 @@ public static class UpdatePolicySettingsTab
             .EnsureExists(h.Hub, h.Hub.ServiceProvider.GetService<AccessService>(), UpdatePolicyKind.Continuous)
             .Select(_ => (UiControl?)MeshNodeContentEditorControl.ForType(
                 UpdatePolicyNodeType.NodePath, typeof(UpdatePolicyContent)))
-            .StartWith((UiControl?)Controls.Markdown("_Loading update policy…_")));
+            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingUpdatePolicy"))));
 
         // Live status: the latest available tag + when last checked.
         stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
@@ -78,7 +78,7 @@ public static class UpdatePolicySettingsTab
             .StartWith((UiControl?)Controls.Markdown("")));
 
         // Manual apply (installs that can self-patch). Reads the latest tag, then patches via the Http pool.
-        stack = stack.WithView(Controls.Button("Apply available update now")
+        stack = stack.WithView(Controls.Button(host.Localize("ui.applyUpdateNow"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {

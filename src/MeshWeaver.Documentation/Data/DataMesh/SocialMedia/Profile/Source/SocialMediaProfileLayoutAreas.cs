@@ -33,7 +33,7 @@ public static class SocialMediaProfileLayoutAreas
             .Select(node =>
             {
                 if (node is null)
-                    return (UiControl?)Controls.Markdown("*Profile not found.*");
+                    return (UiControl?)Controls.Markdown(host.Localize("ui.mdProfileNotFound"));
 
                 var name = node.Name ?? GetProp(node, "name") ?? "Profile";
                 var platformId = GetProp(node, "platform") ?? "LinkedIn";

@@ -1384,7 +1384,7 @@ public static class EditorExtensions
             DataContext = LayoutAreaReference.GetDataPointer(dataId)
         };
 
-        var browseButton = Controls.Button("Browse...")
+        var browseButton = Controls.Button(host.Localize("ui.browse"))
             .WithAppearance(Appearance.Outline)
             .WithStyle("flex-shrink: 0;")
             .WithClickAction(ctx =>
@@ -1529,7 +1529,7 @@ public static class EditorExtensions
             var collectionAttr = property.GetCustomAttribute<MeshNodeCollectionAttribute>();
             if (collectionAttr != null)
             {
-                stack = stack.WithView(Controls.Button("+ Add")
+                stack = stack.WithView(Controls.Button(host.Localize("ui.plusAdd"))
                     .WithAppearance(Appearance.Lightweight)
                     .WithStyle("align-self: flex-start; margin-top: 4px; font-size: 0.85rem;")
                     .WithClickAction(ctx =>
@@ -1673,7 +1673,7 @@ public static class EditorExtensions
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: flex-end; gap: 8px;")
-            .WithView(Controls.Button("Add")
+            .WithView(Controls.Button(ctx.Host.Localize("ui.add"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(addCtx =>
                 {
@@ -1685,7 +1685,7 @@ public static class EditorExtensions
                             if (string.IsNullOrEmpty(selectedValue))
                             {
                                 var errorDialog = Controls.Dialog(
-                                    Controls.Markdown("Please select an item."),
+                                    Controls.Markdown(ctx.Host.Localize("ui.selectItem")),
                                     "Validation Error"
                                 ).WithSize("S").WithClosable(true);
                                 addCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
@@ -1696,7 +1696,7 @@ public static class EditorExtensions
                         });
                     return Task.CompletedTask;
                 }))
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(ctx.Host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(cancelCtx =>
                 {
@@ -1903,7 +1903,7 @@ public static class EditorExtensions
             stack = stack.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 12px;")
-                .WithView(Controls.Button("Done")
+                .WithView(Controls.Button(host.Localize("common.done"))
                     .WithAppearance(Appearance.Accent)
                     .WithClickAction(ctx =>
                     {

@@ -45,7 +45,7 @@ public static class ApiTokensSettingsTab
         var userName = userContext?.Name ?? "";
         var userEmail = userContext?.Email ?? "";
 
-        stack = stack.WithView(Controls.H2("API Tokens").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.apiTokens")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(
             "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
             "Manage personal access tokens for API and MCP access.</p>"));
@@ -100,7 +100,7 @@ public static class ApiTokensSettingsTab
         // repeated tokens show a dialog even if the raw token string is identical).
         const string tokenRenderKey = "apiTokenRenderKey";
 
-        formRow = formRow.WithView(Controls.Button("Generate Token")
+        formRow = formRow.WithView(Controls.Button(host.Localize("ui.generateToken"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
@@ -202,7 +202,7 @@ public static class ApiTokensSettingsTab
                     .Select(tokens => tokens.Count == 0
                         ? (UiControl?)Controls.Html(
                             "<p style=\"color: var(--neutral-foreground-hint);\">No tokens yet. Create one above.</p>")
-                        : BuildTokenList(tokens, tokenService, resultDataId)));
+                        : BuildTokenList(tokens, tokenService, resultDataId, locale: host.ViewerLocale())));
 
         return stack;
     }
@@ -210,7 +210,7 @@ public static class ApiTokensSettingsTab
     private static UiControl BuildTokenList(
         IReadOnlyList<ApiTokenInfo> tokens,
         ApiTokenService tokenService,
-        string resultDataId)
+        string resultDataId, string? locale = null)
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
 
@@ -243,7 +243,7 @@ public static class ApiTokensSettingsTab
             // Delete button — available for revoked or expired tokens to clean up the list.
             if (token.IsRevoked || (token.ExpiresAt.HasValue && token.ExpiresAt.Value < DateTimeOffset.UtcNow))
             {
-                row = row.WithView(Controls.Button("Delete")
+                row = row.WithView(Controls.Button(LocalizationCatalog.Get("common.delete", locale))
                     .WithAppearance(Appearance.Outline)
                     .WithClickAction(ctx =>
                     {
@@ -269,7 +269,7 @@ public static class ApiTokensSettingsTab
             if (!token.IsRevoked)
             {
                 var captured = token;
-                row = row.WithView(Controls.Button("Revoke")
+                row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.revoke", locale))
                     .WithAppearance(Appearance.Outline)
                     .WithClickAction(ctx =>
                     {

@@ -47,7 +47,7 @@ public static class AiSettingsTab
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var userId = accessService?.Context?.ObjectId ?? "";
 
-        stack = stack.WithView(Controls.H2("AI Settings").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.aiSettings")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(
             "<p style=\"font-size:0.85rem; color:var(--neutral-foreground-hint); margin-bottom:16px;\">" +
             "Choose which AI harnesses appear in your chat composer, and customise the agent/model " +

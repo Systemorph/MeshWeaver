@@ -97,7 +97,7 @@ public static class ApprovalLayoutAreas
                 .WithHorizontalGap(8)
                 .WithStyle("margin-top: 16px;");
 
-            buttonRow = buttonRow.WithView(Controls.Button("Approve")
+            buttonRow = buttonRow.WithView(Controls.Button(host.Localize("ui.approve"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>
                 {
@@ -105,7 +105,7 @@ public static class ApprovalLayoutAreas
                     return Task.CompletedTask;
                 }));
 
-            buttonRow = buttonRow.WithView(Controls.Button("Reject")
+            buttonRow = buttonRow.WithView(Controls.Button(host.Localize("ui.reject"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(ctx =>
                 {
@@ -240,7 +240,7 @@ public static class ApprovalLayoutAreas
 
                     if (string.Equals(approval.Approver, currentUser, StringComparison.OrdinalIgnoreCase))
                     {
-                        card = card.WithView(Controls.Button("Approve")
+                        card = card.WithView(Controls.Button(host.Localize("ui.approve"))
                             .WithAppearance(Appearance.Accent)
                             .WithClickAction(ctx =>
                             {

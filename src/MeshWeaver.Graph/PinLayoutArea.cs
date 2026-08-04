@@ -207,10 +207,10 @@ public static class PinLayoutArea
             ? $"Removed <code>{System.Net.WebUtility.HtmlEncode(hubPath)}</code> from your pinned items."
             : $"Added <code>{System.Net.WebUtility.HtmlEncode(hubPath)}</code> to your pinned items.";
 
-        return Observable.Return<UiControl?>(BuildSimpleMessage(title, message, backHref));
+        return Observable.Return<UiControl?>(BuildSimpleMessage(title, message, backHref, locale: host.ViewerLocale()));
     }
 
-    private static UiControl BuildSimpleMessage(string title, string messageHtml, string backHref)
+    private static UiControl BuildSimpleMessage(string title, string messageHtml, string backHref, string? locale = null)
         => Controls.Stack
             .WithWidth("100%")
             .WithStyle("padding: 24px;")
@@ -218,7 +218,7 @@ public static class PinLayoutArea
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(16)
                 .WithStyle("align-items: center; margin-bottom: 16px;")
-                .WithView(Controls.Button("Back")
+                .WithView(Controls.Button(LocalizationCatalog.Get("common.back", locale))
                     .WithAppearance(Appearance.Lightweight)
                     .WithIconStart(FluentIcons.ArrowLeft())
                     .WithNavigateToHref(backHref))
