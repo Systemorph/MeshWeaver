@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Microsoft.Extensions.DependencyInjection;
 using System.Linq;
 using System.Reactive.Linq;
 using MeshWeaver.Layout;
@@ -49,7 +50,13 @@ public static class MarkdownOverviewLayoutArea
                     .Where(c => !LastSegment(c.Path).StartsWith('_'))
                     .OrderBy(c => c.Name ?? c.Id, System.StringComparer.OrdinalIgnoreCase)
                     .ToList();
-                return (UiControl?)(subNodes.Count == 0 ? content : BuildWithSubNodeNav(node, subNodes, content));
+                // A module that OWNS this page may supply its own menu (a course lists the whole
+                // course, not the branch you are in). Nothing supplied → core's default child list,
+                // unchanged — which is why docs and spaces are untouched by this.
+                var supplied = SuppliedNavigation(host, node, subNodes);
+                return (UiControl?)(subNodes.Count == 0 && supplied is null
+                    ? content
+                    : BuildWithSubNodeNav(node, subNodes, content, supplied));
             });
     }
 
@@ -63,9 +70,56 @@ public static class MarkdownOverviewLayoutArea
     /// Wraps the page content with a collapsible left-hand NavMenu listing the node's sub-nodes,
     /// giving every markdown node with children a navigable side menu of them.
     /// </summary>
-    private static UiControl BuildWithSubNodeNav(MeshNode? node, IReadOnlyList<MeshNode> subNodes, UiControl content)
+        /// <summary>
+    /// Asks each registered <see cref="INodeNavigationProvider"/> for this node's navigation, first
+    /// non-null wins. A provider that declines (or throws — a broken module must not take the page
+    /// down with it) leaves core's default child list in place.
+    /// </summary>
+    private static IReadOnlyList<NodeNavigationEntry>? SuppliedNavigation(
+        LayoutAreaHost host, MeshNode? node, IReadOnlyList<MeshNode> children)
+    {
+        var providers = host.Hub.ServiceProvider
+            .GetServices<INodeNavigationProvider>();
+        foreach (var provider in providers)
+        {
+            try
+            {
+                if (provider.GetNavigation(node, children) is { Count: > 0 } entries)
+                    return entries;
+            }
+            catch
+            {
+                // A module's navigation is a nicety; the page is not. Fall through to the default.
+            }
+        }
+        return null;
+    }
+
+private static UiControl BuildWithSubNodeNav(
+        MeshNode? node, IReadOnlyList<MeshNode> subNodes, UiControl content,
+        IReadOnlyList<NodeNavigationEntry>? supplied = null)
     {
         var group = new NavGroupControl(node?.Name ?? "Contents").WithSkin(s => s.WithExpanded(true));
+        if (supplied is { Count: > 0 })
+        {
+            // A module OWNS these pages and knows more about them than core does — a course knows
+            // its whole chapter list and which one the reader is standing in. The current entry is
+            // rendered as TEXT, not a link: a link to the page you are on is a dead control that
+            // teaches the reader their position marker is broken.
+            foreach (var entry in supplied)
+                group = entry.IsCurrent
+                    ? group.WithView(Controls.Body($"▸ {entry.Label}")
+                        .WithStyle("display:block;padding:4px 12px;font-weight:600;"))
+                    : group.WithView(new NavLinkControl(entry.Label, entry.Icon, $"/{entry.Path}"));
+            var suppliedNav = Controls.NavMenu
+                .WithSkin(s => s.WithWidth(240).WithCollapsible(true)).WithNavGroup(group);
+            return Controls.Stack
+                .WithOrientation(Orientation.Horizontal).WithWidth("100%")
+                .WithStyle("gap: 24px; align-items: flex-start;")
+                .WithView(suppliedNav)
+                .WithView(Controls.Stack.WithStyle("flex: 1; min-width: 0;").WithView(content));
+        }
+
         foreach (var child in subNodes)
         {
             var href = $"/{child.Path}";
