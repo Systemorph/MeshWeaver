@@ -29,6 +29,12 @@ namespace MeshWeaver.GitSync.Test;
 /// times out. (A non-Orleans harness with a free-threaded scheduler would not deadlock here; the
 /// regression this pins is specifically the grain-turn one.) With the execution scheduled off the
 /// hub turn the line lands while the command is still subscribed, and the activity finishes.</para>
+///
+/// <para>⚠️ Consequence of that parenthesis, measured rather than assumed: on THIS harness the two
+/// live-progress tests below pass with <c>ScheduleOffHubTurn</c> deleted. They document the contract;
+/// they do not enforce it. <see cref="TheCommandDoesNotRunOnTheThreadThatDeliveredTheCreate"/> is the
+/// one that fails — it asserts the scheduler hop itself rather than an outcome the hop happens to
+/// enable.</para>
 /// </summary>
 public class ActivityLiveProgressTest(ITestOutputHelper output) : GitHubSyncTestBase(output)
 {
@@ -90,6 +96,49 @@ public class ActivityLiveProgressTest(ITestOutputHelper output) : GitHubSyncTest
         Assert.Equal(ActivityStatus.Succeeded, log.Status);
         Assert.Contains(log.Messages, m => m.Message.Contains("step one"));
         Assert.Contains(log.Messages, m => m.Message.Contains("step two"));
+    }
+
+    /// <summary>
+    /// 🚨 The one test that actually FAILS when <c>ScheduleOffHubTurn</c> is removed.
+    ///
+    /// <para>The two tests above assert the OUTCOME (a progress line lands mid-run), and that
+    /// outcome is reachable inline on a free-threaded harness — verified 2026-08-04 by deleting the
+    /// scheduler hop: both still passed, in under a second. A regression pin that cannot fail is
+    /// worse than no pin, because the next person to touch this reads green and ships the deadlock.</para>
+    ///
+    /// <para>So pin the MECHANISM instead of the symptom, which needs no Orleans silo: the command
+    /// body must not run on the thread that delivered the create — under Orleans that thread IS the
+    /// grain's activation turn, and holding it is what makes every <c>ctx.Log</c> round trip
+    /// unserviceable. <c>onActivityCreated</c> fires on exactly that continuation, immediately
+    /// before the execution is scheduled, so the two thread ids are the before / after of the hop.</para>
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task TheCommandDoesNotRunOnTheThreadThatDeliveredTheCreate()
+    {
+        var space = "GhTurn" + Guid.NewGuid().ToString("N")[..8];
+        await CreateSpace(space, "Off-turn execution space");
+
+        int createdThread = -1;
+        int commandThread = -2;
+
+        var activityPath = await Mesh.RunActivity(
+                space, ActivityCategory.Import, "Off-turn probe",
+                ctx =>
+                {
+                    commandThread = Environment.CurrentManagedThreadId;
+                    return Observable.Return(Unit.Default);
+                },
+                onActivityCreated: _ => createdThread = Environment.CurrentManagedThreadId)
+            .Timeout(60.Seconds()).ToTask();
+
+        Assert.NotEqual(-1, createdThread);
+        Assert.NotEqual(-2, commandThread);
+        Assert.True(createdThread != commandThread,
+            $"the command ran INLINE on the create's thread ({createdThread}) — under Orleans that is "
+            + "the grain turn, so every ctx.Log write would deadlock against the command holding it");
+
+        var log = await WaitForActivity(activityPath, l => l.Status != ActivityStatus.Running);
+        Assert.Equal(ActivityStatus.Succeeded, log.Status);
     }
 
     private IObservable<ActivityLog> ObserveMessage(string activityPath, string contains) =>
