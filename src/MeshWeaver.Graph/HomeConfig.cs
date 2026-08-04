@@ -1,5 +1,7 @@
 using System.ComponentModel;
 
+using MeshWeaver.Messaging;
+
 namespace MeshWeaver.Graph;
 
 /// <summary>How deep the home catalog lists content.</summary>
@@ -48,13 +50,16 @@ public record HomeConfig
 {
     /// <summary>Depth of the home listing: FirstLevel (top-level entries only) or Subtree (the full tree).</summary>
     [Description("How deep the home lists content. FirstLevel shows only top-level entries (the spaces, courses and plugins you can see, plus your own top-level home items). Subtree shows everything you can read.")]
+    [Translation("de", "Wie tief die Startseite Inhalte auflistet. FirstLevel zeigt nur Einträge der obersten Ebene (sichtbare Spaces, Kurse und Plugins sowie eigene Einträge der obersten Ebene). Subtree zeigt alles Lesbare.")]
     public HomeCatalogScope Scope { get; init; } = HomeCatalogScope.FirstLevel;
 
     /// <summary>How items are rendered: Flat (one list) or Grouped (per-type sections).</summary>
     [Description("How the home renders items. Flat is one list; Grouped shows collapsible per-type sections.")]
+    [Translation("de", "Wie die Startseite Einträge darstellt. Flat ist eine einzelne Liste; Grouped zeigt einklappbare Abschnitte pro Typ.")]
     public HomeCatalogRender Render { get; init; } = HomeCatalogRender.Flat;
 
     /// <summary>The default ordering (the user can still change it via the Sort-by control).</summary>
     [Description("The default ordering. Last accessed shows your recently-opened items first; Last modified shows recent edits; Alphabetical sorts by name.")]
+    [Translation("de", "Die Standardsortierung. Zuletzt geöffnet zeigt kürzlich geöffnete Einträge zuerst; Zuletzt geändert zeigt kürzliche Änderungen; Alphabetisch sortiert nach Name.")]
     public HomeCatalogSort DefaultSort { get; init; } = HomeCatalogSort.LastAccessed;
 }

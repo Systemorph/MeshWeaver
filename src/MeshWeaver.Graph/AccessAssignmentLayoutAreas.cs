@@ -50,7 +50,7 @@ public static class AccessAssignmentLayoutAreas
                 var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
                 if (assignment == null)
                     return (UiControl?)new MeshNodeThumbnailControl(hubPath, node.Name ?? hubPath);
-                return (UiControl?)BuildAssignmentRow(hubPath, assignment, perms.HasFlag(Permission.Delete));
+                return (UiControl?)BuildAssignmentRow(hubPath, assignment, perms.HasFlag(Permission.Delete), locale: host.ViewerLocale());
             });
     }
 
@@ -58,7 +58,7 @@ public static class AccessAssignmentLayoutAreas
     /// Builds the assignment row. The subject (User/Group) and every role bind to their own node
     /// streams GUI-side, so the row stays live with no backend value resolution.
     /// </summary>
-    private static UiControl BuildAssignmentRow(string nodePath, AccessAssignment assignment, bool canEdit)
+    private static UiControl BuildAssignmentRow(string nodePath, AccessAssignment assignment, bool canEdit, string? locale = null)
     {
         var subjectPath = assignment.AccessObject;
         var subjectFallback = assignment.DisplayName
@@ -100,7 +100,7 @@ public static class AccessAssignmentLayoutAreas
         }
 
         if (canEdit)
-            rolesBlock = rolesBlock.WithView(Controls.Button("+ Add role")
+            rolesBlock = rolesBlock.WithView(Controls.Button(LocalizationCatalog.Get("ui.plusAddRole", locale))
                 .WithAppearance(Appearance.Stealth)
                 .WithStyle("align-self: flex-start; font-size: 12px; padding: 0 6px; height: 24px;")
                 .WithClickAction(ctx =>
@@ -147,7 +147,7 @@ public static class AccessAssignmentLayoutAreas
         return ownNode.CombineLatest(permsStream, (node, perms) =>
             {
                 if (!perms.HasFlag(Permission.Read))
-                    return (UiControl?)Controls.Markdown("Access denied.");
+                    return (UiControl?)Controls.Markdown(host.Localize("ui.accessDeniedPlain"));
                 return BuildOverviewContent(host, node, hubPath, perms.HasFlag(Permission.Delete));
             });
     }
@@ -170,7 +170,7 @@ public static class AccessAssignmentLayoutAreas
                 assignment.DisplayName ?? assignment.AccessObject));
 
         if (canEdit)
-            stack = stack.WithView(Controls.Button("Change Subject")
+            stack = stack.WithView(Controls.Button(host.Localize("ui.changeSubject"))
                 .WithAppearance(Appearance.Neutral)
                 .WithStyle("align-self: flex-start; margin-top: 8px;")
                 .WithClickAction(ctx =>
@@ -179,11 +179,11 @@ public static class AccessAssignmentLayoutAreas
                     return Task.CompletedTask;
                 }));
 
-        stack = stack.WithView(Controls.H3("Roles").WithStyle("margin: 24px 0 12px 0;"));
+        stack = stack.WithView(Controls.H3(host.Localize("ui.roles")).WithStyle("margin: 24px 0 12px 0;"));
 
         if (assignment.Roles.Count == 0)
         {
-            stack = stack.WithView(Controls.Markdown("_No roles assigned._"));
+            stack = stack.WithView(Controls.Markdown(host.Localize("ui.mdNoRoles")));
         }
         else
         {
@@ -212,7 +212,7 @@ public static class AccessAssignmentLayoutAreas
         }
 
         if (canEdit)
-            stack = stack.WithView(Controls.Button("+ Add role")
+            stack = stack.WithView(Controls.Button(host.Localize("ui.plusAddRole"))
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("align-self: flex-start; margin-top: 16px;")
                 .WithClickAction(ctx =>
@@ -317,14 +317,14 @@ public static class AccessAssignmentLayoutAreas
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px;")
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(ctx.Host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(cancelCtx =>
                 {
                     cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
                     return Task.CompletedTask;
                 }))
-            .WithView(Controls.Button("Save")
+            .WithView(Controls.Button(ctx.Host.Localize("common.save"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction((Action<UiActionContext>)(saveCtx =>
                 {
@@ -336,7 +336,7 @@ public static class AccessAssignmentLayoutAreas
                             if (string.IsNullOrEmpty(selectedSubject))
                             {
                                 var errorDialog = Controls.Dialog(
-                                    Controls.Markdown("Please select a **Subject**."),
+                                    Controls.Markdown(ctx.Host.Localize("ui.selectSubject")),
                                     "Validation Error"
                                 ).WithSize("S").WithClosable(true);
                                 saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);

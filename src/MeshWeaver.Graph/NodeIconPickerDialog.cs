@@ -89,7 +89,7 @@ public static class NodeIconPickerDialog
                     Immediate = true,
                     DataContext = formPointer
                 }.WithStyle("flex: 1;"))
-                .WithView(Controls.Button("Use as Icon")
+                .WithView(Controls.Button(host.Localize("ui.useAsIcon"))
                     .WithAppearance(Appearance.Neutral)
                     .WithClickAction(ctx => ApplyFileAsIcon(ctx, formDataId))));
         }
@@ -98,14 +98,14 @@ public static class NodeIconPickerDialog
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px; justify-content: flex-end; margin-top: 8px;")
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(ctx =>
                 {
                     ctx.Host.UpdateArea(DialogControl.DialogArea, null);
                     return Task.CompletedTask;
                 }))
-            .WithView(Controls.Button("Save")
+            .WithView(Controls.Button(host.Localize("common.save"))
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.Save())
                 .WithClickAction(ctx => SaveIcon(ctx, formDataId, node))));

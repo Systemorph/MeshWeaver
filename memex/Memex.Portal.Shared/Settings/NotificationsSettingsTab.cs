@@ -37,21 +37,22 @@ public static class NotificationsSettingsTab
                 Icon: FluentIcons.Alert(),
                 GroupIcon: FluentIcons.Person(),
                 Order: 240,
-                RequiredPermission: Permission.None));
+                RequiredPermission: Permission.None)
+            { LabelKey = "settings.notifications", GroupKey = "settings.groupPreferences" });
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var userId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
 
-        stack = stack.WithView(Controls.H2("Notifications").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.notifications")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Markdown(
             "Choose where each kind of notification reaches you — the in-app **bell** and/or **email**. " +
             "The bell is on by default for everything; email is on by default for access grants and approvals."));
 
         if (string.IsNullOrEmpty(userId))
         {
-            stack = stack.WithView(Controls.Markdown("_Sign in to manage your notification preferences._"));
+            stack = stack.WithView(Controls.Markdown(host.Localize("ui.mdSignInForNotifs")));
             return stack;
         }
 
@@ -61,7 +62,7 @@ public static class NotificationsSettingsTab
         stack = stack.WithView((h, _) => NotificationSettingsNodeType
             .EnsureExists(h.Hub, userId!)
             .Select(path => (UiControl?)MeshNodeContentEditorControl.ForType(path, typeof(NotificationSettings)))
-            .StartWith((UiControl?)Controls.Markdown("_Loading notification preferences…_")));
+            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingNotifPrefs"))));
 
         return stack;
     }

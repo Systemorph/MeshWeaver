@@ -63,14 +63,14 @@ public static class ActivityLayoutAreas
             .Select(node =>
             {
                 if (node?.Content is not ActivityLog log)
-                    return (UiControl?)Controls.Label("No activity data.")
+                    return (UiControl?)Controls.Label(host.Localize("ui.noActivityData"))
                         .WithStyle("font-style: italic; color: var(--neutral-foreground-hint);");
 
                 var stack = Controls.Stack
                     .WithStyle("padding: 16px; gap: 12px;")
                     .WithView(BuildHeader(log))
                     .WithView(BuildProgressIndicator(log))
-                    .WithView(BuildLog(log));
+                    .WithView(BuildLog(log, locale: host.ViewerLocale()));
 
                 // While running: Cancel button. Per the Activity Control Plane
                 // pattern (Doc/Architecture/ActivityControlPlane.md), cancellation
@@ -80,7 +80,7 @@ public static class ActivityLayoutAreas
                 // RequestedStatus = Cancelled patch into the internal cancel.
                 if (IsCancelButtonVisible(log))
                 {
-                    stack = stack.WithView(Controls.Button("Cancel")
+                    stack = stack.WithView(Controls.Button(host.Localize("common.cancel"))
                         .WithIconStart(FluentIcons.Dismiss())
                         .WithClickAction(ctx =>
                         {
@@ -94,7 +94,7 @@ public static class ActivityLayoutAreas
                 else if (!string.IsNullOrEmpty(log.HubPath) && log.Status != ActivityStatus.Running)
                 {
                     var originAddress = new Address(log.HubPath);
-                    stack = stack.WithView(Controls.Button("Re-run")
+                    stack = stack.WithView(Controls.Button(host.Localize("ui.rerun"))
                         .WithIconStart(FluentIcons.ArrowRotateClockwise())
                         .WithAppearance(Appearance.Accent)
                         .WithClickAction(ctx =>
@@ -128,7 +128,7 @@ public static class ActivityLayoutAreas
                 if (node?.Content is not ActivityLog log) return null;
                 if (log.Status != ActivityStatus.Running) return null;
                 var disabled = log.RequestedStatus == ActivityStatus.Cancelled;
-                var button = Controls.Button("Cancel")
+                var button = Controls.Button(host.Localize("common.cancel"))
                     .WithIconStart(FluentIcons.Dismiss())
                     .WithStyle(disabled ? "opacity: 0.5;" : "");
                 if (!disabled)
@@ -156,20 +156,20 @@ public static class ActivityLayoutAreas
             .Select(node =>
             {
                 if (node?.Content is not ActivityLog log)
-                    return (UiControl?)Controls.Label("No activity yet.")
+                    return (UiControl?)Controls.Label(host.Localize("ui.noActivityYet"))
                         .WithStyle("font-style: italic; color: var(--neutral-foreground-hint);");
 
                 var stack = Controls.Stack
                     .WithStyle("gap: 8px;")
                     .WithView(BuildProgressIndicator(log))
-                    .WithView(BuildLog(log));
+                    .WithView(BuildLog(log, locale: host.ViewerLocale()));
 
                 // Inline Cancel: same content-patch pattern as the Overview's
                 // button. Only rendered while the activity is actually running
                 // and not already cancelling.
                 if (IsCancelButtonVisible(log))
                 {
-                    stack = stack.WithView(Controls.Button("Cancel")
+                    stack = stack.WithView(Controls.Button(host.Localize("common.cancel"))
                         .WithIconStart(FluentIcons.Dismiss())
                         .WithClickAction(ctx =>
                         {
@@ -252,7 +252,7 @@ public static class ActivityLayoutAreas
     /// horizontal rows) — replaces the former hand-rolled messages HTML and is
     /// unit-testable without a layout host.
     /// </summary>
-    public static StackControl BuildLog(ActivityLog log)
+    public static StackControl BuildLog(ActivityLog log, string? locale = null)
     {
         var stack = Controls.Stack
             .WithStyle(
@@ -261,7 +261,7 @@ public static class ActivityLayoutAreas
 
         if (log.Messages.Count == 0)
         {
-            return stack.WithView(Controls.Label("Running…")
+            return stack.WithView(Controls.Label(LocalizationCatalog.Get("ui.running", locale))
                 .WithStyle("font-style: italic; color: var(--neutral-foreground-hint);"));
         }
 
@@ -302,6 +302,6 @@ public static class ActivityLayoutAreas
     /// </summary>
     public static UiControl Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
-        return Controls.Label("Activity");
+        return Controls.Label(host.Localize("ui.activity"));
     }
 }
