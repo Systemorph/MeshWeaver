@@ -622,5 +622,17 @@
   "ui.prevArrow": "◀ Prev",
   "ui.nextArrow": "Next ▶",
   "ui.noModelsYet": "_No models yet — enter a base URL + key and click **Fetch models**._",
-  "ui.notCheckedOut": "_Not checked out yet — use **Check out / pull** above._"
+  "ui.notCheckedOut": "_Not checked out yet — use **Check out / pull** above._",
+  "dialog.validationError": "Validation error",
+  "dialog.typeRequired": "Type is required.",
+  "dialog.nameRequired": "Name is required.",
+  "dialog.creationFailed": "Creation failed",
+  "dialog.importFailed": "Import failed",
+  "dialog.mirrorFailed": "Mirror failed",
+  "dialog.missingFields": "Missing fields",
+  "dialog.selectSourceNode": "Please select a source node.",
+  "dialog.regenerateIcon": "Regenerate icon",
+  "dialog.iconGenFailed": "Icon generation failed",
+  "dialog.generateImage": "Generate image",
+  "dialog.imageGenFailed": "Image generation failed"
 }

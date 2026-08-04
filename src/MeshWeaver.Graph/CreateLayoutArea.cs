@@ -147,7 +147,7 @@ public static class CreateLayoutArea
         var generator = actx.Host.Hub.ServiceProvider.GetService<IIconGenerator>();
         if (generator == null)
         {
-            ShowErrorDialog(actx, "Regenerate Icon",
+            ShowErrorDialog(actx, actx.Host.Localize("dialog.regenerateIcon"),
                 "Icon generator service is not registered. Call AddAgentChatServices().");
             return Task.CompletedTask;
         }
@@ -174,7 +174,7 @@ public static class CreateLayoutArea
                     iconDesc = form?.GetValueOrDefault("description")?.ToString();
                 if (string.IsNullOrWhiteSpace(currentName) && string.IsNullOrWhiteSpace(iconDesc))
                 {
-                    ShowErrorDialog(actx, "Regenerate Icon",
+                    ShowErrorDialog(actx, actx.Host.Localize("dialog.regenerateIcon"),
                         "Enter a Name or Description first — the agent uses those to craft the icon.");
                     return Observable.Empty<string>();
                 }
@@ -191,7 +191,7 @@ public static class CreateLayoutArea
                 ex =>
                 {
                     PatchForm(f => f["iconGenerating"] = false);
-                    ShowErrorDialog(actx, "Icon Generation Failed",
+                    ShowErrorDialog(actx, actx.Host.Localize("dialog.iconGenFailed"),
                         ex is TimeoutException
                             ? "The icon agent didn't respond in time. Make sure a utility-tier model is configured for icon generation."
                             : ex.Message);
@@ -211,7 +211,7 @@ public static class CreateLayoutArea
         var generator = actx.Host.Hub.ServiceProvider.GetService<IImageGenerator>();
         if (generator == null)
         {
-            ShowErrorDialog(actx, "Generate Image",
+            ShowErrorDialog(actx, actx.Host.Localize("dialog.generateImage"),
                 "Image generator service is not registered. Call AddAgentChatServices().");
             return Task.CompletedTask;
         }
@@ -236,7 +236,7 @@ public static class CreateLayoutArea
                 var prompt = string.Join(". ", new[] { name, iconDesc }.Where(s => !string.IsNullOrWhiteSpace(s)));
                 if (string.IsNullOrWhiteSpace(prompt))
                 {
-                    ShowErrorDialog(actx, "Generate Image",
+                    ShowErrorDialog(actx, actx.Host.Localize("dialog.generateImage"),
                         "Enter a Name or an Icon description first — the image model uses those as the prompt.");
                     return Observable.Empty<GeneratedImage>();
                 }
@@ -255,7 +255,7 @@ public static class CreateLayoutArea
                 ex =>
                 {
                     PatchForm(f => f["iconGenerating"] = false);
-                    ShowErrorDialog(actx, "Image Generation Failed",
+                    ShowErrorDialog(actx, actx.Host.Localize("dialog.imageGenFailed"),
                         ex is TimeoutException
                             ? "The image model didn't respond in time. Check the image model / endpoint configuration."
                             : ex.Message);
@@ -552,12 +552,12 @@ public static class CreateLayoutArea
 
                         if (string.IsNullOrWhiteSpace(selectedType))
                         {
-                            ShowErrorDialog(actx, "Validation Error", "Type is required.");
+                            ShowErrorDialog(actx, actx.Host.Localize("dialog.validationError"), actx.Host.Localize("dialog.typeRequired"));
                             return;
                         }
                         if (string.IsNullOrWhiteSpace(name))
                         {
-                            ShowErrorDialog(actx, "Validation Error", "Name is required.");
+                            ShowErrorDialog(actx, actx.Host.Localize("dialog.validationError"), actx.Host.Localize("dialog.nameRequired"));
                             return;
                         }
 
@@ -610,7 +610,7 @@ public static class CreateLayoutArea
                                 var errorMsg = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
                                     ? "You do not have permission to create nodes in this namespace."
                                     : $"Failed to create node: {ex.Message}";
-                                ShowErrorDialog(actx, "Creation Failed", errorMsg);
+                                ShowErrorDialog(actx, actx.Host.Localize("dialog.creationFailed"), errorMsg);
                             });
                     });
                 return Task.CompletedTask;
