@@ -73,19 +73,41 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             string.Equals(m, modelName, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// Resolves the agent's <see cref="AgentConfiguration.ModelTier"/> ("heavy" / "standard" /
-    /// "light" / "utility") to a concrete model via the <c>ModelTier:*</c> config section.
-    /// Returns null when the agent declares no tier, the tier isn't configured, or this
-    /// factory doesn't serve the resolved model (so the caller falls back to its provider
-    /// default instead of creating a client for a model another factory owns).
-    /// Precedence in concrete factories: composer selection (<see cref="CurrentModelName"/>)
-    /// → agent tier → provider default.
+    /// Resolves the agent's <see cref="AgentConfiguration.ModelTier"/> — a SIZE label ("S"/"M"/"L"/"XL",
+    /// or the legacy "utility"/"light"/"standard"/"heavy") — to a concrete model.
+    ///
+    /// <para>Two sources, in order: the <b>model nodes themselves</b> (a node carrying that
+    /// <see cref="ModelDefinition.Size"/>, lowest Order wins — the data-driven form, so a new
+    /// environment labels its models and needs no config keys at all), then the legacy
+    /// <c>ModelTier:*</c> config section for deployments still expressing tiers that way.</para>
+    ///
+    /// Returns null when the agent declares no tier, neither source names a model, or this factory
+    /// doesn't serve the resolved one (so the caller falls back to its provider default rather than
+    /// creating a client for a model another factory owns). Precedence in concrete factories:
+    /// composer selection (<see cref="CurrentModelName"/>) → agent tier → provider default.
     /// </summary>
     protected string? ResolveTierModel(AgentConfiguration agentConfig)
     {
         if (string.IsNullOrEmpty(agentConfig.ModelTier))
             return null;
 
+        // 1. The label as DATA on the model nodes. Deliberately does NOT fall through to the
+        //    deployment default here: that is the caller's own last resort, and swallowing it at
+        //    this level would hand this factory a model another factory owns.
+        if (ModelSizes.Parse(agentConfig.ModelTier) is { } size
+            && Hub.ServiceProvider.GetService<ChatClientCredentialResolver>() is { } resolver)
+        {
+            var labelled = ModelSizeCatalog.Resolve(
+                size, resolver.ReadSizeCandidates(), resolver.HasUsableCredential);
+            if (!string.IsNullOrEmpty(labelled) && Supports(labelled))
+            {
+                Logger.LogDebug("[AgentFactory] Agent {Agent} size '{Size}' resolved to labelled model {Model}",
+                    agentConfig.Id, agentConfig.ModelTier, labelled);
+                return labelled;
+            }
+        }
+
+        // 2. Legacy: the ModelTier:* config section.
         var configuration = Hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>();
         if (configuration == null)
             return null;
