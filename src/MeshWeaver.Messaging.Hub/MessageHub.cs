@@ -1246,9 +1246,8 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     private void ReportRouterTraffic(IMessageDelivery delivery)
     {
-        const string MeshAddressType = "mesh";
-        var targetIsRouter = string.Equals(Address.Type, MeshAddressType, StringComparison.Ordinal);
-        var senderIsRouter = string.Equals(delivery.Sender?.Type, MeshAddressType, StringComparison.Ordinal);
+        var targetIsRouter = string.Equals(Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal);
+        var senderIsRouter = string.Equals(delivery.Sender?.Type, AddressExtensions.MeshType, StringComparison.Ordinal);
         if (!targetIsRouter && !senderIsRouter)
             return;
 
