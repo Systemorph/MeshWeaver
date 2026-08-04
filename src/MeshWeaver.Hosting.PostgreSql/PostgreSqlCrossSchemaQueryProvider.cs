@@ -18,6 +18,13 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     private readonly PostgreSqlSqlGenerator _sqlGenerator = new();
     private readonly ILogger? _logger;
 
+    /// <summary>
+    /// Fan-out width of the LAST schema list read — how many partitions a cross-schema UNION spans.
+    /// Only ever used to annotate the timing log, so a stale-by-one value is harmless; keeping it a
+    /// plain int avoids putting a lock on the query path to serve a diagnostic.
+    /// </summary>
+    internal int _cachedSchemaCount;
+
     // SyncSearchableSchemasAsync throttle. PostgreSqlPartitionedMeshQuery
     // calls this once per cross-schema fan-out, which under thread-render
     // load is N times per page-load. Without throttling, each call does a
@@ -221,6 +228,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
                     schemas.Add(reader2.GetString(0));
             }
 
+            _cachedSchemaCount = schemas.Count;
             return schemas;
         }
         catch (OperationCanceledException) { return []; }
@@ -324,11 +332,59 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         cmd.Parameters.Add(new NpgsqlParameter("@p_order", orderBy));
         cmd.Parameters.Add(new NpgsqlParameter("@p_limit", limit));
 
+        // ⏱️ TIMED, because this is the expensive shape and nothing used to measure it.
+        // search_across_schemas builds a UNION ALL over EVERY row of public.searchable_schemas,
+        // so an unanchored query (no path:/namespace: first segment) scans every partition —
+        // every plugin AND every user partition. Its cost therefore grows with the number of
+        // users on the mesh, which makes it get quietly slower over months with no code change.
+        // Log the fan-out width next to the elapsed time so a slow query says WHY it was slow;
+        // a WHERE-clause dump alone (the previous logging) cannot distinguish "bad filter" from
+        // "300 schemas". Escalates to Warning past the threshold so it shows at default level.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var rows = 0;
+        var firstRowMs = -1L;
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        // 🚨 try/FINALLY, not a call after the loop. A caller that stops enumerating early — a
+        // `.Take(n)`, a `break`, a cancellation, or a throw out of ReadMeshNode — disposes the
+        // iterator without ever reaching code placed after the `while`. The slow fan-out would then
+        // go UNLOGGED, which is the one case this instrumentation exists to catch. `finally` runs on
+        // that disposal path too, so an abandoned enumeration still reports what it cost.
+        try
         {
-            yield return ReadMeshNode(reader, options);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                if (rows++ == 0)
+                    firstRowMs = sw.ElapsedMilliseconds;
+                yield return ReadMeshNode(reader, options);
+            }
         }
+        finally
+        {
+            LogFanOutTiming("search_across_schemas", sw.ElapsedMilliseconds, firstRowMs, rows, limit);
+        }
+    }
+
+    /// <summary>Elapsed above which a cross-schema fan-out is logged as a Warning, not Debug.</summary>
+    internal const long SlowFanOutMs = 1000;
+
+    /// <summary>
+    /// One line per cross-schema fan-out: total elapsed, time to the FIRST row, rows returned, the
+    /// limit, and how many schemas the UNION spanned. Time-to-first-row separates a slow QUERY (the
+    /// scan) from slow STREAMING (the caller's own consumption) — without it a slow log line is
+    /// ambiguous and the usual next step is to blame the database.
+    /// </summary>
+    internal void LogFanOutTiming(string what, long totalMs, long firstRowMs, int rows, int limit)
+    {
+        var schemas = _cachedSchemaCount;
+        if (totalMs >= SlowFanOutMs)
+            _logger?.LogWarning(
+                "[CrossSchema] SLOW {What}: {TotalMs}ms (first row {FirstMs}ms) — {Rows}/{Limit} rows across {Schemas} schema(s). " +
+                "An unanchored query UNIONs every partition; add a path:/namespace: first segment to pin it to one schema.",
+                what, totalMs, firstRowMs, rows, limit, schemas);
+        else
+            _logger?.LogDebug(
+                "[CrossSchema] {What}: {TotalMs}ms (first row {FirstMs}ms) — {Rows}/{Limit} rows across {Schemas} schema(s).",
+                what, totalMs, firstRowMs, rows, limit, schemas);
     }
 
     /// <inheritdoc />
