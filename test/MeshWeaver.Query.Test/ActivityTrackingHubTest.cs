@@ -87,7 +87,12 @@ public class ActivityTrackingHubTest(ITestOutputHelper output) : MonolithMeshTes
     /// the calling hub. Pre-fix the write ran on the caller's context; post-fix it is
     /// decoupled onto the stable tracking hub.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    // Timeout comfortably exceeds PollForNode's ceiling, so a genuine miss fails as an ASSERTION
+    // ("must land a UserActivity node") rather than as an opaque test-timeout. Both are generous on
+    // purpose: the poll returns the instant the node lands (well under a second when idle), so the
+    // ceiling only ever costs time in the failure case — and being stingy with it is precisely what
+    // made this fail on a loaded runner and pass everywhere else.
+    [Fact(Timeout = 90_000)]
     public async Task TrackActivity_InitiatedFromConnectionHub_LandsNode()
     {
         const string user = "dave";
@@ -116,20 +121,16 @@ public class ActivityTrackingHubTest(ITestOutputHelper output) : MonolithMeshTes
             NodeType: "Markdown",
             Namespace: user));
 
-        // 🚨 Wait on the QUERY, not on GetMeshNodeStream(path). This looks like the wrong
-        // primitive — the query index is eventually consistent — but it is the only one that
-        // WAITS for a node that does not exist yet. Both authoritative reads terminate instead:
-        // ReadNode is a one-shot GetMeshNode that returns null on NotFound and completes, and
-        // GetMeshNodeStream(path) on a not-yet-created node likewise COMPLETES rather than staying
-        // open until the write lands. #772 switched to the stream and turned an occasional 15s
-        // timeout into a deterministic 250ms "completed without a value" on CI (afe2fc6ea) — the
-        // whole wait collapsed. Reverted; the poll is correct here precisely because it retries.
-        var node = await PollForFirst($"namespace:{user}/_UserActivity nodeType:UserActivity");
+        // Wait on the AUTHORITATIVE read at the known path, retried — see PollForNode. The node's
+        // landing is a storage fact, so waiting on the eventually-consistent query index only added
+        // index lag to the budget, which is what made this flaky under a loaded CI runner.
+        var expectedPath = $"{user}/_UserActivity/{nodePath.Replace("/", "_")}";
+        var node = await PollForNode(expectedPath);
 
         node.Should().NotBeNull(
             "a track posted to a connection-style hub must still land a UserActivity node — " +
             "the handler originates the write from the dedicated tracking hub, not the caller");
-        node!.Path.Should().Be($"{user}/_UserActivity/{nodePath.Replace("/", "_")}");
+        node!.Path.Should().Be(expectedPath);
         node.NodeType.Should().Be("UserActivity");
 
         // 🚨 The write ran under the CALLER's identity, not system/empty. The handler builds
@@ -158,14 +159,32 @@ public class ActivityTrackingHubTest(ITestOutputHelper output) : MonolithMeshTes
         await ReadNode(user).Should().Match(n => n is { State: MeshNodeState.Active });
     }
 
-    private async Task<MeshNode?> PollForFirst(string query)
-        => await MeshQuery
-            .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
-            .Scan(ImmutableList<MeshNode>.Empty, (acc, c) =>
-                c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset
-                    ? c.Items.ToImmutableList()
-                    : acc.AddRange(c.Items))
-            .Where(list => list.Count > 0)
-            .Select(list => list[0])
-            .Should().Within(TimeSpan.FromSeconds(15)).Emit();
+    /// <summary>
+    /// Waits for a node to LAND, by retrying the AUTHORITATIVE read at its known path.
+    ///
+    /// <para>🚨 Deliberately not the query index. The assertion here is a storage fact — the write
+    /// happened — and the index is only eventually consistent with storage, so waiting on it makes
+    /// the test measure index lag on top of the thing it is testing. That extra layer is what made
+    /// this flaky: a fixed 15s budget is ample on an idle machine and not always ample on a CI
+    /// runner already executing six shards, so it failed on load and passed everywhere else.</para>
+    ///
+    /// <para>The reason the index was used at all is real and still true: <c>ReadNode</c> is a
+    /// one-shot that returns null and COMPLETES for a node that does not exist yet, so it cannot
+    /// itself wait (and <c>GetMeshNodeStream</c> on a missing path completes too — #772 learned
+    /// that the hard way, turning a 15s timeout into a deterministic 250ms "completed without a
+    /// value"). Retrying the one-shot restores the waiting behaviour without the index in the
+    /// middle: each attempt reads storage directly, and the loop supplies the patience.</para>
+    /// </summary>
+    private async Task<MeshNode?> PollForNode(string path)
+    {
+        var deadline = DateTime.UtcNow + ReadNodeTimeout;   // 60s ceiling, fast exit
+        while (DateTime.UtcNow < deadline)
+        {
+            var node = await ReadNode(path).FirstAsync();
+            if (node is not null)
+                return node;
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+        }
+        return null;
+    }
 }
