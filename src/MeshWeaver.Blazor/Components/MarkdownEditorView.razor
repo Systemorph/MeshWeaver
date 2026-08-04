@@ -275,7 +275,9 @@
     {
         var markerId = Guid.NewGuid().ToString("N")[..8];
         var author = CurrentAuthor;
-        var date = DateTime.Now.ToString("MMM d");
+        // The stamp the reader sees must be THEIR today — DateTime.Now is the server's, and the
+        // container runs UTC.
+        var date = AccessService.ToDisplayTime(DateTimeOffset.UtcNow).ToString("MMM d");
         var meta = !string.IsNullOrEmpty(author) ? $":{author}:{date}" : "";
 
         // Insert comment markers into the annotated content at the mapped positions
