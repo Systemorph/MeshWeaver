@@ -457,6 +457,29 @@ jobs:
       if: always()
       run: |
         mkdir -p collected-logs
+        # ── Symbols for any host that died on a SIGNAL ──────────────────────────
+        # A core dump without symbols answers "it segfaulted" and almost nothing
+        # else: gdb/lldb cannot name a single frame, so the fault site stays
+        # unknown and every hypothesis stays unfalsifiable. That is exactly where
+        # the 2026-08-04 FutuRe SIGSEGV investigation ran out of road — the dump
+        # was collected, but nothing to symbolise it against.
+        #
+        # Only for projects whose marker shows a signal death (exit=13x), because
+        # a test bin is ~100-800 MB and we must not pay that on every green run.
+        # dll + pdb only (no runtimeconfig/deps/content) keeps it to the managed
+        # symbols a stack walk actually needs. Also record the runtime patch the
+        # dump was produced by — the matching DAC is what makes SOS work at all.
+        while read -r sigproj; do
+          [ -z "$sigproj" ] && continue
+          bindir=$(find test -type d -path "*/$sigproj/bin/Release/net10.0" | head -1)
+          [ -z "$bindir" ] && continue
+          echo "Collecting symbols for signal-killed $sigproj from $bindir"
+          mkdir -p "collected-logs/symbols-$sigproj"
+          find "$bindir" -maxdepth 1 \( -name '*.dll' -o -name '*.pdb' \) \
+            -exec cp {} "collected-logs/symbols-$sigproj/" \; 2>/dev/null || true
+          dotnet --list-runtimes > "collected-logs/symbols-$sigproj/_runtimes.txt" 2>/dev/null || true
+        done < <(grep -oE '\[CI\] [A-Za-z0-9._]+ exit=13[0-9]' test/test-results.log 2>/dev/null \
+                 | awk '{print $2}' | sort -u)
         # Find all test-logs directories and collect their contents without renaming
         find . -path "*/bin/*/test-logs/*.log" -type f -exec cp {} collected-logs/ \; 2>/dev/null || true
         # The MonolithMeshTestBase phase trace + dispose trace live in the
