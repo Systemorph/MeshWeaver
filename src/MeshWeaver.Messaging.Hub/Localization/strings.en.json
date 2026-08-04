@@ -226,5 +226,20 @@
   "plural.toolCall.other": "{0} tool calls",
   "plural.update.one": "{0} update",
   "plural.update.other": "{0} updates",
-  "settings.groupManagement": "Management"
+  "settings.groupManagement": "Management",
+  "menu.newThread": "New thread",
+  "menu.newThreadTooltip": "Start a new conversation in the chat panel",
+  "menu.threadsTooltip": "Conversation threads across every namespace",
+  "menu.models": "Models",
+  "menu.modelsTooltip": "Language models — global, space, and user",
+  "menu.agents": "Agents",
+  "menu.agentsTooltip": "AI agents — global, space, and user",
+  "menu.skills": "Skills",
+  "menu.skillsTooltip": "Reusable skills — global, space, and user",
+  "menu.providers": "Providers",
+  "menu.providersTooltip": "AI providers — endpoints + keys",
+  "menu.viewPublicProfileTooltip": "Preview your public profile as visitors see it",
+  "menu.editProfileTooltip": "Edit your bio, links, and showcase",
+  "menu.editHomePageTooltip": "Edit this home page's markdown",
+  "menu.resetHomeTooltip": "Discard your custom home and use the default layout"
 }

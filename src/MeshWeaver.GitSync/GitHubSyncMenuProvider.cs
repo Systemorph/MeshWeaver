@@ -64,14 +64,17 @@ public sealed class GitHubSyncMenuProvider : INodeMenuProvider
                         if (canExport)
                             children.Add(new NodeMenuItemDefinition("Sync now", GitHubActionArea.AreaName,
                                 Icon: "⬆️", Order: childOrder++,
-                                Href: GitHubActionArea.Href(hubPath, sourceId, GitHubActionArea.Commit)));
+                                Href: GitHubActionArea.Href(hubPath, sourceId, GitHubActionArea.Commit))
+                                { LabelKey = "menu.syncNow" });
                         if (canImport)
                             children.Add(new NodeMenuItemDefinition("Update to latest", GitHubActionArea.AreaName,
                                 Icon: "⬇️", Order: childOrder++,
-                                Href: GitHubActionArea.Href(hubPath, sourceId, GitHubActionArea.Update)));
+                                Href: GitHubActionArea.Href(hubPath, sourceId, GitHubActionArea.Update))
+                                { LabelKey = "menu.updateToLatest" });
                         children.Add(new NodeMenuItemDefinition("Check branch", GitHubActionArea.AreaName,
                             Icon: "🔍", Order: childOrder++,
-                            Href: GitHubActionArea.Href(hubPath, sourceId, GitHubActionArea.Check)));
+                            Href: GitHubActionArea.Href(hubPath, sourceId, GitHubActionArea.Check))
+                            { LabelKey = "menu.checkBranch" });
 
                         items.Add(new NodeMenuItemDefinition(
                             Label: node.Name ?? sourceId ?? "GitHub",

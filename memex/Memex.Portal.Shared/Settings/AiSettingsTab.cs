@@ -39,7 +39,8 @@ public static class AiSettingsTab
                 Icon: FluentIcons.Sparkle(),
                 GroupIcon: FluentIcons.Sparkle(),
                 Order: 210,
-                RequiredPermission: Permission.Read));
+                RequiredPermission: Permission.Read)
+            { LabelKey = "settings.aiSettings" });
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {

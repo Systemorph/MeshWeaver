@@ -51,6 +51,11 @@ public static class GlobalSettingsLayoutArea
     {
         var hubAddress = host.Hub.Address;
 
+        // Translate tab labels and group names for THIS subscriber (see
+        // SettingsLayoutArea.BuildMenuPane — same seam, node-independent variant).
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
+        items = [.. items.Select(i => i.Localized(access))];
+
         return Controls.Splitter
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
             .WithView(

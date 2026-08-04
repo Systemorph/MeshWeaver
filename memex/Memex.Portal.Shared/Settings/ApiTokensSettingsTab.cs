@@ -31,7 +31,8 @@ public static class ApiTokensSettingsTab
                 Group: "Security",
                 Icon: FluentIcons.Key(),
                 Order: 230,
-                RequiredPermission: Permission.None));
+                RequiredPermission: Permission.None)
+            { LabelKey = "settings.apiTokens", GroupKey = "settings.groupSecurity" });
     }
 
     internal static UiControl BuildApiTokensContent(

@@ -39,7 +39,8 @@ public static class UpdatePolicySettingsTab
             Group: "Administration",
             Icon: FluentIcons.ArrowSync(),
             GroupIcon: FluentIcons.Shield(),
-            Order: 320);
+            Order: 320)
+        { LabelKey = "settings.updates", GroupKey = "settings.groupAdministration" };
 
         return AdminMenuGate.IsPlatformAdmin(host)
             .Select(isAdmin => isAdmin

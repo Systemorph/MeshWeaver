@@ -226,5 +226,20 @@
   "plural.toolCall.other": "{0} Tool-Aufrufe",
   "plural.update.one": "{0} Aktualisierung",
   "plural.update.other": "{0} Aktualisierungen",
-  "settings.groupManagement": "Verwaltung"
+  "settings.groupManagement": "Verwaltung",
+  "menu.newThread": "Neuer Thread",
+  "menu.newThreadTooltip": "Eine neue Unterhaltung im Chat-Bereich beginnen",
+  "menu.threadsTooltip": "Threads aus allen Namespaces",
+  "menu.models": "Modelle",
+  "menu.modelsTooltip": "Sprachmodelle — global, Space und Benutzer",
+  "menu.agents": "Agents",
+  "menu.agentsTooltip": "AI-Agents — global, Space und Benutzer",
+  "menu.skills": "Skills",
+  "menu.skillsTooltip": "Wiederverwendbare Skills — global, Space und Benutzer",
+  "menu.providers": "Provider",
+  "menu.providersTooltip": "AI-Provider — Endpunkte und Schlüssel",
+  "menu.viewPublicProfileTooltip": "Das öffentliche Profil so ansehen, wie Besucher es sehen",
+  "menu.editProfileTooltip": "Biografie, Links und Showcase bearbeiten",
+  "menu.editHomePageTooltip": "Das Markdown dieser Startseite bearbeiten",
+  "menu.resetHomeTooltip": "Die eigene Startseite verwerfen und das Standard-Layout verwenden"
 }
