@@ -1924,11 +1924,21 @@ public class AgentChatClient : IAgentChat
         if (resolver.HasUsableCredential(currentModelName))
             return;
         // Either NO model is selected, or the selected one isn't usable (deleted/refactored out of the
-        // catalog, or its provider carries no key). Seed the DEFAULT available model (lowest-Order model
-        // with a usable key) so the round runs on a working model instead of dead-ending on the first
-        // factory (OpenAI) with "(none selected)". When nothing usable exists, `fallback` is empty →
-        // currentModelName stays as-is → the round surfaces the clear "No AI model available" message.
-        var fallback = resolver.ResolveDefaultModelId();
+        // catalog, or its provider carries no key). Seed a working model so the round runs instead of
+        // dead-ending on the first factory (OpenAI) with "(none selected)".
+        //
+        // 📏 Seed by the selected agent's declared SIZE, not the bare default. This is the ONE place a
+        // size label can take effect: the concrete factories consult ResolveTierModel only when no model
+        // is selected, and by then this method has already seeded one — so seeding the plain default
+        // here would make every sized agent run on the default and the label would be decorative.
+        // ResolveModelIdForSize(null) IS the default, so an agent declaring no size is unaffected, and
+        // an explicit USABLE selection never reaches this line (early return above) — a human pick still
+        // wins. When nothing usable exists, `fallback` is empty → currentModelName stays as-is → the
+        // round surfaces the clear "No AI model available" message.
+        var declaredSize = loadedAgents
+            .FirstOrDefault(a => string.Equals(a.Name, currentAgentName, StringComparison.OrdinalIgnoreCase))
+            ?.AgentConfiguration?.ModelTier;
+        var fallback = resolver.ResolveModelIdForSize(declaredSize);
         if (string.IsNullOrEmpty(fallback)
             || string.Equals(fallback, currentModelName, StringComparison.OrdinalIgnoreCase))
             return;
