@@ -36,6 +36,7 @@ public enum BakePhase
 public sealed class NodeTypeBakeGateState
 {
     private readonly ConcurrentDictionary<string, string> regressions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> unevaluated = new(StringComparer.OrdinalIgnoreCase);
     private int phase = (int)BakePhase.NotStarted;
     private volatile string detail = "pre-warm not started";
 
@@ -47,6 +48,13 @@ public sealed class NodeTypeBakeGateState
 
     /// <summary>Types that regressed on this image, with their compile error.</summary>
     public IReadOnlyDictionary<string, string> Regressions => regressions;
+
+    /// <summary>
+    /// Types the sweep could NOT evaluate on this image — a timed-out warm or an upstream that
+    /// never built. Visible for diagnosis, but deliberately NOT readiness-blocking: "I don't know"
+    /// is not "it broke". See <see cref="MarkOutcome"/>.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Unevaluated => unevaluated;
 
     /// <summary>The sweep has begun.</summary>
     public void MarkRunning(string message)
@@ -65,6 +73,27 @@ public sealed class NodeTypeBakeGateState
     {
         if (outcome.ReachedUsableBuild || !outcome.WasHealthyBeforeBake)
             return;
+
+        // 🚨 A TIMEOUT IS NOT A VERDICT. The per-type budget elapsing means the sweep never got an
+        // answer — it says nothing about whether the type builds. During a roll the baking pod and
+        // the serving pod are two silos, and the sweep's shared-source resolution can time out
+        // across that boundary (core #694), so a healthy type times out for reasons that have
+        // nothing to do with it.
+        //
+        // Enabling the gate while timeouts counted as regressions stalled memex-cloud's rollout on
+        // 2026-08-02: "7 NodeType(s) regressed on this image", with not a single CS#### diagnostic
+        // in the pod log — every one was a SubscribeRequest timeout. The old image kept serving (no
+        // outage), but self-update silently stopped advancing, which for an auto-updating fleet is
+        // the worse failure.
+        //
+        // Deliberately narrow: only TimedOut is reclassified. A CompileError is Roslyn's verdict
+        // that the type is broken on this image, and an UpstreamFailed still gates — see
+        // UpstreamFailedOnAPreviouslyHealthyType_AlsoGates for why that one is intentional.
+        if (outcome.Status is PreWarmStatus.TimedOut)
+        {
+            unevaluated[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
+            return;
+        }
 
         regressions[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
         Interlocked.Exchange(ref phase, (int)BakePhase.Regressed);
@@ -85,7 +114,13 @@ public sealed class NodeTypeBakeGateState
         }
 
         Interlocked.Exchange(ref phase, (int)BakePhase.Complete);
-        detail = message;
+        // Ready, but say so honestly: a type we could not evaluate is not a type we verified.
+        // Surfacing it in the health payload is what keeps "non-blocking" from becoming "invisible"
+        // — a silently-swallowed timeout is how a real regression would hide behind this change.
+        detail = unevaluated.IsEmpty
+            ? message
+            : $"{message} ({unevaluated.Count} not evaluated — "
+                + string.Join(", ", unevaluated.Keys.OrderBy(k => k, StringComparer.Ordinal)) + ")";
     }
 }
 
