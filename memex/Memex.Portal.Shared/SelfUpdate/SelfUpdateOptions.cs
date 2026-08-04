@@ -7,6 +7,9 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// </summary>
 public record SelfUpdateOptions
 {
+    /// <summary>Configuration section this binds from (e.g. <c>SelfUpdate__PollInterval</c>).</summary>
+    public const string SectionName = "SelfUpdate";
+
     /// <summary>The container registry login server the running install pulls from and polls.</summary>
     public string Registry { get; init; } = "meshweaver.azurecr.io";
 

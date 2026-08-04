@@ -628,16 +628,27 @@ public static class CodeLayoutAreas
 
         stack = stack.WithView(languageRow);
 
-        // Monaco editor. LSP opt-in: when this Code node sits under a NodeType's Source/
-        // subtree, enable live Roslyn diagnostics (Stage-1 IMeshLanguageService). The
-        // Edit view's hub address IS the Code MeshNode path, so we can derive both the
-        // NodeType path and the source path from it. For Code nodes outside a Source/
-        // subtree (rare — typically standalone scripts), skip LSP wiring.
+        // Monaco editor. LSP opt-in for EVERY C# Code node — live Roslyn diagnostics AND
+        // completions (IMeshLanguageService). The Edit view's hub address IS the Code
+        // MeshNode path, so both the owner path and the source path derive from it:
+        //   • under a NodeType's Source/ subtree → the owner is that NodeType, and the
+        //     language service works in its compilation (siblings in scope);
+        //   • anywhere else (a standalone script cell — e.g. a course lesson's
+        //     {lesson}/Source/{cell}, whose owner is a Markdown page, or a bare Code node)
+        //     → the owner is simply the parent, which is not a NodeType, and the language
+        //     service answers from the KERNEL'S SCRIPT ENVIRONMENT instead (script parsing,
+        //     the kernel's imports/references, the script globals in scope).
+        // Either way the editor completes exactly what that cell can actually compile, so
+        // there is no longer a reason to leave standalone scripts without language services.
         var sourcePath = host.Hub.Address.ToString();
         var sourceMarkerIdx = sourcePath.IndexOf("/Source/", StringComparison.Ordinal);
-        CodeEditorLanguageServerConfig? lspConfig = sourceMarkerIdx > 0 && language == "csharp"
+        var lastSlashIdx = sourcePath.LastIndexOf('/');
+        var ownerPath = sourceMarkerIdx > 0
+            ? sourcePath.Substring(0, sourceMarkerIdx)
+            : lastSlashIdx > 0 ? sourcePath.Substring(0, lastSlashIdx) : sourcePath;
+        CodeEditorLanguageServerConfig? lspConfig = language == "csharp"
             ? new CodeEditorLanguageServerConfig(
-                NodeTypePath: sourcePath.Substring(0, sourceMarkerIdx),
+                NodeTypePath: ownerPath,
                 SourcePath: sourcePath)
             : null;
 

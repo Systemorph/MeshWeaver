@@ -873,6 +873,9 @@ public static class MemexConfiguration
                         // Plugin Catalog tab (platform admins only) — browse the registry's modules
                         // and Install / Update them onto this instance. Replaces the old Plugins Space.
                         .AddPluginCatalogSettingsTab()
+                        // Coupons tab (platform admins only) — the Store's typed coupon codes at
+                        // Admin/Coupons: live list, redemption tallies, create/open.
+                        .AddCouponAdminSettingsTab()
                         // Instance Sync lives in the "Synchronizations" NODE-menu item (not a
                         // settings tab) — wired via AddInstanceSyncTypes on the mesh builder.
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).

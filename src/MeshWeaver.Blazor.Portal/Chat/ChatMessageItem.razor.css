@@ -5,6 +5,8 @@
     max-width: calc(100% - 5rem);
     padding: 0.5rem 1.25rem;
     border-radius: 0.25rem;
+    /* Kept as a fixed PAIR: this bubble sets its own background, so it must set its own ink.
+       Theming only one half is how the rest of this file broke. */
     color: #1F2937;
     white-space: pre-wrap;
 }
@@ -132,11 +134,17 @@
 
 ::deep th,
 ::deep tr:nth-child(even) {
-    background-color: rgba(0, 0, 0, 0.05);
+    /* A black wash disappears on a dark surface; the divider token reads on both. */
+    background-color: var(--neutral-fill-stealth-hover, rgba(0, 0, 0, 0.05));
 }
 
 ::deep pre>code {
-    background-color: white;
+    /* 🚨 Themed, not white. A hardcoded white background with NO foreground inherits the theme's
+       text colour — near-white in dark mode — so every code block rendered white on white. That is
+       what a /code answer is mostly MADE of, which is why it read as "the chat is blank". Any
+       background here must state its own foreground; the two travel together or not at all. */
+    background-color: var(--neutral-fill-secondary-rest, #f6f8fa);
+    color: var(--neutral-foreground-rest, #24292e);
     display: block;
     padding: 0.5rem 1rem;
     margin: 1rem 0;
@@ -176,7 +184,8 @@
     align-items: center;
     justify-content: center;
     padding: 3rem 2rem;
-    background-color: #ffffff;
+    background-color: var(--neutral-fill-secondary-rest, #ffffff);
+    color: var(--neutral-foreground-rest, #24292e);
     border-radius: 0 0 6px 6px;
     min-height: 120px;
 }
@@ -301,12 +310,12 @@
 .code-content {
     padding: 0.75rem 1rem;
     margin: 0;
-    background-color: #ffffff;
+    background-color: var(--neutral-fill-secondary-rest, #ffffff);
     border-radius: 0 0 6px 6px;
     font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'Menlo', monospace;
     font-size: 0.875rem;
     line-height: 1.45;
-    color: #24292e;
+    color: var(--neutral-foreground-rest, #24292e);
     overflow-x: auto;
     white-space: pre-wrap;
 }

@@ -30,11 +30,27 @@ The self-updater itself only patches the image; the compiling happens on the NEW
 `PreWarm__DynamicTypes` (see `DEPLOY-RUNBOOK.md` §7): every new pod sweeps and compiles all dynamic
 NodeTypes at start, so an un-visited type can no longer sit "no definition" until its pages hang.
 Managed envs run the sweep ON — an env with it off has no deploy-time compile at all on this
-channel. The companion readiness gate (`PreWarm__GateReadiness`) additionally stalls a rollout on a
-type that regressed on the new image (`maxSurge 1 / maxUnavailable 0` keeps the old pod serving) —
-⛔ it stays OFF until core #694 (cross-silo reply routing) is fixed, because the two-silo roll
-window makes the sweep's shared-source resolution flake and the gate then stalls every rollout on
-false regressions.
+channel.
+
+**⛔ The self-update does NOT currently wait for the compile.** The companion readiness gate
+(`PreWarm__GateReadiness`) is designed to do exactly that — hold the new pod's `/health` red until
+every NodeType is built against ITS image, with the `startupProbe` on `/health` and
+`maxUnavailable: 0` keeping the old pod serving — so a regressed type STALLS the roll instead of
+surfacing as user-facing errors. It is **off**.
+
+It was enabled on 2026-08-02 and reverted the same day. The first gated roll on memex-cloud stalled
+with `7 NodeType(s) regressed on this image`, and those were **false** regressions: the pod log
+contained no `CS####` compile error at all, only the sweep timing out across the roll window —
+`No response received in hub cache/… within 00:01:00 for request SubscribeRequest → target
+Claims / Reinsurance / SocialMedia / ClaimsDeepfield / RiskTransfer`. During a roll the baking pod
+and the serving pod are two silos and the sweep cannot resolve shared sources across that boundary.
+This is core #694 residue: #718 + #719 (2026-07-29) did NOT close it, so the earlier 2026-07-30
+observation stands unexplained by them.
+
+Until the sweep's cross-silo source resolution is fixed, database migration is the only part of the
+roll that is gated (the unconditional `db_version` health check), and NodeType compiles fall back to
+the pod-side sweep with lazy compile on failure. ⚠️ Do not re-enable the gate by widening the probe
+budget — the sweep is not slow, it is erroring.
 
 ## Update policy (Admin → Platform updates)
 

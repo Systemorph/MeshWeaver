@@ -7,6 +7,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Layout.Domain;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
@@ -256,6 +257,58 @@ public static class ThreadComposerView
             return;
         }
 
+        // 🚨 A thread is the USER'S conversation; the node it is about is only CONTEXT — and
+        // StartThread already takes that separately. So the owning namespace must be somewhere the
+        // user can actually WRITE. Where they cannot, this used to create the thread there anyway:
+        // the create was denied, the failure logged, and the conversation lived only in the browser
+        // until the next navigation — the reader watched a chat that was never being saved, then
+        // lost it (a gated course: enrolment grants Viewer, which is Read-only BY DESIGN; the same
+        // holds for every GitSynced doc/plugin space). Fall back to the user's own home, keep the
+        // context, and say so in the log.
+        OwningNamespace(host, ns!, user, logger)
+            .Take(1)
+            .Subscribe(
+                owner => StartThreadIn(host, owner, edited, user, contextPath),
+                ex => logger?.LogWarning(ex, "[ThreadComposer] Send: owner resolution failed"));
+    }
+
+    /// <summary>
+    /// Where the new thread's node belongs: <paramref name="ns"/> when the signed-in user may
+    /// CREATE there, otherwise their own home. Threads in a space the whole team can write stay
+    /// team-visible on the node — that is deliberate; only a namespace the user cannot write falls
+    /// back, because the alternative is silently losing the conversation. A permission read that
+    /// fails is treated as "cannot write": the user's home always works.
+    /// </summary>
+    private static IObservable<string> OwningNamespace(
+        LayoutAreaHost host, string ns, string? user, ILogger? logger)
+    {
+        if (string.IsNullOrEmpty(user) || string.Equals(ns, user, StringComparison.OrdinalIgnoreCase))
+            return Observable.Return(ns);
+        return host.Hub.GetEffectivePermissions(ns)
+            .Take(1)
+            .Select(permissions => permissions.HasFlag(Permission.Create) ? ns : user!)
+            .Catch<string, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[ThreadComposer] permission read for '{Namespace}' failed — owning the thread in '{User}'",
+                    ns, user);
+                return Observable.Return(user!);
+            })
+            .Do(owner =>
+            {
+                if (!string.Equals(owner, ns, StringComparison.Ordinal))
+                    logger?.LogInformation(
+                        "[ThreadComposer] '{User}' cannot create in '{Namespace}' — owning the thread in their "
+                        + "home instead; the context stays '{Context}'", user, ns, ns);
+            });
+    }
+
+    /// <summary>Creates the thread under <paramref name="owner"/>, keeping the page as context.</summary>
+    private static void StartThreadIn(
+        LayoutAreaHost host, string owner, ThreadComposer edited, string? user, string? contextPath)
+    {
+        var logger = Logger(host);
+        var ns = owner;
         host.Hub.StartThread(
             namespacePath: ns!,
             userText: edited.MessageContent!,

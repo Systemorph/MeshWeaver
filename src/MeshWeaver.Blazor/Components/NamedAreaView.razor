@@ -14,7 +14,18 @@
     <HeadContent>
         @foreach (var kvp in @MetaAttributes)
         {
-            <meta name="@kvp.Key" content="@kvp.Value" />
+            @* Open Graph is addressed by `property`, not `name` — a scraper (LinkedIn, Slack,
+               iMessage, Facebook) reading og:* looks for property= and ignores name=. Twitter's
+               own tags stay name=. Emitting the right attribute per key is the whole difference
+               between a link that unfurls into a card and one that renders as a bare URL. *@
+            @if (IsOpenGraph(kvp.Key))
+            {
+                <meta property="@kvp.Key" content="@AbsoluteMetaValue(kvp.Key, kvp.Value)" />
+            }
+            else
+            {
+                <meta name="@kvp.Key" content="@AbsoluteMetaValue(kvp.Key, kvp.Value)" />
+            }
         }
     </HeadContent>
 }

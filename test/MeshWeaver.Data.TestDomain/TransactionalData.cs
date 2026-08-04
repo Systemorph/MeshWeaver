@@ -1,6 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Messaging;
-using Newtonsoft.Json;
 
 namespace MeshWeaver.Data.TestDomain;
 
@@ -10,7 +9,7 @@ namespace MeshWeaver.Data.TestDomain;
 /// For tests, it is handy to ship initial values. Can be also hosted in separate file.
 /// </summary>
 
-public record TransactionalData([property: Key][JsonProperty("$id")] string Id, int Year, string LoB, string BusinessUnit, double Value);
+public record TransactionalData([property: Key] string Id, int Year, string LoB, string BusinessUnit, double Value);
 public record TransactionalData2(string Id, int Year, string LoB, string BusinessUnit, double Value);
 
 

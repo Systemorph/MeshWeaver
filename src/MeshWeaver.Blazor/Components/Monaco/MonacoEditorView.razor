@@ -108,6 +108,17 @@
     public Func<string, IObservable<IReadOnlyList<CompletionItem>>>? CompletionCallback { get; set; }
 
     /// <summary>
+    /// Optional POSITION-BASED code completions (Roslyn over the mesh language service) —
+    /// distinct from <see cref="CompletionCallback"/>, whose trigger-token model matches a
+    /// typed <c>@</c>-reference query and cannot express "complete C# at line/column". Called
+    /// with the full in-flight buffer and the caret (LSP convention, 0-based — converted from
+    /// Monaco's 1-based positions at the boundary); the emitted entries feed Monaco's suggest
+    /// widget, which filters and ranks client-side against the current word.
+    /// </summary>
+    [Parameter]
+    public Func<CodeCompletionRequest, IObservable<IReadOnlyList<MeshWeaver.Mesh.Services.LanguageServer.CompletionEntry>>>? CodeCompletionCallback { get; set; }
+
+    /// <summary>
     /// Optional reactive callback that supplies live diagnostics (squiggles) for the
     /// current editor content. Called with the editor's full text on every debounced
     /// content change. Each emission is converted to Monaco markers and rendered via
@@ -264,6 +275,14 @@
 
             // Register completion provider if configured
             await TryRegisterCompletionProvider();
+
+            // Position-based code completions (the Roslyn path) — independent of the
+            // trigger-token provider above; a code editor may carry both.
+            if (CodeCompletionCallback != null)
+            {
+                await jsModule.InvokeVoidAsync("registerCodeCompletionProvider", EditorId,
+                    new { language = Language });
+            }
 
             // Enable LSP-style live diagnostics if the consumer wired a callback.
             // JS side debounces onDidChangeModelContent and invokes back to RequestDiagnostics.
@@ -455,6 +474,60 @@
         }
 
         return Task.FromResult(MapCompletionsToJs(_currentCompletions));
+    }
+
+    /// <summary>
+    /// Called from the JS code-completion provider on every suggest request: the full buffer
+    /// plus Monaco's 1-based caret, answered with LSP-shaped entries. Bounded — a language
+    /// service that stalls yields an empty list after the timeout instead of hanging the
+    /// suggest widget; errors are logged and swallowed the same way (suggest must never throw
+    /// into the circuit).
+    /// </summary>
+    [JSInvokable]
+    public async Task<object[]> GetCodeCompletions(string? text, int lineNumber, int column)
+    {
+        if (CodeCompletionCallback == null)
+            return [];
+        try
+        {
+            var request = new CodeCompletionRequest(
+                text ?? string.Empty, Math.Max(0, lineNumber - 1), Math.Max(0, column - 1));
+            var entries = await CodeCompletionCallback(request)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .FirstOrDefaultAsync();
+            if (entries is not { Count: > 0 })
+                return [];
+            return entries.Select(e => (object)new
+            {
+                label = e.Label,
+                insertText = e.InsertText,
+                kind = (int)e.Kind,
+                detail = e.Detail ?? "",
+                documentation = e.Documentation ?? "",
+                sortText = e.SortText ?? "",
+                preselect = e.Preselect,
+            }).ToArray();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Code completions failed for editor {EditorId}", EditorId);
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Optional callback invoked when the user ACCEPTS a code completion — carries the chosen
+    /// label, its LSP kind, and the word that had been typed. Backs the per-user suggest memory.
+    /// </summary>
+    [Parameter]
+    public Action<string, int, string>? CodeCompletionAccepted { get; set; }
+
+    /// <summary>Called from JS once Monaco has inserted an accepted code completion.</summary>
+    [JSInvokable]
+    public void HandleCodeCompletionAccepted(string? label, int kind, string? typed)
+    {
+        if (!string.IsNullOrEmpty(label))
+            CodeCompletionAccepted?.Invoke(label!, kind, typed ?? string.Empty);
     }
 
     private static object[] MapCompletionsToJs(IReadOnlyList<CompletionItem> items)
