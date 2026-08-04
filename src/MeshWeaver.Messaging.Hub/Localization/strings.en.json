@@ -228,7 +228,7 @@
   "plural.update.other": "{0} updates",
   "settings.groupManagement": "Management",
   "menu.newThread": "New thread",
-  "menu.newThreadTooltip": "Start a new conversation in the chat panel",
+  "menu.newThreadTooltip": "Start a new conversation",
   "menu.threadsTooltip": "Conversation threads across every namespace",
   "menu.models": "Models",
   "menu.modelsTooltip": "Language models — global, space, and user",
