@@ -354,7 +354,24 @@ public static class PluginGateRunner
         {
             var services = new ServiceCollection();
             services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
-            services.AddLogging(logging => logging.SetMinimumLevel(LogLevel.Warning));
+            // Warning by default — the gate's own output is the product, and a bulk run at Trace
+            // is ~100k lines. But a message-flow hang reproduces ONLY in bulk (see the /debug
+            // skill), and this tool IS the bulk shape, so the trace has to be reachable without
+            // editing the tool. MW_LOG_LEVEL=Trace turns the whole run into the trace the skill
+            // greps; MW_LOG_CATEGORIES narrows it to the categories that carry MESSAGE_FLOW.
+            var minLevel = Enum.TryParse<LogLevel>(
+                Environment.GetEnvironmentVariable("MW_LOG_LEVEL"), ignoreCase: true, out var lvl)
+                ? lvl
+                : LogLevel.Warning;
+            services.AddLogging(logging =>
+            {
+                logging.SetMinimumLevel(minLevel);
+                if (minLevel < LogLevel.Warning)
+                    logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss.fff "; });
+                foreach (var category in (Environment.GetEnvironmentVariable("MW_LOG_CATEGORIES") ?? "")
+                         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    logging.AddFilter(category, minLevel);
+            });
             services.AddOptions();
 
             var runRoot = Path.Combine(Path.GetTempPath(),
