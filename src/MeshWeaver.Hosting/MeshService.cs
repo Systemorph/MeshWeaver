@@ -46,7 +46,7 @@ internal sealed class MeshService(
     /// and GetMeshHub walks ParentHub on every call, so caching avoids the walk per CRUD request.
     /// </summary>
     private Address? _meshAddress;
-    private Address MeshAddress => _meshAddress ??= hub.GetMeshHub().Address;
+    private Address MeshAddress => _meshAddress ??= hub.NodeOperationTarget();
 
     /// <summary>
     /// Per-call timeout ceiling. Every CRUD observable is bounded by this so a lost response
