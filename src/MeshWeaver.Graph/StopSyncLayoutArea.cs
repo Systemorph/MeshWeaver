@@ -40,7 +40,8 @@ public static class StopSyncLayoutArea
             StopSyncArea,
             Icon: excluded ? "PlugConnected" : "PlugDisconnected",
             Order: 75,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, StopSyncArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, StopSyncArea))
+            { LabelKey = excluded ? "menu.resumeSync" : "menu.stopSync" };
     }
 
     /// <summary>

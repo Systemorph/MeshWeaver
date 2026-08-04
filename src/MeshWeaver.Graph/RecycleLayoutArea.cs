@@ -26,7 +26,8 @@ public static class RecycleLayoutArea
             return null;
         return new("Recycle", MeshNodeLayoutAreas.RecycleArea,
             RequiredPermission: Permission.Update, Order: 90,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.RecycleArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.RecycleArea))
+            { LabelKey = "menu.recycle" };
     }
 
     /// <summary>

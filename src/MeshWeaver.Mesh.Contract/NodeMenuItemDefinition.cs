@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
 
@@ -26,6 +27,41 @@ public record NodeMenuItemDefinition(
     IReadOnlyList<NodeMenuItemDefinition>? Children = null,
     string? Tooltip = null)
 {
+    /// <summary>
+    /// Optional localization key for <see cref="Label"/> (e.g. <c>menu.edit</c>). When set,
+    /// <see cref="Localized"/> replaces the English <see cref="Label"/> with the viewer's
+    /// translation; when null the English label is used as-is.
+    ///
+    /// <para>A key rather than a locale parameter on every <c>GetMenuItem</c> helper: the ~20
+    /// providers that build these items are static and scattered across projects, but the menu is
+    /// aggregated in ONE place that already has the subscriber's <c>AccessService</c>. Keying here
+    /// and resolving there keeps the translation concern in a single spot, and an unkeyed item
+    /// still renders its English label rather than breaking.</para>
+    /// </summary>
+    public string? LabelKey { get; init; }
+
+    /// <summary>Optional localization key for <see cref="Tooltip"/>. See <see cref="LabelKey"/>.</summary>
+    public string? TooltipKey { get; init; }
+
+    /// <summary>
+    /// This item with <see cref="Label"/> and <see cref="Tooltip"/> resolved into the current
+    /// viewer's language (recursively, so nested menus translate too). Items with no
+    /// <see cref="LabelKey"/> are returned unchanged. Call once, at menu aggregation.
+    /// </summary>
+    public NodeMenuItemDefinition Localized(AccessService? access)
+    {
+        var children = Children?.Count > 0
+            ? Children.Select(c => c.Localized(access)).ToList()
+            : null;
+        var label = LabelKey is { Length: > 0 } lk ? access.Localize(lk) : Label;
+        var tooltip = TooltipKey is { Length: > 0 } tk ? access.Localize(tk) : Tooltip;
+
+        if (ReferenceEquals(label, Label) && tooltip == Tooltip && children is null)
+            return this;
+
+        return this with { Label = label, Tooltip = tooltip, Children = children ?? Children };
+    }
+
     /// <summary>
     /// Value equality that compares <see cref="Children"/> by SEQUENCE (recursively). The synthesized
     /// record equality compares the Children LIST by REFERENCE, and the live menu stream deserializes a

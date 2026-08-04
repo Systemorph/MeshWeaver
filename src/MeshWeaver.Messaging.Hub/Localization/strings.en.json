@@ -38,13 +38,11 @@
   "common.menu": "Menu",
   "common.signIn": "Sign in",
   "common.signOut": "Sign out",
-
   "empty.noItems": "No items.",
   "empty.noItemsFound": "No items found.",
   "empty.nothingYet": "Nothing here yet",
   "empty.createFirst": "Click to create your first item",
   "empty.noEditableSettings": "No editable settings.",
-
   "error.title": "Something went wrong",
   "error.unhandled": "An unhandled error has occurred.",
   "error.tryReloading": "Try reloading the page.",
@@ -65,7 +63,6 @@
   "error.saveFailed": "Saving failed",
   "error.reconnecting": "Reconnecting…",
   "error.serverUpdated": "The server was updated. Reloading the page to pick up the latest version.",
-
   "menu.node": "Node menu",
   "menu.mesh": "Mesh menu",
   "menu.ai": "AI menu",
@@ -109,10 +106,8 @@
   "menu.createNew": "Create new...",
   "menu.fullScreen": "Full screen",
   "menu.history": "History",
-
   "theme.switchToLight": "Switch to light theme",
   "theme.switchToDark": "Switch to dark theme",
-
   "chat.new": "New chat",
   "chat.newTooltip": "New chat — start a fresh, empty composer (keeps your harness/agent/model)",
   "chat.resume": "Resume thread",
@@ -173,7 +168,6 @@
   "chat.sendFailed": "Couldn't send your message: {0}",
   "chat.modifiedNodes": "Modified nodes",
   "chat.undo": "Undo",
-
   "settings.metadata": "Metadata",
   "settings.nodeTypes": "Node types",
   "settings.files": "Files",
@@ -203,12 +197,10 @@
   "settings.groupIntegration": "Integration",
   "settings.language": "Language",
   "settings.languageDescription": "Choose the language for the portal interface. Your content is not translated — only the interface. Detected from your browser on first sign-in; pick a language here to override it.",
-
   "notifications.title": "Notifications",
   "notifications.markAllRead": "Mark all read",
   "notifications.allCaughtUp": "You're all caught up.",
   "notifications.unread": "Unread",
-
   "auth.loggedInAs": "Logged in as:",
   "auth.developerMode": "Developer mode",
   "auth.developerLogin": "Developer login",
@@ -217,11 +209,9 @@
   "auth.signInWith": "Sign in with",
   "auth.selectPerson": "Select a person to log in as",
   "auth.loggingIn": "Logging in...",
-
   "cookies.message": "This website uses cookies to ensure you get the best experience on our website.",
   "cookies.accept": "Accept",
   "cookies.rejectNonEssential": "Reject non-essential",
-
   "plural.message.one": "{0} message",
   "plural.message.other": "{0} messages",
   "plural.change.one": "{0} change",
@@ -235,5 +225,6 @@
   "plural.toolCall.one": "{0} tool call",
   "plural.toolCall.other": "{0} tool calls",
   "plural.update.one": "{0} update",
-  "plural.update.other": "{0} updates"
+  "plural.update.other": "{0} updates",
+  "settings.groupManagement": "Management"
 }

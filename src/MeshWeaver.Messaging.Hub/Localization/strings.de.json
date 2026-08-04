@@ -38,13 +38,11 @@
   "common.menu": "Menü",
   "common.signIn": "Anmelden",
   "common.signOut": "Abmelden",
-
   "empty.noItems": "Keine Einträge.",
   "empty.noItemsFound": "Keine Einträge gefunden.",
   "empty.nothingYet": "Noch nichts vorhanden",
   "empty.createFirst": "Klicken, um den ersten Eintrag zu erstellen",
   "empty.noEditableSettings": "Keine bearbeitbaren Einstellungen.",
-
   "error.title": "Etwas ist schiefgelaufen",
   "error.unhandled": "Ein unbehandelter Fehler ist aufgetreten.",
   "error.tryReloading": "Bitte die Seite neu laden.",
@@ -65,7 +63,6 @@
   "error.saveFailed": "Speichern fehlgeschlagen",
   "error.reconnecting": "Verbindung wird wiederhergestellt…",
   "error.serverUpdated": "Der Server wurde aktualisiert. Die Seite wird neu geladen.",
-
   "menu.node": "Node-Menü",
   "menu.mesh": "Mesh-Menü",
   "menu.ai": "AI-Menü",
@@ -109,10 +106,8 @@
   "menu.createNew": "Neu erstellen…",
   "menu.fullScreen": "Vollbild",
   "menu.history": "Verlauf",
-
   "theme.switchToLight": "Zum hellen Design wechseln",
   "theme.switchToDark": "Zum dunklen Design wechseln",
-
   "chat.new": "Neuer Chat",
   "chat.newTooltip": "Neuer Chat — startet eine leere Eingabe (Harness, Agent und Modell bleiben erhalten)",
   "chat.resume": "Thread fortsetzen",
@@ -173,7 +168,6 @@
   "chat.sendFailed": "Nachricht konnte nicht gesendet werden: {0}",
   "chat.modifiedNodes": "Geänderte Nodes",
   "chat.undo": "Rückgängig",
-
   "settings.metadata": "Metadaten",
   "settings.nodeTypes": "Node-Typen",
   "settings.files": "Dateien",
@@ -203,12 +197,10 @@
   "settings.groupIntegration": "Integration",
   "settings.language": "Sprache",
   "settings.languageDescription": "Sprache für die Benutzeroberfläche des Portals. Inhalte werden nicht übersetzt — nur die Oberfläche. Bei der ersten Anmeldung wird die Sprache aus dem Browser übernommen; hier lässt sie sich überschreiben.",
-
   "notifications.title": "Benachrichtigungen",
   "notifications.markAllRead": "Alle als gelesen markieren",
   "notifications.allCaughtUp": "Alles erledigt.",
   "notifications.unread": "Ungelesen",
-
   "auth.loggedInAs": "Angemeldet als:",
   "auth.developerMode": "Entwicklermodus",
   "auth.developerLogin": "Entwickler-Anmeldung",
@@ -217,11 +209,9 @@
   "auth.signInWith": "Anmelden mit",
   "auth.selectPerson": "Person zum Anmelden auswählen",
   "auth.loggingIn": "Anmeldung läuft…",
-
   "cookies.message": "Diese Website verwendet Cookies, um die bestmögliche Nutzung zu gewährleisten.",
   "cookies.accept": "Akzeptieren",
   "cookies.rejectNonEssential": "Nicht notwendige ablehnen",
-
   "plural.message.one": "{0} Nachricht",
   "plural.message.other": "{0} Nachrichten",
   "plural.change.one": "{0} Änderung",
@@ -235,5 +225,6 @@
   "plural.toolCall.one": "{0} Tool-Aufruf",
   "plural.toolCall.other": "{0} Tool-Aufrufe",
   "plural.update.one": "{0} Aktualisierung",
-  "plural.update.other": "{0} Aktualisierungen"
+  "plural.update.other": "{0} Aktualisierungen",
+  "settings.groupManagement": "Verwaltung"
 }

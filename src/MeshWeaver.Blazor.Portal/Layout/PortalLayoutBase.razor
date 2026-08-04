@@ -1,6 +1,7 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @using Microsoft.AspNetCore.Components.Authorization
 @inherits LayoutComponentBase
+@inject AccessService Access
 @inject IDialogService DialogService
 
 <div class="layout @(IsPresentMode ? "present-mode" : "") @(IsSidePanelVisible ? $"panel-visible panel-position-{SidePanelPositionValue.ToString().ToLower()}" : "")"
@@ -28,7 +29,7 @@
             </FluentAnchor>
             <div class="links">
                 <FluentAnchor Appearance="Appearance.Stealth" Href="/Store" Class="store-link"
-                              title="Store — browse plugins and courses" aria-label="Store — browse plugins and courses">
+                              title="@Access.Localize("menu.storeTooltip")" aria-label="@Access.Localize("menu.storeTooltip")">
                     <FluentIcon Value="@(new Icons.Regular.Size20.BuildingShop())" Slot="start" />
                     Store
                 </FluentAnchor>
@@ -46,7 +47,7 @@
                    modest padding — no spacer pushing the menu away from the logo; the search
                    fills the rest. Anonymous-visible: the storefront is the public sales surface. *@
                 <FluentAnchor Appearance="Appearance.Stealth" Href="/Store" Class="store-link"
-                              title="Store — browse plugins and courses" aria-label="Store — browse plugins and courses">
+                              title="@Access.Localize("menu.storeTooltip")" aria-label="@Access.Localize("menu.storeTooltip")">
                     <FluentIcon Value="@(new Icons.Regular.Size20.BuildingShop())" Slot="start" />
                     Store
                 </FluentAnchor>
@@ -92,7 +93,7 @@
                             }
                         </FluentMenu>
                         <FluentButton Id="node-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
-                            Title="Node menu" aria-label="Node menu"
+                            Title="@Access.Localize("menu.node")" aria-label="@Access.Localize("menu.node")"
                             OnClick="@ToggleNodeMenu">
                             <FluentIcon Value="@(new Icons.Regular.Size20.Cube())" Color="Color.FillInverse" />
                         </FluentButton>
@@ -131,7 +132,7 @@
                             }
                         </FluentMenu>
                         <FluentButton Id="mesh-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
-                            Title="Mesh menu" aria-label="Mesh menu"
+                            Title="@Access.Localize("menu.mesh")" aria-label="@Access.Localize("menu.mesh")"
                             OnClick="@ToggleMeshMenu">
                             <FluentIcon Value="@(new Icons.Regular.Size20.Grid())" Color="Color.FillInverse" />
                         </FluentButton>
@@ -165,7 +166,7 @@
                             }
                         </FluentMenu>
                         <FluentButton Id="ai-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
-                            Title="AI" aria-label="AI menu"
+                            Title="AI" aria-label="@Access.Localize("menu.ai")"
                             OnClick="@ToggleAiMenu">
                             <FluentIcon Value="@(new Icons.Regular.Size20.Sparkle())" Color="Color.FillInverse" />
                         </FluentButton>
@@ -190,7 +191,7 @@
                                 }
                             </FluentMenu>
                             <FluentButton Id="github-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
-                                Title="GitHub" aria-label="GitHub menu"
+                                Title="GitHub" aria-label="@Access.Localize("menu.github")"
                                 OnClick="@ToggleGitHubMenu">
                                 <FluentIcon Value="@(new Icons.Regular.Size20.BranchFork())" Color="Color.FillInverse" />
                             </FluentButton>
@@ -198,7 +199,7 @@
 
                         @* Settings — direct navigation *@
                         <FluentButton Appearance="Appearance.Stealth" BackgroundColor="transparent"
-                            Title="Settings" aria-label="Settings"
+                            Title="@Access.Localize("common.settings")" aria-label="@Access.Localize("common.settings")"
                             OnClick="@NavigateToSettings">
                             <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.FillInverse" />
                         </FluentButton>
@@ -257,7 +258,7 @@
                 <Authorized>
                     <FluentButton
                         IconEnd="@(IsNavMenuOpen ? new Icons.Regular.Size24.Dismiss() : new Icons.Regular.Size24.Navigation())"
-                        Title="Menu" Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                        Title="@Access.Localize("common.menu")" Appearance="Appearance.Stealth" BackgroundColor="transparent"
                         OnClick="@ToggleNavMenu" Class="navigation-button" />
                 </Authorized>
             </AuthorizeView>
@@ -275,8 +276,8 @@
        page /{cumulative}), the bold current node, and a trailing "· {area}" appear when the route
        has a node path. Blazor peer of the React-Native shell's breadcrumb toolbar and the
        server-side BuildBreadcrumbs content trail. *@
-    <nav class="breadcrumb-bar" aria-label="Breadcrumb">
-        <a class="crumb crumb-home" href="/" title="Home">⌂ Home</a>
+    <nav class="breadcrumb-bar" aria-label="@Access.Localize("menu.breadcrumb")">
+        <a class="crumb crumb-home" href="/" title="@Access.Localize("common.home")">⌂ @Access.Localize("common.home")</a>
         @foreach (var crumb in Breadcrumbs)
         {
             <span class="crumb-sep" aria-hidden="true">›</span>

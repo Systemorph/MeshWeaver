@@ -43,7 +43,8 @@ public static class CreateLayoutArea
             : null;
         return new("Create", MeshNodeLayoutAreas.CreateNodeArea,
             RequiredPermission: Permission.Create, Order: 0,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.CreateNodeArea, createQs));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.CreateNodeArea, createQs))
+            { LabelKey = "menu.create" };
     }
     /// <summary>
     /// Main entry point for the Create layout area. Shows the unified "Create New" form with the

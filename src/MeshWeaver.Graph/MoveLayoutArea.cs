@@ -29,7 +29,8 @@ public static class MoveLayoutArea
             return null;
         return new("Move", MeshNodeLayoutAreas.MoveArea,
             RequiredPermission: Permission.Delete, Order: 3,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.MoveArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.MoveArea))
+            { LabelKey = "menu.move" };
     }
 
     /// <summary>

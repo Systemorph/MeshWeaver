@@ -16,7 +16,7 @@
     <FluentStack VerticalAlignment="VerticalAlignment.Center" Style="margin-bottom: 8px;">
         <FluentSpacer />
         <FluentAnchor Appearance="Appearance.Hypertext" Href="javascript:void(0)" OnClick="MarkAllRead">
-            Mark all read
+            @Access.Localize("notifications.markAllRead")
         </FluentAnchor>
     </FluentStack>
 
@@ -24,7 +24,7 @@
     {
         <div class="notification-empty">
             <FluentIcon Value="@(new Icons.Regular.Size32.Alert())" Color="Color.Neutral" />
-            <p>You're all caught up.</p>
+            <p>@Access.Localize("notifications.allCaughtUp")</p>
         </div>
     }
     else
@@ -52,7 +52,7 @@
                             @notif.Title
                             @if (g.Count > 1)
                             {
-                                <span class="notification-count" title="@g.Count updates">@g.Count</span>
+                                <span class="notification-count" title="@Access.LocalizePlural("plural.update", g.Count)">@g.Count</span>
                             }
                         </div>
                         @if (!string.IsNullOrEmpty(notif.Message))
@@ -65,7 +65,7 @@
                                       aria-expanded="@(expanded ? "true" : "false")"
                                       @onclick="() => ToggleExpanded(g.Key)" @onclick:stopPropagation="true"
                                       @onkeydown="e => OnExpandKeyDown(e, g.Key)" @onkeydown:stopPropagation="true">
-                                    @(expanded ? "Show less" : "Show more")
+                                    @Access.Localize(expanded ? "common.showLess" : "common.showMore")
                                 </span>
                             }
                         }
@@ -83,7 +83,7 @@
                     </div>
                     @if (!isRead)
                     {
-                        <div class="notification-unread-dot" title="@g.UnreadCount unread"></div>
+                        <div class="notification-unread-dot" title="@($"{g.UnreadCount} {Access.Localize("notifications.unread")}")"></div>
                     }
                 </button>
             }

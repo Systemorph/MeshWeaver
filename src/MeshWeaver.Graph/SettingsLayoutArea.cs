@@ -10,6 +10,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -129,6 +130,12 @@ public static class SettingsLayoutArea
     {
         var searchDataId = $"settingsMenuSearch_{hubPath.Replace('/', '_')}";
         host.UpdateData(searchDataId, string.Empty);
+
+        // Translate tab labels and group names for THIS subscriber before anything reads them, so
+        // the search box below filters on what the viewer actually sees (a German user finds
+        // "Datenschutz" by typing it, not only by typing "Privacy").
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
+        items = [.. items.Select(i => i.Localized(access))];
 
         var searchBox = (new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Search settings…")

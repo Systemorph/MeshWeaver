@@ -31,7 +31,8 @@ public static class ImportLayoutArea
             return null;
         return new("Import", MeshNodeLayoutAreas.ImportMeshNodesArea,
             RequiredPermission: Permission.Create, Order: 1,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ImportMeshNodesArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ImportMeshNodesArea))
+            { LabelKey = "menu.import" };
     }
     /// <summary>
     /// Layout area for importing mesh nodes.

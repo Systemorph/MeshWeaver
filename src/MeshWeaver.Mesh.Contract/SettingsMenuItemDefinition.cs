@@ -1,6 +1,7 @@
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
 
@@ -32,7 +33,31 @@ public record SettingsMenuItemDefinition(
     object? GroupIcon = null,
     int Order = 0,
     Permission RequiredPermission = Permission.Read,
-    IReadOnlyList<string>? Keywords = null);
+    IReadOnlyList<string>? Keywords = null)
+{
+    /// <summary>
+    /// Optional localization key for <see cref="Label"/> (e.g. <c>settings.privacy</c>). When set,
+    /// <see cref="Localized"/> replaces the English label with the viewer's translation; when null
+    /// the English label is used as-is. See <see cref="NodeMenuItemDefinition.LabelKey"/> for why
+    /// the key rides on the definition rather than a locale being threaded through every provider.
+    /// </summary>
+    public string? LabelKey { get; init; }
+
+    /// <summary>Optional localization key for <see cref="Group"/>. See <see cref="LabelKey"/>.</summary>
+    public string? GroupKey { get; init; }
+
+    /// <summary>
+    /// This tab with <see cref="Label"/> and <see cref="Group"/> resolved into the current viewer's
+    /// language. Applied BEFORE the settings search filter so a German user can find a tab by
+    /// typing its German name.
+    /// </summary>
+    public SettingsMenuItemDefinition Localized(AccessService? access)
+        => this with
+        {
+            Label = LabelKey is { Length: > 0 } lk ? access.Localize(lk) : Label,
+            Group = GroupKey is { Length: > 0 } gk ? access.Localize(gk) : Group,
+        };
+}
 
 /// <summary>
 /// Delegate that builds the content for a settings tab.
