@@ -122,6 +122,65 @@ public class NodeTypeBakeGateStateTest
         state.Phase.Should().Be(BakePhase.Regressed);
         state.Regressions.Keys.Should().Contain("Dependent");
     }
+    /// <summary>
+    /// 🚨 A TIMEOUT IS NOT A VERDICT. The per-type budget elapsing means the sweep never got an
+    /// answer — not that the type is broken. During a roll the baking pod and the serving pod are
+    /// two silos and the sweep's source resolution can time out across that boundary (core #694),
+    /// so a perfectly healthy type times out for reasons that have nothing to do with it.
+    ///
+    /// <para>Counting that as a regression stalled memex-cloud's rollout on 2026-08-02 — "7
+    /// NodeType(s) regressed on this image" with not one CS#### diagnostic in the log; every one
+    /// was a SubscribeRequest timeout. The old image kept serving, but self-update stopped
+    /// advancing, which for an auto-updating fleet is the worse failure.</para>
+    /// </summary>
+    [Fact]
+    public void TimedOutOnAPreviouslyHealthyType_DoesNotGate()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome("Slow/Type", PreWarmStatus.TimedOut, "budget elapsed")
+        {
+            WasHealthyBeforeBake = true
+        });
+        state.MarkComplete("done");
+
+        state.Phase.Should().Be(BakePhase.Complete);
+        state.Regressions.Should().BeEmpty();
+        state.Unevaluated.Keys.Should().Contain("Slow/Type");
+    }
+
+    /// <summary>
+    /// Non-blocking must not mean invisible: a swallowed timeout is exactly how a real regression
+    /// would hide behind that leniency, so the health payload names what it could not evaluate.
+    /// </summary>
+    [Fact]
+    public void UnevaluatedTypes_AreNamedInTheHealthDetail()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome("Slow/Type", PreWarmStatus.TimedOut) { WasHealthyBeforeBake = true });
+        state.MarkComplete("all good");
+
+        state.Detail.Should().Contain("Slow/Type").And.Contain("not evaluated");
+    }
+
+    /// <summary>
+    /// The leniency is scoped to timeouts ONLY. Roslyn rejecting the type is a verdict, and it must
+    /// still stall the rollout — otherwise the gate stops being a gate.
+    /// </summary>
+    [Fact]
+    public void CompileErrorStillGates_EvenAlongsideATimeout()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome("Slow/Type", PreWarmStatus.TimedOut) { WasHealthyBeforeBake = true });
+        state.MarkOutcome(Failed("Broken/Type", wasHealthy: true));
+        state.MarkComplete("done");
+
+        state.Phase.Should().Be(BakePhase.Regressed);
+        state.Regressions.Keys.Should().Equal("Broken/Type");
+    }
+
 
     /// <summary>Outcomes default to "was healthy" so a caller that never sets the flag fails safe.</summary>
     [Fact]
