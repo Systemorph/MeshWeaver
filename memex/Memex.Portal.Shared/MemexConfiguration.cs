@@ -517,6 +517,42 @@ public static class MemexConfiguration
             + "misconfiguration surfaces now rather than after users have uploaded and lost files.");
     }
 
+    /// <summary>
+    /// The AI (✨) menu seed — Threads / Models / Agents / Skills / Providers, each opening mesh search
+    /// grouped by namespace, plus the imperative "New thread" entry. This is the SINGLE SOURCE OF TRUTH,
+    /// shared by the hub registration below and the unit tests, so a regression can't quietly drop an
+    /// entry (there was no coverage at all pinning "New thread" into this menu).
+    /// <para>
+    /// 🚨 "New thread" deliberately carries NO <c>Href</c>: its <c>Area</c> is the
+    /// <see cref="PortalLayoutBase.AiNewThreadAction"/> sentinel, handled imperatively in
+    /// <c>HandleMenuItemClick</c> (open the composer in the MAIN pane + close the side panel). Giving it
+    /// an Href would send the generic branch navigating to that "area" on whatever node is on screen.
+    /// </para>
+    /// </summary>
+    internal static IReadOnlyList<NodeMenuItemDefinition> AiMenuItems { get; } =
+    [
+        new NodeMenuItemDefinition("New thread", PortalLayoutBase.AiNewThreadAction,
+            Icon: "/static/NodeTypeIcons/chat.svg", Order: 0,
+            Tooltip: "Start a new conversation"),
+        new NodeMenuItemDefinition("Threads", "AiThreads", Icon: "/static/NodeTypeIcons/chat.svg", Order: 10,
+            Href: "/search?q=nodeType%3AThread&groupBy=Namespace",
+            Tooltip: "Conversation threads across every namespace"),
+        // Scope-tabbed catalogs (This space · User · Global) with per-tab "+" create,
+        // anchored on the type roots so the catalog area resolves (AddAiCatalogLayoutAreas).
+        new NodeMenuItemDefinition("Models", "AiModels", Icon: "/static/NodeTypeIcons/sparkle.svg", Order: 20,
+            Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ModelsArea}",
+            Tooltip: "Language models — global, space, and user"),
+        new NodeMenuItemDefinition("Providers", "AiProviders", Icon: "/static/NodeTypeIcons/key.svg", Order: 25,
+            Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ProvidersArea}",
+            Tooltip: "AI providers — endpoints + keys"),
+        new NodeMenuItemDefinition("Agents", "AiAgents", Icon: "/static/NodeTypeIcons/bot.svg", Order: 30,
+            Href: $"/Agent/{AiCatalogLayoutAreas.AgentsArea}",
+            Tooltip: "AI agents — global, space, and user"),
+        new NodeMenuItemDefinition("Skills", "AiSkills", Icon: "/static/NodeTypeIcons/rocket.svg", Order: 40,
+            Href: $"/{SkillNodeType.RootNamespace}/{AiCatalogLayoutAreas.SkillsArea}",
+            Tooltip: "Reusable skills — global, space, and user"),
+    ];
+
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
     {
         /// <summary>
@@ -824,30 +860,7 @@ public static class MemexConfiguration
                         // opens mesh search grouped by namespace, so every tier (global / space / user)
                         // where the concern is defined shows as its own section. Per-item configurable
                         // (label / icon / order / tooltip / href); register more under the same AI context.
-                        .AddNodeMenuItems(NodeMenuItemsExtensions.AiMenuContext,
-                            // "New thread" — opens the chat side panel ready for a brand-new conversation.
-                            // The Area is a sentinel handled imperatively in PortalLayoutBase.HandleMenuItemClick
-                            // (no Href → no navigation): it opens the panel + signals new-thread mode.
-                            new NodeMenuItemDefinition("New thread", PortalLayoutBase.AiNewThreadAction,
-                                Icon: "/static/NodeTypeIcons/chat.svg", Order: 0,
-                                Tooltip: "Start a new conversation in the chat panel"),
-                            new NodeMenuItemDefinition("Threads", "AiThreads", Icon: "/static/NodeTypeIcons/chat.svg", Order: 10,
-                                Href: "/search?q=nodeType%3AThread&groupBy=Namespace",
-                                Tooltip: "Conversation threads across every namespace"),
-                            // Scope-tabbed catalogs (This space · User · Global) with per-tab "+" create,
-                            // anchored on the type roots so the catalog area resolves (AddAiCatalogLayoutAreas).
-                            new NodeMenuItemDefinition("Models", "AiModels", Icon: "/static/NodeTypeIcons/sparkle.svg", Order: 20,
-                                Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ModelsArea}",
-                                Tooltip: "Language models — global, space, and user"),
-                            new NodeMenuItemDefinition("Agents", "AiAgents", Icon: "/static/NodeTypeIcons/bot.svg", Order: 30,
-                                Href: $"/Agent/{AiCatalogLayoutAreas.AgentsArea}",
-                                Tooltip: "AI agents — global, space, and user"),
-                            new NodeMenuItemDefinition("Skills", "AiSkills", Icon: "/static/NodeTypeIcons/rocket.svg", Order: 40,
-                                Href: $"/{SkillNodeType.RootNamespace}/{AiCatalogLayoutAreas.SkillsArea}",
-                                Tooltip: "Reusable skills — global, space, and user"),
-                            new NodeMenuItemDefinition("Providers", "AiProviders", Icon: "/static/NodeTypeIcons/key.svg", Order: 25,
-                                Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ProvidersArea}",
-                                Tooltip: "AI providers — endpoints + keys"))
+                        .AddNodeMenuItems(NodeMenuItemsExtensions.AiMenuContext, [.. AiMenuItems])
                         // Dedicated Admin menu (platform-wide GlobalSettings area), gated on root
                         // Permission.All: Invitations + Inbox.
                         .AddInvitationsSettingsTab()

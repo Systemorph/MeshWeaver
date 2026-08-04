@@ -396,8 +396,10 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     /// <summary>
     /// Sentinel <see cref="NodeMenuItemDefinition.Area"/> for the AI menu's "New thread" item. It carries
-    /// NO Href, so it is handled imperatively in <see cref="HandleMenuItemClick"/> (open the chat panel in
-    /// new-thread mode) instead of navigating. Lives here so the menu seed and the handler agree.
+    /// NO Href, so it is handled imperatively in <see cref="HandleMenuItemClick"/> (open the composer in
+    /// the MAIN pane) instead of navigating to an area on the CURRENT node — the composer is a per-user
+    /// surface at <c>/User/{me}/Chat</c>, never <c>/{whatever-I-am-looking-at}/…</c>. Lives here so the
+    /// menu seed and the handler agree.
     /// </summary>
     public const string AiNewThreadAction = "ai-new-thread";
 
@@ -411,10 +413,10 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         isMeshMenuOpen = false;
         isAiMenuOpen = false;
         isGitHubMenuOpen = false;
-        // Imperative actions (no Href): the AI menu's "New thread" opens the chat panel fresh.
+        // Imperative actions (no Href): the AI menu's "New thread" opens the composer in the MAIN pane.
         if (string.Equals(item.Area, AiNewThreadAction, StringComparison.Ordinal))
         {
-            _ = OpenNewThreadInSidePanel();
+            OpenNewThreadInMain();
             return;
         }
         if (!string.IsNullOrEmpty(item.Href))
@@ -424,20 +426,44 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
     /// <summary>
-    /// Opens the chat side panel ready for a brand-new thread: clears any shown content (so the new-chat
-    /// composer renders), signals a mounted composer to reset to chat mode, and shows the panel (applying
-    /// the persisted size). Same end state as the side panel's existing New-thread button.
+    /// The user-scoped chat URL for <paramref name="userId"/> — <c>/User/{id}/Chat</c>. That area is
+    /// <see cref="UserActivityLayoutAreas.ChatArea"/>, which renders <c>ComposerAreaView</c>: the SAME
+    /// <c>ThreadChatControl</c> the side panel mounts for a new chat. Static + internal so the routing
+    /// contract is unit-testable without standing up a circuit.
     /// </summary>
-    private async Task OpenNewThreadInSidePanel()
+    internal static string NewThreadHref(string userId) =>
+        $"/User/{userId}/{UserActivityLayoutAreas.ChatArea}";
+
+    /// <summary>
+    /// Opens a brand-new conversation in the MAIN pane: navigates to <see cref="NewThreadHref"/> and
+    /// CLOSES the side panel.
+    /// <para>
+    /// 🚨 It closes the panel rather than leaving it be: a conversation lives in EITHER the main view
+    /// OR the side panel, never both (the same invariant <c>OnLocationChanged</c> enforces when the main
+    /// view navigates to a thread). Leaving the panel open would put a second, independent composer on
+    /// screen beside the one we just navigated to — two "new thread" surfaces, only one of which the
+    /// user is looking at, each able to start its own thread.
+    /// </para>
+    /// <para>
+    /// This replaces the previous side-panel implementation, which also had a live defect:
+    /// <c>RequestAction("New")</c> is a bare event (<c>OnActionRequested?.Invoke</c>), and it fired
+    /// BEFORE <c>SetVisible(true)</c> — so with the panel closed no composer was mounted, nothing was
+    /// subscribed, and the reset signal was dropped on the floor.
+    /// </para>
+    /// </summary>
+    private void OpenNewThreadInMain()
     {
+        var userId = AccessService?.Context?.ObjectId;
+        if (string.IsNullOrEmpty(userId))
+            return;
+
+        // Drop any side-panel conversation first, so the composer exists exactly once, in main.
         SidePanelState.SetContentPath(null);
         SidePanelState.SetTitle(null);
-        SidePanelState.RequestAction("New");
-        if (!SidePanelState.IsVisible)
-        {
-            SidePanelState.SetVisible(true);
-            await ApplyPersistedSizeAsync();
-        }
+        if (SidePanelState.IsVisible)
+            SidePanelState.SetVisible(false);
+
+        NavigationManager.NavigateTo(NewThreadHref(userId));
     }
 
     /// <summary>
