@@ -107,6 +107,41 @@ gh pr merge PR_NUMBER --merge
 
 **If `FORBIDDEN`**: re-authenticate with `! gh auth login`.
 
+### 🚨 "Is the build finished?" — filter by WORKFLOW, never wait for all check suites
+
+The merge gate is "CI green", so you must be able to tell when CI is actually *done*. **Never wait
+for every check suite on the commit to reach `COMPLETED` — that never happens.** GitHub creates a
+check suite for *every* installed App holding the Checks permission, and an App that posts no check
+runs leaves its suite at `queued` forever. This repo has exactly that: the **Azure Boards** App
+(installed 2026-08-03, `latest_check_runs_count: 0`, zero `AB#` references in the history) puts a
+permanently-`queued` suite on every commit. It never blocks a merge — `mergeStateStatus` stays
+`CLEAN` — but a naive "all suites complete" poll hangs until its timeout and then looks like CI
+never finished.
+
+**Poll the `MeshWeaver Build and Test` suite specifically:**
+
+```bash
+gh api graphql -f query='query($o:String!,$r:String!,$p:Int!){repository(owner:$o,name:$r){pullRequest(number:$p){
+  mergeStateStatus commits(last:1){nodes{commit{checkSuites(first:20){nodes{
+    status conclusion workflowRun{workflow{name}}}}}}}}}}' \
+  -f o=Systemorph -f r=MeshWeaver -F p=PR_NUMBER \
+  --jq '[.data.repository.pullRequest.commits.nodes[0].commit.checkSuites.nodes[]
+         | select(.workflowRun.workflow.name=="MeshWeaver Build and Test")
+         | "\(.status)/\(.conclusion)"]'
+```
+
+Merge only on `COMPLETED/SUCCESS` for that suite. Two further gotchas:
+
+- **`Consolidate test results` is the required check** — and the ONLY one to require. `Build solution
+  (once)` and the shards are legitimately *skipped* when a run reuses an already-green tree, and a
+  skipped required check blocks the merge forever.
+- **Don't poll with `gh run watch` / `gh pr checks --watch`.** They hammer REST and burn the shared
+  token budget into 403s that masquerade as CI-red. Use the GraphQL query above, or a `Monitor` that
+  filters on the workflow name.
+
+**Also check the clock before declaring a job stuck.** GitHub timestamps are UTC; a local-time
+comparison makes a healthy 7-minute build look like a 33-minute hang. `date -u` first.
+
 ## 🚨 Postgres: One Schema Per Partition
 
 **`public.mesh_nodes` is empty by design.** Data lives in per-partition schemas (`acme.mesh_nodes`, `rbuergi.mesh_nodes`, etc.).
