@@ -112,7 +112,7 @@ else
                 <div class="thread-nav-section-label">
                     <span>@Access.Localize("chat.otherOpenThreads")</span>
                     @if (others.Count > 0) { <span class="thread-nav-count">@others.Count</span> }
-                    <span class="thread-nav-hint" title="Option-Tab cycles through them">&#8997;&#8677;</span>
+                    <span class="thread-nav-hint" title="@Access.Localize("chat.optionTabHint")">&#8997;&#8677;</span>
                 </div>
                 @if (others.Count == 0)
                 {
@@ -194,7 +194,7 @@ else
                     @if (isEditingDescription)
                     {
                         <FluentTextArea @ref="_descEditField" @bind-Value="editDescriptionText" Immediate="true"
-                                        class="thread-header-desc-input" Rows="2" Placeholder="Add a description…"
+                                        class="thread-header-desc-input" Rows="2" Placeholder="@Access.Localize("chat.addDescription")"
                                         @onkeydown="OnDescriptionEditKeyDown" @onblur="CommitDescriptionEdit" />
                     }
                     else if (!string.IsNullOrWhiteSpace(ThreadViewModel?.Description))
@@ -310,7 +310,7 @@ else
                                 <div class="thread-msg-inline-actions">
                                     @if (isUser && !IsReadOnlyThread)
                                     {
-                                        <button class="thread-msg-action-btn" @onclick="() => StartEdit(msgId)" title="Edit">&#9998;</button>
+                                        <button class="thread-msg-action-btn" @onclick="() => StartEdit(msgId)" title="@Access.Localize("common.edit")">&#9998;</button>
                                         <button class="thread-msg-action-btn" @onclick="() => ResubmitMessage(msgId)" title="@Access.Localize("chat.resubmit")">&#8635;</button>
                                         <button class="thread-msg-action-btn" @onclick="() => DeleteFromMessage(msgId)" title="@Access.Localize("chat.deleteFromHere")">&#128465;</button>
                                     }
@@ -674,7 +674,7 @@ else
                 @if (!string.IsNullOrEmpty(boundHarness))
                 {
                     <button type="button" class="thread-chat-status-item is-clickable"
-                            title="Harness — click to switch runtime" @onclick='() => OnStatusChipClick("harness", false)'>
+                            title="@Access.Localize("chat.harnessTooltip")" @onclick='() => OnStatusChipClick("harness", false)'>
                         @HarnessIcon(boundHarness) @harnessId
                     </button>
                 }
@@ -694,7 +694,7 @@ else
                     @if (isClaudeCode)
                     {
                         <button type="button" class="thread-chat-status-item is-clickable"
-                                title="Reasoning effort — click to change" @onclick='() => OnStatusChipClick("effort", true)'>
+                                title="@Access.Localize("chat.reasoningTooltip")" @onclick='() => OnStatusChipClick("effort", true)'>
                             @ChipSvg("effort") @(string.IsNullOrEmpty(harnessRt?.Effort) ? "…" : harnessRt!.Effort)
                         </button>
                     }
@@ -704,7 +704,7 @@ else
                     @if (!string.IsNullOrEmpty(boundAgentPath))
                     {
                         <button type="button" class="thread-chat-status-item is-clickable"
-                                title="Agent — click to change" @onclick='() => OnStatusChipClick("agent", false)'>
+                                title="@Access.Localize("chat.agentTooltip")" @onclick='() => OnStatusChipClick("agent", false)'>
                             @ChipSvg("agent") @LastSegment(boundAgentPath)
                         </button>
                     }
@@ -733,7 +733,7 @@ else
             <div class="thread-chat-widget" @onkeydown:stopPropagation="true">
                 <div class="thread-chat-widget-header">
                     <span>Delete @_deleteConfirmMessageCount message@(_deleteConfirmMessageCount == 1 ? "" : "s")?</span>
-                    <button class="thread-msg-action-btn" @onclick="CancelDelete" title="Close">&#10005;</button>
+                    <button class="thread-msg-action-btn" @onclick="CancelDelete" title="@Access.Localize("common.close")">&#10005;</button>
                 </div>
                 <div style="padding:12px 14px; display:flex; flex-direction:column; gap:12px;">
                     <div style="color:var(--neutral-foreground-hint); line-height:1.4;">
@@ -766,7 +766,7 @@ else
             <div class="thread-chat-widget" @onkeydown:stopPropagation="true">
                 <div class="thread-chat-widget-header">
                     <span>Log in to @(_loginHarness!.Definition.DisplayName)</span>
-                    <button class="thread-msg-action-btn" @onclick="CancelConnect" title="Close">&#10005;</button>
+                    <button class="thread-msg-action-btn" @onclick="CancelConnect" title="@Access.Localize("common.close")">&#10005;</button>
                 </div>
                 <FluentStack Orientation="Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical" VerticalGap="10"
                              Style="padding:12px 14px; flex:1 1 auto; min-height:0; overflow-y:auto;">
@@ -814,7 +814,7 @@ else
                                 @if (c.Challenge.RequiresPastedCode)
                                 {
                                     <div style="margin-top:4px;"><strong>2</strong>&nbsp; Paste the code shown, then submit:</div>
-                                    <FluentTextField @bind-Value="_connectCode" Immediate="true" Placeholder="Paste code"
+                                    <FluentTextField @bind-Value="_connectCode" Immediate="true" Placeholder="@Access.Localize("chat.pasteCode")"
                                                      @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
                                     <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
                                                   Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
@@ -877,7 +877,7 @@ else
                  @onkeydown:stopPropagation="true">
                 <div class="thread-chat-widget-header">
                     <span>@picker.Title</span>
-                    <button class="thread-msg-action-btn" @onclick="DismissWidget" title="Close">&#10005;</button>
+                    <button class="thread-msg-action-btn" @onclick="DismissWidget" title="@Access.Localize("common.close")">&#10005;</button>
                 </div>
                 <div class="thread-chat-widget-list">
                     @for (var i = 0; i < pickerNodes.Count; i++)

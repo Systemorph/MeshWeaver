@@ -32,7 +32,7 @@
                         Search
                     </button>
                     <button type="button" class="mesh-search-options-button" @onclick="ToggleSearchOptions"
-                            title="Search options">
+                            title="@Access.Localize("search.options")">
                         <FluentIcon Value="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size16.Settings())" />
                     </button>
                 }
@@ -88,7 +88,7 @@
             }
             <div class="mesh-search-viewbar-spacer"></div>
             <div class="mesh-search-viewbar-menu-wrap">
-                <button type="button" class="mesh-search-viewbar-menu-btn" title="Display options"
+                <button type="button" class="mesh-search-viewbar-menu-btn" title="@Access.Localize("search.displayOptions")"
                         @onclick="ToggleViewMenu">
                     <FluentIcon Value="@(new Icons.Regular.Size16.Options())" />
                 </button>
@@ -447,7 +447,7 @@
                         @onclick="() => ConfirmDelete(node)" @onclick:stopPropagation="true">
                     <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" />
                 </button>
-                <button type="button" class="mesh-search-delete-no" title="Cancel"
+                <button type="button" class="mesh-search-delete-no" title="@Access.Localize("common.cancel")"
                         @onclick="CancelDelete" @onclick:stopPropagation="true">
                     <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" />
                 </button>
@@ -455,7 +455,7 @@
         }
         else
         {
-            <button type="button" class="mesh-search-delete" title="Delete"
+            <button type="button" class="mesh-search-delete" title="@Access.Localize("common.delete")"
                     @onclick="() => RequestDelete(node)" @onclick:stopPropagation="true">
                 <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" />
             </button>

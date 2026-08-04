@@ -97,7 +97,7 @@
                       SelectMode="DataGridSelectMode.Multiple"
                       SelectFromEntireRow="false"
                       @bind-SelectedItems="SelectedItems"/>
-        <TemplateColumn TGridItem="CollectionItem" Title="Name">
+        <TemplateColumn TGridItem="CollectionItem" Title="@Access.Localize("common.name")">
             <div class="grid-item">
                 @if (context is FolderItem folder)
                 {
@@ -125,7 +125,7 @@
                 }
              </div>
         </TemplateColumn>
-        <TemplateColumn TGridItem="CollectionItem" Title="Details">
+        <TemplateColumn TGridItem="CollectionItem" Title="@Access.Localize("common.details")">
             @if (context is FolderItem folder)
             {
                 <span>@folder.ItemCount items</span>

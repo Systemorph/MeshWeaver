@@ -11,6 +11,7 @@
 @using Microsoft.Extensions.DependencyInjection
 @using Microsoft.JSInterop
 @inherits BlazorView<ExportDocumentControl, ExportDocumentView>
+@inject AccessService Access
 
 <div class="export-document-view" style="max-width: 720px;">
     <h2 style="margin-top: 0;">Export @(_title)</h2>
@@ -38,7 +39,7 @@
             </div>
 
             <FluentCheckbox Value="_coverPage" ValueChanged="@((bool v) => _coverPage = v)" Label="Branded cover page" />
-            <FluentCheckbox Value="_toc" ValueChanged="@((bool v) => _toc = v)" Label="Table of contents" />
+            <FluentCheckbox Value="_toc" ValueChanged="@((bool v) => _toc = v)" Label="@Access.Localize("export.tableOfContents")" />
             <FluentCheckbox Value="_pbH1" ValueChanged="@((bool v) => _pbH1 = v)" Label="Page break before each # Section" />
             <FluentCheckbox Value="_pbH2" ValueChanged="@((bool v) => _pbH2 = v)" Label="Page break before each ## Subsection" />
 

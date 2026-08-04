@@ -1,4 +1,5 @@
 @implements IDialogContentComponent
+@inject AccessService Access
 
 <div>
     <FluentDesignTheme @ref=theme
@@ -27,7 +28,7 @@
             </OptionTemplate>
         </FluentSelect>
 
-        <FluentSwitch Label="Direction"
+        <FluentSwitch Label="@Access.Localize("appearance.direction")"
                       Style="margin-bottom: 30px;"
                       CheckedMessage="Left to Right"
                       UncheckedMessage="Right to Left"

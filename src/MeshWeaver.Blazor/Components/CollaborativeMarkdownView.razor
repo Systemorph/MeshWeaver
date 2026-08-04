@@ -5,6 +5,7 @@
 @using Microsoft.Extensions.Logging
 @namespace MeshWeaver.Blazor.Components
 @inherits BlazorView<CollaborativeMarkdownControl, CollaborativeMarkdownView>
+@inject AccessService Access
 
 <div class="collab-md-container @ViewModeClass" data-theme="@Mode.ToString().ToLower()" @ref="containerRef">
     @* Toolbar — comment filter + accept/reject-all, shown when there are comments or pending changes *@
@@ -58,9 +59,9 @@
                             <div class="comment-actions">
                                 @if (comment.Status != CommentStatus.Resolved)
                                 {
-                                    <button class="btn-resolve" title="Resolve" @onclick="() => ResolveComment(id)" @onclick:stopPropagation="true">&#x2713;</button>
+                                    <button class="btn-resolve" title="@Access.Localize("ui.resolve")" @onclick="() => ResolveComment(id)" @onclick:stopPropagation="true">&#x2713;</button>
                                 }
-                                <button class="btn-delete" title="Delete" @onclick="() => DeleteComment(id)" @onclick:stopPropagation="true">&#x2715;</button>
+                                <button class="btn-delete" title="@Access.Localize("common.delete")" @onclick="() => DeleteComment(id)" @onclick:stopPropagation="true">&#x2715;</button>
                             </div>
                         </div>
                         @if (!string.IsNullOrEmpty(comment.HighlightedText))
@@ -91,8 +92,8 @@
                             @if (BoundCanEdit)
                             {
                                 <div class="collab-md-card-actions">
-                                    <button class="btn-accept" title="Accept" @onclick="() => OnAcceptChange(id)" @onclick:stopPropagation="true">✓</button>
-                                    <button class="btn-reject" title="Reject" @onclick="() => OnRejectChange(id)" @onclick:stopPropagation="true">✗</button>
+                                    <button class="btn-accept" title="@Access.Localize("ui.accept")" @onclick="() => OnAcceptChange(id)" @onclick:stopPropagation="true">✓</button>
+                                    <button class="btn-reject" title="@Access.Localize("ui.reject")" @onclick="() => OnRejectChange(id)" @onclick:stopPropagation="true">✗</button>
                                 </div>
                             }
                         </div>

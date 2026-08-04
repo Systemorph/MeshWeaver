@@ -19,6 +19,7 @@
 @using TrackedChangeStatus = MeshWeaver.Markdown.Collaboration.TrackedChangeStatus
 @namespace MeshWeaver.Blazor.Components
 @inherits BlazorView<MarkdownEditorControl, MarkdownEditorView>
+@inject AccessService Access
 
 <div class="collaborative-editor-container">
     @* Suggest mode indicator stripe *@
@@ -60,8 +61,8 @@
                     @if (TrackedChanges.Count > 0)
                     {
                         <div class="annotations-sidebar-actions">
-                            <button class="btn-accept-all" title="Accept all" @onclick="@OnAcceptAllChanges">Accept all</button>
-                            <button class="btn-reject-all" title="Reject all" @onclick="@OnRejectAllChanges">Reject all</button>
+                            <button class="btn-accept-all" title="@Access.Localize("ui.acceptAll")" @onclick="@OnAcceptAllChanges">Accept all</button>
+                            <button class="btn-reject-all" title="@Access.Localize("ui.rejectAll")" @onclick="@OnRejectAllChanges">Reject all</button>
                         </div>
                     }
                 </div>
@@ -80,14 +81,14 @@
                             @if (ann.Type != MeshWeaver.Markdown.AnnotationType.Comment)
                             {
                                 <div class="annotation-card-actions">
-                                    <button class="btn-accept" title="Accept" @onclick="() => OnAcceptAnnotation(ann)" @onclick:stopPropagation="true">&#10003;</button>
-                                    <button class="btn-reject" title="Reject" @onclick="() => OnRejectAnnotation(ann)" @onclick:stopPropagation="true">&#10007;</button>
+                                    <button class="btn-accept" title="@Access.Localize("ui.accept")" @onclick="() => OnAcceptAnnotation(ann)" @onclick:stopPropagation="true">&#10003;</button>
+                                    <button class="btn-reject" title="@Access.Localize("ui.reject")" @onclick="() => OnRejectAnnotation(ann)" @onclick:stopPropagation="true">&#10007;</button>
                                 </div>
                             }
                             else
                             {
                                 <div class="annotation-card-actions">
-                                    <button class="btn-resolve" title="Resolve" @onclick="() => OnResolveComment(ann.Id)" @onclick:stopPropagation="true">&#10003;</button>
+                                    <button class="btn-resolve" title="@Access.Localize("ui.resolve")" @onclick="() => OnResolveComment(ann.Id)" @onclick:stopPropagation="true">&#10003;</button>
                                 </div>
                             }
                         </div>

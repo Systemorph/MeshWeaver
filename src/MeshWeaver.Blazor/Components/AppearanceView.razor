@@ -1,6 +1,7 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @using Microsoft.FluentUI.AspNetCore.Components.Extensions
 @inherits BlazorView<AppearanceControl, AppearanceView>
+@inject AccessService Access
 
 <div style="max-width: 500px;">
     <FluentDesignTheme @ref="theme"
@@ -11,7 +12,7 @@
                        StorageName="theme" />
 
     <FluentStack Orientation="Orientation.Vertical" VerticalGap="0">
-        <FluentSelect Label="Theme"
+        <FluentSelect Label="@Access.Localize("appearance.theme")"
                       Width="100%"
                       Style="margin-bottom: 30px;"
                       Items="@AllModes"
@@ -40,7 +41,7 @@
                          Value="@customColorInput"
                          ValueChanged="@OnCustomColorChanged" />
 
-        <FluentSwitch Label="Direction"
+        <FluentSwitch Label="@Access.Localize("appearance.direction")"
                       Style="margin-bottom: 30px;"
                       CheckedMessage="Left to Right"
                       UncheckedMessage="Right to Left"
