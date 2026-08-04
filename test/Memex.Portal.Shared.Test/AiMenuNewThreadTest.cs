@@ -34,6 +34,20 @@ public class AiMenuNewThreadTest
     }
 
     [Fact]
+    public void NewThread_Icon_Is_LanguageNeutral()
+    {
+        var newThread = MemexConfiguration.AiMenuItems
+            .Single(i => i.Area == PortalLayoutBase.AiNewThreadAction);
+
+        // A plus reads as "new" in every locale. Pin BOTH halves of that contract: the glyph itself,
+        // and that IsEmoji routes it to a <span> — an icon that fell through to the IsImageUrl branch
+        // would render as <img src="➕"> (a broken-image box), which is how icon regressions show up.
+        Assert.Equal("➕", newThread.Icon);
+        Assert.True(MeshNodeImageHelper.IsEmoji(newThread.Icon));
+        Assert.False(MeshNodeImageHelper.IsImageUrl(newThread.Icon));
+    }
+
+    [Fact]
     public void NewThread_Carries_No_Href_So_It_Stays_Imperative()
     {
         var newThread = MemexConfiguration.AiMenuItems
