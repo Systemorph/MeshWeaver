@@ -38,6 +38,7 @@ public record UpdatePolicyContent
 {
     /// <summary>The update strategy. Defaults to <see cref="UpdatePolicyKind.Continuous"/>.</summary>
     [Description("Update strategy")]
+    [Translation("de", "Update-Strategie")]
     public UpdatePolicyKind Policy { get; init; } = UpdatePolicyKind.Continuous;
 
     /// <summary>
@@ -49,6 +50,7 @@ public record UpdatePolicyContent
     /// Set <c>false</c> to also accept unverified edge builds (bleeding-edge / pre-merge testing).
     /// </summary>
     [Description("Only update to CI-verified (green) builds")]
+    [Translation("de", "Nur auf CI-geprüfte (grüne) Builds aktualisieren")]
     public bool RequireCiGreen { get; init; } = true;
 
     /// <summary>The newest image tag the poller has found on the registry (for the admin UI /

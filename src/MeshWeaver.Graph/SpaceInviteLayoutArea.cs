@@ -28,7 +28,7 @@ public static class SpaceInviteLayoutArea
     {
         var spacePath = SpaceOf(host.Hub.Address.ToString());
         if (string.IsNullOrEmpty(spacePath))
-            return Observable.Return<UiControl?>(Controls.Markdown("*Invites are available inside a Space.*"));
+            return Observable.Return<UiControl?>(Controls.Markdown(host.Localize("ui.mdInvitesInSpace")));
 
         var formId = $"space_invite_{Guid.NewGuid():N}";
         host.UpdateData(formId, new Dictionary<string, object?>
@@ -48,7 +48,7 @@ public static class SpaceInviteLayoutArea
         var pinCheck = new CheckBoxControl(new JsonPointerReference("pin"))
             { Label = "Pin the Space to their dashboard", DataContext = dataContext };
 
-        var inviteButton = Controls.Button("Invite")
+        var inviteButton = Controls.Button(host.Localize("ui.invite"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction((Action<UiActionContext>)(ctx =>
                 ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
@@ -56,7 +56,7 @@ public static class SpaceInviteLayoutArea
                     .Subscribe(form => Submit(ctx, spacePath, form))));
 
         var stack = Controls.Stack
-            .WithView(Controls.H2("Invite people").WithStyle("margin: 0 0 8px 0;"))
+            .WithView(Controls.H2(host.Localize("menu.invitePeople")).WithStyle("margin: 0 0 8px 0;"))
             .WithView(Controls.Markdown(
                 "Invite someone to this Space by email. If they already have an account they get "
                 + "access immediately; otherwise they're invited, and access is granted automatically "

@@ -81,7 +81,7 @@ public static class GroupLayoutAreas
             if (!string.IsNullOrEmpty(accessObject?.Description))
                 stack = stack.WithView(Controls.Html($"<p>{System.Web.HttpUtility.HtmlEncode(accessObject.Description)}</p>"));
 
-            stack = stack.WithView(Controls.H3("Members").WithStyle("margin: 0;"));
+            stack = stack.WithView(Controls.H3(host.Localize("ui.members")).WithStyle("margin: 0;"));
 
             var memberList = members as IReadOnlyList<MeshNode> ?? members.ToList();
             if (memberList.Count == 0)
@@ -131,7 +131,7 @@ public static class GroupLayoutAreas
             var groupName = node?.Name ?? hubPath;
             stack = stack.WithView(Controls.H2($"Edit Group: {groupName}"));
 
-            stack = stack.WithView(Controls.H3("Members").WithStyle("margin: 0;"));
+            stack = stack.WithView(Controls.H3(host.Localize("ui.members")).WithStyle("margin: 0;"));
 
             foreach (var member in members)
             {
@@ -159,7 +159,7 @@ public static class GroupLayoutAreas
             stack = stack.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("gap: 8px;")
-                .WithView(Controls.Button("Add Member")
+                .WithView(Controls.Button(host.Localize("ui.addMember"))
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.PersonAdd())
                     .WithClickAction(ctx =>
@@ -167,7 +167,7 @@ public static class GroupLayoutAreas
                         ShowAddMemberDialog(ctx, hubPath);
                         return Task.CompletedTask;
                     }))
-                .WithView(Controls.Button("Invite by Email")
+                .WithView(Controls.Button(host.Localize("ui.inviteByEmail"))
                     .WithIconStart(FluentIcons.Mail())
                     .WithClickAction(ctx =>
                     {
@@ -229,7 +229,7 @@ public static class GroupLayoutAreas
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("justify-content: flex-end; gap: 8px; margin-top: 16px;")
-                .WithView(Controls.Button("Save")
+                .WithView(Controls.Button(ctx.Host.Localize("common.save"))
                     .WithAppearance(Appearance.Accent)
                     .WithClickAction(saveCtx =>
                     {
@@ -241,7 +241,7 @@ public static class GroupLayoutAreas
                                 if (string.IsNullOrEmpty(memberId))
                                 {
                                     var errorDialog = Controls.Dialog(
-                                        Controls.Markdown("Please select a **Member**."),
+                                        Controls.Markdown(ctx.Host.Localize("ui.selectMember")),
                                         "Validation Error"
                                     ).WithSize("S").WithClosable(true);
                                     saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
@@ -308,7 +308,7 @@ public static class GroupLayoutAreas
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("justify-content: flex-end; gap: 8px;")
-                .WithView(Controls.Button("Invite")
+                .WithView(Controls.Button(ctx.Host.Localize("ui.invite"))
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.Mail())
                     .WithClickAction(inviteCtx =>

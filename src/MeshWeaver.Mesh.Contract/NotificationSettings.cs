@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using MeshWeaver.Messaging;
 using System.Text.Json.Serialization;
 
 namespace MeshWeaver.Mesh;
@@ -37,41 +38,49 @@ public record NotificationSettings
     /// <summary>Show approval notifications in the bell.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     [Description("Approvals — show in the notification bell")]
+    [Translation("de", "Freigaben — in der Benachrichtigungsglocke anzeigen")]
     public bool ApprovalsInApp { get; init; } = true;
 
     /// <summary>Show access-granted notifications in the bell.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     [Description("Access granted — show in the notification bell")]
+    [Translation("de", "Zugriff erteilt — in der Benachrichtigungsglocke anzeigen")]
     public bool AccessGrantedInApp { get; init; } = true;
 
     /// <summary>Show chat-ready notifications in the bell.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     [Description("Chat ready — show in the notification bell")]
+    [Translation("de", "Chat fertig — in der Benachrichtigungsglocke anzeigen")]
     public bool ChatReadyInApp { get; init; } = true;
 
     /// <summary>Show system notifications in the bell.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     [Description("System — show in the notification bell")]
+    [Translation("de", "System — in der Benachrichtigungsglocke anzeigen")]
     public bool SystemInApp { get; init; } = true;
 
     /// <summary>Email approval notifications.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     [Description("Approvals — send an email")]
+    [Translation("de", "Freigaben — eine E-Mail senden")]
     public bool ApprovalsEmail { get; init; } = true;
 
     /// <summary>Email access-granted notifications.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     [Description("Access granted — send an email")]
+    [Translation("de", "Zugriff erteilt — eine E-Mail senden")]
     public bool AccessGrantedEmail { get; init; } = true;
 
     /// <summary>Email chat-ready notifications.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     [Description("Chat ready — send an email")]
+    [Translation("de", "Chat fertig — eine E-Mail senden")]
     public bool ChatReadyEmail { get; init; }
 
     /// <summary>Email system notifications.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     [Description("System — send an email")]
+    [Translation("de", "System — eine E-Mail senden")]
     public bool SystemEmail { get; init; }
 
     /// <summary>Whether the given category is delivered to the bell.</summary>

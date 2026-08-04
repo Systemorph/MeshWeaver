@@ -150,3 +150,40 @@ Debug-level `ILogger` file capture or `MESHWEAVER_MSG_TRACE=1`, not by raising a
 - [ ] GUI view reads via `_cache.GetStream(path)` (field, not local), writes via `_cache.Update(path, fn)`, **no** `.Take(1)`, **no** `GetRemoteStream` in the view.
 - [ ] The content type is registered in the TypeRegistry of the hub that reads it.
 - [ ] Cold write observables are `.Subscribe(...)`d with an onError that surfaces at a real boundary.
+- [ ] 🌍 **Every string a user reads is localized** — no hard-coded UI text. See below.
+
+## 🌍 Every user-visible string — localize it as you write it
+
+The portal ships English + German, so **a hard-coded UI string is a bug**: it renders English for
+every viewer regardless of their language. Localize as part of writing the view, not as a follow-up.
+
+Covers labels, buttons, tooltips, `aria-label`s, placeholders, page titles, empty states, validation
+messages, toasts, dialog copy and menu entries — anything a human reads on screen.
+
+```csharp
+// Server-side layout area
+Controls.Button(host.Localize("ui.createRelease"))
+stack.WithView(Controls.Body(host.Localize("ui.noCodeDefined")))
+
+// Blazor view
+@inject AccessService Access
+<button title="@Access.Localize("common.close")">…</button>
+
+// On a declaration — the translation rides next to the English, so they can't drift
+[Description("Sync direction")]
+[Translation("de", "Synchronisierungsrichtung")]
+public SyncDirection Direction { get; init; }
+```
+
+Keys live in **both** `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json`;
+`LocalizationTest` fails if a language is missing one, so a half-translated string cannot merge.
+
+**Prefer text that needs no translation.** A language-neutral glyph beats a translated word — the AI
+menu's "new" entry is **➕**, the node menu is ✏️ 🔖 ➡️ 📋 🗑️. Icon + translated tooltip usually
+beats a translated label: smaller translation surface, identical reading in every locale.
+
+🚨 Never resolve from `CultureInfo.CurrentUICulture` — a layout-area render hops the hub scheduler
+and an ambient AsyncLocal culture doesn't survive it, so one viewer's UI would pick up another's
+language. Resolution is always explicit off `AccessContext.Locale`.
+
+Full reference: `Doc/Architecture/Localization`.
