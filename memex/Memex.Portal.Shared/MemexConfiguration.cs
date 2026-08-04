@@ -518,15 +518,19 @@ public static class MemexConfiguration
     }
 
     /// <summary>
-    /// The AI (✨) menu seed — Threads / Models / Agents / Skills / Providers, each opening mesh search
-    /// grouped by namespace, plus the imperative "New thread" entry. This is the SINGLE SOURCE OF TRUTH,
-    /// shared by the hub registration below and the unit tests, so a regression can't quietly drop an
-    /// entry (there was no coverage at all pinning "New thread" into this menu).
+    /// The AI (✨) menu seed. In render order (by <c>Order</c>): the imperative "New thread" entry, then
+    /// Threads / Models / Providers / Agents / Skills, each opening mesh search grouped by namespace.
+    /// This is the SINGLE SOURCE OF TRUTH, shared by the hub registration below and the unit tests, so a
+    /// regression can't quietly drop an entry (there was no coverage at all pinning "New thread" here).
     /// <para>
-    /// 🚨 "New thread" deliberately carries NO <c>Href</c>: its <c>Area</c> is the
-    /// <see cref="PortalLayoutBase.AiNewThreadAction"/> sentinel, handled imperatively in
-    /// <c>HandleMenuItemClick</c> (open the composer in the MAIN pane + close the side panel). Giving it
-    /// an Href would send the generic branch navigating to that "area" on whatever node is on screen.
+    /// 🚨 "New thread" carries NO <c>Href</c> because it CANNOT: the composer lives at
+    /// <c>/User/{me}/Chat</c>, and the signed-in user is not known here — this seed is static and
+    /// registered per node hub, with no viewer identity. So the destination has to be resolved at CLICK
+    /// time from the circuit's <c>AccessService</c>. That is what the
+    /// <see cref="PortalLayoutBase.AiNewThreadAction"/> sentinel is for: <c>HandleMenuItemClick</c>
+    /// matches it FIRST and returns (open the composer in the MAIN pane + close the side panel), so an
+    /// <c>Href</c> added here would be silently dead code rather than a redirect. Keep it null so the
+    /// declaration matches the behaviour.
     /// </para>
     /// </summary>
     internal static IReadOnlyList<NodeMenuItemDefinition> AiMenuItems { get; } =
