@@ -41,6 +41,7 @@ public static class WhatsNewSettingsTab
                 ContentBuilder: BuildContent,
                 Icon: FluentIcons.Sparkle(),
                 Order: 910)
+            { LabelKey = "settings.whatsNew" }
         });
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)

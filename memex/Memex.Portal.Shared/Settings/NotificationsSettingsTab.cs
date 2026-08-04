@@ -37,7 +37,8 @@ public static class NotificationsSettingsTab
                 Icon: FluentIcons.Alert(),
                 GroupIcon: FluentIcons.Person(),
                 Order: 240,
-                RequiredPermission: Permission.None));
+                RequiredPermission: Permission.None)
+            { LabelKey = "settings.notifications", GroupKey = "settings.groupPreferences" });
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {

@@ -51,7 +51,8 @@ public static class TokenUsageSettingsTab
             Group: "Administration",
             Icon: FluentIcons.Database(),
             GroupIcon: FluentIcons.Shield(),
-            Order: 320);
+            Order: 320)
+            { LabelKey = "settings.tokenUsage", GroupKey = "settings.groupAdministration" };
 
         return AdminMenuGate.IsPlatformAdmin(host)
             .Select(isAdmin => isAdmin

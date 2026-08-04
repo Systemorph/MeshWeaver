@@ -35,6 +35,7 @@ public static class AboutSettingsTab
                 ContentBuilder: BuildContent,
                 Icon: FluentIcons.Info(),
                 Order: 900)
+            { LabelKey = "settings.about" }
         });
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)

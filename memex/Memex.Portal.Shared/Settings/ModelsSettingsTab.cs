@@ -75,7 +75,8 @@ public static class ModelsSettingsTab
                 Icon: FluentIcons.BrainCircuit(),
                 GroupIcon: FluentIcons.Sparkle(),
                 Order: 220,
-                RequiredPermission: Permission.Api));
+                RequiredPermission: Permission.Api)
+            { LabelKey = "settings.languageModels" });
     }
 
     internal static UiControl BuildModelsContent(

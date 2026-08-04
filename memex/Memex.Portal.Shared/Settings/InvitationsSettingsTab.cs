@@ -48,7 +48,8 @@ public static class InvitationsSettingsTab
             Group: "Administration",
             Icon: FluentIcons.Mail(),
             GroupIcon: FluentIcons.Shield(),
-            Order: 310);
+            Order: 310)
+            { LabelKey = "settings.invitations", GroupKey = "settings.groupAdministration" };
 
         // Reactive: gated tab appears once the platform-admin grant surfaces. No async/await.
         return AdminMenuGate.IsPlatformAdmin(host)

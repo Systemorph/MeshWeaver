@@ -147,7 +147,8 @@ public static class UserNodeType
             RequiredPermission: Permission.Update,
             Keywords: ["preferences", "time zone", "timezone", "clock", "display", "locale",
                 "region", "utc", "dst", "language", "sprache", "deutsch", "german", "english",
-                "translation"]));
+                "translation"])
+        { LabelKey = "settings.preferences" });
 
     private static UiControl BuildPreferencesTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
@@ -330,7 +331,11 @@ public static class UserNodeType
             GroupIcon: Application.Styles.FluentIcons.Shield(),
             Order: 300,
             Keywords: ["global admin", "platform admin", "administration", "invites",
-                "users", "onboarding", "system"]);
+                "users", "onboarding", "system"])
+        {
+            LabelKey = "settings.globalAdministration",
+            GroupKey = "settings.groupAdministration"
+        };
 
         // Canonical platform-admin check: admin on the Admin partition (hub.IsGlobalAdmin →
         // Permission.All at scope "Admin"). Pure reactive — wait for the POSITIVE (filter true)

@@ -37,7 +37,8 @@ public static class InboxSettingsTab
             Group: "Administration",
             Icon: FluentIcons.Mail(),
             GroupIcon: FluentIcons.Shield(),
-            Order: 320);
+            Order: 320)
+            { LabelKey = "settings.inbox", GroupKey = "settings.groupAdministration" };
 
         // Reactive: AdminMenuGate.IsPlatformAdmin emits false first (tab hidden), then true once the
         // platform-admin grant surfaces → the tab appears. No async/await/IAsyncEnumerable.

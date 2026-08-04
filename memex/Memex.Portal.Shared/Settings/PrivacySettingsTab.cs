@@ -36,7 +36,8 @@ public static class PrivacySettingsTab
             Group: "Administration",
             Icon: FluentIcons.Shield(),
             GroupIcon: FluentIcons.Shield(),
-            Order: 330);
+            Order: 330)
+            { LabelKey = "settings.privacy", GroupKey = "settings.groupAdministration" };
 
         return AdminMenuGate.IsPlatformAdmin(host)
             .Select(isAdmin => isAdmin

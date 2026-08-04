@@ -432,24 +432,28 @@ public static class UserActivityLayoutAreas
                         "View public profile", ProfileArea,
                         Icon: "👤", RequiredPermission: Permission.Update, Order: 5,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ProfileArea),
-                        Tooltip: "Preview your public profile as visitors see it"));
+                        Tooltip: "Preview your public profile as visitors see it")
+                        { LabelKey = "menu.viewPublicProfile", TooltipKey = "menu.viewPublicProfileTooltip" });
                     items.Add(new NodeMenuItemDefinition(
                         "Edit profile", EditProfileArea,
                         Icon: "🪪", RequiredPermission: Permission.Update, Order: 6,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, EditProfileArea),
-                        Tooltip: "Edit your bio, links, and showcase"));
+                        Tooltip: "Edit your bio, links, and showcase")
+                        { LabelKey = "menu.editProfile", TooltipKey = "menu.editProfileTooltip" });
                     items.Add(new NodeMenuItemDefinition(
                         "Edit home page", MeshNodeLayoutAreas.EditArea,
                         Icon: "✏️", RequiredPermission: Permission.Update, Order: 10,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.EditArea),
-                        Tooltip: "Edit this home page's markdown"));
+                        Tooltip: "Edit this home page's markdown")
+                        { LabelKey = "menu.editHomePage", TooltipKey = "menu.editHomePageTooltip" });
 
                     if (!string.IsNullOrWhiteSpace(node.ContentAs<User>(options)?.Body))
                         items.Add(new NodeMenuItemDefinition(
                             "Reset home to default", ResetHomeArea,
                             Icon: "↩️", RequiredPermission: Permission.Update, Order: 11,
                             Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ResetHomeArea),
-                            Tooltip: "Discard your custom home and use the default layout"));
+                            Tooltip: "Discard your custom home and use the default layout")
+                            { LabelKey = "menu.resetHome", TooltipKey = "menu.resetHomeTooltip" });
                 }
                 return (IReadOnlyCollection<NodeMenuItemDefinition>)items;
             });
