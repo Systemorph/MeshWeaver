@@ -30,7 +30,7 @@ else
                     <FluentSelect TOption="string"
                                   Items="@f.Options"
                                   OptionValue="@(o => o)"
-                                  OptionText="@(o => o)"
+                                  OptionText="@(o => f.LabelFor(o))"
                                   Value="@TextOf(f)"
                                   ValueChanged="(string? v) => OnEnumChanged(f, v)"
                                   Disabled="@(!CanEdit)"
