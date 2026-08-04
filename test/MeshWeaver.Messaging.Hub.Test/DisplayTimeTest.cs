@@ -94,4 +94,47 @@ public class DisplayTimeTest
         var access = new AccessService();
         access.ToDisplayTime(SummerUtc).Offset.Should().Be(TimeSpan.Zero);
     }
+
+    [Fact]
+    public void ViewerZoneId_ResolvesRequestThenCircuit_ElseNull()
+    {
+        var access = new AccessService();
+        access.ViewerZoneId().Should().BeNull();
+
+        access.SetCircuitContext(new AccessContext { ObjectId = "u", TimeZoneId = "Europe/Zurich" });
+        try
+        {
+            access.ViewerZoneId().Should().Be("Europe/Zurich");
+
+            // The request-scoped context wins over the circuit's.
+            using (access.SwitchAccessContext(new AccessContext { ObjectId = "u", TimeZoneId = "America/New_York" }))
+                access.ViewerZoneId().Should().Be("America/New_York");
+        }
+        finally
+        {
+            access.SetCircuitContext(null);
+        }
+
+        ((AccessService?)null).ViewerZoneId().Should().BeNull();
+    }
+
+    /// <summary>
+    /// The reason <see cref="DisplayTimeExtensions.ViewerZoneId"/> exists: a render path that
+    /// formats on a LATER emission (an IIoPool HTTP result, a pooled scheduler hop) has left the
+    /// scope that carried the request context, so resolving there falls back to UTC — silently
+    /// showing every viewer the wrong wall clock. Capturing the zone on the render turn survives.
+    /// </summary>
+    [Fact]
+    public void ZoneCapturedOnRenderTurn_SurvivesLeavingTheContextScope()
+    {
+        var access = new AccessService();
+        string? captured;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = "u", TimeZoneId = "Europe/Zurich" }))
+            captured = access.ViewerZoneId();
+
+        // Outside the scope late resolution has already lost the zone …
+        access.ToDisplayTime(SummerUtc).Offset.Should().Be(TimeSpan.Zero);
+        // … while the captured id still renders the viewer's wall clock.
+        DisplayTimeExtensions.ToDisplayTime(SummerUtc, captured).Hour.Should().Be(18);
+    }
 }
