@@ -158,6 +158,19 @@ public class CodeCellRunTrackerTest
     }
 
     [Fact]
+    public void Fingerprint_CannotBeCollidedByShiftingTheLanguageCodeBoundary()
+    {
+        // `language` is an unconstrained string, so a delimiter-only encoding is ambiguous:
+        // ("b\nc", "a") and ("c", "a\nb") both flatten to "a\nb\nc". Sharing a fingerprint would mean
+        // a genuine edit reads as up-to-date — the exact failure this class exists to prevent. The
+        // encoding is length-prefixed so the boundary is unambiguous for every input.
+        CodeFingerprint.Of("b\nc", "a").Should().NotBe(CodeFingerprint.Of("c", "a\nb"));
+
+        // Same shape one character along, and with the empty language in play.
+        CodeFingerprint.Of("xy", "").Should().NotBe(CodeFingerprint.Of("y", "x"));
+    }
+
+    [Fact]
     public void Fingerprint_TreatsNullLanguageAsCsharp()
     {
         // "csharp" is the default everywhere else in the path (SubmitCodeRequest.Language,

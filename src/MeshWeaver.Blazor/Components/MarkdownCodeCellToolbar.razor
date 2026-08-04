@@ -52,11 +52,13 @@
         ? new Icons.Regular.Size16.ArrowSync()
         : new Icons.Regular.Size16.Play();
 
+    // Localized like the label and the chip beside it: a tooltip IS the control's accessible name,
+    // so leaving it English would read as untranslated to exactly the users who need it most.
     private string RunTitle => OnRun is null
-        ? "Interactive kernel is not available here"
+        ? Access.Localize("code.kernelUnavailable")
         : IsStale
-            ? "The code changed since this output was produced — run it again"
-            : "Run this code block";
+            ? Access.Localize("code.rerunCell")
+            : Access.Localize("code.runCell");
 
     private void Run()
     {

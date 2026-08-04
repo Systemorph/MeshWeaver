@@ -31,9 +31,14 @@ public static class CodeFingerprint
     public static string Of(string? code, string? language)
     {
         var lang = string.IsNullOrWhiteSpace(language) ? "csharp" : language;
-        // '\n' separator: a language can't contain one, so no (language, code) pair can collide with
-        // another by shifting the boundary.
-        var payload = Encoding.UTF8.GetBytes($"{lang}\n{Normalize(code)}");
+        var normalized = Normalize(code);
+        // LENGTH-PREFIXED framing, not a separator character. `language` is an unconstrained string
+        // — nothing in SubmitCodeRequest or CodeConfiguration stops it containing the separator — so
+        // any delimiter-only encoding is ambiguous: ("b\nc", "a") and ("c", "a\nb") both flatten to
+        // "a\nb\nc" and would share a fingerprint, i.e. an edit could go unnoticed. Prefixing the
+        // language's length makes the boundary unambiguous for EVERY input, so the encoding is
+        // injective without constraining what a language may be.
+        var payload = Encoding.UTF8.GetBytes($"{lang.Length}:{lang}{normalized}");
         return Convert.ToBase64String(SHA256.HashData(payload));
     }
 
