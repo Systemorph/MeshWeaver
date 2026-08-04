@@ -90,7 +90,7 @@ public static class WorkingTreeTab
         host.UpdateData(FilterId, "");
         host.UpdateData(SelectedFileId, "");
 
-        stack = stack.WithView(Controls.H2("Code workspace").WithStyle("margin:0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("ui.codeWorkspace")).WithStyle("margin:0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(Hint(
             "Check out this Space's connected GitHub repository as a working tree, edit a file, and " +
             "commit + push as yourself. The same checkout is what the AI assistants operate on.")));
@@ -216,7 +216,7 @@ public static class WorkingTreeTab
     }
 
     private static UiControl BuildEditorPane(
-        GitWorkingTreeService wt, string userId, string repoSlug, string branch, string path)
+        GitWorkingTreeService wt, string userId, string repoSlug, string branch, string path, string? locale = null)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle("gap:8px;");
         stack = stack.WithView(Controls.Html(
@@ -235,7 +235,7 @@ public static class WorkingTreeTab
         };
         stack = stack.WithView(editor);
 
-        stack = stack.WithView(Controls.Button("Commit & push")
+        stack = stack.WithView(Controls.Button(LocalizationCatalog.Get("ui.commitAndPush", locale))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
             .WithClickAction(ctx =>

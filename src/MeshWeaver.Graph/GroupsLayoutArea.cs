@@ -98,7 +98,7 @@ public static class GroupsLayoutArea
         stack = stack.WithView(Controls.H2($"Groups - {headerText}"));
 
         // Section 1: Inherited Memberships (merged per member, using builder)
-        stack = stack.WithView(Controls.H3("Inherited Memberships").WithStyle("margin: 0;"));
+        stack = stack.WithView(Controls.H3(host.Localize("ui.inheritedMemberships")).WithStyle("margin: 0;"));
 
         if (inherited.Count == 0)
         {
@@ -110,14 +110,14 @@ public static class GroupsLayoutArea
         }
 
         // Section 2: Local Memberships (reactive via workspace stream)
-        stack = stack.WithView(Controls.H3("Local Memberships").WithStyle("margin: 0;"));
+        stack = stack.WithView(Controls.H3(host.Localize("ui.localMemberships")).WithStyle("margin: 0;"));
 
         stack = stack.WithView((h, _) => BuildLocalMemberships(h, nodePath, isAdmin));
 
         // + button if admin
         if (isAdmin)
         {
-            stack = stack.WithView(Controls.Button("+ Add Membership")
+            stack = stack.WithView(Controls.Button(host.Localize("ui.plusAddMembership"))
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("align-self: flex-start; margin-top: 8px;")
                 .WithClickAction(ctx =>
@@ -229,14 +229,14 @@ public static class GroupsLayoutArea
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: flex-end; gap: 8px;")
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(ctx.Host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(cancelCtx =>
                 {
                     cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
                     return Task.CompletedTask;
                 }))
-            .WithView(Controls.Button("Create")
+            .WithView(Controls.Button(ctx.Host.Localize("menu.create"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(saveCtx =>
                 {
@@ -250,7 +250,7 @@ public static class GroupsLayoutArea
                             if (string.IsNullOrEmpty(selectedMember))
                             {
                                 var errorDialog = Controls.Dialog(
-                                    Controls.Markdown("Please select a **Member**."),
+                                    Controls.Markdown(ctx.Host.Localize("ui.selectMember")),
                                     "Validation Error"
                                 ).WithSize("S").WithClosable(true);
                                 saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);

@@ -542,24 +542,30 @@ public static class MemexConfiguration
         // MeshNodeImageHelper.IsEmoji routes it to a <span>, never an <img>.
         new NodeMenuItemDefinition("New thread", PortalLayoutBase.AiNewThreadAction,
             Icon: "➕", Order: 0,
-            Tooltip: "Start a new conversation"),
+            Tooltip: "Start a new conversation")
+            { LabelKey = "menu.newThread", TooltipKey = "menu.newThreadTooltip" },
         new NodeMenuItemDefinition("Threads", "AiThreads", Icon: "/static/NodeTypeIcons/chat.svg", Order: 10,
             Href: "/search?q=nodeType%3AThread&groupBy=Namespace",
-            Tooltip: "Conversation threads across every namespace"),
+            Tooltip: "Conversation threads across every namespace")
+            { LabelKey = "menu.threads", TooltipKey = "menu.threadsTooltip" },
         // Scope-tabbed catalogs (This space · User · Global) with per-tab "+" create,
         // anchored on the type roots so the catalog area resolves (AddAiCatalogLayoutAreas).
         new NodeMenuItemDefinition("Models", "AiModels", Icon: "/static/NodeTypeIcons/sparkle.svg", Order: 20,
             Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ModelsArea}",
-            Tooltip: "Language models — global, space, and user"),
+            Tooltip: "Language models — global, space, and user")
+            { LabelKey = "menu.models", TooltipKey = "menu.modelsTooltip" },
         new NodeMenuItemDefinition("Providers", "AiProviders", Icon: "/static/NodeTypeIcons/key.svg", Order: 25,
             Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ProvidersArea}",
-            Tooltip: "AI providers — endpoints + keys"),
+            Tooltip: "AI providers — endpoints + keys")
+            { LabelKey = "menu.providers", TooltipKey = "menu.providersTooltip" },
         new NodeMenuItemDefinition("Agents", "AiAgents", Icon: "/static/NodeTypeIcons/bot.svg", Order: 30,
             Href: $"/Agent/{AiCatalogLayoutAreas.AgentsArea}",
-            Tooltip: "AI agents — global, space, and user"),
+            Tooltip: "AI agents — global, space, and user")
+            { LabelKey = "menu.agents", TooltipKey = "menu.agentsTooltip" },
         new NodeMenuItemDefinition("Skills", "AiSkills", Icon: "/static/NodeTypeIcons/rocket.svg", Order: 40,
             Href: $"/{SkillNodeType.RootNamespace}/{AiCatalogLayoutAreas.SkillsArea}",
-            Tooltip: "Reusable skills — global, space, and user"),
+            Tooltip: "Reusable skills — global, space, and user")
+            { LabelKey = "menu.skills", TooltipKey = "menu.skillsTooltip" },
     ];
 
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder

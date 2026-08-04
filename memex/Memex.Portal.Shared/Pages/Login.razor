@@ -4,13 +4,14 @@
 @inject IAuthenticationNavigationService AuthNavService
 @inject NavigationManager Navigation
 @inject Microsoft.Extensions.Configuration.IConfiguration Configuration
+@inject AccessService Access
 
-<PageTitle>Sign In - Memex Portal</PageTitle>
+<PageTitle>@Access.Localize("page.signIn")</PageTitle>
 
 <div class="login-container">
     <div class="login-card">
         <div class="login-header">
-            <h1>Sign in to Memex</h1>
+            <h1>@Access.Localize("auth.signInToMemex")</h1>
         </div>
 
         @if (!string.IsNullOrEmpty(ErrorMessage))
@@ -22,7 +23,7 @@
 
         @if (Providers.Count > 0)
         {
-            <p class="signin-label">Sign in with</p>
+            <p class="signin-label">@Access.Localize("auth.signInWith")</p>
             <div class="provider-row">
                 @foreach (var provider in Providers)
                 {
@@ -41,7 +42,7 @@
         }
         else
         {
-            <p class="signin-label">No external sign-in providers are configured.</p>
+            <p class="signin-label">@Access.Localize("auth.noProviders")</p>
         }
 
         @if (ShowGitHubLogin)
@@ -58,10 +59,10 @@
 
         @if (ShowDevLogin)
         {
-            <div class="divider"><span>Developer Mode</span></div>
+            <div class="divider"><span>@Access.Localize("auth.developerMode")</span></div>
             <button type="button" class="provider-btn-full provider-dev" @onclick="NavigateToDevLogin">
                 <span class="provider-icon-text">&#x1F6E0;&#xFE0F;</span>
-                <span>Developer Login</span>
+                <span>@Access.Localize("auth.developerLogin")</span>
             </button>
         }
 
@@ -70,18 +71,18 @@
            must not show on environments (e.g. atioz) that don't set the Social LinkedIn client. *@
         @if (ShowLinkedInPublishing)
         {
-            <div class="divider"><span>Publishing</span></div>
+            <div class="divider"><span>@Access.Localize("auth.publishing")</span></div>
             <button type="button" class="provider-btn-full provider-linkedin-publish" @onclick="NavigateToConnectLinkedIn"
                     title="Authorizes Memex to read &amp; publish LinkedIn posts on your behalf. Requires you to be signed in first — you'll be redirected back here if not.">
                 <span class="provider-icon-text">&#x1F4BC;</span>
-                <span>Connect LinkedIn for publishing</span>
+                <span>@Access.Localize("ui.connectLinkedIn")</span>
             </button>
         }
 
         @* Public privacy statement — anonymous (/privacy), linked here so it is reachable
            before sign-in (external app registrations link it as the privacy policy URL). *@
         <div class="login-footer">
-            <a href="/privacy">Privacy Statement</a>
+            <a href="/privacy">@Access.Localize("auth.privacyStatement")</a>
         </div>
     </div>
 </div>
