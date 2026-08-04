@@ -46,6 +46,27 @@ internal sealed class MeshNodeLanguageService(
     private readonly ConcurrentDictionary<string, CachedWorkspace> _cache =
         new(StringComparer.Ordinal);
 
+    // The ONE script workspace — for Code nodes with no NodeType compilation behind them
+    // (course lesson cells). Its reference set is process-shared and fixed for the service's
+    // lifetime, so a single lazily-built project serves every request: each suggest forks the
+    // immutable solution with the in-flight text, nothing is applied back, and concurrent
+    // requests never contend. Bounded: one AdhocWorkspace total, not one per cell.
+    private readonly Lazy<ScriptWorkspace> _scriptWorkspace = new(
+        () => BuildScriptWorkspace(hub.ServiceProvider),
+        LazyThreadSafetyMode.ExecutionAndPublication);
+
+    // Path used as the script document's FilePath — never a real MeshNode path.
+    private const string ScriptDocumentPath = "__script__.csx";
+
+    // The likely-usage prior (how often each identifier occurs in the Code nodes this mesh
+    // already runs). Built lazily in the BACKGROUND and never awaited on a request — see
+    // CompletionUsageIndex; until it is ready, ranking simply proceeds without it.
+    private readonly CompletionUsageIndex usageIndex = new(hub, logger);
+
+    // This user's acceptance history — the per-user half of "likely usage" (VS Code's suggest
+    // memory). Used ONLY to preselect; it never reorders what the matcher decided.
+    private readonly CompletionMemoryStore memoryStore = new(hub, logger);
+
     // Compile pool: Roslyn LSP work is CPU-bound, so it routes through the bounded
     // Compile pool which caps concurrency so it can't starve other schedulers.
     // A bare Observable.FromAsync deadlocks under a blocking subscriber (SubscribeOn
@@ -78,19 +99,92 @@ internal sealed class MeshNodeLanguageService(
             {
                 if (cached is null || !cached.DocumentsByPath.TryGetValue(sourcePath, out var docId))
                     return Observable.Return<IReadOnlyList<CompletionEntry>>(Array.Empty<CompletionEntry>());
-                return _ioPool.Run(ct => GetCompletionsAsync(cached, docId, position, maxResults, ct));
+                return _ioPool.Run(ct => GetCompletionsAsync(cached, docId, position, maxResults, usageIndex, CurrentMemory(), ct));
+            });
+
+    /// <inheritdoc />
+    public IObservable<IReadOnlyList<CompletionEntry>> GetCompletions(
+        string nodeTypePath, string sourcePath, string proposedCode, SourcePosition position, int maxResults = 20)
+        // Kick the likely-usage prior's background refresh (never awaited — a cold or wedged
+        // index just means this request ranks without the corpus signal).
+        => Observable.Defer(() => { usageIndex.EnsureFresh(); return ResolveNode(nodeTypePath); })
+            .SelectMany(node => Environment(node, nodeTypePath) switch
+            {
+                CompletionEnvironment.NodeType => GetOrBuildWorkspace(nodeTypePath)
+                    .SelectMany(cached => cached is null
+                        ? Observable.Return<IReadOnlyList<CompletionEntry>>(Array.Empty<CompletionEntry>())
+                        : _ioPool.Run(ct => GetOverlayCompletionsAsync(
+                            cached, sourcePath, proposedCode, position, maxResults, usageIndex,
+                            CurrentMemory(), ct))),
+                // A non-NodeType owner that EXISTS → a standalone SCRIPT Code node (e.g. a course
+                // lesson cell): complete in the kernel's script environment.
+                CompletionEnvironment.Script =>
+                    _ioPool.Run(ct => GetScriptCompletionsAsync(proposedCode, position, maxResults, ct)),
+                // Owner unresolvable → we do not know which language environment applies, and
+                // guessing "script" would suggest globals (Mesh/Log/Ct) that do not exist in a
+                // NodeType source. No suggestions beats wrong ones.
+                _ => Observable.Return<IReadOnlyList<CompletionEntry>>(Array.Empty<CompletionEntry>()),
             });
 
     public IObservable<IReadOnlyList<DiagnosticInfo>> CheckSpeculative(
         string nodeTypePath, string sourcePath, string proposedCode)
         => ResolveNode(nodeTypePath)
-            .SelectMany(node => node is null
-                ? Observable.Return<IReadOnlyList<DiagnosticInfo>>(Array.Empty<DiagnosticInfo>())
-                : compilationService.GetCompilationInputsAsync(node)
+            .SelectMany(node => Environment(node, nodeTypePath) switch
+            {
+                CompletionEnvironment.NodeType => compilationService.GetCompilationInputsAsync(node!)
                     .SelectMany(inputs => inputs is null
                         ? Observable.Return<IReadOnlyList<DiagnosticInfo>>(Array.Empty<DiagnosticInfo>())
                         : _ioPool.Run(ct =>
-                            speculativeCompilation.GetDiagnosticsAsync(inputs, sourcePath, proposedCode, ct))));
+                            speculativeCompilation.GetDiagnosticsAsync(inputs, sourcePath, proposedCode, ct))),
+                // A non-NodeType owner that EXISTS → a standalone script Code node: diagnose in
+                // the script environment so lesson cells get live squiggles too (this used to
+                // fall through to a compilation that parses a cell as REGULAR C#, reporting the
+                // spurious "top-level statements must be in an executable" on every cell).
+                CompletionEnvironment.Script => _ioPool.Run(ct => GetScriptDiagnosticsAsync(proposedCode, ct)),
+                // Owner unresolvable → no honest environment to diagnose in; stay silent rather
+                // than paint squiggles computed under the wrong language rules.
+                _ => Observable.Return<IReadOnlyList<DiagnosticInfo>>(Array.Empty<DiagnosticInfo>()),
+            });
+
+    /// <summary>Which language environment a Code node's text belongs to.</summary>
+    private enum CompletionEnvironment
+    {
+        /// <summary>The owner could not be read — the environment is genuinely unknown.</summary>
+        Unknown,
+        /// <summary>The owner is a NodeType: its sources compile as a library.</summary>
+        NodeType,
+        /// <summary>The owner exists and is not a NodeType: the kernel runs this text as a script.</summary>
+        Script,
+    }
+
+    /// <summary>
+    /// Classifies the owner, and it must key on what the node IS: a plain Code node still
+    /// produces compilation inputs, so "inputs resolved" never distinguished the two
+    /// environments. An owner that cannot be READ is <see cref="CompletionEnvironment.Unknown"/>
+    /// rather than script — inferring an environment from a failed read would offer script
+    /// globals inside a NodeType source. The one exception is an owner we have already compiled:
+    /// a cached workspace proves it is a NodeType, so a transient read failure does not
+    /// interrupt completions in the file the user is actually editing.
+    /// </summary>
+    private CompletionEnvironment Environment(MeshNode? node, string nodeTypePath)
+    {
+        if (node is not null)
+            return string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal)
+                ? CompletionEnvironment.NodeType
+                : CompletionEnvironment.Script;
+        return _cache.ContainsKey(nodeTypePath)
+            ? CompletionEnvironment.NodeType
+            : CompletionEnvironment.Unknown;
+    }
+
+    /// <inheritdoc />
+    public void RecordCompletionAccepted(string prefix, string label, CompletionKind kind)
+    {
+        var viewer = memoryStore.Viewer();
+        if (viewer is null || string.IsNullOrEmpty(label))
+            return;
+        memoryStore.Record(viewer, prefix, label, (int)kind);
+    }
 
     /// <inheritdoc />
     public void Evict(string nodeTypePath)
@@ -210,7 +304,6 @@ internal sealed class MeshNodeLanguageService(
 
         var compilation = await project.GetCompilationAsync(ct).ConfigureAwait(false);
         if (compilation is null) return Array.Empty<DiagnosticInfo>();
-
         var diags = compilation.GetDiagnostics(ct);
         if (diags.IsDefaultOrEmpty) return Array.Empty<DiagnosticInfo>();
 
@@ -249,11 +342,99 @@ internal sealed class MeshNodeLanguageService(
     }
 
     private static async Task<IReadOnlyList<CompletionEntry>> GetCompletionsAsync(
-        CachedWorkspace cached, DocumentId docId, SourcePosition position, int maxResults, CancellationToken ct)
+        CachedWorkspace cached, DocumentId docId, SourcePosition position, int maxResults,
+        CompletionUsageIndex? usage, CompletionMemory? memory, CancellationToken ct)
     {
         var document = cached.Workspace.CurrentSolution.GetDocument(docId);
         if (document is null) return Array.Empty<CompletionEntry>();
+        return await CompleteAsync(document, position, maxResults, usage, memory, ct).ConfigureAwait(false);
+    }
 
+    /// <summary>
+    /// Overlay completions inside a NodeType's compilation: the CURRENT solution with the one
+    /// document's text substituted by the editor's in-flight code (an unknown
+    /// <paramref name="sourcePath"/> is added as a new document — same tolerance as
+    /// <see cref="CheckSpeculative"/>). Forked solutions are immutable, so concurrent suggest
+    /// requests never contend and nothing needs applying back.
+    /// </summary>
+    private static async Task<IReadOnlyList<CompletionEntry>> GetOverlayCompletionsAsync(
+        CachedWorkspace cached, string sourcePath, string proposedCode, SourcePosition position,
+        int maxResults, CompletionUsageIndex? usage, CompletionMemory? memory, CancellationToken ct)
+    {
+        var solution = cached.Workspace.CurrentSolution;
+        Document? document;
+        if (cached.DocumentsByPath.TryGetValue(sourcePath, out var docId))
+        {
+            document = solution
+                .WithDocumentText(docId, SourceText.From(proposedCode))
+                .GetDocument(docId);
+        }
+        else
+        {
+            var newId = DocumentId.CreateNewId(cached.ProjectId);
+            document = solution
+                .AddDocument(newId, sourcePath, SourceText.From(proposedCode), filePath: sourcePath)
+                .GetDocument(newId);
+        }
+        if (document is null) return Array.Empty<CompletionEntry>();
+        return await CompleteAsync(document, position, maxResults, usage, memory, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Completions for a standalone SCRIPT Code node in the environment the kernel executes
+    /// it in — script-kind parsing, the kernel's default imports and process-shared reference
+    /// set, and the script globals type in scope (see <c>MeshScriptEnvironment</c>), so the
+    /// editor suggests exactly what a ▶ Run can use.
+    /// </summary>
+    private async Task<IReadOnlyList<CompletionEntry>> GetScriptCompletionsAsync(
+        string proposedCode, SourcePosition position, int maxResults, CancellationToken ct)
+    {
+        var usage = usageIndex;
+        var memory = CurrentMemory();
+        var script = _scriptWorkspace.Value;
+        var document = script.Workspace.CurrentSolution
+            .WithDocumentText(script.DocumentId, SourceText.From(StripKernelDirectives(proposedCode)))
+            .GetDocument(script.DocumentId);
+        if (document is null) return Array.Empty<CompletionEntry>();
+        return await CompleteAsync(document, position, maxResults, usage, memory, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Diagnostics for a standalone SCRIPT Code node — the script-environment sibling of
+    /// <see cref="SpeculativeCompilation"/>, so lesson cells get live squiggles.
+    /// </summary>
+    private async Task<IReadOnlyList<DiagnosticInfo>> GetScriptDiagnosticsAsync(
+        string proposedCode, CancellationToken ct)
+    {
+        var script = _scriptWorkspace.Value;
+        var document = script.Workspace.CurrentSolution
+            .WithDocumentText(script.DocumentId, SourceText.From(StripKernelDirectives(proposedCode)))
+            .GetDocument(script.DocumentId);
+        var compilation = document is null
+            ? null
+            : await document.Project.GetCompilationAsync(ct).ConfigureAwait(false);
+        if (compilation is null) return Array.Empty<DiagnosticInfo>();
+
+
+        var diags = compilation.GetDiagnostics(ct);
+        if (diags.IsDefaultOrEmpty) return Array.Empty<DiagnosticInfo>();
+        var result = new List<DiagnosticInfo>();
+        foreach (var d in diags)
+        {
+            if (d.Severity == RoslynDiagnosticSeverity.Hidden) continue;
+            result.Add(ToDiagnosticInfo(d));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// The shared core: Roslyn <see cref="CompletionService"/> over one document at one
+    /// position, flattened to <see cref="CompletionEntry"/>.
+    /// </summary>
+    private static async Task<IReadOnlyList<CompletionEntry>> CompleteAsync(
+        Document document, SourcePosition position, int maxResults, CompletionUsageIndex? usage,
+        CompletionMemory? memory, CancellationToken ct)
+    {
         var text = await document.GetTextAsync(ct).ConfigureAwait(false);
         var offset = TryGetOffset(text, position);
         if (offset is null) return Array.Empty<CompletionEntry>();
@@ -264,11 +445,46 @@ internal sealed class MeshNodeLanguageService(
         var list = await service.GetCompletionsAsync(document, offset.Value, cancellationToken: ct).ConfigureAwait(false);
         if (list is null || list.ItemsList.Count == 0) return Array.Empty<CompletionEntry>();
 
-        var take = Math.Min(maxResults, list.ItemsList.Count);
-        var result = new List<CompletionEntry>(take);
-        for (var i = 0; i < take; i++)
+        // 🚨 Rank BEFORE truncating. Roslyn returns every symbol in scope, alphabetically — a
+        // bare Take(maxResults) keeps the A's and drops everything after them, so typing "Mes"
+        // could never reach "Mesh" no matter how the client filters afterwards. The word being
+        // completed comes from the completion list's own span (the token Roslyn would replace),
+        // so it is exactly what the user has typed at the caret.
+        var prefix = list.Span.Length > 0 && list.Span.End <= text.Length
+            ? text.ToString(list.Span)
+            : string.Empty;
+
+        // Two regimes, the same split every editor makes (VS Code: client fuzzy-scorer for the
+        // typed word, server sortText/priority for ties, learned prior otherwise):
+        //
+        //   • The user has TYPED something → MATCH QUALITY decides, and Roslyn's own matcher is
+        //     the authority (exact > prefix > CamelCase hump > substring, honouring the
+        //     MatchPriority that target-typing sets). Popularity must NOT reorder across match
+        //     quality here, or typing "Bad" would surface the popular "Stack" above "Badge".
+        //   • The user has typed NOTHING (just pressed `.`) → there is no match quality to rank
+        //     by and alphabetical is worthless. This is where LIKELY USAGE decides: how often
+        //     each identifier occurs in the code this mesh already runs, plus a locality bonus
+        //     for identifiers already in this very cell (VS Code's locality bonus, and the
+        //     signal IntelliCode models over a public corpus — ours is better, it is the
+        //     MeshWeaver idiom itself).
+        IEnumerable<CompletionItem> ranked;
+        if (prefix.Length > 0)
         {
-            var item = list.ItemsList[i];
+            ranked = service.FilterItems(document, list.ItemsList.ToImmutableArray(), prefix);
+        }
+        else
+        {
+            var local = LocalIdentifierCounts(text.ToString());
+            ranked = list.ItemsList
+                .OrderByDescending(i => UsageScore(i, usage, local))
+                .ThenByDescending(i => i.Rules.MatchPriority)
+                .ThenBy(i => i.SortText ?? i.DisplayText, StringComparer.OrdinalIgnoreCase);
+        }
+        ranked = ranked.Take(maxResults);
+
+        var result = new List<CompletionEntry>();
+        foreach (var item in ranked)
+        {
             result.Add(new CompletionEntry(
                 Label: item.DisplayText,
                 Kind: MapTagsToKind(item.Tags),
@@ -277,7 +493,83 @@ internal sealed class MeshNodeLanguageService(
                 Documentation: null,
                 SortText: item.SortText));
         }
+
+        // Finally, this user's own history: what they accepted last time in this situation is
+        // PRESELECTED — the order stays exactly as ranked above, only the highlighted row moves
+        // (VS Code's suggest memory works this way, and it is why the memory can be aggressive
+        // without ever hiding a better match).
+        var remembered = memory?.Select(
+            result.Select(r => (r.Label, (int)r.Kind)).ToList(), prefix);
+        if (remembered is not null)
+        {
+            for (var i = 0; i < result.Count; i++)
+            {
+                if (!string.Equals(result[i].Label, remembered, StringComparison.Ordinal))
+                    continue;
+                result[i] = result[i] with { Preselect = true };
+                break;
+            }
+        }
         return result;
+    }
+
+    /// <summary>This viewer's acceptance history, or null when nobody is signed in.</summary>
+    private CompletionMemory? CurrentMemory()
+    {
+        var viewer = memoryStore.Viewer();
+        return viewer is null ? null : memoryStore.For(viewer);
+    }
+
+    /// <summary>
+    /// The likely-usage score for one candidate: how often the identifier appears in THIS cell
+    /// (weighted heavily — the strongest signal about what the author is doing right now, and it
+    /// works on a cold index) plus how often it appears across the mesh's existing Code nodes.
+    /// </summary>
+    private static int UsageScore(
+        CompletionItem item, CompletionUsageIndex? usage, IReadOnlyDictionary<string, int> local)
+    {
+        var name = item.FilterText is { Length: > 0 } f ? f : item.DisplayText;
+        var localCount = local.TryGetValue(name, out var n) ? n : 0;
+        return (LocalityWeight * localCount) + (usage?.Frequency(name) ?? 0);
+    }
+
+    /// <summary>How much an occurrence in the current cell outweighs one in the corpus.</summary>
+    private const int LocalityWeight = 5;
+
+    /// <summary>Identifier occurrences within the cell being edited (VS Code's locality bonus).</summary>
+    private static Dictionary<string, int> LocalIdentifierCounts(string code)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (string.IsNullOrEmpty(code))
+            return counts;
+        foreach (System.Text.RegularExpressions.Match m in
+                 System.Text.RegularExpressions.Regex.Matches(code, @"[A-Za-z_][A-Za-z0-9_]*"))
+        {
+            var token = m.Value;
+            if (token.Length < 2) continue;
+            counts[token] = counts.TryGetValue(token, out var n) ? n + 1 : 1;
+        }
+        return counts;
+    }
+
+    /// <summary>
+    /// Blanks kernel-only directive lines (<c>#r "nuget: …"</c> — restored out of band by the
+    /// kernel, unknown to a workspace compilation) while PRESERVING line numbers, so positions
+    /// and diagnostic locations still line up with the editor's text.
+    /// </summary>
+    internal static string StripKernelDirectives(string code)
+    {
+        if (string.IsNullOrEmpty(code) || !code.Contains("#r", StringComparison.Ordinal))
+            return code;
+        var lines = code.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].TrimStart();
+            if (trimmed.StartsWith("#r", StringComparison.Ordinal)
+                && trimmed.Contains("nuget:", StringComparison.OrdinalIgnoreCase))
+                lines[i] = string.Empty;
+        }
+        return string.Join("\n", lines);
     }
 
     private static DiagnosticInfo ToDiagnosticInfo(Diagnostic d)
@@ -381,6 +673,52 @@ internal sealed class MeshNodeLanguageService(
         }
         return CompletionKind.Text;
     }
+
+    /// <summary>
+    /// Builds the script workspace mirroring the kernel's execution environment
+    /// (<c>MeshScriptEnvironment</c>): script-kind parsing, the default imports as the
+    /// compilation's usings, the process-shared reference set, the shared metadata resolver,
+    /// and the script globals as the submission's host object — so <c>Mesh</c>, <c>Log</c>,
+    /// <c>Ct</c> and <c>Inputs</c> complete as bare identifiers exactly as they run.
+    /// </summary>
+    private static ScriptWorkspace BuildScriptWorkspace(IServiceProvider serviceProvider)
+    {
+        var workspace = new AdhocWorkspace();
+        var projectId = ProjectId.CreateNewId();
+        var docId = DocumentId.CreateNewId(projectId);
+        var projectInfo = ProjectInfo
+            .Create(
+                projectId,
+                VersionStamp.Create(),
+                name: "MeshScript",
+                assemblyName: "MeshScript",
+                language: LanguageNames.CSharp,
+                compilationOptions: new CSharpCompilationOptions(
+                        OutputKind.DynamicallyLinkedLibrary,
+                        metadataReferenceResolver: Kernel.Hub.MeshScriptEnvironment.MetadataResolver)
+                    .WithUsings(Kernel.Hub.MeshScriptEnvironment.Imports),
+                parseOptions: new CSharpParseOptions(kind: SourceCodeKind.Script),
+                metadataReferences: Kernel.Hub.MeshScriptEnvironment.References(serviceProvider),
+                isSubmission: true,
+                hostObjectType: Kernel.Hub.MeshScriptEnvironment.GlobalsType)
+            .WithDocuments(
+            [
+                DocumentInfo.Create(
+                    docId,
+                    name: ScriptDocumentPath,
+                    filePath: ScriptDocumentPath,
+                    sourceCodeKind: SourceCodeKind.Script,
+                    loader: TextLoader.From(TextAndVersion.Create(
+                        SourceText.From(string.Empty), VersionStamp.Create()))),
+            ]);
+        workspace.AddProject(projectInfo);
+        return new ScriptWorkspace(workspace, projectId, docId);
+    }
+
+    private sealed record ScriptWorkspace(
+        AdhocWorkspace Workspace,
+        ProjectId ProjectId,
+        DocumentId DocumentId);
 
     private sealed record CachedWorkspace(
         AdhocWorkspace Workspace,

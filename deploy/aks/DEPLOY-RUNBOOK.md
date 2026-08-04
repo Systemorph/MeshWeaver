@@ -200,7 +200,7 @@ reverts them):
 | Knob | What it does |
 |---|---|
 | `config.memex_portal.PreWarm__DynamicTypes: "true"` | every new pod sweeps + compiles ALL dynamic NodeTypes at start (resumes from the shared `/data` cache — warm restarts are cheap) |
-| `config.memex_portal.PreWarm__GateReadiness` | `/health` stays red until the sweep is green; with `maxSurge 1 / maxUnavailable 0` a regressed type STALLS the rollout with the old image serving. **⛔ OFF until core #694 is fixed** — the two-silo roll window makes the sweep flake (see below) and the gate then stalls every rollout on FALSE regressions |
+| `config.memex_portal.PreWarm__GateReadiness` | `/health` stays red until the sweep is green; with `maxSurge 1 / maxUnavailable 0` a regressed type STALLS the rollout with the old image serving. **⛔ OFF** — tried 2026-08-02 and reverted the same day: the first gated roll stalled on 7 FALSE regressions that were cross-silo `SubscribeRequest` timeouts, not compile errors (#694 residue, see SELF-UPDATE.md). Do NOT re-enable by widening the probe budget — the sweep is erroring, not slow |
 | `probes.startup: {periodSeconds: 10, failureThreshold: 1080}` | ⚠️ REQUIRED with the gate: a cold bake is ~90 s/type, sequential — the default 5 min budget kills the pod mid-bake forever |
 
 ⛔ **The bake Job (`bake.enabled`) stays OFF on AKS until core asserts fingerprint-match.** On its

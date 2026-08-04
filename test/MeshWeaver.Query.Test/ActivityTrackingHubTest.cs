@@ -116,12 +116,25 @@ public class ActivityTrackingHubTest(ITestOutputHelper output) : MonolithMeshTes
             NodeType: "Markdown",
             Namespace: user));
 
-        var node = await PollForFirst($"namespace:{user}/_UserActivity nodeType:UserActivity");
+        // 🚨 Wait on the NODE STREAM of the hub that actually performs the write, not on a query.
+        // The query index is eventually consistent BY DESIGN, so polling it for a just-written node
+        // races the indexer — that is exactly how this test failed on CI (2026-08-03, shard 1): the
+        // 15s budget expired with the node written but not yet indexed. Widening the budget would
+        // only make the race rarer; reading the authoritative source removes it.
+        // The write originates on the dedicated tracking hub against the shared root cache (see the
+        // class docs), so its workspace is where the node is observable — NOT the calling connHub,
+        // and not ReadNode (a one-shot GetMeshNode that returns null on NotFound and completes,
+        // so it cannot wait for a node that has not been written yet).
+        var expectedPath = $"{user}/_UserActivity/{nodePath.Replace("/", "_")}";
+        var node = await Mesh.GetActivityTrackingHub().GetWorkspace().GetMeshNodeStream(expectedPath)
+            .Where(n => n is not null)
+            .Select(n => (MeshNode?)n)
+            .Should().Within(TimeSpan.FromSeconds(15)).Emit();
 
         node.Should().NotBeNull(
             "a track posted to a connection-style hub must still land a UserActivity node — " +
             "the handler originates the write from the dedicated tracking hub, not the caller");
-        node!.Path.Should().Be($"{user}/_UserActivity/{nodePath.Replace("/", "_")}");
+        node!.Path.Should().Be(expectedPath);
         node.NodeType.Should().Be("UserActivity");
 
         // 🚨 The write ran under the CALLER's identity, not system/empty. The handler builds

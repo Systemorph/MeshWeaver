@@ -130,17 +130,36 @@ config:
     # image keeps serving) instead of surfacing as user-facing errors.
     # ⚠️ Enabling the gate REQUIRES the raised probes.startup budget below —
     # paired settings, never change one without the other.
-    # ⛔ Gate OFF until core #694 (cross-silo reply routing) is fixed: during a
-    # roll the baking pod + the serving pod are TWO silos, the sweep's
-    # shared-source resolution flakes across that boundary, and the gate then
-    # accumulates FALSE regressions and stalls every rollout (memex-cloud
-    # 2026-07-30: three sweeps in a row, a different regression set each time,
-    # while every flagged type compiled clean when triggered on one silo).
-    # The sweep itself stays ON — deploys still compile every type at pod
-    # start; failures fall back to lazy compile instead of holding readiness.
-    # Flip to "true" together with the #694 fix.
+    # ⛔ Gate OFF — core #694 (cross-silo reply routing) is NOT fully fixed.
+    # Enabled 2026-08-02 on the reasoning that #718 + #719 (both 2026-07-29)
+    # closed #694; reverted the SAME DAY after the first gated roll on
+    # memex-cloud stalled with "7 NodeType(s) regressed on this image".
+    # Those were FALSE regressions: the pod log contains no CS#### compile
+    # error at all, only cross-silo subscribe timeouts from the sweep —
+    #   No response received in hub cache/… within 00:01:00 for request
+    #   SubscribeRequest → target Claims / Reinsurance / SocialMedia /
+    #   ClaimsDeepfield / RiskTransfer
+    # i.e. during a roll the baking pod and the serving pod are two silos and
+    # the sweep cannot resolve shared sources across that boundary, exactly as
+    # this comment warned before. The types compile fine; the sweep cannot
+    # reach them. So the 2026-07-30 observation was NOT explained by #718/#719.
+    # The gate's failure mode is a STALLED rollout (old image keeps serving —
+    # no outage, but self-update silently stops advancing), which is why this
+    # must stay off until the sweep's cross-silo source resolution is fixed.
+    # ⚠️ Do NOT re-enable by widening the probe budget — the sweep is not slow,
+    # it is erroring. Fix the cross-silo SubscribeRequest first.
+    # The sweep itself stays ON: deploys still compile every type at pod start;
+    # failures fall back to lazy compile instead of holding readiness.
     PreWarm__DynamicTypes: "true"
     PreWarm__GateReadiness: "false"
+    # ---- Platform self-update cadence --------------------------------------
+    # The poller's built-in default is 6h, which is why a freshly published image
+    # could sit unpicked for hours and look like "self-update is broken" (memex,
+    # 2026-08-03: running ci.1672 while ci.1674 had been in ACR since 07:34).
+    # Managed envs track main closely, so poll every 20 minutes. Binding only
+    # works from the image that added SelfUpdateOptions.SectionName — before that
+    # this key is inert, because AddSelfUpdate() constructed its options directly.
+    SelfUpdate__PollInterval: "00:20:00"
     Mcp__BaseUrl: "http://memex-portal-service:8080"
     # ---- AI model providers (templated by the chart) ------------------------
     # These seed the system model catalog on deploy (BuiltInLanguageModelProvider
