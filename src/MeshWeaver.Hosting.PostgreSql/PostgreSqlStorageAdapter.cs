@@ -445,7 +445,92 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             return node;
         });
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Windows the nodes by TARGET TABLE and sends one <see cref="NpgsqlBatch"/> per window:
+    /// N upserts, one round-trip, one implicit transaction each. The per-node SQL is the exact
+    /// same upsert <see cref="Write"/> uses (both go through <see cref="BuildUpsertAsync"/>), so
+    /// batching changes only how many times we cross the wire.
+    ///
+    /// <para>Windowing is by table, not merely by partition, because <see cref="ResolveTable"/>
+    /// routes satellite node types to their own tables — a course's subtree can span several — and
+    /// a batch may only carry commands for one target. Grouping preserves first-seen order so the
+    /// windows themselves stay in caller order.</para>
+    ///
+    /// <para>🚨 The <see cref="Changes"/> feed is published in the CALLER's original order, after
+    /// all windows commit — never in per-window order. Those notifications are what wake per-node
+    /// hubs, and callers order parents before children precisely so a child's hub never activates
+    /// against a cold parent. Storage has no ordering to lose inside a transaction; the change feed
+    /// does.</para>
+    /// </remarks>
+    public IObservable<IReadOnlyList<MeshNode>> WriteMany(
+        IReadOnlyCollection<MeshNode> nodes, JsonSerializerOptions options)
+    {
+        if (nodes.Count == 0)
+            return Observable.Return<IReadOnlyList<MeshNode>>([]);
+        if (nodes.Count == 1)
+            return Write(nodes.First(), options)
+                .Select(n => (IReadOnlyList<MeshNode>)(n is null ? [] : new[] { n }));
+
+        return _ioPool.Invoke<IReadOnlyList<MeshNode>>(async ct =>
+        {
+            var ordered = nodes.ToList();
+
+            // Build every upsert first (this is where the embedding calls happen), keeping the
+            // caller's order, then window by target table.
+            var built = new List<(MeshNode Node, string Table, string Sql, IReadOnlyList<object> Parameters)>(ordered.Count);
+            foreach (var node in ordered)
+            {
+                var (sql, parameters) = await BuildUpsertAsync(node, options).ConfigureAwait(false);
+                built.Add((node, ResolveTable(node.Path, node.NodeType), sql, parameters));
+            }
+
+            foreach (var window in built.GroupBy(b => b.Table, StringComparer.Ordinal))
+            {
+                await using var batch = _dataSource.CreateBatch();
+                foreach (var item in window)
+                {
+                    var command = new NpgsqlBatchCommand(item.Sql);
+                    foreach (var value in item.Parameters)
+                        command.Parameters.AddWithValue(value);
+                    batch.BatchCommands.Add(command);
+                }
+                await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+
+            // Caller order, not window order — see the ordering note above.
+            foreach (var node in ordered)
+            {
+                try
+                {
+                    _changes.OnNext(DataChangeNotification.Updated(
+                        string.IsNullOrEmpty(node.Path) ? node.Id : node.Path, node));
+                }
+                catch { /* never throw — change feed is best-effort */ }
+            }
+
+            return ordered;
+        });
+    }
+
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
+    {
+        var (sql, parameters) = await BuildUpsertAsync(node, options).ConfigureAwait(false);
+        await using var cmd = _dataSource.CreateCommand(sql);
+        foreach (var value in parameters)
+            cmd.Parameters.AddWithValue(value);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The upsert for ONE node: its SQL text and its positional parameters, in order.
+    /// Shared by <see cref="WriteAsyncCore"/> (one command) and <see cref="WriteMany"/>
+    /// (one <see cref="NpgsqlBatchCommand"/> per node) so the two paths can never drift —
+    /// in particular the ON CONFLICT set, which deliberately omits created_by/created_date
+    /// so an update preserves the original author.
+    /// </summary>
+    private async Task<(string Sql, IReadOnlyList<object> Parameters)> BuildUpsertAsync(
+        MeshNode node, JsonSerializerOptions options)
     {
         var ns = node.Namespace ?? "";
 
@@ -476,7 +561,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         var excludeInsertCol = writeSync ? ", exclude_from_context" : "";
         var excludeInsertVal = writeSync ? ", $20" : "";
         var excludeUpdate = writeSync ? ",\n                exclude_from_context = EXCLUDED.exclude_from_context" : "";
-        await using var cmd = _dataSource.CreateCommand(
+        var sql =
             $"""
             INSERT INTO {table} (namespace, id, name, description, node_type, category, icon, display_order,
                                     last_modified, version, state, content, desired_id, embedding, main_node{syncInsertCol}{authorInsertCol}{excludeInsertCol})
@@ -495,42 +580,40 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 desired_id = EXCLUDED.desired_id,
                 embedding = EXCLUDED.embedding,
                 main_node = EXCLUDED.main_node{syncUpdate}{authorUpdate}{excludeUpdate}
-            """);
+            """;
 
-        cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(node.Id);
-        cmd.Parameters.AddWithValue((object?)node.Name ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)node.Description ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)node.NodeType ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)node.Category ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)node.Icon ?? DBNull.Value);
-        cmd.Parameters.AddWithValue(node.Order.HasValue ? node.Order.Value : DBNull.Value);
-        cmd.Parameters.AddWithValue(node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified);
-        cmd.Parameters.AddWithValue(node.Version);
-        cmd.Parameters.AddWithValue((short)node.State);
-        cmd.Parameters.AddWithValue((object?)contentJson ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)node.DesiredId ?? DBNull.Value);
-
-        if (embeddingVector != null)
-            cmd.Parameters.AddWithValue(new Vector(embeddingVector));
-        else
-            cmd.Parameters.AddWithValue(DBNull.Value);
-
-        cmd.Parameters.AddWithValue(node.MainNode);
+        var parameters = new List<object>(20)
+        {
+            ns,
+            node.Id,
+            (object?)node.Name ?? DBNull.Value,
+            (object?)node.Description ?? DBNull.Value,
+            (object?)node.NodeType ?? DBNull.Value,
+            (object?)node.Category ?? DBNull.Value,
+            (object?)node.Icon ?? DBNull.Value,
+            node.Order.HasValue ? node.Order.Value : DBNull.Value,
+            node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified,
+            node.Version,
+            (short)node.State,
+            (object?)contentJson ?? DBNull.Value,
+            (object?)node.DesiredId ?? DBNull.Value,
+            embeddingVector != null ? new Vector(embeddingVector) : DBNull.Value,
+            node.MainNode,
+        };
 
         // $16–$20 — only bound when the target is mesh_nodes (see writeSync above).
         if (writeSync)
         {
-            cmd.Parameters.AddWithValue((short)node.SyncBehavior);
-            cmd.Parameters.AddWithValue((object?)node.CreatedBy ?? DBNull.Value);
-            cmd.Parameters.AddWithValue((object?)node.LastModifiedBy ?? DBNull.Value);
-            cmd.Parameters.AddWithValue(node.CreatedDate == default ? DBNull.Value : node.CreatedDate);
-            cmd.Parameters.AddWithValue(node.ExcludeFromContext is { Count: > 0 } efc
+            parameters.Add((short)node.SyncBehavior);
+            parameters.Add((object?)node.CreatedBy ?? DBNull.Value);
+            parameters.Add((object?)node.LastModifiedBy ?? DBNull.Value);
+            parameters.Add(node.CreatedDate == default ? DBNull.Value : node.CreatedDate);
+            parameters.Add(node.ExcludeFromContext is { Count: > 0 } efc
                 ? efc.ToArray()
                 : (object)DBNull.Value);
         }
 
-        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return (sql, parameters);
     }
 
     /// <inheritdoc />
