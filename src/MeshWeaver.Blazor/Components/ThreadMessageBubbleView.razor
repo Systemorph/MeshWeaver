@@ -13,7 +13,8 @@
             }
             @if (Timestamp.HasValue)
             {
-                <span>@Timestamp.Value.ToString("HH:mm:ss")</span>
+                @* Stored UTC → the viewer's zone (AccessContext.TimeZoneId). *@
+                <span>@AccessService.ToDisplayTime(Timestamp.Value).ToString("HH:mm:ss")</span>
             }
         </div>
     }

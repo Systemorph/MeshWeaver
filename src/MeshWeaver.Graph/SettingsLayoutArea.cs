@@ -10,6 +10,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -279,7 +280,7 @@ public static class SettingsLayoutArea
 
         stack = stack.WithView(BuildSection("Identity", BuildIdentitySection(meta)));
         stack = stack.WithView(BuildSection("Display", BuildDisplaySection(host, node.Path, nodeContext)));
-        stack = stack.WithView(BuildSection("Timestamps", BuildTimestampsSection(meta)));
+        stack = stack.WithView(BuildSection("Timestamps", BuildTimestampsSection(meta, host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId())));
 
         return stack;
     }
@@ -797,13 +798,15 @@ public static class SettingsLayoutArea
         ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
     }
 
-    private static UiControl BuildTimestampsSection(MeshNodeMetadata meta)
+    private static UiControl BuildTimestampsSection(MeshNodeMetadata meta, string? zoneId)
     {
+        // Stored UTC → the viewer's zone. The "zzz" offset stays, so the rendered value
+        // still says which offset it is rather than being an unlabelled wall clock.
         var grid = Controls.Stack.WithWidth("100%").WithStyle(MetaGridStyle);
         grid = AddReadOnlyField(grid, "Created",
-            meta.CreatedDate == default ? "—" : meta.CreatedDate.ToString("yyyy-MM-dd HH:mm:ss zzz"));
+            meta.CreatedDate == default ? "—" : DisplayTimeExtensions.ToDisplayTime(meta.CreatedDate, zoneId).ToString("yyyy-MM-dd HH:mm:ss zzz"));
         grid = AddReadOnlyField(grid, "Last Modified",
-            meta.LastModified == default ? "—" : meta.LastModified.ToString("yyyy-MM-dd HH:mm:ss zzz"));
+            meta.LastModified == default ? "—" : DisplayTimeExtensions.ToDisplayTime(meta.LastModified, zoneId).ToString("yyyy-MM-dd HH:mm:ss zzz"));
         return grid;
     }
 

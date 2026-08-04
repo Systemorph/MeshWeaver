@@ -49,7 +49,10 @@ public class VersionPlugin(IMessageHub hub)
             .Select(v => (object)new
             {
                 v.Version,
-                LastModified = v.LastModified.ToString("yyyy-MM-dd HH:mm:ss"),
+                // ISO-8601 UTC with the Z: this value round-trips into RestoreFromPointInTime,
+                // where a zone-less string would be parsed in the SERVER's local zone. Agent
+                // tool output is machine-facing — the UI localizes via AccessService.ToDisplayTime.
+                LastModified = v.LastModified.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ"),
                 v.ChangedBy,
                 v.Name,
                 v.NodeType
@@ -187,7 +190,7 @@ public class VersionPlugin(IMessageHub hub)
                     else
                         tcs.TrySetResult(
                             $"Restored '{path}' to version {result.target.Version} " +
-                            $"(from {result.target.LastModified:yyyy-MM-dd HH:mm:ss}). " +
+                            $"(from {result.target.LastModified.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}). " +
                             $"New version: {result.restored.Version}.");
                 },
                 ex =>

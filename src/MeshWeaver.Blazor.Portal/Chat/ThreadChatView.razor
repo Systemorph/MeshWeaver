@@ -258,7 +258,8 @@ else
                                 }
                                 @if (state.Timestamp.HasValue)
                                 {
-                                    <span>@state.Timestamp.Value.ToString("HH:mm:ss")</span>
+                                    @* Stored UTC → the viewer's zone (AccessContext.TimeZoneId). *@
+                                    <span>@Access.ToDisplayTime(state.Timestamp.Value).ToString("HH:mm:ss")</span>
                                 }
                                 @* Stream duration:
                                    • Live (ticker-driven, "0:12") ONLY while the THREAD is executing —

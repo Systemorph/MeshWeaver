@@ -39,7 +39,7 @@
                         <div class="conversation-preview">@GetChatPreview(chat)</div>
                         <div class="conversation-meta">
                             <small class="text-muted">
-                                @FormatDate(chat.Node.LastModified.DateTime)
+                                @FormatDate(chat.Node.LastModified)
                                 @if (!string.IsNullOrEmpty(GetPathScope(chat.Path)))
                                 {
                                     <span> • @GetContextName(GetPathScope(chat.Path))</span>
@@ -279,7 +279,7 @@
         }
 
         // Fallback to date
-        return $"Chat from {chat.Node.LastModified:MM/dd HH:mm}";
+        return $"Chat from {AccessService.ToDisplayTime(chat.Node.LastModified):MM/dd HH:mm}";
     }
 
     private string GetChatPreview(ThreadItem chat)
@@ -357,22 +357,24 @@
         StateHasChanged();
     }
 
-    private string FormatDate(DateTime date)
+    // Age is measured against UTC (comparing a stored UTC instant to the SERVER's local
+    // clock skewed every bucket by the host offset); the wall clock shown is the VIEWER's.
+    private string FormatDate(DateTimeOffset date)
     {
-        var now = DateTime.Now;
-        var timeSpan = now - date;
+        var timeSpan = DateTimeOffset.UtcNow - date;
+        var local = AccessService.ToDisplayTime(date);
 
         if (timeSpan.TotalDays < 1)
         {
-            return date.ToString("HH:mm");
+            return local.ToString("HH:mm");
         }
         else if (timeSpan.TotalDays < 7)
         {
-            return date.ToString("ddd HH:mm");
+            return local.ToString("ddd HH:mm");
         }
         else
         {
-            return date.ToString("MM/dd");
+            return local.ToString("MM/dd");
         }
     }
 
