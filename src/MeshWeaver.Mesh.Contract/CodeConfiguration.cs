@@ -42,6 +42,18 @@ public record CodeConfiguration
     public string? LastExecutedBy { get; init; }
 
     /// <summary>
+    /// <see cref="CodeFingerprint"/> of the <see cref="Code"/> (and <see cref="Language"/>) that the
+    /// most recent run actually submitted. The Content area re-computes the fingerprint of the CURRENT
+    /// content and compares: a mismatch means the output pane below is showing the result of code the
+    /// reader is no longer looking at, and the cell renders a "code changed — re-run" state.
+    ///
+    /// <para><c>null</c> until the first run — and also on nodes last executed by a build that predates
+    /// this field, which is why an absent hash reads as "unknown", never as "stale". Claiming staleness
+    /// we cannot prove would light up every legacy node at once.</para>
+    /// </summary>
+    public string? LastExecutedCodeHash { get; init; }
+
+    /// <summary>
     /// Full path of the <c>Activity</c> MeshNode for the most recent run. The
     /// Code node's Content view subscribes to this activity's <c>Progress</c>
     /// area so the "Output" pane shows the last run's log immediately on page

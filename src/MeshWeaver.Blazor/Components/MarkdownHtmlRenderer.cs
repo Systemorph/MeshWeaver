@@ -42,6 +42,7 @@ public class MarkdownHtmlRenderer
     private readonly DesignThemeModes _mode;
     private readonly ISynchronizationStream? _stream;
     private readonly Action<string>? _runSubmission;
+    private readonly Func<string, CodeCellRunState>? _runState;
 
     /// <summary>
     /// Initialises the renderer with the current UI theme and an optional synchronization stream
@@ -52,11 +53,19 @@ public class MarkdownHtmlRenderer
     /// <param name="runSubmission">Invoked with a block's submission id when the reader clicks the cell toolbar's
     /// Run button; the hosting view (re-)posts that block's <c>SubmitCodeRequest</c> to its kernel activity.
     /// Null when no kernel is available — cell toolbars then render their Run button disabled.</param>
-    public MarkdownHtmlRenderer(DesignThemeModes mode, ISynchronizationStream? stream, Action<string>? runSubmission = null)
+    /// <param name="runState">Answers, per submission id, whether the cell's displayed output still belongs to
+    /// the code shown (the hosting view's <c>CodeCellRunTracker</c>). Null → every cell renders as
+    /// <see cref="CodeCellRunState.NeverRun"/>, i.e. no staleness claim at all.</param>
+    public MarkdownHtmlRenderer(
+        DesignThemeModes mode,
+        ISynchronizationStream? stream,
+        Action<string>? runSubmission = null,
+        Func<string, CodeCellRunState>? runState = null)
     {
         _mode = mode;
         _stream = stream;
         _runSubmission = runSubmission;
+        _runState = runState;
     }
 
     /// <summary>
@@ -121,12 +130,14 @@ public class MarkdownHtmlRenderer
                     RenderUcrLink(builder, node);
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains(ExecutableCodeBlockRenderer.CellToolbarClass):
+                    var submissionId = node.GetAttributeValue(ExecutableCodeBlockRenderer.SubmissionIdAttribute, "");
                     builder.OpenComponent<MarkdownCodeCellToolbar>(1);
-                    builder.AddAttribute(2, nameof(MarkdownCodeCellToolbar.SubmissionId),
-                        node.GetAttributeValue(ExecutableCodeBlockRenderer.SubmissionIdAttribute, ""));
+                    builder.AddAttribute(2, nameof(MarkdownCodeCellToolbar.SubmissionId), submissionId);
                     builder.AddAttribute(3, nameof(MarkdownCodeCellToolbar.Language),
                         node.GetAttributeValue(ExecutableCodeBlockRenderer.LanguageAttribute, "csharp"));
                     builder.AddAttribute(4, nameof(MarkdownCodeCellToolbar.OnRun), _runSubmission);
+                    builder.AddAttribute(5, nameof(MarkdownCodeCellToolbar.RunState),
+                        _runState?.Invoke(submissionId) ?? CodeCellRunState.NeverRun);
                     builder.CloseComponent();
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains(LayoutAreaMarkdownRenderer.LayoutArea):

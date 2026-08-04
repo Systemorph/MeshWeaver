@@ -8,10 +8,12 @@ namespace MeshWeaver.Markdown;
 /// <summary>
 /// HTML renderer for <see cref="ExecutableCodeBlock"/>: emits the optional code display, the kernel
 /// result-area placeholder div, mermaid diagrams, and embedded layout areas. An executable block
-/// that also shows its code is wrapped in a notebook-cell frame (<see cref="CellClass"/>): a toolbar
-/// marker the Blazor renderer turns into a Run affordance, the code beneath it, and the kernel
-/// result area attached directly below inside the same frame — the same reading shape as a Code
-/// node's notebook cell.
+/// that also shows its code is wrapped in a notebook-cell frame (<see cref="CellClass"/>): the code,
+/// the kernel result area directly below it, and — on the frame's bottom edge — a toolbar marker the
+/// client renderers turn into a Run affordance. Same reading shape as a Code node's notebook cell.
+/// <para>The toolbar marker is emitted LAST, so every client that renders these segments in document
+/// order (the Blazor <c>MarkdownHtmlRenderer</c>, the React <c>"toolbar"</c> segment, the React
+/// Native <c>RunCell</c>) gets the foot placement without knowing anything about it.</para>
 /// </summary>
 public class ExecutableCodeBlockRenderer : CodeBlockRenderer
 {
@@ -25,8 +27,9 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
     public const string CellClass = "md-code-cell";
 
     /// <summary>
-    /// CSS class of the cell-toolbar marker div. The Blazor renderer replaces it with the
-    /// interactive toolbar (Run button + language badge); non-interactive renderers leave it empty.
+    /// CSS class of the cell-toolbar marker div, emitted on the cell's BOTTOM edge (after the code
+    /// and the output segment). The Blazor renderer replaces it with the interactive toolbar (Run
+    /// button + language badge); non-interactive renderers leave it empty.
     /// </summary>
     public const string CellToolbarClass = "md-code-cell-toolbar";
 
@@ -68,17 +71,15 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         var showsCode = args.TryGetValue(ShowCode, out var showCode) && showCode is null
                         || bool.TryParse(showCode, out var sc) && sc;
 
-        // Executable block WITH visible code → notebook-cell frame: toolbar (Run) on top,
-        // code beneath, output attached below inside the same frame. Executable blocks that
-        // hide their code (--execute setup, --render live demos) keep the bare result area.
+        // Executable block WITH visible code → notebook-cell frame: code first, the run's output
+        // attached below it, and the toolbar (Run) as a composer-style bar on the BOTTOM edge —
+        // the same reading shape as a Code node's cell (CodeLayoutAreas.BuildContent, moved there
+        // on 2026-07-03 UX feedback: the controls belong at the FOOT of the cell, like a chat
+        // composer, not above the code). Executable blocks that hide their code (--execute setup,
+        // --render live demos) keep the bare result area.
         var isCell = fenced.SubmitCode is not null && (showsHeader || showsCode);
         if (isCell)
-        {
             renderer.Write($"<div class=\"{CellClass}\">");
-            renderer.Write($"<div class=\"{CellToolbarClass}\" " +
-                           $"{SubmissionIdAttribute}=\"{HttpUtility.HtmlAttributeEncode(fenced.SubmitCode!.Id)}\" " +
-                           $"{LanguageAttribute}=\"{HttpUtility.HtmlAttributeEncode(fenced.SubmitCode.Language)}\"></div>");
-        }
 
         if (showsHeader)
         {
@@ -109,7 +110,13 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         }
 
         if (isCell)
+        {
+            // Toolbar LAST — the composer bar on the bottom edge, below the output segment.
+            renderer.Write($"<div class=\"{CellToolbarClass}\" " +
+                           $"{SubmissionIdAttribute}=\"{HttpUtility.HtmlAttributeEncode(fenced.SubmitCode!.Id)}\" " +
+                           $"{LanguageAttribute}=\"{HttpUtility.HtmlAttributeEncode(fenced.SubmitCode.Language)}\"></div>");
             renderer.Write("</div>");
+        }
 
         renderer.EnsureLine();
 
