@@ -36,7 +36,7 @@ namespace MeshWeaver.GitSync.Test;
 ///
 /// <para>⚠️ Consequence of that parenthesis, measured rather than assumed: on THIS harness the two
 /// live-progress tests below pass with <c>ScheduleOffHubTurn</c> deleted. They document the contract;
-/// they do not enforce it. <see cref="TheCommandDoesNotRunOnTheThreadThatDeliveredTheCreate"/> is the
+/// they do not enforce it. <see cref="ActivityExecutionGoesThroughThePooledSubscribeScheduler"/> is the
 /// one that fails — it asserts the scheduler hop itself rather than an outcome the hop happens to
 /// enable.</para>
 /// </summary>
@@ -177,7 +177,7 @@ public class ActivityLiveProgressTest(ITestOutputHelper output) : GitHubSyncTest
     /// and for the right reason — with no timing dependence whatsoever.</para>
     /// </summary>
     [Fact(Timeout = 120000)]
-    public async Task TheCommandDoesNotRunOnTheThreadThatDeliveredTheCreate()
+    public async Task ActivityExecutionGoesThroughThePooledSubscribeScheduler()
     {
         var recorder = Mesh.ServiceProvider.GetService<IPooledSubscribeScheduler>() as RecordingSubscribeScheduler;
         Assert.NotNull(recorder); // the harness must have installed the recorder — see ConfigureMesh
