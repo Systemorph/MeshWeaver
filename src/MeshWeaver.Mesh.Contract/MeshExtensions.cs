@@ -768,8 +768,14 @@ public static class MeshExtensions
         var grantObs = grantPath is null
             ? Observable.Return<MeshNode?>(null)
             : ReadNodeAuthoritative(hub, persistence, grantPath);
+        // A GitSynced partition is SYSTEM-OWNED by definition — its content is rewritten from the
+        // repo and only system-security writes it. That is the ownership signal the root itself
+        // does not carry (ProvisionAndCreateRoot writes the root as System, so root.CreatedBy is
+        // never the owner), and it is what distinguishes "I am creating my own partition" from
+        // "I am a deploy touching somebody else's".
+        var syncObs = ReadNodeAuthoritative(hub, persistence, $"{partition}/_GitSync");
 
-        return Observable.Zip(rootObs, grantObs, (root, grant) => (root, grant))
+        return Observable.Zip(rootObs, grantObs, syncObs, (root, grant, sync) => (root, grant, sync))
             .SelectMany(t =>
             {
                 var rootExists = t.root is not null;
@@ -800,7 +806,20 @@ public static class MeshExtensions
                         var healRoot = rootExists
                             ? Observable.Return(System.Reactive.Unit.Default)
                             : ProvisionAndCreateRoot(hub, partition, meshService, accessService, logger);
-                        return healRoot.SelectMany(_ => isRealCreator && !grantExists
+                        // 🚨 A deploy is not an ownership claim. Running `git_hub_sync update` on
+                        // `Skill` — a partition that had existed for weeks — wrote one activity
+                        // node into it and walked away with Admin, reproducibly, on every sync.
+                        // The self-heal still does its job for a user's own partition, which is
+                        // what it exists for; it just no longer fires on a SYSTEM-OWNED one, where
+                        // the caller is a deployer and never the owner.
+                        var systemOwned = t.sync is not null;
+                        var mintGrant = isRealCreator && !grantExists && !systemOwned;
+                        if (isRealCreator && !grantExists && systemOwned)
+                            logger.LogInformation(
+                                "[PartitionBootstrap] '{Creator}' gets NO grant on GitSynced partition "
+                                + "'{Partition}' — it is system-owned; writing into it is a deploy, "
+                                + "not an ownership claim", creator, partition);
+                        return healRoot.SelectMany(_ => mintGrant
                             ? CreateCreatorGrant(partition, creator!, meshService, accessService, logger)
                             : Observable.Return(System.Reactive.Unit.Default));
                     });
