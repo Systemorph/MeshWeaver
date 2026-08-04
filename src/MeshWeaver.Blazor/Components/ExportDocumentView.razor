@@ -11,6 +11,7 @@
 @using Microsoft.Extensions.DependencyInjection
 @using Microsoft.JSInterop
 @inherits BlazorView<ExportDocumentControl, ExportDocumentView>
+@inject AccessService Access
 
 <div class="export-document-view" style="max-width: 720px;">
     <h2 style="margin-top: 0;">Export @(_title)</h2>
@@ -23,12 +24,12 @@
         <div style="display: flex; flex-direction: column; gap: 12px;">
 
             <div>
-                <label><strong>Document title</strong></label>
+                <label><strong>@Access.Localize("export.documentTitle")</strong></label>
                 <FluentTextField @bind-Value="_title" Style="width: 100%;" />
             </div>
 
             <div>
-                <label><strong>Corporate identity</strong></label>
+                <label><strong>@Access.Localize("export.corporateIdentity")</strong></label>
                 <FluentTextField @bind-Value="_brandNodePath"
                                  Placeholder="Brand/Systemorph"
                                  Style="width: 100%;" />
@@ -37,32 +38,32 @@
                 </small>
             </div>
 
-            <FluentCheckbox Value="_coverPage" ValueChanged="@((bool v) => _coverPage = v)" Label="Branded cover page" />
-            <FluentCheckbox Value="_toc" ValueChanged="@((bool v) => _toc = v)" Label="Table of contents" />
-            <FluentCheckbox Value="_pbH1" ValueChanged="@((bool v) => _pbH1 = v)" Label="Page break before each # Section" />
-            <FluentCheckbox Value="_pbH2" ValueChanged="@((bool v) => _pbH2 = v)" Label="Page break before each ## Subsection" />
+            <FluentCheckbox Value="_coverPage" ValueChanged="@((bool v) => _coverPage = v)" Label="@Access.Localize("export.brandedCover")" />
+            <FluentCheckbox Value="_toc" ValueChanged="@((bool v) => _toc = v)" Label="@Access.Localize("export.tableOfContents")" />
+            <FluentCheckbox Value="_pbH1" ValueChanged="@((bool v) => _pbH1 = v)" Label="@Access.Localize("export.pageBreakSection")" />
+            <FluentCheckbox Value="_pbH2" ValueChanged="@((bool v) => _pbH2 = v)" Label="@Access.Localize("export.pageBreakSubsection")" />
 
             @if (HasDescendants)
             {
                 <FluentCheckbox Value="_includeChildren"
                                 ValueChanged="@((bool v) => _includeChildren = v)"
-                                Label="Include child nodes as chapters" />
+                                Label="@Access.Localize("export.includeChildren")" />
                 @if (_includeChildren)
                 {
                     <FluentCheckbox Value="_pbChildren"
                                     ValueChanged="@((bool v) => _pbChildren = v)"
-                                    Label="Page break between child chapters"
+                                    Label="@Access.Localize("export.pageBreakChildren")"
                                     Style="margin-left: 24px;" />
                 }
             }
 
             <div>
-                <label><strong>Header text (optional)</strong></label>
+                <label><strong>@Access.Localize("export.headerText")</strong></label>
                 <FluentTextField @bind-Value="_header" Style="width: 100%;" />
             </div>
 
             <div>
-                <label><strong>Footer text (optional)</strong></label>
+                <label><strong>@Access.Localize("export.footerText")</strong></label>
                 <FluentTextField @bind-Value="_footer" Style="width: 100%;" />
             </div>
 
@@ -79,17 +80,17 @@
     @if (_isExporting)
     {
         <FluentProgress Visible="true" />
-        <p style="margin-top: 8px; color: var(--neutral-foreground-hint);">Generating document…</p>
+        <p style="margin-top: 8px; color: var(--neutral-foreground-hint);">@Access.Localize("export.generating")</p>
     }
 
     @if (_done)
     {
         <FluentCard Style="padding: 16px; margin-top: 16px;">
-            <h3 style="color: var(--success); margin: 0 0 12px 0;">Export complete</h3>
-            <p>The file has been downloaded.</p>
+            <h3 style="color: var(--success); margin: 0 0 12px 0;">@Access.Localize("export.complete")</h3>
+            <p>@Access.Localize("export.downloaded")</p>
             <div style="margin-top: 16px; display: flex; gap: 8px;">
                 <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
-                              OnClick="@Reset">Export again</FluentButton>
+                              OnClick="@Reset">@Access.Localize("export.again")</FluentButton>
             </div>
         </FluentCard>
     }
@@ -101,7 +102,7 @@
         </FluentCard>
         <div style="margin-top: 16px;">
             <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Neutral"
-                          OnClick="@Reset">Try again</FluentButton>
+                          OnClick="@Reset">@Access.Localize("common.retry")</FluentButton>
         </div>
     }
 </div>

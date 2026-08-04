@@ -197,7 +197,7 @@ public static class AccessControlLayoutArea
                 .WithOptions(new[] { Role.Admin.Id, Role.Editor.Id, Role.Viewer.Id, Role.Commenter.Id }))
             with { Label = "Role", DataContext = dataContext };
 
-        var addButton = Controls.Button("+ Add")
+        var addButton = Controls.Button(host.Localize("ui.plusAdd"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction((Action<UiActionContext>)(ctx =>
             {
@@ -323,10 +323,10 @@ public static class AccessControlLayoutArea
         return Controls.Stack
             .WithStyle("gap: 8px; margin-top: 24px; padding-top: 16px; " +
                        "border-top: 1px solid var(--neutral-stroke-divider-rest);")
-            .WithView(Controls.H3("Advanced").WithStyle("margin: 0;"))
+            .WithView(Controls.H3(host.Localize("ui.advanced")).WithStyle("margin: 0;"))
             .WithView(Controls.Markdown(
                 "Partition policy caps the permissions available to **everyone** at this scope and below."))
-            .WithView(Controls.Button("Set partition policy…")
+            .WithView(Controls.Button(host.Localize("ui.setPartitionPolicy"))
                 .WithAppearance(Appearance.Neutral)
                 .WithStyle("align-self: flex-start;")
                 .WithClickAction((Action<UiActionContext>)(ctx =>
@@ -396,11 +396,11 @@ public static class AccessControlLayoutArea
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px;")
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(ctx.Host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction((Action<UiActionContext>)(cancelCtx =>
                     cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!))))
-            .WithView(Controls.Button("Create")
+            .WithView(Controls.Button(ctx.Host.Localize("menu.create"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction((Action<UiActionContext>)(saveCtx =>
                 {
@@ -490,7 +490,7 @@ public static class AccessControlLayoutArea
         });
 
         var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
-            .WithView(Controls.Markdown("Set a partition access policy to restrict permissions for **all users** at this namespace. Turn off permissions to deny them."))
+            .WithView(Controls.Markdown(ctx.Host.Localize("ui.partitionPolicyHint")))
             .WithView(new SwitchControl(new JsonPointerReference("allowRead"))
             {
                 Label = "Read",
@@ -525,11 +525,11 @@ public static class AccessControlLayoutArea
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px;")
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(ctx.Host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction((Action<UiActionContext>)(cancelCtx =>
                     cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!))))
-            .WithView(Controls.Button("Save")
+            .WithView(Controls.Button(ctx.Host.Localize("common.save"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction((Action<UiActionContext>)(saveCtx =>
                 {

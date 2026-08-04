@@ -1,7 +1,8 @@
 ﻿@using System.Reactive.Linq
 @using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @implements IDialogContentComponent<CreateFolderModel>
-<FluentTextField @ref="textField" @bind-Value="Content.Name" Placeholder="New Folder"  />
+@inject AccessService Access
+<FluentTextField @ref="textField" @bind-Value="Content.Name" Placeholder="@Access.Localize("files.newFolder")"  />
 @if (!string.IsNullOrEmpty(errorMessage))
 {
     <FluentLabel Color="Color.Error">@errorMessage</FluentLabel>

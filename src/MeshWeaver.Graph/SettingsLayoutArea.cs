@@ -10,6 +10,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -129,6 +130,12 @@ public static class SettingsLayoutArea
     {
         var searchDataId = $"settingsMenuSearch_{hubPath.Replace('/', '_')}";
         host.UpdateData(searchDataId, string.Empty);
+
+        // Translate tab labels and group names for THIS subscriber before anything reads them, so
+        // the search box below filters on what the viewer actually sees (a German user finds
+        // "Datenschutz" by typing it, not only by typing "Privacy").
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
+        items = [.. items.Select(i => i.Localized(access))];
 
         var searchBox = (new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Search settings…")
@@ -286,7 +293,7 @@ public static class SettingsLayoutArea
 
     internal static UiControl BuildNodeTypesTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
-        stack = stack.WithView(Controls.H2("Node Types").WithStyle("margin: 0 0 24px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.nodeTypes")).WithStyle("margin: 0 0 24px 0;"));
         stack = stack.WithView(
             (h, ctx) => MeshNodeLayoutAreas.NodeTypes(h, ctx)!,
             "NodeTypesContent"
@@ -296,7 +303,7 @@ public static class SettingsLayoutArea
 
     internal static UiControl BuildFilesTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
-        stack = stack.WithView(Controls.H2("Files").WithStyle("margin: 0 0 24px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.files")).WithStyle("margin: 0 0 24px 0;"));
 
         var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
         var collections = contentService?.GetAllCollectionConfigs()?.ToList();
@@ -351,7 +358,7 @@ public static class SettingsLayoutArea
     internal static UiControl BuildGroupsTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
         var hubPath = host.Hub.Address.ToString();
-        stack = stack.WithView(Controls.H2("Groups").WithStyle("margin: 0 0 16px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.groups")).WithStyle("margin: 0 0 16px 0;"));
 
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery == null)
@@ -390,7 +397,7 @@ public static class SettingsLayoutArea
                 "<p style=\"color: var(--warning-color);\">Row-Level Security is not enabled.</p>"));
         }
 
-        stack = stack.WithView(Controls.H2("Effective Access").WithStyle("margin: 0 0 16px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.effectiveAccess")).WithStyle("margin: 0 0 16px 0;"));
         stack = stack.WithView(Controls.Html(
             "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
             "Test what permissions a user has on this node. Enter a user ID and press Enter or click Check.</p>"));
@@ -412,7 +419,7 @@ public static class SettingsLayoutArea
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("margin-top: 12px; gap: 8px;")
-            .WithView(Controls.Button("Check")
+            .WithView(Controls.Button(host.Localize("ui.check"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction((Action<UiActionContext>)(ctx =>
                 {
@@ -450,7 +457,7 @@ public static class SettingsLayoutArea
 
     internal static UiControl BuildAppearanceTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
-        stack = stack.WithView(Controls.H2("Appearance").WithStyle("margin: 0 0 24px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.appearance")).WithStyle("margin: 0 0 24px 0;"));
         stack = stack.WithView(new AppearanceControl());
         return stack;
     }
@@ -555,7 +562,7 @@ public static class SettingsLayoutArea
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(8)
                 .WithStyle("justify-content: flex-end;")
-                .WithView(Controls.Button("Generate")
+                .WithView(Controls.Button(host.Localize("ui.generate"))
                     .WithAppearance(Appearance.Neutral)
                     .WithIconStart(FluentIcons.Sparkle())
                     .WithClickAction(actx => RegenerateDescriptionFromNode(actx, nodePath)))));
@@ -604,7 +611,7 @@ public static class SettingsLayoutArea
                         ? Controls.Html("<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>")
                         : CreateLayoutArea.BuildIconPreview(icon);
                 }))
-            .WithView(Controls.Button("Generate")
+            .WithView(Controls.Button(host.Localize("ui.generate"))
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Sparkle())
                 .WithClickAction(actx => RegenerateIconFromNode(actx, nodePath))));
@@ -637,7 +644,7 @@ public static class SettingsLayoutArea
                     Immediate = true,
                     DataContext = LayoutAreaReference.GetDataPointer(quickPickDataId)
                 }.WithStyle("flex: 1;"))
-                .WithView(Controls.Button("Use as Icon")
+                .WithView(Controls.Button(host.Localize("ui.useAsIcon"))
                     .WithAppearance(Appearance.Neutral)
                     .WithClickAction(actx => UseFileAsIcon(actx, nodePath, quickPickDataId))));
         }

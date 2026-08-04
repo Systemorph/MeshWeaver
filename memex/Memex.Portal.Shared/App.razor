@@ -3,6 +3,7 @@
 @using Memex.Portal.Shared.Seo
 
 @inject IConfiguration Configuration
+@inject AccessService Access
 
 @{
     // Instance identity: when Portal:InstanceName is set (e.g. "Local"), the tab
@@ -113,7 +114,7 @@
     <div id="components-reconnect-modal" class="reconnect-modal">
         <div class="reconnect-card">
             <div class="reconnect-spinner"></div>
-            <div class="reconnect-title">Reconnecting…</div>
+            <div class="reconnect-title">@Access.Localize("error.reconnecting")</div>
             <div class="reconnect-detail">The server was updated. Reloading the page to pick up the latest version.</div>
         </div>
     </div>

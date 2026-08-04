@@ -81,13 +81,13 @@ public static class ModuleLayoutAreas
 
         return nodeStream.CombineLatest(theoryStream, exampleStream, exerciseStream, siblingStream,
             (node, theory, examples, exercises, siblings) =>
-                (UiControl?)BuildContent(node, modulePath, options, theory, examples, exercises, siblings));
+                (UiControl?)BuildContent(node, modulePath, options, theory, examples, exercises, siblings, locale: host.ViewerLocale()));
     }
 
     private static UiControl BuildContent(
         MeshNode? node, string modulePath, JsonSerializerOptions options,
         IEnumerable<MeshNode> theory, IEnumerable<MeshNode> examples,
-        IEnumerable<MeshNode> exercises, IEnumerable<MeshNode> siblings)
+        IEnumerable<MeshNode> exercises, IEnumerable<MeshNode> siblings, string? locale = null)
     {
         var module = node.ContentAs<ModuleConfiguration>(options);
         var stack = Controls.Stack.WithWidth("100%")
@@ -115,7 +115,7 @@ public static class ModuleLayoutAreas
         if (orderedExamples.Count > 0)
         {
             var section = Controls.Stack.WithWidth("100%")
-                .WithView(Controls.H2("Examples").WithStyle("margin: 16px 0 8px 0;"));
+                .WithView(Controls.H2(LocalizationCatalog.Get("ui.examples", locale)).WithStyle("margin: 16px 0 8px 0;"));
             foreach (var example in orderedExamples)
                 section = section.WithView(
                     new LayoutAreaControl(new Address(example.Path), new LayoutAreaReference("")),
@@ -136,7 +136,7 @@ public static class ModuleLayoutAreas
                         new LayoutAreaReference(ExerciseLayoutAreas.WorkspaceArea)),
                     s => s.WithLabel(exercise.Name ?? exercise.Id));
             stack = stack
-                .WithView(Controls.H2("Exercises").WithStyle("margin: 16px 0 8px 0;"))
+                .WithView(Controls.H2(LocalizationCatalog.Get("ui.exercises", locale)).WithStyle("margin: 16px 0 8px 0;"))
                 .WithView(tabs, ExerciseTabsArea);
         }
 

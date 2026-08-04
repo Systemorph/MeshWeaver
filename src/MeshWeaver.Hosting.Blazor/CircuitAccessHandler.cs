@@ -246,12 +246,19 @@ public class CircuitAccessHandler : CircuitHandler
                     // stored-UTC timestamps display in the viewer's local time via
                     // AccessService.ToDisplayTime. Unset (never signed in on a browser yet) →
                     // stays null → renders UTC.
-                    var timeZoneId = meshUser.ContentAs<User>(_hub.JsonSerializerOptions)?.TimeZoneId;
+                    // The viewer's UI language is resolved from the same profile read, for the
+                    // same reason and along the same path: it rides on the AccessContext so
+                    // AccessService.Localize translates identically on the circuit and on
+                    // server-side hub renders. Unset → stays null → renders English.
+                    var profile = meshUser.ContentAs<User>(_hub.JsonSerializerOptions);
+                    var timeZoneId = profile?.TimeZoneId;
+                    var locale = profile?.Locale;
                     context = context with
                     {
                         ObjectId = meshUser.Id,
                         Name = meshUser.Name ?? meshUser.Id,
-                        TimeZoneId = string.IsNullOrWhiteSpace(timeZoneId) ? context.TimeZoneId : timeZoneId
+                        TimeZoneId = string.IsNullOrWhiteSpace(timeZoneId) ? context.TimeZoneId : timeZoneId,
+                        Locale = string.IsNullOrWhiteSpace(locale) ? context.Locale : locale
                     };
                 }
             }

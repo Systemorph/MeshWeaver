@@ -90,6 +90,7 @@ public static class GlobalSettingsMenuItemsExtensions
                 ContentBuilder: GlobalSettingsLayoutArea.BuildDataSourcesTab,
                 Icon: FluentIcons.Database(),
                 Order: 0)
+            { LabelKey = "settings.dataSources" }
         );
     }
 }

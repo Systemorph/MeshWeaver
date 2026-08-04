@@ -4,23 +4,24 @@
 @using System.IO.Compression
 @inject NavigationManager NavigationManager
 @inherits BlazorView<NodeImportControl, NodeImportView>
+@inject AccessService Access
 
 <div class="node-import-view" style="max-width: 800px;">
     <p style="color: var(--neutral-foreground-hint); margin-bottom: 24px;">
         @if (IsFileMode)
         {
-            <text>Upload file(s) to import into the mesh.</text>
+            <text>@Access.Localize("ui.uploadFilesHint")</text>
         }
         else
         {
-            <text>Upload a ZIP file containing MeshNodes to import into the mesh.</text>
+            <text>@Access.Localize("ui.uploadZipHint")</text>
         }
     </p>
 
     @if (!IsImporting && ImportResult == null)
     {
         <div style="margin-bottom: 16px;">
-            <FluentCheckbox @bind-Value="@ForceReimport" Label="Force re-import (overwrite existing data)" />
+            <FluentCheckbox @bind-Value="@ForceReimport" Label="@Access.Localize("import.forceReimport")" />
         </div>
 
         @if (!IsFileMode)
@@ -60,22 +61,22 @@
         <FluentCard Style="padding: 16px; margin-top: 16px;">
             @if (ImportResult.Success)
             {
-                <h3 style="color: var(--success); margin: 0 0 12px 0;">Import Complete</h3>
-                <p><strong>Nodes imported:</strong> @ImportResult.NodesImported</p>
-                <p><strong>Nodes skipped:</strong> @ImportResult.NodesSkipped</p>
-                <p><strong>Nodes removed:</strong> @ImportResult.NodesRemoved</p>
-                <p><strong>Time:</strong> @ImportResult.Elapsed.TotalSeconds.ToString("F1")s</p>
+                <h3 style="color: var(--success); margin: 0 0 12px 0;">@Access.Localize("import.complete")</h3>
+                <p><strong>@Access.Localize("import.nodesImported")</strong> @ImportResult.NodesImported</p>
+                <p><strong>@Access.Localize("import.nodesSkipped")</strong> @ImportResult.NodesSkipped</p>
+                <p><strong>@Access.Localize("import.nodesRemoved")</strong> @ImportResult.NodesRemoved</p>
+                <p><strong>@Access.Localize("import.time")</strong> @ImportResult.Elapsed.TotalSeconds.ToString("F1")s</p>
             }
             else
             {
-                <h3 style="color: var(--error); margin: 0 0 12px 0;">Import Failed</h3>
+                <h3 style="color: var(--error); margin: 0 0 12px 0;">@Access.Localize("import.failed")</h3>
                 <p>@ImportResult.Error</p>
             }
         </FluentCard>
 
         <div style="margin-top: 16px; display: flex; gap: 8px;">
-            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent" OnClick="@Reset">Import Another</FluentButton>
-            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Neutral" OnClick="@GoBack">Overview</FluentButton>
+            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent" OnClick="@Reset">@Access.Localize("import.another")</FluentButton>
+            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Neutral" OnClick="@GoBack">@Access.Localize("ui.open")</FluentButton>
         </div>
     }
 

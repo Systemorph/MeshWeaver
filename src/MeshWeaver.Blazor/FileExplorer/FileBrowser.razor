@@ -1,5 +1,6 @@
 ﻿@using MeshWeaver.ContentCollections
 @using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
+@inject AccessService Access
 
 
 <div class="file-browser">
@@ -57,12 +58,12 @@
             <FluentSpacer></FluentSpacer>
             @if (Collection is not null)
             {
-                <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowDownload())" Text="Download" Disabled="@(!SelectedItems.Any())" OnClick="DownloadSelectedAsync">Download</FluentButton>
+                <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowDownload())" Text="@Access.Localize("common.download")" Disabled="@(!SelectedItems.Any())" OnClick="DownloadSelectedAsync">@Access.Localize("common.download")</FluentButton>
                 @if (!IsReadOnly)
                 {
-                    <FluentButton IconStart="@(new Icons.Regular.Size20.Add())" Text="Add Folder" OnClick="AddFolderAsync">New Folder</FluentButton>
-                    <FluentButton IconStart="@(new Icons.Regular.Size20.BinRecycle())" Text="Delete" Disabled="@(!SelectedItems.Any())" OnClick="DeleteAsync">Delete</FluentButton>
-                    <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="Upload" Id="MyUploadStream">Upload</FluentButton>
+                    <FluentButton IconStart="@(new Icons.Regular.Size20.Add())" Text="@Access.Localize("files.addFolder")" OnClick="AddFolderAsync">@Access.Localize("files.newFolder")</FluentButton>
+                    <FluentButton IconStart="@(new Icons.Regular.Size20.BinRecycle())" Text="@Access.Localize("common.delete")" Disabled="@(!SelectedItems.Any())" OnClick="DeleteAsync">@Access.Localize("common.delete")</FluentButton>
+                    <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="@Access.Localize("common.upload")" Id="MyUploadStream">@Access.Localize("common.upload")</FluentButton>
                     <FluentInputFile @ref="@myFileByStream"
                                      AnchorId="MyUploadStream"
                                      DragDropZoneVisible="false"
@@ -75,7 +76,7 @@
                                      OnCompleted="@OnCompleted" />
                     if (ShowNewArticle)
                     {
-                        <FluentButton IconStart="@(new Icons.Regular.Size20.New())" Text="New Article" OnClick="NewArticleAsync">New Article</FluentButton>
+                        <FluentButton IconStart="@(new Icons.Regular.Size20.New())" Text="@Access.Localize("files.newArticle")" OnClick="NewArticleAsync">@Access.Localize("files.newArticle")</FluentButton>
                     }
                 }
             }
@@ -96,7 +97,7 @@
                       SelectMode="DataGridSelectMode.Multiple"
                       SelectFromEntireRow="false"
                       @bind-SelectedItems="SelectedItems"/>
-        <TemplateColumn TGridItem="CollectionItem" Title="Name">
+        <TemplateColumn TGridItem="CollectionItem" Title="@Access.Localize("common.name")">
             <div class="grid-item">
                 @if (context is FolderItem folder)
                 {
@@ -124,7 +125,7 @@
                 }
              </div>
         </TemplateColumn>
-        <TemplateColumn TGridItem="CollectionItem" Title="Details">
+        <TemplateColumn TGridItem="CollectionItem" Title="@Access.Localize("common.details")">
             @if (context is FolderItem folder)
             {
                 <span>@folder.ItemCount items</span>

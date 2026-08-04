@@ -66,7 +66,8 @@ public static class ApprovalExtensions
                 ? (IReadOnlyCollection<NodeMenuItemDefinition>)
                     [new NodeMenuItemDefinition(
                         "Request Approval", "RequestApproval",
-                        Order: 30, Href: MeshNodeLayoutAreas.BuildUrl(hubPath, "RequestApproval"))]
+                        Order: 30, Href: MeshNodeLayoutAreas.BuildUrl(hubPath, "RequestApproval"))
+                        { LabelKey = "menu.requestApproval" }]
                 : []);
     }
 }

@@ -86,7 +86,7 @@ public static class DeckLayoutAreas
             .WithView(
                 // Left pane: hidable NavMenu from the ordered manifest.
                 (h, c) => deckNodeStream.CombineLatest(slidesStream,
-                    (node, slides) => BuildDeckNav(deckPath, node, slides)),
+                    (node, slides) => BuildDeckNav(deckPath, node, slides, locale: host.ViewerLocale())),
                 skin => skin.WithSize("300px").WithMin("220px").WithMax("440px").WithCollapsible(true))
             .WithView(
                 // Right pane: the welcome stage with the intro + Present entry point.
@@ -100,7 +100,7 @@ public static class DeckLayoutAreas
     /// node's display label. The manifest is the source of truth for order.
     /// </summary>
     private static UiControl BuildDeckNav(
-        string deckPath, MeshNode? deckNode, IReadOnlyList<(string Path, MeshNode? Node)> slides)
+        string deckPath, MeshNode? deckNode, IReadOnlyList<(string Path, MeshNode? Node)> slides, string? locale = null)
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(300).WithCollapsible(false));
         var group = new NavGroupControl(deckNode?.Name ?? deckNode?.Id ?? "Slides")
@@ -118,7 +118,7 @@ public static class DeckLayoutAreas
         }
         else
         {
-            group = group.WithView(Controls.Body("No slides in this deck yet.")
+            group = group.WithView(Controls.Body(LocalizationCatalog.Get("ui.noSlides", locale))
                 .WithStyle("padding: 4px 16px; display: block; color: var(--neutral-foreground-hint);"));
         }
 
@@ -155,7 +155,7 @@ public static class DeckLayoutAreas
 
         if (hasSlides)
         {
-            container = container.WithView(Controls.Button("▶ Present")
+            container = container.WithView(Controls.Button(host.Localize("ui.presentPlay"))
                 .WithAppearance(Appearance.Accent)
                 .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(deckPath, PresentArea)));
         }

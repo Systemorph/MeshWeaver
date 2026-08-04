@@ -1,6 +1,7 @@
 @typeparam TOption
 @inject IJSRuntime JS
 @implements IDisposable
+@inject AccessService Access
 
 <div class="simple-dropdown @(isOpen ? "open" : "") @Class"
      @ref="containerRef"
@@ -34,11 +35,11 @@
             <div class="simple-dropdown-list">
                 @if (isLoading)
                 {
-                    <div class="simple-dropdown-message">Loading...</div>
+                    <div class="simple-dropdown-message">@Access.Localize("common.loading")</div>
                 }
                 else if (displayItems.Count == 0)
                 {
-                    <div class="simple-dropdown-message">No results</div>
+                    <div class="simple-dropdown-message">@Access.Localize("common.noResults")</div>
                 }
                 else
                 {
