@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.AI;
 
@@ -34,13 +35,14 @@ public record ThreadMessageViewModel
     /// defaulting the author name from the role when unset and formatting the timestamp.
     /// </summary>
     /// <param name="msg">The source thread message.</param>
+    /// <param name="zoneId">The viewer's IANA zone (<c>AccessService.ViewerZoneId()</c>); null renders UTC.</param>
     /// <returns>The view model for binding in the bubble control.</returns>
-    public static ThreadMessageViewModel FromMessage(ThreadMessage msg) => new()
+    public static ThreadMessageViewModel FromMessage(ThreadMessage msg, string? zoneId = null) => new()
     {
         Role = msg.Role,
         AuthorName = msg.AuthorName ?? (msg.Role == "user" ? "You" : msg.AgentName ?? "Assistant"),
         ModelName = msg.ModelName,
-        Timestamp = msg.Timestamp.ToString("HH:mm:ss"),
+        Timestamp = DisplayTimeExtensions.ToDisplayTime(msg.Timestamp, zoneId).ToString("HH:mm:ss"),
         Text = msg.Text ?? "",
         ToolCalls = msg.ToolCalls,
         UpdatedNodes = msg.UpdatedNodes
