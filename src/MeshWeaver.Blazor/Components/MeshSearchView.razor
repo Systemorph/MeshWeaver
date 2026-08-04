@@ -3,6 +3,7 @@
 @using MeshWeaver.Layout
 @using MeshWeaver.Mesh
 @using Microsoft.FluentUI.AspNetCore.Components
+@inject AccessService Access
 
 <div class="mesh-search-container">
     @if (BoundShowSearchBox || !string.IsNullOrEmpty(BoundTitle) || ShowCreateButton)
@@ -38,7 +39,7 @@
                 @if (ShowCreateButton)
                 {
                     <button type="button" class="mesh-search-create-button" @onclick="HandleCreateClick"
-                            title="Create new">
+                            title="@Access.Localize("search.createNew")">
                         +
                     </button>
                 }
@@ -123,7 +124,7 @@
                 }
                 else if (_treeSearchItems == null || _treeSearchItems.Count == 0)
                 {
-                    <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">No items found.</FluentLabel>
+                    <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">@Access.Localize("empty.noItemsFound")</FluentLabel>
                 }
                 else
                 {
@@ -144,13 +145,13 @@
                     @if (ShowCreateButton)
                     {
                         <div class="mesh-search-empty-create" @onclick="HandleCreateClick">
-                            <div class="mesh-search-empty-title">Nothing here yet</div>
-                            <div class="mesh-search-empty-hint">Click to create your first item</div>
+                            <div class="mesh-search-empty-title">@Access.Localize("empty.nothingYet")</div>
+                            <div class="mesh-search-empty-hint">@Access.Localize("empty.createFirst")</div>
                         </div>
                     }
                     else
                     {
-                        <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">No items found.</FluentLabel>
+                        <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">@Access.Localize("empty.noItemsFound")</FluentLabel>
                     }
                 }
             }
@@ -196,13 +197,13 @@
                             <line x1="24" y1="32" x2="40" y2="32" stroke="var(--accent-fill-rest)" stroke-width="2.5" stroke-linecap="round"/>
                         </svg>
                     </div>
-                    <div class="mesh-search-empty-title">Nothing here yet</div>
-                    <div class="mesh-search-empty-hint">Click to create your first item</div>
+                    <div class="mesh-search-empty-title">@Access.Localize("empty.nothingYet")</div>
+                    <div class="mesh-search-empty-hint">@Access.Localize("empty.createFirst")</div>
                 </div>
             }
             else
             {
-                <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">No items found.</FluentLabel>
+                <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">@Access.Localize("empty.noItemsFound")</FluentLabel>
             }
         }
         else
@@ -345,7 +346,7 @@
             @if (showDrill)
             {
                 <a class="mesh-search-drilldown" href="/@node.Path/@drillArea"
-                   title="Drill down" @onclick:stopPropagation="true">
+                   title="@Access.Localize("search.drillDown")" @onclick:stopPropagation="true">
                     @DrillDownIcon
                 </a>
             }
@@ -442,7 +443,7 @@
         if (_pendingDeletePath == node.Path)
         {
             <div class="mesh-search-delete-confirm" @onclick:stopPropagation="true">
-                <button type="button" class="mesh-search-delete-yes" title="Confirm delete"
+                <button type="button" class="mesh-search-delete-yes" title="@Access.Localize("search.confirmDelete")"
                         @onclick="() => ConfirmDelete(node)" @onclick:stopPropagation="true">
                     <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" />
                 </button>
@@ -635,7 +636,7 @@
             @if (!string.IsNullOrEmpty(drillArea))
             {
                 <a class="mesh-search-drilldown mesh-search-folder-drilldown"
-                   href="/@folderPath/@drillArea" title="Drill down"
+                   href="/@folderPath/@drillArea" title="@Access.Localize("search.drillDown")"
                    @onclick:stopPropagation="true">
                     @DrillDownIcon
                 </a>
@@ -695,16 +696,16 @@
                 }
             </nav>
 
-            <label class="mesh-nav-doctoggle" title="Show indexed content (Document nodes) in this view">
+            <label class="mesh-nav-doctoggle" title="@Access.Localize("search.includeDocumentsTooltip")">
                 <input type="checkbox" checked="@_includeDocuments" @onchange="ToggleIncludeDocuments" />
-                <span>Include documents</span>
+                <span>@Access.Localize("search.includeDocuments")</span>
             </label>
 
             @* TOP: the mesh nodes at this level. *@
             @if (nodes.Count > 0)
             {
                 <div class="mesh-nav-section">
-                    <div class="mesh-nav-section-label">Nodes</div>
+                    <div class="mesh-nav-section-label">@Access.Localize("search.nodes")</div>
                     <div class="mesh-search-area-grid" style="@CardGridStyle">
                         @foreach (var item in nodes)
                         {
@@ -718,7 +719,7 @@
             @if (namespaces.Count > 0)
             {
                 <div class="mesh-nav-section">
-                    <div class="mesh-nav-section-label">Namespaces</div>
+                    <div class="mesh-nav-section-label">@Access.Localize("search.namespaces")</div>
                     <div class="mesh-nav-namespaces">
                         @foreach (var ns in namespaces)
                         {
