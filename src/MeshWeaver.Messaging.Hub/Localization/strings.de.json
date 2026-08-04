@@ -634,5 +634,7 @@
   "dialog.regenerateIcon": "Symbol neu erzeugen",
   "dialog.iconGenFailed": "Symbolerzeugung fehlgeschlagen",
   "dialog.generateImage": "Bild erzeugen",
-  "dialog.imageGenFailed": "Bilderzeugung fehlgeschlagen"
+  "dialog.imageGenFailed": "Bilderzeugung fehlgeschlagen",
+  "create.autoGenIdHint": "Leer lassen, um die ID automatisch aus dem Namen zu erzeugen (aus \"Mein Artikel\" wird \"MeinArtikel\")",
+  "create.autoGenIdPlaceholder": "Leer lassen für automatische Erzeugung aus dem Namen"
 }
