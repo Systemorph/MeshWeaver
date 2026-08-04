@@ -138,6 +138,13 @@ public static class ActivityRunner
                 () => AccessContextScope.FromNode(created, accessService, logger),
                 _ =>
                 {
+                    // Register the run as in flight for the WHOLE of its life, released in the
+                    // Finally below — i.e. at TERMINAL (succeeded / failed / cancelled), not when
+                    // it was merely dispatched. Teardown quiesces on this: it stops starting new
+                    // work and waits for what is running, instead of walking away from it while
+                    // the command still executes against a tearing-down mesh.
+                    var runRegistration = hub.ServiceProvider.GetService<ActivityTracker>()?.Track();
+
                     var cts = new CancellationTokenSource();
                     // Cancel watcher: RequestedStatus = Cancelled trips the command's token
                     // (Activity Control Plane). Subscribed for the life of the run; disposed on
@@ -173,6 +180,8 @@ public static class ActivityRunner
                         {
                             cancelWatch.Dispose();
                             cts.Dispose();
+                            // Terminal: the run is no longer in flight, so teardown may proceed.
+                            runRegistration?.Dispose();
                         })
                         .Select(_ => activityPath);
                 }));
