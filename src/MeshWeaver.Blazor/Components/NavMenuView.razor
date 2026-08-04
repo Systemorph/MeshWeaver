@@ -1,5 +1,6 @@
 @using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
 @inherits SkinnedView<NavMenuControl, NavMenuSkin, NavMenuView>
+@inject AccessService Access
 
 <div class="navmenu">
     @if (Collapsible)
@@ -7,7 +8,7 @@
         <div class="navmenu-toggle-container">
             <!-- Bind the checkbox's checked state to Expanded -->
             <input type="checkbox"
-                   title="Menu expand/collapse toggle"
+                   title="@Access.Localize("menu.expandCollapse")"
                    id="navmenu-toggle"
                    class="navmenu-icon"
                    @bind="Expanded" />
@@ -18,7 +19,7 @@
     }
     <nav class="sitenav @(Expanded ? "expanded" : "collapsed")" aria-labelledby="main-menu">
         <FluentNavMenu Id="main-menu"
-                       Title="Main menu"
+                       Title="@Access.Localize("menu.mainMenu")"
                        CustomToggle="true"
                        @bind-Expanded="Expanded">
             <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />

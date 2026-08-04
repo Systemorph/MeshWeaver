@@ -483,7 +483,7 @@ public static class CommentLayoutAreas
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: flex-end; margin-top: 4px;")
-            .WithView(Controls.Button("Done")
+            .WithView(Controls.Button(host.Localize("common.done"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>
                 {
@@ -581,7 +581,7 @@ public static class CommentLayoutAreas
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithStyle("margin-top: 8px; justify-content: flex-end;")
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(_ =>
                 {
@@ -589,7 +589,7 @@ public static class CommentLayoutAreas
                     host.UpdateData(replyPathStateId, "");
                     return Task.CompletedTask;
                 }))
-            .WithView(Controls.Button("Create")
+            .WithView(Controls.Button(host.Localize("menu.create"))
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.Add())
                 .WithClickAction(ctx =>
@@ -743,7 +743,7 @@ public static class CommentLayoutAreas
         if (!canComment)
         {
             return stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to edit comments.</p>"))
-                .WithView(Controls.Button("Back")
+                .WithView(Controls.Button(host.Localize("common.back"))
                     .WithAppearance(Appearance.Lightweight)
                     .WithIconStart(FluentIcons.ArrowLeft())
                     .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(hubPath, OverviewArea)));
@@ -754,7 +754,7 @@ public static class CommentLayoutAreas
             && !string.Equals(comment.Author, currentUser, StringComparison.OrdinalIgnoreCase))
         {
             return stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">You can only edit your own comments.</p>"))
-                .WithView(Controls.Button("Back")
+                .WithView(Controls.Button(host.Localize("common.back"))
                     .WithAppearance(Appearance.Lightweight)
                     .WithIconStart(FluentIcons.ArrowLeft())
                     .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(hubPath, OverviewArea)));
@@ -771,11 +771,11 @@ public static class CommentLayoutAreas
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(16)
                 .WithStyle("align-items: center;")
-                .WithView(Controls.Button("Done")
+                .WithView(Controls.Button(host.Localize("common.done"))
                     .WithAppearance(Appearance.Lightweight)
                     .WithIconStart(FluentIcons.ArrowLeft())
                     .WithNavigateToHref(doneHref))
-                .WithView(Controls.H2("Edit Comment").WithStyle("margin: 0;"))));
+                .WithView(Controls.H2(host.Localize("ui.editComment")).WithStyle("margin: 0;"))));
 
         // Property editor (auto-generates MarkdownEditorControl for [Markdown] Text field)
         if (node.Content != null)

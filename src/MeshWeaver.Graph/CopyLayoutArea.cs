@@ -28,7 +28,8 @@ public static class CopyLayoutArea
             return null;
         return new("Copy", MeshNodeLayoutAreas.CopyArea,
             RequiredPermission: Permission.Create, Order: 2,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.CopyArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.CopyArea))
+            { LabelKey = "menu.copy" };
     }
 
     /// <summary>
@@ -43,7 +44,7 @@ public static class CopyLayoutArea
             .Select(canCreate => canCreate
                 ? (UiControl?)BuildCopyForm(host, currentPath)
                 : (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
-                    .WithView(Controls.H2("Access Denied").WithStyle("margin: 0 0 16px 0;"))
+                    .WithView(Controls.H2(host.Localize("error.accessDenied")).WithStyle("margin: 0 0 16px 0;"))
                     .WithView(Controls.Html(
                         "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to copy nodes.</p>")));
     }
@@ -68,11 +69,11 @@ public static class CopyLayoutArea
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(16)
             .WithStyle("align-items: center; margin-bottom: 24px;")
-            .WithView(Controls.Button("Back")
+            .WithView(Controls.Button(host.Localize("common.back"))
                 .WithAppearance(Appearance.Lightweight)
                 .WithIconStart(FluentIcons.ArrowLeft())
                 .WithNavigateToHref(backHref))
-            .WithView(Controls.H2("Copy Node").WithStyle("margin: 0;")));
+            .WithView(Controls.H2(host.Localize("ui.copyNode")).WithStyle("margin: 0;")));
 
         // Source (read-only display)
         stack = stack.WithView(Controls.Html(
@@ -99,10 +100,10 @@ public static class CopyLayoutArea
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithStyle("justify-content: flex-end;")
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithNavigateToHref(backHref))
-            .WithView(Controls.Button("Copy")
+            .WithView(Controls.Button(host.Localize("menu.copy"))
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.Copy())
                 .WithClickAction(ctx =>

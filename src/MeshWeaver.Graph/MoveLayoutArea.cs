@@ -29,7 +29,8 @@ public static class MoveLayoutArea
             return null;
         return new("Move", MeshNodeLayoutAreas.MoveArea,
             RequiredPermission: Permission.Delete, Order: 3,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.MoveArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.MoveArea))
+            { LabelKey = "menu.move" };
     }
 
     /// <summary>
@@ -48,7 +49,7 @@ public static class MoveLayoutArea
             {
                 if (!perms.HasFlag(Permission.Delete))
                     return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
-                        .WithView(Controls.H2("Access Denied").WithStyle("margin: 0 0 16px 0;"))
+                        .WithView(Controls.H2(host.Localize("error.accessDenied")).WithStyle("margin: 0 0 16px 0;"))
                         .WithView(Controls.Html(
                             "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to move this node.</p>"));
 
@@ -76,11 +77,11 @@ public static class MoveLayoutArea
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(16)
             .WithStyle("align-items: center; margin-bottom: 24px;")
-            .WithView(Controls.Button("Back")
+            .WithView(Controls.Button(host.Localize("common.back"))
                 .WithAppearance(Appearance.Lightweight)
                 .WithIconStart(FluentIcons.ArrowLeft())
                 .WithNavigateToHref(backHref))
-            .WithView(Controls.H2("Move Node").WithStyle("margin: 0;")));
+            .WithView(Controls.H2(host.Localize("ui.moveNode")).WithStyle("margin: 0;")));
 
         // Source (read-only display)
         stack = stack.WithView(Controls.Html(
@@ -112,10 +113,10 @@ public static class MoveLayoutArea
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithStyle("justify-content: flex-end;")
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithNavigateToHref(backHref))
-            .WithView(Controls.Button("Move")
+            .WithView(Controls.Button(host.Localize("menu.move"))
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.ArrowMove())
                 .WithClickAction(ctx =>

@@ -5,8 +5,9 @@
 @implements IDisposable
 @inject IDialogService DialogService
 @inject IMessageHub Hub
+@inject AccessService Access
 
-<FluentButton BackgroundColor="transparent" OnClick="ToggleNotificationCenterAsync" Title="Notifications">
+<FluentButton BackgroundColor="transparent" OnClick="ToggleNotificationCenterAsync" Title="@Access.Localize("notifications.title")">
     @if (unreadCount > 0)
     {
         <FluentCounterBadge Count="@unreadCount"
@@ -64,7 +65,7 @@
     }
 
     private RenderFragment NotificationIcon() =>
-        @<FluentIcon Value="@(new Size20.Alert())" Color="Color.Neutral" Title="Notifications" />;
+        @<FluentIcon Value="@(new Size20.Alert())" Color="Color.Neutral" Title="@Access.Localize("notifications.title")" />;
 
     private async Task ToggleNotificationCenterAsync()
     {

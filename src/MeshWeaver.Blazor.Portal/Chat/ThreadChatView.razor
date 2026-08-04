@@ -14,10 +14,10 @@
 {
     <div class="thread-resume-view">
         <div class="resume-header">
-            <FluentButton Appearance="FluentAppearance.Stealth" OnClick="SwitchToChatMode" Title="Back to chat">
+            <FluentButton Appearance="FluentAppearance.Stealth" OnClick="SwitchToChatMode" Title="@Access.Localize("chat.backToChat")">
                 <FluentIcon Value="@(new Icons.Regular.Size16.ArrowLeft())" />
             </FluentButton>
-            <span style="font-weight: 600;">Threads</span>
+            <span style="font-weight: 600;">@Access.Localize("chat.threads")</span>
         </div>
         <div class="resume-threads-list">
             @* Live-bound to hub.GetQuery (synced, write-consistent snapshot) — see
@@ -30,7 +30,7 @@
             }
             else if (resumeThreads.Count == 0)
             {
-                <div class="resume-thread-date" style="padding: 12px; text-align: center;">No threads yet</div>
+                <div class="resume-thread-date" style="padding: 12px; text-align: center;">@Access.Localize("chat.noThreadsYet")</div>
             }
             else
             {
@@ -67,7 +67,7 @@ else
                         title="@($"Navigation: {_navLayout} — click for next (top bar → left rail → hidden)")">
                     <FluentIcon Value="@(new Icons.Regular.Size16.Navigation())" Color="Color.Neutral" />
                 </button>
-                <span class="thread-nav-title">Threads</span>
+                <span class="thread-nav-title">@Access.Localize("chat.threads")</span>
                 <button class="thread-nav-new" @onclick="StartNewComposer"
                         title="New chat — start a fresh, empty composer (keeps your harness/agent/model)">
                     <FluentIcon Value="@(new Icons.Regular.Size16.Add())" Color="Color.Neutral" />
@@ -87,7 +87,7 @@ else
             }
 
             <div class="thread-nav-section thread-nav-hierarchy">
-                <div class="thread-nav-section-label">This thread</div>
+                <div class="thread-nav-section-label">@Access.Localize("chat.thisThread")</div>
                 @foreach (var anc in ancestors)
                 {
                     <a class="thread-nav-item thread-nav-ancestor" href="/@anc.Path" title="@anc.Path">
@@ -110,13 +110,13 @@ else
 
             <div class="thread-nav-section thread-nav-others">
                 <div class="thread-nav-section-label">
-                    <span>Other open threads</span>
+                    <span>@Access.Localize("chat.otherOpenThreads")</span>
                     @if (others.Count > 0) { <span class="thread-nav-count">@others.Count</span> }
-                    <span class="thread-nav-hint" title="Option-Tab cycles through them">&#8997;&#8677;</span>
+                    <span class="thread-nav-hint" title="@Access.Localize("chat.optionTabHint")">&#8997;&#8677;</span>
                 </div>
                 @if (others.Count == 0)
                 {
-                    <div class="thread-nav-empty">No other open threads</div>
+                    <div class="thread-nav-empty">@Access.Localize("chat.noOtherOpenThreads")</div>
                 }
                 else
                 {
@@ -133,7 +133,7 @@ else
     }
     else if (ShowThreadNav)
     {
-        <button class="thread-nav-reveal" @onclick="CycleNavLayout" title="Show thread navigation">
+        <button class="thread-nav-reveal" @onclick="CycleNavLayout" title="@Access.Localize("chat.showThreadNavigation")">
             <FluentIcon Value="@(new Icons.Regular.Size16.Navigation())" Color="Color.Neutral" />
         </button>
     }
@@ -179,7 +179,7 @@ else
                     @if (isEditingTitle)
                     {
                         <FluentTextField @ref="_titleEditField" @bind-Value="editTitleText" Immediate="true"
-                                         class="thread-header-title-input" Placeholder="Untitled thread"
+                                         class="thread-header-title-input" Placeholder="@Access.Localize("chat.untitledThread")"
                                          @onkeydown="OnTitleEditKeyDown" @onblur="CommitTitleEdit" />
                     }
                     else
@@ -187,26 +187,26 @@ else
                         var hasTitle = !string.IsNullOrWhiteSpace(ThreadViewModel?.Name);
                         <div class="thread-header-title @(IsReadOnlyThread ? "" : "editable") @(hasTitle ? "" : "untitled")"
                              @onclick="BeginTitleEdit"
-                             title="@(IsReadOnlyThread ? null : "Click to edit title")">@(hasTitle ? ThreadViewModel!.Name : "Untitled thread")</div>
+                             title="@(IsReadOnlyThread ? null : Access.Localize("chat.clickToEditTitle"))">@(hasTitle ? ThreadViewModel!.Name : Access.Localize("chat.untitledThread"))</div>
                     }
 
                     @* Description — smaller abstract; click to edit (writes the thread node's Description). *@
                     @if (isEditingDescription)
                     {
                         <FluentTextArea @ref="_descEditField" @bind-Value="editDescriptionText" Immediate="true"
-                                        class="thread-header-desc-input" Rows="2" Placeholder="Add a description…"
+                                        class="thread-header-desc-input" Rows="2" Placeholder="@Access.Localize("chat.addDescription")"
                                         @onkeydown="OnDescriptionEditKeyDown" @onblur="CommitDescriptionEdit" />
                     }
                     else if (!string.IsNullOrWhiteSpace(ThreadViewModel?.Description))
                     {
                         <div class="thread-header-desc @(IsReadOnlyThread ? "" : "editable")"
                              @onclick="BeginDescriptionEdit"
-                             title="@(IsReadOnlyThread ? null : "Click to edit description")">@ThreadViewModel!.Description</div>
+                             title="@(IsReadOnlyThread ? null : Access.Localize("chat.clickToEditDescription"))">@ThreadViewModel!.Description</div>
                     }
                     else if (!IsReadOnlyThread)
                     {
                         <div class="thread-header-desc editable placeholder"
-                             @onclick="BeginDescriptionEdit" title="Click to add a description">Add a description…</div>
+                             @onclick="BeginDescriptionEdit" title="@Access.Localize("chat.clickToAddDescription")">@Access.Localize("chat.addDescription")</div>
                     }
                 </div>
             }
@@ -274,11 +274,11 @@ else
                                 @{ var isLiveStreaming = state.Status == "Streaming" && ThreadViewModel?.IsExecuting == true; }
                                 @if (isLiveStreaming && state.Timestamp.HasValue)
                                 {
-                                    <span class="thread-msg-elapsed thread-msg-elapsed-live" title="Streaming...">@FormatElapsed(state.Timestamp)</span>
+                                    <span class="thread-msg-elapsed thread-msg-elapsed-live" title="@Access.Localize("chat.streaming")">@FormatElapsed(state.Timestamp)</span>
                                 }
                                 else if (state.Timestamp.HasValue && state.CompletedAt.HasValue)
                                 {
-                                    <span class="thread-msg-elapsed" title="Stream duration">@FormatElapsed(state.Timestamp, state.CompletedAt)</span>
+                                    <span class="thread-msg-elapsed" title="@Access.Localize("chat.streamDuration")">@FormatElapsed(state.Timestamp, state.CompletedAt)</span>
                                 }
                                 @if (state.InputTokens.HasValue || state.OutputTokens.HasValue)
                                 {
@@ -311,16 +311,16 @@ else
                                 <div class="thread-msg-inline-actions">
                                     @if (isUser && !IsReadOnlyThread)
                                     {
-                                        <button class="thread-msg-action-btn" @onclick="() => StartEdit(msgId)" title="Edit">&#9998;</button>
-                                        <button class="thread-msg-action-btn" @onclick="() => ResubmitMessage(msgId)" title="Resubmit">&#8635;</button>
-                                        <button class="thread-msg-action-btn" @onclick="() => DeleteFromMessage(msgId)" title="Delete from here">&#128465;</button>
+                                        <button class="thread-msg-action-btn" @onclick="() => StartEdit(msgId)" title="@Access.Localize("common.edit")">&#9998;</button>
+                                        <button class="thread-msg-action-btn" @onclick="() => ResubmitMessage(msgId)" title="@Access.Localize("chat.resubmit")">&#8635;</button>
+                                        <button class="thread-msg-action-btn" @onclick="() => DeleteFromMessage(msgId)" title="@Access.Localize("chat.deleteFromHere")">&#128465;</button>
                                     }
                                     @if (state.UpdatedNodes is { Count: > 0 } && !IsReadOnlyThread)
                                     {
                                         <button class="thread-msg-action-btn" @onclick="() => UndoMessageChanges(msgId)"
                                                 title="Undo the @(state.UpdatedNodes.Count) node change(s) this message made">&#8630;</button>
                                     }
-                                    <button class="thread-msg-action-btn" @onclick="() => NewThreadFromCell(msgId)" title="New thread from this cell">&#8599;</button>
+                                    <button class="thread-msg-action-btn" @onclick="() => NewThreadFromCell(msgId)" title="@Access.Localize("chat.newThreadFromCell")">&#8599;</button>
                                 </div>
                             }
                         }
@@ -371,7 +371,7 @@ else
                                             @if (isPending && delHeader is { IsExecuting: true, StartedAt: { } delStarted })
                                             {
                                                 <span class="thread-msg-tool-delegation-elapsed"
-                                                      title="Running — elapsed since the sub-thread started">@FormatElapsed(delStarted)</span>
+                                                      title="@Access.Localize("chat.runningSubThreadElapsed")">@FormatElapsed(delStarted)</span>
                                             }
                                         </a>
                                     }
@@ -394,7 +394,7 @@ else
                                                     {
                                                         <a class="thread-msg-tool-action"
                                                            href="/@display.Path/VersionDiff?from=@(change.VersionBefore)&to=@(change.VersionAfter)"
-                                                           @onclick:stopPropagation>Diff</a>
+                                                           @onclick:stopPropagation>@Access.Localize("chat.diff")</a>
                                                     }
                                                     @if (change.VersionBefore.HasValue)
                                                     {
@@ -483,15 +483,15 @@ else
             {
                 <div class="empty-thread-message">
                     <FluentProgressRing />
-                    <p>Creating thread...</p>
+                    <p>@Access.Localize("chat.creatingThread")</p>
                 </div>
             }
             else if (!hasAnyMessage && string.IsNullOrEmpty(threadPath))
             {
                 <div class="empty-thread-message">
                     <FluentIcon Value="@(new Icons.Regular.Size48.Chat())" Color="Color.Neutral" />
-                    <p>Start a conversation</p>
-                    <p class="hint">Use @("@") references to include context from other nodes</p>
+                    <p>@Access.Localize("chat.startConversation")</p>
+                    <p class="hint">@Access.Localize("chat.startConversationHint")</p>
                 </div>
             }
             @* Thread-total impact — the aggregate of every node changed across this thread's
@@ -526,7 +526,7 @@ else
                    the chip auto-hides for the brief StartingExecution window. *@
                 @if (ThreadViewModel.ExecutionStartedAt is { } started)
                 {
-                    <span class="thread-exec-elapsed" title="Elapsed since round started">@FormatElapsed(started)</span>
+                    <span class="thread-exec-elapsed" title="@Access.Localize("chat.elapsedSinceRound")">@FormatElapsed(started)</span>
                 }
                 @if (!IsReadOnlyThread)
                 {
@@ -580,14 +580,14 @@ else
             @if (runningSubThreads.Count > 0)
             {
                 <div class="thread-runtime-section thread-runtime-subthreads">
-                    <div class="thread-runtime-section-label">Running sub-threads</div>
+                    <div class="thread-runtime-section-label">@Access.Localize("chat.runningSubThreads")</div>
                     @foreach (var (path, header) in runningSubThreads)
                     {
                         var subIcon = header.Icon ?? "/static/NodeTypeIcons/chat.svg";
                         var subTitle = header.Title ?? path;
                         var preview = !string.IsNullOrWhiteSpace(header.StreamingText)
                             ? TruncateText(header.StreamingText.Trim(), 200)
-                            : (header.ExecutionStatus ?? "Working…");
+                            : (header.ExecutionStatus ?? Access.Localize("chat.working"));
                         <a class="thread-runtime-subthread-card" href="/@path" title="@subTitle">
                             <img src="@subIcon" alt="" class="thread-runtime-subthread-icon" />
                             <div class="thread-runtime-subthread-body">
@@ -598,7 +598,7 @@ else
                                        hasn't stamped ExecutionStartedAt yet; chip auto-hides. *@
                                     @if (header.StartedAt is { } subStarted)
                                     {
-                                        <span class="thread-runtime-subthread-elapsed" title="Elapsed since sub-thread started">@FormatElapsed(subStarted)</span>
+                                        <span class="thread-runtime-subthread-elapsed" title="@Access.Localize("chat.subThreadElapsed")">@FormatElapsed(subStarted)</span>
                                     }
                                 </div>
                                 <div class="thread-runtime-subthread-preview">@preview</div>
@@ -612,7 +612,7 @@ else
             {
                 <div class="thread-runtime-section thread-runtime-scheduled">
                     <div class="thread-runtime-section-label">
-                        Scheduled <span class="thread-runtime-hint">— waiting for current round to finish</span>
+                        @Access.Localize("chat.scheduled") <span class="thread-runtime-hint">@Access.Localize("chat.waitingForRound")</span>
                     </div>
                     @foreach (var pendingText in runtimeScheduled)
                     {
@@ -645,8 +645,8 @@ else
             <div class="thread-allocating-panel">
                 <FluentProgressRing Style="width: 28px; height: 28px;" />
                 <div class="thread-allocating-text">
-                    <div class="thread-allocating-title">Allocating agent…</div>
-                    <div class="thread-allocating-subtitle">Creating conversation and redirecting</div>
+                    <div class="thread-allocating-title">@Access.Localize("chat.allocatingAgent")</div>
+                    <div class="thread-allocating-subtitle">@Access.Localize("chat.creatingConversation")</div>
                 </div>
             </div>
             @if (!string.IsNullOrWhiteSpace(lastSubmittedText))
@@ -675,7 +675,7 @@ else
                 @if (!string.IsNullOrEmpty(boundHarness))
                 {
                     <button type="button" class="thread-chat-status-item is-clickable"
-                            title="Harness — click to switch runtime" @onclick='() => OnStatusChipClick("harness", false)'>
+                            title="@Access.Localize("chat.harnessTooltip")" @onclick='() => OnStatusChipClick("harness", false)'>
                         @HarnessIcon(boundHarness) @harnessId
                     </button>
                 }
@@ -695,7 +695,7 @@ else
                     @if (isClaudeCode)
                     {
                         <button type="button" class="thread-chat-status-item is-clickable"
-                                title="Reasoning effort — click to change" @onclick='() => OnStatusChipClick("effort", true)'>
+                                title="@Access.Localize("chat.reasoningTooltip")" @onclick='() => OnStatusChipClick("effort", true)'>
                             @ChipSvg("effort") @(string.IsNullOrEmpty(harnessRt?.Effort) ? "…" : harnessRt!.Effort)
                         </button>
                     }
@@ -705,7 +705,7 @@ else
                     @if (!string.IsNullOrEmpty(boundAgentPath))
                     {
                         <button type="button" class="thread-chat-status-item is-clickable"
-                                title="Agent — click to change" @onclick='() => OnStatusChipClick("agent", false)'>
+                                title="@Access.Localize("chat.agentTooltip")" @onclick='() => OnStatusChipClick("agent", false)'>
                             @ChipSvg("agent") @LastSegment(boundAgentPath)
                         </button>
                     }
@@ -734,7 +734,7 @@ else
             <div class="thread-chat-widget" @onkeydown:stopPropagation="true">
                 <div class="thread-chat-widget-header">
                     <span>Delete @_deleteConfirmMessageCount message@(_deleteConfirmMessageCount == 1 ? "" : "s")?</span>
-                    <button class="thread-msg-action-btn" @onclick="CancelDelete" title="Close">&#10005;</button>
+                    <button class="thread-msg-action-btn" @onclick="CancelDelete" title="@Access.Localize("common.close")">&#10005;</button>
                 </div>
                 <div style="padding:12px 14px; display:flex; flex-direction:column; gap:12px;">
                     <div style="color:var(--neutral-foreground-hint); line-height:1.4;">
@@ -748,10 +748,10 @@ else
                                 @onclick="() => ConfirmDelete(true)">Delete &amp; undo @_deleteConfirmChangeCount change@(_deleteConfirmChangeCount == 1 ? "" : "s")</button>
                         <button type="button" class="thread-msg-action-btn"
                                 style="padding:6px 12px; border:1px solid var(--neutral-stroke-rest); border-radius:4px;"
-                                @onclick="() => ConfirmDelete(false)">Delete only</button>
+                                @onclick="() => ConfirmDelete(false)">@Access.Localize("chat.deleteOnly")</button>
                         <button type="button" class="thread-msg-action-btn"
                                 style="padding:6px 12px; border-radius:4px;"
-                                @onclick="CancelDelete">Cancel</button>
+                                @onclick="CancelDelete">@Access.Localize("common.cancel")</button>
                     </div>
                 </div>
             </div>
@@ -767,13 +767,13 @@ else
             <div class="thread-chat-widget" @onkeydown:stopPropagation="true">
                 <div class="thread-chat-widget-header">
                     <span>Log in to @(_loginHarness!.Definition.DisplayName)</span>
-                    <button class="thread-msg-action-btn" @onclick="CancelConnect" title="Close">&#10005;</button>
+                    <button class="thread-msg-action-btn" @onclick="CancelConnect" title="@Access.Localize("common.close")">&#10005;</button>
                 </div>
                 <FluentStack Orientation="Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical" VerticalGap="10"
                              Style="padding:12px 14px; flex:1 1 auto; min-height:0; overflow-y:auto;">
                     @if (_loginMethod is null)
                     {
-                        <div style="color:var(--neutral-foreground-hint);">How do you want to sign in?</div>
+                        <div style="color:var(--neutral-foreground-hint);">@Access.Localize("login.howSignIn")</div>
                         @* Account/browser login is offered ONLY for providers whose device flow can
                            complete on this portal. It is suppressed for ClaudeCode: that flow drives
                            `claude setup-token` server-side and scrapes the token from stdout, but the CLI
@@ -788,9 +788,9 @@ else
                             </FluentButton>
                         }
                         <FluentButton Appearance="@(_connectProvider is MeshWeaver.AI.Connect.ConnectProvider.ClaudeCode ? FluentAppearance.Accent : FluentAppearance.Neutral)" Style="width:100%;"
-                                      OnClick="@(() => ChooseLoginMethod("apiKey"))">Paste a subscription token or API key</FluentButton>
+                                      OnClick="@(() => ChooseLoginMethod("apiKey"))">@Access.Localize("login.pasteToken")</FluentButton>
                         <FluentButton Appearance="FluentAppearance.Neutral" Style="width:100%;"
-                                      OnClick="@(() => ChooseLoginMethod("gateway"))">Use a gateway / proxy</FluentButton>
+                                      OnClick="@(() => ChooseLoginMethod("gateway"))">@Access.Localize("login.useGateway")</FluentButton>
                     }
                     else if (_loginMethod == "account")
                     {
@@ -803,19 +803,19 @@ else
                             case MeshWeaver.AI.Connect.ConnectStatus.Error err:
                                 <div style="color:var(--error-foreground, #dc2626);">@err.Reason</div>
                                 <FluentButton Appearance="FluentAppearance.Accent"
-                                              OnClick="@(() => StartHarnessConnect(_loginHarness!))">Try again</FluentButton>
+                                              OnClick="@(() => StartHarnessConnect(_loginHarness!))">@Access.Localize("common.retry")</FluentButton>
                                 <FluentButton Appearance="FluentAppearance.Neutral"
-                                              OnClick="@(() => ChooseLoginMethod("apiKey"))">Use an API key instead</FluentButton>
+                                              OnClick="@(() => ChooseLoginMethod("apiKey"))">@Access.Localize("login.useApiKeyInstead")</FluentButton>
                                 break;
 
                             case MeshWeaver.AI.Connect.ConnectStatus.Connecting c when !string.IsNullOrEmpty(c.Challenge.VerificationUrl):
                                 <div><strong>1</strong>&nbsp; Open the authorization page and approve:</div>
                                 <FluentAnchor Href="@c.Challenge.VerificationUrl" Target="_blank"
-                                              Appearance="FluentAppearance.Accent">Open authorization page&nbsp;↗</FluentAnchor>
+                                              Appearance="FluentAppearance.Accent">@Access.Localize("login.openAuthPage")</FluentAnchor>
                                 @if (c.Challenge.RequiresPastedCode)
                                 {
                                     <div style="margin-top:4px;"><strong>2</strong>&nbsp; Paste the code shown, then submit:</div>
-                                    <FluentTextField @bind-Value="_connectCode" Immediate="true" Placeholder="Paste code"
+                                    <FluentTextField @bind-Value="_connectCode" Immediate="true" Placeholder="@Access.Localize("chat.pasteCode")"
                                                      @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
                                     <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
                                                   Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
@@ -823,13 +823,13 @@ else
                                 }
                                 else if (!string.IsNullOrEmpty(c.Challenge.UserCode))
                                 {
-                                    <div>Enter this code in the browser: <strong>@c.Challenge.UserCode</strong></div>
-                                    <div style="color:var(--neutral-foreground-hint);">Waiting for authorization…</div>
+                                    <div>@Access.Localize("login.enterCodeInBrowser") <strong>@c.Challenge.UserCode</strong></div>
+                                    <div style="color:var(--neutral-foreground-hint);">@Access.Localize("login.waitingForAuth")</div>
                                 }
                                 break;
 
                             default:
-                                <div style="color:var(--neutral-foreground-hint);">Starting login…</div>
+                                <div style="color:var(--neutral-foreground-hint);">@Access.Localize("login.startingLogin")</div>
                                 break;
                         }
                     }
@@ -841,9 +841,9 @@ else
                         }
                         @if (_loginMethod == "gateway")
                         {
-                            <div>Gateway base URL:</div>
+                            <div>@Access.Localize("login.gatewayBaseUrl")</div>
                             <FluentTextField @bind-Value="_connectBaseUrl" Immediate="true" Placeholder="https://…" Style="width:100%;" />
-                            <div style="margin-top:4px;">Gateway token:</div>
+                            <div style="margin-top:4px;">@Access.Localize("login.gatewayToken")</div>
                         }
                         else
                         {
@@ -878,7 +878,7 @@ else
                  @onkeydown:stopPropagation="true">
                 <div class="thread-chat-widget-header">
                     <span>@picker.Title</span>
-                    <button class="thread-msg-action-btn" @onclick="DismissWidget" title="Close">&#10005;</button>
+                    <button class="thread-msg-action-btn" @onclick="DismissWidget" title="@Access.Localize("common.close")">&#10005;</button>
                 </div>
                 <div class="thread-chat-widget-list">
                     @for (var i = 0; i < pickerNodes.Count; i++)
@@ -924,12 +924,12 @@ else
                     }
                     @if (pickerNodes.Count == 0)
                     {
-                        <div class="thread-chat-widget-empty">Nothing to pick.</div>
+                        <div class="thread-chat-widget-empty">@Access.Localize("chat.nothingToPick")</div>
                     }
                     else if (_pickerHighlight < 0)
                     {
                         @* Titles only, nothing selectable — e.g. providers present but no models. *@
-                        <div class="thread-chat-widget-empty">No models available to select.</div>
+                        <div class="thread-chat-widget-empty">@Access.Localize("chat.noModelsAvailable")</div>
                     }
                 </div>
             </div>
@@ -1007,7 +1007,7 @@ else
                     <FluentButton Appearance="@(_dictationState == "recording" ? FluentAppearance.Accent : FluentAppearance.Stealth)"
                                   OnClick="ToggleDictation"
                                   Disabled="@(_dictationState == "transcribing")"
-                                  Title="@(_dictationError ?? (_dictationState == "recording" ? "Stop & transcribe" : "Dictate"))">
+                                  Title="@(_dictationError ?? (_dictationState == "recording" ? Access.Localize("chat.stopAndTranscribe") : Access.Localize("chat.dictate")))">
                         @if (_dictationState == "transcribing")
                         {
                             <FluentProgressRing Style="width: 20px; height: 20px;" />
@@ -1020,7 +1020,7 @@ else
                 }
                 @if (!submissionHandler.IsInputEnabled)
                 {
-                    <FluentButton Appearance="FluentAppearance.Accent" Disabled="true" Title="Sending...">
+                    <FluentButton Appearance="FluentAppearance.Accent" Disabled="true" Title="@Access.Localize("common.sending")">
                         <FluentProgressRing Style="width: 20px; height: 20px;" />
                     </FluentButton>
                 }
@@ -1033,7 +1033,7 @@ else
                        no model. *@
                     <FluentButton Appearance="FluentAppearance.Accent" OnClick="SendMessage"
                                   Disabled="@(string.IsNullOrWhiteSpace(MessageText))"
-                                  Title="Send">
+                                  Title="@Access.Localize("common.send")">
                         <FluentIcon Value="@(new Icons.Regular.Size20.Send())" Color="Color.Neutral" />
                     </FluentButton>
                 }

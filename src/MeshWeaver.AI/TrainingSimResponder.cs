@@ -155,13 +155,13 @@ public static class TrainingSimResponder
     /// fenced code block becomes the code pane; everything else renders as the
     /// output markdown. A reply without a fence yields an empty code pane.
     /// </summary>
-    public static PromptCellResponse Project(ThreadMessage message)
+    public static PromptCellResponse Project(ThreadMessage message, string? locale = null)
     {
         ArgumentNullException.ThrowIfNull(message);
         var text = message.Text ?? "";
         var (code, remainder) = ExtractFirstCodeFence(text);
         var output = string.IsNullOrWhiteSpace(remainder)
-            ? Controls.Markdown("_(no further output)_")
+            ? Controls.Markdown(LocalizationCatalog.Get("ui.mdNoFurtherOutput", locale))
             : Controls.Markdown(remainder);
         return new PromptCellResponse(code, output);
     }

@@ -2,6 +2,7 @@
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.FluentUI.AspNetCore.Components;
 
@@ -72,13 +73,13 @@ public partial class EditFormView
 
     private void ShowSuccess()
     {
-        var message = "Saved successfully";
+        var message = Access.Localize("error.saveSucceeded");
         ToastService.ShowToast(ToastIntent.Success, message);
     }
 
     private void ShowError()
     {
-        var message = "Saving failed";
+        var message = Access.Localize("error.saveFailed");
         ToastService.ShowToast(ToastIntent.Error, message);
     }
 

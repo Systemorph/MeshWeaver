@@ -12,12 +12,13 @@
 @using FluentOrientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @inject IJSRuntime JSRuntime
 @implements IAsyncDisposable
+@inject AccessService Access
 
 <div class="notebook-editor" @ref="containerRef" tabindex="-1" @onkeydown="OnGlobalKeyDown">
     <div class="notebook-toolbar">
         <FluentButton Appearance="FluentAppearance.Stealth"
                       IconStart="@(new Icons.Regular.Size20.Code())"
-                      Title="Add code cell"
+                      Title="@Access.Localize("notebook.addCode")"
                       Disabled="@BoundReadonly"
                       OnClick="() => AddCellBelow(selectedCellIndex, NotebookCellType.Code)">
             + Code
@@ -25,7 +26,7 @@
 
         <FluentButton Appearance="FluentAppearance.Stealth"
                       IconStart="@(new Icons.Regular.Size20.Markdown())"
-                      Title="Add markdown cell"
+                      Title="@Access.Localize("notebook.addMarkdown")"
                       Disabled="@BoundReadonly"
                       OnClick="() => AddCellBelow(selectedCellIndex, NotebookCellType.Markdown)">
             + Markdown
@@ -35,7 +36,7 @@
 
         <FluentButton Appearance="FluentAppearance.Stealth"
                       IconStart="@(new Icons.Regular.Size20.Play())"
-                      Title="Run all cells"
+                      Title="@Access.Localize("notebook.runAll")"
                       Disabled="@(BoundReadonly || isRunningAll)"
                       OnClick="RunAllCells">
             Run All
@@ -43,7 +44,7 @@
 
         <FluentButton Appearance="FluentAppearance.Stealth"
                       IconStart="@(new Icons.Regular.Size20.DismissCircle())"
-                      Title="Clear all outputs"
+                      Title="@Access.Localize("notebook.clearOutputs")"
                       Disabled="@BoundReadonly"
                       OnClick="ClearAllOutputs">
             Clear Outputs
@@ -52,7 +53,7 @@
         @if (isRunningAll)
         {
             <FluentProgressRing Style="width: 20px; height: 20px; margin-left: 8px;" />
-            <span style="margin-left: 4px; font-size: 12px;">Running...</span>
+            <span style="margin-left: 4px; font-size: 12px;">@Access.Localize("ui.running")</span>
         }
     </div>
 
@@ -84,7 +85,7 @@
         @if (cellControls.Count == 0)
         {
             <div class="notebook-empty">
-                <p>This notebook is empty.</p>
+                <p>@Access.Localize("ui.notebookEmpty")</p>
                 <FluentButton Appearance="FluentAppearance.Accent"
                               IconStart="@(new Icons.Regular.Size20.Code())"
                               Disabled="@BoundReadonly"

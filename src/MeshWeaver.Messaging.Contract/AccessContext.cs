@@ -41,6 +41,17 @@ public record AccessContext
     public string? TimeZoneId { get; init; }
 
     /// <summary>
+    /// The principal's preferred UI language as a BCP-47 tag (e.g. <c>de</c>, <c>en</c>),
+    /// resolved from the user's profile when the context is built. Rides on the identity —
+    /// exactly like <see cref="TimeZoneId"/> — so every render path translates in the viewer's
+    /// language: the Blazor circuit AND server-side hub layout areas that have no browser and
+    /// no ambient <c>CultureInfo.CurrentUICulture</c>. Resolution is explicit (never ambient
+    /// culture) because a hub render hops schedulers, where an AsyncLocal culture would not
+    /// survive. Null/empty/unsupported → English.
+    /// </summary>
+    public string? Locale { get; init; }
+
+    /// <summary>
     /// When set, indicates that this context is impersonated by another identity
     /// (e.g., a portal hub acting on behalf of a virtual user).
     /// The impersonator's identity is used for authorization when the

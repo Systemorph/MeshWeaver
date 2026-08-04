@@ -1,5 +1,6 @@
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
 
@@ -22,7 +23,28 @@ public record GlobalSettingsMenuItemDefinition(
     string? Group = null,
     object? Icon = null,
     object? GroupIcon = null,
-    int Order = 0);
+    int Order = 0)
+{
+    /// <summary>
+    /// Optional localization key for <see cref="Label"/>. See
+    /// <see cref="SettingsMenuItemDefinition.LabelKey"/>.
+    /// </summary>
+    public string? LabelKey { get; init; }
+
+    /// <summary>Optional localization key for <see cref="Group"/>.</summary>
+    public string? GroupKey { get; init; }
+
+    /// <summary>
+    /// This tab with <see cref="Label"/> and <see cref="Group"/> resolved into the current viewer's
+    /// language. Applied at menu render, where the subscriber's AccessService is available.
+    /// </summary>
+    public GlobalSettingsMenuItemDefinition Localized(AccessService? access)
+        => this with
+        {
+            Label = LabelKey is { Length: > 0 } lk ? access.Localize(lk) : Label,
+            Group = GroupKey is { Length: > 0 } gk ? access.Localize(gk) : Group,
+        };
+}
 
 /// <summary>
 /// Delegate that builds the content for a global settings tab.

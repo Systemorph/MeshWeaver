@@ -279,32 +279,59 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// <summary>
     /// The DEFAULT model id to fall back to when a selected model no longer resolves — the
     /// LOWEST-<see cref="MeshNode.Order"/> <c>LanguageModel</c> in the live catalog whose credentials
-    /// actually resolve (so the fallback is never ANOTHER broken model). Mirrors
+    /// actually resolve (so the fallback is never ANOTHER broken model).
+    ///
+    /// <para><b>Routers are excluded</b> (<see cref="ModelDefinition.IsRouter"/>): the Auto entry
+    /// dispatches to a real model rather than serving a round, so it must never become the default —
+    /// not even when it deliberately sorts first in the picker at a very low Order. Auto is reachable
+    /// only by an explicit pick.</para>
+    ///
+    /// Mirrors
     /// <c>AgentPickerProjection.ObserveDefaultComposer</c>'s "lowest Order wins" rule, read from the
     /// same warm snapshot this resolver already maintains. Returns <c>null</c> when no model in the
     /// catalog resolves (e.g. a deployment whose models bypass the catalog entirely).
     /// </summary>
-    public string? ResolveDefaultModelId()
-    {
-        var snapshot = ReadSnapshot();
-        return snapshot
+    public string? ResolveDefaultModelId() =>
+        ModelSizeCatalog.Default(ReadSizeCandidates(), HasUsableCredential);
+
+    /// <summary>
+    /// The model an agent asking for a SIZE should run on — the lowest-Order model whose node carries
+    /// that <see cref="ModelDefinition.Size"/> label, else the deployment default. Accepts the legacy
+    /// tier vocabulary too (<c>utility</c>/<c>light</c>/<c>standard</c>/<c>heavy</c>).
+    ///
+    /// <para>A size nobody carries is a MISS, not a failure: it falls through to
+    /// <see cref="ResolveDefaultModelId"/>, which is what lets an environment label only the models
+    /// it cares about. Routers (the Auto entry) are excluded — resolving a size to Auto would hand
+    /// the round to something that dispatches rather than answers.</para>
+    /// </summary>
+    /// <param name="sizeOrTier">"S"/"M"/"L"/"XL", or a legacy tier name. Null/unknown → the default.</param>
+    /// <returns>The model id, or <c>null</c> when nothing in the catalog is usable.</returns>
+    public string? ResolveModelIdForSize(string? sizeOrTier) =>
+        ModelSizeCatalog.ResolveOrDefault(sizeOrTier, ReadSizeCandidates(), HasUsableCredential);
+
+    /// <summary>
+    /// Projects the warm snapshot's <c>LanguageModel</c> nodes into the flat shape the selection
+    /// rules work on. Rank comes from <see cref="MeshNode.Order"/>, falling back to the
+    /// <see cref="ModelDefinition.Order"/> when the node carries none — mirroring the picker
+    /// (<c>ToModelInfo</c> reads <c>def.Order</c>), so a per-model default (Order = -1) is honoured
+    /// whether the Order lives on the node or only in its content. Without that fallback a BYO model
+    /// that set only <see cref="ModelDefinition.Order"/> ranked 0 here while ranking correctly in
+    /// the picker.
+    /// </summary>
+    public IReadOnlyList<ModelSizeCandidate> ReadSizeCandidates() =>
+        ReadSnapshot()
             .Where(n => string.Equals(n.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
             .Select(n =>
             {
                 var def = ExtractContent<ModelDefinition>(n.Content);
-                // Rank by MeshNode.Order, falling back to the ModelDefinition's Order when the node
-                // carries none — mirrors the picker (ToModelInfo reads def.Order), so a per-model
-                // default (DeepSeek-V4-Flash → -1) is honoured whether the Order lives on the node
-                // or only on its content. Without the def fallback a BYO model that set only
-                // ModelDefinition.Order ranked 0 here while ranking correctly in the picker.
-                var order = n.Order ?? (def?.Order ?? 0);
-                return (Order: order, Id: def?.Id);
+                return new ModelSizeCandidate(
+                    def?.Id ?? string.Empty,
+                    n.Order ?? (def?.Order ?? 0),
+                    def?.Size,
+                    def?.IsRouter == true);
             })
-            .Where(x => !string.IsNullOrEmpty(x.Id))
-            .OrderBy(x => x.Order)
-            .Select(x => x.Id!)
-            .FirstOrDefault(HasUsableCredential);
-    }
+            .Where(c => !string.IsNullOrEmpty(c.Id))
+            .ToList();
 
     /// <summary>
     /// True when <paramref name="modelId"/> resolves to a credential the model factories can ACTUALLY

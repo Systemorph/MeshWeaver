@@ -41,11 +41,12 @@ public static class WhatsNewSettingsTab
                 ContentBuilder: BuildContent,
                 Icon: FluentIcons.Sparkle(),
                 Order: 910)
+            { LabelKey = "settings.whatsNew" }
         });
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
     {
-        stack = stack.WithView(Controls.H2("What's New").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.whatsNew")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Markdown(
             "Recent changes shipped in the platform, newest first. Open an entry to read the full note."));
 
@@ -63,9 +64,9 @@ public static class WhatsNewSettingsTab
                 h.Hub.ServiceProvider.GetService<ILoggerFactory>()?
                     .CreateLogger(nameof(WhatsNewSettingsTab))
                     .LogWarning(ex, "What's New listing failed for {Namespace}", WhatsNewNamespace);
-                return Observable.Return((UiControl?)Controls.Markdown("_Could not load What's New right now._"));
+                return Observable.Return((UiControl?)Controls.Markdown(host.Localize("ui.mdWhatsNewFailed")));
             })
-            .StartWith((UiControl?)Controls.Markdown("_Loading…_")));
+            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoading"))));
 
         return stack;
     }

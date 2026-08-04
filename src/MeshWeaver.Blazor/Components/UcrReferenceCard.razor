@@ -3,11 +3,12 @@
 @using MeshWeaver.Layout
 @using MeshWeaver.Mesh.Services
 @inject IPathResolver PathResolver
+@inject AccessService Access
 
 @* Uses the Thumbnail layout area from MeshNodeView - same as catalog *@
 @if (IsLoading)
 {
-    <div class="ucr-reference-loading">Loading...</div>
+    <div class="ucr-reference-loading">@Access.Localize("common.loading")</div>
 }
 else if (ResolvedViewModel != null)
 {

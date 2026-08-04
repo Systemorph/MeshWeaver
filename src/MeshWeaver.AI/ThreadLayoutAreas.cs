@@ -122,7 +122,7 @@ public static class ThreadLayoutAreas
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("justify-content: flex-end; padding: 0 0 12px 0;")
-                .WithView(Controls.Button("Create Thread")
+                .WithView(Controls.Button(host.Localize("ui.createThread"))
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.Add())
                     .WithNavigateToHref(createUrl)))
@@ -770,7 +770,7 @@ public static class ThreadLayoutAreas
     /// → roll back to it; a freshly Created node (no prior version) → delete it. See <see cref="UndoNodeChange"/>.
     /// </summary>
     internal static UiControl BuildModifiedNodesView(
-        ImmutableList<NodeChangeEntry> updates, string threadPath, string headerLabel, bool undoAll)
+        ImmutableList<NodeChangeEntry> updates, string threadPath, string headerLabel, bool undoAll, string? locale = null)
     {
         var threadIdx = threadPath.IndexOf("/_Thread/", StringComparison.Ordinal);
         var shortenPrefix = threadIdx > 0 ? threadPath[..(threadIdx + 1)] : null;
@@ -803,7 +803,7 @@ public static class ThreadLayoutAreas
             if (entry.VersionBefore is { } vb)
                 row = row.WithView(Controls.Badge($"v{vb}").WithStyle("font-family:monospace; font-size:0.72rem;"));
             else if (op.Equals("Created", StringComparison.OrdinalIgnoreCase))
-                row = row.WithView(Controls.Label("new")
+                row = row.WithView(Controls.Label(LocalizationCatalog.Get("ui.new", locale))
                     .WithStyle("font-size:0.72rem; font-style:italic; color:var(--neutral-foreground-hint);"));
 
             row = row.WithView(Controls.Label("→").WithStyle("color:var(--neutral-foreground-hint);"));
@@ -812,7 +812,7 @@ public static class ThreadLayoutAreas
                 row = row.WithView(Controls.Badge($"v{va}")
                     .WithStyle("font-family:monospace; font-size:0.72rem; font-weight:600;"));
             else if (op.Equals("Deleted", StringComparison.OrdinalIgnoreCase))
-                row = row.WithView(Controls.Label("deleted")
+                row = row.WithView(Controls.Label(LocalizationCatalog.Get("ui.deleted", locale))
                     .WithStyle("font-size:0.72rem; font-style:italic; color:var(--neutral-foreground-hint);"));
 
             if (entry.VersionBefore.HasValue && entry.VersionAfter.HasValue)
@@ -821,7 +821,7 @@ public static class ThreadLayoutAreas
                     .WithStyle("font-size:0.74rem;"));
 
             var e = entry; // capture per-iteration for the click closure
-            row = row.WithView(Controls.Button("Undo")
+            row = row.WithView(Controls.Button(LocalizationCatalog.Get("chat.undo", locale))
                 .WithAppearance(Appearance.Stealth)
                 .WithIconStart(FluentIcons.ArrowUndo(IconSize.Size16))
                 .WithClickAction(ctx => UndoNodeChange(ctx.Hub, e)));

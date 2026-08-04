@@ -34,7 +34,7 @@ public static class LocalPortal
                     .WithColumn(new PropertyColumnControl<string> { Property = "type" }.WithTitle("Type")), "nodes")
                 // A live catalog (the new MeshSearch control) querying the local mesh — proves the
                 // query-driven Wave-2 controls render natively. Type to filter; cards come from hub.GetQuery.
-                .WithView(Controls.Markdown("## Catalog"), "catalogTitle")
+                .WithView(Controls.Markdown(host.Localize("ui.mdCatalogHeading")), "catalogTitle")
                 .WithView(Controls.MeshSearch
                     .WithHiddenQuery("is:main")
                     .WithPlaceholder("Search the local mesh…"), "catalog"));

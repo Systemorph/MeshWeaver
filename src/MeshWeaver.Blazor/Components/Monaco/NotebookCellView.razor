@@ -2,6 +2,7 @@
 @using MeshWeaver.Kernel
 @using MeshWeaver.Layout
 @using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+@inject AccessService Access
 
 <div class="notebook-cell @(IsSelected ? "selected" : "") @(CellType.ToString().ToLower())"
      tabindex="0"
@@ -29,25 +30,25 @@
 
             <FluentButton Appearance="FluentAppearance.Stealth"
                           IconStart="@(new Icons.Regular.Size20.Play())"
-                          Title="Run cell (Ctrl+Enter)"
+                          Title="@Access.Localize("notebook.runCell")"
                           Disabled="@(CellType == NotebookCellType.Markdown || IsExecuting || IsReadonly)"
                           OnClick="OnRunClick" />
 
             <FluentButton Appearance="FluentAppearance.Stealth"
                           IconStart="@(new Icons.Regular.Size20.ArrowUp())"
-                          Title="Move cell up"
+                          Title="@Access.Localize("notebook.moveUp")"
                           Disabled="@(IsFirst || IsReadonly)"
                           OnClick="OnMoveUpClick" />
 
             <FluentButton Appearance="FluentAppearance.Stealth"
                           IconStart="@(new Icons.Regular.Size20.ArrowDown())"
-                          Title="Move cell down"
+                          Title="@Access.Localize("notebook.moveDown")"
                           Disabled="@(IsLast || IsReadonly)"
                           OnClick="OnMoveDownClick" />
 
             <FluentButton Appearance="FluentAppearance.Stealth"
                           IconStart="@(new Icons.Regular.Size20.Delete())"
-                          Title="Delete cell"
+                          Title="@Access.Localize("notebook.deleteCell")"
                           Disabled="@IsReadonly"
                           OnClick="OnDeleteClick" />
 

@@ -3,6 +3,7 @@
    and static assets never live under /area/ — like /article and /content this is a plain catch-all. *@
 @page "/area/{**Path}"
 @using MeshWeaver.Blazor.Layouts
+@inject AccessService Access
 @layout EmptyLayout
 
 <FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
@@ -12,9 +13,9 @@
         @if (Resolution is null)
         {
             <div class="error-container">
-                <h2>Page Not Found</h2>
+                <h2>@Access.Localize("error.pageNotFound")</h2>
                 <p>The path '<strong>@Path</strong>' does not match any registered address pattern.</p>
-                <p>Please double-check the url you have entered.</p>
+                <p>@Access.Localize("error.checkUrl")</p>
             </div>
         }
         else

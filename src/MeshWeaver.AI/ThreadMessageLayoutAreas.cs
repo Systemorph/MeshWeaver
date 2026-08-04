@@ -177,7 +177,7 @@ public static class ThreadMessageLayoutAreas
                 var buttonRow = Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
                     .WithStyle("gap: 8px; justify-content: flex-end; margin-top: 8px;")
-                    .WithView(Controls.Button("Submit")
+                    .WithView(Controls.Button(host.Localize("ui.submit"))
                         .WithAppearance(Appearance.Accent)
                         .WithIconStart(FluentIcons.Send(IconSize.Size16))
                         .WithClickAction(actx =>
@@ -461,14 +461,14 @@ public static class ThreadMessageLayoutAreas
         var buttonRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px; justify-content: flex-end; margin-top: 8px;")
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(_ =>
                 {
                     // Stream-update delete — see RequestViaStreamUpdate.md.
                     host.Hub.DeleteFromMessage(threadPath, messageId);
                 }))
-            .WithView(Controls.Button("Submit")
+            .WithView(Controls.Button(host.Localize("ui.submit"))
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.Send(IconSize.Size16))
                 .WithClickAction(actx =>

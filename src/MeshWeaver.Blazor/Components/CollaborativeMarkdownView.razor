@@ -6,6 +6,7 @@
 @using Microsoft.Extensions.Logging
 @namespace MeshWeaver.Blazor.Components
 @inherits BlazorView<CollaborativeMarkdownControl, CollaborativeMarkdownView>
+@inject AccessService Access
 
 <div class="collab-md-container @ViewModeClass" data-theme="@Mode.ToString().ToLower()" @ref="containerRef">
     @* Toolbar — comment filter + accept/reject-all, shown when there are comments or pending changes *@
@@ -19,9 +20,9 @@
                               ValueChanged="@OnCommentFilterChanged"
                               Label="Comments"
                               Style="min-width: 160px;">
-                    <FluentOption Value="Unresolved">Unresolved</FluentOption>
-                    <FluentOption Value="All">All Comments</FluentOption>
-                    <FluentOption Value="None">No Comments</FluentOption>
+                    <FluentOption Value="Unresolved">@Access.Localize("ui.unresolved")</FluentOption>
+                    <FluentOption Value="All">@Access.Localize("comments.all")</FluentOption>
+                    <FluentOption Value="None">@Access.Localize("ui.noComments")</FluentOption>
                 </FluentSelect>
             }
 
@@ -31,10 +32,10 @@
 
                 <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
                               OnClick="@OnAcceptAll"
-                              Style="color: var(--annotation-insert-border); font-size: 0.85rem;">Accept All</FluentButton>
+                              Style="color: var(--annotation-insert-border); font-size: 0.85rem;">@Access.Localize("ui.acceptAll")</FluentButton>
                 <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
                               OnClick="@OnRejectAll"
-                              Style="color: var(--annotation-delete-border); font-size: 0.85rem;">Reject All</FluentButton>
+                              Style="color: var(--annotation-delete-border); font-size: 0.85rem;">@Access.Localize("ui.rejectAll")</FluentButton>
             }
         </div>
     }
@@ -59,9 +60,9 @@
                             <div class="comment-actions">
                                 @if (comment.Status != CommentStatus.Resolved)
                                 {
-                                    <button class="btn-resolve" title="Resolve" @onclick="() => ResolveComment(id)" @onclick:stopPropagation="true">&#x2713;</button>
+                                    <button class="btn-resolve" title="@Access.Localize("ui.resolve")" @onclick="() => ResolveComment(id)" @onclick:stopPropagation="true">&#x2713;</button>
                                 }
-                                <button class="btn-delete" title="Delete" @onclick="() => DeleteComment(id)" @onclick:stopPropagation="true">&#x2715;</button>
+                                <button class="btn-delete" title="@Access.Localize("common.delete")" @onclick="() => DeleteComment(id)" @onclick:stopPropagation="true">&#x2715;</button>
                             </div>
                         </div>
                         @if (!string.IsNullOrEmpty(comment.HighlightedText))
@@ -92,8 +93,8 @@
                             @if (BoundCanEdit)
                             {
                                 <div class="collab-md-card-actions">
-                                    <button class="btn-accept" title="Accept" @onclick="() => OnAcceptChange(id)" @onclick:stopPropagation="true">✓</button>
-                                    <button class="btn-reject" title="Reject" @onclick="() => OnRejectChange(id)" @onclick:stopPropagation="true">✗</button>
+                                    <button class="btn-accept" title="@Access.Localize("ui.accept")" @onclick="() => OnAcceptChange(id)" @onclick:stopPropagation="true">✓</button>
+                                    <button class="btn-reject" title="@Access.Localize("ui.reject")" @onclick="() => OnRejectChange(id)" @onclick:stopPropagation="true">✗</button>
                                 </div>
                             }
                         </div>
@@ -113,7 +114,7 @@
 
     @if (string.IsNullOrWhiteSpace(_processedHtml))
     {
-        <p style="color: var(--neutral-foreground-hint); font-style: italic;">No content yet. Click Edit to add content.</p>
+        <p style="color: var(--neutral-foreground-hint); font-style: italic;">@Access.Localize("ui.noContentYet")</p>
     }
 
     @* Comment input dialog — appears when user selects text and clicks Comment *@
@@ -121,15 +122,15 @@
     {
         <div class="comment-input-overlay" @onclick="CancelSelectionComment">
             <div class="comment-input-dialog" @onclick:stopPropagation="true">
-                <div class="comment-input-header">Add Comment</div>
+                <div class="comment-input-header">@Access.Localize("comments.add")</div>
                 @if (!string.IsNullOrEmpty(_pendingSelectionText))
                 {
                     <div class="comment-input-quote">&ldquo;@Truncate(_pendingSelectionText, 120)&rdquo;</div>
                 }
                 <textarea class="comment-input-textarea" @bind="_pendingCommentText" @bind:event="oninput" placeholder="Write your comment..." rows="3"></textarea>
                 <div class="comment-input-actions">
-                    <button class="comment-btn comment-btn-cancel" @onclick="CancelSelectionComment">Cancel</button>
-                    <button class="comment-btn comment-btn-submit" @onclick="SubmitSelectionComment">Add Comment</button>
+                    <button class="comment-btn comment-btn-cancel" @onclick="CancelSelectionComment">@Access.Localize("common.cancel")</button>
+                    <button class="comment-btn comment-btn-submit" @onclick="SubmitSelectionComment">@Access.Localize("comments.add")</button>
                 </div>
             </div>
         </div>
@@ -144,8 +145,8 @@
                 <div class="page-comment-form">
                     <textarea class="comment-input-textarea" @bind="_pageCommentText" @bind:event="oninput" placeholder="Write your comment..." rows="3"></textarea>
                     <div class="comment-input-actions">
-                        <button class="comment-btn comment-btn-cancel" @onclick="CancelPageComment">Cancel</button>
-                        <button class="comment-btn comment-btn-submit" @onclick="SubmitPageComment">Add Comment</button>
+                        <button class="comment-btn comment-btn-cancel" @onclick="CancelPageComment">@Access.Localize("common.cancel")</button>
+                        <button class="comment-btn comment-btn-submit" @onclick="SubmitPageComment">@Access.Localize("comments.add")</button>
                     </div>
                 </div>
             }

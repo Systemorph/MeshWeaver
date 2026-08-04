@@ -1,4 +1,5 @@
 @implements IDialogContentComponent
+@inject AccessService Access
 
 <div>
     <FluentDesignTheme @ref=theme
@@ -27,7 +28,7 @@
             </OptionTemplate>
         </FluentSelect>
 
-        <FluentSwitch Label="Direction"
+        <FluentSwitch Label="@Access.Localize("appearance.direction")"
                       Style="margin-bottom: 30px;"
                       CheckedMessage="Left to Right"
                       UncheckedMessage="Right to Left"
@@ -40,7 +41,7 @@
         </FluentLabel>
         <FluentDivider Style="width: 100%; margin: 1rem 0" />
         <FluentPopover Style="width: 350px;" AnchorId="info" FixedPlacement="true" @bind-Open="@popVisible">
-            <Header>Reset site settings</Header>
+            <Header>@Access.Localize("ui.resetSiteSettings")</Header>
             <Body>
                 <p>
                     This site stores settings for the theme and color and downloaded samples, emoji and icons in the browser' cache and local storage.
@@ -56,13 +57,13 @@
                     click the button below to clear the cache and delete local storage.
                 </p>
                 <p>
-                    <strong>Don't worry, this will <strong>only</strong> reset stored data for <strong>this</strong> site. It will not clear any of your browser's cache for other sites!</strong>
+                    <strong>@((MarkupString)Access.Localize("ui.siteResetWarning"))</strong>
                 </p>
             </Body>
         </FluentPopover>
 
         <FluentStack VerticalAlignment="VerticalAlignment.Center">
-            <FluentButton OnClick="@ResetSiteAsync">Reset settings</FluentButton>
+            <FluentButton OnClick="@ResetSiteAsync">@Access.Localize("ui.resetSettings")</FluentButton>
             <FluentIcon Id="info" Value="@(new Icons.Regular.Size24.Info())" OnClick="@(() => popVisible = !popVisible)" />
         </FluentStack>
 

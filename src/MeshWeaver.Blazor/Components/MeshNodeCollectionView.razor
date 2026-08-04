@@ -3,6 +3,7 @@
 @inherits BlazorView<MeshWeaver.Layout.MeshNodeCollectionControl, MeshNodeCollectionView>
 @inject NavigationManager NavigationManager
 @inject MeshWeaver.Mesh.Services.IMeshService MeshQuery
+@inject AccessService Access
 
 <div class="mesh-node-collection" style="@Style">
     @if (_isLoading)
@@ -11,7 +12,7 @@
     }
     else if (_items.Count == 0 && !(ViewModel?.ShowAdd ?? true))
     {
-        <div style="color: var(--neutral-foreground-hint); padding: 8px;">No items.</div>
+        <div style="color: var(--neutral-foreground-hint); padding: 8px;">@Access.Localize("empty.noItems")</div>
     }
     else
     {
