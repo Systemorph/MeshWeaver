@@ -67,6 +67,24 @@ Two exclusions apply to every automatic step (2–4):
 
 The rules are pure functions over the catalog (`ModelSizeCatalog`), so "which model does an agent asking for L get" is answerable from data alone, without a running mesh. They are unit-tested that way.
 
+### Where the label actually takes effect
+
+Worth knowing, because it is not where you would guess. When a round starts with **no usable model selected**, `AgentChatClient.ApplyStaleModelFallback` **seeds** one before any factory is chosen — and that seed is where the size is honoured (`ResolveModelIdForSize(agent.ModelTier)`, which is the plain default when the agent declares nothing).
+
+It has to happen there. The concrete factories also consult the tier (`ResolveTierModel`), but only when no model is selected — and by that point the seed has already set one. Seeding the bare default instead would make **every** sized agent run on the default, with the label sitting on the node looking meaningful and changing nothing. A size label that silently does nothing is worse than no label at all, because you stop looking.
+
+An explicit, usable composer selection never reaches the seed at all — the fallback returns early when the current model resolves — so **a human pick always wins over a label**.
+
+### "My agent declares L but ran on the default"
+
+That is the designed fallback, not a bug, and there are exactly three causes:
+
+1. **No model carries the `L` label** — the miss falls through. Check `size` on your model nodes.
+2. **The labelled model's credentials don't resolve** — it is skipped like any unusable model. Check its `providerRef` and that the provider node has a key.
+3. **Someone picked a model in the composer** — an explicit selection wins, by design.
+
+The operator log line names the swap; the round itself is silent, deliberately (an unusable pinned model is a config problem a user cannot act on mid-thread).
+
 ## Auto, and why routers are excluded
 
 The **Auto** entry is not a model — it is a *router*: it looks at the ask, estimates how much model it needs, and dispatches to a real one. It is marked on its node:
