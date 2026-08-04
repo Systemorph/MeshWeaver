@@ -192,6 +192,34 @@ MeshWeaver.Layout.Controls.Stack
 
 ---
 
+## Every user-visible string is localized
+
+The portal renders its chrome in the **viewer's** language (English and German ship today), so text
+in a control is never a bare literal — it goes through the localization seam as you write it:
+
+```csharp
+Controls.Button(host.Localize("ui.createRelease"))
+```
+
+Because a layout area renders **per subscriber**, the viewer's language is available on the server
+at render time, the same way their display time zone is. Resolution is explicit off
+`AccessContext.Locale` — never ambient `CultureInfo.CurrentUICulture`, which does not survive the
+hub's scheduler hops.
+
+Text attached to a declaration carries its translation next to the English instead, so the two
+cannot drift:
+
+```csharp
+[Description("Sync direction")]
+[Translation("de", "Synchronisierungsrichtung")]
+public SyncDirection Direction { get; init; }
+```
+
+Prefer wording that needs no translation at all — a language-neutral glyph (**➕**, ✏️, 🗑️) plus a
+translated tooltip beats a translated label. Full reference: [Localization](../Localization).
+
+---
+
 ## Why This Architecture?
 
 | Benefit | How it is achieved |

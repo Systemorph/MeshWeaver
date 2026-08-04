@@ -51,6 +51,11 @@ public static class GlobalSettingsLayoutArea
     {
         var hubAddress = host.Hub.Address;
 
+        // Translate tab labels and group names for THIS subscriber (see
+        // SettingsLayoutArea.BuildMenuPane — same seam, node-independent variant).
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
+        items = [.. items.Select(i => i.Localized(access))];
+
         return Controls.Splitter
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
             .WithView(
@@ -153,7 +158,7 @@ public static class GlobalSettingsLayoutArea
     /// </summary>
     internal static UiControl BuildDataSourcesTab(LayoutAreaHost host, StackControl stack)
     {
-        stack = stack.WithView(Controls.H2("Data Sources").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.dataSources")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(
             "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
             "Registered data source repositories. Enable or disable sources, install data, or export subtrees.</p>"));
@@ -177,13 +182,13 @@ public static class GlobalSettingsLayoutArea
                         return (UiControl?)Controls.Html(
                             "<p style=\"color: var(--neutral-foreground-hint);\">No data sources registered.</p>");
 
-                    return (UiControl?)BuildDataSourcesList(nodes, host.Hub.JsonSerializerOptions);
+                    return (UiControl?)BuildDataSourcesList(nodes, host.Hub.JsonSerializerOptions, locale: host.ViewerLocale());
                 }));
 
         return stack;
     }
 
-    private static UiControl BuildDataSourcesList(List<MeshNode> nodes, System.Text.Json.JsonSerializerOptions options)
+    private static UiControl BuildDataSourcesList(List<MeshNode> nodes, System.Text.Json.JsonSerializerOptions options, string? locale = null)
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 12px;");
 
@@ -249,7 +254,7 @@ public static class GlobalSettingsLayoutArea
             var buttonRow = Controls.Stack.WithOrientation(Orientation.Horizontal)
                 .WithStyle("gap: 8px; margin-top: 4px;");
 
-            buttonRow = buttonRow.WithView(Controls.Button("Open")
+            buttonRow = buttonRow.WithView(Controls.Button(LocalizationCatalog.Get("ui.open", locale))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>
                 {

@@ -86,7 +86,7 @@ public static class ContentIndexSettingsTab
         var spacePath = node?.Path ?? "";
         var collectionPath = $"{spacePath}/content";
 
-        stack = stack.WithView(Controls.H2("Content Indexing").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("ui.contentIndexing")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(
             "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin-bottom:16px;\">" +
             "Files uploaded to this space's <code>content</code> collection are chunked, embedded into a " +
@@ -112,7 +112,7 @@ public static class ContentIndexSettingsTab
         // ── Re-index (operations-as-script Activity) ──────────────────────────
         stack = stack.WithView(Section("Re-index"));
         var reindexRow = Controls.Stack.WithWidth("100%").WithStyle("flex-direction:row; gap:8px; flex-wrap:wrap;");
-        reindexRow = reindexRow.WithView(Controls.Button("Re-index all content")
+        reindexRow = reindexRow.WithView(Controls.Button(host.Localize("ui.reindexAll"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(c =>
             {
@@ -123,7 +123,7 @@ public static class ContentIndexSettingsTab
             }));
         // Rebuild: forces re-extraction past the hash gate — backfills page/position onto already-indexed
         // (content-unchanged) files, which a plain re-index would skip.
-        reindexRow = reindexRow.WithView(Controls.Button("Rebuild (re-extract page/position)")
+        reindexRow = reindexRow.WithView(Controls.Button(host.Localize("ui.rebuildExtract"))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(c =>
             {
@@ -278,12 +278,12 @@ public static class ContentIndexSettingsTab
 
         return store.GetChunk(collection, file, index)
             .SelectMany(chunk => store.GetChunkCount(collection, file)
-                .Select(total => (UiControl?)BuildChunkPanel(collection, file, index, chunk, total)))
+                .Select(total => (UiControl?)BuildChunkPanel(collection, file, index, chunk, total, locale: host.ViewerLocale())))
             .Catch<UiControl?, Exception>(ex => Observable.Return((UiControl?)Controls.Html(Err(ex.Message))));
     }
 
     private static UiControl BuildChunkPanel(
-        string collection, string file, int index, ContentChunk? chunk, int total)
+        string collection, string file, int index, ContentChunk? chunk, int total, string? locale = null)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle(
             "gap:6px; margin-top:8px; padding:12px; background:var(--neutral-layer-2);border-radius:6px;");
@@ -313,14 +313,14 @@ public static class ContentIndexSettingsTab
         // Prev / next / close stepping.
         var nav = Controls.Stack.WithWidth("100%").WithStyle("flex-direction:row; gap:8px;");
         if (index > 0)
-            nav = nav.WithView(Controls.Button("← Prev")
+            nav = nav.WithView(Controls.Button(LocalizationCatalog.Get("ui.prevShort", locale))
                 .WithAppearance(Appearance.Outline)
                 .WithClickAction(c => { c.Host.UpdateData(ExploreSelectedId, EncodeSelection(collection, file, index - 1)); return Task.CompletedTask; }));
         if (index < total - 1)
-            nav = nav.WithView(Controls.Button("Next →")
+            nav = nav.WithView(Controls.Button(LocalizationCatalog.Get("ui.next", locale))
                 .WithAppearance(Appearance.Outline)
                 .WithClickAction(c => { c.Host.UpdateData(ExploreSelectedId, EncodeSelection(collection, file, index + 1)); return Task.CompletedTask; }));
-        nav = nav.WithView(Controls.Button("Close")
+        nav = nav.WithView(Controls.Button(LocalizationCatalog.Get("common.close", locale))
             .WithAppearance(Appearance.Stealth)
             .WithClickAction(c => { c.Host.UpdateData(ExploreSelectedId, ""); return Task.CompletedTask; }));
         stack = stack.WithView(nav);
@@ -351,7 +351,7 @@ public static class ContentIndexSettingsTab
         stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(activityPath)
             .Select(n => n.ContentAs<ActivityLog>(host.Hub.JsonSerializerOptions)?.Status)
             .Select(status => (UiControl?)(status == ActivityStatus.Running
-                ? Controls.Button("Cancel")
+                ? Controls.Button(host.Localize("common.cancel"))
                     .WithAppearance(Appearance.Outline)
                     .WithClickAction(c => { c.Host.Hub.CancelActivity(activityPath); return Task.CompletedTask; })
                 : Controls.Stack))

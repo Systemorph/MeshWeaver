@@ -38,7 +38,7 @@ public static class ReleaseLayoutAreas
             .Select(node =>
             {
                 if (node == null)
-                    return (UiControl?)Controls.Body("Loading…");
+                    return (UiControl?)Controls.Body(host.Localize("common.loading"));
                 var release = node.ContentAs<NodeTypeRelease>(host.Hub.JsonSerializerOptions);
 
                 var stack = Controls.Stack.WithWidth("100%")

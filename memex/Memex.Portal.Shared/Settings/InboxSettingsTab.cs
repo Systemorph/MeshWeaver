@@ -37,7 +37,8 @@ public static class InboxSettingsTab
             Group: "Administration",
             Icon: FluentIcons.Mail(),
             GroupIcon: FluentIcons.Shield(),
-            Order: 320);
+            Order: 320)
+            { LabelKey = "settings.inbox", GroupKey = "settings.groupAdministration" };
 
         // Reactive: AdminMenuGate.IsPlatformAdmin emits false first (tab hidden), then true once the
         // platform-admin grant surfaces → the tab appears. No async/await/IAsyncEnumerable.
@@ -49,7 +50,7 @@ public static class InboxSettingsTab
 
     internal static UiControl BuildInboxContent(LayoutAreaHost host, StackControl stack)
     {
-        stack = stack.WithView(Controls.H2("Inbox").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.inbox")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(
             "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
             "Email received from people who are <strong>not</strong> Memex users. (Mail from a known " +
@@ -70,7 +71,7 @@ public static class InboxSettingsTab
             var accessService = h.Hub.ServiceProvider.GetService<AccessService>();
             return ws.GetQuery("inbox:list",
                     $"namespace:{EmailNodeType.AdminInboxNamespace} nodeType:{EmailNodeType.NodeType}")
-                .Select(nodes => (UiControl?)BuildList(nodes.ToList(), meshService, accessService, jsonOptions));
+                .Select(nodes => (UiControl?)BuildList(nodes.ToList(), meshService, accessService, jsonOptions, locale: host.ViewerLocale()));
         });
 
         return stack;
@@ -78,7 +79,7 @@ public static class InboxSettingsTab
 
     private static UiControl BuildList(
         IReadOnlyList<MeshNode> nodes, IMeshService meshService, AccessService? accessService,
-        JsonSerializerOptions? jsonOptions)
+        JsonSerializerOptions? jsonOptions, string? locale = null)
     {
         var rows = nodes
             .Select(n => (node: n, email: EmailOf(n, jsonOptions)))
@@ -108,7 +109,7 @@ public static class InboxSettingsTab
             {
                 var capturedNode = node;
                 var capturedEmail = email;
-                row = row.WithView(Controls.Button("Archive")
+                row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.archive", locale))
                     .WithAppearance(Appearance.Outline)
                     .WithClickAction(ctx =>
                     {

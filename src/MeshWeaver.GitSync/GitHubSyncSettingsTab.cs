@@ -106,7 +106,7 @@ public static class GitHubSyncSettingsTab
         if (string.IsNullOrEmpty(spacePath))
             return stack.WithView(Controls.Html("<p><em>GitHub Sync is available inside a Space.</em></p>"));
 
-        stack = stack.WithView(Controls.H2("GitHub Sync").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("ui.githubSync")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(
             "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin-bottom:16px;\">" +
             "Export this Space to a GitHub repository, and re-import it at any commit. Your GitHub " +
@@ -129,7 +129,7 @@ public static class GitHubSyncSettingsTab
             // the OAuth callback's saved credential syncs in. (A one-shot read grabbed the synced
             // query's empty pre-sync snapshot and showed "Not connected" right after connecting.)
             stack = stack.WithView((h, _) => creds.GetStream(userId)
-                .Select(c => (UiControl?)RenderConnect(creds, userId, currentPath, c, oauth.IsConfigured))
+                .Select(c => (UiControl?)RenderConnect(creds, userId, currentPath, c, oauth.IsConfigured, locale: host.ViewerLocale()))
                 .StartWith((UiControl?)Controls.Html(
                     "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Checking GitHub connection…</p>")));
 
@@ -186,7 +186,7 @@ public static class GitHubSyncSettingsTab
             {
                 ["commit"] = cfg!.LastSyncCommitSha ?? cfg.Branch ?? "main",
             })));
-        stack = stack.WithView(BuildReimportForm(spacePath, userId));
+        stack = stack.WithView(BuildReimportForm(spacePath, userId, locale: host.ViewerLocale()));
 
         // ── 4. Additional sync sources ────────────────────────────────────────
         // The Repository above is the PRIMARY sync source ({space}/_GitSync). A Space can sync
@@ -202,7 +202,7 @@ public static class GitHubSyncSettingsTab
             .Select(nodes => (UiControl?)BuildAdditionalSources(h, sync, spacePath, userId, nodes))
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
         host.UpdateData(AddSourceFormId, new Dictionary<string, object?> { ["name"] = "" });
-        stack = stack.WithView(BuildAddSourceForm(sync, spacePath));
+        stack = stack.WithView(BuildAddSourceForm(sync, spacePath, locale: host.ViewerLocale()));
 
         // ── 5. Pull request (AI-drafted → user edits the bound node → submit) ──
         stack = stack.WithView(Section("Pull request"));
@@ -213,7 +213,7 @@ public static class GitHubSyncSettingsTab
 
         // "Draft pull request" — AI drafts title+body and creates a draft PR node, then we point
         // the editor at that node by stashing its path in the PrPathId data id.
-        stack = stack.WithView(Controls.Button("Draft pull request with AI")
+        stack = stack.WithView(Controls.Button(host.Localize("ui.draftPrWithAi"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
@@ -232,7 +232,7 @@ public static class GitHubSyncSettingsTab
         // PrPathId changes (a new draft) — the node-content editor itself live-binds to the node
         // stream for Title/Body, and the status/link row binds to the same node's content.
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(PrPathId)
-            .Select(prPath => (UiControl?)BuildPullRequestEditor(prService, spacePath, prPath, userId))
+            .Select(prPath => (UiControl?)BuildPullRequestEditor(prService, spacePath, prPath, userId, locale: host.ViewerLocale()))
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         // ── Result area ───────────────────────────────────────────────────────
@@ -248,7 +248,7 @@ public static class GitHubSyncSettingsTab
     // ── Connect (OAuth authorization-code / callback flow) ─────────────────────
 
     private static UiControl RenderConnect(
-        GitHubCredentialService creds, string userId, string returnNodePath, GitHubCredential? cred, bool isConfigured)
+        GitHubCredentialService creds, string userId, string returnNodePath, GitHubCredential? cred, bool isConfigured, string? locale = null)
     {
         if (cred is { AccessToken.Length: > 0 } || cred is { GitHubLogin.Length: > 0 })
         {
@@ -256,7 +256,7 @@ public static class GitHubSyncSettingsTab
             var body = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:16px;align-items:center;");
             body = body.WithView(Controls.Html(
                 $"<div style=\"flex:1;font-size:0.9rem;\"><span style=\"color:#22c55e;\">✓</span> Connected{who}</div>"));
-            body = body.WithView(Controls.Button("Disconnect")
+            body = body.WithView(Controls.Button(LocalizationCatalog.Get("ui.disconnect", locale))
                 .WithAppearance(Appearance.Outline)
                 .WithClickAction(ctx =>
                 {
@@ -344,7 +344,7 @@ public static class GitHubSyncSettingsTab
                 MeshNodeContentEditorControl.ForType(node.Path, typeof(GitHubSyncConfig)));
             source = source.WithView(BuildSyncButtons(
                 spacePath, userId, sourceId, config?.Direction ?? SyncDirection.Bidirectional));
-            source = source.WithView(Controls.Button("Remove source")
+            source = source.WithView(Controls.Button(host.Localize("ui.removeSource"))
                 .WithAppearance(Appearance.Outline)
                 .WithClickAction(ctx =>
                 {
@@ -363,7 +363,7 @@ public static class GitHubSyncSettingsTab
         return stack;
     }
 
-    private static UiControl BuildAddSourceForm(GitHubSyncService sync, string spacePath)
+    private static UiControl BuildAddSourceForm(GitHubSyncService sync, string spacePath, string? locale = null)
     {
         var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:8px;align-items:flex-end;");
         row = row.WithView(new TextFieldControl(new JsonPointerReference("name"))
@@ -372,7 +372,7 @@ public static class GitHubSyncSettingsTab
             Placeholder = "e.g. upstream, mirror, backup",
             DataContext = LayoutAreaReference.GetDataPointer(AddSourceFormId),
         }.WithWidth("320px"));
-        row = row.WithView(Controls.Button("Add sync source")
+        row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.addSyncSource", locale))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(ctx =>
             {
@@ -396,7 +396,7 @@ public static class GitHubSyncSettingsTab
 
     // ── Re-import form (transient action input — a commit/branch to import to, not node content) ──
 
-    private static UiControl BuildReimportForm(string spacePath, string userId)
+    private static UiControl BuildReimportForm(string spacePath, string userId, string? locale = null)
     {
         var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:8px;align-items:flex-end;");
         row = row.WithView(new TextFieldControl(new JsonPointerReference("commit"))
@@ -405,7 +405,7 @@ public static class GitHubSyncSettingsTab
             Placeholder = "commit SHA or branch",
             DataContext = LayoutAreaReference.GetDataPointer(CommitFormId),
         }.WithWidth("320px"));
-        row = row.WithView(Controls.Button("Re-import at this commit")
+        row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.reimportAtCommit", locale))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(ctx =>
             {
@@ -450,7 +450,7 @@ public static class GitHubSyncSettingsTab
         stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(activityPath)
             .Select(node => node.ContentAs<MeshWeaver.Data.ActivityLog>(host.Hub.JsonSerializerOptions)?.Status)
             .Select(status => (UiControl?)(status == MeshWeaver.Data.ActivityStatus.Running
-                ? Controls.Button("Cancel")
+                ? Controls.Button(host.Localize("common.cancel"))
                     .WithAppearance(Appearance.Outline)
                     .WithClickAction(ctx => { ctx.Host.Hub.CancelActivity(activityPath); return Task.CompletedTask; })
                 : Controls.Stack))
@@ -487,7 +487,7 @@ public static class GitHubSyncSettingsTab
     /// Empty until a draft is created.
     /// </summary>
     private static UiControl BuildPullRequestEditor(
-        PullRequestService prService, string spacePath, string? prPath, string userId)
+        PullRequestService prService, string spacePath, string? prPath, string userId, string? locale = null)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle("gap:12px;");
         if (string.IsNullOrEmpty(prPath))
@@ -499,7 +499,7 @@ public static class GitHubSyncSettingsTab
 
         // Action row: Submit (open on GitHub) + Check status (asks GitHub live).
         var actions = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:8px;align-items:center;");
-        actions = actions.WithView(Controls.Button("Submit pull request")
+        actions = actions.WithView(Controls.Button(LocalizationCatalog.Get("ui.submitPr", locale))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
@@ -510,7 +510,7 @@ public static class GitHubSyncSettingsTab
                 return Task.CompletedTask;
             }));
         // Status is GitHub-owned: we ASK GitHub live, never store/replicate it.
-        actions = actions.WithView(Controls.Button("Check status on GitHub")
+        actions = actions.WithView(Controls.Button(LocalizationCatalog.Get("ui.checkStatusGitHub", locale))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(ctx =>
             {

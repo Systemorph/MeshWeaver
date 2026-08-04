@@ -48,7 +48,10 @@ public sealed class AiContentSyncMenuProvider : INodeMenuProvider
             Icon: "⬇️",
             Order: 38,   // content/history section (Files=30, Versions=32, Synchronizations=36)
             Href: AiContentSyncArea.Href(hubPath),
-            Tooltip: "Write the agents & skills edited here back to content/ai in the repo");
+            Tooltip: "Write the agents & skills edited here back to content/ai in the repo")
+        {
+            LabelKey = "menu.syncToRepo"
+        };
 
         // Platform-admin gated; StartWith so a host CombineLatest fires, Catch so a permission race
         // never breaks the whole menu.

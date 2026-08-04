@@ -48,7 +48,8 @@ public static class InvitationsSettingsTab
             Group: "Administration",
             Icon: FluentIcons.Mail(),
             GroupIcon: FluentIcons.Shield(),
-            Order: 310);
+            Order: 310)
+            { LabelKey = "settings.invitations", GroupKey = "settings.groupAdministration" };
 
         // Reactive: gated tab appears once the platform-admin grant surfaces. No async/await.
         return AdminMenuGate.IsPlatformAdmin(host)
@@ -66,7 +67,7 @@ public static class InvitationsSettingsTab
         // The invitation EMAIL is sent by the node-driven InvitationEmailSender hosted service
         // (watches Pending invitations, stamps EmailSentAt). This handler just creates the node.
 
-        stack = stack.WithView(Controls.H2("Invitations").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.invitations")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(
             "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
             "When invitation-only onboarding is enabled (<code>Features:Onboarding:InvitationOnly</code>), " +
@@ -97,7 +98,7 @@ public static class InvitationsSettingsTab
             DataContext = LayoutAreaReference.GetDataPointer(FormDataId)
         }.WithWidth("240px"));
 
-        formRow = formRow.WithView(Controls.Button("Invite")
+        formRow = formRow.WithView(Controls.Button(host.Localize("ui.invite"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(clickCtx =>
             {
@@ -156,7 +157,7 @@ public static class InvitationsSettingsTab
     private static UiControl BuildInvitationList(
         IReadOnlyList<MeshNode> nodes,
         InvitationService invitationService,
-        System.Text.Json.JsonSerializerOptions? jsonOptions)
+        System.Text.Json.JsonSerializerOptions? jsonOptions, string? locale = null)
     {
         var rows = nodes
             .Select(n => (node: n, inv: InvitationService.TryGetInvitation(n, jsonOptions)))
@@ -191,7 +192,7 @@ public static class InvitationsSettingsTab
             {
                 var capturedNode = node;
                 var capturedInv = inv;
-                row = row.WithView(Controls.Button("Revoke")
+                row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.revoke", locale))
                     .WithAppearance(Appearance.Outline)
                     .WithClickAction(ctx =>
                     {

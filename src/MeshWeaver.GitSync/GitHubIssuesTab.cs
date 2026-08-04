@@ -95,7 +95,7 @@ public static class GitHubIssuesTab
         if (string.IsNullOrEmpty(spacePath))
             return stack.WithView(Controls.Html("<p><em>GitHub Issues are available inside a Space.</em></p>"));
 
-        stack = stack.WithView(Controls.H2("GitHub Issues & Pull Requests").WithStyle("margin:0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("ui.githubIssuesPrs")).WithStyle("margin:0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(
             "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin-bottom:16px;\">" +
             "Browse and act on the configured repository's issues and pull requests. Set the repository " +
@@ -103,7 +103,7 @@ public static class GitHubIssuesTab
 
         // ── Issues ─────────────────────────────────────────────────────────────
         stack = stack.WithView(Section("Issues"));
-        stack = stack.WithView(Controls.Button("Sync issues from GitHub")
+        stack = stack.WithView(Controls.Button(host.Localize("ui.syncIssues"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(c =>
             {
@@ -114,7 +114,7 @@ public static class GitHubIssuesTab
                 return Task.CompletedTask;
             }));
 
-        stack = stack.WithView(BuildNewIssueForm(issues, spacePath, userId));
+        stack = stack.WithView(BuildNewIssueForm(issues, spacePath, userId, locale: host.ViewerLocale()));
 
         // Live issues grid — binds to the synced query, refreshes itself as issues land.
         host.RegisterForDisposal(issues.WatchIssueNodes(spacePath)
@@ -136,7 +136,7 @@ public static class GitHubIssuesTab
 
         // ── Pull requests ────────────────────────────────────────────────────
         stack = stack.WithView(Section("Pull requests"));
-        stack = stack.WithView(Controls.Button("Refresh pull requests")
+        stack = stack.WithView(Controls.Button(host.Localize("ui.refreshPrs"))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(c =>
             {
@@ -177,7 +177,7 @@ public static class GitHubIssuesTab
 
     // ── Forms ──────────────────────────────────────────────────────────────────
 
-    private static UiControl BuildNewIssueForm(IssueService issues, string spacePath, string userId)
+    private static UiControl BuildNewIssueForm(IssueService issues, string spacePath, string userId, string? locale = null)
     {
         var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:8px;align-items:flex-end;flex-wrap:wrap;");
         row = row.WithView(new TextFieldControl(new JsonPointerReference("title"))
@@ -192,7 +192,7 @@ public static class GitHubIssuesTab
             Placeholder = "Describe the issue…",
             DataContext = LayoutAreaReference.GetDataPointer(NewIssueFormId),
         }.WithWidth("320px"));
-        row = row.WithView(Controls.Button("Create issue")
+        row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.createIssue", locale))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(c =>
             {

@@ -66,8 +66,8 @@ internal static class NodeTypeDataModelAreas
             }
 
             return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; gap: 8px;")
-                .WithView(Controls.H2("Data model").WithStyle("margin: 0;"))
-                .WithView(BuildDiagramJsonTabs(model, linkBase));
+                .WithView(Controls.H2(host.Localize("ui.dataModel")).WithStyle("margin: 0;"))
+                .WithView(BuildDiagramJsonTabs(model, linkBase, locale: host.ViewerLocale()));
         });
     }
 
@@ -86,7 +86,7 @@ internal static class NodeTypeDataModelAreas
             .WithView(
                 (h, c) => GetInstanceModelStream(host)
                     .Select(model => RenderOverviewBody(model, linkBase))
-                    .StartWith(Controls.Body("Resolving data model…")
+                    .StartWith(Controls.Body(host.Localize("ui.resolvingDataModel"))
                         .WithStyle("color: var(--neutral-foreground-hint); font-style: italic; padding: 8px 0;")),
                 "DataModelSection");
     }
@@ -106,7 +106,7 @@ internal static class NodeTypeDataModelAreas
     /// the JSON schema and back. Tabs only render when both representations exist;
     /// a single representation renders bare.
     /// </summary>
-    private static UiControl BuildDiagramJsonTabs(NodeTypeInstanceModel model, string linkBase)
+    private static UiControl BuildDiagramJsonTabs(NodeTypeInstanceModel model, string linkBase, string? locale = null)
     {
         UiControl? diagram = model.SeedTypes.Count > 0
             ? Controls.Markdown(DataModelLayoutArea.BuildMermaidDiagram(
@@ -129,7 +129,7 @@ internal static class NodeTypeDataModelAreas
                 .WithView(schema, s => s.WithLabel(jsonLabel));
         }
 
-        return diagram ?? schema ?? Controls.Body("No data model available.")
+        return diagram ?? schema ?? Controls.Body(LocalizationCatalog.Get("ui.noDataModel", locale))
             .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;");
     }
 
