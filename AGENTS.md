@@ -163,6 +163,21 @@ All docs embedded in `src/MeshWeaver.Documentation/` and served under `Doc/` at 
 
 **Use `hub.Observe(...)` not `RegisterCallback`/`AwaitResponse`** — those overloads are `[Obsolete]` and deadlock. Tests use `MonolithMeshTestBase.AwaitResponseAsync(...)`.
 
+## 🌍 New user-visible text must be localized
+
+**The portal ships English + German. A new hard-coded UI string is a bug** — it renders English for every viewer regardless of their language. Two shapes, pick by whether the text hangs off a declaration:
+
+- **On a declaration** (property label, node-type name, enum member) → add `[Translation("de", "…")]` next to the existing `[Description]`. Nothing else to wire.
+- **Everywhere else** (Blazor markup, inline `Controls.*`, toasts) → add a key to **both** `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json` and read it via `Access.Localize("key")` (Blazor, `@inject AccessService Access`) or `host.Localize("key")` (layout areas).
+
+`LocalizationTest` fails if a language is missing any English key, so a half-translated string cannot merge.
+
+🚨 **Never resolve from `CultureInfo.CurrentUICulture`** — a layout-area render hops the hub scheduler and an ambient AsyncLocal culture does not survive it, so one user's UI would pick up another user's language. Resolution is always explicit off `AccessContext.Locale`.
+
+🚨 **Do NOT translate**: LLM tool-parameter `[Description]`s (model-facing — translating degrades tool-calling), wire identifiers (`nodeType:Thread` in help text, `RequestAction("New")`, Fluent icon names), or the glossary terms kept English on purpose (Thread, Mesh, Node, Agent, Skill, Harness, Provider, Namespace, Partition, Store).
+
+Full reference: [Localization.md](src/MeshWeaver.Documentation/Data/Architecture/Localization.md)
+
 ## Deployment
 
 **Two deploy routes, different targets — neither deprecated.** Pick by target, don't mix:
