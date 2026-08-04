@@ -2,6 +2,7 @@
 Name: Displaying Times in the Viewer's Zone
 Category: Documentation
 Description: Stored instants are UTC — render them through AccessService.ToDisplayTime so every reader sees their own wall clock, with named IANA zones so DST follows the region
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
 ---
 
 Every timestamp in the mesh is **stored, serialized, versioned, sorted and logged in UTC**. Only
