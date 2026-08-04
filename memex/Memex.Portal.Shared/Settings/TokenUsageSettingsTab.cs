@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -18,8 +19,9 @@ namespace Memex.Portal.Shared.Settings;
 /// <summary>
 /// Admin settings tab: aggregated token usage + estimated cost, read from the per-model
 /// <see cref="TokenUsage"/> satellites ({thread}/_Usage/{model}). Filterable by time window and
-/// groupable by model / person / thread. Cost is derived on read from <see cref="ModelPricing"/>
-/// (never stored), so price changes re-price history.
+/// groupable by model / person / thread. Cost is derived on read — the price authored on each
+/// model's catalog node first, the built-in <see cref="ModelPricing.Defaults"/> table as fallback
+/// (<see cref="ModelPriceCatalog"/>) — and never stored, so a price edit re-prices history.
 ///
 /// <para>Gated like the other Administration tabs via <c>AdminMenuGate.IsPlatformAdmin</c>; the
 /// query is RLS-scoped to what the viewer can read. Rendered with framework controls
@@ -68,8 +70,10 @@ public static class TokenUsageSettingsTab
         stack = stack.WithView(Controls.H2("Token Usage").WithStyle("margin: 0 0 4px 0;"));
         stack = stack.WithView(Controls.Markdown(
             "Aggregated token usage and estimated cost from the per-model `_Usage` satellites " +
-            "(`{thread}/_Usage/{model}`). Cost uses the built-in model price table and re-prices " +
-            "automatically when prices change. Scope follows your read access."));
+            "(`{thread}/_Usage/{model}`). Cost uses the price on each model's catalog node — the " +
+            "built-in price table backs anything unpriced — and re-prices automatically when a " +
+            "price changes. Cache reads/writes bill at their reduced/premium rates. Scope follows " +
+            "your read access."));
 
         // Filter toolbar (grouping + time window) — reactive so the active choice stays highlighted.
         stack = stack.WithView((h, _) =>
@@ -77,12 +81,24 @@ public static class TokenUsageSettingsTab
                 .StartWith(Default)
                 .Select(f => (UiControl?)BuildToolbar(f)));
 
-        // The grid: query × filter, recomputed reactively on either change (never .Take(1) on the live feed).
+        // Live SHARED model catalog → authored prices. Only the platform catalog is queryable from
+        // an admin view (a user's BYO models live in their own partition); those fall back to the
+        // built-in table, same as before. Seeded + caught so a catalog hiccup can never blank the
+        // grid — pricing degrades, usage still renders.
+        var prices = ws.GetQuery("tokenusage:prices", AgentPickerProjection.BuildModelQueries())
+            .Select(nodes => (IReadOnlyDictionary<string, ModelPriceRate>)
+                ModelPriceCatalog.FromNodes(nodes, jsonOptions))
+            .Catch(Observable.Return((IReadOnlyDictionary<string, ModelPriceRate>)
+                ImmutableDictionary<string, ModelPriceRate>.Empty))
+            .StartWith(ImmutableDictionary<string, ModelPriceRate>.Empty);
+
+        // The grid: query × filter × prices, recomputed reactively on any change (never .Take(1) on a live feed).
         stack = stack.WithView((h, _) =>
             ws.GetQuery("tokenusage:list", $"nodeType:{TokenUsageNodeType.NodeType}")
                 .CombineLatest(
                     h.Stream.GetDataStream<FilterState>(FilterDataId).StartWith(Default),
-                    (nodes, filter) => (UiControl?)BuildGrid(nodes, filter, jsonOptions)));
+                    prices,
+                    (nodes, filter, catalog) => (UiControl?)BuildGrid(nodes, filter, jsonOptions, catalog)));
 
         return stack;
     }
@@ -111,7 +127,8 @@ public static class TokenUsageSettingsTab
             });
 
     private static UiControl BuildGrid(
-        IEnumerable<MeshNode> nodes, FilterState filter, JsonSerializerOptions jsonOptions)
+        IEnumerable<MeshNode> nodes, FilterState filter, JsonSerializerOptions jsonOptions,
+        IReadOnlyDictionary<string, ModelPriceRate>? priceCatalog = null)
     {
         var cutoff = filter.WindowDays > 0
             ? DateTimeOffset.UtcNow.AddDays(-filter.WindowDays)
@@ -135,7 +152,11 @@ public static class TokenUsageSettingsTab
             {
                 long inp = g.Sum(x => x.u!.InputTokens);
                 long outp = g.Sum(x => x.u!.OutputTokens);
-                decimal cost = g.Sum(x => ModelPricing.Default(x.u!.Model)?.Cost(x.u!.InputTokens, x.u!.OutputTokens) ?? 0m);
+                // Cache-aware, like the thread token chip: cache reads bill at the reduced rate and
+                // writes at the premium, so a cache-heavy agent isn't billed as if every prompt
+                // token were fresh (the two surfaces disagreed while this used the 2-arg overload).
+                decimal cost = g.Sum(x => ModelPriceCatalog.RateFor(x.u!.Model, priceCatalog)
+                    ?.Cost(x.u!.InputTokens, x.u!.OutputTokens, x.u!.CacheReadTokens, x.u!.CacheWriteTokens) ?? 0m);
                 return new UsageRow(g.Key, inp, outp, inp + outp, cost);
             })
             .OrderByDescending(r => r.Total)
