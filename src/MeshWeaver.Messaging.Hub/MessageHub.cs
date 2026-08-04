@@ -119,9 +119,11 @@ public sealed class MessageHub : IMessageHub
     private static void DisposeTrace(Address address, string phase, long elapsedMs, string? extra = null)
     {
         if (DisposeTraceChannel is null) return;
+        // pid: this file is shared by every test host in a CI shard, and a core dump is named
+        // `dotnet-<pid>.dmp` — without it you cannot tell which process's lines you are reading.
         var line = extra is null
-            ? $"{DateTime.UtcNow:HH:mm:ss.fff} {address} {phase} elapsed={elapsedMs}ms"
-            : $"{DateTime.UtcNow:HH:mm:ss.fff} {address} {phase} elapsed={elapsedMs}ms {extra}";
+            ? $"{DateTime.UtcNow:HH:mm:ss.fff} pid={Environment.ProcessId} {address} {phase} elapsed={elapsedMs}ms"
+            : $"{DateTime.UtcNow:HH:mm:ss.fff} pid={Environment.ProcessId} {address} {phase} elapsed={elapsedMs}ms {extra}";
         // Non-blocking: drops on full so a stuck writer never delays dispose.
         DisposeTraceChannel.Writer.TryWrite(line);
     }
