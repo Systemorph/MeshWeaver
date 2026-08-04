@@ -24,6 +24,15 @@ public record ModelInfo
     public required string Provider { get; init; }
 
     /// <summary>
+    /// Human label from the model's MeshNode — its <see cref="MeshWeaver.Mesh.MeshNode.Name"/>
+    /// (else <see cref="ModelDefinition.DisplayName"/>), e.g. <c>"Kimi K3 · $3.00/$15.00"</c>. This
+    /// is what the <c>/model</c> picker lists, so surfaces that show the CURRENT selection (the
+    /// composer's model chip) can render the same text instead of the raw wire id. Null for a model
+    /// with no backing node; callers then fall back to <see cref="Name"/> / the path's last segment.
+    /// </summary>
+    public string? Label { get; init; }
+
+    /// <summary>
     /// Display order from the factory (lower = first).
     /// </summary>
     public int Order { get; init; }

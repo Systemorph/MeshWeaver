@@ -712,13 +712,13 @@ else
                     {
                         <button type="button" class="thread-chat-status-item is-clickable"
                                 title="Model: @boundModelPath — click to change" @onclick='() => OnStatusChipClick("model", false)'>
-                            @ChipSvg("model") @LastSegment(boundModelPath)
+                            @ChipSvg("model") @ModelChipLabel(boundModelPath)
                         </button>
                     }
                 }
                 @* The token chip renders its own leading separator only when it has usage data,
                    so it sits inline after the model/effort chip on this same row (no dangling "·"). *@
-                <ThreadTokenChip ThreadPath="@threadPath" />
+                <ThreadTokenChip ThreadPath="@threadPath" UserPath="@_userHome" />
             </div>
         }
 
