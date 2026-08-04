@@ -320,8 +320,8 @@ public static class GitHistoryTab
     // ── helpers ─────────────────────────────────────────────────────────────────────────────
 
     // Fresh control per call — a shared instance would reuse a layout-area control Id across areas/emissions.
-    private static UiControl NotCheckedOut() =>
-        Controls.Markdown("_Not checked out yet — use **Check out / pull** above._");
+    private static UiControl NotCheckedOut(string? locale = null) =>
+        Controls.Markdown(LocalizationCatalog.Get("ui.notCheckedOut", locale));
     private static UiControl SelectAChange(string? locale = null) =>
         Controls.Markdown(LocalizationCatalog.Get("ui.mdSelectChange", locale));
 

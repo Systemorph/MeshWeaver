@@ -88,14 +88,14 @@ public static class TokenUsageSettingsTab
         return stack;
     }
 
-    private static UiControl BuildToolbar(FilterState f)
+    private static UiControl BuildToolbar(FilterState f, string? locale = null)
     {
         var bar = Controls.Stack.WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0;");
-        bar = bar.WithView(Controls.Markdown("**Group:**"));
+        bar = bar.WithView(Controls.Markdown(LocalizationCatalog.Get("ui.groupLabel", locale)));
         foreach (var (key, label) in Groupings)
             bar = bar.WithView(Btn(label, f.GroupBy == key, cur => cur with { GroupBy = key }));
-        bar = bar.WithView(Controls.Markdown("· **Period:**"));
+        bar = bar.WithView(Controls.Markdown(LocalizationCatalog.Get("ui.periodLabel", locale)));
         foreach (var (days, label) in Windows)
             bar = bar.WithView(Btn(label, f.WindowDays == days, cur => cur with { WindowDays = days }));
         return bar;

@@ -326,7 +326,7 @@ public static class ModelsSettingsTab
                 .StartWith(new Dictionary<string, object?>());
             return fetched.CombineLatest(form, (ids, f) =>
                 (UiControl?)BuildModelChecklist(scope, ids ?? Array.Empty<string>(),
-                    f?.GetValueOrDefault("filter")?.ToString() ?? ""));
+                    f?.GetValueOrDefault("filter")?.ToString() ?? "", locale: h.ViewerLocale()));
         });
 
         card = card.WithView(Controls.Button(host.Localize("ui.saveProvider"))
@@ -336,10 +336,10 @@ public static class ModelsSettingsTab
         return card;
     }
 
-    private static UiControl BuildModelChecklist(string scope, string[] ids, string filter)
+    private static UiControl BuildModelChecklist(string scope, string[] ids, string filter, string? locale = null)
     {
         if (ids.Length == 0)
-            return Controls.Markdown("_No models yet — enter a base URL + key and click **Fetch models**._");
+            return Controls.Markdown(LocalizationCatalog.Get("ui.noModelsYet", locale));
 
         var indexed = ids
             .Select((id, i) => (id, i))
