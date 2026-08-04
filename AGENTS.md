@@ -163,9 +163,15 @@ All docs embedded in `src/MeshWeaver.Documentation/` and served under `Doc/` at 
 
 **Use `hub.Observe(...)` not `RegisterCallback`/`AwaitResponse`** — those overloads are `[Obsolete]` and deadlock. Tests use `MonolithMeshTestBase.AwaitResponseAsync(...)`.
 
-## 🌍 New user-visible text must be localized
+## 🌍🌍🌍 ALWAYS think about internationalization — every user-visible string, every time
 
-**The portal ships English + German. A new hard-coded UI string is a bug** — it renders English for every viewer regardless of their language. Two shapes, pick by whether the text hangs off a declaration:
+**Before you write ANY text a user will read, stop and ask: "how does this render for a German viewer?"** This is not a final-polish step or a follow-up ticket — it is part of writing the feature, the same way a null check is. The portal ships English + German; **a hard-coded UI string is a bug**, because it renders English for every viewer regardless of their language.
+
+This applies to every surface, not just obvious ones: buttons, labels, tooltips, `aria-label`s, placeholders, page titles, empty states, validation messages, toasts, dialog copy, menu entries, settings tabs, notification text, and error strings. If a human reads it on screen, it needs a key or a `[Translation]`.
+
+**Prefer text that doesn't need translating at all.** A language-neutral glyph beats a translated word: the AI menu's "new thread" entry uses **➕**, and the node menu uses ✏️ 🔖 ➡️ 📋 🗑️. An icon plus a translated tooltip is usually better than a translated label — it shrinks the translation surface and reads identically in every locale. (The tooltip still needs a key.)
+
+Two shapes, pick by whether the text hangs off a declaration:
 
 - **On a declaration** (property label, node-type name, enum member) → add `[Translation("de", "…")]` next to the existing `[Description]`. Nothing else to wire.
 - **Everywhere else** (Blazor markup, inline `Controls.*`, toasts) → add a key to **both** `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json` and read it via `Access.Localize("key")` (Blazor, `@inject AccessService Access`) or `host.Localize("key")` (layout areas).
@@ -175,6 +181,8 @@ All docs embedded in `src/MeshWeaver.Documentation/` and served under `Doc/` at 
 🚨 **Never resolve from `CultureInfo.CurrentUICulture`** — a layout-area render hops the hub scheduler and an ambient AsyncLocal culture does not survive it, so one user's UI would pick up another user's language. Resolution is always explicit off `AccessContext.Locale`.
 
 🚨 **Do NOT translate**: LLM tool-parameter `[Description]`s (model-facing — translating degrades tool-calling), wire identifiers (`nodeType:Thread` in help text, `RequestAction("New")`, Fluent icon names), or the glossary terms kept English on purpose (Thread, Mesh, Node, Agent, Skill, Harness, Provider, Namespace, Partition, Store).
+
+**Adding a language is cheap by design** — a tag in `Locales.Supported`, a `strings.{tag}.json`, and the matching `[Translation]` attributes. Keep it that way: never scatter a second resolution mechanism, and never let a string bypass the catalog "just this once".
 
 Full reference: [Localization.md](src/MeshWeaver.Documentation/Data/Architecture/Localization.md)
 
