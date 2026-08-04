@@ -342,15 +342,24 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         // "300 schemas". Escalates to Warning past the threshold so it shows at default level.
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var rows = 0;
-        await using (var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
+        var firstRowMs = -1L;
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        // 🚨 try/FINALLY, not a call after the loop. A caller that stops enumerating early — a
+        // `.Take(n)`, a `break`, a cancellation, or a throw out of ReadMeshNode — disposes the
+        // iterator without ever reaching code placed after the `while`. The slow fan-out would then
+        // go UNLOGGED, which is the one case this instrumentation exists to catch. `finally` runs on
+        // that disposal path too, so an abandoned enumeration still reports what it cost.
+        try
         {
-            var firstRowMs = -1L;
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
                 if (rows++ == 0)
                     firstRowMs = sw.ElapsedMilliseconds;
                 yield return ReadMeshNode(reader, options);
             }
+        }
+        finally
+        {
             LogFanOutTiming("search_across_schemas", sw.ElapsedMilliseconds, firstRowMs, rows, limit);
         }
     }

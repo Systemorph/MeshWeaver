@@ -25,6 +25,9 @@ public class CrossSchemaFanOutTimingTests
     private sealed class CapturingLogger : ILogger<PostgreSqlCrossSchemaQueryProvider>
     {
         public readonly List<Entry> Entries = new();
+        // NB: no `where TState : notnull` here — CS0460 forbids restating a constraint on an
+        // EXPLICIT interface implementation; it is inherited from ILogger.BeginScope. (Copilot
+        // suggested adding it; the compiler rejects it.)
         IDisposable? ILogger.BeginScope<TState>(TState state) => null;
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex,
