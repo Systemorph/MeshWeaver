@@ -1,4 +1,5 @@
 using MeshWeaver.Domain;
+using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Graph;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -28,6 +29,10 @@ public static class PluginCatalogConfigurationExtensions
         => (TBuilder)builder
             .AddMeshNodes(CreatePackageNodeType())
             .AddMeshNodes(CreateCatalogNodeType())
+            // The build-completion subscriber. A mesh-scoped SINGLETON, so its subscriptions live
+            // and die with the mesh rather than surviving disposal into the next test
+            // (Doc/Architecture/NoStaticState).
+            .ConfigureServices(services => services.AddSingleton<PluginUpdateWatcher>())
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();

@@ -83,6 +83,8 @@ public sealed class GitHubWebhookProcessor
     {
         if (string.Equals(eventType, "push", StringComparison.OrdinalIgnoreCase))
             return ProcessPush(payload);
+        if (string.Equals(eventType, "workflow_run", StringComparison.OrdinalIgnoreCase))
+            return ProcessWorkflowRun(payload);
         var isIssues = string.Equals(eventType, "issues", StringComparison.OrdinalIgnoreCase);
         var isComment = string.Equals(eventType, "issue_comment", StringComparison.OrdinalIgnoreCase);
         if (!isIssues && !isComment)
@@ -277,6 +279,92 @@ public sealed class GitHubWebhookProcessor
             _ => meshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{GitHubSyncService.ConfigNodeType}"))
                 .Take(1));
+    }
+
+    // ── workflow_run → build-completion record ───────────────────────────────
+
+    /// <summary>
+    /// A verified <c>workflow_run</c> → the repository's <see cref="BuildCompletion"/> node.
+    ///
+    /// <para>GitSync records a FACT and stops there: "repo X built green at sha Y". It does not know
+    /// or care who is listening. Consumers — today the plugin catalog — SUBSCRIBE to the node's
+    /// stream and decide for themselves whether anything they care about actually changed. That
+    /// keeps the two sides decoupled at compile time (the node's content type lives in
+    /// MeshWeaver.Graph, which both reference) and means a second consumer costs nothing here.</para>
+    ///
+    /// <para><b>Only a completed, successful run is recorded.</b> A failed or cancelled run may still
+    /// have produced artifacts; writing that as a build completion is how a broken build reaches
+    /// consumers. Every green run rewrites the node — including doc-only commits, reverts, and
+    /// re-runs of an unchanged tree — because deciding "did anything change" needs content identity,
+    /// which is the consumer's business, not the webhook's.</para>
+    ///
+    /// <para>Written under the SYSTEM identity: the webhook request is anonymous (its authorization
+    /// is the verified HMAC signature), so an ambient-identity write would be refused on an
+    /// access-gated portal. Same identity model as the issue upsert and the push auto-update.</para>
+    /// </summary>
+    private IObservable<int> ProcessWorkflowRun(JsonElement payload)
+    {
+        if (!string.Equals(GetString(payload, "action"), "completed", StringComparison.OrdinalIgnoreCase))
+            return Observable.Return(0);
+        if (!payload.TryGetProperty("workflow_run", out var run) || run.ValueKind != JsonValueKind.Object)
+            return Observable.Return(0);
+        if (!string.Equals(GetString(run, "conclusion"), "success", StringComparison.OrdinalIgnoreCase))
+            return Observable.Return(0);
+        if (!TryGetRepoUrl(payload, out var repoUrl))
+            return Observable.Return(0);
+
+        var headSha = GetString(run, "head_sha") ?? "";
+        if (headSha.Length == 0)
+        {
+            logger?.LogWarning("workflow_run webhook for {Repo} carried no head_sha — ignoring.", repoUrl);
+            return Observable.Return(0);
+        }
+
+        var (owner, repo) = ParseSafe(repoUrl);
+        if (owner.Length == 0 || repo.Length == 0)
+            return Observable.Return(0);
+
+        var completion = new BuildCompletion
+        {
+            RepositoryUrl = repoUrl,
+            Branch = GetString(run, "head_branch") ?? "",
+            HeadSha = headSha,
+            WorkflowName = GetString(run, "name"),
+            RunId = GetLong(run, "id"),
+            RunNumber = GetLong(run, "run_number"),
+            CompletedAtUtc = GetDate(run, "updated_at"),
+            Conclusion = "success",
+        };
+
+        var path = BuildCompletion.PathFor(owner, repo);
+        var slash = path.LastIndexOf('/');
+        var node = new MeshNode(path[(slash + 1)..], path[..slash])
+        {
+            NodeType = BuildCompletion.NodeType,
+            Name = $"{owner}/{repo} build",
+            State = MeshNodeState.Active,
+            Content = completion,
+        };
+
+        logger?.LogInformation(
+            "workflow_run webhook ({Repo}@{Branch} {Sha}, {Workflow} #{RunNumber}) → recording build completion at {Path}.",
+            repoUrl, completion.Branch, headSha, completion.WorkflowName, completion.RunNumber, path);
+
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return Observable.Using(
+                () => accessService.ImpersonateAsSystem(),
+                _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)).FirstAsync())
+            .Select(d =>
+            {
+                if (!d.Message.Success)
+                {
+                    // Never throw: GitHub retries a non-2xx delivery, so a write failure would turn
+                    // into a delivery storm. Surface it and report "nothing recorded".
+                    logger?.LogWarning("Recording build completion at {Path} failed: {Error}", path, d.Message.Error);
+                    return 0;
+                }
+                return 1;
+            });
     }
 
     /// <summary>The distinct Space paths whose GitHub sync config targets <paramref name="repoUrl"/>.</summary>
