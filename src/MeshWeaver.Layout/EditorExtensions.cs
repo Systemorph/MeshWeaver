@@ -564,11 +564,15 @@ public static class EditorExtensions
         var propertySkinLabel = displayAttribute?.Name ?? propertyInfo.Name.Wordify();
         string? label = null; // // TODO V10: This is to avoid duplication with property skin. do consistently in future. (19.01.2025, Roland Bürgi)
 
+        // The viewer's language, read off the AccessContext rather than ambient culture (see
+        // ViewerLocaleOf). Resolved once here so the per-skin lambda does no repeated DI lookup.
+        var viewerLocale = serviceProvider.GetService<AccessService>().ViewerLocale();
+
         Func<PropertySkin, PropertySkin> skinConfiguration = skin =>
             skin with
             {
                 Name = propertyInfo.Name.ToCamelCase(),
-                Description = propertyInfo.GetCustomAttribute<DescriptionAttribute>()?.Description
+                Description = propertyInfo.LocalizedDescription(viewerLocale)
                               ?? MeshWeaver.Messaging.Serialization.XmlDocs.Summary(propertyInfo),
                 Label = propertySkinLabel
             };
@@ -883,7 +887,7 @@ public static class EditorExtensions
         }
 
         // Regular property: Label + reactive read/edit view
-        var displayName = GetToggleableDisplayName(property);
+        var displayName = GetToggleableDisplayName(property, host);
 
         // Apply style from UiControlAttribute if present - minimal padding for alignment
         var containerStyle = "padding: 4px 0;";
@@ -923,10 +927,19 @@ public static class EditorExtensions
                && property.Name.Equals("Description", StringComparison.OrdinalIgnoreCase)
                && property.GetCustomAttribute<UiControlAttribute>() == null);
 
-    private static string GetToggleableDisplayName(PropertyInfo property)
+    /// <summary>
+    /// The viewer's language for label resolution on a render path. Read off the AccessContext
+    /// that <c>LayoutAreaHost</c> captured for THIS subscriber, never from ambient culture — a
+    /// layout-area render hops the hub scheduler, where an AsyncLocal culture would not survive
+    /// and one user's UI could pick up another user's language.
+    /// </summary>
+    private static string? ViewerLocaleOf(LayoutAreaHost host)
+        => host.Hub.ServiceProvider.GetService<AccessService>().ViewerLocale();
+
+    private static string GetToggleableDisplayName(PropertyInfo property, LayoutAreaHost host)
     {
         return property.GetCustomAttribute<DisplayAttribute>()?.Name
-               ?? property.GetCustomAttribute<DescriptionAttribute>()?.Description
+               ?? property.LocalizedDescription(ViewerLocaleOf(host))
                ?? property.Name.Wordify();
     }
 
@@ -1499,7 +1512,7 @@ public static class EditorExtensions
         bool isEditable)
     {
         var propName = property.Name.ToCamelCase()!;
-        var displayName = GetToggleableDisplayName(property);
+        var displayName = GetToggleableDisplayName(property, host);
 
         var stack = Controls.Stack
             .WithWidth("100%")
@@ -1802,7 +1815,7 @@ public static class EditorExtensions
         string? boundDataContext = null)
     {
         var propName = property.Name.ToCamelCase()!;
-        var displayName = GetToggleableDisplayName(property);
+        var displayName = GetToggleableDisplayName(property, host);
 
         // When not toggleable and editable, always show edit view
         if (!isToggleable && isEditable)
