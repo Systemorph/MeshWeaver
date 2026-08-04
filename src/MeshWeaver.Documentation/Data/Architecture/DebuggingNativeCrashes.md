@@ -66,6 +66,25 @@ docker run --rm --platform linux/amd64 -v "$HOME/segv-dump/shard/collected-logs:
   '
 ```
 
+Use the **`curl` single-file download above, not `dotnet tool install -g dotnet-dump`** — the tool
+installer fails under qemu emulation with `There was an error reflecting type '…DotNetCliTool'`,
+and the resulting `dotnet-dump: command not found` looks like a PATH problem rather than what it is.
+
+## Free triage before you start a container
+
+`strings` on the raw core answers two questions in seconds, with no DAC and no emulation:
+
+```bash
+strings -a dump.dmp | grep -oE "AccessViolation|FailFast|SIGSEGV" | sort | uniq -c
+strings -a dump.dmp | grep -oE "/usr/share/dotnet/shared/Microsoft.NETCore.App/[0-9.]+/lib[a-z]+\.so" | sort -u
+```
+
+- `AccessViolation` + `FailFast` ⇒ the runtime tripped over bad memory; this is not a managed
+  exception that someone forgot to catch.
+- The second line reveals **which runtime patch CI actually ran**. It is regularly *not* the one you
+  have locally (2026-08-03: CI on `10.0.10`, local on `10.0.9`) — on its own a candidate explanation
+  for "only fails on CI", and worth eliminating before blaming load or shard composition.
+
 ## The command sequence that actually answers the question
 
 Run these in order; each one kills off a class of hypothesis.
@@ -101,6 +120,12 @@ tempting to fix that and declare victory. Discipline:
   showed it crashing during hub *construction*.
 - A method's **name** is not evidence of the phase. `SubscribeToOwnDeletion` is a
   `.WithInitialization(...)` hook: it names what the subscription later watches for, not when it runs.
+- **A frame appearing TWICE in one stack is re-entrancy, and re-entrancy is the finding.** That is
+  what the 2026-08-03 crash turned out to be — `CreateHub → Build → … → CreateHub → Build` nested an
+  Autofac `ComponentRegistryBuilder.Build` inside the in-progress one, and that builder is not
+  re-entrant. Scan the stack for repeats before theorising about anything else (fixed in #774: the
+  own-node subscription moved from the synchronous `WithInitialization` overload, which runs *inside*
+  `Build`, to the observable one, which runs on `InitializeHubRequest` after `Build` returns).
 - If a hypothesis survives, write down what would disprove it, then go and check that.
 
 ## Why the dump may have no precursor in the logs
