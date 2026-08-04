@@ -655,6 +655,65 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected virtual TimeSpan TestHardDeadline => TimeSpan.FromSeconds(90);
 
     /// <summary>
+    /// Headroom the watchdog keeps ABOVE a test's own declared <c>[Fact(Timeout)]</c>, so the
+    /// operation's specific failure always wins the race against this generic backstop.
+    /// </summary>
+    private static readonly TimeSpan HardDeadlineMargin = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The hard deadline actually enforced: <see cref="TestHardDeadline"/>, raised when the
+    /// RUNNING test declares a larger <c>[Fact(Timeout)]</c> than it allows for.
+    ///
+    /// <para>Why derive instead of trusting the property: the invariant above —
+    /// <i>"MUST stay strictly ABOVE every in-test operation budget"</i> — was previously per-class
+    /// discipline, and roughly a dozen classes in Hosting.Monolith.Test silently broke it by
+    /// declaring <c>[Fact(Timeout = 120_000 … 300_000)]</c> while inheriting the 90 s default.
+    /// Those budgets were fiction: the watchdog killed the test at 90 s mid-wait and blamed the
+    /// author's CancellationToken handling, hiding whatever actually ran long. The failures were
+    /// CI-only because they only bite when an operation genuinely uses its budget — e.g. a cold
+    /// Roslyn NodeType compile on a fresh runner (NodeTypeCompileParkTest, DynamicTypePreWarmerTest,
+    /// CompileLeafStabilityTest).</para>
+    ///
+    /// <para>Reading the running test's own attribute makes the invariant STRUCTURAL: a class can
+    /// no longer declare a budget the watchdog won't honour, and no future test can reintroduce
+    /// the contradiction. An explicit <see cref="TestHardDeadline"/> override still applies as a
+    /// FLOOR, so classes that deliberately widen it keep working.</para>
+    /// </summary>
+    private TimeSpan EffectiveHardDeadline
+    {
+        get
+        {
+            var floor = TestHardDeadline;
+            if (CurrentFactTimeout() is not { } declared)
+                return floor;
+            var needed = declared + HardDeadlineMargin;
+            return needed > floor ? needed : floor;
+        }
+    }
+
+    /// <summary>
+    /// The <c>[Fact(Timeout)]</c> of the test currently executing, or null when it declares none
+    /// (or the context is unavailable — the watchdog then falls back to <see cref="TestHardDeadline"/>).
+    /// </summary>
+    private static TimeSpan? CurrentFactTimeout()
+    {
+        try
+        {
+            var testMethod = TestContext.Current?.TestMethod;
+            if (testMethod?.GetType().GetProperty("Method")?.GetValue(testMethod)
+                is not MethodInfo method)
+                return null;
+            var timeout = method.GetCustomAttribute<FactAttribute>()?.Timeout ?? 0;
+            return timeout > 0 ? TimeSpan.FromMilliseconds(timeout) : null;
+        }
+        catch
+        {
+            // The watchdog must never be the reason a test fails to tear down.
+            return null;
+        }
+    }
+
+    /// <summary>
     /// xUnit async lifecycle hook run before each test: records the start time and performs any
     /// per-test setup (including access-rights setup) before the test body executes.
     /// </summary>
@@ -1103,10 +1162,11 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             : DateTimeOffset.UtcNow - _testMethodStartedAt;
         if (testMethodElapsed is { } elapsed)
         {
-            if (elapsed > TestHardDeadline)
+            var hardDeadline = EffectiveHardDeadline;
+            if (elapsed > hardDeadline)
             {
                 var msg = $"{testName} ran {elapsed.TotalSeconds:F1}s — exceeded HARD deadline " +
-                    $"({TestHardDeadline.TotalSeconds:F0}s). xUnit's [Fact(Timeout=...)] is " +
+                    $"({hardDeadline.TotalSeconds:F0}s). xUnit's [Fact(Timeout=...)] is " +
                     $"cooperative; this test almost certainly ignored its CancellationToken " +
                     $"and silently hung past its declared timeout. Fix: thread the test's " +
                     $"CancellationToken through every async call.";
