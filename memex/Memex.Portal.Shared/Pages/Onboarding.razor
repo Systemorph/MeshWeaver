@@ -32,7 +32,7 @@
 @inject ILogger<Onboarding> Logger
 @implements IDisposable
 
-<PageTitle>Complete Your Profile - Memex Portal</PageTitle>
+<PageTitle>@AccessService.Localize("page.completeProfile")</PageTitle>
 
 @if (!checkCompleted || existingUserFound)
 {
@@ -65,8 +65,8 @@ else
         <div class="onboarding-card">
             <div class="onboarding-header">
                 <FluentIcon Value="@(new Icons.Regular.Size24.PersonAdd())" />
-                <h1>Complete Your Profile</h1>
-                <p class="onboarding-subtitle">Tell us a bit about yourself to get started</p>
+                <h1>@AccessService.Localize("auth.completeProfile")</h1>
+                <p class="onboarding-subtitle">@AccessService.Localize("auth.completeProfileHint")</p>
             </div>
 
             @if (!string.IsNullOrEmpty(errorMessage))
@@ -80,37 +80,37 @@ else
                 <DataAnnotationsValidator />
 
                 <FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
-                    <FluentTextField Label="Full Name"
+                    <FluentTextField Label="@AccessService.Localize("auth.fullName")"
                                      Required="true"
                                      @bind-Value="model.FullName"
-                                     Placeholder="Your full name"
+                                     Placeholder="@AccessService.Localize("auth.fullNamePlaceholder")"
                                      Style="width: 100%;" />
 
-                    <FluentTextField Label="Username"
+                    <FluentTextField Label="@AccessService.Localize("auth.username")"
                                      Required="true"
                                      @bind-Value="model.Username"
-                                     Placeholder="Pick a username"
+                                     Placeholder="@AccessService.Localize("auth.usernamePlaceholder")"
                                      Style="width: 100%;" />
 
-                    <FluentTextField Label="Email"
+                    <FluentTextField Label="@AccessService.Localize("auth.email")"
                                      Required="true"
                                      ReadOnly="@emailReadOnly"
                                      @bind-Value="model.Email"
                                      Placeholder="your@email.com"
                                      Style="@($"width: 100%;{(emailReadOnly ? " opacity: 0.7;" : "")}")" />
 
-                    <FluentTextArea Label="Bio"
+                    <FluentTextArea Label="@AccessService.Localize("auth.bio")"
                                     @bind-Value="model.Bio"
-                                    Placeholder="A short bio about yourself (optional)"
+                                    Placeholder="@AccessService.Localize("auth.bioPlaceholder")"
                                     Rows="3"
                                     Style="width: 100%;" />
 
-                    <FluentTextField Label="Role"
+                    <FluentTextField Label="@AccessService.Localize("auth.role")"
                                      @bind-Value="model.Role"
-                                     Placeholder="e.g., Developer, Manager, Designer (optional)"
+                                     Placeholder="@AccessService.Localize("auth.rolePlaceholder")"
                                      Style="width: 100%;" />
 
-                    <FluentTextField Label="Avatar URL"
+                    <FluentTextField Label="@AccessService.Localize("auth.avatarUrl")"
                                      @bind-Value="model.AvatarUrl"
                                      Placeholder="https://example.com/avatar.jpg (optional)"
                                      Style="width: 100%;" />
@@ -120,7 +120,7 @@ else
                                   Style="width: 100%; margin-top: 8px;"
                                   Loading="isSaving"
                                   Disabled="isSaving">
-                        Get Started
+                        @AccessService.Localize("auth.getStarted")
                     </FluentButton>
                 </FluentStack>
             </EditForm>

@@ -6,6 +6,8 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 
+using MeshWeaver.Messaging;
+
 namespace MeshWeaver.Graph;
 
 /// <summary>
@@ -16,7 +18,7 @@ internal static class PartitionSettingsTab
 {
     internal static UiControl BuildPartitionsTab(LayoutAreaHost host, StackControl stack)
     {
-        stack = stack.WithView(Controls.H2("Partitions").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.partitions")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(
             "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
             "Storage partitions and their namespace mappings. Each organization gets its own partition.</p>"));
@@ -40,13 +42,13 @@ internal static class PartitionSettingsTab
                         return (UiControl?)Controls.Html(
                             "<p style=\"color: var(--neutral-foreground-hint);\">No partitions registered.</p>");
 
-                    return (UiControl?)BuildPartitionsList(nodes, host.Hub.JsonSerializerOptions);
+                    return (UiControl?)BuildPartitionsList(nodes, host.Hub.JsonSerializerOptions, locale: host.ViewerLocale());
                 }));
 
         return stack;
     }
 
-    private static UiControl BuildPartitionsList(List<MeshNode> nodes, System.Text.Json.JsonSerializerOptions options)
+    private static UiControl BuildPartitionsList(List<MeshNode> nodes, System.Text.Json.JsonSerializerOptions options, string? locale = null)
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 12px;");
 
@@ -109,7 +111,7 @@ internal static class PartitionSettingsTab
             var capturedPath = node.Path;
             var buttonRow = Controls.Stack.WithOrientation(Orientation.Horizontal)
                 .WithStyle("gap: 8px; margin-top: 4px;");
-            buttonRow = buttonRow.WithView(Controls.Button("Open")
+            buttonRow = buttonRow.WithView(Controls.Button(LocalizationCatalog.Get("ui.open", locale))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>
                 {

@@ -1,12 +1,13 @@
 @page "/dev/login/confirm"
 @inject IJSRuntime JS
+@inject AccessService Access
 
-<PageTitle>Logging in...</PageTitle>
+<PageTitle>@Access.Localize("auth.loggingIn")</PageTitle>
 
 <div style="display: flex; justify-content: center; align-items: center; min-height: 100vh;">
     <div style="text-align: center;">
         <FluentProgressRing />
-        <p>Logging in...</p>
+        <p>@Access.Localize("auth.loggingIn")</p>
     </div>
 </div>
 

@@ -2,10 +2,11 @@
 @using MeshWeaver.Blazor.Infrastructure
 @using MeshWeaver.Mesh.Services
 @using Microsoft.AspNetCore.Components.Authorization
+@inject AccessService Access
 
 <FluentMenu Open="@IsOpen" Anchored="false" Style="grid-area: nav-menu; height: auto; max-height: 80vh; width: 100%;">
     <div style="padding: 8px;">
-        <FluentSearch Placeholder="Search..." @bind-Value="searchQuery"
+        <FluentSearch Placeholder="@Access.Localize("common.search")" @bind-Value="searchQuery"
             @onkeydown="HandleSearchKeyDown" Style="width: 100%;" />
     </div>
     <FluentDivider />
@@ -19,12 +20,12 @@
             <FluentDivider />
             <FluentMenuItem OnClick="@HandleCreateClick">
                 <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Slot="start" />
-                Create New...
+                @Access.Localize("menu.createNew")
             </FluentMenuItem>
             <FluentDivider />
             <FluentMenuItem OnClick="@HandleSettingsClick">
                 <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Slot="start" />
-                Settings
+                @Access.Localize("common.settings")
             </FluentMenuItem>
         </Authorized>
     </AuthorizeView>

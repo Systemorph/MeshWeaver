@@ -182,7 +182,7 @@ public static class CodeLayoutAreas
         }
         else
         {
-            cell = cell.WithView(Controls.Body("No code defined.")
+            cell = cell.WithView(Controls.Body(host.Localize("ui.noCodeDefined"))
                     .WithStyle("display: block; padding: 12px; color: var(--neutral-foreground-hint); font-style: italic;"),
                 CellCodeArea);
         }
@@ -208,7 +208,7 @@ public static class CodeLayoutAreas
             else
             {
                 // Not yet run: a one-line subtle hint, not a large empty pane.
-                cell = cell.WithView(Controls.Body("Not yet run.")
+                cell = cell.WithView(Controls.Body(host.Localize("ui.notYetRun"))
                         .WithStyle($"display: block; {outputStyle} " +
                                    "color: var(--neutral-foreground-hint); font-style: italic; font-size: 0.85rem;"),
                     CellOutputArea);
@@ -249,7 +249,7 @@ public static class CodeLayoutAreas
         bool isExecutable,
         string language,
         ActivityLog? lastActivity,
-        bool canEdit)
+        bool canEdit, string? locale = null)
     {
         // Stale = the output pane above is showing a run of code that has since been edited. The
         // toolbar goes amber, matching the NodeType editor's "Source changed — needs compile" panel,
@@ -272,7 +272,7 @@ public static class CodeLayoutAreas
             // button client-side hid it even from admins when the live
             // permission stream had a transient empty emission, which is exactly
             // the state we once spent a session debugging.
-            toolbar = toolbar.WithView(Controls.Button("Run")
+            toolbar = toolbar.WithView(Controls.Button(LocalizationCatalog.Get("common.run", locale))
                     .WithIconStart(RunGlyph(isStale))
                     .WithAppearance(Appearance.Accent)
                     .WithClickAction(ctx =>
@@ -286,7 +286,7 @@ public static class CodeLayoutAreas
 
             if (isStale)
                 toolbar = toolbar.WithView(
-                    Controls.Body("Code changed — re-run")
+                    Controls.Body(LocalizationCatalog.Get("code.staleCell", locale))
                         .WithStyle("font-size: 0.8rem; font-weight: 600; " +
                                    "color: var(--warning-foreground, #92400e);"),
                     StaleChipArea);
@@ -300,7 +300,7 @@ public static class CodeLayoutAreas
                 && lastActivity is not null
                 && ActivityLayoutAreas.IsCancelButtonVisible(lastActivity))
             {
-                toolbar = toolbar.WithView(Controls.Button("Cancel")
+                toolbar = toolbar.WithView(Controls.Button(LocalizationCatalog.Get("common.cancel", locale))
                         .WithIconStart(FluentIcons.Stop())
                         .WithClickAction(ctx =>
                         {
@@ -327,7 +327,7 @@ public static class CodeLayoutAreas
             // drives the DialogControl area). Identity resolution + the actual
             // copy happen at CLICK time under the clicker's AccessContext.
             var sourcePath = hubAddress.ToString();
-            toolbar = toolbar.WithView(Controls.Button("Edit")
+            toolbar = toolbar.WithView(Controls.Button(LocalizationCatalog.Get("common.edit", locale))
                     .WithIconStart(FluentIcons.Edit())
                     .WithClickAction(ctx =>
                     {
@@ -392,7 +392,7 @@ public static class CodeLayoutAreas
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("gap: 8px; justify-content: flex-end;")
-                .WithView(Controls.Button("Cancel")
+                .WithView(Controls.Button(ctx.Host.Localize("common.cancel"))
                         .WithAppearance(Appearance.Neutral)
                         .WithClickAction(c =>
                         {
@@ -400,7 +400,7 @@ public static class CodeLayoutAreas
                             return Task.CompletedTask;
                         }),
                     CopyDialogCancelArea)
-                .WithView(Controls.Button("Copy to my home")
+                .WithView(Controls.Button(ctx.Host.Localize("ui.copyToHome"))
                         .WithAppearance(Appearance.Accent)
                         .WithIconStart(FluentIcons.Copy())
                         .WithClickAction(c =>
@@ -533,7 +533,7 @@ public static class CodeLayoutAreas
                     .Select(tuple =>
                     {
                         var (siblings, currentNode) = tuple;
-                        return BuildCodeNavMenu(hubAddress, hubPath, currentNode, siblings);
+                        return BuildCodeNavMenu(hubAddress, hubPath, currentNode, siblings, locale: host.ViewerLocale());
                     }),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
@@ -551,7 +551,7 @@ public static class CodeLayoutAreas
         object hubAddress,
         string currentPath,
         MeshNode? currentNode,
-        IReadOnlyCollection<MeshNode>? siblings)
+        IReadOnlyCollection<MeshNode>? siblings, string? locale = null)
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
@@ -573,7 +573,7 @@ public static class CodeLayoutAreas
         else
         {
             codeGroup = codeGroup.WithView(
-                Controls.Body("No code files").WithStyle("padding: 4px 16px; display: block; color: var(--neutral-foreground-hint);")
+                Controls.Body(LocalizationCatalog.Get("ui.noCodeFiles", locale)).WithStyle("padding: 4px 16px; display: block; color: var(--neutral-foreground-hint);")
             );
         }
 
@@ -644,7 +644,7 @@ public static class CodeLayoutAreas
         var displayNameRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 12px; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.Label("Display Name:").WithStyle("font-weight: 500;"))
+            .WithView(Controls.Label(host.Localize("ui.displayName")).WithStyle("font-weight: 500;"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Enter display name...")
                 .WithStyle("flex: 1; max-width: 400px;")
@@ -659,7 +659,7 @@ public static class CodeLayoutAreas
         var languageRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 12px; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.Label("Language:").WithStyle("font-weight: 500;"))
+            .WithView(Controls.Label(host.Localize("ui.language")).WithStyle("font-weight: 500;"))
             .WithView((new SelectControl(new JsonPointerReference(""), Array.Empty<object>())
                     .WithOptions(LanguageOptions)) with
                 { DataContext = LayoutAreaReference.GetDataPointer(languageDataId) });
@@ -713,12 +713,12 @@ public static class CodeLayoutAreas
 
         // Cancel button
         var viewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
-        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("common.cancel"))
             .WithAppearance(Appearance.Neutral)
             .WithNavigateToHref(viewHref));
 
         // Save button — sync click action; subscribes to the form snapshot then posts.
-        buttonRow = buttonRow.WithView(Controls.Button("Save")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("common.save"))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
             .WithClickAction(actx =>

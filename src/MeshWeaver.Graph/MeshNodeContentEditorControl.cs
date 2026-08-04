@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
 using MeshWeaver.Utils;
 
@@ -34,17 +35,39 @@ public record MeshNodeEditorField(string Key, string Label, MeshNodeEditorFieldK
     public ImmutableList<string> Options { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
-    /// Builds the editable field list from a content record type: <c>[Browsable(false)]</c>
-    /// properties are skipped, <c>[Description]</c>/<c>[Display]</c>/<c>[DisplayName]</c> supply the
-    /// label (else the wordified property name), the key is the camelCase property name, and the
-    /// kind follows the property type (bool → checkbox, enum → dropdown, everything else → text).
+    /// Optional display text per entry in <see cref="Options"/>, keyed by the stored option value.
+    /// Lets a picker show a human-readable (and localizable) label while still storing the raw
+    /// value — e.g. the language picker stores <c>de</c> but shows <c>Deutsch</c>. An option with no
+    /// entry here falls back to showing its stored value, so this stays optional everywhere.
     /// </summary>
-    public static ImmutableList<MeshNodeEditorField> FromType(Type contentType) =>
+    public ImmutableDictionary<string, string> OptionLabels { get; init; } =
+        ImmutableDictionary<string, string>.Empty;
+
+    /// <summary>The display text for <paramref name="option"/> — its <see cref="OptionLabels"/>
+    /// entry when one exists, otherwise the stored value itself.</summary>
+    public string LabelFor(string option)
+        => OptionLabels.TryGetValue(option, out var label) ? label : option;
+
+    /// <summary>
+    /// Builds the editable field list from a content record type: <c>[Browsable(false)]</c>
+    /// properties are skipped, <c>[Translation]</c>/<c>[Description]</c>/<c>[Display]</c>/
+    /// <c>[DisplayName]</c> supply the label (else the wordified property name), the key is the
+    /// camelCase property name, and the kind follows the property type (bool → checkbox, enum →
+    /// dropdown, everything else → text).
+    /// </summary>
+    /// <param name="contentType">The content record type to derive fields from.</param>
+    /// <param name="locale">
+    /// The viewer's language, used to pick a <c>[Translation]</c> over the English
+    /// <c>[Description]</c>. Null → English. Callers on a render path pass
+    /// <c>accessService.ViewerLocale()</c>; the field list is built per render, so each viewer gets
+    /// their own labels even though the type's attributes are shared.
+    /// </param>
+    public static ImmutableList<MeshNodeEditorField> FromType(Type contentType, string? locale = null) =>
         contentType.GetProperties()
             .Where(p => p.GetCustomAttribute<BrowsableAttribute>()?.Browsable != false)
             .Select(p =>
             {
-                var label = p.GetCustomAttribute<DescriptionAttribute>()?.Description
+                var label = p.LocalizedDescription(locale)
                     ?? p.GetCustomAttribute<DisplayAttribute>()?.Name
                     ?? p.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
                     ?? p.Name.Wordify();

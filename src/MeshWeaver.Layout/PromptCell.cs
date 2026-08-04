@@ -141,7 +141,7 @@ public static class PromptCell
                         return Task.CompletedTask;
                     }),
                 SuggestButtonArea)
-            .WithView(Controls.Button("Send")
+            .WithView(Controls.Button(host.Localize("common.send"))
                     .WithAppearance(Appearance.Accent)
                     .WithClickAction(ctx =>
                     {

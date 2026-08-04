@@ -140,7 +140,7 @@ public static class PartitionSyncAdminLayoutArea
     {
         var viewerId = ResolveViewerId(host);
         if (string.IsNullOrEmpty(viewerId))
-            return Observable.Return<UiControl?>(AccessDenied());
+            return Observable.Return<UiControl?>(AccessDenied(locale: host.ViewerLocale()));
 
         // Wait for the positive admin confirmation (filter true) with a bounded timeout, exactly
         // as the Global Administration tab does. No true within the window (or an error) → treat
@@ -153,12 +153,12 @@ public static class PartitionSyncAdminLayoutArea
             .Catch<bool, Exception>(_ => Observable.Return(false))
             .Select(isAdmin => isAdmin
                 ? BuildAdminView(host)
-                : Observable.Return<UiControl?>(AccessDenied()))
+                : Observable.Return<UiControl?>(AccessDenied(locale: host.ViewerLocale())))
             .Switch();
     }
 
-    private static UiControl AccessDenied()
-        => Controls.Markdown("Access denied — platform admins only.");
+    private static UiControl AccessDenied(string? locale = null)
+        => Controls.Markdown(LocalizationCatalog.Get("ui.accessDeniedAdminsOnly", locale));
 
     // ── Partition discovery ────────────────────────────────────────────────────
 
@@ -211,8 +211,8 @@ public static class PartitionSyncAdminLayoutArea
         {
             if (partitions.Length == 0)
                 return Observable.Return<UiControl?>(Controls.Stack
-                    .WithView(Controls.Title("Partitions", 1))
-                    .WithView(Controls.Markdown("*No partitions found.*")));
+                    .WithView(Controls.Title(host.Localize("settings.partitions"), 1))
+                    .WithView(Controls.Markdown(host.Localize("ui.mdNoPartitions"))));
 
             // Live: one row stream per partition — the ROOT node stream (namespace="",
             // path==partition; starts with null so CombineLatest fires immediately) combined
@@ -321,7 +321,7 @@ public static class PartitionSyncAdminLayoutArea
         }
 
         var stack = Controls.Stack
-            .WithView(Controls.Title("Partitions", 1))
+            .WithView(Controls.Title(host.Localize("settings.partitions"), 1))
             .WithView(Controls.Markdown(
                 "Every partition in the mesh, with its main node (namespace empty, id = partition), "
                 + "sync status and sync sources. Select a partition below to manage it: toggle "
@@ -329,16 +329,16 @@ public static class PartitionSyncAdminLayoutArea
                 + "**sync direction** — bidirectional, export-only or import-only), add or remove "
                 + "sync sources, or delete the space (which removes the entire partition)."))
             .WithView(grid)
-            .WithView(Controls.Title("Manage partition", 2))
+            .WithView(Controls.Title(host.Localize("ui.managePartition"), 2))
             .WithView(selectRow);
 
         // The detail panel — bound to the selected partition, live inner streams via Switch.
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(SelectedPartitionId)
             .Select(partition => string.IsNullOrEmpty(partition)
-                ? Observable.Return<UiControl?>(Controls.Markdown("*Select a partition to manage it.*"))
+                ? Observable.Return<UiControl?>(Controls.Markdown(host.Localize("ui.mdSelectPartition")))
                 : BuildDetailStream(h, partition, providers, logger))
             .Switch()
-            .StartWith((UiControl?)Controls.Markdown("*Select a partition to manage it.*")));
+            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdSelectPartition"))));
 
         return stack;
     }
@@ -366,13 +366,13 @@ public static class PartitionSyncAdminLayoutArea
             : Observable.CombineLatest(sourcesStreams).Select(x => x.ToList());
 
         return root.CombineLatest(sources,
-            (node, sourceGroups) => (UiControl?)BuildDetailPanel(partition, node, sourceGroups, logger));
+            (node, sourceGroups) => (UiControl?)BuildDetailPanel(partition, node, sourceGroups, logger, locale: host.ViewerLocale()));
     }
 
     private static UiControl BuildDetailPanel(
         string partition, MeshNode? node,
         List<(IPartitionSyncSourceProvider Provider, IReadOnlyList<MeshNode> Nodes)> sourceGroups,
-        ILogger? logger)
+        ILogger? logger, string? locale = null)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle("gap: 12px;");
         stack = stack.WithView(Controls.Title(node?.Name ?? partition, 3));
@@ -408,11 +408,11 @@ public static class PartitionSyncAdminLayoutArea
                         ex => logger?.LogWarning(ex, "Partition sync toggle failed for {Path}", partition));
                 return Task.CompletedTask;
             }));
-        actions = actions.WithView(Controls.Button("Open")
+        actions = actions.WithView(Controls.Button(LocalizationCatalog.Get("ui.open", locale))
             .WithAppearance(Appearance.Outline)
             .WithIconStart(FluentIcons.Open())
             .WithNavigateToHref($"/{partition}"));
-        actions = actions.WithView(Controls.Button("Delete space…")
+        actions = actions.WithView(Controls.Button(LocalizationCatalog.Get("ui.deleteSpace", locale))
             .WithAppearance(Appearance.Outline)
             .WithIconStart(FluentIcons.Delete())
             .WithStyle("color: var(--error, #d32f2f);")
@@ -425,7 +425,7 @@ public static class PartitionSyncAdminLayoutArea
         {
             stack = stack.WithView(Controls.Title($"{provider.Kind} sync sources", 4));
             if (nodes.Count == 0)
-                stack = stack.WithView(Controls.Markdown("*No sync sources configured.*"));
+                stack = stack.WithView(Controls.Markdown(LocalizationCatalog.Get("ui.mdNoSyncSources", locale)));
             foreach (var source in nodes)
             {
                 var sourceStack = Controls.Stack.WithWidth("100%")
@@ -437,7 +437,7 @@ public static class PartitionSyncAdminLayoutArea
                 if (provider.CanRemove(partition, source))
                 {
                     var capturedSource = source;
-                    sourceStack = sourceStack.WithView(Controls.Button("Remove source")
+                    sourceStack = sourceStack.WithView(Controls.Button(LocalizationCatalog.Get("ui.removeSource", locale))
                         .WithAppearance(Appearance.Outline)
                         .WithClickAction(ctx =>
                         {
@@ -452,14 +452,14 @@ public static class PartitionSyncAdminLayoutArea
                 }
                 stack = stack.WithView(sourceStack);
             }
-            stack = stack.WithView(BuildAddSourceForm(provider, partition, logger));
+            stack = stack.WithView(BuildAddSourceForm(provider, partition, logger, locale: locale));
         }
 
         return stack;
     }
 
     private static UiControl BuildAddSourceForm(
-        IPartitionSyncSourceProvider provider, string partition, ILogger? logger)
+        IPartitionSyncSourceProvider provider, string partition, ILogger? logger, string? locale = null)
     {
         var row = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -471,7 +471,7 @@ public static class PartitionSyncAdminLayoutArea
             Placeholder = "e.g. upstream, mirror, backup",
             DataContext = LayoutAreaReference.GetDataPointer(AddSourceFormId),
         }.WithWidth("280px"));
-        row = row.WithView(Controls.Button("Add sync source")
+        row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.addSyncSource", locale))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(ctx =>
             {
