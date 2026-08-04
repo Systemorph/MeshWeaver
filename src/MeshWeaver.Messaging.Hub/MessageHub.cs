@@ -1253,21 +1253,26 @@ public sealed class MessageHub : IMessageHub
         if (!targetIsRouter && !senderIsRouter)
             return;
 
-        var messageType = delivery.Message?.GetType().Name ?? "(null)";
-        // Heartbeats ARE the router's own job — routing liveness, not work.
-        if (messageType is "HeartBeatEvent")
+        // Heartbeats ARE the router's own job — routing liveness, not work. Type check, not a name
+        // match: a rename must not silently turn this exclusion off.
+        if (delivery.Message is HeartBeatEvent)
             return;
+
+        var messageType = delivery.Message?.GetType().Name ?? "(null)";
 
         var role = targetIsRouter && senderIsRouter ? "sender AND target"
             : targetIsRouter ? "target" : "sender";
         if (!routerTrafficReported.TryAdd($"{role}:{messageType}", 0))
             return;
 
+        // Log BOTH ends explicitly. {Address} is this hub — the delivery TARGET — so when the router
+        // is the SENDER it would name the innocent hub and send the reader hunting the wrong one.
         logger.LogError(
-            "ROUTER_TRAFFIC: {MessageType} has the mesh hub as {Role} ({Address}). The mesh hub is the "
-            + "ROUTER and must not execute work — it belongs on a hub of its own (session portal hub "
-            + "for REST/Blazor/MCP, import hub for bulk imports). Reported once per role+type for this hub.",
-            messageType, role, Address);
+            "ROUTER_TRAFFIC: {MessageType} has the mesh hub as {Role} (sender: {Sender}, target: {Target}). "
+            + "The mesh hub is the ROUTER and must not execute work — it belongs on a hub of its own "
+            + "(session portal hub for REST/Blazor/MCP, import hub for bulk imports). Reported once per "
+            + "role+type for this hub.",
+            messageType, role, delivery.Sender?.ToString() ?? "(none)", Address);
     }
 
     /// <summary>
