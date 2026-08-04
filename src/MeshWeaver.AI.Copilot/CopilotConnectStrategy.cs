@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using MeshWeaver.AI.Connect;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
@@ -122,11 +122,8 @@ public sealed class CopilotConnectStrategy : IConnectStrategy
     private CopilotClient BuildClient(string? userConfigDir)
     {
         var cfg = CopilotConfig;
-        var options = new CopilotClientOptions { AutoStart = true, UseLoggedInUser = true };
-        if (!string.IsNullOrEmpty(cfg.CliPath)) options.CliPath = cfg.CliPath;
-        if (!string.IsNullOrEmpty(cfg.CliUrl)) options.CliUrl = cfg.CliUrl;
-        if (cfg.Port.HasValue) options.Port = cfg.Port.Value;
-        if (!string.IsNullOrEmpty(userConfigDir)) options.CopilotHome = userConfigDir;
+        var options = CopilotClientOptionsFactory.Create(cfg.CliPath, cfg.CliUrl, cfg.Port, userConfigDir);
+        options.UseLoggedInUser = true;
         return new CopilotClient(options);
     }
 

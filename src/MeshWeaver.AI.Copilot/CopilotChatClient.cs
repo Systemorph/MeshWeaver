@@ -2,7 +2,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using MeshWeaver.AI.Connect;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Reactive;
@@ -203,25 +203,8 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
     {
         try
         {
-            var clientOptions = new CopilotClientOptions
-            {
-                AutoStart = true
-            };
-
-            if (!string.IsNullOrEmpty(configuration.CliPath))
-            {
-                clientOptions.CliPath = configuration.CliPath;
-            }
-
-            if (!string.IsNullOrEmpty(configuration.CliUrl))
-            {
-                clientOptions.CliUrl = configuration.CliUrl;
-            }
-
-            if (configuration.Port.HasValue)
-            {
-                clientOptions.Port = configuration.Port.Value;
-            }
+            var clientOptions = CopilotClientOptionsFactory.Create(
+                configuration.CliPath, configuration.CliUrl, configuration.Port);
 
             // Auth: a per-user GitHub token wins (co-hosted multi-user); otherwise
             // fall back to the machine's logged-in user (dev / ambient auth).
@@ -290,7 +273,10 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
         await using var session = await client.CreateSessionAsync(sessionConfig, cancellationToken);
 
         // Set up event handling using pattern matching
-        subscription = session.On(evt =>
+        // 1.0.8: On is generic (On<T>(Action<T>)) — the type argument is explicit because the
+        // lambda switches over event subtypes, so inference has nothing to bind to. SessionEvent
+        // is the base, i.e. subscribe to EVERY event and pattern-match, as before.
+        subscription = session.On<SessionEvent>(evt =>
         {
             switch (evt)
             {
@@ -436,7 +422,9 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
         // Add tools if provided - the SDK accepts AIFunction from Microsoft.Extensions.AI.Abstractions
         if (options?.Tools != null && options.Tools.Count > 0)
         {
-            config.Tools = options.Tools.OfType<AIFunction>().ToList();
+            // 1.0.8: Tools is ICollection<AIFunctionDeclaration> (AIFunction derives from it),
+            // so the executable AIFunctions still go in — only the static type widened.
+            config.Tools = options.Tools.OfType<AIFunction>().Cast<AIFunctionDeclaration>().ToList();
         }
 
         // The mesh: per-user `meshweaver` HTTP MCP server (Bearer-authenticated as the calling user).
