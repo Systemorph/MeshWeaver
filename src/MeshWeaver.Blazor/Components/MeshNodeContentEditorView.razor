@@ -1,6 +1,7 @@
 @inherits BlazorView<MeshNodeContentEditorControl, MeshNodeContentEditorView>
 @using MeshWeaver.Graph
 @using Microsoft.FluentUI.AspNetCore.Components
+@inject AccessService Access
 
 @if (!_loaded)
 {
@@ -8,7 +9,7 @@
 }
 else if (Fields.Count == 0)
 {
-    <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body">No editable settings.</FluentLabel>
+    <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body">@Access.Localize("empty.noEditableSettings")</FluentLabel>
 }
 else
 {

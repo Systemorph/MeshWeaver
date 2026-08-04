@@ -4,6 +4,7 @@
 @using Microsoft.AspNetCore.Components
 @inherits BlazorView<UiControl, DispatchView>
 @inject NavigationManager NavigationManager
+@inject AccessService Access
 
 @if(ViewModel is RedirectControl redirect)
 {
@@ -36,7 +37,7 @@ else if(ViewDescriptor != null)
             <ErrorContent Context="renderError">
                 <div class="meshweaver-render-error"
                      style="padding:0.75rem;border:1px solid var(--error,#d13438);border-radius:4px;background:rgba(209,52,56,0.08);color:var(--error,#d13438);font-size:0.875rem">
-                    <strong>This view failed to render.</strong>
+                    <strong>@Access.Localize("error.viewFailed")</strong>
                     <div style="margin-top:0.25rem;white-space:pre-wrap;font-family:monospace">@renderError.Message</div>
                 </div>
             </ErrorContent>

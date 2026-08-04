@@ -5,6 +5,7 @@
 @using MeshWeaver.ContentCollections
 @using MeshWeaver.Messaging
 @using Microsoft.Extensions.DependencyInjection
+@inject AccessService Access
 
 <PageTitle>Browse @Collection</PageTitle>
 <AuthorizeView Roles="@Roles.PortalAdmin">
@@ -12,7 +13,7 @@
         <FileBrowser CollectionName="@Collection" CurrentPath="@Path"></FileBrowser>
     </Authorized>
     <NotAuthorized>
-        <h3>Access Denied</h3>
+        <h3>@Access.Localize("error.accessDenied")</h3>
         You need to have Portal Administrator role to administer collections. Please contact your system administrator
     </NotAuthorized>
 </AuthorizeView>

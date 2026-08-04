@@ -241,5 +241,7 @@
   "menu.viewPublicProfileTooltip": "Preview your public profile as visitors see it",
   "menu.editProfileTooltip": "Edit your bio, links, and showcase",
   "menu.editHomePageTooltip": "Edit this home page's markdown",
-  "menu.resetHomeTooltip": "Discard your custom home and use the default layout"
+  "menu.resetHomeTooltip": "Discard your custom home and use the default layout",
+  "chat.runningSubThreadElapsed": "Running — elapsed since the sub-thread started",
+  "chat.subThreadElapsed": "Elapsed since sub-thread started"
 }

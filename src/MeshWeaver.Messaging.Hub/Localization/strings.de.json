@@ -241,5 +241,7 @@
   "menu.viewPublicProfileTooltip": "Das öffentliche Profil so ansehen, wie Besucher es sehen",
   "menu.editProfileTooltip": "Biografie, Links und Showcase bearbeiten",
   "menu.editHomePageTooltip": "Das Markdown dieser Startseite bearbeiten",
-  "menu.resetHomeTooltip": "Die eigene Startseite verwerfen und das Standard-Layout verwenden"
+  "menu.resetHomeTooltip": "Die eigene Startseite verwerfen und das Standard-Layout verwenden",
+  "chat.runningSubThreadElapsed": "Läuft — Zeit seit dem Start des Sub-Threads",
+  "chat.subThreadElapsed": "Zeit seit dem Start des Sub-Threads"
 }
