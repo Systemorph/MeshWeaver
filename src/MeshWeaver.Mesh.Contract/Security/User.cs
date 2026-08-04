@@ -37,6 +37,18 @@ public record User : AccessObject
     /// </summary>
     public string? TimeZoneId { get; init; }
 
+    /// <summary>
+    /// The user's preferred UI language as a BCP-47 tag (e.g. <c>en</c>, <c>de</c>). Drives the
+    /// per-viewer TEXT seam (<c>AccessService.Localize</c>), resolved once onto
+    /// <c>AccessContext.Locale</c> when the circuit context is built — exactly as
+    /// <see cref="TimeZoneId"/> drives the timestamp seam. Content STORAGE is unaffected: only
+    /// UI chrome is translated. A region tag falls back to its primary subtag
+    /// (<c>de-CH</c> → <c>de</c>) and an unsupported/empty value falls back to English, so the
+    /// UI is never blank — just untranslated. Populated once from the browser's
+    /// <c>navigator.language</c> on first sign-in and overridable in user settings.
+    /// </summary>
+    public string? Locale { get; init; }
+
     /// <summary>Ordered list of node paths the user has pinned to their dashboard.</summary>
     public IReadOnlyList<string> PinnedPaths { get; init; } = [];
 

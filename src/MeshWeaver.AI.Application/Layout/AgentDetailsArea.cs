@@ -55,7 +55,7 @@ public static class AgentDetailsArea
                 if (agent == null)
                 {
                     return (UiControl?)Controls.Stack
-                        .WithView(Controls.Title("Agent Details", 2), "Title")
+                        .WithView(Controls.Title(host.Localize("ui.agentDetails"), 2), "Title")
                         .WithView(Controls.Text($"Agent '{agentName}' not found. Please verify the agent name and try again."), "ErrorMessage")
                         .WithView(Controls.NavLink("Agents", $"{host.Hub.Address}/Overview"), "BackLink");
                 }

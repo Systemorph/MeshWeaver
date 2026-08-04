@@ -68,7 +68,7 @@ public static class CatalogLayoutAreas
                 cfg?.SourceRef ?? "HEAD", cfg?.Description,
                 cfg?.SourceRepoPath is { Length: > 0 } p ? $"{p} @ {cfg.SourceRef}" : null))
             .Switch()
-            .StartWith((UiControl?)Controls.Markdown("*Loading catalog…*"));
+            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingCatalog")));
     }
 
     /// <summary>
@@ -83,7 +83,7 @@ public static class CatalogLayoutAreas
         return ObserveAvailable(host, source, sourceRef)
             .CombineLatest(installed, (available, inst) =>
                 (UiControl?)BuildCatalog(host, source, sourceRef, description, sourceLabel, available, inst))
-            .StartWith((UiControl?)Controls.Markdown("*Loading catalog…*"));
+            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingCatalog")));
     }
 
     // Live list of installable packages from the given source at its ref.
@@ -146,7 +146,7 @@ public static class CatalogLayoutAreas
             .WithWidth("100%")
             .WithStyle("width: 100%; max-width: 900px; margin: 0 auto; padding: 16px;");
 
-        container = container.WithView(Controls.H1("Plugin Catalog").WithStyle("margin: 0 0 4px 0;"));
+        container = container.WithView(Controls.H1(host.Localize("ui.pluginCatalog")).WithStyle("margin: 0 0 4px 0;"));
 
         if (!string.IsNullOrWhiteSpace(description))
             container = container.WithView(Controls.Markdown(description!).WithStyle("margin-bottom: 8px;"));
@@ -158,7 +158,7 @@ public static class CatalogLayoutAreas
             .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 16px; display: block;"));
 
         if (available.Count == 0)
-            container = container.WithView(Controls.Markdown("*No installable packages found.*"));
+            container = container.WithView(Controls.Markdown(host.Localize("ui.mdNoPackages")));
 
         var n = 0;
         foreach (var pkg in available)

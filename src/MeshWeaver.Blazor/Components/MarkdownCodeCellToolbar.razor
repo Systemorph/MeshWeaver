@@ -1,11 +1,12 @@
 @using Microsoft.FluentUI.AspNetCore.Components
+@inject AccessService Access
 
 <div class="md-cell-toolbar">
     <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
                   Disabled="@(OnRun is null)"
                   Title="@(OnRun is null ? "Interactive kernel is not available here" : "Run this code block")"
                   IconStart="@(new Icons.Regular.Size16.Play())"
-                  OnClick="@Run">Run</FluentButton>
+                  OnClick="@Run">@Access.Localize("common.run")</FluentButton>
     <span class="md-cell-language">@Language</span>
 </div>
 

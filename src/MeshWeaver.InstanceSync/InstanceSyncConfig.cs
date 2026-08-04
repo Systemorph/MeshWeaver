@@ -3,6 +3,8 @@ using System.ComponentModel;
 using System.Text.Json.Serialization;
 using MeshWeaver.Mesh.Services;
 
+using MeshWeaver.Messaging;
+
 namespace MeshWeaver.InstanceSync;
 
 /// <summary>
@@ -84,18 +86,22 @@ public record InstanceSyncConfig
 {
     /// <summary>Base URL of the remote MeshWeaver instance, e.g. <c>https://memex.meshweaver.cloud</c>.</summary>
     [Description("Remote instance URL (e.g. https://memex.meshweaver.cloud)")]
+    [Translation("de", "URL der entfernten Instanz (z. B. https://memex.meshweaver.cloud)")]
     public string? RemoteUrl { get; init; }
 
     /// <summary>API token issued by the remote instance (<c>mw_…</c>) — authenticates every push/pull.</summary>
     [Description("API token issued by the remote instance (mw_…)")]
+    [Translation("de", "Von der entfernten Instanz ausgestelltes API-Token (mw_…)")]
     public string? RemoteToken { get; init; }
 
     /// <summary>The space id on the remote to replicate into. Blank = same id as the local space.</summary>
     [Description("Space id on the remote (blank = same id as this space)")]
+    [Translation("de", "Space-ID auf der Gegenstelle (leer = dieselbe ID wie dieser Space)")]
     public string? RemoteSpace { get; init; }
 
     /// <summary>The allowed sync direction — bi-directional (default), push-only, or pull-only.</summary>
     [Description("Sync direction")]
+    [Translation("de", "Synchronisierungsrichtung")]
     public InstanceSyncDirection Direction { get; init; } = InstanceSyncDirection.Bidirectional;
 
     /// <summary>
@@ -106,6 +112,7 @@ public record InstanceSyncConfig
     /// re-materializes the initializer. Pinned by the pause test.
     /// </summary>
     [Description("Active — uncheck to pause syncing")]
+    [Translation("de", "Aktiv — abwählen, um die Synchronisierung zu pausieren")]
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool Active { get; init; } = true;
 

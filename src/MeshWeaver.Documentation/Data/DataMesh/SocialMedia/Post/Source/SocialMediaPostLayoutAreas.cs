@@ -116,7 +116,7 @@ public static class SocialMediaPostLayoutAreas
         if (ordered.Count == 0)
             return Controls.Stack
                 .WithStyle("padding: 16px;")
-                .WithView(Controls.Markdown("*No posts yet.*"));
+                .WithView(Controls.Markdown(host.Localize("ui.mdNoPosts")));
 
         var rows = string.Join("", ordered.Select(p =>
         {
@@ -170,7 +170,7 @@ public static class SocialMediaPostLayoutAreas
             .Select(node =>
             {
                 if (node is null)
-                    return (UiControl?)Controls.Markdown("*Post not found.*");
+                    return (UiControl?)Controls.Markdown(host.Localize("ui.mdPostNotFound"));
 
                 var title = node.Name ?? GetProp(node, "title") ?? "(untitled)";
                 var body = GetProp(node, "body");

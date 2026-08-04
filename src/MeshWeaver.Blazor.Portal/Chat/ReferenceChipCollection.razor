@@ -1,5 +1,6 @@
 @namespace MeshWeaver.Blazor.Portal.Chat
 @using Microsoft.FluentUI.AspNetCore.Components
+@inject AccessService Access
 
 <div class="reference-chip-collection">
     @foreach (var attachment in Attachments)
@@ -17,7 +18,7 @@
                 <FluentIcon Value="@(new Icons.Regular.Size16.Link())" Color="Color.Neutral" />
             }
             <span class="chip-text">@GetDisplayName(attachment.Path, attachment.DisplayName)</span>
-            <button type="button" class="chip-remove" @onclick:stopPropagation="true" @onclick="@(() => OnAttachmentRemoved.InvokeAsync(attachment.Path))" title="Remove">
+            <button type="button" class="chip-remove" @onclick:stopPropagation="true" @onclick="@(() => OnAttachmentRemoved.InvokeAsync(attachment.Path))" title="@Access.Localize("common.remove")">
                 <FluentIcon Value="@(new Icons.Regular.Size12.Dismiss())" Color="Color.Neutral" />
             </button>
         </div>

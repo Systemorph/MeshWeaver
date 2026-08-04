@@ -11,6 +11,23 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- UI string catalogs, one per shipped language (see LocalizationCatalog). Embedded so the
+         table is available on every host — server-side layout-area renders included — with no
+         satellite-assembly probing and no file deployment.
+
+         🚨 WithCulture="false" is LOAD-BEARING, not boilerplate. The SDK infers a culture from the
+         ".en."/".de." segment of an EmbeddedResource filename and, having inferred one, routes the
+         file into a SATELLITE assembly (bin/en/, bin/de/) instead of the main one. The result is
+         silent: the build succeeds, the main assembly carries ZERO manifest resources, every lookup
+         falls through to the key-fallback path, and the UI renders raw "chat.new" tokens. Explicit
+         LogicalName pins the name the loader asks for, independent of RootNamespace. -->
+    <EmbeddedResource Include="Localization/strings.en.json" WithCulture="false"
+                      LogicalName="MeshWeaver.Messaging.Localization.strings.en.json" />
+    <EmbeddedResource Include="Localization/strings.de.json" WithCulture="false"
+                      LogicalName="MeshWeaver.Messaging.Localization.strings.de.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="JsonPatch.Net" />
     <PackageReference Include="Microsoft.Extensions.Logging" />
     <PackageReference Include="System.Reactive" />

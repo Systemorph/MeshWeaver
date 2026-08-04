@@ -5,22 +5,23 @@
 @using MeshWeaver.Mesh.Services
 @inject NavigationManager Navigation
 @inject IMeshService MeshQuery
+@inject AccessService Access
 
-<PageTitle>Developer Login - Memex Portal</PageTitle>
+<PageTitle>@Access.Localize("page.devLogin")</PageTitle>
 
 <div class="dev-login-container">
     <div class="dev-login-card">
         <div class="dev-login-header">
             <FluentIcon Value="@(new Icons.Regular.Size24.PersonKey())" />
-            <h1>Developer Login</h1>
-            <p class="dev-login-subtitle">Select a person to log in as</p>
+            <h1>@Access.Localize("auth.developerLogin")</h1>
+            <p class="dev-login-subtitle">@Access.Localize("auth.selectPerson")</p>
         </div>
 
         @if (isLoading)
         {
             <div class="loading-container">
                 <FluentProgressRing />
-                <span>Loading persons...</span>
+                <span>@Access.Localize("auth.loadingPersons")</span>
             </div>
         }
         else if (!string.IsNullOrEmpty(error))

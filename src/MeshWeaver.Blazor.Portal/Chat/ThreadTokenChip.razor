@@ -4,6 +4,7 @@
    inline metadata item (its own leading "·" separator) so it shares the status row
    with the harness · agent · model chips rather than dropping to a second line. *@
 @namespace MeshWeaver.Blazor.Portal.Chat
+@inject AccessService Access
 
 @if (HasData)
 {
@@ -13,7 +14,7 @@
             <span class="thread-token-chip-label"
                   role="button"
                   tabindex="0"
-                  title="Token usage — click for the per-model breakdown"
+                  title="@Access.Localize("chat.tokenUsageTooltip")"
                   @onclick="ToggleExpanded"
                   @onkeydown="OnLabelKeyDown">@ChipLabel</span>
         </span>
@@ -25,11 +26,11 @@
                 {
                     <span class="thread-token-chip-row">
                         <span class="thread-token-chip-model" title="@row.Model">@row.Model</span>
-                        <span title="Input tokens (incl. cached)">↑@FormatCompact(row.Input)</span>
-                        <span title="Output tokens">↓@FormatCompact(row.Output)</span>
+                        <span title="@Access.Localize("chat.inputTokens")">↑@FormatCompact(row.Input)</span>
+                        <span title="@Access.Localize("chat.outputTokens")">↓@FormatCompact(row.Output)</span>
                         @if (row.CacheRead > 0 || row.CacheWrite > 0)
                         {
-                            <span title="Cached prompt tokens (read + write) — a subset of input">⚡@FormatCompact(row.CacheRead + row.CacheWrite)</span>
+                            <span title="@Access.Localize("chat.cachedTokens")">⚡@FormatCompact(row.CacheRead + row.CacheWrite)</span>
                         }
                     </span>
                 }

@@ -16,8 +16,8 @@
 <div class="chat-history-container @(IsRightPanel ? "right-panel" : "")">
     <!-- Header at top, same height as main bar -->
     <div class="chat-history-header">
-        <h3>Chat History</h3>
-        <FluentButton BackgroundColor="transparent" OnClick="StartNewConversation" Title="New Chat">
+        <h3>@AccessService.Localize("chat.history")</h3>
+        <FluentButton BackgroundColor="transparent" OnClick="StartNewConversation" Title="@AccessService.Localize("chat.new")">
             <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.Neutral" />
         </FluentButton>
     </div>
@@ -26,7 +26,7 @@
     <div class="conversation-list-container">
         @if (!Chats.Any())
         {
-            <div class="no-conversations">No previous conversations</div>
+            <div class="no-conversations">@AccessService.Localize("chat.noPreviousConversations")</div>
         }
         else
         {
@@ -48,7 +48,7 @@
                         </div>
                         <FluentButton BackgroundColor="transparent" OnClick="() => DeleteConversation(chat.Path)"
                             OnClick:stopPropagation="true"
-                            title="Delete conversation" Class="delete-btn">
+                            title="@AccessService.Localize("chat.deleteConversation")" Class="delete-btn">
                             <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" Color="Color.Error" />
                         </FluentButton>
                     </div>

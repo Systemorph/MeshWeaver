@@ -1,4 +1,5 @@
 @using MeshWeaver.Mesh.Services
+@inject AccessService Access
 
 <div class="search-bar-container">
     <input @key="_inputKey"
@@ -17,7 +18,7 @@
         <div class="search-dropdown">
             @if (isLoading && suggestions.Length == 0)
             {
-                <div class="search-dropdown-loading">Searching...</div>
+                <div class="search-dropdown-loading">@Access.Localize("common.searching")</div>
             }
             else
             {

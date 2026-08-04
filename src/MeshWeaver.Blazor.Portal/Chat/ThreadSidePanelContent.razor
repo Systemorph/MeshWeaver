@@ -3,19 +3,20 @@
 @using MeshWeaver.Layout
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
+@inject AccessService Access
 
 <ChatSidePanel OnCloseRequested="@OnCloseRequested" Title="@SidePanelTitle">
     <ToolbarContent>
-        <FluentButton BackgroundColor="transparent" OnClick="OnNewChat" Title="New Chat">
+        <FluentButton BackgroundColor="transparent" OnClick="OnNewChat" Title="@Access.Localize("chat.new")">
             <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.Neutral" />
         </FluentButton>
         @if (!string.IsNullOrEmpty(selectedThreadPath))
         {
-            <FluentButton BackgroundColor="transparent" OnClick="OpenThreadFullScreen" Title="Open Full Screen">
+            <FluentButton BackgroundColor="transparent" OnClick="OpenThreadFullScreen" Title="@Access.Localize("chat.openFullScreen")">
                 <FluentIcon Value="@(new Icons.Regular.Size20.ArrowMaximize())" Color="Color.Neutral" />
             </FluentButton>
         }
-        <FluentButton BackgroundColor="transparent" Title="Chat Position" @onclick="@(() => positionMenuVisible = !positionMenuVisible)" Id="position-menu-anchor">
+        <FluentButton BackgroundColor="transparent" Title="@Access.Localize("chat.position")" @onclick="@(() => positionMenuVisible = !positionMenuVisible)" Id="position-menu-anchor">
             <FluentIcon Value="@(new Icons.Regular.Size20.WindowLocationTarget())" Color="Color.Neutral" />
         </FluentButton>
         <FluentMenu @bind-Open="positionMenuVisible" Anchor="position-menu-anchor">

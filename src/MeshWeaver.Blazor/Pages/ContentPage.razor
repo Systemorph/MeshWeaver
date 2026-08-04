@@ -4,18 +4,19 @@
 *@
 @page "/content/{**FullPath}"
 @inject NavigationManager NavigationManager
+@inject AccessService Access
 
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {
     <div class="error-container">
         <div style="padding: 1rem; background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 0.375rem; margin-bottom: 1rem;">
-            <div style="color: #991b1b; font-weight: 600;">Error</div>
+            <div style="color: #991b1b; font-weight: 600;">@Access.Localize("ui.error")</div>
             <div style="color: #dc2626;">@ErrorMessage</div>
         </div>
         <div class="error-content">
-            <h1>Collection Not Found</h1>
+            <h1>@Access.Localize("content.collectionNotFound")</h1>
             <p>The collection <strong>@ResolvedCollection</strong> does not exist.</p>
-            <p>Please check the URL or contact an administrator.</p>
+            <p>@Access.Localize("content.checkUrlOrAdmin")</p>
         </div>
     </div>
 }
@@ -73,7 +74,7 @@ else if (Content != null)
                     @if (CsvVisibleRows < CsvRows.Count)
                     {
                         <button style="margin-left: 12px; cursor: pointer; background: var(--accent-fill-rest, #0078d4); color: white; border: none; padding: 4px 12px; border-radius: 4px;"
-                                @onclick="LoadMoreCsvRows">Load more</button>
+                                @onclick="LoadMoreCsvRows">@Access.Localize("common.loadMore")</button>
                     }
                 </div>
             </div>

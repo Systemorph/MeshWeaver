@@ -53,7 +53,7 @@ public static class ModelProviderLayoutAreas
             .Select(node =>
             {
                 if (node is null)
-                    return (UiControl?)Controls.Markdown("_No provider data._");
+                    return (UiControl?)Controls.Markdown(host.Localize("ui.mdNoProviderData"));
 
                 // A freshly-created provider has no config yet — the create flow persists an Active
                 // node with null Content and edits it here (Overview doubles as the Edit area). Show a
@@ -75,7 +75,7 @@ public static class ModelProviderLayoutAreas
                         Fields = ImmutableList.Create(
                             new MeshNodeEditorField("endpoint", "URL", MeshNodeEditorFieldKind.Text))
                     })
-                    .WithView(Controls.Button("Enter Key")
+                    .WithView(Controls.Button(host.Localize("ui.enterKey"))
                         .WithAppearance(Appearance.Accent)
                         .WithClickAction((Action<UiActionContext>)(ctx => ShowKeyDialog(ctx, path))))
                     // The models this provider exposes (its LanguageModel children) — surfaced on the
@@ -99,7 +99,7 @@ public static class ModelProviderLayoutAreas
         ctx.Host.UpdateData(formId, new Dictionary<string, object?> { ["key"] = "" });
 
         var form = Controls.Stack.WithStyle("gap: 12px; padding: 16px;")
-            .WithView(Controls.Markdown("Paste the API key. It is stored encrypted and never displayed."))
+            .WithView(Controls.Markdown(ctx.Host.Localize("ui.pasteApiKey")))
             .WithView(new TextFieldControl(new JsonPointerReference("key"))
             {
                 Label = "API key",
@@ -111,11 +111,11 @@ public static class ModelProviderLayoutAreas
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px;")
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(ctx.Host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction((Action<UiActionContext>)(cancel =>
                     cancel.Host.UpdateArea(DialogControl.DialogArea, null!))))
-            .WithView(Controls.Button("Save key")
+            .WithView(Controls.Button(ctx.Host.Localize("ui.saveKey"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction((Action<UiActionContext>)(save =>
                     save.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
