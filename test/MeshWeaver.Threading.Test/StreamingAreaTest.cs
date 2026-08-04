@@ -124,9 +124,9 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
     /// <c>ResetExecution()</c> and drives Status→Idle itself within a few hundred ms. The
     /// original test raced that: it wrote Idle AFTER the hub had usually already written Idle, so
     /// <c>stream.Update</c> diffed to an EMPTY patch, no DataChangedEvent was produced,
-    /// StreamingView never re-evaluated, and the assertion timed out at 10 s. Deterministic
-    /// failure locally (the hub always won); ~50/50 on CI, which made it the single largest
-    /// source of red runs — it failed in all five of the most recent red runs on 2026-08-04.
+    /// StreamingView never re-evaluated, and the assertion timed out. Which side won the race
+    /// depended on machine speed, so the same defect read as a hard failure locally and an
+    /// intermittent one on CI.
     ///
     /// The clearing machinery itself is correct and is what this now asserts: on a genuine
     /// transition StreamingView emits null → UpdateArea → DisposeChildAreas → RemoveViews emits
