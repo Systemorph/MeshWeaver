@@ -50,8 +50,8 @@ public static class SendDocumentLayoutArea
             .Select(canRead => canRead
                 ? (UiControl?)BuildSendForm(host, hubPath)
                 : (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
-                    .WithView(Controls.H2("Access Denied").WithStyle("margin: 0 0 16px 0;"))
-                    .WithView(Controls.Markdown("You do not have permission to send this node.")));
+                    .WithView(Controls.H2(host.Localize("error.accessDenied")).WithStyle("margin: 0 0 16px 0;"))
+                    .WithView(Controls.Markdown(host.Localize("ui.noPermissionToSend"))));
     }
 
     private static UiControl BuildSendForm(LayoutAreaHost host, string hubPath)
@@ -105,10 +105,10 @@ public static class SendDocumentLayoutArea
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px;")
-            .WithView(Controls.Button("Send")
+            .WithView(Controls.Button(host.Localize("common.send"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(actx => SubmitSend(actx, host, hubPath, formId)))
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.OverviewArea))));
 

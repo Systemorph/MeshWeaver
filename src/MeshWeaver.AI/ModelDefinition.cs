@@ -127,6 +127,30 @@ public record ModelDefinition
     public bool? SupportsTools { get; init; }
 
     /// <summary>
+    /// Abstract SIZE label — which rung of the catalog this model is (see <see cref="ModelSize"/>).
+    /// An agent asks for a size (<see cref="AgentConfiguration.ModelTier"/>) and the resolver picks
+    /// the lowest-<see cref="Order"/> model carrying that label, so "which model is our large one"
+    /// is DATA on the node rather than a <c>ModelTier:*</c> config key a new environment must set.
+    ///
+    /// <para><c>null</c> = unlabelled, which is normal: a deployment does NOT have to populate every
+    /// size. A size nobody carries is a MISS and falls through to the deployment default, so
+    /// labelling one model is a valid setup.</para>
+    /// </summary>
+    [System.ComponentModel.Description("Size label: S, M, L, or XL")]
+    public ModelSize? Size { get; init; }
+
+    /// <summary>
+    /// <c>true</c> marks this entry a ROUTER (the "Auto" pseudo-model) rather than a model that can
+    /// serve a round itself: it inspects the ask and dispatches to a real model.
+    ///
+    /// <para>A router is excluded from every automatic selection — the default-model fallback and
+    /// the size lookup — because selecting it there would resolve Auto to Auto. It is only ever
+    /// chosen EXPLICITLY, by a user picking it in the composer.</para>
+    /// </summary>
+    [System.ComponentModel.Description("Router (Auto) — dispatches to a real model")]
+    public bool? IsRouter { get; init; }
+
+    /// <summary>
     /// Projects this definition into the lighter <see cref="ModelInfo"/>
     /// shape consumed by the chat picker.
     /// </summary>

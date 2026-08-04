@@ -36,7 +36,8 @@ public static class PrivacySettingsTab
             Group: "Administration",
             Icon: FluentIcons.Shield(),
             GroupIcon: FluentIcons.Shield(),
-            Order: 330);
+            Order: 330)
+            { LabelKey = "settings.privacy", GroupKey = "settings.groupAdministration" };
 
         return AdminMenuGate.IsPlatformAdmin(host)
             .Select(isAdmin => isAdmin
@@ -46,7 +47,7 @@ public static class PrivacySettingsTab
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
     {
-        stack = stack.WithView(Controls.H2("Privacy statement").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("auth.privacyStatement")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Markdown(
             "This statement is shown publicly at [/privacy](/privacy) — no login required — and is " +
             "what external app registrations (e.g. LinkedIn) link as the privacy policy URL. It " +
@@ -73,7 +74,7 @@ public static class PrivacySettingsTab
                 .WithAutoSave(h.Hub.Address.ToString(), PrivacyStatementNode.NodePath))
             .Catch<UiControl?, Exception>(ex =>
                 Observable.Return((UiControl?)Controls.Markdown($"_Could not load the privacy statement: {ex.Message}_")))
-            .StartWith((UiControl?)Controls.Markdown("_Loading privacy statement…_")));
+            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingPrivacy"))));
 
         return stack;
     }

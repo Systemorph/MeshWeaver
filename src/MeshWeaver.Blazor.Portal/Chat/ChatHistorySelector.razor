@@ -16,8 +16,8 @@
 <div class="chat-history-container @(IsRightPanel ? "right-panel" : "")">
     <!-- Header at top, same height as main bar -->
     <div class="chat-history-header">
-        <h3>Chat History</h3>
-        <FluentButton BackgroundColor="transparent" OnClick="StartNewConversation" Title="New Chat">
+        <h3>@AccessService.Localize("chat.history")</h3>
+        <FluentButton BackgroundColor="transparent" OnClick="StartNewConversation" Title="@AccessService.Localize("chat.new")">
             <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.Neutral" />
         </FluentButton>
     </div>
@@ -26,7 +26,7 @@
     <div class="conversation-list-container">
         @if (!Chats.Any())
         {
-            <div class="no-conversations">No previous conversations</div>
+            <div class="no-conversations">@AccessService.Localize("chat.noPreviousConversations")</div>
         }
         else
         {
@@ -39,7 +39,7 @@
                         <div class="conversation-preview">@GetChatPreview(chat)</div>
                         <div class="conversation-meta">
                             <small class="text-muted">
-                                @FormatDate(chat.Node.LastModified.DateTime)
+                                @FormatDate(chat.Node.LastModified)
                                 @if (!string.IsNullOrEmpty(GetPathScope(chat.Path)))
                                 {
                                     <span> • @GetContextName(GetPathScope(chat.Path))</span>
@@ -48,7 +48,7 @@
                         </div>
                         <FluentButton BackgroundColor="transparent" OnClick="() => DeleteConversation(chat.Path)"
                             OnClick:stopPropagation="true"
-                            title="Delete conversation" Class="delete-btn">
+                            title="@AccessService.Localize("chat.deleteConversation")" Class="delete-btn">
                             <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" Color="Color.Error" />
                         </FluentButton>
                     </div>
@@ -279,7 +279,7 @@
         }
 
         // Fallback to date
-        return $"Chat from {chat.Node.LastModified:MM/dd HH:mm}";
+        return $"Chat from {AccessService.ToDisplayTime(chat.Node.LastModified):MM/dd HH:mm}";
     }
 
     private string GetChatPreview(ThreadItem chat)
@@ -357,22 +357,24 @@
         StateHasChanged();
     }
 
-    private string FormatDate(DateTime date)
+    // Age is measured against UTC (comparing a stored UTC instant to the SERVER's local
+    // clock skewed every bucket by the host offset); the wall clock shown is the VIEWER's.
+    private string FormatDate(DateTimeOffset date)
     {
-        var now = DateTime.Now;
-        var timeSpan = now - date;
+        var timeSpan = DateTimeOffset.UtcNow - date;
+        var local = AccessService.ToDisplayTime(date);
 
         if (timeSpan.TotalDays < 1)
         {
-            return date.ToString("HH:mm");
+            return local.ToString("HH:mm");
         }
         else if (timeSpan.TotalDays < 7)
         {
-            return date.ToString("ddd HH:mm");
+            return local.ToString("ddd HH:mm");
         }
         else
         {
-            return date.ToString("MM/dd");
+            return local.ToString("MM/dd");
         }
     }
 

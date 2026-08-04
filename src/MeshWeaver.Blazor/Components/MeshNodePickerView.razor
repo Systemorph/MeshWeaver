@@ -1,6 +1,7 @@
 @using MeshWeaver.Layout.Catalog
 @using MeshWeaver.Mesh
 @inherits FormComponentBase<MeshNodePickerControl, MeshNodePickerView, string>
+@inject AccessService Access
 
 <div class="mesh-node-picker@(IsThin ? " mesh-node-picker--thin" : "")">
     @if (Label != null)
@@ -52,7 +53,7 @@
             }
             else if (_results.Count == 0)
             {
-                <div class="mesh-node-picker-empty">No items found.</div>
+                <div class="mesh-node-picker-empty">@Access.Localize("empty.noItemsFound")</div>
             }
             else
             {
@@ -66,7 +67,7 @@
                         </div>
                         <div class="mesh-node-picker-item-info">
                             <div class="mesh-node-picker-item-name">@ViewModel.EmptyOptionLabel</div>
-                            <div class="mesh-node-picker-item-type">No namespace</div>
+                            <div class="mesh-node-picker-item-type">@Access.Localize("search.noNamespace")</div>
                         </div>
                     </div>
                 }

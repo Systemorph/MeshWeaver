@@ -1,15 +1,16 @@
 @using MeshWeaver.Markdown
 @using Microsoft.FluentUI.AspNetCore.Components
+@inject AccessService Access
 
 <div class="@ToolbarClass">
     <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
                   Disabled="@(OnRun is null)"
                   Title="@RunTitle"
                   IconStart="@RunIcon"
-                  OnClick="@Run">Run</FluentButton>
+                  OnClick="@Run">@Access.Localize("common.run")</FluentButton>
     @if (IsStale)
     {
-        <span class="md-cell-stale">Code changed — re-run</span>
+        <span class="md-cell-stale">@Access.Localize("code.staleCell")</span>
     }
     <span class="md-cell-language">@Language</span>
 </div>

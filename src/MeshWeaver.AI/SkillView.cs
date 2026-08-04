@@ -65,7 +65,7 @@ public static class SkillView
         if (!string.IsNullOrWhiteSpace(def.Instructions))
             container = container.WithView(Controls.Markdown(def.Instructions!));
         else if (def.Action is null)
-            container = container.WithView(Controls.Markdown("_This skill has no instructions yet._"));
+            container = container.WithView(Controls.Markdown(host.Localize("ui.mdSkillNoInstructions")));
 
         // Compact metadata table at the foot.
         var metadata = BuildMetadataMarkdown(def);

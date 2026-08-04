@@ -118,7 +118,7 @@ public static class MeshDataSourceLayoutAreas
         var buttonRow = Controls.Stack.WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px; margin-top: 8px;");
 
-        buttonRow = buttonRow.WithView(Controls.Button("Copy / Install")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("ui.copyInstall"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
@@ -127,7 +127,7 @@ public static class MeshDataSourceLayoutAreas
                 return Task.CompletedTask;
             }));
 
-        buttonRow = buttonRow.WithView(Controls.Button("Export")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("menu.export"))
             .WithAppearance(Appearance.Outline)
             .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ExportArea)));
 
@@ -198,7 +198,7 @@ public static class MeshDataSourceLayoutAreas
         var buttonRow = Controls.Stack.WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px; margin-top: 8px;");
 
-        buttonRow = buttonRow.WithView(Controls.Button("Copy / Install")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("ui.copyInstall"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
@@ -207,7 +207,7 @@ public static class MeshDataSourceLayoutAreas
                 return Task.CompletedTask;
             }));
 
-        buttonRow = buttonRow.WithView(Controls.Button("Export")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("menu.export"))
             .WithAppearance(Appearance.Outline)
             .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ExportArea)));
 
@@ -238,7 +238,7 @@ public static class MeshDataSourceLayoutAreas
 
         // Source type radio
         content = content.WithView(Controls.Stack.WithWidth("100%")
-            .WithView(Controls.Body("Source").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(Controls.Body(host.Localize("ui.source")).WithStyle("font-weight: 600; margin-bottom: 4px;"))
             .WithView(new RadioGroupControl(
                 new JsonPointerReference("sourceType"),
                 new Option<string>[]
@@ -275,7 +275,7 @@ public static class MeshDataSourceLayoutAreas
 
         // Mode radio: Copy vs Install
         content = content.WithView(Controls.Stack.WithWidth("100%")
-            .WithView(Controls.Body("Mode").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(Controls.Body(host.Localize("ui.mode")).WithStyle("font-weight: 600; margin-bottom: 4px;"))
             .WithView(new RadioGroupControl(
                 new JsonPointerReference("mode"),
                 new Option<string>[]

@@ -126,7 +126,7 @@ public static class ExerciseLayoutAreas
 
         return nodeStream.CombineLatest(attemptStream,
             (node, attempt) => (UiControl?)(attempt is null
-                ? BuildStartView(node, exercisePath, options)
+                ? BuildStartView(node, exercisePath, options, locale: host.ViewerLocale())
                 : BuildWorkspaceView(node, exercisePath, resolvedAttemptPath, attempt, options)));
     }
 
@@ -155,13 +155,13 @@ public static class ExerciseLayoutAreas
     /// synced attempt query then re-renders the area into the workspace.
     /// </summary>
     private static UiControl BuildStartView(
-        MeshNode? node, string exercisePath, JsonSerializerOptions options)
+        MeshNode? node, string exercisePath, JsonSerializerOptions options, string? locale = null)
     {
         var exercise = node.ContentAs<ExerciseConfiguration>(options);
         return Controls.Stack.WithWidth("100%")
             .WithView(Controls.H1(node?.Name ?? node?.Id ?? "Exercise").WithStyle("margin: 0 0 16px 0;"))
             .WithView(Controls.Markdown(exercise?.Statement ?? "*No statement yet.*"), StatementArea)
-            .WithView(Controls.Button("Start exercise")
+            .WithView(Controls.Button(LocalizationCatalog.Get("ui.startExercise", locale))
                     .WithIconStart(FluentIcons.Play())
                     .WithAppearance(Appearance.Accent)
                     .WithClickAction(ctx =>
@@ -277,11 +277,11 @@ public static class ExerciseLayoutAreas
     /// the attempt node via the canonical <c>GetMeshNodeStream(path).Update</c>
     /// — no request message. The per-attempt hub's validation watcher reacts.
     /// </summary>
-    private static UiControl BuildValidationToolbar(string attemptPath, ExerciseAttemptStatus attempt)
+    private static UiControl BuildValidationToolbar(string attemptPath, ExerciseAttemptStatus attempt, string? locale = null)
         => Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("display: flex; align-items: center; gap: 8px; margin-top: 8px;")
-            .WithView(Controls.Button("Validate")
+            .WithView(Controls.Button(LocalizationCatalog.Get("ui.validate", locale))
                 .WithIconStart(FluentIcons.CheckmarkCircle())
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>

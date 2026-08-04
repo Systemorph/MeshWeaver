@@ -1,5 +1,7 @@
 using System.ComponentModel;
 
+using MeshWeaver.Messaging;
+
 namespace MeshWeaver.GitSync;
 
 /// <summary>
@@ -20,10 +22,12 @@ public record GitHubSyncConfig
 {
     /// <summary>The target repository URL, e.g. <c>https://github.com/owner/repo</c>.</summary>
     [Description("Repository URL")]
+    [Translation("de", "Repository-URL")]
     public string? RepositoryUrl { get; init; }
 
     /// <summary>The branch to commit to. Defaults to <c>main</c>.</summary>
     [Description("Branch")]
+    [Translation("de", "Branch")]
     public string Branch { get; init; } = "main";
 
     /// <summary>
@@ -32,6 +36,7 @@ public record GitHubSyncConfig
     /// only within this subdirectory; files elsewhere in the repo are untouched.
     /// </summary>
     [Description("Subdirectory (optional — blank = repository root)")]
+    [Translation("de", "Unterverzeichnis (optional — leer = Repository-Wurzel)")]
     public string? Subdirectory { get; init; }
 
     /// <summary>
@@ -40,6 +45,7 @@ public record GitHubSyncConfig
     /// Enforced by <see cref="GitHubSyncService"/> on every sync operation.
     /// </summary>
     [Description("Sync direction")]
+    [Translation("de", "Synchronisierungsrichtung")]
     public SyncDirection Direction { get; init; } = SyncDirection.Bidirectional;
 
     /// <summary>
@@ -56,14 +62,17 @@ public record GitHubSyncConfig
     /// edit. Only takes effect once a first sync has recorded that timestamp.</para>
     /// </summary>
     [Description("Two-way (don't overwrite nodes changed on the server since the last sync — commit them back instead)")]
+    [Translation("de", "Zweiweg (Nodes, die seit der letzten Synchronisierung auf dem Server geändert wurden, nicht überschreiben — stattdessen zurück committen)")]
     public bool TwoWay { get; init; }
 
     /// <summary>Create <see cref="Branch"/> if it does not exist yet. Default true.</summary>
     [Description("Create the branch if it doesn't exist")]
+    [Translation("de", "Branch anlegen, falls er nicht existiert")]
     public bool CreateBranchIfMissing { get; init; } = true;
 
     /// <summary>Create the repository (private) if it does not exist yet. Default true.</summary>
     [Description("Create the repository (private) if it doesn't exist")]
+    [Translation("de", "Repository (privat) anlegen, falls es nicht existiert")]
     public bool CreateRepoIfMissing { get; init; } = true;
 
     /// <summary>
@@ -74,6 +83,7 @@ public record GitHubSyncConfig
     /// (last match wins); <c>*</c>/<c>**</c>/<c>?</c> globs as in <c>.gitignore</c>.
     /// </summary>
     [Description("Ignore patterns (gitignore-style, relative to the Space root; unset = default: Release/)")]
+    [Translation("de", "Ignorier-Muster (gitignore-Stil, relativ zur Space-Wurzel; leer = Standard: Release/)")]
     public string[]? Ignore { get; init; }
 
     /// <summary>When the last successful export completed. Set by the sync operation; not user-editable.</summary>

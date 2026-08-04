@@ -89,7 +89,7 @@ public static class ApprovalsView
             .WithHorizontalGap(8)
             .WithStyle("margin-top: 16px;");
 
-        buttons = buttons.WithView(Controls.Button("Submit")
+        buttons = buttons.WithView(Controls.Button(host.Localize("ui.submit"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
@@ -97,7 +97,7 @@ public static class ApprovalsView
                 return Task.CompletedTask;
             }));
 
-        buttons = buttons.WithView(Controls.Button("Cancel")
+        buttons = buttons.WithView(Controls.Button(host.Localize("common.cancel"))
             .WithAppearance(Appearance.Neutral)
             .WithClickAction(_ =>
             {

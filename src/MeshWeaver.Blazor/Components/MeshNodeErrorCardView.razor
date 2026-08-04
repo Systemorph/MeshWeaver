@@ -1,5 +1,6 @@
 @using MeshWeaver.Mesh
 @using Microsoft.FluentUI.AspNetCore.Components
+@inject AccessService Access
 
 @if (Error is not null)
 {
@@ -13,7 +14,7 @@
             @if (!string.IsNullOrEmpty(Error.Diagnostic))
             {
                 <FluentAccordion>
-                    <FluentAccordionItem Heading="Details">
+                    <FluentAccordionItem Heading="@Access.Localize("common.details")">
                         <pre class="mesh-node-error-diagnostic">@Error.Diagnostic</pre>
                     </FluentAccordionItem>
                 </FluentAccordion>
@@ -46,14 +47,14 @@
         _ => MessageIntent.Error,
     };
 
-    private string Title => Error?.Code switch
+    private string Title => Access.Localize(Error?.Code switch
     {
-        MeshNodeErrorCode.AccessDenied => "Access denied",
-        MeshNodeErrorCode.NotFound => "Not found",
-        MeshNodeErrorCode.Validation => "Validation failed",
-        MeshNodeErrorCode.OwnerUnreachable => "Owner unreachable",
-        MeshNodeErrorCode.Deserialization => "Content could not be deserialized",
-        MeshNodeErrorCode.Conflict => "Concurrent update conflict",
-        _ => "MeshNode operation failed",
-    };
+        MeshNodeErrorCode.AccessDenied => "error.accessDenied",
+        MeshNodeErrorCode.NotFound => "error.notFound",
+        MeshNodeErrorCode.Validation => "error.validationFailed",
+        MeshNodeErrorCode.OwnerUnreachable => "error.ownerUnreachable",
+        MeshNodeErrorCode.Deserialization => "error.deserializationFailed",
+        MeshNodeErrorCode.Conflict => "error.concurrentUpdate",
+        _ => "error.nodeOperationFailed",
+    });
 }

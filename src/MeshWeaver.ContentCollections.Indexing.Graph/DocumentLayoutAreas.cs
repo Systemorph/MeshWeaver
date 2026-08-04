@@ -5,6 +5,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -65,19 +66,21 @@ public static class DocumentLayoutAreas
             container = container.WithView(Controls.Html(
                 "<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No summary available.</p>"));
 
-        container = container.WithView(BuildMetadata(document));
-        container = container.WithView(BuildActions(node?.Path ?? host.Hub.Address.ToString()));
+        // Both sides of this merge are wanted: the viewer's TIME ZONE for the indexed-at stamp,
+        // and the viewer's LOCALE for the action labels.
+        container = container.WithView(BuildMetadata(document, host.Hub.ServiceProvider.GetService<AccessService>()));
+        container = container.WithView(BuildActions(node?.Path ?? host.Hub.Address.ToString(), locale: host.ViewerLocale()));
         return container;
     }
 
     /// <summary>A row of navigation buttons into the block reader and the original-file viewer.</summary>
-    private static UiControl BuildActions(string nodePath)
+    private static UiControl BuildActions(string nodePath, string? locale = null)
     {
         var row = Controls.Stack.WithWidth("100%").WithStyle("flex-direction:row; gap:8px; margin-top:12px;");
-        row = row.WithView(Controls.Button("Read indexed blocks")
+        row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.readIndexedBlocks", locale))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(c => { c.NavigateTo($"/{nodePath}/{BlocksArea}"); return Task.CompletedTask; }));
-        row = row.WithView(Controls.Button("Open original")
+        row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.openOriginal", locale))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(c => { c.NavigateTo($"/{nodePath}/{SourceArea}"); return Task.CompletedTask; }));
         return row;
@@ -87,7 +90,7 @@ public static class DocumentLayoutAreas
     /// Compact metadata row: source-file link, mime, size, chunk count, indexed-at. The source link
     /// points at the file's path within the collection (display + navigation reference).
     /// </summary>
-    private static UiControl BuildMetadata(Document document)
+    private static UiControl BuildMetadata(Document document, AccessService? access)
     {
         var details = Controls.Stack.WithWidth("100%").WithStyle(
             "gap: 4px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--neutral-stroke-rest); " +
@@ -107,7 +110,7 @@ public static class DocumentLayoutAreas
         details = details.WithView(Row("Chunks", document.ChunkCount.ToString()));
 
         if (document.IndexedAt != default)
-            details = details.WithView(Row("Indexed", document.IndexedAt.ToString("yyyy-MM-dd HH:mm 'UTC'")));
+            details = details.WithView(Row("Indexed", access.ToDisplayTime(document.IndexedAt).ToString("yyyy-MM-dd HH:mm")));
 
         return details;
     }
@@ -167,7 +170,7 @@ public static class DocumentLayoutAreas
 
         var document = node?.ContentAs<Document>(host.Hub.JsonSerializerOptions);
         if (document is null)
-            return container.WithView(Controls.Markdown("_No document data._"));
+            return container.WithView(Controls.Markdown(host.Localize("ui.mdNoDocumentData")));
 
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
 
@@ -198,7 +201,7 @@ public static class DocumentLayoutAreas
                     .CreateLogger(typeof(DocumentLayoutAreas))
                     .LogWarning(ex, "Failed to load content block {Index} for {Collection}/{File}",
                         index, document.CollectionPath, document.FilePath);
-                return Observable.Return((UiControl?)Controls.Markdown("_Could not load this block._"));
+                return Observable.Return((UiControl?)Controls.Markdown(host.Localize("ui.mdBlockLoadFailed")));
             });
     }
 
@@ -229,16 +232,16 @@ public static class DocumentLayoutAreas
         return WithBlockNav(panel, nodePath, index, total, terms);
     }
 
-    private static UiControl WithBlockNav(StackControl panel, string nodePath, int index, int total, string terms)
+    private static UiControl WithBlockNav(StackControl panel, string nodePath, int index, int total, string terms, string? locale = null)
     {
         var nav = Controls.Stack.WithWidth("100%").WithStyle("flex-direction:row; gap:8px; flex-wrap:wrap;");
         if (index > 0)
-            nav = nav.WithView(Controls.Button("← Previous").WithAppearance(Appearance.Outline)
+            nav = nav.WithView(Controls.Button(LocalizationCatalog.Get("ui.previous", locale)).WithAppearance(Appearance.Outline)
                 .WithClickAction(c => { c.Host.UpdateData(BlockIndexId, (index - 1).ToString()); return Task.CompletedTask; }));
         if (total <= 0 || index < total - 1)
-            nav = nav.WithView(Controls.Button("Next →").WithAppearance(Appearance.Outline)
+            nav = nav.WithView(Controls.Button(LocalizationCatalog.Get("ui.next", locale)).WithAppearance(Appearance.Outline)
                 .WithClickAction(c => { c.Host.UpdateData(BlockIndexId, (index + 1).ToString()); return Task.CompletedTask; }));
-        nav = nav.WithView(Controls.Button("Open original").WithAppearance(Appearance.Accent)
+        nav = nav.WithView(Controls.Button(LocalizationCatalog.Get("ui.openOriginal", locale)).WithAppearance(Appearance.Accent)
             .WithClickAction(c => { c.NavigateTo(BuildAreaHref(nodePath, SourceArea, index, terms)); return Task.CompletedTask; }));
         return panel.WithView(nav);
     }
@@ -265,14 +268,14 @@ public static class DocumentLayoutAreas
 
         var document = node?.ContentAs<Document>(host.Hub.JsonSerializerOptions);
         if (document is null)
-            return Observable.Return((UiControl?)container.WithView(Controls.Markdown("_No document data._")));
+            return Observable.Return((UiControl?)container.WithView(Controls.Markdown(host.Localize("ui.mdNoDocumentData"))));
 
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var fileName = string.IsNullOrEmpty(document.Name) ? document.FilePath : document.Name;
         var fileUrl = BuildStaticUrl(document.CollectionPath, document.FilePath);
 
         container = container.WithView(Controls.H2(fileName));
-        container = container.WithView(Controls.Button("← Back to blocks").WithAppearance(Appearance.Outline)
+        container = container.WithView(Controls.Button(host.Localize("ui.backToBlocks")).WithAppearance(Appearance.Outline)
             .WithClickAction(c => { c.NavigateTo(BuildAreaHref(nodePath, BlocksArea, index, terms)); return Task.CompletedTask; }));
 
         // Load the deep-linked chunk's stored provenance (page + on-page box) so the viewer marks the exact

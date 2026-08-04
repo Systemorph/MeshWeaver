@@ -30,7 +30,7 @@ public static class InstanceSyncLayoutArea
     {
         var spacePath = InstanceSyncService.SpaceOf(host.Hub.Address.ToString());
         return string.IsNullOrEmpty(spacePath)
-            ? Observable.Return<UiControl?>(Controls.Markdown("*Instance Sync is available inside a Space.*"))
+            ? Observable.Return<UiControl?>(Controls.Markdown(host.Localize("ui.mdInstanceSyncInSpace")))
             : Observable.Return<UiControl?>(BuildContent(host, spacePath));
     }
 
@@ -41,7 +41,7 @@ public static class InstanceSyncLayoutArea
         var logger = sp.GetService<ILoggerFactory>()?.CreateLogger(typeof(InstanceSyncLayoutArea));
 
         var stack = Controls.Stack
-            .WithView(Controls.H2("Instance Sync").WithStyle("margin: 0 0 8px 0;"))
+            .WithView(Controls.H2(host.Localize("ui.instanceSync")).WithStyle("margin: 0 0 8px 0;"))
             .WithView(Controls.Markdown(
                 "Replicate this Space to another MeshWeaver instance and keep syncing changes as they "
                 + "happen — like syncing a SharePoint library. Enter the remote instance's URL and an "
@@ -52,7 +52,7 @@ public static class InstanceSyncLayoutArea
         // The live parties list: re-renders on add / remove / any config or status change.
         return stack.WithView((h, _) => sync.WatchConfigNodes(spacePath)
             .Select(sources => (UiControl?)BuildPartiesView(h, sync, spacePath, sources, logger))
-            .StartWith((UiControl?)Controls.Markdown("*Loading sync parties…*")));
+            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingSyncParties"))));
     }
 
     private static UiControl BuildPartiesView(
@@ -60,20 +60,20 @@ public static class InstanceSyncLayoutArea
         IReadOnlyList<MeshNode> sources, ILogger? logger)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle("gap: 12px;");
-        stack = stack.WithView(Controls.Title("Syncing parties", 3));
+        stack = stack.WithView(Controls.Title(host.Localize("ui.syncParties"), 3));
 
         if (sources.Count == 0)
-            stack = stack.WithView(Controls.Markdown("*No syncing parties yet — add one below.*"));
+            stack = stack.WithView(Controls.Markdown(host.Localize("ui.mdNoSyncParties")));
 
         foreach (var source in sources)
-            stack = stack.WithView(BuildPartyCard(sync, spacePath, source, logger));
+            stack = stack.WithView(BuildPartyCard(sync, spacePath, source, logger, locale: host.ViewerLocale()));
 
-        stack = stack.WithView(BuildAddButton(sync, spacePath, sources, logger));
+        stack = stack.WithView(BuildAddButton(sync, spacePath, sources, logger, locale: host.ViewerLocale()));
         return stack;
     }
 
     private static UiControl BuildPartyCard(
-        InstanceSyncService sync, string spacePath, MeshNode source, ILogger? logger)
+        InstanceSyncService sync, string spacePath, MeshNode source, ILogger? logger, string? locale = null)
     {
         var config = sync.Extract(source) ?? new InstanceSyncConfig();
         var card = Controls.Stack.WithWidth("100%")
@@ -96,7 +96,7 @@ public static class InstanceSyncLayoutArea
             + $"?spaceId={Uri.EscapeDataString(spacePath)}"
             + $"&sourceId={Uri.EscapeDataString(source.Id)}"
             + $"&returnPath={Uri.EscapeDataString(returnPath)}";
-        card = card.WithView(Controls.Button("Connect with the remote's login (OAuth)")
+        card = card.WithView(Controls.Button(LocalizationCatalog.Get("ui.connectOAuth", locale))
             .WithAppearance(Appearance.Outline)
             .WithIconStart(FluentIcons.PlugConnected())
             .WithNavigateToHref(connectHref));
@@ -109,7 +109,7 @@ public static class InstanceSyncLayoutArea
             .WithStyle("flex-wrap: wrap;");
 
         // Sync now — flip the control-plane trigger; the worker drains on the next tick.
-        actions = actions.WithView(Controls.Button("Sync now")
+        actions = actions.WithView(Controls.Button(LocalizationCatalog.Get("menu.syncNow", locale))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.ArrowSync())
             .WithClickAction(ctx =>
@@ -132,7 +132,7 @@ public static class InstanceSyncLayoutArea
                 return Task.CompletedTask;
             }));
 
-        actions = actions.WithView(Controls.Button("Remove (stop syncing)")
+        actions = actions.WithView(Controls.Button(LocalizationCatalog.Get("ui.removeStopSync", locale))
             .WithAppearance(Appearance.Outline)
             .WithIconStart(FluentIcons.Delete())
             .WithStyle("color: var(--error, #d32f2f);")
@@ -169,10 +169,10 @@ public static class InstanceSyncLayoutArea
     /// editor on the new card. No hand-rolled form state.
     /// </summary>
     private static UiControl BuildAddButton(
-        InstanceSyncService sync, string spacePath, IReadOnlyList<MeshNode> sources, ILogger? logger)
+        InstanceSyncService sync, string spacePath, IReadOnlyList<MeshNode> sources, ILogger? logger, string? locale = null)
     {
         var name = NextPartyName(sources);
-        return Controls.Button("Add syncing party")
+        return Controls.Button(LocalizationCatalog.Get("ui.addSyncParty", locale))
             .WithAppearance(Appearance.Outline)
             .WithIconStart(FluentIcons.Add())
             .WithClickAction(ctx =>

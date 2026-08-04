@@ -4,8 +4,9 @@
 @using MeshWeaver.Messaging
 @using Microsoft.FluentUI.AspNetCore.Components
 @inject IMessageHub Hub
+@inject AccessService Access
 
-<PageTitle>Search - Memex</PageTitle>
+<PageTitle>@Access.Localize("page.search")</PageTitle>
 
 <div style="max-width: 1400px; margin: 0 auto; padding: 24px; width: 100%;">
     <ContentSearchResultsView Query="@Query" Namespace="@Namespace" />

@@ -382,7 +382,7 @@ public static class CommentsView
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(8)
             .WithStyle("margin-top: 4px; justify-content: flex-end;")
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(_ =>
                 {
@@ -391,7 +391,7 @@ public static class CommentsView
                     host.UpdateData(stateId, "");
                     return Task.CompletedTask;
                 }))
-            .WithView(Controls.Button("Create")
+            .WithView(Controls.Button(host.Localize("menu.create"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>
                 {

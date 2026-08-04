@@ -1,13 +1,14 @@
 @using Microsoft.FluentUI.AspNetCore.Components
 @using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+@inject AccessService Access
 
 <div class="side-panel">
     <div class="side-panel-header">
         <div class="side-panel-title-area">
-            <FluentButton BackgroundColor="transparent" OnClick="OnNewThread" Title="New thread">
+            <FluentButton BackgroundColor="transparent" OnClick="OnNewThread" Title="@Access.Localize("chat.new")">
                 <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.Neutral" />
             </FluentButton>
-            <FluentButton BackgroundColor="transparent" OnClick="OnResumeThread" Title="Resume thread">
+            <FluentButton BackgroundColor="transparent" OnClick="OnResumeThread" Title="@Access.Localize("chat.resume")">
                 <FluentIcon Value="@(new Icons.Regular.Size20.ArrowCounterclockwise())" Color="Color.Neutral" />
             </FluentButton>
             <h3 class="side-panel-title">@DisplayTitle</h3>
@@ -16,11 +17,11 @@
             @ToolbarContent
             @if (HasThread)
             {
-                <FluentButton BackgroundColor="transparent" OnClick="MoveToMainPanel" Title="Open in main panel">
+                <FluentButton BackgroundColor="transparent" OnClick="MoveToMainPanel" Title="@Access.Localize("chat.openInMainPanel")">
                     <FluentIcon Value="@(new Icons.Regular.Size20.ArrowMaximize())" Color="Color.Neutral" />
                 </FluentButton>
             }
-            <FluentButton BackgroundColor="transparent" OnClick="CloseAsync" Title="Close">
+            <FluentButton BackgroundColor="transparent" OnClick="CloseAsync" Title="@Access.Localize("common.close")">
                 <FluentIcon Value="@(new Icons.Regular.Size20.Dismiss())" Color="Color.Neutral" />
             </FluentButton>
         </div>
