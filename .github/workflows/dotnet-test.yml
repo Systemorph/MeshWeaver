@@ -273,6 +273,14 @@ jobs:
           # of the same framework + MeshWeaver DLLs, which the default 8 MiB
           # window can't see. The EXTRACT side must pass --long=27 too, or zstd
           # refuses with a window-size error.
+          # 🚨 An empty path list would produce an empty tarball, and a shard that
+          # extracts nothing finds no <Name>.dll — which the run loop would classify
+          # as "helper project, nothing to run", exit=0, GREEN. A whole suite could
+          # pass having executed zero tests. Fail here instead.
+          if [ ! -s ".build-paths-$i.txt" ]; then
+            echo "::error::shard $i got no bin trees to pack — shard-assign.sh failed or the build produced no test output."
+            exit 1
+          fi
           tar -I 'zstd -T0 --long=27' -cf "build-output-$i.tar.zst" -T ".build-paths-$i.txt"
           echo "shard $i: $(wc -l < ".build-paths-$i.txt") bin trees, $(du -h "build-output-$i.tar.zst" | cut -f1)"
         done
@@ -402,6 +410,15 @@ jobs:
           # Helper projects (TestDomain, Hub.Fixture, AI.Test.FakeCli) ship no
           # xunit.v3 host — nothing to run. Recorded so the log shows they were
           # consciously skipped, not lost.
+          # 🚨 Distinguish the two "nothing to run" cases. A missing bin TREE means this
+          # shard's artifact never carried the project (packaging or assignment
+          # mismatch) — reporting exit=0 there would let a shard read GREEN having run
+          # nothing. Only a present bin with no xunit host is a genuine helper project.
+          if [ ! -d "$(dirname "$csproj")/bin" ]; then
+            echo "::error::$name: bin tree absent — this shard's artifact did not contain it (build/test shard-assign mismatch)."
+            echo "[CI] $name exit=97 MISSING_BIN (artifact did not contain this project)" >> test/test-results.log
+            continue
+          fi
           if [ ! -f "$dir/$name.dll" ] || [ ! -f "$dir/xunit.v3.core.dll" ]; then
             echo "[CI] $name exit=0 (helper project — no xUnit v3 test host)" >> test/test-results.log
             continue
