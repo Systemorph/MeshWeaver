@@ -232,7 +232,7 @@ public static class MeshNodeLayoutAreas
                             .WithView(Controls.Redirect("/" + redirect.TrimStart('/')), "Redirect")
                             .WithView(Controls.Markdown(
                                 $"[Continue here →](/{redirect.TrimStart('/')})"))
-                        : BuildAccessDenied(hubPath));
+                        : BuildAccessDenied(hubPath, locale: host.ViewerLocale()));
             });
     }
 
@@ -252,7 +252,7 @@ public static class MeshNodeLayoutAreas
                 (node, permissions) => (Node: node, Permissions: permissions))
             .Select(t => t.Permissions.HasFlag(Permission.Read)
                 ? (UiControl?)host.BuildDetailsContent(t.Node, null, t.Permissions.HasFlag(Permission.Update))
-                : BuildAccessDenied(hubPath));
+                : BuildAccessDenied(hubPath, locale: host.ViewerLocale()));
     }
 
     /// <summary>
@@ -267,18 +267,18 @@ public static class MeshNodeLayoutAreas
             { LabelKey = "menu.data" };
     }
 
-    internal static UiControl BuildAccessDenied(string nodePath)
+    internal static UiControl BuildAccessDenied(string nodePath, string? locale = null)
     {
         var nodeName = nodePath.Split('/').LastOrDefault() ?? nodePath;
         return Controls.Stack.WithWidth("100%").WithStyle("padding: 48px 24px; align-items: center; text-align: center;")
             .WithView(Controls.Icon(FluentIcons.ShieldKeyhole())
                 .WithStyle("font-size: 64px; color: var(--neutral-foreground-hint); margin-bottom: 16px;"))
-            .WithView(Controls.H2("Access Denied").WithStyle("margin: 0;"))
+            .WithView(Controls.H2(LocalizationCatalog.Get("error.accessDenied", locale)).WithStyle("margin: 0;"))
             .WithView(Controls.Html(
                 $"<p style=\"color: var(--neutral-foreground-hint); max-width: 480px;\">" +
                 $"You do not have permission to view <strong>{System.Web.HttpUtility.HtmlEncode(nodeName)}</strong>. " +
                 $"Contact the owner to request access.</p>"))
-            .WithView(Controls.Button("Request Access")
+            .WithView(Controls.Button(LocalizationCatalog.Get("ui.requestAccess", locale))
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.PersonAdd())
                 .WithClickAction(ctx =>
@@ -509,7 +509,7 @@ public static class MeshNodeLayoutAreas
         // Configuration button for NodeType definition nodes — points at their own Configuration area.
         if (node?.NodeType == MeshNode.NodeTypePath)
         {
-            row = row.WithView(Controls.Button("Configuration")
+            row = row.WithView(Controls.Button(host.Localize("ui.configuration"))
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.Settings())
                 .WithNavigateToHref(BuildUrl(nodePath, NodeTypeLayoutAreas.ConfigurationArea)));
@@ -517,22 +517,22 @@ public static class MeshNodeLayoutAreas
 
         if (canEdit)
         {
-            row = row.WithView(Controls.Button("Edit")
+            row = row.WithView(Controls.Button(host.Localize("common.edit"))
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Edit())
                 .WithNavigateToHref(BuildUrl(nodePath, EditArea)));
 
-            row = row.WithView(Controls.Button("Copy")
+            row = row.WithView(Controls.Button(host.Localize("menu.copy"))
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Copy())
                 .WithNavigateToHref(BuildUrl(nodePath, CopyArea)));
 
-            row = row.WithView(Controls.Button("Move")
+            row = row.WithView(Controls.Button(host.Localize("menu.move"))
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.ArrowMove())
                 .WithNavigateToHref(BuildUrl(nodePath, MoveArea)));
 
-            row = row.WithView(Controls.Button("Delete")
+            row = row.WithView(Controls.Button(host.Localize("common.delete"))
                 .WithAppearance(Appearance.Neutral)
                 .WithStyle("color: var(--error, #d32f2f);")
                 .WithIconStart(FluentIcons.Delete())
@@ -1087,7 +1087,7 @@ public static class MeshNodeLayoutAreas
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("justify-content: flex-end; padding: 0 0 12px 0;")
-                .WithView(Controls.Button("Create Thread")
+                .WithView(Controls.Button(host.Localize("ui.createThread"))
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.Add())
                     .WithNavigateToHref(createUrl)))
@@ -1237,7 +1237,7 @@ public static class MeshNodeLayoutAreas
         var collections = contentService?.GetAllCollectionConfigs()?.Where(c => c.IsEditable).ToList();
 
         var stack = Controls.Stack
-            .WithView(Controls.Button("Back")
+            .WithView(Controls.Button(host.Localize("common.back"))
                 .WithAppearance(Appearance.Lightweight)
                 .WithIconStart(FluentIcons.ArrowLeft())
                 .WithNavigateToHref(backHref));
@@ -1271,7 +1271,7 @@ public static class MeshNodeLayoutAreas
         var backHref = BuildUrl(hubPath, OverviewArea);
 
         var stack = Controls.Stack
-            .WithView(Controls.Button("Back")
+            .WithView(Controls.Button(host.Localize("common.back"))
                 .WithAppearance(Appearance.Lightweight)
                 .WithIconStart(FluentIcons.ArrowLeft())
                 .WithNavigateToHref(backHref));
@@ -1728,7 +1728,7 @@ public static class MeshNodeLayoutAreas
             (node, permissions) =>
             {
                 if (!permissions.HasFlag(Permission.Update))
-                    return (UiControl?)BuildAccessDenied(hubPath);
+                    return (UiControl?)BuildAccessDenied(hubPath, locale: host.ViewerLocale());
                 return (UiControl?)BuildEditNodeContent(host, node);
             });
     }
@@ -1736,7 +1736,7 @@ public static class MeshNodeLayoutAreas
     private static UiControl BuildEditNodeContent(LayoutAreaHost host, MeshNode? node)
     {
         if (node == null)
-            return Controls.Markdown("*Node not found*");
+            return Controls.Markdown(host.Localize("ui.mdNodeNotFound"));
 
         var instance = node.Content;
         if (instance == null)
@@ -1756,7 +1756,7 @@ public static class MeshNodeLayoutAreas
         if (instance == null)
             return Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host))
                 .WithView(BuildHeader(host, node, false))
-                .WithView(Controls.Markdown("*No content type configured for this node.*")
+                .WithView(Controls.Markdown(host.Localize("ui.mdNoContentType"))
                     .WithStyle("color: var(--neutral-foreground-hint);"));
 
         if (instance is JsonElement je)
@@ -1766,7 +1766,7 @@ public static class MeshNodeLayoutAreas
         if (instance is Configuration.NodeTypeDefinition)
             return Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host))
                 .WithView(BuildHeader(host, node, false))
-                .WithView(Controls.Markdown("*Built-in type nodes cannot be edited here.*")
+                .WithView(Controls.Markdown(host.Localize("ui.mdBuiltInNotEditable"))
                     .WithStyle("color: var(--neutral-foreground-hint);"));
 
         var contentType = instance.GetType();

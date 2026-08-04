@@ -67,7 +67,7 @@ public static class DeleteLayoutArea
             (perms, count) => (canDelete: perms.HasFlag(Permission.Delete), count))
             .Select(tuple => (UiControl?)(tuple.canDelete
                 ? BuildDeletePage(host, nodePath, backHref, tuple.count)
-                : BuildAccessDenied(backHref)))
+                : BuildAccessDenied(backHref, locale: host.ViewerLocale())))
             .StartWith(placeholder);
     }
 
@@ -77,17 +77,17 @@ public static class DeleteLayoutArea
             .Take(1)
             .Select(c => c.Items.Count);
 
-    private static UiControl BuildAccessDenied(string backHref) =>
+    private static UiControl BuildAccessDenied(string backHref, string? locale = null) =>
         Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(16)
                 .WithStyle("align-items: center; margin-bottom: 24px;")
-                .WithView(Controls.Button("Back")
+                .WithView(Controls.Button(LocalizationCatalog.Get("common.back", locale))
                     .WithAppearance(Appearance.Lightweight)
                     .WithIconStart(FluentIcons.ArrowLeft())
                     .WithNavigateToHref(backHref))
-                .WithView(Controls.H2("Access Denied").WithStyle("margin: 0; color: var(--error);")))
+                .WithView(Controls.H2(LocalizationCatalog.Get("error.accessDenied", locale)).WithStyle("margin: 0; color: var(--error);")))
             .WithView(Controls.Html(
                 "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to delete this node.</p>"));
 
@@ -109,11 +109,11 @@ public static class DeleteLayoutArea
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(16)
             .WithStyle("align-items: center; margin-bottom: 24px;")
-            .WithView(Controls.Button("Back")
+            .WithView(Controls.Button(host.Localize("common.back"))
                 .WithAppearance(Appearance.Lightweight)
                 .WithIconStart(FluentIcons.ArrowLeft())
                 .WithNavigateToHref(backHref))
-            .WithView(Controls.H2("Delete Node").WithStyle("margin: 0; color: var(--error);")));
+            .WithView(Controls.H2(host.Localize("ui.deleteNode")).WithStyle("margin: 0; color: var(--error);")));
 
         var safePath = System.Web.HttpUtility.HtmlEncode(nodePath);
         var warningText = descendantCount > 0
@@ -137,7 +137,7 @@ public static class DeleteLayoutArea
         stack = stack.WithView(Controls.Stack
             .WithWidth("100%")
             .WithStyle("margin-bottom: 24px;")
-            .WithView(Controls.Body("Type DELETE to confirm:").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(Controls.Body(host.Localize("ui.typeDeleteToConfirm")).WithStyle("font-weight: 600; margin-bottom: 4px;"))
             .WithView(new TextFieldControl(new JsonPointerReference("confirmation"))
             {
                 Placeholder = "DELETE",
@@ -155,10 +155,10 @@ public static class DeleteLayoutArea
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithStyle("justify-content: flex-end;")
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithNavigateToHref(backHref))
-            .WithView(Controls.Button("Delete")
+            .WithView(Controls.Button(host.Localize("common.delete"))
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("background: var(--error, #d32f2f); color: white;")
                 .WithIconStart(FluentIcons.Delete())

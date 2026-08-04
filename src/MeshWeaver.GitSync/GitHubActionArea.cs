@@ -120,12 +120,12 @@ public static class GitHubActionArea
                 new Address(activityPath),
                 new LayoutAreaReference(ActivityLayoutAreas.OverviewArea)));
 
-    private static StackControl BuildHeader(string title, string backHref)
+    private static StackControl BuildHeader(string title, string backHref, string? locale = null)
         => Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(16)
             .WithStyle("align-items: center;")
-            .WithView(Controls.Button("Back")
+            .WithView(Controls.Button(LocalizationCatalog.Get("common.back", locale))
                 .WithAppearance(Appearance.Lightweight)
                 .WithIconStart(FluentIcons.ArrowLeft())
                 .WithNavigateToHref(backHref))

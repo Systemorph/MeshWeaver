@@ -52,7 +52,7 @@ public static class LaunchScriptArea
 
         var targetAddress = new Address(codeNodePath);
 
-        var button = Controls.Button("Launch script")
+        var button = Controls.Button(host.Localize("ui.launchScript"))
             .WithIconStart(FluentIcons.Play())
             .WithAppearance(Appearance.Accent)
             .WithClickAction(clickCtx =>

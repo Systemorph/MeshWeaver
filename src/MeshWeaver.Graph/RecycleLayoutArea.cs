@@ -50,7 +50,7 @@ public static class RecycleLayoutArea
 
         var recyclingMessage = (UiControl?)Controls.Stack
             .WithStyle("padding: 24px;")
-            .WithView(Controls.Markdown("**Recycling hub…** redirecting in a moment."));
+            .WithView(Controls.Markdown(host.Localize("ui.mdRecyclingHub")));
 
         var redirect = (UiControl?)new RedirectControl(overviewHref);
 

@@ -113,7 +113,7 @@ public static class VersionLayoutArea
             stack = stack.WithView(
                 Controls.Stack.WithOrientation(Orientation.Horizontal)
                     .WithStyle("align-items: center; gap: 8px; margin-bottom: 16px;")
-                    .WithView(Controls.Button("Back")
+                    .WithView(Controls.Button(host.Localize("common.back"))
                         .WithAppearance(Appearance.Lightweight)
                         .WithIconStart(FluentIcons.ArrowLeft())
                         .WithNavigateToHref(backHref)));
@@ -153,7 +153,7 @@ public static class VersionLayoutArea
                         $"<div style=\"flex: 1; color: var(--neutral-foreground-hint);\">{System.Net.WebUtility.HtmlEncode(timeStr)}</div>"))
                     .WithView(Controls.Html(
                         $"<div style=\"min-width: 120px; color: var(--neutral-foreground-hint);\">{System.Net.WebUtility.HtmlEncode(changedBy)}</div>"))
-                    .WithView(Controls.Button("Compare")
+                    .WithView(Controls.Button(host.Localize("ui.compare"))
                         .WithAppearance(Appearance.Outline)
                         .WithNavigateToHref(compareHref));
 
@@ -299,7 +299,7 @@ public static class VersionLayoutArea
         stack = stack.WithView(
             Controls.Stack.WithOrientation(Orientation.Horizontal)
                 .WithStyle("align-items: center; gap: 8px; margin-bottom: 16px;")
-                .WithView(Controls.Button("Back to Versions")
+                .WithView(Controls.Button(host.Localize("ui.backToVersions"))
                     .WithAppearance(Appearance.Lightweight)
                     .WithIconStart(FluentIcons.ArrowLeft())
                     .WithNavigateToHref(backHref)));

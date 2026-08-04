@@ -160,7 +160,7 @@ public static class NodeTypeLayoutAreas
                     // resubscribe storm that wedged the portal. The Recompile button flips
                     // RequestedReleaseAt + Force on the NodeType's OWN node; the compile watcher reacts.
                     stack = AppendCompileErrorSources(stack, def);
-                    stack = stack.WithView(Controls.Button("Recompile")
+                    stack = stack.WithView(Controls.Button(host.Localize("ui.recompile"))
                         .WithAppearance(Appearance.Accent)
                         .WithClickAction(_ =>
                         {
@@ -464,7 +464,7 @@ public static class NodeTypeLayoutAreas
                 if (!string.IsNullOrEmpty(typeDef?.Description))
                     content = content.WithView(Controls.Markdown(typeDef.Description));
 
-                content = content.WithView(BuildConfigurationSection(hubAddress, node, typeDef));
+                content = content.WithView(BuildConfigurationSection(hubAddress, node, typeDef, locale: host.ViewerLocale()));
                 content = content.WithView(NodeTypeDataModelAreas.BuildOverviewSection(host));
                 content = content.WithView(BuildQueriesSection("Source queries",
                     CodeQueryResolver.GroupAll(typeDef?.Sources, CodeQueryResolver.DefaultSources,
@@ -495,7 +495,7 @@ public static class NodeTypeLayoutAreas
     /// Configuration summary on the Overview: the notable settings as read-only rows
     /// plus a link to the full Configuration area where they're edited.
     /// </summary>
-    private static UiControl BuildConfigurationSection(object hubAddress, MeshNode node, NodeTypeDefinition? def)
+    private static UiControl BuildConfigurationSection(object hubAddress, MeshNode node, NodeTypeDefinition? def, string? locale = null)
     {
         var configHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
         var section = Controls.Stack.WithWidth("100%")
@@ -521,7 +521,7 @@ public static class NodeTypeLayoutAreas
         }
 
         if (!hasAny)
-            section = section.WithView(Controls.Body("All settings at their defaults.")
+            section = section.WithView(Controls.Body(LocalizationCatalog.Get("ui.allDefaults", locale))
                 .WithStyle("color: var(--neutral-foreground-hint); font-style: italic; padding: 8px 0;"));
         return section;
     }
@@ -530,14 +530,14 @@ public static class NodeTypeLayoutAreas
     /// Lists the named source/test queries exactly as configured — one line per query,
     /// grouped label first (<c>src — `namespace:Source scope:subtree`</c>).
     /// </summary>
-    private static UiControl BuildQueriesSection(string title, IReadOnlyList<CodeQueryGroup> groups)
+    private static UiControl BuildQueriesSection(string title, IReadOnlyList<CodeQueryGroup> groups, string? locale = null)
     {
         var section = Controls.Stack.WithWidth("100%")
             .WithView(BuildSectionHeader(title));
 
         if (groups.Count == 0)
         {
-            return section.WithView(Controls.Body("None configured.")
+            return section.WithView(Controls.Body(LocalizationCatalog.Get("ui.noneConfigured", locale))
                 .WithStyle("color: var(--neutral-foreground-hint); font-style: italic; padding: 8px 0;"));
         }
 
@@ -721,7 +721,7 @@ public static class NodeTypeLayoutAreas
         Icon groupIcon,
         string rootPath,
         IReadOnlyList<(CodeQueryGroup Group, IReadOnlyList<MeshNode> Nodes)>? groups,
-        object? hubAddress = null)
+        object? hubAddress = null, string? locale = null)
     {
         var root = new NavGroupControl(groupLabel)
             .WithIcon(groupIcon)
@@ -743,7 +743,7 @@ public static class NodeTypeLayoutAreas
             if (nodes.Count == 0)
             {
                 sub = sub.WithView(
-                    Controls.Body("(empty)")
+                    Controls.Body(LocalizationCatalog.Get("ui.empty", locale))
                         .WithStyle("padding: 4px 16px; display: block; color: var(--neutral-foreground-hint);"));
             }
             else
@@ -1015,7 +1015,7 @@ public static class NodeTypeLayoutAreas
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; gap: 16px;")
-            .WithView(Controls.H2("Releases").WithStyle("margin: 0;"));
+            .WithView(Controls.H2(host.Localize("ui.releases")).WithStyle("margin: 0;"));
 
         var statusStream = host.Workspace.GetMeshNodeStream()
             .Select(n => n.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions)?.CompilationStatus)
@@ -1029,7 +1029,7 @@ public static class NodeTypeLayoutAreas
                 _ => ""
             }).WithStyle("color: var(--neutral-foreground-hint); font-size: 13px;"));
 
-        var createReleaseButton = Controls.Button("Create Release")
+        var createReleaseButton = Controls.Button(host.Localize("ui.createRelease"))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Play())
             .WithClickAction(clickCtx =>
@@ -1186,7 +1186,7 @@ public static class NodeTypeLayoutAreas
             .DistinctUntilChanged();
 
         var releaseButton = (LayoutAreaHost h, RenderingContext rc) => isUpToDate
-            .Select(upToDate => (UiControl)Controls.Button("Create Release")
+            .Select(upToDate => (UiControl)Controls.Button(host.Localize("ui.createRelease"))
                 // Appearance still signals the up-to-date state (Neutral = nothing changed
                 // since the last release; Accent = actionable) without renaming the button —
                 // it is THE "Create Release" entry point regardless of dirty state.
@@ -1214,7 +1214,7 @@ public static class NodeTypeLayoutAreas
                     return Task.CompletedTask;
                 }));
 
-        var runTestsButton = Controls.Button("Run Tests")
+        var runTestsButton = Controls.Button(host.Localize("ui.runTests"))
             .WithAppearance(Appearance.Outline)
             .WithIconStart(FluentIcons.Play())
             .WithClickAction(ctx =>
@@ -1267,7 +1267,7 @@ public static class NodeTypeLayoutAreas
             host.Workspace.GetMeshNodeStream()
                 .Select(n => n.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions))
                 .Where(d => d is not null)
-                .Select(d => BuildCompileLogPanel(d!));
+                .Select(d => BuildCompileLogPanel(d!, locale: host.ViewerLocale()));
         stack = stack.WithView(compileLogPanel, "CompileLogPanel");
 
         // Editable settings form — bound DIRECTLY to the node stream (IMeshNodeStreamCache), ONE
@@ -1347,8 +1347,8 @@ public static class NodeTypeLayoutAreas
         var configHeader = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; margin-top: 8px;")
-            .WithView(Controls.H3("Configuration Lambda").WithStyle("margin: 0;"))
-            .WithView(Controls.Button("Edit")
+            .WithView(Controls.H3(host.Localize("ui.configurationLambda")).WithStyle("margin: 0;"))
+            .WithView(Controls.Button(host.Localize("common.edit"))
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.Edit())
                 .WithNavigateToHref(editHref));
@@ -1379,7 +1379,7 @@ public static class NodeTypeLayoutAreas
         }
         else
         {
-            stack = stack.WithView(Controls.Body("No configuration lambda defined.")
+            stack = stack.WithView(Controls.Body(host.Localize("ui.noConfigLambda"))
                 .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;"));
         }
 
@@ -1414,7 +1414,7 @@ public static class NodeTypeLayoutAreas
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
-        stack = stack.WithView(Controls.H2("Configuration").WithStyle("margin-bottom: 16px;"));
+        stack = stack.WithView(Controls.H2(host.Localize("ui.configuration")).WithStyle("margin-bottom: 16px;"));
         stack = stack.WithView(Controls.Body("Lambda expression: Func<MessageHubConfiguration, MessageHubConfiguration>").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 16px;"));
 
         if (!string.IsNullOrEmpty(content?.Configuration))
@@ -1427,7 +1427,7 @@ public static class NodeTypeLayoutAreas
                 Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
                     .WithStyle("margin-top: 16px;")
-                    .WithView(Controls.Button("Edit")
+                    .WithView(Controls.Button(host.Localize("common.edit"))
                         .WithAppearance(Appearance.Accent)
                         .WithIconStart(FluentIcons.Edit())
                         .WithNavigateToHref(editHref))
@@ -1435,12 +1435,12 @@ public static class NodeTypeLayoutAreas
         }
         else
         {
-            stack = stack.WithView(Controls.Body("No Configuration defined.").WithStyle("color: var(--neutral-foreground-hint);"));
+            stack = stack.WithView(Controls.Body(host.Localize("ui.noConfiguration")).WithStyle("color: var(--neutral-foreground-hint);"));
         }
 
         // Back button
         var configBackHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
-        stack = stack.WithView(Controls.Button("Back")
+        stack = stack.WithView(Controls.Button(host.Localize("common.back"))
             .WithAppearance(Appearance.Neutral)
             .WithStyle("margin-top: 24px;")
             .WithNavigateToHref(configBackHref));
@@ -1512,7 +1512,7 @@ public static class NodeTypeLayoutAreas
         // Display Name
         stack = stack.WithView(Controls.Stack
             .WithStyle(formStyle)
-            .WithView(Controls.Label("Display Name:").WithStyle("font-weight: 500;"))
+            .WithView(Controls.Label(host.Localize("ui.displayName")).WithStyle("font-weight: 500;"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Enter display name...")
                 .WithImmediate(true) with
@@ -1521,7 +1521,7 @@ public static class NodeTypeLayoutAreas
         // Description
         stack = stack.WithView(Controls.Stack
             .WithStyle(formStyle)
-            .WithView(Controls.Label("Description:").WithStyle("font-weight: 500;"))
+            .WithView(Controls.Label(host.Localize("ui.description")).WithStyle("font-weight: 500;"))
             .WithView(new TextAreaControl(new JsonPointerReference(""))
                 .WithPlaceholder("Enter description...")
                 .WithImmediate(true) with
@@ -1530,7 +1530,7 @@ public static class NodeTypeLayoutAreas
         // Icon Name
         stack = stack.WithView(Controls.Stack
             .WithStyle(formStyle)
-            .WithView(Controls.Label("Icon Name:").WithStyle("font-weight: 500;"))
+            .WithView(Controls.Label(host.Localize("ui.iconName")).WithStyle("font-weight: 500;"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("e.g., Document, Folder...")
                 .WithImmediate(true) with
@@ -1539,7 +1539,7 @@ public static class NodeTypeLayoutAreas
         // Display Order
         stack = stack.WithView(Controls.Stack
             .WithStyle(formStyle)
-            .WithView(Controls.Label("Display Order:").WithStyle("font-weight: 500;"))
+            .WithView(Controls.Label(host.Localize("ui.displayOrder")).WithStyle("font-weight: 500;"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("0")
                 .WithImmediate(true) with
@@ -1548,7 +1548,7 @@ public static class NodeTypeLayoutAreas
         // Children Query
         stack = stack.WithView(Controls.Stack
             .WithStyle(formStyle)
-            .WithView(Controls.Label("Children Query:").WithStyle("font-weight: 500;"))
+            .WithView(Controls.Label(host.Localize("ui.childrenQuery")).WithStyle("font-weight: 500;"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Query for children (e.g., nodeType:Person)")
                 .WithImmediate(true) with
@@ -1557,14 +1557,14 @@ public static class NodeTypeLayoutAreas
         // Dependencies
         stack = stack.WithView(Controls.Stack
             .WithStyle(formStyle)
-            .WithView(Controls.Label("Dependencies:").WithStyle("font-weight: 500;"))
+            .WithView(Controls.Label(host.Localize("ui.dependencies")).WithStyle("font-weight: 500;"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Comma-separated node type paths...")
                 .WithImmediate(true) with
             { DataContext = LayoutAreaReference.GetDataPointer(dependenciesDataId) }));
 
         // Configuration (code editor)
-        stack = stack.WithView(Controls.H3("Configuration").WithStyle("margin: 24px 0 8px 0;"));
+        stack = stack.WithView(Controls.H3(host.Localize("ui.configuration")).WithStyle("margin: 24px 0 8px 0;"));
         stack = stack.WithView(Controls.Body("Lambda expression: config => config.AddData(...)").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
 
         var editor = new CodeEditorControl()
@@ -1595,12 +1595,12 @@ public static class NodeTypeLayoutAreas
 
         // Cancel button
         var viewHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
-        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("common.cancel"))
             .WithAppearance(Appearance.Neutral)
             .WithNavigateToHref(viewHref));
 
         // Save button - sync click action; subscribes to combined form snapshot then posts.
-        buttonRow = buttonRow.WithView(Controls.Button("Save")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("common.save"))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
             .WithClickAction(actx =>
@@ -1645,7 +1645,7 @@ public static class NodeTypeLayoutAreas
                         if (updatedNode == null)
                         {
                             var errorDialog = Controls.Dialog(
-                                Controls.Markdown("**Error:** Could not find MeshNode to update."),
+                                Controls.Markdown(host.Localize("ui.mdNodeToUpdateMissing")),
                                 "Save Failed"
                             ).WithSize("M");
                             actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
@@ -1769,34 +1769,34 @@ public static class NodeTypeLayoutAreas
 
         if (status == CompilationStatus.Compiling)
         {
-            chip = Controls.Body("Compiling…").WithStyle("font-weight: 600;");
+            chip = Controls.Body(host.Localize("ui.compiling")).WithStyle("font-weight: 600;");
             compileButtonLabel = "Compile";
             compileButtonEnabled = false;
             panelStyleSuffix = "background: var(--neutral-fill-stealth-rest);";
         }
         else if (status == CompilationStatus.Error)
         {
-            chip = Controls.Body("Compilation failed").WithStyle("font-weight: 600; color: var(--error-foreground);");
+            chip = Controls.Body(host.Localize("ui.compilationFailed")).WithStyle("font-weight: 600; color: var(--error-foreground);");
             compileButtonLabel = "Retry compile";
             panelStyleSuffix = "background: var(--error-fill-rest); border-color: var(--error-stroke-rest);";
         }
         else if (neverCompiled)
         {
-            chip = Controls.Body("Never compiled — click Compile to build")
+            chip = Controls.Body(host.Localize("ui.neverCompiled"))
                 .WithStyle("font-weight: 600; color: var(--warning-foreground);");
             compileButtonLabel = "Compile";
             panelStyleSuffix = "background: var(--warning-fill-rest); border-color: var(--warning-stroke-rest);";
         }
         else if (isDirty)
         {
-            chip = Controls.Body("Source changed — needs compile")
+            chip = Controls.Body(host.Localize("ui.sourceChanged"))
                 .WithStyle("font-weight: 600; color: var(--warning-foreground);");
             compileButtonLabel = "Compile";
             panelStyleSuffix = "background: var(--warning-fill-rest); border-color: var(--warning-stroke-rest);";
         }
         else
         {
-            chip = Controls.Body("Up to date").WithStyle("font-weight: 600;");
+            chip = Controls.Body(host.Localize("ui.upToDate")).WithStyle("font-weight: 600;");
             compileButtonLabel = "Recompile";
             panelStyleSuffix = "background: var(--neutral-fill-stealth-rest);";
         }
@@ -1869,7 +1869,7 @@ public static class NodeTypeLayoutAreas
     /// </list>
     /// Empty when nothing has happened yet.
     /// </summary>
-    private static UiControl BuildCompileLogPanel(NodeTypeDefinition def)
+    private static UiControl BuildCompileLogPanel(NodeTypeDefinition def, string? locale = null)
     {
         // Nothing meaningful to show until at least one compile has been
         // requested or recorded. Return an empty stack so the layout area
@@ -1885,14 +1885,14 @@ public static class NodeTypeLayoutAreas
 
         if (def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling)
         {
-            panel = panel.WithView(Controls.Body("Compiling…")
+            panel = panel.WithView(Controls.Body(LocalizationCatalog.Get("ui.compiling", locale))
                 .WithStyle("color: var(--accent-fill-rest); font-weight: 600;"));
         }
         else if (def.CompilationStatus == CompilationStatus.Error
                  && !string.IsNullOrEmpty(def.CompilationError))
         {
             panel = panel
-                .WithView(Controls.Body("Compile failed")
+                .WithView(Controls.Body(LocalizationCatalog.Get("ui.compileFailed", locale))
                     .WithStyle("color: var(--error); font-weight: 600;"))
                 .WithView(Controls.Html(
                     $"<pre style=\"white-space: pre-wrap; font-family: monospace; font-size: 12px; color: var(--error); margin: 0;\">{System.Net.WebUtility.HtmlEncode(def.CompilationError)}</pre>"));
@@ -1902,7 +1902,7 @@ public static class NodeTypeLayoutAreas
         {
             var releaseHref = "/" + def.LatestReleasePath;
             panel = panel
-                .WithView(Controls.Body("Release published")
+                .WithView(Controls.Body(LocalizationCatalog.Get("ui.releasePublished", locale))
                     .WithStyle("color: var(--accent-fill-rest); font-weight: 600;"))
                 .WithView(Controls.Html(
                     $"<a href=\"{System.Net.WebUtility.HtmlEncode(releaseHref)}\" style=\"text-decoration: none; color: var(--accent-fill-rest);\">→ {System.Net.WebUtility.HtmlEncode(def.LatestReleasePath!)}</a>"));

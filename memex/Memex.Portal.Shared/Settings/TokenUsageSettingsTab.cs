@@ -66,7 +66,7 @@ public static class TokenUsageSettingsTab
         var jsonOptions = ws.Hub.JsonSerializerOptions;
         host.UpdateData(FilterDataId, Default);
 
-        stack = stack.WithView(Controls.H2("Token Usage").WithStyle("margin: 0 0 4px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.tokenUsage")).WithStyle("margin: 0 0 4px 0;"));
         stack = stack.WithView(Controls.Markdown(
             "Aggregated token usage and estimated cost from the per-model `_Usage` satellites " +
             "(`{thread}/_Usage/{model}`). Cost uses the built-in model price table and re-prices " +
@@ -83,7 +83,7 @@ public static class TokenUsageSettingsTab
             ws.GetQuery("tokenusage:list", $"nodeType:{TokenUsageNodeType.NodeType}")
                 .CombineLatest(
                     h.Stream.GetDataStream<FilterState>(FilterDataId).StartWith(Default),
-                    (nodes, filter) => (UiControl?)BuildGrid(nodes, filter, jsonOptions)));
+                    (nodes, filter) => (UiControl?)BuildGrid(nodes, filter, jsonOptions, locale: host.ViewerLocale())));
 
         return stack;
     }
@@ -112,7 +112,7 @@ public static class TokenUsageSettingsTab
             });
 
     private static UiControl BuildGrid(
-        IEnumerable<MeshNode> nodes, FilterState filter, JsonSerializerOptions jsonOptions)
+        IEnumerable<MeshNode> nodes, FilterState filter, JsonSerializerOptions jsonOptions, string? locale = null)
     {
         var cutoff = filter.WindowDays > 0
             ? DateTimeOffset.UtcNow.AddDays(-filter.WindowDays)
@@ -143,7 +143,7 @@ public static class TokenUsageSettingsTab
             .ToList();
 
         if (rows.Count == 0)
-            return Controls.Markdown("_No token usage recorded in this period._");
+            return Controls.Markdown(LocalizationCatalog.Get("ui.mdNoTokenUsage", locale));
 
         long totIn = rows.Sum(r => r.Input);
         long totOut = rows.Sum(r => r.Output);

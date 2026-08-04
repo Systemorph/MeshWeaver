@@ -164,7 +164,7 @@ public static class SlideLayoutAreas
 
         container = container.WithView(BuildStage(slide, nextHref), StageArea);
         container = container.WithView(
-            BuildPresenterBar(hubPath, index, slides.Count, prev, next), PresenterBarArea);
+            BuildPresenterBar(hubPath, index, slides.Count, prev, next, locale: host.ViewerLocale()), PresenterBarArea);
 
         return container;
     }
@@ -175,7 +175,7 @@ public static class SlideLayoutAreas
     /// direction; all navigation goes through the standard href mechanism.
     /// </summary>
     private static UiControl BuildPresenterBar(
-        string hubPath, int index, int count, MeshNode? prev, MeshNode? next)
+        string hubPath, int index, int count, MeshNode? prev, MeshNode? next, string? locale = null)
     {
         var bar = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -193,12 +193,12 @@ public static class SlideLayoutAreas
 
         var parentPath = GetParentPath(hubPath);
         if (parentPath is not null)
-            bar = bar.WithView(Controls.Button("Deck")
+            bar = bar.WithView(Controls.Button(LocalizationCatalog.Get("ui.deck", locale))
                     .WithAppearance(Appearance.Lightweight)
                     .WithNavigateToHref($"/{parentPath}"),
                 DeckLinkArea);
 
-        bar = bar.WithView(Controls.Button("Present")
+        bar = bar.WithView(Controls.Button(LocalizationCatalog.Get("ui.present", locale))
                 .WithAppearance(Appearance.Lightweight)
                 .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(hubPath, PresentArea)),
             PresentLinkArea);
