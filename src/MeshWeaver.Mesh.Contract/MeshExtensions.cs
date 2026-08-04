@@ -134,6 +134,46 @@ public static class MeshExtensions
     /// <c>AddDefaultLayoutAreas</c> (which calls <c>AddMeshDataSource</c>, which
     /// calls this).
     /// </summary>
+    /// <summary>
+    /// The address node CRUD (<see cref="CreateNodeRequest"/> and friends) must be TARGETED at: the
+    /// NEAREST hub up the parent chain that actually registered
+    /// <see cref="WithNodeOperationHandlers"/> and is not the root mesh hub.
+    ///
+    /// <para>🚨 <b>The mesh hub is the ROUTER — it must not execute work.</b> Targeting it makes every
+    /// create/delete/move run on the router's own action block; a burst starves real
+    /// <c>SubscribeRequest</c> traffic and the whole portal wedges (atioz 2026-06-11:
+    /// "11× CreateOrUpdateNodeRequest + 3× CreateNodeRequest@mesh/&lt;self&gt; stale &gt;60s"). A hosted
+    /// hub that opted into the handlers — the portal hub for REST/Blazor/MCP work, the dedicated
+    /// <c>import/{id}</c> hub for bulk static-repo imports — serialises that traffic on ITS OWN block
+    /// and leaves the router free.</para>
+    ///
+    /// <para>Falls back to the mesh root only when no ancestor handles node operations, so a host that
+    /// never opted in keeps working exactly as before.</para>
+    /// </summary>
+    /// <param name="hub">The hub issuing the operation.</param>
+    /// <returns>The address to target.</returns>
+    public static Address NodeOperationTarget(this IMessageHub hub)
+    {
+        // Walk with the SAME self-reference guard GetMeshHub uses: a hub whose ParentHub resolves
+        // to itself (the root) would otherwise spin this loop forever — an infinite loop on the
+        // CRUD path, which presents as a hang, not an error.
+        var current = hub;
+        while (current is not null)
+        {
+            if (current.Configuration.Get<NodeOperationHandlersMarker>() is not null
+                && !string.Equals(current.Address.Type, MeshAddressType, StringComparison.Ordinal))
+                return current.Address;
+            var parent = current.Configuration.ParentHub;
+            if (parent is null || ReferenceEquals(parent, current))
+                break;
+            current = parent;
+        }
+        return hub.GetMeshHub().Address;
+    }
+
+    /// <summary>Address type of the root mesh hub — the router, never a work target.</summary>
+    private const string MeshAddressType = "mesh";
+
     public static MessageHubConfiguration WithNodeOperationHandlers(this MessageHubConfiguration config)
     {
         if (config.Get<NodeOperationHandlersMarker>() is not null)
