@@ -78,6 +78,7 @@ Browse the full set of controls, layout primitives, and data-binding guides:
 | [Layout Grid](LayoutGrid) | CSS-grid-based two-dimensional layouts |
 | [Data Binding](DataBinding) | Two-way reactive binding via JSON Pointers — the contract every backend area must follow |
 | [Static vs. Dynamic Views](Observables) | When areas re-render and how to control update frequency |
+| [Displaying Times](DisplayTimes) | Stored instants are UTC — render them in the viewer's own zone, and which values must NOT be converted |
 | [DataGrid](DataGrid) | Tabular data with sorting, filtering, and row actions |
 | [Form Input Controls](InputControls) | Checkboxes, switches, date pickers, list selectors, radio groups, node picker — each rendered live |
 | [Badges, Icons & Status](DisplayControls) | Badges, icons, progress bars, spacers, menu items, and card skins |

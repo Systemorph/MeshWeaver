@@ -25,6 +25,7 @@ public partial class FileBrowser : IDisposable
     private IContentService ContentService => Hub.ServiceProvider.GetRequiredService<IContentService>();
     [Inject] private IToastService ToastService { get; set; } = null!;
     [Inject] private IMessageHub Hub { get; set; } = null!;
+    [Inject] private AccessService AccessService { get; set; } = null!;
     [Inject] private IJSRuntime JSRuntime { get; set; } = null!;
     /// <summary>Name of the content collection to browse. Changing this value reloads the collection.</summary>
     [Parameter] public string? CollectionName { get; set; } = "";

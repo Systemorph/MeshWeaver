@@ -53,6 +53,18 @@ public static class DisplayTimeExtensions
     public static DateTime ToDisplayTime(this AccessService? accessService, DateTime utc)
         => ToDisplayTime(utc, ResolveViewerZoneId(accessService));
 
+    /// <summary>
+    /// The current viewer's display zone id, for render paths that must CAPTURE the zone
+    /// eagerly. <see cref="ToDisplayTime(AccessService, DateTimeOffset)"/> resolves the
+    /// context at the moment it is called, which is correct on a synchronous render path
+    /// but not when the formatting happens on a later emission that crossed an I/O
+    /// boundary (an <c>IIoPool</c> HTTP result, a pooled scheduler hop) where the
+    /// <c>AsyncLocal</c> context may no longer flow. Capture this while still on the
+    /// viewer's turn and pass it to <see cref="ToDisplayTime(DateTimeOffset, string?)"/>.
+    /// </summary>
+    public static string? ViewerZoneId(this AccessService? accessService)
+        => ResolveViewerZoneId(accessService);
+
     private static string? ResolveViewerZoneId(AccessService? accessService)
     {
         var fromRequest = accessService?.Context?.TimeZoneId;

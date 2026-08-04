@@ -179,7 +179,9 @@ public static class SocialMediaPostLayoutAreas
                 var scheduled = GetDate(node, "scheduledAt");
                 var published = GetDate(node, "publishedAt");
                 var status = published.HasValue ? "Published"
-                    : (scheduled.HasValue && scheduled.Value > DateTimeOffset.Now ? "Scheduled" : "Draft");
+                    // UtcNow, not Now: scheduledAt is a stored UTC instant, so comparing it to the
+                    // server's local clock flips the badge by the host offset.
+                    : (scheduled.HasValue && scheduled.Value > DateTimeOffset.UtcNow ? "Scheduled" : "Draft");
                 var statusColor = published.HasValue ? "#2e7d32" : "#ed6c02";
                 var impressions = GetInt(node, "impressions");
                 var likes = GetInt(node, "likes");

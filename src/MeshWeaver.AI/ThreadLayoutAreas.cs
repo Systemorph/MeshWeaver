@@ -381,8 +381,9 @@ public static class ThreadLayoutAreas
                 BuildHistoryView(host, node, hubPath, children ?? Array.Empty<MeshNode>()));
     }
 
-    private static UiControl BuildHistoryView(LayoutAreaHost _, MeshNode? node, string threadPath, IReadOnlyList<MeshNode> delegations)
+    private static UiControl BuildHistoryView(LayoutAreaHost host, MeshNode? node, string threadPath, IReadOnlyList<MeshNode> delegations)
     {
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
         var container = Controls.Stack
             .WithWidth("100%")
             .WithStyle("padding: 24px;");
@@ -419,7 +420,7 @@ public static class ThreadLayoutAreas
             foreach (var delegation in delegations.OrderByDescending(d => d.LastModified))
             {
                 grid = grid.WithView(
-                    BuildDelegationCard(delegation),
+                    BuildDelegationCard(delegation, access),
                     itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
             }
 
@@ -429,10 +430,11 @@ public static class ThreadLayoutAreas
         return container;
     }
 
-    private static UiControl BuildDelegationCard(MeshNode delegationNode)
+    private static UiControl BuildDelegationCard(MeshNode delegationNode, AccessService? access)
     {
         var title = delegationNode.Name ?? "Delegation";
-        var timestamp = delegationNode.LastModified.ToString("g");
+        // Viewer's zone, not UTC — same rule as the node Overview.
+        var timestamp = access.ToDisplayTime(delegationNode.LastModified).ToString("g");
         var path = delegationNode.Path ?? "";
 
         return Controls.Stack
@@ -458,16 +460,17 @@ public static class ThreadLayoutAreas
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
         return host.Workspace.GetMeshNodeStream()
-            .Select(node => BuildThumbnail(node, hubPath, host.Hub.JsonSerializerOptions));
+            .Select(node => BuildThumbnail(node, hubPath, host.Hub.JsonSerializerOptions, access));
     }
 
-    private static UiControl BuildThumbnail(MeshNode? node, string hubPath, JsonSerializerOptions options)
+    private static UiControl BuildThumbnail(MeshNode? node, string hubPath, JsonSerializerOptions options, AccessService? access)
     {
         var thread = node.ContentAs<MeshThread>(options);
         var cellIds = thread?.Messages ?? ImmutableList<string>.Empty;
         var title = node?.Name ?? "Thread";
-        var lastActivity = node?.LastModified.ToString("g") ?? "";
+        var lastActivity = node is null ? "" : access.ToDisplayTime(node.LastModified).ToString("g");
 
         // Preview is a lazy embedded layout area pointing at the last cell's
         // compact Streaming view (last 3 lines + tool-call chips). The cell

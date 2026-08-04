@@ -85,6 +85,11 @@ public static class GitHubIssuesTab
         var issues = sp.GetRequiredService<IssueService>();
         var prs = sp.GetRequiredService<PullRequestService>();
         var userId = sp.GetService<AccessService>()?.Context?.ObjectId ?? "";
+        // Capture the viewer's zone HERE, on the render turn. Both grids are filled from
+        // later emissions (a synced query, an HTTP PR list) where the AsyncLocal access
+        // context may no longer flow, so resolving it inside the mapper would silently
+        // fall back to UTC.
+        var viewerZoneId = sp.GetService<AccessService>().ViewerZoneId();
         var spacePath = SpaceRootPath(node?.Path ?? "");
 
         if (string.IsNullOrEmpty(spacePath))
@@ -113,7 +118,7 @@ public static class GitHubIssuesTab
 
         // Live issues grid — binds to the synced query, refreshes itself as issues land.
         host.RegisterForDisposal(issues.WatchIssueNodes(spacePath)
-            .Select(nodes => MapIssues(host, nodes))
+            .Select(nodes => MapIssues(host, nodes, viewerZoneId))
             .Subscribe(
                 rows => host.UpdateData(IssuesGridId, rows),
                 // Surface a faulted synced query instead of a silently-frozen grid.
@@ -135,7 +140,8 @@ public static class GitHubIssuesTab
             .WithAppearance(Appearance.Outline)
             .WithClickAction(c =>
             {
-                PushPrs(prs, spacePath, userId, rows => c.Host.UpdateData(PrGridId, rows),
+                PushPrs(prs, spacePath, userId, viewerZoneId,
+                    rows => c.Host.UpdateData(PrGridId, rows),
                     err => c.Host.UpdateData(ResultId, Err(err)));
                 return Task.CompletedTask;
             }));
@@ -144,7 +150,7 @@ public static class GitHubIssuesTab
 
         // Initial PR load (live from GitHub, never persisted).
         host.RegisterForDisposal(prs.ListAll(spacePath, null, userId)
-            .Select(MapPrs)
+            .Select(rows => MapPrs(rows, viewerZoneId))
             .Catch<IReadOnlyList<GitHubPrRow>, Exception>(_ =>
                 Observable.Return((IReadOnlyList<GitHubPrRow>)Array.Empty<GitHubPrRow>()))
             .Subscribe(rows => host.UpdateData(PrGridId, rows), _ => { }));
@@ -243,7 +249,7 @@ public static class GitHubIssuesTab
 
     // ── Mapping ──────────────────────────────────────────────────────────────
 
-    private static IReadOnlyList<GitHubIssueRow> MapIssues(LayoutAreaHost host, IReadOnlyList<MeshNode> nodes)
+    private static IReadOnlyList<GitHubIssueRow> MapIssues(LayoutAreaHost host, IReadOnlyList<MeshNode> nodes, string? zoneId)
     {
         var opts = host.Hub.JsonSerializerOptions;
         return nodes
@@ -253,23 +259,25 @@ public static class GitHubIssuesTab
             .Select(i => new GitHubIssueRow(
                 i.Number, i.Title ?? "", i.State.ToString(), i.AuthorLogin ?? "",
                 string.Join(", ", i.Labels), i.CommentsCount,
-                i.UpdatedAt?.ToString("yyyy-MM-dd") ?? ""))
+                // A UTC instant late in the day is already "tomorrow" in the viewer's zone —
+                // convert before formatting, even for a date-only column.
+                i.UpdatedAt is { } u ? DisplayTimeExtensions.ToDisplayTime(u, zoneId).ToString("yyyy-MM-dd") : ""))
             .ToList();
     }
 
-    private static IReadOnlyList<GitHubPrRow> MapPrs(IReadOnlyList<GitHubPullRequestSummary> prs) =>
+    private static IReadOnlyList<GitHubPrRow> MapPrs(IReadOnlyList<GitHubPullRequestSummary> prs, string? zoneId) =>
         prs.OrderByDescending(p => p.Number)
             .Select(p => new GitHubPrRow(
                 p.Number, p.Title, p.AuthorLogin ?? "", p.Status.ToString(),
                 p.Draft ? "draft" : "", $"{p.HeadBranch} → {p.BaseBranch}",
-                p.UpdatedAt?.ToString("yyyy-MM-dd") ?? ""))
+                p.UpdatedAt is { } u ? DisplayTimeExtensions.ToDisplayTime(u, zoneId).ToString("yyyy-MM-dd") : ""))
             .ToList();
 
     private static void PushPrs(
-        PullRequestService prs, string spacePath, string userId,
+        PullRequestService prs, string spacePath, string userId, string? zoneId,
         Action<IReadOnlyList<GitHubPrRow>> onRows, Action<string> onError)
     {
-        prs.ListAll(spacePath, null, userId).Select(MapPrs).Subscribe(onRows, ex => onError(ex.Message));
+        prs.ListAll(spacePath, null, userId).Select(rows => MapPrs(rows, zoneId)).Subscribe(onRows, ex => onError(ex.Message));
     }
 
     // ── Small view helpers ─────────────────────────────────────────────────────

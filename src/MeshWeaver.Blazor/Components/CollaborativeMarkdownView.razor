@@ -2,6 +2,7 @@
 @using MeshWeaver.Layout
 @using MeshWeaver.Markdown
 @using MeshWeaver.Mesh
+@using MeshWeaver.Messaging
 @using Microsoft.Extensions.Logging
 @namespace MeshWeaver.Blazor.Components
 @inherits BlazorView<CollaborativeMarkdownControl, CollaborativeMarkdownView>
@@ -55,7 +56,7 @@
                          @onclick="() => HighlightAnnotation(id)">
                         <div class="comment-header">
                             <span class="comment-author">@comment.Author</span>
-                            <span class="comment-time">@FormatTimeAgo(comment.CreatedAt)</span>
+                            <span class="comment-time">@FormatTimeAgo(comment.CreatedAt, AccessService.ViewerZoneId())</span>
                             <div class="comment-actions">
                                 @if (comment.Status != CommentStatus.Resolved)
                                 {
@@ -87,7 +88,7 @@
                                 {
                                     <span class="collab-md-author">@change.Author</span>
                                 }
-                                <span class="collab-md-time">@ChangeLabel(change.ChangeType) · @FormatTimeAgo(change.CreatedAt)</span>
+                                <span class="collab-md-time">@ChangeLabel(change.ChangeType) · @FormatTimeAgo(change.CreatedAt, AccessService.ViewerZoneId())</span>
                             </div>
                             @if (BoundCanEdit)
                             {

@@ -59,6 +59,7 @@ public static class ActivityLayoutAreas
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
+        var zoneId = host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId();
         return host.Workspace.GetMeshNodeStream()
             .Select(node =>
             {
@@ -68,7 +69,7 @@ public static class ActivityLayoutAreas
 
                 var stack = Controls.Stack
                     .WithStyle("padding: 16px; gap: 12px;")
-                    .WithView(BuildHeader(log))
+                    .WithView(BuildHeader(log, zoneId))
                     .WithView(BuildProgressIndicator(log))
                     .WithView(BuildLog(log, locale: host.ViewerLocale()));
 
@@ -187,11 +188,13 @@ public static class ActivityLayoutAreas
     /// hint (started / ended). Control-based — replaces the former hand-rolled
     /// header HTML.
     /// </summary>
-    public static StackControl BuildHeader(ActivityLog log)
+    public static StackControl BuildHeader(ActivityLog log, string? zoneId = null)
     {
         var userName = log.User?.DisplayName ?? log.User?.Email ?? "System";
-        var startStr = log.Start.ToString("g");
-        var endStr = log.End is { } end ? end.ToString("g") : "—";
+        // Activity timestamps are stored UTC; the header is the one place a user reads
+        // "when did this run", so it renders in THEIR zone.
+        var startStr = DisplayTimeExtensions.ToDisplayTime(log.Start, zoneId).ToString("g");
+        var endStr = log.End is { } end ? DisplayTimeExtensions.ToDisplayTime(end, zoneId).ToString("g") : "—";
 
         return Controls.Stack
             .WithOrientation(Orientation.Horizontal)
