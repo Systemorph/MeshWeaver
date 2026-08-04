@@ -116,6 +116,23 @@ public record PackageManifest
     public ImmutableSortedDictionary<string, string>? InstalledFiles { get; init; }
 
     /// <summary>
+    /// Opt in to UNATTENDED updates for this installed package: when the source repo's CI goes
+    /// green and this module's content hash actually changed, install the delta without waiting for
+    /// a human to click Update.
+    ///
+    /// <para><b>Off by default, and deliberately so.</b> A bad plugin build reaching every
+    /// installation with nobody in the loop is a much worse failure than an update that lands an
+    /// hour late. Turn it on per package, for the ones whose CI you trust. With it off the change
+    /// still surfaces immediately — as an "Update available" notification on this record — it just
+    /// does not install itself.</para>
+    ///
+    /// <para>Only meaningful on an INSTALL RECORD (it is a property of this installation's policy,
+    /// not of the package), and only consulted when the module's <see cref="ModuleVersion"/> has
+    /// genuinely moved. See <c>Doc/Architecture/PluginUpdateOnGreenBuild</c>.</para>
+    /// </summary>
+    public bool AutoUpdate { get; init; }
+
+    /// <summary>
     /// The module manifest's per-file hash map as it stands AT THE CATALOG'S REF
     /// (<see cref="ModuleManifest.Files"/>) — the candidate side of the diff, where
     /// <see cref="InstalledFiles"/> is the installed side. Set by the source while listing; never
