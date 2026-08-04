@@ -6,6 +6,7 @@
 @using Microsoft.JSInterop
 @using System.IO.Compression
 @inherits BlazorView<NodeExportControl, NodeExportView>
+@inject AccessService Access
 
 <div class="node-export-view" style="max-width: 800px;">
     <p style="color: var(--neutral-foreground-hint); margin-bottom: 24px;">
@@ -46,14 +47,14 @@
     @if (ExportDone)
     {
         <FluentCard Style="padding: 16px; margin-top: 16px;">
-            <h3 style="color: var(--success); margin: 0 0 12px 0;">Export Complete</h3>
-            <p><strong>Nodes exported:</strong> @NodesExported</p>
-            <p>The ZIP file has been downloaded to your browser.</p>
+            <h3 style="color: var(--success); margin: 0 0 12px 0;">@Access.Localize("export.complete")</h3>
+            <p><strong>@Access.Localize("export.nodesExported")</strong> @NodesExported</p>
+            <p>@Access.Localize("export.zipDownloaded")</p>
         </FluentCard>
 
         <div style="margin-top: 16px; display: flex; gap: 8px;">
             <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
-                          OnClick="@Reset">Export Again</FluentButton>
+                          OnClick="@Reset">@Access.Localize("export.again")</FluentButton>
         </div>
     }
 
@@ -65,7 +66,7 @@
 
         <div style="margin-top: 16px;">
             <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Neutral"
-                          OnClick="@Reset">Try Again</FluentButton>
+                          OnClick="@Reset">@Access.Localize("common.retry")</FluentButton>
         </div>
     }
 </div>

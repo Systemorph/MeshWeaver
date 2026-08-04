@@ -61,7 +61,7 @@
                     @if (TrackedChanges.Count > 0)
                     {
                         <div class="annotations-sidebar-actions">
-                            <button class="btn-accept-all" title="@Access.Localize("ui.acceptAll")" @onclick="@OnAcceptAllChanges">Accept all</button>
+                            <button class="btn-accept-all" title="@Access.Localize("ui.acceptAll")" @onclick="@OnAcceptAllChanges">@Access.Localize("ui.acceptAll")</button>
                             <button class="btn-reject-all" title="@Access.Localize("ui.rejectAll")" @onclick="@OnRejectAllChanges">Reject all</button>
                         </div>
                     }

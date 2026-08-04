@@ -15,14 +15,14 @@
 @inject INavigationService NavigationService
 @inject AccessService Access
 
-<PageTitle>Create Node</PageTitle>
+<PageTitle>@Access.Localize("ui.createNode")</PageTitle>
 
 <div class="create-page" style="padding: 24px; max-width: 600px; margin: 0 auto; width: 100%;">
     <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 24px;">
         <a href="@BackHref" style="display: flex; align-items: center; text-decoration: none; color: var(--neutral-foreground-rest); padding: 4px;">
             <FluentIcon Value="@(new Icons.Regular.Size20.ArrowLeft())" />
         </a>
-        <h1 style="margin: 0;">Create New</h1>
+        <h1 style="margin: 0;">@Access.Localize("ui.createNew")</h1>
     </div>
 
     @if (isLoading)

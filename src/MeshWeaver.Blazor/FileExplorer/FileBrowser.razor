@@ -58,11 +58,11 @@
             <FluentSpacer></FluentSpacer>
             @if (Collection is not null)
             {
-                <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowDownload())" Text="@Access.Localize("common.download")" Disabled="@(!SelectedItems.Any())" OnClick="DownloadSelectedAsync">Download</FluentButton>
+                <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowDownload())" Text="@Access.Localize("common.download")" Disabled="@(!SelectedItems.Any())" OnClick="DownloadSelectedAsync">@Access.Localize("common.download")</FluentButton>
                 @if (!IsReadOnly)
                 {
                     <FluentButton IconStart="@(new Icons.Regular.Size20.Add())" Text="@Access.Localize("files.addFolder")" OnClick="AddFolderAsync">New Folder</FluentButton>
-                    <FluentButton IconStart="@(new Icons.Regular.Size20.BinRecycle())" Text="@Access.Localize("common.delete")" Disabled="@(!SelectedItems.Any())" OnClick="DeleteAsync">Delete</FluentButton>
+                    <FluentButton IconStart="@(new Icons.Regular.Size20.BinRecycle())" Text="@Access.Localize("common.delete")" Disabled="@(!SelectedItems.Any())" OnClick="DeleteAsync">@Access.Localize("common.delete")</FluentButton>
                     <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="@Access.Localize("common.upload")" Id="MyUploadStream">Upload</FluentButton>
                     <FluentInputFile @ref="@myFileByStream"
                                      AnchorId="MyUploadStream"

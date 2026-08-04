@@ -747,10 +747,10 @@ else
                                 @onclick="() => ConfirmDelete(true)">Delete &amp; undo @_deleteConfirmChangeCount change@(_deleteConfirmChangeCount == 1 ? "" : "s")</button>
                         <button type="button" class="thread-msg-action-btn"
                                 style="padding:6px 12px; border:1px solid var(--neutral-stroke-rest); border-radius:4px;"
-                                @onclick="() => ConfirmDelete(false)">Delete only</button>
+                                @onclick="() => ConfirmDelete(false)">@Access.Localize("chat.deleteOnly")</button>
                         <button type="button" class="thread-msg-action-btn"
                                 style="padding:6px 12px; border-radius:4px;"
-                                @onclick="CancelDelete">Cancel</button>
+                                @onclick="CancelDelete">@Access.Localize("common.cancel")</button>
                     </div>
                 </div>
             </div>
@@ -772,7 +772,7 @@ else
                              Style="padding:12px 14px; flex:1 1 auto; min-height:0; overflow-y:auto;">
                     @if (_loginMethod is null)
                     {
-                        <div style="color:var(--neutral-foreground-hint);">How do you want to sign in?</div>
+                        <div style="color:var(--neutral-foreground-hint);">@Access.Localize("login.howSignIn")</div>
                         @* Account/browser login is offered ONLY for providers whose device flow can
                            complete on this portal. It is suppressed for ClaudeCode: that flow drives
                            `claude setup-token` server-side and scrapes the token from stdout, but the CLI
@@ -804,7 +804,7 @@ else
                                 <FluentButton Appearance="FluentAppearance.Accent"
                                               OnClick="@(() => StartHarnessConnect(_loginHarness!))">Try again</FluentButton>
                                 <FluentButton Appearance="FluentAppearance.Neutral"
-                                              OnClick="@(() => ChooseLoginMethod("apiKey"))">Use an API key instead</FluentButton>
+                                              OnClick="@(() => ChooseLoginMethod("apiKey"))">@Access.Localize("login.useApiKeyInstead")</FluentButton>
                                 break;
 
                             case MeshWeaver.AI.Connect.ConnectStatus.Connecting c when !string.IsNullOrEmpty(c.Challenge.VerificationUrl):
@@ -823,12 +823,12 @@ else
                                 else if (!string.IsNullOrEmpty(c.Challenge.UserCode))
                                 {
                                     <div>Enter this code in the browser: <strong>@c.Challenge.UserCode</strong></div>
-                                    <div style="color:var(--neutral-foreground-hint);">Waiting for authorization…</div>
+                                    <div style="color:var(--neutral-foreground-hint);">@Access.Localize("login.waitingForAuth")</div>
                                 }
                                 break;
 
                             default:
-                                <div style="color:var(--neutral-foreground-hint);">Starting login…</div>
+                                <div style="color:var(--neutral-foreground-hint);">@Access.Localize("login.startingLogin")</div>
                                 break;
                         }
                     }
@@ -840,9 +840,9 @@ else
                         }
                         @if (_loginMethod == "gateway")
                         {
-                            <div>Gateway base URL:</div>
+                            <div>@Access.Localize("login.gatewayBaseUrl")</div>
                             <FluentTextField @bind-Value="_connectBaseUrl" Immediate="true" Placeholder="https://…" Style="width:100%;" />
-                            <div style="margin-top:4px;">Gateway token:</div>
+                            <div style="margin-top:4px;">@Access.Localize("login.gatewayToken")</div>
                         }
                         else
                         {
