@@ -1,3 +1,4 @@
+using System.Reactive;
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
@@ -178,7 +179,18 @@ public static class MeshDataSourceExtensions
             // InitializeHubRequest, HeartBeatEvent, ShutdownRequest, DisposeRequest,
             // and DeliveryFailure are bypassed by the framework — see MessageService.cs.
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
-            .WithInitialization(SubscribeToOwnDeletion)
+            // 🚨 REACTIVE init, NOT the synchronous overload. SyncBuildupActions run INSIDE
+            // MessageHubConfiguration.Build, and SubscribeToOwnDeletion resolves the own-node
+            // stream — which can create another hub. That made hub construction RE-ENTER hub
+            // construction and nest an Autofac ComponentRegistryBuilder.Build inside the
+            // in-progress one; the registry builder is not re-entrant, so the process died with
+            // an access violation (SIGSEGV / exit=139) with no test named. Seen on CI as an
+            // intermittent MeshWeaver.FutuRe.Test crash; the core dump's faulting thread was
+            //   CreateHub → Build → SubscribeToOwnDeletion → GetStream → GetHub → CreateHub
+            //   → Build → Autofac ResolvePipelineBuilder.BuildPipeline
+            // Running it as a BuildupAction defers it to InitializeHubRequest — after Build has
+            // finished — so resolving a stream can never nest a container build.
+            .WithInitialization(SubscribeToOwnDeletionInit)
             .WithNodeOperationHandlers()
             // Per-node-hub contract for resolving (assembly + HubConfiguration) of the
             // NodeType this hub is responsible for. Kept as a fallback for hubs / callers
@@ -810,6 +822,19 @@ public static class MeshDataSourceExtensions
         {
             // Intentionally empty — see TryLogWarning.
         }
+    }
+
+    /// <summary>
+    /// Reactive wrapper so the own-node subscription runs as a BuildupAction (on
+    /// <c>InitializeHubRequest</c>) rather than a SyncBuildupAction (inside
+    /// <c>MessageHubConfiguration.Build</c>). A named static method, not a lambda: the observable
+    /// <c>WithInitialization</c> overload de-duplicates on DELEGATE IDENTITY, and a fresh lambda
+    /// per configurator call would stack N subscriptions instead of collapsing to one.
+    /// </summary>
+    private static IObservable<Unit> SubscribeToOwnDeletionInit(IMessageHub hub)
+    {
+        SubscribeToOwnDeletion(hub);
+        return Observable.Return(Unit.Default);
     }
 
     private static void SubscribeToOwnDeletion(IMessageHub hub)
