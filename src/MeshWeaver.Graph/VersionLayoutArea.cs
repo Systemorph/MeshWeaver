@@ -28,7 +28,8 @@ public static class VersionLayoutArea
         if (!perms.HasFlag(Permission.Read))
             return null;
         return new("Versions", MeshNodeLayoutAreas.VersionsArea, Order: 55,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.VersionsArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.VersionsArea))
+            { LabelKey = "menu.versions" };
     }
     /// <summary>
     /// Renders the Versions list showing all historical versions of the current node.

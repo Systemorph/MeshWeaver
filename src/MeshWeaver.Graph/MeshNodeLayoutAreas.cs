@@ -263,7 +263,8 @@ public static class MeshNodeLayoutAreas
     {
         if (!perms.HasFlag(Permission.Read))
             return null;
-        return new("Data", ContentDataArea, Order: 31, Href: BuildUrl(hubPath, ContentDataArea));
+        return new("Data", ContentDataArea, Order: 31, Href: BuildUrl(hubPath, ContentDataArea))
+            { LabelKey = "menu.data" };
     }
 
     internal static UiControl BuildAccessDenied(string nodePath)
@@ -605,7 +606,8 @@ public static class MeshNodeLayoutAreas
         if (!perms.HasFlag(Permission.Update))
             return null;
         return new("Edit", EditArea,
-            RequiredPermission: Permission.Update, Order: -10, Href: BuildUrl(hubPath, EditArea));
+            RequiredPermission: Permission.Update, Order: -10, Href: BuildUrl(hubPath, EditArea))
+            { LabelKey = "menu.edit" };
     }
 
     /// <summary>
@@ -615,14 +617,16 @@ public static class MeshNodeLayoutAreas
     {
         if (!perms.HasFlag(Permission.Read))
             return null;
-        return new("Files", FilesArea, Order: 25, Href: BuildUrl(hubPath, FilesArea));
+        return new("Files", FilesArea, Order: 25, Href: BuildUrl(hubPath, FilesArea))
+            { LabelKey = "menu.files" };
     }
 
     /// <summary>
     /// Returns the Threads menu item (always visible).
     /// </summary>
     public static NodeMenuItemDefinition GetThreadsMenuItem(string hubPath)
-        => new("Threads", ThreadsArea, Order: 50, Href: BuildUrl(hubPath, ThreadsArea));
+        => new("Threads", ThreadsArea, Order: 50, Href: BuildUrl(hubPath, ThreadsArea))
+            { LabelKey = "menu.threads" };
 
     /// <summary>
     /// Gets the display name for a node type with count (e.g., "Project (5)").

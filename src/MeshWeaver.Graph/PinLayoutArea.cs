@@ -44,7 +44,8 @@ public static class PinLayoutArea
         return new("Pin", PinArea,
             Icon: "Bookmark",
             Order: 50,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, PinArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, PinArea))
+            { LabelKey = "menu.pin" };
     }
 
     /// <summary>

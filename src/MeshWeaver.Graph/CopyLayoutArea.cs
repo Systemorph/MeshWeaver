@@ -28,7 +28,8 @@ public static class CopyLayoutArea
             return null;
         return new("Copy", MeshNodeLayoutAreas.CopyArea,
             RequiredPermission: Permission.Create, Order: 2,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.CopyArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.CopyArea))
+            { LabelKey = "menu.copy" };
     }
 
     /// <summary>

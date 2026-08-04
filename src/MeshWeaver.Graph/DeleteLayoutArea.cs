@@ -28,7 +28,8 @@ public static class DeleteLayoutArea
             return null;
         return new("Delete", MeshNodeLayoutAreas.DeleteArea,
             RequiredPermission: Permission.Delete, Order: 100,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.DeleteArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.DeleteArea))
+            { LabelKey = "menu.delete" };
     }
     /// <summary>
     /// Entry point for the Delete layout area.
