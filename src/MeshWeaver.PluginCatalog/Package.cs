@@ -114,6 +114,21 @@ public record PackageManifest
     /// install path).
     /// </summary>
     public ImmutableSortedDictionary<string, string>? InstalledFiles { get; init; }
+
+    /// <summary>
+    /// The module manifest's per-file hash map as it stands AT THE CATALOG'S REF
+    /// (<see cref="ModuleManifest.Files"/>) — the candidate side of the diff, where
+    /// <see cref="InstalledFiles"/> is the installed side. Set by the source while listing; never
+    /// authored and never written to the install record (the record stores the map it installed, as
+    /// <see cref="InstalledFiles"/>).
+    ///
+    /// <para>Diffing the two yields the actual added/modified/removed file list that a
+    /// build-completion subscriber reports, so nothing has to re-fetch the sidecar it already read.
+    /// Null when the module ships no <c>manifest.lock</c> — the legacy commit-sha comparison applies
+    /// then, and no file-level diff is available.</para>
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableSortedDictionary<string, string>? ManifestFiles { get; init; }
 }
 
 /// <summary>A single file of a package folder read from the source at a git ref.</summary>
