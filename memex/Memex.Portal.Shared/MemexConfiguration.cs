@@ -531,8 +531,13 @@ public static class MemexConfiguration
     /// </summary>
     internal static IReadOnlyList<NodeMenuItemDefinition> AiMenuItems { get; } =
     [
+        // ➕ is deliberately a LANGUAGE-NEUTRAL glyph, not the chat.svg the "Threads" entry uses:
+        // "new" is the whole meaning here, and a plus carries it in every locale without translation
+        // (and without colliding visually with "Threads", which is also a chat bubble). Emoji icons
+        // are the established convention in these menus — the Node menu is ✏️ 🔖 ➡️ 📋 🗑️ — and
+        // MeshNodeImageHelper.IsEmoji routes it to a <span>, never an <img>.
         new NodeMenuItemDefinition("New thread", PortalLayoutBase.AiNewThreadAction,
-            Icon: "/static/NodeTypeIcons/chat.svg", Order: 0,
+            Icon: "➕", Order: 0,
             Tooltip: "Start a new conversation"),
         new NodeMenuItemDefinition("Threads", "AiThreads", Icon: "/static/NodeTypeIcons/chat.svg", Order: 10,
             Href: "/search?q=nodeType%3AThread&groupBy=Namespace",
