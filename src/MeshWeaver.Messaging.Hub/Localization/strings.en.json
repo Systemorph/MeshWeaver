@@ -634,5 +634,7 @@
   "dialog.regenerateIcon": "Regenerate icon",
   "dialog.iconGenFailed": "Icon generation failed",
   "dialog.generateImage": "Generate image",
-  "dialog.imageGenFailed": "Image generation failed"
+  "dialog.imageGenFailed": "Image generation failed",
+  "create.autoGenIdHint": "Leave empty to auto-generate from the name (e.g. \"My Article\" → \"MyArticle\")",
+  "create.autoGenIdPlaceholder": "Leave empty to auto-generate from name"
 }

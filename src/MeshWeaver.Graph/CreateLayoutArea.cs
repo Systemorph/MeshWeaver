@@ -382,11 +382,11 @@ public static class CreateLayoutArea
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("id"))
         {
             Label = "Id (optional)",
-            Placeholder = "Leave empty to auto-generate from name",
+            Placeholder = host.Localize("create.autoGenIdPlaceholder"),
             Immediate = true,
             DataContext = dataContext
         }.WithStyle("width: 100%; margin-bottom: 4px;"));
-        stack = stack.WithView(Controls.Body("Leave empty to auto-generate from the name (e.g. \"My Article\" → \"MyArticle\")")
+        stack = stack.WithView(Controls.Body(host.Localize("create.autoGenIdHint"))
             .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-bottom: 16px;"));
 
         // 6. Type picker (or readonly label if restricted to single value)
