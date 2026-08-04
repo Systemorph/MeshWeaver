@@ -622,5 +622,17 @@
   "ui.prevArrow": "◀ Zurück",
   "ui.nextArrow": "Weiter ▶",
   "ui.noModelsYet": "_Noch keine Modelle — Basis-URL und Schlüssel eingeben und auf **Modelle abrufen** klicken._",
-  "ui.notCheckedOut": "_Noch nicht ausgecheckt — oben **Auschecken / Pull** verwenden._"
+  "ui.notCheckedOut": "_Noch nicht ausgecheckt — oben **Auschecken / Pull** verwenden._",
+  "dialog.validationError": "Validierungsfehler",
+  "dialog.typeRequired": "Typ ist erforderlich.",
+  "dialog.nameRequired": "Name ist erforderlich.",
+  "dialog.creationFailed": "Erstellen fehlgeschlagen",
+  "dialog.importFailed": "Import fehlgeschlagen",
+  "dialog.mirrorFailed": "Spiegelung fehlgeschlagen",
+  "dialog.missingFields": "Fehlende Felder",
+  "dialog.selectSourceNode": "Bitte einen Quell-Node auswählen.",
+  "dialog.regenerateIcon": "Symbol neu erzeugen",
+  "dialog.iconGenFailed": "Symbolerzeugung fehlgeschlagen",
+  "dialog.generateImage": "Bild erzeugen",
+  "dialog.imageGenFailed": "Bilderzeugung fehlgeschlagen"
 }

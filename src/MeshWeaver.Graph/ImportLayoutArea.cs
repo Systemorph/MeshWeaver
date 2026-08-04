@@ -175,7 +175,7 @@ public static class ImportLayoutArea
 
                         if (string.IsNullOrWhiteSpace(sourceNode))
                         {
-                            ShowErrorDialog(actx, "Validation Error", "Please select a source node.");
+                            ShowErrorDialog(actx, actx.Host.Localize("dialog.validationError"), actx.Host.Localize("dialog.selectSourceNode"));
                             return;
                         }
 
@@ -211,7 +211,7 @@ public static class ImportLayoutArea
                                     var errorMsg = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
                                         ? "You do not have permission to import nodes here."
                                         : $"Import failed: {ex.Message}";
-                                    ShowErrorDialog(actx, "Import Failed", errorMsg);
+                                    ShowErrorDialog(actx, actx.Host.Localize("dialog.importFailed"), errorMsg);
                                 });
                     });
             }));
@@ -322,7 +322,7 @@ public static class ImportLayoutArea
                             || string.IsNullOrWhiteSpace(token)
                             || string.IsNullOrWhiteSpace(srcPath))
                         {
-                            ShowErrorDialog(actx, "Missing fields",
+                            ShowErrorDialog(actx, actx.Host.Localize("dialog.missingFields"),
                                 "Remote URL, API token, and source path are all required.");
                             return;
                         }
@@ -351,7 +351,7 @@ public static class ImportLayoutArea
                                 {
                                     logger?.LogError(ex, "Mirror failed for {Source} {Direction} {Url}",
                                         srcPath, direction, url);
-                                    ShowErrorDialog(actx, "Mirror failed", ex.Message);
+                                    ShowErrorDialog(actx, actx.Host.Localize("dialog.mirrorFailed"), ex.Message);
                                 });
                     });
             }));
