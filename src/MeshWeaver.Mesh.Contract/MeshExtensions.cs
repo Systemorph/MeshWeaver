@@ -124,17 +124,6 @@ public static class MeshExtensions
     private sealed record NodeOperationHandlersMarker;
 
     /// <summary>
-    /// Registers handlers for mesh node operations. Idempotent — calling twice on the
-    /// same configuration is a no-op on the second call. Without this guard, every
-    /// extra call would add a duplicate set of handlers; each delivery would invoke
-    /// HandleCreateNodeRequest/Update/etc. twice, producing two responses per request
-    /// (the second one observing the side-effects of the first → spurious
-    /// "Node already exists"/"Node not found" failures). Concrete trigger: any hub
-    /// that gets both <see cref="MeshBuilder"/>'s <c>AddMesh</c> and
-    /// <c>AddDefaultLayoutAreas</c> (which calls <c>AddMeshDataSource</c>, which
-    /// calls this).
-    /// </summary>
-    /// <summary>
     /// The address node CRUD (<see cref="CreateNodeRequest"/> and friends) must be TARGETED at: the
     /// NEAREST hub up the parent chain that actually registered
     /// <see cref="WithNodeOperationHandlers"/> and is not the root mesh hub.
@@ -161,7 +150,7 @@ public static class MeshExtensions
         while (current is not null)
         {
             if (current.Configuration.Get<NodeOperationHandlersMarker>() is not null
-                && !string.Equals(current.Address.Type, MeshAddressType, StringComparison.Ordinal))
+                && !string.Equals(current.Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal))
                 return current.Address;
             var parent = current.Configuration.ParentHub;
             if (parent is null || ReferenceEquals(parent, current))
@@ -171,9 +160,17 @@ public static class MeshExtensions
         return hub.GetMeshHub().Address;
     }
 
-    /// <summary>Address type of the root mesh hub — the router, never a work target.</summary>
-    private const string MeshAddressType = "mesh";
-
+    /// <summary>
+    /// Registers handlers for mesh node operations. Idempotent — calling twice on the
+    /// same configuration is a no-op on the second call. Without this guard, every
+    /// extra call would add a duplicate set of handlers; each delivery would invoke
+    /// HandleCreateNodeRequest/Update/etc. twice, producing two responses per request
+    /// (the second one observing the side-effects of the first → spurious
+    /// "Node already exists"/"Node not found" failures). Concrete trigger: any hub
+    /// that gets both <see cref="MeshBuilder"/>'s <c>AddMesh</c> and
+    /// <c>AddDefaultLayoutAreas</c> (which calls <c>AddMeshDataSource</c>, which
+    /// calls this).
+    /// </summary>
     public static MessageHubConfiguration WithNodeOperationHandlers(this MessageHubConfiguration config)
     {
         if (config.Get<NodeOperationHandlersMarker>() is not null)
