@@ -576,7 +576,23 @@ Before building NodeTypes, data models, layout areas, or CSV loaders — read th
 
 **Never assert "exactly N change events"** on a stream backed by pg_notify or any change feed that can race the initial-snapshot path. Filter on the emission shape (e.g. `.Where(c => c.ChangeType == QueryChangeType.Initial)`), not the count.
 
-xUnit v3 config (`xunit.runner.json`): `parallelizeAssembly: false`, `maxParallelThreads: 1`, `methodTimeout: 60000ms`.
+xUnit v3 config (`test/xunit.runner.json`): `parallelizeAssembly: false`,
+`parallelizeTestCollections: false`, `maxParallelThreads: 1`, `methodTimeout: 30000` (30 s).
+
+**🚨 `methodTimeout` only bounds time spent INSIDE a test method.** A wedge in fixture
+construction, class init, or teardown is outside it and runs unbounded — on 2026-08-04 an
+orphaned local run sat at a pegged core for 25+ minutes, and together with a leaking e2e
+container drove the colima VM to 128 MB free / load average 195, OOM-killing unrelated
+containers. So **always give a local test run its own wall-clock cap**:
+
+```bash
+timeout 20m dotnet test test/MeshWeaver.Data.Test --no-restore    # hard cap, always
+```
+
+CI has the equivalent at two levels: `timeout 8m` per project inside the shard loop, and
+`timeout-minutes: 20` on the shard job itself for a wedge BETWEEN projects (which the
+per-project cap cannot see). If a run hits either, it is stuck — do not raise the bound,
+find what is not completing (AGENTS.md → "No band-aids").
 
 Full guidance: [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md)
 
