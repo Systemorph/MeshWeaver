@@ -54,7 +54,7 @@
 
         <FluentDivider Style="width: 100%; margin: 1rem 0" />
 
-        <FluentButton OnClick="@ResetSiteAsync">Reset settings</FluentButton>
+        <FluentButton OnClick="@ResetSiteAsync">@Access.Localize("ui.resetSettings")</FluentButton>
 
         @if (!string.IsNullOrEmpty(status))
         {

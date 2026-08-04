@@ -53,7 +53,7 @@
         @if (isRunningAll)
         {
             <FluentProgressRing Style="width: 20px; height: 20px; margin-left: 8px;" />
-            <span style="margin-left: 4px; font-size: 12px;">Running...</span>
+            <span style="margin-left: 4px; font-size: 12px;">@Access.Localize("ui.running")</span>
         }
     </div>
 
@@ -85,7 +85,7 @@
         @if (cellControls.Count == 0)
         {
             <div class="notebook-empty">
-                <p>This notebook is empty.</p>
+                <p>@Access.Localize("ui.notebookEmpty")</p>
                 <FluentButton Appearance="FluentAppearance.Accent"
                               IconStart="@(new Icons.Regular.Size20.Code())"
                               Disabled="@BoundReadonly"

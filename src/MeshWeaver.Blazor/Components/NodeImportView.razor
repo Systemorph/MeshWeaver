@@ -10,11 +10,11 @@
     <p style="color: var(--neutral-foreground-hint); margin-bottom: 24px;">
         @if (IsFileMode)
         {
-            <text>Upload file(s) to import into the mesh.</text>
+            <text>@Access.Localize("ui.uploadFilesHint")</text>
         }
         else
         {
-            <text>Upload a ZIP file containing MeshNodes to import into the mesh.</text>
+            <text>@Access.Localize("ui.uploadZipHint")</text>
         }
     </p>
 

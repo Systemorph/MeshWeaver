@@ -32,7 +32,7 @@
 @inject ILogger<Onboarding> Logger
 @implements IDisposable
 
-<PageTitle>Complete Your Profile - Memex Portal</PageTitle>
+<PageTitle>@AccessService.Localize("page.completeProfile")</PageTitle>
 
 @if (!checkCompleted || existingUserFound)
 {

@@ -7,6 +7,7 @@
 @using MeshWeaver.Utils
 @using ChatMessage = Microsoft.Extensions.AI.ChatMessage
 @implements IDisposable
+@inject AccessService Access
 
 @if (Message.Role == ChatRole.User)
 {
@@ -88,7 +89,7 @@ else if (Message.Role != ChatRole.System)
                                         </svg>
                                     </div>
                                     <div class="loading-text">
-                                        <span class="typing-dots">Writing code</span>
+                                        <span class="typing-dots">@Access.Localize("ui.writingCode")</span>
                                         <span class="dots">
                                             <span class="dot">.</span>
                                             <span class="dot">.</span>

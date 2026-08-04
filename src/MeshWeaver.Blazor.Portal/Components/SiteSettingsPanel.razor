@@ -41,7 +41,7 @@
         </FluentLabel>
         <FluentDivider Style="width: 100%; margin: 1rem 0" />
         <FluentPopover Style="width: 350px;" AnchorId="info" FixedPlacement="true" @bind-Open="@popVisible">
-            <Header>Reset site settings</Header>
+            <Header>@Access.Localize("ui.resetSiteSettings")</Header>
             <Body>
                 <p>
                     This site stores settings for the theme and color and downloaded samples, emoji and icons in the browser' cache and local storage.
@@ -63,7 +63,7 @@
         </FluentPopover>
 
         <FluentStack VerticalAlignment="VerticalAlignment.Center">
-            <FluentButton OnClick="@ResetSiteAsync">Reset settings</FluentButton>
+            <FluentButton OnClick="@ResetSiteAsync">@Access.Localize("ui.resetSettings")</FluentButton>
             <FluentIcon Id="info" Value="@(new Icons.Regular.Size24.Info())" OnClick="@(() => popVisible = !popVisible)" />
         </FluentStack>
 

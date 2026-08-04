@@ -24,12 +24,12 @@
         <div style="display: flex; flex-direction: column; gap: 12px;">
 
             <div>
-                <label><strong>Document title</strong></label>
+                <label><strong>@Access.Localize("export.documentTitle")</strong></label>
                 <FluentTextField @bind-Value="_title" Style="width: 100%;" />
             </div>
 
             <div>
-                <label><strong>Corporate identity</strong></label>
+                <label><strong>@Access.Localize("export.corporateIdentity")</strong></label>
                 <FluentTextField @bind-Value="_brandNodePath"
                                  Placeholder="Brand/Systemorph"
                                  Style="width: 100%;" />
@@ -58,12 +58,12 @@
             }
 
             <div>
-                <label><strong>Header text (optional)</strong></label>
+                <label><strong>@Access.Localize("export.headerText")</strong></label>
                 <FluentTextField @bind-Value="_header" Style="width: 100%;" />
             </div>
 
             <div>
-                <label><strong>Footer text (optional)</strong></label>
+                <label><strong>@Access.Localize("export.footerText")</strong></label>
                 <FluentTextField @bind-Value="_footer" Style="width: 100%;" />
             </div>
 
@@ -102,7 +102,7 @@
         </FluentCard>
         <div style="margin-top: 16px;">
             <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Neutral"
-                          OnClick="@Reset">Try again</FluentButton>
+                          OnClick="@Reset">@Access.Localize("common.retry")</FluentButton>
         </div>
     }
 </div>

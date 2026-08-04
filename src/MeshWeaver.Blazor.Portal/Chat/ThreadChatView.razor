@@ -17,7 +17,7 @@
             <FluentButton Appearance="FluentAppearance.Stealth" OnClick="SwitchToChatMode" Title="@Access.Localize("chat.backToChat")">
                 <FluentIcon Value="@(new Icons.Regular.Size16.ArrowLeft())" />
             </FluentButton>
-            <span style="font-weight: 600;">Threads</span>
+            <span style="font-weight: 600;">@Access.Localize("chat.threads")</span>
         </div>
         <div class="resume-threads-list">
             @* Live-bound to hub.GetQuery (synced, write-consistent snapshot) — see
@@ -206,7 +206,7 @@ else
                     else if (!IsReadOnlyThread)
                     {
                         <div class="thread-header-desc editable placeholder"
-                             @onclick="BeginDescriptionEdit" title="@Access.Localize("chat.clickToAddDescription")">Add a description…</div>
+                             @onclick="BeginDescriptionEdit" title="@Access.Localize("chat.clickToAddDescription")">@Access.Localize("chat.addDescription")</div>
                     }
                 </div>
             }
@@ -787,9 +787,9 @@ else
                             </FluentButton>
                         }
                         <FluentButton Appearance="@(_connectProvider is MeshWeaver.AI.Connect.ConnectProvider.ClaudeCode ? FluentAppearance.Accent : FluentAppearance.Neutral)" Style="width:100%;"
-                                      OnClick="@(() => ChooseLoginMethod("apiKey"))">Paste a subscription token or API key</FluentButton>
+                                      OnClick="@(() => ChooseLoginMethod("apiKey"))">@Access.Localize("login.pasteToken")</FluentButton>
                         <FluentButton Appearance="FluentAppearance.Neutral" Style="width:100%;"
-                                      OnClick="@(() => ChooseLoginMethod("gateway"))">Use a gateway / proxy</FluentButton>
+                                      OnClick="@(() => ChooseLoginMethod("gateway"))">@Access.Localize("login.useGateway")</FluentButton>
                     }
                     else if (_loginMethod == "account")
                     {
@@ -802,7 +802,7 @@ else
                             case MeshWeaver.AI.Connect.ConnectStatus.Error err:
                                 <div style="color:var(--error-foreground, #dc2626);">@err.Reason</div>
                                 <FluentButton Appearance="FluentAppearance.Accent"
-                                              OnClick="@(() => StartHarnessConnect(_loginHarness!))">Try again</FluentButton>
+                                              OnClick="@(() => StartHarnessConnect(_loginHarness!))">@Access.Localize("common.retry")</FluentButton>
                                 <FluentButton Appearance="FluentAppearance.Neutral"
                                               OnClick="@(() => ChooseLoginMethod("apiKey"))">@Access.Localize("login.useApiKeyInstead")</FluentButton>
                                 break;

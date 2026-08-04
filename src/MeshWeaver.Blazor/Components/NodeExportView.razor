@@ -17,7 +17,7 @@
     @if (SatelliteTypes.Count > 0 && !IsExporting && !ExportDone)
     {
         <div style="margin-bottom: 24px;">
-            <p style="font-weight: 600; margin-bottom: 8px;">Include satellite data:</p>
+            <p style="font-weight: 600; margin-bottom: 8px;">@Access.Localize("files.includeSatellites")</p>
             @foreach (var satType in SatelliteTypes)
             {
                 var st = satType;

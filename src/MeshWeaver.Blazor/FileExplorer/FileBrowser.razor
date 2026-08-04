@@ -61,9 +61,9 @@
                 <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowDownload())" Text="@Access.Localize("common.download")" Disabled="@(!SelectedItems.Any())" OnClick="DownloadSelectedAsync">@Access.Localize("common.download")</FluentButton>
                 @if (!IsReadOnly)
                 {
-                    <FluentButton IconStart="@(new Icons.Regular.Size20.Add())" Text="@Access.Localize("files.addFolder")" OnClick="AddFolderAsync">New Folder</FluentButton>
+                    <FluentButton IconStart="@(new Icons.Regular.Size20.Add())" Text="@Access.Localize("files.addFolder")" OnClick="AddFolderAsync">@Access.Localize("files.newFolder")</FluentButton>
                     <FluentButton IconStart="@(new Icons.Regular.Size20.BinRecycle())" Text="@Access.Localize("common.delete")" Disabled="@(!SelectedItems.Any())" OnClick="DeleteAsync">@Access.Localize("common.delete")</FluentButton>
-                    <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="@Access.Localize("common.upload")" Id="MyUploadStream">Upload</FluentButton>
+                    <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="@Access.Localize("common.upload")" Id="MyUploadStream">@Access.Localize("common.upload")</FluentButton>
                     <FluentInputFile @ref="@myFileByStream"
                                      AnchorId="MyUploadStream"
                                      DragDropZoneVisible="false"
@@ -76,7 +76,7 @@
                                      OnCompleted="@OnCompleted" />
                     if (ShowNewArticle)
                     {
-                        <FluentButton IconStart="@(new Icons.Regular.Size20.New())" Text="@Access.Localize("files.newArticle")" OnClick="NewArticleAsync">New Article</FluentButton>
+                        <FluentButton IconStart="@(new Icons.Regular.Size20.New())" Text="@Access.Localize("files.newArticle")" OnClick="NewArticleAsync">@Access.Localize("files.newArticle")</FluentButton>
                     }
                 }
             }

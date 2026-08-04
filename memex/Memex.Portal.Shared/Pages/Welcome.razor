@@ -5,7 +5,7 @@
 @layout EmptyLayout
 @inject AccessService Access
 
-<PageTitle>Welcome - Memex Portal</PageTitle>
+<PageTitle>@Access.Localize("page.welcome")</PageTitle>
 
 <div class="mw-landing">
     <!-- Hero -->
@@ -42,7 +42,7 @@
         </div>
         <div class="mw-feature-card">
             <FluentIcon Value="@(new Icons.Regular.Size28.Alert())" Color="Color.Accent" />
-            <h3>Notifications</h3>
+            <h3>@Access.Localize("notifications.title")</h3>
             <p>Stay informed with real-time alerts for approval requests, decisions, mentions, and updates.</p>
         </div>
     </div>

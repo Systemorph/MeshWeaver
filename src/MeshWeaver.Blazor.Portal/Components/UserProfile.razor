@@ -27,7 +27,7 @@
                     @if (showFrontendToggle)
                     {
                         <FluentStack VerticalAlignment="VerticalAlignment.Center" Style="margin-top: 8px;">
-                            <FluentButton Appearance="Appearance.Stealth" OnClick="SwitchToNewFrontend">Try the new frontend</FluentButton>
+                            <FluentButton Appearance="Appearance.Stealth" OnClick="SwitchToNewFrontend">@Access.Localize("ui.tryNewFrontend")</FluentButton>
                         </FluentStack>
                     }
                     @* Platform info — What's New feed + About (exact build). *@

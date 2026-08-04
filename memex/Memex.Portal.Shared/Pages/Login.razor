@@ -6,7 +6,7 @@
 @inject Microsoft.Extensions.Configuration.IConfiguration Configuration
 @inject AccessService Access
 
-<PageTitle>Sign In - Memex Portal</PageTitle>
+<PageTitle>@Access.Localize("page.signIn")</PageTitle>
 
 <div class="login-container">
     <div class="login-card">
@@ -23,7 +23,7 @@
 
         @if (Providers.Count > 0)
         {
-            <p class="signin-label">Sign in with</p>
+            <p class="signin-label">@Access.Localize("auth.signInWith")</p>
             <div class="provider-row">
                 @foreach (var provider in Providers)
                 {
@@ -75,7 +75,7 @@
             <button type="button" class="provider-btn-full provider-linkedin-publish" @onclick="NavigateToConnectLinkedIn"
                     title="Authorizes Memex to read &amp; publish LinkedIn posts on your behalf. Requires you to be signed in first — you'll be redirected back here if not.">
                 <span class="provider-icon-text">&#x1F4BC;</span>
-                <span>Connect LinkedIn for publishing</span>
+                <span>@Access.Localize("ui.connectLinkedIn")</span>
             </button>
         }
 

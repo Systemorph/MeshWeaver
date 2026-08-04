@@ -19,9 +19,9 @@
                               ValueChanged="@OnCommentFilterChanged"
                               Label="Comments"
                               Style="min-width: 160px;">
-                    <FluentOption Value="Unresolved">Unresolved</FluentOption>
+                    <FluentOption Value="Unresolved">@Access.Localize("ui.unresolved")</FluentOption>
                     <FluentOption Value="All">@Access.Localize("comments.all")</FluentOption>
-                    <FluentOption Value="None">No Comments</FluentOption>
+                    <FluentOption Value="None">@Access.Localize("ui.noComments")</FluentOption>
                 </FluentSelect>
             }
 
@@ -34,7 +34,7 @@
                               Style="color: var(--annotation-insert-border); font-size: 0.85rem;">@Access.Localize("ui.acceptAll")</FluentButton>
                 <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
                               OnClick="@OnRejectAll"
-                              Style="color: var(--annotation-delete-border); font-size: 0.85rem;">Reject All</FluentButton>
+                              Style="color: var(--annotation-delete-border); font-size: 0.85rem;">@Access.Localize("ui.rejectAll")</FluentButton>
             }
         </div>
     }
@@ -113,7 +113,7 @@
 
     @if (string.IsNullOrWhiteSpace(_processedHtml))
     {
-        <p style="color: var(--neutral-foreground-hint); font-style: italic;">No content yet. Click Edit to add content.</p>
+        <p style="color: var(--neutral-foreground-hint); font-style: italic;">@Access.Localize("ui.noContentYet")</p>
     }
 
     @* Comment input dialog — appears when user selects text and clicks Comment *@

@@ -1,5 +1,6 @@
 @using Microsoft.Extensions.AI
 @using MeshWeaver.AI
+@inject AccessService Access
 
 <div class="delegation-message">
     <div class="delegation-header" @onclick="ToggleExpanded">
@@ -43,7 +44,7 @@
     @if (isExpanded)
     {
         <div class="delegation-content">
-            <div class="delegation-message-label">Message:</div>
+            <div class="delegation-message-label">@Access.Localize("ui.message")</div>
             <div class="delegation-message-text">
                 @DelegationContent.DelegationMessage
             </div>
