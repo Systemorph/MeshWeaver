@@ -49,6 +49,24 @@ public static class MeshTeardownExtensions
         // never resolve DI once disposal has begun (the scope may already be tearing down).
         var ioPools = mesh.ServiceProvider.GetService<IoPoolRegistry>();
         var asyncDisposeQueue = mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
+        var activities = mesh.ServiceProvider.GetService<ActivityTracker>();
+
+        // (0) QUIESCE ACTIVITIES FIRST — before anything is disposed.
+        //
+        // An activity falls through all three phases below: its trigger returned as soon as the
+        // activity existed, its command runs off-turn so it holds no grain turn, and
+        // SubscribeThroughPool holds a pool permit for the SUBSCRIBE window only — so DrainAll()
+        // joins nothing once the command continues past it. Measured: a 5s activity, and teardown
+        // returned after 2028ms with the command still running.
+        //
+        // This waits, it does not cancel: the run finishes and writes its terminal ActivityLog
+        // status. It must run BEFORE Dispose because those Append/Finish writes go back through
+        // hubs that are still alive. Bounded, so a run that never settles surfaces as a timeout
+        // rather than hanging teardown forever.
+        if (activities is not null)
+            await activities.WhenIdle.Timeout(timeout)
+                .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+                .ToTask();
 
         mesh.Dispose();
 
