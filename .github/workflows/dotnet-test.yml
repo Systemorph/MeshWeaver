@@ -2,7 +2,7 @@
 # parallel shards that consume the prebuilt output, and finally consolidates
 # every shard's results in a single collector job.
 #
-#   build ──▶ test (matrix shard 0..5) ──▶ collect-results
+#   precheck ──▶ build ──▶ test (matrix shard 0..5) ──▶ collect-results
 #
 # Why this shape (vs. the old "every shard restores+builds the whole solution"):
 #   * The 50+ project solution is compiled exactly once; shards start from the
@@ -25,6 +25,43 @@
 #      Persistence.Test memory-watchdog abort), a 6m wall-clock kill (124/137),
 #      and xunit catastrophic failures ("There is no currently active test",
 #      teardown ObjectDisposedException) that leave no failed trx entry.
+#
+# ─────────────── GREEN-TREE REUSE (why main isn't re-tested) ───────────────
+# A PR run does NOT test the branch — GitHub builds `refs/pull/N/merge`, i.e. the
+# branch ALREADY MERGED with main's tip. When that PR then merges and main hasn't
+# moved in between, the commit pushed to main has the IDENTICAL TREE to the one
+# just tested green: re-running the whole suite tests the same bytes a second time,
+# adds ~22 min to the merge→deploy path (main-cd gates on this workflow), and gives
+# flakes a second roll of the dice that can red main and stall the self-update.
+#
+# So a green run records the TREE it tested as a marker ref:
+#
+#     refs/ci-green/<tree-sha>/<unix-epoch>
+#
+# and `precheck` short-circuits build+test when the tree it is about to test
+# already carries a fresh marker. Keyed on the TREE, not the commit, so it is
+# merge-strategy agnostic — merge, squash and rebase all produce the same tree
+# when the base hasn't moved.
+#
+# Fail-safe by construction: if main moved between the PR run and the merge, the
+# merged tree differs, no marker exists, and the full suite runs. There is no way
+# to skip a tree that was not actually tested green.
+#
+# Guards on the marker (all must hold before one is written / honoured):
+#   * Written ONLY when build AND every shard job succeeded — not merely when the
+#     collector's own gates passed. A shard that infra-fails drops its artifacts
+#     entirely, which the trx/exit-marker gates cannot see (nothing to parse).
+#   * TTL (CI_GREEN_TTL_SECONDS, 24 h): inputs OUTSIDE the tree drift — a fresh
+#     NuGetAudit advisory reds restore repo-wide, the runner's SDK patch moves. A
+#     day-old green is evidence; a week-old green is a guess.
+#   * `workflow_dispatch` never reuses — a manual run means "actually run it".
+#
+# `collect-results` runs on BOTH paths (reuse and full), so it is the stable
+# required-status-check for the branch ruleset. Do NOT require "Build solution
+# (once)" or a shard job: those are legitimately skipped on the reuse path, and a
+# skipped required check blocks the merge. Keeping the collector job alive is also
+# what keeps the run's conclusion `success` (a run whose jobs ALL skip can conclude
+# `skipped`) — main-cd's `workflow_run.conclusion == 'success'` gate depends on it.
 
 name: MeshWeaver Build and Test
 
@@ -46,12 +83,93 @@ concurrency:
 
 # publish-unit-test-result-action runs per shard AND in the collector — both need
 # checks: write to create check-runs and pull-requests: write to comment.
+# contents: write is for the `refs/ci-green/*` marker refs ONLY (push + prune); a
+# fork PR's read-only token makes that step fail, which is why it is best-effort.
 permissions:
-  contents: read
+  contents: write
   checks: write
   pull-requests: write
 
+env:
+  # How long a green tree stays evidence. Beyond this the marker is ignored (and
+  # the full suite runs) because non-tree inputs — NuGet advisories, runner SDK
+  # patch level — have had time to move under it.
+  CI_GREEN_TTL_SECONDS: 86400      # 24 h
+  # Marker refs older than this are deleted, so `git ls-remote refs/ci-green/*`
+  # stays a handful of lines rather than an unbounded ref namespace.
+  CI_GREEN_PRUNE_SECONDS: 1209600  # 14 d
+
 jobs:
+  # ──────────────────────────── PRECHECK ───────────────────────────
+  # Is the tree we are about to test ALREADY green? See the green-tree-reuse
+  # section in the file header for why this exists and why it is safe.
+  #
+  # Cost when it misses: one ~15 s job (checkout + one ls-remote) in front of a
+  # ~22 min suite. Cost when it hits: the whole suite, skipped.
+  precheck:
+    name: "Check for an already-green tree"
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.probe.outputs.skip }}
+      tree: ${{ steps.probe.outputs.tree }}
+      marker: ${{ steps.probe.outputs.marker }}
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        # Only HEAD's tree matters; the marker push in collect-results needs
+        # nothing deeper either (it points the ref at github.sha).
+        fetch-depth: 1
+    - name: "Probe refs/ci-green for this tree"
+      id: probe
+      run: |
+        set -euo pipefail
+        # On a pull_request run this is the tree of refs/pull/N/merge — the branch
+        # already merged with main — which is exactly the tree that lands on main
+        # if nothing else merges first.
+        tree=$(git rev-parse 'HEAD^{tree}')
+        echo "tree=$tree" >> "$GITHUB_OUTPUT"
+        echo "Tree under test: $tree"
+
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "Manual dispatch — always runs the full suite."
+          echo "Manual dispatch: full suite (green-tree reuse disabled)." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        # Newest marker for this tree, if any. Grep locally as well as passing the
+        # prefix: never let a server-side pattern match a ref for a DIFFERENT tree.
+        newest=$(git ls-remote origin "refs/ci-green/$tree/*" 2>/dev/null \
+                 | awk '{print $2}' \
+                 | grep -E "^refs/ci-green/$tree/[0-9]+$" \
+                 | sed 's|.*/||' | sort -n | tail -1 || true)
+
+        if [ -z "$newest" ]; then
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "No green marker for this tree — running the full suite."
+          exit 0
+        fi
+
+        age=$(( $(date +%s) - newest ))
+        if [ "$age" -gt "${CI_GREEN_TTL_SECONDS}" ]; then
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "Marker is ${age}s old (TTL ${CI_GREEN_TTL_SECONDS}s) — stale, running the full suite."
+          exit 0
+        fi
+
+        echo "skip=true" >> "$GITHUB_OUTPUT"
+        echo "marker=refs/ci-green/$tree/$newest" >> "$GITHUB_OUTPUT"
+        echo "Tree already green ${age}s ago — reusing that result."
+        {
+          echo "### ✅ Reusing an already-green result"
+          echo
+          echo "This commit's tree \`$tree\` was tested green **${age}s ago** and nothing in it has changed since, so build + test are skipped."
+          echo
+          echo "- Marker: \`refs/ci-green/$tree/$newest\`"
+          echo "- TTL: \`${CI_GREEN_TTL_SECONDS}s\`"
+        } >> "$GITHUB_STEP_SUMMARY"
+
   # ───────────────────────────── BUILD ─────────────────────────────
   # Compile the whole solution exactly once and package every TEST project's
   # bin output (self-contained: CopyLocal puts each test's full dependency
@@ -71,6 +189,11 @@ jobs:
   # from dist/packages anymore, so packing it was pure waste.
   build:
     name: "Build solution (once)"
+    needs: precheck
+    # Skipped when this exact tree is already green (see the file header). `test`
+    # needs `build`, so it skips with it; `collect-results` is if:always() and
+    # reports the reused result.
+    if: needs.precheck.outputs.skip != 'true'
     timeout-minutes: 25
     runs-on: ubuntu-latest
     steps:
@@ -425,11 +548,30 @@ jobs:
   # regardless of this always() collector's own conclusion.)
   collect-results:
     name: "Consolidate test results"
-    needs: test
+    needs: [precheck, build, test]
     if: always()
     runs-on: ubuntu-latest
     steps:
+    # Needed for the marker push/prune steps below: gives us a git repo whose
+    # `origin` carries the run's credentials, and puts github.sha's object in it.
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
+    # ── Reuse path: build+test skipped because the tree is already green ──
+    # This job still runs (and succeeds), so it is the stable required check and
+    # it keeps the run's conclusion `success` for main-cd's workflow_run gate.
+    - name: "Reused: tree already green"
+      if: needs.precheck.outputs.skip == 'true'
+      run: |
+        echo "Tree ${{ needs.precheck.outputs.tree }} was already tested green (${{ needs.precheck.outputs.marker }}) — build + test skipped."
+        {
+          echo "### ✅ Test suite reused"
+          echo
+          echo "Tree \`${{ needs.precheck.outputs.tree }}\` was already tested green — build and test were skipped."
+          echo "Marker: \`${{ needs.precheck.outputs.marker }}\`"
+        } >> "$GITHUB_STEP_SUMMARY"
     - name: Download all shard results
+      if: needs.precheck.outputs.skip != 'true'
       uses: actions/download-artifact@v6
       with:
         # No merge-multiple: keep each shard under its own dir so same-named
@@ -440,7 +582,7 @@ jobs:
       # Parse every shard's trx and echo each failed test as an ::error::
       # annotation + into the job step summary, so failing tests are visible
       # directly on THIS job without opening the published check.
-      if: always()
+      if: always() && needs.precheck.outputs.skip != 'true'
       run: |
         echo "### Failed tests (all shards)" >> "$GITHUB_STEP_SUMMARY"
         any=0
@@ -470,7 +612,7 @@ jobs:
         fi
     - name: Publish Test Results
       uses: EnricoMi/publish-unit-test-result-action@v2.12.0
-      if: always()
+      if: always() && needs.precheck.outputs.skip != 'true'
       # Best-effort reporter ONLY (reporting, not gating) — the TRX-summarize step
       # above is the gate. action_fail removed + continue-on-error so a throttled
       # GitHub-API publish (429) can't fail the run; failures fail via the trx gate.
@@ -485,7 +627,7 @@ jobs:
       # already gates its own). A host that crashed after streaming green
       # results, or was killed at the 6m cap, appears ONLY here — the trx gate
       # above cannot see it (completed tests all read Passed; the rest vanish).
-      if: always()
+      if: always() && needs.precheck.outputs.skip != 'true'
       run: |
         bad=$(find all-results -name 'test-results.log' -exec cat {} \; \
               | grep -E 'exit=[1-9]' || true)
@@ -494,3 +636,54 @@ jobs:
           echo "$bad"
           exit 1
         fi
+
+    # ─────────────────── RECORD THE GREEN TREE ────────────────────
+    # Only reached when every gate above passed AND every upstream job actually
+    # SUCCEEDED. The job-result condition is not redundant with the gates: a shard
+    # that infra-fails (runner dies, artifact upload lost) leaves NOTHING for the
+    # trx/exit-marker gates to parse, so they pass on the surviving shards' green
+    # results. Marking that tree green would let a genuinely untested tree skip
+    # its main run.
+    - name: "Record green tree"
+      if: >-
+        needs.precheck.outputs.skip != 'true' &&
+        needs.build.result == 'success' &&
+        needs.test.result == 'success'
+      # Best-effort: a fork PR's read-only GITHUB_TOKEN cannot push the marker.
+      # Losing a marker only costs a redundant run — never correctness.
+      continue-on-error: true
+      run: |
+        set -euo pipefail
+        tree="${{ needs.precheck.outputs.tree }}"
+        ref="refs/ci-green/$tree/$(date +%s)"
+        # github.sha is this run's commit — the merge commit on a pull_request run,
+        # which is exactly the commit whose tree we tested. Marker refs live
+        # outside refs/heads and refs/tags: invisible in the branch/tag UI, and
+        # they trigger no workflow (a GITHUB_TOKEN push never does anyway).
+        git push origin "${{ github.sha }}:$ref"
+        echo "Recorded green tree: $ref"
+        echo "Green tree recorded: \`$ref\`" >> "$GITHUB_STEP_SUMMARY"
+
+    # Keep the marker namespace small. Anything past the prune horizon is long
+    # past the TTL — it can never be honoured again, it only slows the ls-remote.
+    - name: "Prune stale green markers"
+      if: always() && needs.precheck.outputs.skip != 'true'
+      continue-on-error: true
+      run: |
+        set -euo pipefail
+        now=$(date +%s)
+        refspecs=()
+        while read -r _sha ref; do
+          [ -z "${ref:-}" ] && continue
+          epoch="${ref##*/}"
+          case "$epoch" in (*[!0-9]*|'') continue;; esac
+          if [ $(( now - epoch )) -gt "${CI_GREEN_PRUNE_SECONDS}" ]; then
+            refspecs+=(":$ref")
+          fi
+        done < <(git ls-remote origin 'refs/ci-green/*' 2>/dev/null || true)
+        if [ "${#refspecs[@]}" -eq 0 ]; then
+          echo "No stale markers to prune."
+          exit 0
+        fi
+        echo "Pruning ${#refspecs[@]} stale marker(s)."
+        git push origin "${refspecs[@]}"

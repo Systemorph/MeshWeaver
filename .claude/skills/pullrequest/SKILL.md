@@ -28,6 +28,18 @@ green CI image. So `main`'s CI is not a formality — it is the source of the im
 > merge only on `conclusion == SUCCESS`** (step 3). Do NOT use `gh run watch` — it polls REST and
 > drains the shared token budget into 403s that masquerade as CI-red.
 
+**"Consolidate test results" is the required check** (ruleset `main pr protection`) — GitHub now blocks
+the merge until it reports green, so the gate above is mechanical as well as a rule. Require nothing
+else from that workflow: `Build solution (once)` and the shards are legitimately **skipped** when the
+run reuses an already-green tree, and a skipped *required* check blocks the merge forever.
+
+**A main run with skipped build/test jobs is not a run that didn't happen.** A PR is tested as
+`refs/pull/N/merge` — your branch already merged with main — so when main hasn't moved, the commit
+that lands has the identical TREE and `dotnet-test.yml` reuses that green instead of re-testing the
+same bytes (marker refs `refs/ci-green/<tree>/<epoch>`, 24 h TTL; see the workflow header). The run
+still concludes `success`, main-cd still ships the image — ~22 min earlier. If main moved, the tree
+differs and the full suite runs; there is no way to skip an untested tree.
+
 ## The procedure
 
 ```bash
