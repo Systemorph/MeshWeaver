@@ -485,32 +485,59 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 built.Add((node, ResolveTable(node.Path, node.NodeType), sql, parameters));
             }
 
-            foreach (var window in built.GroupBy(b => b.Table, StringComparer.Ordinal))
+            // Each window is its own implicit transaction, so a later window failing does NOT roll
+            // back an earlier one. Track what actually committed: those rows are in storage, and
+            // storage that no hub has been told about is worse than a clean failure — the node is
+            // there, every per-node hub and synced-query subscriber still believes it is not, and
+            // nothing forces a refresh. So the committed set is ANNOUNCED on both paths.
+            var committed = new HashSet<string>(StringComparer.Ordinal);
+            try
             {
-                await using var batch = _dataSource.CreateBatch();
-                foreach (var item in window)
+                foreach (var window in built.GroupBy(b => b.Table, StringComparer.Ordinal))
                 {
-                    var command = new NpgsqlBatchCommand(item.Sql);
-                    foreach (var value in item.Parameters)
-                        command.Parameters.AddWithValue(value);
-                    batch.BatchCommands.Add(command);
+                    await using var batch = _dataSource.CreateBatch();
+                    foreach (var item in window)
+                    {
+                        var command = new NpgsqlBatchCommand(item.Sql);
+                        foreach (var value in item.Parameters)
+                            command.Parameters.AddWithValue(value);
+                        batch.BatchCommands.Add(command);
+                    }
+                    await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                    foreach (var item in window)
+                        committed.Add(item.Node.Path);
                 }
-                await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                PublishChanges(ordered, committed);   // announce what landed, then fail
+                throw;
             }
 
-            // Caller order, not window order — see the ordering note above.
-            foreach (var node in ordered)
-            {
-                try
-                {
-                    _changes.OnNext(DataChangeNotification.Updated(
-                        string.IsNullOrEmpty(node.Path) ? node.Id : node.Path, node));
-                }
-                catch { /* never throw — change feed is best-effort */ }
-            }
-
+            PublishChanges(ordered, committed);
             return ordered;
         });
+    }
+
+    /// <summary>
+    /// Publishes the in-process <see cref="Changes"/> feed for the nodes that COMMITTED, in the
+    /// CALLER's order — never window order. Those notifications are what wake per-node hubs, and
+    /// callers order parents before children so a child's hub never activates against a cold parent.
+    /// Best-effort by contract: the feed must never turn a successful write into a failure.
+    /// </summary>
+    private void PublishChanges(IReadOnlyList<MeshNode> ordered, IReadOnlySet<string> committed)
+    {
+        foreach (var node in ordered)
+        {
+            if (!committed.Contains(node.Path))
+                continue;
+            try
+            {
+                _changes.OnNext(DataChangeNotification.Updated(
+                    string.IsNullOrEmpty(node.Path) ? node.Id : node.Path, node));
+            }
+            catch { /* never throw — change feed is best-effort */ }
+        }
     }
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)

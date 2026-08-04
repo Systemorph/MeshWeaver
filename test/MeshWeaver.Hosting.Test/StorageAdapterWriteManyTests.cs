@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
@@ -62,7 +64,7 @@ public class StorageAdapterWriteManyTests
             Enumerable.Range(0, 5).Select(i => Node($"N{i}", "me")).ToArray(),
             JsonOptions).FirstAsync();
 
-        Assert.Equal(0, adapter.MaxConcurrent - 1); // never more than one in flight
+        Assert.Equal(1, adapter.MaxConcurrent);   // never more than one write in flight at a time
     }
 
     [Fact]
@@ -99,16 +101,25 @@ public class StorageAdapterWriteManyTests
         public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
             => Observable.Return<MeshNode?>(null);
 
+        // 🚨 The write must stay IN FLIGHT until its observable terminates, and must terminate
+        // ASYNCHRONOUSLY. A synchronous Observable.Return that decremented before returning made
+        // MaxConcurrent cap at 1 no matter what WriteMany did — so the overlap test passed against a
+        // Merge implementation too, i.e. it pinned nothing. Holding the count in Finally() and
+        // completing on the task pool gives a concurrent subscriber a real window to overlap in.
         public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
             => Observable.Defer(() =>
             {
                 if (UnownedPrefix != null && node.Path.StartsWith(UnownedPrefix, StringComparison.Ordinal))
                     return Observable.Return<MeshNode?>(null);
-                _inFlight++;
-                MaxConcurrent = Math.Max(MaxConcurrent, _inFlight);
-                WriteOrder.Add(node.Path);
-                _inFlight--;
-                return Observable.Return<MeshNode?>(node);
+                var now = Interlocked.Increment(ref _inFlight);
+                lock (WriteOrder)
+                {
+                    MaxConcurrent = Math.Max(MaxConcurrent, now);
+                    WriteOrder.Add(node.Path);
+                }
+                return Observable.Return<MeshNode?>(node)
+                    .Delay(TimeSpan.FromMilliseconds(5), TaskPoolScheduler.Default)
+                    .Finally(() => Interlocked.Decrement(ref _inFlight));
             });
 
         public IObservable<string> Delete(string path) => Observable.Return(path);
