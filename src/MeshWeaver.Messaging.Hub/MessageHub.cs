@@ -1212,6 +1212,8 @@ public sealed class MessageHub : IMessageHub
                 messageTypeName, Address, delivery.Id);
         MessageTrace.Write($"hub={Address} msg={delivery.Message?.GetType().Name} id={delivery.Id} HUB.DeliverMessage ENTER state={delivery.State}");
 
+        ReportRouterTraffic(delivery);
+
         var ret = delivery.ChangeState(MessageDeliveryState.Submitted);
         var result = messageService.RouteMessageAsync(ret, default);
 
@@ -1220,6 +1222,52 @@ public sealed class MessageHub : IMessageHub
                 messageTypeName, Address, delivery.Id, result.State);
         MessageTrace.Write($"hub={Address} msg={delivery.Message?.GetType().Name} id={delivery.Id} HUB.DeliverMessage EXIT state={result.State}");
         return result;
+    }
+
+
+    // One report per (role, message type) for this hub's lifetime. Node CRUD targets the router on
+    // EVERY write today, so an un-deduped line would be a storm — and a storm gets muted, which is
+    // how this stayed invisible in the first place.
+    private readonly ConcurrentDictionary<string, byte> routerTrafficReported = new();
+
+    /// <summary>
+    /// 🚨 Logs an ERROR when the ROOT MESH HUB is the sender or the target of a delivery.
+    ///
+    /// <para>The mesh hub is the mesh's ROUTER and nothing else. Work executed on its action block —
+    /// node CRUD above all — competes with routing itself: a burst of creates starves real
+    /// <c>SubscribeRequest</c> traffic and every node op then times out, which is a portal-wide wedge
+    /// (atioz 2026-06-11: "11× CreateOrUpdateNodeRequest + 3× CreateNodeRequest@mesh/&lt;self&gt; stale
+    /// &gt;60s while real user SubscribeRequests starved"). Work belongs on a hub of its own — the
+    /// session portal hub for REST / Blazor / MCP, the dedicated <c>import/{id}</c> hub for bulk
+    /// imports.</para>
+    ///
+    /// <para>This is a DETECTOR, not a guard: it never blocks a delivery. Every violating path must
+    /// stay working while it is migrated — and must stay VISIBLE, because the failure is silent until
+    /// it is catastrophic. The leaked-callback CI failure that surfaced it read as a flaky test, not
+    /// as the router doing someone else's job.</para>
+    /// </summary>
+    private void ReportRouterTraffic(IMessageDelivery delivery)
+    {
+        var targetIsRouter = string.Equals(Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal);
+        var senderIsRouter = string.Equals(delivery.Sender?.Type, AddressExtensions.MeshType, StringComparison.Ordinal);
+        if (!targetIsRouter && !senderIsRouter)
+            return;
+
+        var messageType = delivery.Message?.GetType().Name ?? "(null)";
+        // Heartbeats ARE the router's own job — routing liveness, not work.
+        if (messageType is "HeartBeatEvent")
+            return;
+
+        var role = targetIsRouter && senderIsRouter ? "sender AND target"
+            : targetIsRouter ? "target" : "sender";
+        if (!routerTrafficReported.TryAdd($"{role}:{messageType}", 0))
+            return;
+
+        logger.LogError(
+            "ROUTER_TRAFFIC: {MessageType} has the mesh hub as {Role} ({Address}). The mesh hub is the "
+            + "ROUTER and must not execute work — it belongs on a hub of its own (session portal hub "
+            + "for REST/Blazor/MCP, import hub for bulk imports). Reported once per role+type for this hub.",
+            messageType, role, Address);
     }
 
     /// <summary>
