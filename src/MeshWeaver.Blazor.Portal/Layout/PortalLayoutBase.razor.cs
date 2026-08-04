@@ -395,11 +395,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
     /// <summary>
-    /// Sentinel <see cref="NodeMenuItemDefinition.Area"/> for the AI menu's "New thread" item. It carries
-    /// NO Href, so it is handled imperatively in <see cref="HandleMenuItemClick"/> (open the composer in
-    /// the MAIN pane) instead of navigating to an area on the CURRENT node — the composer is a per-user
-    /// surface at <c>/User/{me}/Chat</c>, never <c>/{whatever-I-am-looking-at}/…</c>. Lives here so the
-    /// menu seed and the handler agree.
+    /// Sentinel <see cref="NodeMenuItemDefinition.Area"/> for the AI menu's "New thread" item.
+    /// <see cref="HandleMenuItemClick"/> matches it BEFORE the Href/Area navigation branches and returns,
+    /// opening the composer in the MAIN pane instead. It has to be imperative because the destination is
+    /// per-user (<c>/User/{me}/Chat</c>) and only resolvable from the circuit at click time — a static
+    /// menu seed cannot name it. Lives here so the seed and the handler agree on the sentinel.
     /// </summary>
     public const string AiNewThreadAction = "ai-new-thread";
 

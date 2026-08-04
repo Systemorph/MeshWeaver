@@ -53,10 +53,10 @@ public class AiMenuNewThreadTest
         var newThread = MemexConfiguration.AiMenuItems
             .Single(i => i.Area == PortalLayoutBase.AiNewThreadAction);
 
-        // 🚨 The regression this guards: HandleMenuItemClick checks the sentinel FIRST, but if someone
-        // gives this entry an Href the generic branch would navigate to it instead — and because Area
-        // is not a real layout area, NavigateToArea would build "/{current-node}/ai-new-thread" and
-        // 404 on whatever page the user happened to be on.
+        // The destination (/User/{me}/Chat) depends on the signed-in user, which the static seed cannot
+        // know — it is resolved at click time from the circuit. HandleMenuItemClick matches the sentinel
+        // FIRST and returns, so an Href here would never be followed: it would be dead code that reads
+        // like a working destination. This pins the declaration to the behaviour.
         Assert.Null(newThread.Href);
     }
 
