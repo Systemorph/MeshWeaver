@@ -1248,20 +1248,12 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     private void ReportRouterTraffic(IMessageDelivery delivery)
     {
-        var targetIsRouter = string.Equals(Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal);
-        var senderIsRouter = string.Equals(delivery.Sender?.Type, AddressExtensions.MeshType, StringComparison.Ordinal);
-        if (!targetIsRouter && !senderIsRouter)
-            return;
-
-        // Heartbeats ARE the router's own job — routing liveness, not work. Type check, not a name
-        // match: a rename must not silently turn this exclusion off.
-        if (delivery.Message is HeartBeatEvent)
+        // The rule itself is a pure predicate — see RouterTrafficRule, where it is unit-tested.
+        var role = RouterTrafficRule.RoleOf(Address.Type, delivery.Sender?.Type, delivery.Message);
+        if (role is null)
             return;
 
         var messageType = delivery.Message?.GetType().Name ?? "(null)";
-
-        var role = targetIsRouter && senderIsRouter ? "sender AND target"
-            : targetIsRouter ? "target" : "sender";
         if (!routerTrafficReported.TryAdd($"{role}:{messageType}", 0))
             return;
 
