@@ -314,7 +314,11 @@ jobs:
   test:
     name: "Run tests (shard ${{ matrix.shard }})"
     needs: build
-    timeout-minutes: 30
+    # HARD CAP on a shard. Each project already has its own `timeout 8m` below, but that
+    # only bounds a project that is RUNNING — it cannot bound a shard that wedges between
+    # projects. 20 min is ~1.5x the slowest observed shard (14m36s) with the rebalanced
+    # weights, so a shard that hits this is stuck, not slow.
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     strategy:
       # Don't cancel sibling shards when one fails — we want every shard's
