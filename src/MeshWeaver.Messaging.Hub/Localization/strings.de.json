@@ -14,6 +14,7 @@
   "common.back": "Zurück",
   "common.run": "Ausführen",
   "common.stop": "Stoppen",
+  "code.staleCell": "Code geändert — erneut ausführen",
   "common.send": "Senden",
   "common.sending": "Wird gesendet…",
   "common.copy": "Kopieren",

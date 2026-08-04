@@ -49,6 +49,10 @@ public partial class MarkdownView
 
     private bool _codeSubmitted;
 
+    // What each cell last SUBMITTED, so its toolbar can say whether the output on screen still belongs
+    // to the code on screen. Recorded at every submit site below; read while rendering.
+    private readonly CodeCellRunTracker _runTracker = new();
+
     // True once THIS view actually created the per-view kernel Activity node (owner resolved +
     // CreateActivityAndSubmit called). Gates the dispose-time teardown: deleting/cancelling an
     // activity that was never created would post to a nonexistent address and NotFound-storm the
@@ -191,6 +195,9 @@ public partial class MarkdownView
                 return;
             }
             var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+            // Record BEFORE handing the batch off: these are the cells whose output the reader is
+            // about to see, and CreateActivityAndSubmit posts them from another thread.
+            _runTracker.Record(CodeSubmissions);
             MarkdownViewLogic.CreateActivityAndSubmit(
                 Hub, meshService, KernelAddress, ownerPath, _kernelId, CodeSubmissions,
                 onReady: OnKernelReady);
@@ -282,9 +289,11 @@ public partial class MarkdownView
             : Html;
 
         // The cell toolbars' Run buttons are enabled only once the kernel activity is routable —
-        // the same gate as the live result-area embed above.
+        // the same gate as the live result-area embed above. The run state is computed against the
+        // CURRENT parse, so a cell whose code changed since its last run renders as stale.
         var renderer = new MarkdownHtmlRenderer(Mode, Stream,
-            _kernelReady ? ResubmitBlock : null);
+            _kernelReady ? ResubmitBlock : null,
+            id => _runTracker.StateOf(id, CodeSubmissions));
         renderer.ShowReferencesSection = ShowReferencesSection;
         renderer.RenderHtml(builder, html);
     }
@@ -299,6 +308,7 @@ public partial class MarkdownView
             .FirstOrDefault(s => string.Equals(s.Id, submissionId, StringComparison.OrdinalIgnoreCase));
         if (submission is null || !_kernelReady)
             return;
+        _runTracker.Record(submission);
         Hub.Post(submission, o => o.WithTarget(KernelAddress));
     }
 }

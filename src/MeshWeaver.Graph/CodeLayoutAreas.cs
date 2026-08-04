@@ -5,6 +5,7 @@ using System.Text.Json;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
@@ -46,6 +47,8 @@ public static class CodeLayoutAreas
     public const string CellOutputArea = "CellOutput";
     /// <summary>Area id of the Run button inside the cell toolbar.</summary>
     public const string RunButtonArea = "Run";
+    /// <summary>Area id of the "code changed — re-run" chip inside the cell toolbar.</summary>
+    public const string StaleChipArea = "StaleChip";
     /// <summary>Area id of the Cancel button inside the cell toolbar.</summary>
     public const string CancelButtonArea = "Cancel";
     /// <summary>Area id of the Edit button inside the cell toolbar.</summary>
@@ -57,6 +60,26 @@ public static class CodeLayoutAreas
 
     private const string CodeDataId = "code";
     private const string SiblingNodesDataId = "siblingCodeNodes";
+
+    /// <summary>
+    /// Whether the cell's output pane is showing the result of code that has since been EDITED.
+    /// True only when we can prove it: the node must have run (<c>LastExecutedAt</c>) AND carry the
+    /// fingerprint of what that run submitted. An absent hash means "unknown" — a node last executed
+    /// before <see cref="CodeConfiguration.LastExecutedCodeHash"/> existed — and unknown must read as
+    /// NOT stale, or every legacy Code node on every mesh would light up amber at once.
+    /// <para>Pure and static so the staleness rule is unit-testable without a hub.</para>
+    /// </summary>
+    internal static bool IsOutputStale(CodeConfiguration? code) =>
+        code is { LastExecutedAt: not null, LastExecutedCodeHash: not null and not "" }
+        && CodeFingerprint.Of(code.Code, code.Language) != code.LastExecutedCodeHash;
+
+    /// <summary>
+    /// The Run button's glyph: a re-run arrow once the cell is stale, the play triangle otherwise.
+    /// Only the GLYPH changes — the label stays "Run", because that word is how both readers and
+    /// every e2e suite find the control.
+    /// </summary>
+    internal static Icon RunGlyph(bool isStale) =>
+        isStale ? FluentIcons.ArrowSync() : FluentIcons.Play();
 
     /// <summary>
     /// Languages a Code node can be authored in. C# runs in-process on the Roslyn kernel; Python routes
@@ -220,7 +243,7 @@ public static class CodeLayoutAreas
     /// copy-to-home dialog (<see cref="OpenCopyToHomeDialog"/>) offering to copy
     /// the node into the viewer's own home space via the standard copy machinery.</para>
     /// </summary>
-    private static UiControl BuildCellToolbar(
+    internal static UiControl BuildCellToolbar(
         Address hubAddress,
         CodeConfiguration? codeConfig,
         bool isExecutable,
@@ -228,10 +251,18 @@ public static class CodeLayoutAreas
         ActivityLog? lastActivity,
         bool canEdit, string? locale = null)
     {
+        // Stale = the output pane above is showing a run of code that has since been edited. The
+        // toolbar goes amber, matching the NodeType editor's "Source changed — needs compile" panel,
+        // so "what you're looking at is out of date" reads the same way across the product.
+        var isStale = isExecutable && IsOutputStale(codeConfig);
         var toolbar = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("display: flex; align-items: center; gap: 8px; padding: 6px 10px; " +
-                       "background: var(--neutral-layer-2); border-top: 1px solid var(--neutral-stroke-rest);");
+                       (isStale
+                           ? "background: var(--warning-fill-rest, #fef3c7); " +
+                             "border-top: 1px solid var(--warning-stroke-rest, #fcd34d);"
+                           : "background: var(--neutral-layer-2); " +
+                             "border-top: 1px solid var(--neutral-stroke-rest);"));
 
         if (isExecutable)
         {
@@ -242,7 +273,7 @@ public static class CodeLayoutAreas
             // permission stream had a transient empty emission, which is exactly
             // the state we once spent a session debugging.
             toolbar = toolbar.WithView(Controls.Button(LocalizationCatalog.Get("common.run", locale))
-                    .WithIconStart(FluentIcons.Play())
+                    .WithIconStart(RunGlyph(isStale))
                     .WithAppearance(Appearance.Accent)
                     .WithClickAction(ctx =>
                     {
@@ -252,6 +283,13 @@ public static class CodeLayoutAreas
                         return Task.CompletedTask;
                     }),
                 RunButtonArea);
+
+            if (isStale)
+                toolbar = toolbar.WithView(
+                    Controls.Body(LocalizationCatalog.Get("code.staleCell", locale))
+                        .WithStyle("font-size: 0.8rem; font-weight: 600; " +
+                                   "color: var(--warning-foreground, #92400e);"),
+                    StaleChipArea);
 
             // Cancel: classic notebook stop control, attached to the same
             // toolbar as Run. Per the Activity Control Plane pattern the click
