@@ -4,6 +4,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
@@ -37,6 +38,10 @@ public static class ApiTokenLayoutAreas
     /// <returns>An observable stream of the Overview view for the API token.</returns>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
+        // Stored timestamps are UTC; render them in the VIEWER's zone (AccessContext.TimeZoneId)
+        // like every other node surface. Formatting the raw value showed UTC to everyone, so the
+        // same instant read differently here than on the node's own Overview.
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
         return host.Workspace.GetMeshNodeStream()
             .Select(node =>
             {
@@ -45,10 +50,10 @@ public static class ApiTokenLayoutAreas
 
                 var status = token.IsRevoked ? "Revoked" : "Active";
                 var expiry = token.ExpiresAt.HasValue
-                    ? token.ExpiresAt.Value.ToString("yyyy-MM-dd HH:mm")
+                    ? access.ToDisplayTime(token.ExpiresAt.Value).ToString("yyyy-MM-dd HH:mm")
                     : "Never";
                 var lastUsed = token.LastUsedAt.HasValue
-                    ? token.LastUsedAt.Value.ToString("yyyy-MM-dd HH:mm")
+                    ? access.ToDisplayTime(token.LastUsedAt.Value).ToString("yyyy-MM-dd HH:mm")
                     : "Never";
 
                 var md = $"""

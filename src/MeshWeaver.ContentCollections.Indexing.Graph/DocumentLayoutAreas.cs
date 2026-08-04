@@ -5,6 +5,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -65,7 +66,7 @@ public static class DocumentLayoutAreas
             container = container.WithView(Controls.Html(
                 "<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No summary available.</p>"));
 
-        container = container.WithView(BuildMetadata(document));
+        container = container.WithView(BuildMetadata(document, host.Hub.ServiceProvider.GetService<AccessService>()));
         container = container.WithView(BuildActions(node?.Path ?? host.Hub.Address.ToString()));
         return container;
     }
@@ -87,7 +88,7 @@ public static class DocumentLayoutAreas
     /// Compact metadata row: source-file link, mime, size, chunk count, indexed-at. The source link
     /// points at the file's path within the collection (display + navigation reference).
     /// </summary>
-    private static UiControl BuildMetadata(Document document)
+    private static UiControl BuildMetadata(Document document, AccessService? access)
     {
         var details = Controls.Stack.WithWidth("100%").WithStyle(
             "gap: 4px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--neutral-stroke-rest); " +
@@ -107,7 +108,7 @@ public static class DocumentLayoutAreas
         details = details.WithView(Row("Chunks", document.ChunkCount.ToString()));
 
         if (document.IndexedAt != default)
-            details = details.WithView(Row("Indexed", document.IndexedAt.ToString("yyyy-MM-dd HH:mm 'UTC'")));
+            details = details.WithView(Row("Indexed", access.ToDisplayTime(document.IndexedAt).ToString("yyyy-MM-dd HH:mm")));
 
         return details;
     }
