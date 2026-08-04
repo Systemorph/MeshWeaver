@@ -16,7 +16,7 @@ import {
 import type { Json, UiControl } from "../area/types.js";
 import { ScopeProvider, useAreaState, useEmit, useResolve, useScope } from "../area/context.js";
 import { useMeshLink } from "../area/navigation.js";
-import { RenderArea } from "../render/ControlRenderer.js";
+import { RenderArea, RenderChildren } from "../render/ControlRenderer.js";
 import { useAreaSourceFactory, type EmbeddedAreaHandle } from "../render/embeddedArea.js";
 import { str, useText } from "./common.js";
 
@@ -153,9 +153,27 @@ function RedirectView({ control }: { control: UiControl }): ReactNode {
   );
 }
 
+/**
+ * `CommentableControl` — a one-area container that wraps arbitrary content in Blazor's
+ * select-to-comment affordance (select text → a floating "Comment" button → an anchored comment).
+ *
+ * The React pack renders the WRAPPED CONTENT and does not offer the affordance — deliberately the
+ * same shape as Blazor's own `CanComment: false` path, which "renders the wrapped content
+ * untouched". Anchoring needs the selection-capture + comment-creation machinery
+ * (`CommentRendering.Capture` and the `_Comment` satellite write), which this pack does not have.
+ *
+ * The alternative — leaving it unregistered — is what the parity test caught: an unregistered
+ * container renders as "Unsupported control" and its child area DISAPPEARS, so every commentable
+ * node would lose its actual content rather than just its comment button.
+ */
+function CommentableView({ control }: { control: UiControl }): ReactNode {
+  return <RenderChildren control={control} />;
+}
+
 export const containerControls = {
   NamedArea: NamedAreaView,
   LayoutArea: LayoutAreaView,
   Dialog: DialogView,
   Redirect: RedirectView,
+  Commentable: CommentableView,
 };
