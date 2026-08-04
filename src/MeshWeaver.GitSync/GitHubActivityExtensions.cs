@@ -2,7 +2,6 @@ using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -68,16 +67,7 @@ public static class GitHubActivityExtensions
                     : "Fetching the branch HEAD from GitHub and importing the deltas…");
                 // ctx.Log as the progress sink: files dropped from the import (parse failures)
                 // append an Error line here and flip the terminal status to Failed.
-                // 🚨 The IMPORT writes as SYSTEM, never as the person who triggered it. A GitSynced
-                // space is owned by system-security by definition; the caller is a deploy button,
-                // not an owner. Passing their id through made every imported node CreatedBy=them,
-                // and the partition bootstrap then read that as "the creator" and minted them an
-                // Admin AccessAssignment at {space}/_Access/{user}_Access (MeshExtensions
-                // .CreateCreatorGrant — it skips exactly this when the creator IS System). So
-                // running `git_hub_sync update` on a space silently made you its administrator.
-                // The ACTIVITY keeps the real userId above, so who triggered the deploy is still
-                // recorded — only the node writes are System.
-                return pr.UpdateToLatest(spacePath, WellKnownUsers.System, sourceId, ctx.Log, force).Select(r =>
+                return pr.UpdateToLatest(spacePath, userId, sourceId, ctx.Log, force).Select(r =>
                 {
                     ctx.Log($"Imported {r.Outcome} ({r.Count} node(s)).");
                     return Unit.Default;
