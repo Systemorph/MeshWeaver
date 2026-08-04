@@ -50,17 +50,15 @@ public static class PartitionStorageHubExtensions
     {
         var adapter = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
 
-        // TODO transaction: today's IStorageAdapter only has per-node Write.
-        // Once IStorageAdapter exposes WriteBatch(...) the loop collapses into
-        // one transactional call and validation / activity-logging slots in
-        // around it. For the migration we keep per-node writes; the actor
-        // scheduler still serialises so concurrent writers can't interleave.
-        request.Message.Nodes
-            .ToObservable()
-            .SelectMany(node => adapter.Write(node, request.Message.Options))
-            .Where(n => n is not null)
-            .Select(n => n!)
-            .ToList()
+        // One call, and the adapter decides how few round-trips that is: Postgres windows by
+        // target table and sends an NpgsqlBatch per window (N upserts, one round-trip, one
+        // transaction); everything else falls back to the interface default, which writes in
+        // sequence. Replaces the per-node loop this handler used to run — the TODO it carried.
+        //
+        // 🚨 Sequence is preserved either way. Callers order parents before children (the
+        // installer's CopyOrder) so a child's per-node hub never activates while its parent's is
+        // still cold; WriteMany's contract pins that ordering onto the Changes feed.
+        adapter.WriteMany(request.Message.Nodes, request.Message.Options)
             .Subscribe(
                 written => hub.Post(
                     new WriteBatchResponse(written.ToImmutableList()),
