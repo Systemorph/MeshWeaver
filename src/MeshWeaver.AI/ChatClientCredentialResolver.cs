@@ -279,7 +279,14 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// <summary>
     /// The DEFAULT model id to fall back to when a selected model no longer resolves — the
     /// LOWEST-<see cref="MeshNode.Order"/> <c>LanguageModel</c> in the live catalog whose credentials
-    /// actually resolve (so the fallback is never ANOTHER broken model). Mirrors
+    /// actually resolve (so the fallback is never ANOTHER broken model).
+    ///
+    /// <para><b>Routers are excluded</b> (<see cref="ModelDefinition.IsRouter"/>): the Auto entry
+    /// dispatches to a real model rather than serving a round, so it must never become the default —
+    /// not even when it deliberately sorts first in the picker at a very low Order. Auto is reachable
+    /// only by an explicit pick.</para>
+    ///
+    /// Mirrors
     /// <c>AgentPickerProjection.ObserveDefaultComposer</c>'s "lowest Order wins" rule, read from the
     /// same warm snapshot this resolver already maintains. Returns <c>null</c> when no model in the
     /// catalog resolves (e.g. a deployment whose models bypass the catalog entirely).
