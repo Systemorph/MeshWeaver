@@ -267,8 +267,9 @@ function KernelNotice({ text }: { text: string }): ReactNode {
 
 /**
  * One executable code cell — the React twin of the Blazor notebook-cell frame
- * (ExecutableCodeBlockRenderer.CellClass): optional code display per --show-header/--show-code,
- * a Run affordance once the kernel is live, and the kernel result area embedded beneath.
+ * (ExecutableCodeBlockRenderer.CellClass): optional code display per --show-header/--show-code, the
+ * kernel result area embedded beneath it, and the Run affordance on the cell's BOTTOM edge once the
+ * kernel is live — a composer bar at the foot, never above the code.
  */
 function MarkdownCodeCell({ cell, kernel }: { cell: CodeCellSegment; kernel: KernelState }): ReactNode {
   const showsCode = cell.showCode || cell.showHeader;
@@ -296,32 +297,6 @@ function MarkdownCodeCell({ cell, kernel }: { cell: CodeCellSegment; kernel: Ker
         overflow: "hidden",
       }}
     >
-      <div
-        className="md-code-cell-toolbar"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "2px 8px",
-          background: "var(--colorNeutralBackground3)",
-          borderBottom: "1px solid var(--colorNeutralStroke2)",
-        }}
-      >
-        <Text size={200} style={{ color: "var(--colorNeutralForeground3)" }}>
-          {cell.language}
-        </Text>
-        <div style={{ flex: 1 }} />
-        {kernel.status === "ready" && cell.hasOutput ? (
-          <Button
-            appearance="subtle"
-            size="small"
-            icon={<Play16Regular />}
-            title="Run"
-            aria-label="Run"
-            onClick={() => kernel.session.submit({ code: cell.code, id: cell.submissionId, language: cell.language })}
-          />
-        ) : null}
-      </div>
       <pre
         style={{
           margin: 0,
@@ -339,6 +314,34 @@ function MarkdownCodeCell({ cell, kernel }: { cell: CodeCellSegment; kernel: Ker
           {output}
         </div>
       ) : null}
+      {/* Toolbar LAST — the composer bar on the cell's bottom edge, matching the server-emitted
+          shape (ExecutableCodeBlockRenderer) and the Blazor cell. */}
+      <div
+        className="md-code-cell-toolbar"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "2px 8px",
+          background: "var(--colorNeutralBackground3)",
+          borderTop: "1px solid var(--colorNeutralStroke2)",
+        }}
+      >
+        {kernel.status === "ready" && cell.hasOutput ? (
+          <Button
+            appearance="subtle"
+            size="small"
+            icon={<Play16Regular />}
+            title="Run"
+            aria-label="Run"
+            onClick={() => kernel.session.submit({ code: cell.code, id: cell.submissionId, language: cell.language })}
+          />
+        ) : null}
+        <div style={{ flex: 1 }} />
+        <Text size={200} style={{ color: "var(--colorNeutralForeground3)" }}>
+          {cell.language}
+        </Text>
+      </div>
     </div>
   );
 }
