@@ -270,9 +270,9 @@ public static class UserActivityLayoutAreas
 
         @@("area/Composer")
 
-        @@("area/Threads")
-
         @@("area/Catalog")
+
+        @@("area/Threads")
 
         @@("area/Pinned")
 

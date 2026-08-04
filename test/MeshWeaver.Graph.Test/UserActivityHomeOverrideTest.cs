@@ -56,10 +56,11 @@ public class UserActivityHomeOverrideTest
         // The welcome heading is back at the very top — above the chat composer.
         welcome.Should().BeLessThan(composer, "the welcome heading must be at the top of the home page");
         // Chat composer above the regions.
-        composer.Should().BeLessThan(threads, "the chat composer sits above the regions");
-        // Pinned is moved to the END of the regions — after Threads and Catalog.
-        threads.Should().BeLessThan(catalog);
-        catalog.Should().BeLessThan(pinned, "pinned items sit at the end of the regions");
+        composer.Should().BeLessThan(catalog, "the chat composer sits above the regions");
+        // My items (Catalog) sits ABOVE Open threads.
+        catalog.Should().BeLessThan(threads, "my items come before open threads");
+        // Pinned is at the END of the regions — after Catalog and Threads.
+        threads.Should().BeLessThan(pinned, "pinned items sit at the end of the regions");
         // The configurable note sits at the BOTTOM — after the regions (the only "configurable" text).
         configurable.Should().BeGreaterThan(pinned, "the configurable text must be at the bottom of the page");
     }
