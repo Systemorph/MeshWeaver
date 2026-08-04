@@ -10,6 +10,8 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 
+using MeshWeaver.Messaging;
+
 namespace MeshWeaver.Graph;
 
 /// <summary>
@@ -59,7 +61,7 @@ public static class SpaceLayoutAreas
                     return (UiControl?)MeshNodeLayoutAreas.BuildAccessDenied(hubPath);
 
                 if (node == null)
-                    return Controls.Markdown("*Loading...*") as UiControl;
+                    return Controls.Markdown(host.Localize("ui.mdLoadingDots")) as UiControl;
 
                 var canEdit = permissions.HasFlag(Permission.Update);
                 var space = ResolveSpace(node, options);
@@ -100,7 +102,7 @@ public static class SpaceLayoutAreas
                 if (IsMarkdownBacked(node))
                     return (UiControl?)MarkdownEditLayoutArea.Edit(host, ctx);
 
-                return (UiControl?)BuildBodyEditor(node, hubPath);
+                return (UiControl?)BuildBodyEditor(node, hubPath, locale: host.ViewerLocale());
             });
     }
 
@@ -126,10 +128,10 @@ public static class SpaceLayoutAreas
     /// the Space CONTENT object via a node-bound <c>DataContext</c> so each field reads/writes straight
     /// to the node stream per-field (one source of truth, no <c>/data</c> replica, no whole-content clobber).
     /// </summary>
-    private static UiControl BuildBodyEditor(MeshNode? node, string hubPath)
+    private static UiControl BuildBodyEditor(MeshNode? node, string hubPath, string? locale = null)
     {
         if (node is null)
-            return Controls.Markdown("*Space not found.*");
+            return Controls.Markdown(LocalizationCatalog.Get("ui.mdSpaceNotFound", locale));
 
         var spacePath = node.Path ?? hubPath;
         // Field pointers resolve against the node's Content JSON (the Space). Every control's edit
@@ -278,7 +280,7 @@ public static class SpaceLayoutAreas
         // was authored without it, or is markdown-backed (Doc/Skill roots) carries no catalog — those
         // would otherwise show NOTHING (issue #502, Case 1), so we append the default catalog for them.
         if (!BodyEmbedsCatalog(EffectiveBodySource(space, node)))
-            shell = shell.WithView(BuildNavigation(spacePath));
+            shell = shell.WithView(BuildNavigation(spacePath, locale: host.ViewerLocale()));
 
         return shell;
     }
@@ -313,9 +315,9 @@ public static class SpaceLayoutAreas
     /// <see cref="BuildEventCalendar"/> embeds a child area. Appended by <see cref="BuildSpaceView"/>
     /// only when the body does not already carry its own catalog embed, so it never double-renders.
     /// </summary>
-    private static UiControl BuildNavigation(string spacePath)
+    private static UiControl BuildNavigation(string spacePath, string? locale = null)
     {
-        var heading = Controls.Markdown("## Contents")
+        var heading = Controls.Markdown(LocalizationCatalog.Get("ui.mdContentsHeading", locale))
             .WithStyle($"{ContentInset} padding-top: 24px;");
 
         var catalog = new LayoutAreaControl(spacePath, new LayoutAreaReference(MeshNodeLayoutAreas.SearchArea))

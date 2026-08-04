@@ -75,7 +75,8 @@ public static class PartitionNodeType
                     Label: "Partitions",
                     ContentBuilder: PartitionSettingsTab.BuildPartitionsTab,
                     Icon: FluentIcons.Database(),
-                    Order: 10))
+                    Order: 10)
+                { LabelKey = "settings.partitions" })
             .AddLayout(layout => layout
                 .WithDefaultArea(MeshNodeLayoutAreas.SearchArea))
     };

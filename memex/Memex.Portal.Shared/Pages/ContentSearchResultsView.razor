@@ -8,6 +8,7 @@
 @using Microsoft.Extensions.DependencyInjection
 @implements IDisposable
 @inject IMessageHub Hub
+@inject AccessService Access
 
 @*
     The "In documents" section of the global search results: live content-chunk matches for the query,
@@ -21,7 +22,7 @@
 @if (_hits.Count > 0)
 {
     <div class="content-results">
-        <h3 class="content-results-title">In documents</h3>
+        <h3 class="content-results-title">@Access.Localize("search.inDocuments")</h3>
         @foreach (var hit in _hits)
         {
             <a class="content-results-row" href="@BlockHref(hit)">

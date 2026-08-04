@@ -117,7 +117,7 @@ public static class ThreadComposerView
                         .WithOrientation(Orientation.Horizontal)
                         .WithStyle("gap: 8px; flex-wrap: nowrap; align-items: flex-end; width: 100%;")
                         .WithView(Controls.Stack.WithStyle("flex: 0 0 auto; margin-left: auto;")
-                            .WithView(BuildSendButton()));
+                            .WithView(BuildSendButton(locale: host.ViewerLocale())));
 
                     return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;")
                         .WithView(editor)
@@ -219,8 +219,8 @@ public static class ThreadComposerView
     /// principals filtered) — never captured at render time, where the ambient context can be the
     /// hub itself.
     /// </summary>
-    private static UiControl BuildSendButton()
-        => Controls.Button("Send")
+    private static UiControl BuildSendButton(string? locale = null)
+        => Controls.Button(LocalizationCatalog.Get("common.send", locale))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {

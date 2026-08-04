@@ -58,19 +58,22 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
                         Area: ExportDocumentLayoutArea.PdfArea,
                         RequiredPermission: Permission.Read,
                         Order: 27,
-                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea)),
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea))
+                        { LabelKey = "menu.exportPdf" },
                     new NodeMenuItemDefinition(
                         Label: DocxLabel,
                         Area: ExportDocumentLayoutArea.DocxArea,
                         RequiredPermission: Permission.Read,
                         Order: 28,
-                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea)),
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea))
+                        { LabelKey = "menu.exportDocx" },
                     new NodeMenuItemDefinition(
                         Label: SendDocumentLayoutArea.SendLabel,
                         Area: SendDocumentLayoutArea.SendArea,
                         RequiredPermission: Permission.Read,
                         Order: 29,
-                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea)),
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea))
+                        { LabelKey = "menu.sendToContacts" },
                 ];
             });
     }

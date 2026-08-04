@@ -31,7 +31,8 @@ public static class ImportLayoutArea
             return null;
         return new("Import", MeshNodeLayoutAreas.ImportMeshNodesArea,
             RequiredPermission: Permission.Create, Order: 1,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ImportMeshNodesArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ImportMeshNodesArea))
+            { LabelKey = "menu.import" };
     }
     /// <summary>
     /// Layout area for importing mesh nodes.
@@ -47,7 +48,7 @@ public static class ImportLayoutArea
             .Select(canCreate => canCreate
                 ? (UiControl?)BuildImportForm(host, currentPath)
                 : (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
-                    .WithView(Controls.H2("Access Denied").WithStyle("margin: 0 0 16px 0;"))
+                    .WithView(Controls.H2(host.Localize("error.accessDenied")).WithStyle("margin: 0 0 16px 0;"))
                     .WithView(Controls.Html(
                         "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to import nodes here.</p>")));
     }
@@ -73,7 +74,7 @@ public static class ImportLayoutArea
         var dataContext = LayoutAreaReference.GetDataPointer(formId);
 
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-        stack = stack.WithView(Controls.H2("Import").WithStyle("margin: 0 0 24px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("menu.import")).WithStyle("margin: 0 0 24px 0;"));
 
         // Destination namespace picker
         stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("namespace"))
@@ -88,7 +89,7 @@ public static class ImportLayoutArea
         stack = stack.WithView(Controls.Stack
             .WithWidth("100%")
             .WithStyle("margin-bottom: 16px;")
-            .WithView(Controls.Body("Source").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(Controls.Body(host.Localize("ui.source")).WithStyle("font-weight: 600; margin-bottom: 4px;"))
             .WithView(new RadioGroupControl(
                 new JsonPointerReference("source"),
                 new Option<string>[]
@@ -124,7 +125,7 @@ public static class ImportLayoutArea
 
         // Cancel button
         var cancelUrl = MeshNodeLayoutAreas.BuildUrl(currentPath, MeshNodeLayoutAreas.OverviewArea);
-        stack = stack.WithView(Controls.Button("Cancel")
+        stack = stack.WithView(Controls.Button(host.Localize("common.cancel"))
             .WithAppearance(Appearance.Neutral)
             .WithNavigateToHref(cancelUrl)
             .WithStyle("margin-top: 24px;"));
@@ -159,7 +160,7 @@ public static class ImportLayoutArea
         }.WithStyle("margin-bottom: 16px;"));
 
         // Import button
-        stack = stack.WithView(Controls.Button("Import")
+        stack = stack.WithView(Controls.Button(host.Localize("menu.import"))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.ArrowImport())
             .WithClickAction(actx =>
@@ -174,7 +175,7 @@ public static class ImportLayoutArea
 
                         if (string.IsNullOrWhiteSpace(sourceNode))
                         {
-                            ShowErrorDialog(actx, "Validation Error", "Please select a source node.");
+                            ShowErrorDialog(actx, actx.Host.Localize("dialog.validationError"), actx.Host.Localize("dialog.selectSourceNode"));
                             return;
                         }
 
@@ -210,7 +211,7 @@ public static class ImportLayoutArea
                                     var errorMsg = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
                                         ? "You do not have permission to import nodes here."
                                         : $"Import failed: {ex.Message}";
-                                    ShowErrorDialog(actx, "Import Failed", errorMsg);
+                                    ShowErrorDialog(actx, actx.Host.Localize("dialog.importFailed"), errorMsg);
                                 });
                     });
             }));
@@ -272,7 +273,7 @@ public static class ImportLayoutArea
         stack = stack.WithView(Controls.Stack
             .WithWidth("100%")
             .WithStyle("margin-bottom: 12px;")
-            .WithView(Controls.Body("Direction").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(Controls.Body(host.Localize("ui.direction")).WithStyle("font-weight: 600; margin-bottom: 4px;"))
             .WithView(new RadioGroupControl(
                 new JsonPointerReference("direction"),
                 new Option<string>[]
@@ -297,7 +298,7 @@ public static class ImportLayoutArea
             DataContext = dataContext,
         }.WithStyle("margin-bottom: 16px;"));
 
-        stack = stack.WithView(Controls.Button("Run mirror")
+        stack = stack.WithView(Controls.Button(host.Localize("ui.runMirror"))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.ArrowSync())
             .WithClickAction(actx =>
@@ -321,7 +322,7 @@ public static class ImportLayoutArea
                             || string.IsNullOrWhiteSpace(token)
                             || string.IsNullOrWhiteSpace(srcPath))
                         {
-                            ShowErrorDialog(actx, "Missing fields",
+                            ShowErrorDialog(actx, actx.Host.Localize("dialog.missingFields"),
                                 "Remote URL, API token, and source path are all required.");
                             return;
                         }
@@ -350,7 +351,7 @@ public static class ImportLayoutArea
                                 {
                                     logger?.LogError(ex, "Mirror failed for {Source} {Direction} {Url}",
                                         srcPath, direction, url);
-                                    ShowErrorDialog(actx, "Mirror failed", ex.Message);
+                                    ShowErrorDialog(actx, actx.Host.Localize("dialog.mirrorFailed"), ex.Message);
                                 });
                     });
             }));

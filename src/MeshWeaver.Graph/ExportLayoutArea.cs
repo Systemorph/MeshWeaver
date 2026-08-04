@@ -29,7 +29,8 @@ public static class ExportLayoutArea
             return null;
         return new("Export", MeshNodeLayoutAreas.ExportArea,
             RequiredPermission: Permission.Export, Order: 26,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ExportArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ExportArea))
+            { LabelKey = "menu.export" };
     }
 
     /// <summary>

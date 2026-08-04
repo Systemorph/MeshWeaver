@@ -19,6 +19,7 @@
 @using TrackedChangeStatus = MeshWeaver.Markdown.Collaboration.TrackedChangeStatus
 @namespace MeshWeaver.Blazor.Components
 @inherits BlazorView<MarkdownEditorControl, MarkdownEditorView>
+@inject AccessService Access
 
 <div class="collaborative-editor-container">
     @* Suggest mode indicator stripe *@
@@ -28,7 +29,7 @@
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink: 0;">
                 <path d="M13.23 1h-1.46L3.52 9.25l-.16.22L1 13.59 2.41 15l4.12-2.36.22-.16L15 4.23V2.77L13.23 1zM2.41 13.59l1.51-3 1.45 1.45-2.96 1.55zm3.83-2.06L4.47 9.76l8-8 1.77 1.77-8 8z"/>
             </svg>
-            <span>Suggesting</span>
+            <span>@Access.Localize("ui.suggesting")</span>
         </div>
     }
 
@@ -60,8 +61,8 @@
                     @if (TrackedChanges.Count > 0)
                     {
                         <div class="annotations-sidebar-actions">
-                            <button class="btn-accept-all" title="Accept all" @onclick="@OnAcceptAllChanges">Accept all</button>
-                            <button class="btn-reject-all" title="Reject all" @onclick="@OnRejectAllChanges">Reject all</button>
+                            <button class="btn-accept-all" title="@Access.Localize("ui.acceptAll")" @onclick="@OnAcceptAllChanges">@Access.Localize("ui.acceptAll")</button>
+                            <button class="btn-reject-all" title="@Access.Localize("ui.rejectAll")" @onclick="@OnRejectAllChanges">@Access.Localize("ui.rejectAll")</button>
                         </div>
                     }
                 </div>
@@ -80,14 +81,14 @@
                             @if (ann.Type != MeshWeaver.Markdown.AnnotationType.Comment)
                             {
                                 <div class="annotation-card-actions">
-                                    <button class="btn-accept" title="Accept" @onclick="() => OnAcceptAnnotation(ann)" @onclick:stopPropagation="true">&#10003;</button>
-                                    <button class="btn-reject" title="Reject" @onclick="() => OnRejectAnnotation(ann)" @onclick:stopPropagation="true">&#10007;</button>
+                                    <button class="btn-accept" title="@Access.Localize("ui.accept")" @onclick="() => OnAcceptAnnotation(ann)" @onclick:stopPropagation="true">&#10003;</button>
+                                    <button class="btn-reject" title="@Access.Localize("ui.reject")" @onclick="() => OnRejectAnnotation(ann)" @onclick:stopPropagation="true">&#10007;</button>
                                 </div>
                             }
                             else
                             {
                                 <div class="annotation-card-actions">
-                                    <button class="btn-resolve" title="Resolve" @onclick="() => OnResolveComment(ann.Id)" @onclick:stopPropagation="true">&#10003;</button>
+                                    <button class="btn-resolve" title="@Access.Localize("ui.resolve")" @onclick="() => OnResolveComment(ann.Id)" @onclick:stopPropagation="true">&#10003;</button>
                                 </div>
                             }
                         </div>
@@ -110,7 +111,7 @@
     @if (BoundShowPreview)
     {
         <div class="preview-panel">
-            <div class="preview-header">Preview</div>
+            <div class="preview-header">@Access.Localize("common.preview")</div>
             <div class="preview-content">
                 @((MarkupString)RenderedPreview)
             </div>
@@ -275,7 +276,9 @@
     {
         var markerId = Guid.NewGuid().ToString("N")[..8];
         var author = CurrentAuthor;
-        var date = DateTime.Now.ToString("MMM d");
+        // The stamp the reader sees must be THEIR today — DateTime.Now is the server's, and the
+        // container runs UTC.
+        var date = AccessService.ToDisplayTime(DateTimeOffset.UtcNow).ToString("MMM d");
         var meta = !string.IsNullOrEmpty(author) ? $":{author}:{date}" : "";
 
         // Insert comment markers into the annotated content at the mapped positions

@@ -1,6 +1,7 @@
 @using System.Text.Json.Nodes
 @using MeshWeaver.Layout.DataGrid
 @inherits BlazorView<DataGridControl, DataGridView>
+@inject AccessService Access
 
 <div style="display: table; table-layout: fixed; width: 100%;" class="@Class">
     <div style="overflow-x: auto;">
@@ -52,7 +53,7 @@
 			@if (showPageSizeSelector)
 			{
 				<div style="display: flex; align-items: center; gap: 0.5rem;">
-					<FluentLabel>Items per page:</FluentLabel>
+					<FluentLabel>@Access.Localize("grid.itemsPerPage")</FluentLabel>
 					<FluentSelect TOption="string"
 									Value="@itemsPerPage.ToString()"
 									ValueChanged="@(async (string value) => await OnPageSizeChanged(int.Parse(value)))"
