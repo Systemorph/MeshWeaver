@@ -24,6 +24,25 @@ public interface IMeshService
     IObservable<MeshNode> CreateNode(MeshNode node);
 
     /// <summary>
+    /// Creates MANY plain nodes in ONE round-trip — the batched sibling of
+    /// <see cref="CreateNode"/>, routed through <see cref="CreateNodesRequest"/> so the full
+    /// validation surface (structural guards, validators/RLS per node, type existence) runs for
+    /// EVERY node before anything is written, then the storage adapter lands the batch with one
+    /// ordered <c>WriteMany</c> and the change feed publishes per node post-commit.
+    /// <para>Semantics: creates only — existing paths are skipped and reported in
+    /// <see cref="CreateNodesResponse.Existing"/>, never overwritten. Satellites
+    /// (<c>_</c>-segment paths) and <c>AccessAssignment</c> nodes are refused; caller order is
+    /// preserved (order parents before children). A pre-write failure means nothing was written;
+    /// the observable then errors (<see cref="UnauthorizedAccessException"/> for a
+    /// validation/RLS refusal, <see cref="InvalidOperationException"/> otherwise). Identity is
+    /// captured eagerly at call time, exactly like <see cref="CreateNode"/>.</para>
+    /// <para>Use it for install/copy/import plans that land dozens-to-hundreds of nodes — the
+    /// per-node request fan-out (one mesh round-trip per node) is the measured dominant cost of
+    /// a course install.</para>
+    /// </summary>
+    IObservable<CreateNodesResponse> CreateNodes(IReadOnlyCollection<MeshNode> nodes);
+
+    /// <summary>
     /// Updates an existing node with validation.
     /// Routes through the canonical <c>GetMeshNodeStream(path).Update</c> write path;
     /// the owning per-node hub re-validates RLS on the merge patch and stamps auditing.

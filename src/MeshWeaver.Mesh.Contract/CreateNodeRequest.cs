@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -102,6 +103,112 @@ public enum NodeCreationRejectionReason
     /// Node content validation failed.
     /// </summary>
     ValidationFailed
+}
+
+/// <summary>
+/// Request to create MANY new MeshNodes in one round-trip — the BULK sibling of
+/// <see cref="CreateNodeRequest"/>, and the sanctioned batched path for callers that today fan
+/// out one create request per node (a course install copies 50-250 nodes; each singular request
+/// is its own mesh-hub round-trip plus a full per-node pipeline pass).
+///
+/// <para>Semantics, relative to N singular creates:</para>
+/// <list type="bullet">
+///   <item><b>Plain nodes only.</b> Satellites (any <c>_</c>-prefixed path segment) and
+///     <c>AccessAssignment</c> nodes are REFUSED — their creation runs guards and side effects
+///     that are deliberately per-node; send them through <see cref="CreateNodeRequest"/>.</item>
+///   <item><b>Creates only.</b> A node whose path already exists is skipped and reported in
+///     <see cref="CreateNodesResponse.Existing"/> — never overwritten, never confirmed
+///     (no Transient→Active dance). Updates flow through the owning per-node hub's stream.</item>
+///   <item><b>Validate-all, then write.</b> Every guard, validator (including RLS) and
+///     type-existence probe runs for every node BEFORE anything is written; any failure fails
+///     the whole request with <see cref="CreateNodesResponse.FailedPath"/> naming the offender
+///     and NOTHING written.</item>
+///   <item><b>Caller order is contract.</b> Nodes are written in request order (parents before
+///     children is the caller's responsibility, exactly as with sequential singular creates)
+///     and the change feed publishes <c>Created</c> per node in that same order, post-commit.</item>
+/// </list>
+/// </summary>
+/// <param name="Nodes">The MeshNodes to create, in the order they must land.</param>
+[CreateNodesPermission]
+public record CreateNodesRequest(ImmutableList<MeshNode> Nodes) : IRequest<CreateNodesResponse>
+{
+    /// <summary>
+    /// The user or system requesting the creation — resolution identical to
+    /// <see cref="CreateNodeRequest.CreatedBy"/>.
+    /// </summary>
+    public string? CreatedBy { get; init; }
+}
+
+/// <summary>
+/// Response for <see cref="CreateNodesRequest"/>.
+/// </summary>
+/// <param name="Created">The nodes actually created (as stored), in request order.</param>
+/// <param name="Existing">Paths that already existed and were skipped (never overwritten).</param>
+public record CreateNodesResponse(ImmutableList<MeshNode> Created, ImmutableList<string> Existing)
+{
+    /// <summary>Error message if the request failed. A failure BEFORE the write means nothing
+    /// was written; a storage failure mid-batch reports what landed in <see cref="Created"/>.</summary>
+    public string? Error { get; init; }
+
+    /// <summary>The path of the node the failure was detected on, when attributable.</summary>
+    public string? FailedPath { get; init; }
+
+    /// <summary>The rejection reason when the request failed.</summary>
+    public NodeCreationRejectionReason? RejectionReason { get; init; }
+
+    /// <summary>Indicates the whole request succeeded.</summary>
+    public bool Success => Error == null;
+
+    /// <summary>Creates a successful response.</summary>
+    public static CreateNodesResponse Ok(ImmutableList<MeshNode> created, ImmutableList<string> existing)
+        => new(created, existing);
+
+    /// <summary>Creates a failed response.</summary>
+    public static CreateNodesResponse Fail(
+        string error,
+        NodeCreationRejectionReason reason = NodeCreationRejectionReason.Unknown,
+        string? failedPath = null,
+        ImmutableList<MeshNode>? created = null)
+        => new(created ?? ImmutableList<MeshNode>.Empty, ImmutableList<string>.Empty)
+        {
+            Error = error,
+            RejectionReason = reason,
+            FailedPath = failedPath,
+        };
+}
+
+/// <summary>
+/// Permission attribute for <see cref="CreateNodesRequest"/>: the pipeline-level bound is the
+/// union of the per-node-type mapped permissions (via
+/// <see cref="CreateNodePermissionAttribute.GetPermissionForNodeType"/>) at the hub path — the
+/// same coarse gate the singular create gets. The authoritative per-node, per-path check is the
+/// RLS validator inside the handler, which runs for EVERY node before anything is written.
+/// </summary>
+public class CreateNodesPermissionAttribute() : RequiresPermissionAttribute(Permission.Create)
+{
+    /// <inheritdoc />
+    public override IEnumerable<(string Path, Permission Permission)> GetPermissionChecks(
+        IMessageDelivery delivery, string hubPath)
+    {
+        // Null request shape / null Nodes / null entries must not throw HERE — the pipeline
+        // permission evaluation runs before the handler can return a structured failure. Fall back
+        // to the Create floor; the handler then refuses the malformed batch cleanly.
+        if (delivery.Message is not CreateNodesRequest { Nodes: not null } req)
+        {
+            yield return (hubPath, Permission.Create);
+            yield break;
+        }
+
+        var permissions = req.Nodes
+            .Where(n => n is not null)
+            .Select(n => CreateNodePermissionAttribute.GetPermissionForNodeType(n.NodeType))
+            .Distinct()
+            .ToList();
+        if (permissions.Count == 0)
+            permissions.Add(Permission.Create);
+        foreach (var permission in permissions)
+            yield return (hubPath, permission);
+    }
 }
 
 /// <summary>
