@@ -1,19 +1,25 @@
+@using MeshWeaver.Markdown
 @using Microsoft.FluentUI.AspNetCore.Components
 @inject AccessService Access
 
-<div class="md-cell-toolbar">
+<div class="@ToolbarClass">
     <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
                   Disabled="@(OnRun is null)"
-                  Title="@(OnRun is null ? "Interactive kernel is not available here" : "Run this code block")"
-                  IconStart="@(new Icons.Regular.Size16.Play())"
+                  Title="@RunTitle"
+                  IconStart="@RunIcon"
                   OnClick="@Run">@Access.Localize("common.run")</FluentButton>
+    @if (IsStale)
+    {
+        <span class="md-cell-stale">@Access.Localize("code.staleCell")</span>
+    }
     <span class="md-cell-language">@Language</span>
 </div>
 
 @code {
     /// <summary>
     /// The executable block's submission id — also the name of the kernel result area
-    /// the run's output streams into (directly below the code, inside the same cell frame).
+    /// the run's output streams into (directly ABOVE this toolbar, inside the same cell frame:
+    /// code, then output, then this composer-style bar on the frame's bottom edge).
     /// </summary>
     [Parameter] public string? SubmissionId { get; set; }
 
@@ -26,6 +32,33 @@
     /// kernel is not available (no owner / not yet routable) — the button renders disabled.
     /// </summary>
     [Parameter] public Action<string>? OnRun { get; set; }
+
+    /// <summary>
+    /// Whether the code above still matches the run whose output is displayed — supplied by the
+    /// hosting view's <see cref="CodeCellRunTracker"/>. <see cref="CodeCellRunState.Stale"/> tints the
+    /// toolbar and swaps Run's glyph for a re-run arrow, so a reader is never left trusting an output
+    /// that silently belongs to older code.
+    /// </summary>
+    [Parameter] public CodeCellRunState RunState { get; set; } = CodeCellRunState.NeverRun;
+
+    private bool IsStale => RunState == CodeCellRunState.Stale;
+
+    // NB: this component REPLACES the server's `md-code-cell-toolbar` marker div, so the hydrated
+    // DOM carries `md-cell-toolbar` — anything selecting the toolbar in a live Blazor page (e2e,
+    // styling) must look for this class, not the marker's.
+    private string ToolbarClass => IsStale ? "md-cell-toolbar stale" : "md-cell-toolbar";
+
+    private Icon RunIcon => IsStale
+        ? new Icons.Regular.Size16.ArrowSync()
+        : new Icons.Regular.Size16.Play();
+
+    // Localized like the label and the chip beside it: a tooltip IS the control's accessible name,
+    // so leaving it English would read as untranslated to exactly the users who need it most.
+    private string RunTitle => OnRun is null
+        ? Access.Localize("code.kernelUnavailable")
+        : IsStale
+            ? Access.Localize("code.rerunCell")
+            : Access.Localize("code.runCell");
 
     private void Run()
     {
