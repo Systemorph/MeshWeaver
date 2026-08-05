@@ -820,7 +820,23 @@ public class MeshQuery : IMeshQueryCore
         var scores = new List<double>(finalList.Count);
         foreach (var (item, score) in finalList)
         {
-            if (parsed.Select is { } select && item is MeshNode node)
+            // 🚨 Never hand a projection to a caller typed on MeshNode. ProjectToSelect returns a
+            // Dictionary<string,object> — the untyped surface's contract — and `(T)(object)dict`
+            // with T = MeshNode throws InvalidCastException for EVERY item, right here inside the
+            // merge, where the fault reaches no subscriber: the provider emits neither an Initial
+            // nor an error, the all-providers Initial gate starves, and the caller HANGS IN TOTAL
+            // SILENCE (no error, no empty result, no log line).
+            //
+            // Measured on memex 2026-08-05: every query carrying a `select:` hung past 120 s —
+            // including `nodeType:NodeType select:path limit:5`, which certainly matches — while
+            // the same queries without one answered instantly and Postgres served the underlying
+            // 136-schema union in 57 ms. MeshOperations.Search (the MCP `search` tool) is
+            // Query<MeshNode>, so every agent search carrying a select: wedged — and
+            // Doc/Architecture/CqrsAndContentAccess tells callers to add exactly that clause.
+            //
+            // The SELECT already narrowed the columns in SQL, so skipping the object-level
+            // projection costs nothing; untyped callers still get their dictionary.
+            if (parsed.Select is { } select && item is MeshNode node && typeof(T) != typeof(MeshNode))
             {
                 items.Add((T)(object)ParsedQuery.ProjectToSelect(node, select));
             }
