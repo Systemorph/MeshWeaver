@@ -1,6 +1,7 @@
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
@@ -59,6 +60,15 @@ public static class GitHubSyncConfiguration
         services.AddSingleton<IPartitionSyncSourceProvider>(sp => new GitHubPartitionSyncSourceProvider(
             sp.GetRequiredService<GitHubSyncService>(),
             sp.GetRequiredService<IMessageHub>()));
+        // Wiring a _GitSync makes the partition SYSTEM-OWNED — retract any privileged account
+        // grant that predates it. See SystemOwnedAccessRetractionHandler for the seven-second
+        // window this closes (create the Space, get Admin, wire the sync).
+        services.AddSingleton<INodePostCreationHandler>(sp => new SystemOwnedAccessRetractionHandler(
+            sp.GetRequiredService<IMessageHub>(),
+            sp.GetRequiredService<IMeshService>(),
+            sp.GetRequiredService<IStorageAdapter>(),
+            sp.GetService<AccessService>(),
+            sp.GetService<ILoggerFactory>()?.CreateLogger<SystemOwnedAccessRetractionHandler>()));
         // On-disk per-user git working trees (clone/edit/commit/push) — the working-tree
         // counterpart to content sync, shared by the AI harness + the in-portal editor.
         // Root binds from GitWorkspace:Root (env GitWorkspace__Root=/workspace in the portal,

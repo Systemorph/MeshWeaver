@@ -1,4 +1,5 @@
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 
@@ -231,5 +232,107 @@ public class AccessAssignmentGuardTest
         var act = () => AccessAssignmentGuard.EnsureScopeValid(node);
 
         act.Should().NotThrow();
+    }
+
+    // ── A system-owned space grants nobody write access ──────────────────────────────────
+    //
+    // memex 2026-08-04: SST/_Access/rbuergi_Access (Admin) was written at 14:48:07 and
+    // SST/_GitSync at 14:48:14 — the Space was hand-created seven seconds before it became
+    // system-owned, so the creator-Admin grant was minted the ordinary way and simply stayed.
+    // Seventeen Admin grants across three meshes came from that window.
+
+    private static MeshNode GrantOf(string path, string subject, params string[] roles) =>
+        Grant(path, mainNode: AccessAssignmentGuard.ScopeFromPath(path)) with
+        {
+            Content = new AccessAssignment
+            {
+                AccessObject = subject,
+                Roles = roles.Select(r => new RoleAssignment { Role = r }).ToArray()
+            }
+        };
+
+    private static AccessAssignment Content(MeshNode node) => (AccessAssignment)node.Content!;
+
+    [Theory]
+    [InlineData("Admin")]
+    [InlineData("Editor")]
+    [InlineData("PlatformAdmin")]
+    [InlineData("SomeCustomRole")]      // allowlist, not denylist: an unknown role is NOT waved through
+    public void PrivilegedGrantOnASystemOwnedSpace_IsRefused(string role)
+    {
+        var node = GrantOf("SST/_Access/rbuergi_Access", "rbuergi", role);
+
+        AccessAssignmentGuard.IsForbiddenOnSystemOwned(node, Content(node), systemOwned: true, out var reason)
+            .Should().BeTrue("a GitSynced space is rewritten from its repo — only the system identity may write it");
+        reason.Should().Contain("rbuergi");
+        reason.Should().Contain("SST", "the message must name the space it is protecting");
+    }
+
+    /// <summary>The entitlement shape — what a purchase, a coupon or an admin grant writes.</summary>
+    [Theory]
+    [InlineData("Viewer")]
+    [InlineData("Commenter")]
+    public void AnEntitlementIsStillAllowed(string role)
+    {
+        var node = GrantOf("SST/_Access/learner_Access", "learner", role);
+
+        AccessAssignmentGuard.IsForbiddenOnSystemOwned(node, Content(node), systemOwned: true, out _)
+            .Should().BeFalse("read-only access IS the funnel — buying a plugin must keep working");
+    }
+
+    /// <summary>The importer's own identity is the one Admin a system-owned space has.</summary>
+    [Fact]
+    public void TheSystemIdentityMayHoldAdmin()
+    {
+        var node = GrantOf("SST/_Access/system-security_Access", WellKnownUsers.System, "Admin");
+
+        AccessAssignmentGuard.IsForbiddenOnSystemOwned(node, Content(node), systemOwned: true, out _)
+            .Should().BeFalse("system-security is the identity the GitSync import writes under");
+    }
+
+    /// <summary>A deny only ever REMOVES access — it is how plugin gating darkens every child.</summary>
+    [Fact]
+    public void ADeniedRoleIsNotAWriteGrant()
+    {
+        var node = Grant("SST/StandReModel/_Access/Anonymous_Access", mainNode: "SST/StandReModel") with
+        {
+            Content = new AccessAssignment
+            {
+                AccessObject = WellKnownUsers.Anonymous,
+                Roles = [new RoleAssignment { Role = "Editor", Denied = true }]
+            }
+        };
+
+        AccessAssignmentGuard.IsForbiddenOnSystemOwned(node, Content(node), systemOwned: true, out _)
+            .Should().BeFalse("a Denied assignment cannot confer anything");
+    }
+
+    /// <summary>A user's own home, a hand-seeded tenant Space — not system-owned, not this rule's business.</summary>
+    [Fact]
+    public void AnOrdinarySpaceIsUntouched()
+    {
+        var node = GrantOf("rbuergi/_Access/rbuergi_Access", "rbuergi", "Admin");
+
+        AccessAssignmentGuard.IsForbiddenOnSystemOwned(node, Content(node), systemOwned: false, out _)
+            .Should().BeFalse("without a _GitSync the partition is owned by its creator, as before");
+    }
+
+    /// <summary>Nested scopes resolve to the PARTITION, because _GitSync is wired on the root.</summary>
+    [Theory]
+    [InlineData("Store/Plugin", "Store")]
+    [InlineData("SST", "SST")]
+    public void PartitionOf_TakesTheFirstSegment(string scope, string expected) =>
+        AccessAssignmentGuard.PartitionOf(scope).Should().Be(expected);
+
+    [Fact]
+    public void ConfersWriteAccess_IgnoresEmptyAndDeniedRoles()
+    {
+        AccessAssignmentGuard.ConfersWriteAccess(new AccessAssignment { Roles = [] })
+            .Should().BeFalse();
+        AccessAssignmentGuard.ConfersWriteAccess(null).Should().BeFalse();
+        AccessAssignmentGuard.ConfersWriteAccess(new AccessAssignment
+        {
+            Roles = [new RoleAssignment { Role = "" }, new RoleAssignment { Role = "Admin", Denied = true }]
+        }).Should().BeFalse();
     }
 }

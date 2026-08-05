@@ -898,9 +898,11 @@ public static class MemexConfiguration
                         .AddGitHubSyncSettingsTab()
                         // GitHub Issues & PRs tab — browse/act on the repo's issues + pull requests.
                         .AddGitHubIssuesTab()
-                        // Plugin Catalog tab (platform admins only) — browse the registry's modules
-                        // and Install / Update them onto this instance. Replaces the old Plugins Space.
-                        .AddPluginCatalogSettingsTab()
+                        // NO Plugin Catalog tab. Browsing and provisioning packages is the STORE's
+                        // job (/Store → the package card → Provision), and it is the only surface
+                        // that runs the install under the System identity via SystemInstall. A
+                        // second admin-only page onto the same registry duplicated that flow while
+                        // bypassing the funnel it exists to enforce.
                         // Coupons tab (platform admins only) — the Store's typed coupon codes at
                         // Admin/Coupons: live list, redemption tallies, create/open.
                         .AddCouponAdminSettingsTab()
