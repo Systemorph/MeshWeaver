@@ -280,22 +280,24 @@ public static class PackageInstaller
     // Bulk-reads the CURRENT persisted state of every path — ONE round-trip on Postgres
     // (IStorageAdapter.ReadMany batches `WHERE (namespace, id) IN (…)`), parallel single reads
     // elsewhere — replacing the per-node read that made a course-sized install pay N sequential
-    // probes before writing anything (#815). Missing paths are absent from the dictionary; a read
-    // failure degrades to "everything is new", the same write-on-failure bias UpsertIfChanged has.
-    private static IObservable<IReadOnlyDictionary<string, MeshNode>> ReadCurrent(
+    // probes before writing anything (#815). Missing paths are absent from the dictionary. A read
+    // FAILURE emits null — "existence unknown" — which the caller must treat as "no bulk routing":
+    // an empty snapshot would make every node look NEW and bulk-write nodes that may exist,
+    // bypassing the per-node handler path existing nodes require. Null instead keeps the old
+    // write-on-failure bias per node THROUGH the validating request path.
+    private static IObservable<IReadOnlyDictionary<string, MeshNode>?> ReadCurrent(
         IStorageAdapter? persistence, IReadOnlyCollection<string> paths, JsonSerializerOptions options)
         => persistence is null || paths.Count == 0
-            ? Observable.Return<IReadOnlyDictionary<string, MeshNode>>(
+            ? Observable.Return<IReadOnlyDictionary<string, MeshNode>?>(
                 ImmutableDictionary<string, MeshNode>.Empty)
             : persistence.ReadMany(paths, options)
                 .Where(n => n is not null)
                 .ToList()
-                .Select(found => (IReadOnlyDictionary<string, MeshNode>)found
+                .Select(found => (IReadOnlyDictionary<string, MeshNode>?)found
                     .GroupBy(n => n.Path, StringComparer.Ordinal)
                     .ToImmutableDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal))
-                .Catch<IReadOnlyDictionary<string, MeshNode>, Exception>(_ =>
-                    Observable.Return<IReadOnlyDictionary<string, MeshNode>>(
-                        ImmutableDictionary<string, MeshNode>.Empty));
+                .Catch<IReadOnlyDictionary<string, MeshNode>?, Exception>(_ =>
+                    Observable.Return<IReadOnlyDictionary<string, MeshNode>?>(null));
 
     // Upserts a node only if it is new or meaningfully changed; returns true if it wrote, false if it
     // skipped an unchanged node. Reads the CURRENT persisted node authoritatively via the storage
@@ -745,11 +747,16 @@ public static class PackageInstaller
 
         return EnsurePartitionsProvisioned(hub, manifest.TargetPartition ?? manifest.Id, InstalledPartition)
             .SelectMany(_ => ReadCurrent(persistence, nodes.Select(n => n.Path).ToArray(), options))
-            .SelectMany(current =>
+            .SelectMany(maybeCurrent =>
             {
                 // Route: NEW non-satellite, non-root nodes take the bulk path per ordering
                 // bucket; the root, satellites and existing nodes keep the request path.
-                bool IsBulk(MeshNode n) => !current.ContainsKey(n.Path);
+                // A FAILED bulk read (maybeCurrent == null) means existence is UNKNOWN — bulk
+                // routing is disabled entirely and every node takes the request path, whose
+                // handler decides create-vs-update against its own authoritative read (the same
+                // per-node write-on-failure the pre-bulk installer had).
+                var current = maybeCurrent ?? ImmutableDictionary<string, MeshNode>.Empty;
+                bool IsBulk(MeshNode n) => maybeCurrent is not null && !current.ContainsKey(n.Path);
                 var bulkSources = stage1.Where(n => Order(n) == 0 && IsBulk(n)).ToArray();
                 var bulkTypes = stage1.Where(n => Order(n) == 1 && IsBulk(n)).ToArray();
                 var requestStage1 = stage1.Where(n => !IsBulk(n)).ToArray(); // keeps Order sort
