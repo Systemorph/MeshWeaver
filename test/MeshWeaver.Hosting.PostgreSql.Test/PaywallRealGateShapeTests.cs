@@ -91,35 +91,50 @@ public class PaywallRealGateShapeTests(PostgreSqlFixture fixture, ITestOutputHel
         };
     }
 
-    /// <summary>
-    /// Seeds one plugin with the full PluginGate shape: root Public + Anonymous Viewer grants
-    /// (the cover is the one public page), Public + Anonymous Viewer DENIES on the gated child
-    /// (a synced child is born gated), and the buyer's root Viewer grant (what
-    /// <c>PluginGate.Enroll</c> writes — entitlement is a grant at the ROOT, which the child
-    /// deny for Public must NOT strip).
-    /// </summary>
-    private async Task<(string Plugin, string Gated)> Seed(string suffix)
-    {
-        var plugin = $"GateShape{suffix}";
-        var gated = $"{plugin}/PaidLesson";
+    // Unique per run (the PostgreSql fixture database persists across runs — a constant name
+    // collides with the previous run's plugin and the seeding CreateNode completes empty),
+    // static so every test instance of the class shares the one seeded gate.
+    private static readonly string Plugin = "GateShape" + Guid.NewGuid().ToString("N")[..8];
+    private static readonly string Gated = $"{Plugin}/PaidLesson";
 
-        await NodeFactory.CreateNode(MeshNode.FromPath(plugin) with
-        { Name = plugin, NodeType = SpaceNodeType.NodeType, Content = new Space() })
+    /// <summary>
+    /// Seeds ONE plugin with the full PluginGate shape, once per test-class mesh: root
+    /// Public + Anonymous Viewer grants (the cover is the one public page), Public + Anonymous
+    /// Viewer DENIES on the gated child (a synced child is born gated), and the buyer's root
+    /// Viewer grant (what <c>PluginGate.Enroll</c> writes — entitlement is a grant at the ROOT,
+    /// which the child deny for Public must NOT strip).
+    ///
+    /// <para>Seeded ONCE for the whole class, lazily from the first test body (a top-level
+    /// Space cannot be created during mesh INIT — SetupAccessRightsAsync-time creates of a
+    /// partition-owning node complete empty; only assignment nodes work there). One seed
+    /// rather than seven keeps the process-wide security-access scope streams small — the
+    /// per-test-seed version timed out its fold barriers on loaded CI shards. The reads under
+    /// test still run per test with explicit caller identities.</para>
+    /// </summary>
+    private static Task? _seeded;
+
+    private Task EnsureSeeded() => _seeded ??= SeedOnce();
+
+    private async Task SeedOnce()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(MeshNode.FromPath(Plugin) with
+        { Name = Plugin, NodeType = SpaceNodeType.NodeType, Content = new Space() })
             .Should().Within(90.Seconds()).Emit();
-        await NodeFactory.CreateNode(MeshNode.FromPath(gated) with
+        await meshService.CreateNode(MeshNode.FromPath(Gated) with
         { Name = "Paid Lesson", NodeType = "Markdown" })
             .Should().Within(90.Seconds()).Emit();
 
         foreach (var node in new[]
         {
-            ViewerAssignment(plugin, WellKnownUsers.Public, denied: false),
-            ViewerAssignment(plugin, WellKnownUsers.Anonymous, denied: false),
-            ViewerAssignment(gated, WellKnownUsers.Public, denied: true),
-            ViewerAssignment(gated, WellKnownUsers.Anonymous, denied: true),
-            ViewerAssignment(plugin, Buyer, denied: false),
+            ViewerAssignment(Plugin, WellKnownUsers.Public, denied: false),
+            ViewerAssignment(Plugin, WellKnownUsers.Anonymous, denied: false),
+            ViewerAssignment(Gated, WellKnownUsers.Public, denied: true),
+            ViewerAssignment(Gated, WellKnownUsers.Anonymous, denied: true),
+            ViewerAssignment(Plugin, Buyer, denied: false),
         })
         {
-            await NodeFactory.CreateNode(node).Should().Within(90.Seconds()).Emit();
+            await meshService.CreateNode(node).Should().Within(90.Seconds()).Emit();
         }
 
         // Barrier: wait until the evaluator's synced access streams have FOLDED the seeded
@@ -127,14 +142,12 @@ public class PaywallRealGateShapeTests(PostgreSqlFixture fixture, ITestOutputHel
         // read can race the query cache: a too-early snapshot denies EVERYONE, which fails the
         // buyer case and lets every deny case pass vacuously. Polling the evaluator itself is
         // the honest barrier — it is the same substrate the read gate consults.
-        await Mesh.GetEffectivePermissions(gated, WellKnownUsers.Public)
+        await Mesh.GetEffectivePermissions(Gated, WellKnownUsers.Public)
             .Where(p => !p.HasFlag(Permission.Read))
-            .Should().Within(60.Seconds()).Emit();
-        await Mesh.GetEffectivePermissions(gated, Buyer)
+            .Should().Within(120.Seconds()).Emit();
+        await Mesh.GetEffectivePermissions(Gated, Buyer)
             .Where(p => p.HasFlag(Permission.Read))
-            .Should().Within(60.Seconds()).Emit();
-
-        return (plugin, gated);
+            .Should().Within(120.Seconds()).Emit();
     }
 
     /// <summary>Reads through the same entry point the MCP `get` tool uses.</summary>
@@ -163,7 +176,8 @@ public class PaywallRealGateShapeTests(PostgreSqlFixture fixture, ITestOutputHel
     [Fact(Timeout = 180000)]
     public async Task DbRoleClaim_DoesNotGrantNodeRead()
     {
-        var (_, gated) = await Seed("Claim");
+        await EnsureSeeded();
+        var gated = Gated;
         var result = await Read(
             new AccessContext { ObjectId = Visitor, Name = Visitor, Roles = ["Admin"] }, gated);
         Output.WriteLine(result);
@@ -176,7 +190,8 @@ public class PaywallRealGateShapeTests(PostgreSqlFixture fixture, ITestOutputHel
     [Fact(Timeout = 180000)]
     public async Task ViewerClaim_DoesNotGrantNodeRead()
     {
-        var (_, gated) = await Seed("ViewerClaim");
+        await EnsureSeeded();
+        var gated = Gated;
         var result = await Read(
             new AccessContext { ObjectId = Visitor, Name = Visitor, Roles = ["Viewer"] }, gated);
         Output.WriteLine(result);
@@ -188,7 +203,8 @@ public class PaywallRealGateShapeTests(PostgreSqlFixture fixture, ITestOutputHel
     [Fact(Timeout = 180000)]
     public async Task AuthenticatedNotEntitled_IsDenied()
     {
-        var (_, gated) = await Seed("Plain");
+        await EnsureSeeded();
+        var gated = Gated;
         var result = await Read(new AccessContext { ObjectId = Visitor, Name = Visitor }, gated);
         Output.WriteLine(result);
         result.Should().NotContain($"\"path\":\"{gated}\"",
@@ -204,7 +220,8 @@ public class PaywallRealGateShapeTests(PostgreSqlFixture fixture, ITestOutputHel
     [Fact(Timeout = 180000)]
     public async Task Buyer_CanReadGatedContent()
     {
-        var (_, gated) = await Seed("Buyer");
+        await EnsureSeeded();
+        var gated = Gated;
         var result = await Read(new AccessContext { ObjectId = Buyer, Name = Buyer }, gated);
         Output.WriteLine(result);
         result.Should().Contain($"\"path\":\"{gated}\"",
@@ -216,7 +233,8 @@ public class PaywallRealGateShapeTests(PostgreSqlFixture fixture, ITestOutputHel
     [Fact(Timeout = 180000)]
     public async Task Cover_VisitorAllowed()
     {
-        var (plugin, _) = await Seed("Cover");
+        await EnsureSeeded();
+        var plugin = Plugin;
         var result = await Read(new AccessContext { ObjectId = Visitor, Name = Visitor }, plugin);
         Output.WriteLine(result);
         result.Should().Contain($"\"path\":\"{plugin}\"",
@@ -233,7 +251,8 @@ public class PaywallRealGateShapeTests(PostgreSqlFixture fixture, ITestOutputHel
     [Fact(Timeout = 180000)]
     public async Task ApiToken_WithClaimRoles_StillReadsPublicContent()
     {
-        var (plugin, _) = await Seed("ApiTok");
+        await EnsureSeeded();
+        var plugin = Plugin;
         var result = await Read(
             new AccessContext
             {
@@ -249,7 +268,8 @@ public class PaywallRealGateShapeTests(PostgreSqlFixture fixture, ITestOutputHel
     [Fact(Timeout = 180000)]
     public async Task ApiToken_WithClaimRoles_IsStillDeniedGatedContent()
     {
-        var (_, gated) = await Seed("ApiTokDeny");
+        await EnsureSeeded();
+        var gated = Gated;
         var result = await Read(
             new AccessContext
             {
