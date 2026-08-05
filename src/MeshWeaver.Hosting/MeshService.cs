@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
@@ -121,6 +122,33 @@ internal sealed class MeshService(
                         NodeCreationRejectionReason.NodeAlreadyExists =>
                             new InvalidOperationException($"Node already exists: {node.Path}"),
                         _ => new InvalidOperationException(r.Error ?? "Node creation failed")
+                    });
+                });
+        }).CarryAccessContext(hub.ServiceProvider);
+    }
+
+    public IObservable<CreateNodesResponse> CreateNodes(IReadOnlyCollection<MeshNode> nodes)
+    {
+        // Same eager identity capture as CreateNode — see the 🚨 note there: the request FIELD
+        // survives the cross-hub post and an emission-thread Subscribe; the ambient context does not.
+        var captured = CaptureContext();
+        return Observable.Defer(() =>
+        {
+            var request = new CreateNodesRequest(nodes as ImmutableList<MeshNode> ?? nodes.ToImmutableList());
+            if (string.IsNullOrEmpty(request.CreatedBy)
+                && captured?.ObjectId is { Length: > 0 } callerId)
+                request = request with { CreatedBy = callerId };
+            return hub.Observe(request, o => ConfigurePost(o, captured))
+                .SelectMany(d =>
+                {
+                    var r = d.Message;
+                    if (r.Success)
+                        return Observable.Return(r);
+                    return Observable.Throw<CreateNodesResponse>(r.RejectionReason switch
+                    {
+                        NodeCreationRejectionReason.ValidationFailed =>
+                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        _ => new InvalidOperationException(r.Error ?? "Bulk node creation failed"),
                     });
                 });
         }).CarryAccessContext(hub.ServiceProvider);
