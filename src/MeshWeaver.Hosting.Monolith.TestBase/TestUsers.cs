@@ -107,6 +107,35 @@ public static class TestUsers
         };
 
     /// <summary>
+    /// REAL root-scope Admin grants for the DevLogin identities (<see cref="Admin"/> /
+    /// <see cref="TestUser"/>) — static AccessAssignment nodes, the same thing a dev mesh's
+    /// login has. Suites that hand-roll ConfigureMesh (and so skip
+    /// <see cref="PublicAdminAccess"/>) chain this in when their SETUP writes/reads run under
+    /// the DevLogin circuit.
+    ///
+    /// <para>🚨 This exists because claim roles no longer grant node permissions
+    /// (PermissionEvaluator — the paywall bypass: an API token attached DB roles as claims and
+    /// the evaluator folded them into every node's permissions, undeniably; see
+    /// PaywallRealGateShapeTests). Tests used to free-ride on <c>Roles = ["Admin"]</c>; access
+    /// now comes from assignment NODES, in tests exactly as in production. Deliberately grants
+    /// the two DevLogin users ONLY — Public, Anonymous and per-test viewer identities keep
+    /// whatever the suite seeds, so security assertions stay meaningful.</para>
+    /// </summary>
+    public static MeshNode[] DevLoginAdminAccess() =>
+        new[] { Admin, TestUser }.Select(u => new MeshNode($"{u.ObjectId}_Access", "_Access")
+        {
+            NodeType = "AccessAssignment",
+            Name = $"{u.Name} — Admin (DevLogin)",
+            Content = new AccessAssignment
+            {
+                AccessObject = u.ObjectId!,
+                DisplayName = u.Name,
+                Roles = [new RoleAssignment { Role = "Admin" }]
+            },
+            MainNode = "",
+        }).ToArray();
+
+    /// <summary>
     /// Adds sample users and access assignments as pre-seeded MeshNodes.
     /// Chain in ConfigureMesh: base.ConfigureMesh(builder).AddGraph().AddSampleUsers()
     /// </summary>

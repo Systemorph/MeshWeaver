@@ -162,7 +162,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
-            .AddMeshNodes(TestUsers.PublicAdminAccess());
+            .AddMeshNodes(TestUsers.PublicAdminAccess())
+            // Real STATIC root Admin grants for the DevLogin identities. Claim roles no longer
+            // grant node permissions (the paywall fix — PermissionEvaluator), so the login
+            // context's Roles=["Admin"] is a platform capability, not data access. The static
+            // grant keeps the evaluator's synchronous fast path alive for the harness user —
+            // without it, permission resolution waits on the synced access queries, which tests
+            // that deliberately stall synced queries (CompileSourceSnapshotWedgeTest) would wedge.
+            .AddMeshNodes(TestUsers.DevLoginAdminAccess());
 
     /// <summary>
     /// Initializes the test base, wiring xUnit output and building (or reusing, in shared-mesh mode)
@@ -756,7 +763,19 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             }
             TestPhaseTrace(name, "INIT_HOSTED_SERVICES_STARTED", sw.ElapsedMilliseconds);
 
-            await SetupAccessRightsAsync();
+            // Access-rights provisioning is a SYSTEM act, in tests exactly as in production
+            // (PluginGate / SystemInstall write grants under the System identity). It cannot run
+            // under the DevLogin circuit: claim roles no longer grant node permissions (the
+            // paywall fix — see PermissionEvaluator/PaywallRealGateShapeTests), so creating the
+            // very first `_Access` grant would require the permission that grant confers.
+            {
+                var accessService = Mesh.ServiceProvider.GetService<AccessService>();
+                using (accessService?.ImpersonateAsSystem()
+                       ?? System.Reactive.Disposables.Disposable.Empty)
+                {
+                    await SetupAccessRightsAsync();
+                }
+            }
             TestPhaseTrace(name, "INIT_DONE", sw.ElapsedMilliseconds);
             TestMemTrace(name, "INIT_MEM", forceGc: false);
 
