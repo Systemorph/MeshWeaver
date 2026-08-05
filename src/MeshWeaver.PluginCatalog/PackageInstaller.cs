@@ -256,6 +256,14 @@ public static class PackageInstaller
             .Take(1)
             .SelectMany(current =>
             {
+                // A CLAIMED node — the user set a non-Include SyncBehavior on it, typically after
+                // modifying it — is theirs, not the repo's. Skip it, exactly as the static-repo
+                // importer does. This is one of the fences that makes UNATTENDED updates
+                // (auto-update on by default) safe: a local edit under a claim can never be
+                // clobbered by a green build. An unclaimed local edit IS overwritten — claiming is
+                // the deliberate act that decouples a node from its package.
+                if (current is not null && current.SyncBehavior != SyncBehavior.Include)
+                    return Observable.Return(false);
                 if (current is not null && IsUnchanged(current, node, options))
                     return Observable.Return(false);
                 if (current is not null && Environment.GetEnvironmentVariable("MW_INSTALL_DIFF") == "1")
@@ -710,16 +718,29 @@ public static class PackageInstaller
 
         // Prune the removed nodes — System-impersonated per delete, like every installer write.
         // A failed/absent delete degrades to a log line, never fails the update.
+        //
+        // Read-before-delete: a CLAIMED node (non-Include SyncBehavior) is the user's, not the
+        // repo's — the repo dropping its file revokes the PACKAGE's copy, never the user's claim.
+        // The same fence UpsertIfChanged applies on the write side, and part of what makes
+        // unattended (default-on) auto-update safe. Only ever narrows the existing prune set:
+        // removedNodePaths is already restricted to previously-installed paths, so a user-ADDED
+        // node was never a prune candidate to begin with.
         IObservable<int> Prune() =>
             meshService is null || removedNodePaths.Count == 0
                 ? Observable.Return(0)
                 : removedNodePaths
-                    .Select(path => Observable.Using(
-                            () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
-                                  ?? System.Reactive.Disposables.Disposable.Empty,
-                            _ => meshService.DeleteNode(path))
-                        .Take(1)
-                        .Select(deleted => deleted ? 1 : 0)
+                    .Select(path => (persistence is not null
+                            ? persistence.Read(path, options).Take(1)
+                            : Observable.Return<MeshNode?>(null))
+                        .SelectMany(current =>
+                            current is not null && current.SyncBehavior != SyncBehavior.Include
+                                ? Observable.Return(0)
+                                : Observable.Using(
+                                        () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
+                                              ?? System.Reactive.Disposables.Disposable.Empty,
+                                        _ => meshService.DeleteNode(path))
+                                    .Take(1)
+                                    .Select(deleted => deleted ? 1 : 0))
                         .Catch<int, Exception>(ex =>
                         {
                             logger?.LogWarning(ex, "Pruning removed node {Path} failed.", path);
