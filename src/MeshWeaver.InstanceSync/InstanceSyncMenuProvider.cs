@@ -37,7 +37,10 @@ public sealed class InstanceSyncMenuProvider : INodeMenuProvider
             Icon: "🔄",
             Order: 36,   // content/history/sync section (Files=30, Versions=32, StopSync=34)
             Href: MeshNodeLayoutAreas.BuildUrl(hubPath, InstanceSyncLayoutArea.AreaName),
-            Tooltip: "Sync this Space with other MeshWeaver instances");
+            Tooltip: "Sync this Space with other MeshWeaver instances")
+        {
+            LabelKey = "menu.synchronizations"
+        };
 
         // Live: show on a Space (its root or any descendant) for a viewer who may Update it — the
         // access-race fix re-emits when the permission enriches. StartWith so CombineLatest fires.

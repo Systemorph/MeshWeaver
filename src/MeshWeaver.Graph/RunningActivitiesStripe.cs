@@ -101,7 +101,7 @@ public static class RunningActivitiesStripe
         return stack;
     }
 
-    private static UiControl BuildRow(MeshNode activity, ActivityLog log)
+    private static UiControl BuildRow(MeshNode activity, ActivityLog log, string? locale = null)
     {
         var label = $"{System.Net.WebUtility.HtmlEncode(log.Category)} · {log.Messages.Count} msg";
         var elapsed = log.End is null
@@ -115,7 +115,7 @@ public static class RunningActivitiesStripe
         // translates the patch into the internal cancellation. No CancelXRequest
         // — see Doc/Architecture/ActivityControlPlane.md.
         var alreadyCancelling = log.RequestedStatus == ActivityStatus.Cancelled;
-        var cancel = Controls.Button("Cancel")
+        var cancel = Controls.Button(LocalizationCatalog.Get("common.cancel", locale))
             .WithIconStart(FluentIcons.Dismiss())
             .WithStyle(alreadyCancelling ? "opacity: 0.5;" : "");
         if (!alreadyCancelling)

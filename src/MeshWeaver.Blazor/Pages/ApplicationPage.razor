@@ -9,6 +9,7 @@
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
 @using Microsoft.AspNetCore.Components.Authorization
+@inject AccessService Access
 
 <FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 
@@ -32,9 +33,9 @@
     else if (Status.Phase == NavigationPhase.NotFound)
     {
         <div class="error-container">
-            <h2>Page Not Found</h2>
+            <h2>@Access.Localize("error.pageNotFound")</h2>
             <p>@Status.Message</p>
-            <p>Please double-check the url you have entered.</p>
+            <p>@Access.Localize("error.checkUrl")</p>
         </div>
     }
     else if (Status.Phase == NavigationPhase.AccessDenied)
@@ -43,9 +44,9 @@
             <Authorized>
                 @* Logged IN but lacks access to this partition — re-authenticating wouldn't help. *@
                 <div class="error-container">
-                    <h2>Access Denied</h2>
+                    <h2>@Access.Localize("error.accessDenied")</h2>
                     <p>@Status.Message</p>
-                    <p>If you believe you should have access, ask the partition owner to grant it.</p>
+                    <p>@Access.Localize("error.accessDeniedHint")</p>
                 </div>
             </Authorized>
             <NotAuthorized>
@@ -57,7 +58,7 @@
     else if (Status.Phase == NavigationPhase.Error)
     {
         <div class="error-container">
-            <h2>Something went wrong</h2>
+            <h2>@Access.Localize("error.title")</h2>
             <p>@Status.Message</p>
         </div>
     }

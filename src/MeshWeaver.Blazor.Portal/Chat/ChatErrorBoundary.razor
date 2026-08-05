@@ -1,4 +1,5 @@
 @using Microsoft.AspNetCore.Components.Web
+@inject AccessService Access
 
 @* Contains a ThreadChatView render/lifecycle exception IN PLACE instead of letting it tear down the whole
    Blazor circuit (the "screen disappeared, have to refresh" symptom). The built-in ErrorBoundary logs the
@@ -14,7 +15,7 @@
             <strong>The chat hit an error — contained here so the rest of the app keeps working.</strong>
             <div style="font-size:12px;opacity:0.85;white-space:pre-wrap;">@ex.GetType().Name: @ex.Message</div>
             <button class="chat-error-reload" style="align-self:flex-start;"
-                    @onclick="() => _boundary?.Recover()">Reload chat</button>
+                    @onclick="() => _boundary?.Recover()">@Access.Localize("chat.reloadChat")</button>
         </div>
     </ErrorContent>
 </ErrorBoundary>

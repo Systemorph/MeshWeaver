@@ -43,7 +43,8 @@ public static class CreateLayoutArea
             : null;
         return new("Create", MeshNodeLayoutAreas.CreateNodeArea,
             RequiredPermission: Permission.Create, Order: 0,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.CreateNodeArea, createQs));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.CreateNodeArea, createQs))
+            { LabelKey = "menu.create" };
     }
     /// <summary>
     /// Main entry point for the Create layout area. Shows the unified "Create New" form with the
@@ -146,7 +147,7 @@ public static class CreateLayoutArea
         var generator = actx.Host.Hub.ServiceProvider.GetService<IIconGenerator>();
         if (generator == null)
         {
-            ShowErrorDialog(actx, "Regenerate Icon",
+            ShowErrorDialog(actx, actx.Host.Localize("dialog.regenerateIcon"),
                 "Icon generator service is not registered. Call AddAgentChatServices().");
             return Task.CompletedTask;
         }
@@ -173,7 +174,7 @@ public static class CreateLayoutArea
                     iconDesc = form?.GetValueOrDefault("description")?.ToString();
                 if (string.IsNullOrWhiteSpace(currentName) && string.IsNullOrWhiteSpace(iconDesc))
                 {
-                    ShowErrorDialog(actx, "Regenerate Icon",
+                    ShowErrorDialog(actx, actx.Host.Localize("dialog.regenerateIcon"),
                         "Enter a Name or Description first — the agent uses those to craft the icon.");
                     return Observable.Empty<string>();
                 }
@@ -190,7 +191,7 @@ public static class CreateLayoutArea
                 ex =>
                 {
                     PatchForm(f => f["iconGenerating"] = false);
-                    ShowErrorDialog(actx, "Icon Generation Failed",
+                    ShowErrorDialog(actx, actx.Host.Localize("dialog.iconGenFailed"),
                         ex is TimeoutException
                             ? "The icon agent didn't respond in time. Make sure a utility-tier model is configured for icon generation."
                             : ex.Message);
@@ -210,7 +211,7 @@ public static class CreateLayoutArea
         var generator = actx.Host.Hub.ServiceProvider.GetService<IImageGenerator>();
         if (generator == null)
         {
-            ShowErrorDialog(actx, "Generate Image",
+            ShowErrorDialog(actx, actx.Host.Localize("dialog.generateImage"),
                 "Image generator service is not registered. Call AddAgentChatServices().");
             return Task.CompletedTask;
         }
@@ -235,7 +236,7 @@ public static class CreateLayoutArea
                 var prompt = string.Join(". ", new[] { name, iconDesc }.Where(s => !string.IsNullOrWhiteSpace(s)));
                 if (string.IsNullOrWhiteSpace(prompt))
                 {
-                    ShowErrorDialog(actx, "Generate Image",
+                    ShowErrorDialog(actx, actx.Host.Localize("dialog.generateImage"),
                         "Enter a Name or an Icon description first — the image model uses those as the prompt.");
                     return Observable.Empty<GeneratedImage>();
                 }
@@ -254,7 +255,7 @@ public static class CreateLayoutArea
                 ex =>
                 {
                     PatchForm(f => f["iconGenerating"] = false);
-                    ShowErrorDialog(actx, "Image Generation Failed",
+                    ShowErrorDialog(actx, actx.Host.Localize("dialog.imageGenFailed"),
                         ex is TimeoutException
                             ? "The image model didn't respond in time. Check the image model / endpoint configuration."
                             : ex.Message);
@@ -275,7 +276,7 @@ public static class CreateLayoutArea
         var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
         var meshConfiguration = host.Hub.ServiceProvider.GetRequiredService<MeshConfiguration>();
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-        stack = stack.WithView(Controls.H2("Create New").WithStyle("margin: 0 0 24px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("ui.createNew")).WithStyle("margin: 0 0 24px 0;"));
 
         // 1. Resolve defaults from the current node
         var currentNode = nodes.FirstOrDefault(n => n.Path == parentPath);
@@ -381,11 +382,11 @@ public static class CreateLayoutArea
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("id"))
         {
             Label = "Id (optional)",
-            Placeholder = "Leave empty to auto-generate from name",
+            Placeholder = host.Localize("create.autoGenIdPlaceholder"),
             Immediate = true,
             DataContext = dataContext
         }.WithStyle("width: 100%; margin-bottom: 4px;"));
-        stack = stack.WithView(Controls.Body("Leave empty to auto-generate from the name (e.g. \"My Article\" → \"MyArticle\")")
+        stack = stack.WithView(Controls.Body(host.Localize("create.autoGenIdHint"))
             .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-bottom: 16px;"));
 
         // 6. Type picker (or readonly label if restricted to single value)
@@ -397,7 +398,7 @@ public static class CreateLayoutArea
             stack = stack.WithView(Controls.Stack
                 .WithWidth("100%")
                 .WithStyle("margin-bottom: 16px;")
-                .WithView(Controls.Body("Type").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+                .WithView(Controls.Body(host.Localize("ui.type")).WithStyle("font-weight: 600; margin-bottom: 4px;"))
                 .WithView(Controls.Body(typeLabel).WithStyle("color: var(--neutral-foreground-rest);")));
         }
         else if (restrictedTypes is { Length: > 1 })
@@ -455,7 +456,7 @@ public static class CreateLayoutArea
                     && host.Hub.ServiceProvider.FindStaticNode(selectedType)?.Content is NodeTypeDefinition selDef
                     && selDef.RestrictedToNamespaces is { Count: > 0 } r)
                     effective = r.ToArray();
-                return (UiControl)BuildNamespaceControl(effective, dataContext);
+                return (UiControl)BuildNamespaceControl(effective, dataContext, locale: host.ViewerLocale());
             }));
 
         // 8. Description — free-text context. Also used as the seed when regenerating an icon.
@@ -482,7 +483,7 @@ public static class CreateLayoutArea
         // 9. Icon: "Icon" label, live preview, Regenerate button.
         // Preview is data-bound so it reflects live updates (default from the chosen type,
         // a regenerated SVG from the Node Initializer agent, or a spinner while generating).
-        stack = stack.WithView(Controls.Body("Icon")
+        stack = stack.WithView(Controls.Body(host.Localize("ui.icon"))
             .WithStyle("font-weight: 600; display: block; margin-bottom: 6px;"));
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -502,13 +503,13 @@ public static class CreateLayoutArea
                         ? Controls.Html("<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>")
                         : BuildIconPreview(icon);
                 }))
-            .WithView(Controls.Button("Regenerate")
+            .WithView(Controls.Button(host.Localize("ui.regenerate"))
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Sparkle())
                 .WithClickAction(actx => RegenerateFormIcon(actx, formId)))
             // "Generate image" — a real raster avatar via a configured image model (IImageGenerator),
             // as opposed to "Regenerate" which draws a vector SVG through the NodeInitializer agent.
-            .WithView(Controls.Button("Generate image")
+            .WithView(Controls.Button(host.Localize("ui.generateImage"))
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Image())
                 .WithClickAction(actx => RegenerateFormImage(actx, formId))));
@@ -520,11 +521,11 @@ public static class CreateLayoutArea
             .WithHorizontalGap(12)
             .WithStyle("margin-top: 24px; justify-content: flex-start;");
 
-        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("common.cancel"))
             .WithAppearance(Appearance.Neutral)
             .WithNavigateToHref(cancelUrl));
 
-        buttonRow = buttonRow.WithView(Controls.Button("Create")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("menu.create"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(actx =>
             {
@@ -551,12 +552,12 @@ public static class CreateLayoutArea
 
                         if (string.IsNullOrWhiteSpace(selectedType))
                         {
-                            ShowErrorDialog(actx, "Validation Error", "Type is required.");
+                            ShowErrorDialog(actx, actx.Host.Localize("dialog.validationError"), actx.Host.Localize("dialog.typeRequired"));
                             return;
                         }
                         if (string.IsNullOrWhiteSpace(name))
                         {
-                            ShowErrorDialog(actx, "Validation Error", "Name is required.");
+                            ShowErrorDialog(actx, actx.Host.Localize("dialog.validationError"), actx.Host.Localize("dialog.nameRequired"));
                             return;
                         }
 
@@ -609,7 +610,7 @@ public static class CreateLayoutArea
                                 var errorMsg = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
                                     ? "You do not have permission to create nodes in this namespace."
                                     : $"Failed to create node: {ex.Message}";
-                                ShowErrorDialog(actx, "Creation Failed", errorMsg);
+                                ShowErrorDialog(actx, actx.Host.Localize("dialog.creationFailed"), errorMsg);
                             });
                     });
                 return Task.CompletedTask;
@@ -624,7 +625,7 @@ public static class CreateLayoutArea
     /// a single restricted value (incl. "") renders a read-only label; multiple values render a
     /// filtered picker; no restriction autocompletes existing Spaces (and never offers "").
     /// </summary>
-    private static UiControl BuildNamespaceControl(string[]? restricted, string dataContext)
+    private static UiControl BuildNamespaceControl(string[]? restricted, string dataContext, string? locale = null)
     {
         if (restricted is { Length: 1 })
         {
@@ -632,7 +633,7 @@ public static class CreateLayoutArea
             return Controls.Stack
                 .WithWidth("100%")
                 .WithStyle("margin-bottom: 16px;")
-                .WithView(Controls.Body("Namespace").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+                .WithView(Controls.Body(LocalizationCatalog.Get("ui.namespace", locale)).WithStyle("font-weight: 600; margin-bottom: 4px;"))
                 .WithView(Controls.Body(nsLabel).WithStyle("color: var(--neutral-foreground-rest);"));
         }
         if (restricted is { Length: > 1 })

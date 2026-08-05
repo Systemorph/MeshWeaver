@@ -157,11 +157,36 @@ All docs embedded in `src/MeshWeaver.Documentation/` and served under `Doc/` at 
 
 **Writing/editing a doc page:** follow [AuthoringDocumentation.md](src/MeshWeaver.Documentation/Data/Architecture/AuthoringDocumentation.md). Links resolve against the page's FULL node path at render time — sibling links need `../Sibling`, absolute links start `/Doc/…`; `xref:` and `.md` suffixes never resolve. `DocumentationLinkIntegrityTest` (test/MeshWeaver.Documentation.Test) fails on any broken internal link — run it after doc edits.
 
+**Node FILE formats (Data/ and every node repo):** the extension is a convention, not a free choice. **Agents and skills are authored as `.md`** — front matter (`nodeType: Agent` / `nodeType: Skill`) carries the configuration, the markdown body IS the instructions (`AgentFileParser`); never JSON with an escaped instructions string. **C# source nodes are `.cs`** with the `// <meshweaver>` heading block (`// Id:`, `// DisplayName:`, optional `// NodeType:` — `CSharpFileParser`); never JSON with the code in an escaped string. **`.json` remains** for typed nodes and for executable code cells: the `.cs` header carries ONLY `Id`/`DisplayName`/`NodeType`, so a cell with `isExecutable`/`activityParentPath` (or node-level `description`/`order`) authored as `.cs` silently loses its Run button on import (e.g. `Data/Architecture/PythonCodeNodes/SampleStatistics.json` stays JSON deliberately).
+
 **Hub-handler test hangs or message disappears:** read [DebuggingMessageFlow.md](src/MeshWeaver.Documentation/Data/Architecture/DebuggingMessageFlow.md) first — it tells you which trace tags to grep and why you should never rerun a hung test "to see".
 
 **`type 'X' is not registered in this hub's TypeRegistry`:** Fix is `WithType(typeof(X), nameof(X))` on the receiving hub. See DebuggingMessageFlow.md → "Type-registry mismatch".
 
 **Use `hub.Observe(...)` not `RegisterCallback`/`AwaitResponse`** — those overloads are `[Obsolete]` and deadlock. Tests use `MonolithMeshTestBase.AwaitResponseAsync(...)`.
+
+## 🌍🌍🌍 ALWAYS think about internationalization — every user-visible string, every time
+
+**Before you write ANY text a user will read, stop and ask: "how does this render for a German viewer?"** This is not a final-polish step or a follow-up ticket — it is part of writing the feature, the same way a null check is. The portal ships English + German; **a hard-coded UI string is a bug**, because it renders English for every viewer regardless of their language.
+
+This applies to every surface, not just obvious ones: buttons, labels, tooltips, `aria-label`s, placeholders, page titles, empty states, validation messages, toasts, dialog copy, menu entries, settings tabs, notification text, and error strings. If a human reads it on screen, it needs a key or a `[Translation]`.
+
+**Prefer text that doesn't need translating at all.** A language-neutral glyph beats a translated word: the AI menu's "new thread" entry uses **➕**, and the node menu uses ✏️ 🔖 ➡️ 📋 🗑️. An icon plus a translated tooltip is usually better than a translated label — it shrinks the translation surface and reads identically in every locale. (The tooltip still needs a key.)
+
+Two shapes, pick by whether the text hangs off a declaration:
+
+- **On a declaration** (property label, node-type name, enum member) → add `[Translation("de", "…")]` next to the existing `[Description]`. Nothing else to wire.
+- **Everywhere else** (Blazor markup, inline `Controls.*`, toasts) → add a key to **both** `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json` and read it via `Access.Localize("key")` (Blazor, `@inject AccessService Access`) or `host.Localize("key")` (layout areas).
+
+`LocalizationTest` fails if a language is missing any English key, so a half-translated string cannot merge.
+
+🚨 **Never resolve from `CultureInfo.CurrentUICulture`** — a layout-area render hops the hub scheduler and an ambient AsyncLocal culture does not survive it, so one user's UI would pick up another user's language. Resolution is always explicit off `AccessContext.Locale`.
+
+🚨 **Do NOT translate**: LLM tool-parameter `[Description]`s (model-facing — translating degrades tool-calling), wire identifiers (`nodeType:Thread` in help text, `RequestAction("New")`, Fluent icon names), or the glossary terms kept English on purpose (Thread, Mesh, Node, Agent, Skill, Harness, Provider, Namespace, Partition, Store).
+
+**Adding a language is cheap by design** — a tag in `Locales.Supported`, a `strings.{tag}.json`, and the matching `[Translation]` attributes. Keep it that way: never scatter a second resolution mechanism, and never let a string bypass the catalog "just this once".
+
+Full reference: [Localization.md](src/MeshWeaver.Documentation/Data/Architecture/Localization.md)
 
 ## Deployment
 

@@ -9,6 +9,7 @@
 @inject IMeshService MeshQuery
 @inject NavigationManager NavigationManager
 @inject IMessageHub Hub
+@inject AccessService Access
 
 <FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 
@@ -29,7 +30,7 @@
     }
     else if (Nodes.Count == 0)
     {
-        <FluentLabel Typo="Fluent.Typography.Body" Style="color: var(--neutral-foreground-hint);">No items found.</FluentLabel>
+        <FluentLabel Typo="Fluent.Typography.Body" Style="color: var(--neutral-foreground-hint);">@Access.Localize("empty.noItemsFound")</FluentLabel>
     }
     else
     {

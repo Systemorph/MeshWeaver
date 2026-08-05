@@ -409,12 +409,12 @@ public static class AgentView
 
         // Cancel button
         var detailsHref = new LayoutAreaReference(DetailsArea).ToHref(hubAddress);
-        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("common.cancel"))
             .WithAppearance(Appearance.Neutral)
             .WithNavigateToHref(detailsHref));
 
         // Save button
-        buttonRow = buttonRow.WithView(Controls.Button("Save")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("common.save"))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
             .WithClickAction(actx =>

@@ -564,11 +564,15 @@ public static class EditorExtensions
         var propertySkinLabel = displayAttribute?.Name ?? propertyInfo.Name.Wordify();
         string? label = null; // // TODO V10: This is to avoid duplication with property skin. do consistently in future. (19.01.2025, Roland Bürgi)
 
+        // The viewer's language, read off the AccessContext rather than ambient culture (see
+        // ViewerLocaleOf). Resolved once here so the per-skin lambda does no repeated DI lookup.
+        var viewerLocale = serviceProvider.GetService<AccessService>().ViewerLocale();
+
         Func<PropertySkin, PropertySkin> skinConfiguration = skin =>
             skin with
             {
                 Name = propertyInfo.Name.ToCamelCase(),
-                Description = propertyInfo.GetCustomAttribute<DescriptionAttribute>()?.Description
+                Description = propertyInfo.LocalizedDescription(viewerLocale)
                               ?? MeshWeaver.Messaging.Serialization.XmlDocs.Summary(propertyInfo),
                 Label = propertySkinLabel
             };
@@ -883,7 +887,7 @@ public static class EditorExtensions
         }
 
         // Regular property: Label + reactive read/edit view
-        var displayName = GetToggleableDisplayName(property);
+        var displayName = GetToggleableDisplayName(property, host);
 
         // Apply style from UiControlAttribute if present - minimal padding for alignment
         var containerStyle = "padding: 4px 0;";
@@ -923,10 +927,19 @@ public static class EditorExtensions
                && property.Name.Equals("Description", StringComparison.OrdinalIgnoreCase)
                && property.GetCustomAttribute<UiControlAttribute>() == null);
 
-    private static string GetToggleableDisplayName(PropertyInfo property)
+    /// <summary>
+    /// The viewer's language for label resolution on a render path. Read off the AccessContext
+    /// that <c>LayoutAreaHost</c> captured for THIS subscriber, never from ambient culture — a
+    /// layout-area render hops the hub scheduler, where an AsyncLocal culture would not survive
+    /// and one user's UI could pick up another user's language.
+    /// </summary>
+    private static string? ViewerLocaleOf(LayoutAreaHost host)
+        => host.Hub.ServiceProvider.GetService<AccessService>().ViewerLocale();
+
+    private static string GetToggleableDisplayName(PropertyInfo property, LayoutAreaHost host)
     {
         return property.GetCustomAttribute<DisplayAttribute>()?.Name
-               ?? property.GetCustomAttribute<DescriptionAttribute>()?.Description
+               ?? property.LocalizedDescription(ViewerLocaleOf(host))
                ?? property.Name.Wordify();
     }
 
@@ -1371,7 +1384,7 @@ public static class EditorExtensions
             DataContext = LayoutAreaReference.GetDataPointer(dataId)
         };
 
-        var browseButton = Controls.Button("Browse...")
+        var browseButton = Controls.Button(host.Localize("ui.browse"))
             .WithAppearance(Appearance.Outline)
             .WithStyle("flex-shrink: 0;")
             .WithClickAction(ctx =>
@@ -1499,7 +1512,7 @@ public static class EditorExtensions
         bool isEditable)
     {
         var propName = property.Name.ToCamelCase()!;
-        var displayName = GetToggleableDisplayName(property);
+        var displayName = GetToggleableDisplayName(property, host);
 
         var stack = Controls.Stack
             .WithWidth("100%")
@@ -1516,7 +1529,7 @@ public static class EditorExtensions
             var collectionAttr = property.GetCustomAttribute<MeshNodeCollectionAttribute>();
             if (collectionAttr != null)
             {
-                stack = stack.WithView(Controls.Button("+ Add")
+                stack = stack.WithView(Controls.Button(host.Localize("ui.plusAdd"))
                     .WithAppearance(Appearance.Lightweight)
                     .WithStyle("align-self: flex-start; margin-top: 4px; font-size: 0.85rem;")
                     .WithClickAction(ctx =>
@@ -1660,7 +1673,7 @@ public static class EditorExtensions
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: flex-end; gap: 8px;")
-            .WithView(Controls.Button("Add")
+            .WithView(Controls.Button(ctx.Host.Localize("ui.add"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(addCtx =>
                 {
@@ -1672,7 +1685,7 @@ public static class EditorExtensions
                             if (string.IsNullOrEmpty(selectedValue))
                             {
                                 var errorDialog = Controls.Dialog(
-                                    Controls.Markdown("Please select an item."),
+                                    Controls.Markdown(ctx.Host.Localize("ui.selectItem")),
                                     "Validation Error"
                                 ).WithSize("S").WithClosable(true);
                                 addCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
@@ -1683,7 +1696,7 @@ public static class EditorExtensions
                         });
                     return Task.CompletedTask;
                 }))
-            .WithView(Controls.Button("Cancel")
+            .WithView(Controls.Button(ctx.Host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(cancelCtx =>
                 {
@@ -1802,7 +1815,7 @@ public static class EditorExtensions
         string? boundDataContext = null)
     {
         var propName = property.Name.ToCamelCase()!;
-        var displayName = GetToggleableDisplayName(property);
+        var displayName = GetToggleableDisplayName(property, host);
 
         // When not toggleable and editable, always show edit view
         if (!isToggleable && isEditable)
@@ -1890,7 +1903,7 @@ public static class EditorExtensions
             stack = stack.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 12px;")
-                .WithView(Controls.Button("Done")
+                .WithView(Controls.Button(host.Localize("common.done"))
                     .WithAppearance(Appearance.Accent)
                     .WithClickAction(ctx =>
                     {

@@ -5,14 +5,15 @@
 @using Memex.Portal.Shared.Settings
 @implements IDisposable
 @inject IMessageHub Hub
+@inject AccessService Access
 
-<PageTitle>Privacy Statement</PageTitle>
+<PageTitle>@Access.Localize("auth.privacyStatement")</PageTitle>
 
 <div class="privacy-container">
     <article class="markdown-body privacy-card">
         @if (Html is null)
         {
-            <p><em>Loading…</em></p>
+            <p><em>@Access.Localize("common.loading")</em></p>
         }
         else
         {

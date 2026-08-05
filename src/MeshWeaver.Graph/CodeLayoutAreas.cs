@@ -5,6 +5,7 @@ using System.Text.Json;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
@@ -46,6 +47,8 @@ public static class CodeLayoutAreas
     public const string CellOutputArea = "CellOutput";
     /// <summary>Area id of the Run button inside the cell toolbar.</summary>
     public const string RunButtonArea = "Run";
+    /// <summary>Area id of the "code changed — re-run" chip inside the cell toolbar.</summary>
+    public const string StaleChipArea = "StaleChip";
     /// <summary>Area id of the Cancel button inside the cell toolbar.</summary>
     public const string CancelButtonArea = "Cancel";
     /// <summary>Area id of the Edit button inside the cell toolbar.</summary>
@@ -57,6 +60,26 @@ public static class CodeLayoutAreas
 
     private const string CodeDataId = "code";
     private const string SiblingNodesDataId = "siblingCodeNodes";
+
+    /// <summary>
+    /// Whether the cell's output pane is showing the result of code that has since been EDITED.
+    /// True only when we can prove it: the node must have run (<c>LastExecutedAt</c>) AND carry the
+    /// fingerprint of what that run submitted. An absent hash means "unknown" — a node last executed
+    /// before <see cref="CodeConfiguration.LastExecutedCodeHash"/> existed — and unknown must read as
+    /// NOT stale, or every legacy Code node on every mesh would light up amber at once.
+    /// <para>Pure and static so the staleness rule is unit-testable without a hub.</para>
+    /// </summary>
+    internal static bool IsOutputStale(CodeConfiguration? code) =>
+        code is { LastExecutedAt: not null, LastExecutedCodeHash: not null and not "" }
+        && CodeFingerprint.Of(code.Code, code.Language) != code.LastExecutedCodeHash;
+
+    /// <summary>
+    /// The Run button's glyph: a re-run arrow once the cell is stale, the play triangle otherwise.
+    /// Only the GLYPH changes — the label stays "Run", because that word is how both readers and
+    /// every e2e suite find the control.
+    /// </summary>
+    internal static Icon RunGlyph(bool isStale) =>
+        isStale ? FluentIcons.ArrowSync() : FluentIcons.Play();
 
     /// <summary>
     /// Languages a Code node can be authored in. C# runs in-process on the Roslyn kernel; Python routes
@@ -159,7 +182,7 @@ public static class CodeLayoutAreas
         }
         else
         {
-            cell = cell.WithView(Controls.Body("No code defined.")
+            cell = cell.WithView(Controls.Body(host.Localize("ui.noCodeDefined"))
                     .WithStyle("display: block; padding: 12px; color: var(--neutral-foreground-hint); font-style: italic;"),
                 CellCodeArea);
         }
@@ -185,7 +208,7 @@ public static class CodeLayoutAreas
             else
             {
                 // Not yet run: a one-line subtle hint, not a large empty pane.
-                cell = cell.WithView(Controls.Body("Not yet run.")
+                cell = cell.WithView(Controls.Body(host.Localize("ui.notYetRun"))
                         .WithStyle($"display: block; {outputStyle} " +
                                    "color: var(--neutral-foreground-hint); font-style: italic; font-size: 0.85rem;"),
                     CellOutputArea);
@@ -220,18 +243,26 @@ public static class CodeLayoutAreas
     /// copy-to-home dialog (<see cref="OpenCopyToHomeDialog"/>) offering to copy
     /// the node into the viewer's own home space via the standard copy machinery.</para>
     /// </summary>
-    private static UiControl BuildCellToolbar(
+    internal static UiControl BuildCellToolbar(
         Address hubAddress,
         CodeConfiguration? codeConfig,
         bool isExecutable,
         string language,
         ActivityLog? lastActivity,
-        bool canEdit)
+        bool canEdit, string? locale = null)
     {
+        // Stale = the output pane above is showing a run of code that has since been edited. The
+        // toolbar goes amber, matching the NodeType editor's "Source changed — needs compile" panel,
+        // so "what you're looking at is out of date" reads the same way across the product.
+        var isStale = isExecutable && IsOutputStale(codeConfig);
         var toolbar = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("display: flex; align-items: center; gap: 8px; padding: 6px 10px; " +
-                       "background: var(--neutral-layer-2); border-top: 1px solid var(--neutral-stroke-rest);");
+                       (isStale
+                           ? "background: var(--warning-fill-rest, #fef3c7); " +
+                             "border-top: 1px solid var(--warning-stroke-rest, #fcd34d);"
+                           : "background: var(--neutral-layer-2); " +
+                             "border-top: 1px solid var(--neutral-stroke-rest);"));
 
         if (isExecutable)
         {
@@ -241,8 +272,8 @@ public static class CodeLayoutAreas
             // button client-side hid it even from admins when the live
             // permission stream had a transient empty emission, which is exactly
             // the state we once spent a session debugging.
-            toolbar = toolbar.WithView(Controls.Button("Run")
-                    .WithIconStart(FluentIcons.Play())
+            toolbar = toolbar.WithView(Controls.Button(LocalizationCatalog.Get("common.run", locale))
+                    .WithIconStart(RunGlyph(isStale))
                     .WithAppearance(Appearance.Accent)
                     .WithClickAction(ctx =>
                     {
@@ -253,6 +284,13 @@ public static class CodeLayoutAreas
                     }),
                 RunButtonArea);
 
+            if (isStale)
+                toolbar = toolbar.WithView(
+                    Controls.Body(LocalizationCatalog.Get("code.staleCell", locale))
+                        .WithStyle("font-size: 0.8rem; font-weight: 600; " +
+                                   "color: var(--warning-foreground, #92400e);"),
+                    StaleChipArea);
+
             // Cancel: classic notebook stop control, attached to the same
             // toolbar as Run. Per the Activity Control Plane pattern the click
             // patches RequestedStatus = Cancelled on the activity node via the
@@ -262,7 +300,7 @@ public static class CodeLayoutAreas
                 && lastActivity is not null
                 && ActivityLayoutAreas.IsCancelButtonVisible(lastActivity))
             {
-                toolbar = toolbar.WithView(Controls.Button("Cancel")
+                toolbar = toolbar.WithView(Controls.Button(LocalizationCatalog.Get("common.cancel", locale))
                         .WithIconStart(FluentIcons.Stop())
                         .WithClickAction(ctx =>
                         {
@@ -289,7 +327,7 @@ public static class CodeLayoutAreas
             // drives the DialogControl area). Identity resolution + the actual
             // copy happen at CLICK time under the clicker's AccessContext.
             var sourcePath = hubAddress.ToString();
-            toolbar = toolbar.WithView(Controls.Button("Edit")
+            toolbar = toolbar.WithView(Controls.Button(LocalizationCatalog.Get("common.edit", locale))
                     .WithIconStart(FluentIcons.Edit())
                     .WithClickAction(ctx =>
                     {
@@ -354,7 +392,7 @@ public static class CodeLayoutAreas
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("gap: 8px; justify-content: flex-end;")
-                .WithView(Controls.Button("Cancel")
+                .WithView(Controls.Button(ctx.Host.Localize("common.cancel"))
                         .WithAppearance(Appearance.Neutral)
                         .WithClickAction(c =>
                         {
@@ -362,7 +400,7 @@ public static class CodeLayoutAreas
                             return Task.CompletedTask;
                         }),
                     CopyDialogCancelArea)
-                .WithView(Controls.Button("Copy to my home")
+                .WithView(Controls.Button(ctx.Host.Localize("ui.copyToHome"))
                         .WithAppearance(Appearance.Accent)
                         .WithIconStart(FluentIcons.Copy())
                         .WithClickAction(c =>
@@ -495,7 +533,7 @@ public static class CodeLayoutAreas
                     .Select(tuple =>
                     {
                         var (siblings, currentNode) = tuple;
-                        return BuildCodeNavMenu(hubAddress, hubPath, currentNode, siblings);
+                        return BuildCodeNavMenu(hubAddress, hubPath, currentNode, siblings, locale: host.ViewerLocale());
                     }),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
@@ -513,7 +551,7 @@ public static class CodeLayoutAreas
         object hubAddress,
         string currentPath,
         MeshNode? currentNode,
-        IReadOnlyCollection<MeshNode>? siblings)
+        IReadOnlyCollection<MeshNode>? siblings, string? locale = null)
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
@@ -535,7 +573,7 @@ public static class CodeLayoutAreas
         else
         {
             codeGroup = codeGroup.WithView(
-                Controls.Body("No code files").WithStyle("padding: 4px 16px; display: block; color: var(--neutral-foreground-hint);")
+                Controls.Body(LocalizationCatalog.Get("ui.noCodeFiles", locale)).WithStyle("padding: 4px 16px; display: block; color: var(--neutral-foreground-hint);")
             );
         }
 
@@ -606,7 +644,7 @@ public static class CodeLayoutAreas
         var displayNameRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 12px; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.Label("Display Name:").WithStyle("font-weight: 500;"))
+            .WithView(Controls.Label(host.Localize("ui.displayName")).WithStyle("font-weight: 500;"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Enter display name...")
                 .WithStyle("flex: 1; max-width: 400px;")
@@ -621,7 +659,7 @@ public static class CodeLayoutAreas
         var languageRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 12px; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.Label("Language:").WithStyle("font-weight: 500;"))
+            .WithView(Controls.Label(host.Localize("ui.language")).WithStyle("font-weight: 500;"))
             .WithView((new SelectControl(new JsonPointerReference(""), Array.Empty<object>())
                     .WithOptions(LanguageOptions)) with
                 { DataContext = LayoutAreaReference.GetDataPointer(languageDataId) });
@@ -675,12 +713,12 @@ public static class CodeLayoutAreas
 
         // Cancel button
         var viewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
-        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("common.cancel"))
             .WithAppearance(Appearance.Neutral)
             .WithNavigateToHref(viewHref));
 
         // Save button — sync click action; subscribes to the form snapshot then posts.
-        buttonRow = buttonRow.WithView(Controls.Button("Save")
+        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("common.save"))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
             .WithClickAction(actx =>

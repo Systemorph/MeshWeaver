@@ -1,5 +1,6 @@
 @using MeshWeaver.Layout
 @inherits ContainerView<CommentableControl, CommentableView>
+@inject AccessService Access
 
 @* The wrapper is the positioning context for the floating "Comment" button (position: relative
    in the .css), so the button can be placed over the selection. *@
@@ -17,7 +18,7 @@
     {
         <div class="comment-input-overlay" @onclick="CancelComment">
             <div class="comment-input-dialog" @onclick:stopPropagation="true">
-                <div class="comment-input-header">Add Comment</div>
+                <div class="comment-input-header">@Access.Localize("comments.add")</div>
                 @if (!string.IsNullOrEmpty(pendingSelectionText))
                 {
                     <div class="comment-input-quote">&ldquo;@Truncate(pendingSelectionText, 120)&rdquo;</div>
@@ -25,8 +26,8 @@
                 <textarea class="comment-input-textarea" @bind="pendingCommentText" @bind:event="oninput"
                           placeholder="Write your comment..." rows="3"></textarea>
                 <div class="comment-input-actions">
-                    <button class="comment-btn comment-btn-cancel" @onclick="CancelComment">Cancel</button>
-                    <button class="comment-btn comment-btn-submit" @onclick="SubmitComment">Add Comment</button>
+                    <button class="comment-btn comment-btn-cancel" @onclick="CancelComment">@Access.Localize("common.cancel")</button>
+                    <button class="comment-btn comment-btn-submit" @onclick="SubmitComment">@Access.Localize("comments.add")</button>
                 </div>
             </div>
         </div>

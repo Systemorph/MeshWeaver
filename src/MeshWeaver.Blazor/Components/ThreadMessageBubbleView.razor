@@ -1,6 +1,7 @@
 @inherits BlazorView<ThreadMessageBubbleControl, ThreadMessageBubbleView>
 @using MeshWeaver.Layout
 @using MeshWeaver.Messaging
+@inject AccessService Access
 
 <div class="thread-msg-bubble @(IsUser ? "thread-msg-user" : "thread-msg-assistant")" style="@Style">
     <div class="thread-msg-author @(IsUser ? "thread-msg-author-user" : "")">@AuthorName</div>
@@ -13,7 +14,8 @@
             }
             @if (Timestamp.HasValue)
             {
-                <span>@Timestamp.Value.ToString("HH:mm:ss")</span>
+                @* Stored UTC → the viewer's zone (AccessContext.TimeZoneId). *@
+                <span>@AccessService.ToDisplayTime(Timestamp.Value).ToString("HH:mm:ss")</span>
             }
         </div>
     }
@@ -43,7 +45,7 @@
         @if (IsUser && CanEdit)
         {
             <div class="thread-msg-inline-actions">
-                <button class="thread-msg-action-btn" @onclick="StartEdit" title="Edit">&#9998;</button>
+                <button class="thread-msg-action-btn" @onclick="StartEdit" title="@Access.Localize("common.edit")">&#9998;</button>
             </div>
         }
     }

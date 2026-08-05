@@ -454,7 +454,15 @@ public static class MeshExtensions
                 //     See EnsurePartitionBootstrap.
                 // 2. Validators → 3. NodeType existence → 4-7. Enrich + save + change feed + version
                 return EnsurePartitionBootstrap(hub, node, capturedRequest, logger)
-                    .SelectMany(_ => RunCreationValidatorsObs(hub, node, capturedRequest))
+                    // 1d. A SYSTEM-OWNED space grants nobody write access. Sequenced AFTER the
+                    //     bootstrap (which may have just created the partition) and ahead of the
+                    //     validators, and folded into the same rejection tuple so the failure is
+                    //     posted by the one code path that already knows how.
+                    .SelectMany(_ => SystemOwnedGrantRejection(hub, node))
+                    .SelectMany(grantRejection => grantRejection is not null
+                        ? Observable.Return<(string? ErrorMessage, NodeCreationRejectionReason Reason)?>(
+                            (grantRejection, NodeCreationRejectionReason.ValidationFailed))
+                        : RunCreationValidatorsObs(hub, node, capturedRequest))
                     .SelectMany(validationError =>
                     {
                         if (validationError != null)
@@ -768,8 +776,14 @@ public static class MeshExtensions
         var grantObs = grantPath is null
             ? Observable.Return<MeshNode?>(null)
             : ReadNodeAuthoritative(hub, persistence, grantPath);
+        // A GitSynced partition is SYSTEM-OWNED by definition — its content is rewritten from the
+        // repo and only system-security writes it. That is the ownership signal the root itself
+        // does not carry (ProvisionAndCreateRoot writes the root as System, so root.CreatedBy is
+        // never the owner), and it is what distinguishes "I am creating my own partition" from
+        // "I am a deploy touching somebody else's".
+        var syncObs = ReadNodeAuthoritative(hub, persistence, $"{partition}/_GitSync");
 
-        return Observable.Zip(rootObs, grantObs, (root, grant) => (root, grant))
+        return Observable.Zip(rootObs, grantObs, syncObs, (root, grant, sync) => (root, grant, sync))
             .SelectMany(t =>
             {
                 var rootExists = t.root is not null;
@@ -800,7 +814,20 @@ public static class MeshExtensions
                         var healRoot = rootExists
                             ? Observable.Return(System.Reactive.Unit.Default)
                             : ProvisionAndCreateRoot(hub, partition, meshService, accessService, logger);
-                        return healRoot.SelectMany(_ => isRealCreator && !grantExists
+                        // 🚨 A deploy is not an ownership claim. Running `git_hub_sync update` on
+                        // `Skill` — a partition that had existed for weeks — wrote one activity
+                        // node into it and walked away with Admin, reproducibly, on every sync.
+                        // The self-heal still does its job for a user's own partition, which is
+                        // what it exists for; it just no longer fires on a SYSTEM-OWNED one, where
+                        // the caller is a deployer and never the owner.
+                        var systemOwned = t.sync is not null;
+                        var mintGrant = isRealCreator && !grantExists && !systemOwned;
+                        if (isRealCreator && !grantExists && systemOwned)
+                            logger.LogInformation(
+                                "[PartitionBootstrap] '{Creator}' gets NO grant on GitSynced partition "
+                                + "'{Partition}' — it is system-owned; writing into it is a deploy, "
+                                + "not an ownership claim", creator, partition);
+                        return healRoot.SelectMany(_ => mintGrant
                             ? CreateCreatorGrant(partition, creator!, meshService, accessService, logger)
                             : Observable.Return(System.Reactive.Unit.Default));
                     });
@@ -1607,6 +1634,48 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Emits the rejection reason when the node is a privileged grant on a SYSTEM-OWNED (GitSynced)
+    /// partition, else <c>null</c>. See <see cref="AccessAssignmentGuard.IsForbiddenOnSystemOwned"/>
+    /// for why that shape is refused.
+    ///
+    /// <para><b>The storage read is paid for only by the shape that can fail.</b> The pure checks
+    /// run first — node type, grant path, and whether the assignment confers write at all — so the
+    /// hot path (an entitlement's <c>Viewer</c> grant, written on every enrollment) never touches
+    /// persistence. Only an Admin/Editor grant costs the one <c>{partition}/_GitSync</c> read, which
+    /// is the same probe <c>EnsurePartitionBootstrap</c> already performs on this path.</para>
+    ///
+    /// <para>Content is materialised through the TYPED accessor, never a raw <c>JsonElement</c>
+    /// test: a grant arrives typed on the hub that owns it, as <c>JsonObject</c> from the node
+    /// builders, and as <c>JsonElement</c> over the wire — and a shape test that misses would read
+    /// "no roles", i.e. silently allow exactly what this guard exists to refuse.</para>
+    /// </summary>
+    private static IObservable<string?> SystemOwnedGrantRejection(IMessageHub hub, MeshNode node)
+    {
+        if (!string.Equals(node.NodeType, AccessAssignmentGuard.AccessAssignmentNodeType,
+                StringComparison.OrdinalIgnoreCase))
+            return Observable.Return<string?>(null);
+
+        var scope = AccessAssignmentGuard.ScopeFromPath(node.Path);
+        if (string.IsNullOrEmpty(scope))
+            return Observable.Return<string?>(null);
+
+        var assignment = node.ContentAs<AccessAssignment>(hub.JsonSerializerOptions);
+        if (!AccessAssignmentGuard.ConfersWriteAccess(assignment))
+            return Observable.Return<string?>(null);
+
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null)
+            return Observable.Return<string?>(null);
+
+        var partition = AccessAssignmentGuard.PartitionOf(scope);
+        return ReadNodeAuthoritative(hub, persistence, $"{partition}/_GitSync")
+            .Select(sync => AccessAssignmentGuard.IsForbiddenOnSystemOwned(
+                node, assignment, systemOwned: sync is not null, out var reason)
+                ? reason
+                : null);
+    }
+
+    /// <summary>
     /// Sync-friendly observable variant of the creation-validator runner. Iterates
     /// validators sequentially via <c>Concat</c> (preserves short-circuit semantics —
     /// stops at the first failure), emits the first failure as a tuple or <c>null</c>
@@ -1995,7 +2064,22 @@ public static class MeshExtensions
 
         var inboundCtx = request.AccessContext;
 
-        existingObs.Subscribe(
+        // Same rule as the create path: a SYSTEM-OWNED space grants nobody write access. Guarding
+        // only the create would leave the hole open through the UPDATE branch below — an existing
+        // Viewer grant could simply be upserted up to Admin, which is the identical ownership claim
+        // with a version bump instead of a create. Both write paths, or neither.
+        var gatedExisting = SystemOwnedGrantRejection(hub, node)
+            .SelectMany(grantRejection =>
+            {
+                if (grantRejection is null)
+                    return existingObs;
+                logger.LogError("[UpsertNode] REFUSED privileged grant on system-owned partition {Path}: {Reason}",
+                    node.Path, grantRejection);
+                PostFail(grantRejection, NodeUpsertRejectionReason.ValidationFailed);
+                return Observable.Empty<MeshNode?>();
+            });
+
+        gatedExisting.Subscribe(
             existing =>
             {
                 if (existing is null)

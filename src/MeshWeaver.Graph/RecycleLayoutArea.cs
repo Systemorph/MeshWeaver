@@ -26,7 +26,8 @@ public static class RecycleLayoutArea
             return null;
         return new("Recycle", MeshNodeLayoutAreas.RecycleArea,
             RequiredPermission: Permission.Update, Order: 90,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.RecycleArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.RecycleArea))
+            { LabelKey = "menu.recycle" };
     }
 
     /// <summary>
@@ -49,7 +50,7 @@ public static class RecycleLayoutArea
 
         var recyclingMessage = (UiControl?)Controls.Stack
             .WithStyle("padding: 24px;")
-            .WithView(Controls.Markdown("**Recycling hub…** redirecting in a moment."));
+            .WithView(Controls.Markdown(host.Localize("ui.mdRecyclingHub")));
 
         var redirect = (UiControl?)new RedirectControl(overviewHref);
 

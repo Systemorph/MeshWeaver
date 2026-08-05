@@ -116,7 +116,7 @@ public static class SocialMediaPostLayoutAreas
         if (ordered.Count == 0)
             return Controls.Stack
                 .WithStyle("padding: 16px;")
-                .WithView(Controls.Markdown("*No posts yet.*"));
+                .WithView(Controls.Markdown(host.Localize("ui.mdNoPosts")));
 
         var rows = string.Join("", ordered.Select(p =>
         {
@@ -170,7 +170,7 @@ public static class SocialMediaPostLayoutAreas
             .Select(node =>
             {
                 if (node is null)
-                    return (UiControl?)Controls.Markdown("*Post not found.*");
+                    return (UiControl?)Controls.Markdown(host.Localize("ui.mdPostNotFound"));
 
                 var title = node.Name ?? GetProp(node, "title") ?? "(untitled)";
                 var body = GetProp(node, "body");
@@ -179,7 +179,9 @@ public static class SocialMediaPostLayoutAreas
                 var scheduled = GetDate(node, "scheduledAt");
                 var published = GetDate(node, "publishedAt");
                 var status = published.HasValue ? "Published"
-                    : (scheduled.HasValue && scheduled.Value > DateTimeOffset.Now ? "Scheduled" : "Draft");
+                    // UtcNow, not Now: scheduledAt is a stored UTC instant, so comparing it to the
+                    // server's local clock flips the badge by the host offset.
+                    : (scheduled.HasValue && scheduled.Value > DateTimeOffset.UtcNow ? "Scheduled" : "Draft");
                 var statusColor = published.HasValue ? "#2e7d32" : "#ed6c02";
                 var impressions = GetInt(node, "impressions");
                 var likes = GetInt(node, "likes");
