@@ -12,6 +12,27 @@
     flex-direction: column;
 }
 
+/* An EMBEDDED area (neither Top nor Fill) is sized by its OWN CONTENT, so it keeps the CSS
+   initial values. The `flex: 1` (a zero flex basis) and `min-height: 0` above are correct only
+   for a FILL area, which must stretch to the page height.
+
+   Those two declarations are inert while the container sits in BLOCK flow — which is why the
+   `@@` live embed and the `--render` cell were never affected. They bite when a layout emits a
+   LayoutAreaControl as a child of a CONTAINER control (Controls.Stack renders a FluentStack, a
+   flex box), making the container a genuine flex item: the box then collapses to a zero basis
+   while its content renders at full height and, with `overflow: visible`, paints over the block
+   below it.
+
+   Measured on RiskTransfer/01-GrossToNet before this rule: the embedded code cell's container was
+   0px tall around 1232px of content, so the cell painted over the whole "Your turn" section. Same
+   shape in MeshWeaver.Courses (ModuleLayoutAreas, ExerciseLayoutAreas) and in the Edu/Lesson
+   plugin. `fill-area` already marks the one context where the fill sizing is right, so scoping
+   with :not() leaves every top-level page, the side panel and .shell-splitter untouched. */
+.layout-area-container:not(.fill-area) {
+    flex: 0 1 auto;
+    min-height: auto;
+}
+
 /* A fill area stretches its content to the full available height.
    The container already fills (.body-content is a definite-height flex column
    and .layout-area-container is flex:1), but the single control rendered inside
