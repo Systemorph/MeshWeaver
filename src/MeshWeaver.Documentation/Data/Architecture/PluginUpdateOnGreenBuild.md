@@ -28,7 +28,7 @@ Admin/_Build/{owner}.{repo}          ← a BuildCompletion node: "repo X built g
    ▼
 per installed module:  ModuleVersion changed?
    ├── no  ──▶ silent. no notification, no fetch, nothing.
-   └── yes ──▶ opted out ? raise an "Update available" reminder : install the delta
+   └── yes ──▶ opted in ? install the delta : raise an "Update available" reminder
 ```
 
 ## Why a node and not a call
@@ -72,15 +72,23 @@ The file-level diff is available with **no extra fetch**: the installed side is 
 the install record (`InstalledFiles`, written by `WriteInstalledRecord`), and the candidate side
 rides in on the catalog entry (`ManifestFiles`, kept when the source parses `manifest.lock`).
 
-## 🚨 Unattended by default; reminder on opt-out
+## 🚨 Reminder by default; unattended on opt-in — seeded per deployment
 
-A changed module **installs itself** — the delta lands as soon as the green build is seen, with
-nobody clicking anything. An install record that sets `AutoUpdateDisabled` opts out: it gets a
-`Notification` satellite instead (the bell surfaces it, the catalog card offers **Update**) and
-nothing installs until a human acts.
+The **platform default is explicit opt-in**: a changed module raises a `Notification` satellite on
+the install record (the bell surfaces it, the catalog card offers **Update**) and nothing installs
+until a human acts. A record whose `AutoUpdate` flag is set installs the delta unattended instead.
 
-Default-on is safe because the unattended path is fenced three ways, none of which depend on a
-human being present:
+The opt-in is **stamped at install time from the deployment's policy**:
+`PluginCatalog:AutoUpdateByDefault` (default `false`) seeds every fresh install record. A
+deployment that wants plugins tracking their repos continuously sets it `true` — **our Helm
+deployments do**, so a plugin repo's green build reaches those portals with nobody clicking
+anything — while an installation that configures nothing stays review-first. Install-time seed
+only: the record's own flag is the runtime authority thereafter, in both directions — an update
+re-stamp carries it forward, and flipping the deployment default later changes nothing for
+already-installed packages.
+
+An opted-in, unattended update is still fenced three ways, none of which depend on a human being
+present:
 
 1. **Content identity** — an unchanged module is never touched, however many green builds land.
 2. **Additive install** — only manifest-tracked nodes are ever written or pruned. A node the user
@@ -89,9 +97,6 @@ human being present:
    [`SyncBehavior`](/Doc/Architecture/StaticRepoImport)) is skipped by both the upsert and the
    prune, exactly as the static-repo importer skips it. Claiming is the deliberate act that
    decouples one node from its package; an unclaimed local edit is overwritten, by design.
-
-Opt out per package where even fenced changes need review — a regulated deployment, a plugin whose
-CI you do not yet trust.
 
 ## Configuration
 
@@ -117,20 +122,22 @@ is what associates a repository with a catalog, and the same value resolves the 
 a `workflow_run` payload carries the same `repository` object a `push` does. A catalog whose source
 is a **local path** never matches a webhook, by construction.
 
-### 3. Opting a package out of unattended updates
+### 3. Opting in to unattended updates
 
-On by default. Set `AutoUpdateDisabled` on the installed package's record to fall back to the
-reminder-only flow for that package.
+Per deployment: `PluginCatalog:AutoUpdateByDefault=true` seeds every FUTURE install record opted
+in (the Helm chart sets this for our portals). Per package: set `AutoUpdate` on an installed
+package's record. Both are edits to the record's own flag — the deployment key is only the
+install-time seed.
 
 ### What you should see
 
 - **Nothing changed** → no notification, no log line beyond the build record itself. This is the
   common case and it is supposed to be quiet.
-- **A module changed** → the delta install runs, touching only the changed files — claimed
-  (non-`Include` `SyncBehavior`) nodes excepted.
-- **A module changed on an opted-out record** → an "Update available" notification on the install
-  record, naming how many files changed and removed, and the short sha it was built from. Nothing
-  installs.
+- **A module changed** → an "Update available" notification on the install record, naming how many
+  files changed and removed, and the short sha it was built from. Nothing installs — this is the
+  platform default.
+- **A module changed on an opted-in record** → the delta install runs, touching only the changed
+  files — claimed (non-`Include` `SyncBehavior`) nodes excepted.
 
 ## Failure modes, and what they look like
 

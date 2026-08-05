@@ -146,15 +146,86 @@ public class BuildCompletionSubscriptionTest(ITestOutputHelper output) : Monolit
             .Should().BeSameAs(watcher, "it is a mesh-scoped singleton, so its subscriptions die with the mesh");
     }
 
-    /// <summary>The default/opt-out rule: unattended unless the record explicitly opted out. An
-    /// absent flag (every record written before the flag existed) auto-applies.</summary>
+    /// <summary>The opt-in rule: unattended only for a record that opted in. An absent flag (every
+    /// record written before the flag existed) stays on the reminder path — the platform default.</summary>
     [Fact(Timeout = 120_000)]
-    public async Task UnattendedIsTheDefault_TheFlagIsAnOptOut()
+    public async Task ReminderIsTheDefault_AutoUpdateIsAnExplicitOptIn()
     {
         PluginUpdateWatcher.ShouldAutoApply(new PackageManifest { Id = "Gadget" })
-            .Should().BeTrue("a record that says nothing auto-updates — that is the default");
-        PluginUpdateWatcher.ShouldAutoApply(new PackageManifest { Id = "Gadget", AutoUpdateDisabled = true })
-            .Should().BeFalse("an opted-out record falls back to the reminder-only flow");
+            .Should().BeFalse("a record that says nothing gets the reminder — the platform default");
+        PluginUpdateWatcher.ShouldAutoApply(new PackageManifest { Id = "Gadget", AutoUpdate = true })
+            .Should().BeTrue("an opted-in record installs unattended");
+    }
+
+    /// <summary>
+    /// The install-time seed: a FRESH record takes the deployment's default
+    /// (<c>PluginCatalog:AutoUpdateByDefault</c>, absent = explicit opt-in — our Helm deployments
+    /// set it true so everything they install tracks its repo); an EXISTING record's own choice
+    /// wins over any deployment default, in BOTH directions — the config is a seed, never a live
+    /// override.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheDeploymentDefaultSeedsFreshInstalls_TheRecordsOwnChoiceWinsThereafter()
+    {
+        // Fresh install: no options / default options → reminder-only; opted-in deployment → auto-update.
+        PackageInstaller.SeedAutoUpdate(null, null)
+            .Should().BeFalse("a deployment that configures nothing is review-first");
+        PackageInstaller.SeedAutoUpdate(null, new PluginCatalogOptions())
+            .Should().BeFalse("the option's own default is explicit opt-in");
+        PackageInstaller.SeedAutoUpdate(null, new PluginCatalogOptions { AutoUpdateByDefault = true })
+            .Should().BeTrue("an opted-in deployment (our Helm portals) seeds fresh installs auto-updating");
+
+        // Existing record: its explicit choice survives every re-stamp, whatever the deployment says.
+        var optedIn = new PackageManifest { Id = "Gadget", AutoUpdate = true };
+        PackageInstaller.SeedAutoUpdate(optedIn, new PluginCatalogOptions())
+            .Should().BeTrue("an update re-stamp must not silently drop a package's opt-in");
+        var reminderOnly = new PackageManifest { Id = "Gadget" };
+        PackageInstaller.SeedAutoUpdate(reminderOnly, new PluginCatalogOptions { AutoUpdateByDefault = true })
+            .Should().BeFalse("flipping the deployment default later must not opt in already-installed packages");
+    }
+
+    /// <summary>
+    /// The integration half of the seed rule: an opted-in record stays opted in through a real
+    /// update. The record built on a re-stamp starts from the CATALOG manifest — which never
+    /// carries the policy field — so without the carry-forward the very FIRST auto-update would
+    /// have silently dropped the opt-in and every deployment would fall back to reminders after
+    /// one round.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnOptedInRecordStaysOptedInThroughAnUpdate()
+    {
+        await PackageInstaller.Install(Mesh, Pkg(ModuleV1), FilesAt(ModuleV1, "# Notes v1", "c1"), "c1")
+            .FirstAsync().ToTask();
+
+        var recordPath = $"{PackageInstaller.InstalledPartition}/Gadget";
+        await Mesh.GetWorkspace().GetMeshNodeStream(recordPath)
+            .Update(n => n with
+            {
+                Content = (n.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions) ?? new PackageManifest())
+                    with { AutoUpdate = true }
+            })
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+
+        // Wait until the flag is STORAGE-visible — that is the read the re-stamp's carry-forward
+        // does, and the hub write can flush a beat later than the stream emission.
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => storage.Read(recordPath, Mesh.JsonSerializerOptions))
+            .Where(n => n?.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)?.AutoUpdate == true)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+
+        var source = new RecordingSource(FilesAt(ModuleV2, "# Notes v2 — updated", "c2"));
+        await CatalogLayoutAreas.InstallOrUpdate(Mesh, source, "c2", Pkg(ModuleV2), null)
+            .FirstAsync().ToTask();
+
+        // The re-stamp really happened (baseline moved to v2) AND the opt-in survived it.
+        var record = await Mesh.GetWorkspace().GetMeshNodeStream(recordPath)
+            .Select(n => n?.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions))
+            .Where(m => m is not null && m.ModuleVersion == ModuleV2)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+        record!.AutoUpdate.Should().BeTrue(
+            "the update re-stamped the baseline from the policy-less catalog manifest — the record's "
+            + "own opt-in must be carried forward, not rebuilt as false");
     }
 
     /// <summary>

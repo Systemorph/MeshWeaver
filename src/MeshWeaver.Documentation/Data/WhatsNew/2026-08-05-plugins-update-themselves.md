@@ -1,17 +1,20 @@
 ---
-Name: Plugins update themselves
+Name: Plugins can update themselves
 Category: What's New
-Description: Installed plugins now pick up their repo's green builds automatically — your own added or claimed nodes are never touched.
+Description: Opt a plugin (or your whole deployment) into automatic updates — green builds install themselves, and your own added or claimed nodes are never touched.
 Icon: Sparkle
 ---
 
-Installed plugins now stay current on their own. When a plugin's repository passes CI, every
-installation that uses it installs the change automatically — only the files that actually changed,
-usually within minutes. No catalog visit, no Update button.
+Installed plugins can now stay current on their own. When a plugin's repository passes CI, an
+installation that opted in installs the change automatically — only the files that actually
+changed, usually within minutes. No catalog visit, no Update button. On the MeshWeaver cloud
+portals this is on for every plugin.
 
-Your content is safe from this: the update only ever touches nodes the plugin itself ships. Anything
-you added alongside them is invisible to it, and any shipped node you modified and claimed (set its
-sync behavior to excluded) stays yours — updates skip it entirely, forever.
+By default nothing installs unattended: you get an "Update available" notification on the
+installed package and choose when to apply it. Opt in per package on its install record, or for a
+whole deployment with one setting (`PluginCatalog:AutoUpdateByDefault`) so everything installed
+from then on tracks its repository.
 
-Prefer to review updates yourself? Opt a package out on its install record and you get an
-"Update available" notification instead — nothing installs until you choose.
+Your content is safe either way: an update only ever touches nodes the plugin itself ships.
+Anything you added alongside them is invisible to it, and any shipped node you modified and claimed
+(set its sync behavior to excluded) stays yours — updates skip it entirely, forever.

@@ -137,37 +137,67 @@ public static class PackageInstaller
             : Observable.Merge(leaves).ToList().Select(_ => System.Reactive.Unit.Default);
     }
 
+    /// <summary>
+    /// The install record's <c>AutoUpdate</c> on a (re-)stamp. An EXISTING record's choice is
+    /// carried forward verbatim — the record built here starts from the CATALOG manifest, which
+    /// never carries the policy field, so without this an update re-stamp would silently reset an
+    /// opted-in package back to reminder-only (breaking "our deployments always update" on the
+    /// very first update). A FRESH install seeds from the deployment's
+    /// <see cref="PluginCatalogOptions.AutoUpdateByDefault"/> (absent = the platform default:
+    /// explicit opt-in, no unattended installs). Pure.
+    /// </summary>
+    // Internal for the BuildCompletionSubscriptionTest pin (InternalsVisibleTo).
+    internal static bool SeedAutoUpdate(PackageManifest? existingRecord, PluginCatalogOptions? options) =>
+        existingRecord?.AutoUpdate ?? options?.AutoUpdateByDefault ?? false;
+
     private static IObservable<MeshNode> WriteInstalledRecord(
         IMessageHub hub, PackageManifest manifest, string installedFromRef, int count,
         ModuleManifest? moduleManifest = null)
     {
-        var record = MeshNode.FromPath($"{InstalledPartition}/{manifest.Id}") with
+        var recordPath = $"{InstalledPartition}/{manifest.Id}";
+        var serializerOptions = hub.JsonSerializerOptions;
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+
+        // Read the existing record first: the re-stamp must preserve the per-record policy
+        // (SeedAutoUpdate) rather than rebuild it from the policy-less catalog manifest.
+        var existing = persistence is not null
+            ? persistence.Read(recordPath, serializerOptions).Take(1)
+                .Select(n => n?.ContentAs<PackageManifest>(serializerOptions))
+                .Catch<PackageManifest?, Exception>(_ => Observable.Return<PackageManifest?>(null))
+            : Observable.Return<PackageManifest?>(null);
+
+        return existing.SelectMany(existingRecord =>
         {
-            NodeType = PackageNodeType,
-            Name = manifest.Name ?? manifest.Id,
-            State = MeshNodeState.Active,
-            Content = manifest with
+            var record = MeshNode.FromPath(recordPath) with
             {
-                InstalledFromRef = installedFromRef,
-                InstalledAtUtc = DateTimeOffset.UtcNow,
-                InstalledNodeCount = count,
-                // The manifest baseline the NEXT update diffs against (null when the package ships
-                // no manifest.lock — the legacy full path stays in charge then).
-                ModuleVersion = moduleManifest?.ModuleVersion ?? manifest.ModuleVersion,
-                InstalledFiles = moduleManifest?.Files ?? manifest.InstalledFiles,
-            },
-        };
-        // System-impersonated like every installer write (Using — see Upsert): this runs after
-        // barrier scheduler hops, where no ambient context survives.
-        return Observable.Using(
-                () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
-                      ?? System.Reactive.Disposables.Disposable.Empty,
-                _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(record)))
-            .FirstAsync().Select(d => d.Message)
-            .SelectMany(resp => resp.Success
-                ? Observable.Return(resp.Node!)
-                : Observable.Throw<MeshNode>(new InvalidOperationException(
-                    $"Recording install of '{manifest.Id}' failed: {resp.Error}")));
+                NodeType = PackageNodeType,
+                Name = manifest.Name ?? manifest.Id,
+                State = MeshNodeState.Active,
+                Content = manifest with
+                {
+                    InstalledFromRef = installedFromRef,
+                    InstalledAtUtc = DateTimeOffset.UtcNow,
+                    InstalledNodeCount = count,
+                    // The manifest baseline the NEXT update diffs against (null when the package ships
+                    // no manifest.lock — the legacy full path stays in charge then).
+                    ModuleVersion = moduleManifest?.ModuleVersion ?? manifest.ModuleVersion,
+                    InstalledFiles = moduleManifest?.Files ?? manifest.InstalledFiles,
+                    AutoUpdate = SeedAutoUpdate(
+                        existingRecord, hub.ServiceProvider.GetService<PluginCatalogOptions>()),
+                },
+            };
+            // System-impersonated like every installer write (Using — see Upsert): this runs after
+            // barrier scheduler hops, where no ambient context survives.
+            return Observable.Using(
+                    () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
+                          ?? System.Reactive.Disposables.Disposable.Empty,
+                    _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(record)))
+                .FirstAsync().Select(d => d.Message)
+                .SelectMany(resp => resp.Success
+                    ? Observable.Return(resp.Node!)
+                    : Observable.Throw<MeshNode>(new InvalidOperationException(
+                        $"Recording install of '{manifest.Id}' failed: {resp.Error}")));
+        });
     }
 
     // Installs a Code package: synthesize the NodeType node from the manifest's configuration, import
@@ -258,10 +288,10 @@ public static class PackageInstaller
             {
                 // A CLAIMED node — the user set a non-Include SyncBehavior on it, typically after
                 // modifying it — is theirs, not the repo's. Skip it, exactly as the static-repo
-                // importer does. This is one of the fences that makes UNATTENDED updates
-                // (auto-update on by default) safe: a local edit under a claim can never be
-                // clobbered by a green build. An unclaimed local edit IS overwritten — claiming is
-                // the deliberate act that decouples a node from its package.
+                // importer does. This is one of the fences that makes UNATTENDED updates (opted-in
+                // records; our deployments opt in wholesale) safe: a local edit under a claim can
+                // never be clobbered by a green build. An unclaimed local edit IS overwritten —
+                // claiming is the deliberate act that decouples a node from its package.
                 if (current is not null && current.SyncBehavior != SyncBehavior.Include)
                     return Observable.Return(false);
                 if (current is not null && IsUnchanged(current, node, options))
@@ -722,7 +752,7 @@ public static class PackageInstaller
         // Read-before-delete: a CLAIMED node (non-Include SyncBehavior) is the user's, not the
         // repo's — the repo dropping its file revokes the PACKAGE's copy, never the user's claim.
         // The same fence UpsertIfChanged applies on the write side, and part of what makes
-        // unattended (default-on) auto-update safe. Only ever narrows the existing prune set:
+        // unattended (opted-in) auto-update safe. Only ever narrows the existing prune set:
         // removedNodePaths is already restricted to previously-installed paths, so a user-ADDED
         // node was never a prune candidate to begin with.
         IObservable<int> Prune() =>
