@@ -130,6 +130,17 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // creates of any non-partition-owning type. AddSpaceType is idempotent,
             // so tests that also call it explicitly are unaffected.
             .AddSpaceType()
+            .AddMeshNodes(TestUsers.DevLoginAdminAccess())
+            // Real STATIC root Admin grant for the DevLogin identity (Roland).
+            // Claim roles no longer grant node permissions (the paywall fix —
+            // PermissionEvaluator): the login context's Roles=["Admin"] is a platform
+            // capability, not data access, so without a real grant every test-body
+            // CreateNode under the DevLogin circuit is denied. Chained HERE, in the base
+            // every suite funnels through, because these are the harness's own identities;
+            // Public, Anonymous, groups and per-test subjects are untouched, so security
+            // assertions about them stay meaningful. A static grant also keeps the
+            // evaluator's synchronous fast path alive where tests deliberately stall the
+            // synced queries (CompileSourceSnapshotWedgeTest).
             .AddMeshNodes(new MeshNode(TestPartition) { Name = "Test Data", NodeType = "Markdown" })
             // 🚨 REPLACE, don't TryAdd. AddInMemoryPersistence already TryAddSingleton'd the
             // pid-scoped default IAssemblyStore, so a TryAdd here would be a no-op and every test
@@ -162,14 +173,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
-            .AddMeshNodes(TestUsers.PublicAdminAccess())
-            // Real STATIC root Admin grants for the DevLogin identities. Claim roles no longer
-            // grant node permissions (the paywall fix — PermissionEvaluator), so the login
-            // context's Roles=["Admin"] is a platform capability, not data access. The static
-            // grant keeps the evaluator's synchronous fast path alive for the harness user —
-            // without it, permission resolution waits on the synced access queries, which tests
-            // that deliberately stall synced queries (CompileSourceSnapshotWedgeTest) would wedge.
-            .AddMeshNodes(TestUsers.DevLoginAdminAccess());
+            .AddMeshNodes(TestUsers.PublicAdminAccess());
 
     /// <summary>
     /// Initializes the test base, wiring xUnit output and building (or reusing, in shared-mesh mode)

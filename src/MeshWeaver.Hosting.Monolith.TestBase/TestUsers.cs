@@ -118,11 +118,19 @@ public static class TestUsers
     /// the evaluator folded them into every node's permissions, undeniably; see
     /// PaywallRealGateShapeTests). Tests used to free-ride on <c>Roles = ["Admin"]</c>; access
     /// now comes from assignment NODES, in tests exactly as in production. Deliberately grants
-    /// the two DevLogin users ONLY — Public, Anonymous and per-test viewer identities keep
-    /// whatever the suite seeds, so security assertions stay meaningful.</para>
+    /// <see cref="Admin"/> (Roland) ONLY — the harness's ambient setup identity.
+    /// <see cref="TestUser"/> is excluded on purpose: suites use it as a SUBJECT (grant it
+    /// Viewer/Editor per test and assert the resulting affordances — MenuAccessControlTest), and
+    /// a baked-in root Admin would shadow every such role. Public, Anonymous, groups and
+    /// per-test identities keep whatever the suite seeds, so security assertions stay
+    /// meaningful.</para>
     /// </summary>
     public static MeshNode[] DevLoginAdminAccess() =>
-        new[] { Admin, TestUser }.Select(u => new MeshNode($"{u.ObjectId}_Access", "_Access")
+        // Node id deliberately differs from the runtime convention ({subject}_Access): several
+        // suites CREATE `_Access/Roland_Access` themselves in SetupAccessRightsAsync, and a
+        // static node at the same path makes that create collide (completes empty). The
+        // evaluator folds assignments by accessObject, not node id, so this grants identically.
+        new[] { Admin }.Select(u => new MeshNode($"{u.ObjectId}_DevLoginAccess", "_Access")
         {
             NodeType = "AccessAssignment",
             Name = $"{u.Name} — Admin (DevLogin)",
