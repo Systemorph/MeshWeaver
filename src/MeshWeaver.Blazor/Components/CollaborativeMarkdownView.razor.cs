@@ -87,6 +87,10 @@ public partial class CollaborativeMarkdownView
     // not-yet-created {owner}/_Activity/markdown-{id} (the subscribe-before-create NotFound storm).
     private bool _kernelReady;
     private IReadOnlyCollection<SubmitCodeRequest>? _codeSubmissions;
+    // What each cell last SUBMITTED, so its toolbar can say whether the output on screen still belongs
+    // to the code on screen. Load-bearing HERE in particular: this view EDITS the document, so a cell's
+    // code routinely changes under a result pane still showing the previous run.
+    private readonly CodeCellRunTracker _runTracker = new();
 
     private Address ResolveActivityAddress()
     {
@@ -410,6 +414,9 @@ public partial class CollaborativeMarkdownView
                 return;
             }
             var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+            // Record BEFORE handing the batch off: these are the cells whose output the reader is
+            // about to see, and CreateActivityAndSubmit posts them from another thread.
+            _runTracker.Record(_codeSubmissions);
             MarkdownViewLogic.CreateActivityAndSubmit(
                 Hub, meshService, KernelAddress, ownerPath, _kernelId, _codeSubmissions,
                 onReady: OnKernelReady);
@@ -511,9 +518,11 @@ public partial class CollaborativeMarkdownView
             : _processedHtml;
 
         // Cell toolbars' Run buttons are enabled only once the kernel activity is routable —
-        // the same gate as the live result-area embed above.
+        // the same gate as the live result-area embed above. The run state is computed against the
+        // CURRENT parse, so a cell the author just edited renders as stale until it is re-run.
         var renderer = new MarkdownHtmlRenderer(Mode, Stream,
-            _kernelReady ? ResubmitBlock : null);
+            _kernelReady ? ResubmitBlock : null,
+            id => _runTracker.StateOf(id, _codeSubmissions));
         renderer.ShowReferencesSection = true;
         renderer.RenderHtml(builder, html);
     }
@@ -527,6 +536,7 @@ public partial class CollaborativeMarkdownView
             .FirstOrDefault(s => string.Equals(s.Id, submissionId, StringComparison.OrdinalIgnoreCase));
         if (submission is null || !_kernelReady)
             return;
+        _runTracker.Record(submission);
         Hub.Post(submission, o => o.WithTarget(KernelAddress));
     }
 
@@ -897,14 +907,16 @@ public partial class CollaborativeMarkdownView
         _ => "Change"
     };
 
-    internal static string FormatTimeAgo(DateTimeOffset dateTime)
+    // The relative buckets are zone-independent; only the absolute >7d fallback is a wall
+    // clock, so that one renders in the viewer's zone.
+    internal static string FormatTimeAgo(DateTimeOffset dateTime, string? zoneId = null)
     {
         var timeSpan = DateTimeOffset.UtcNow - dateTime;
         if (timeSpan.TotalMinutes < 1) return "just now";
         if (timeSpan.TotalMinutes < 60) return $"{(int)timeSpan.TotalMinutes}m ago";
         if (timeSpan.TotalHours < 24) return $"{(int)timeSpan.TotalHours}h ago";
         if (timeSpan.TotalDays < 7) return $"{(int)timeSpan.TotalDays}d ago";
-        return dateTime.ToString("MMM d, yyyy");
+        return DisplayTimeExtensions.ToDisplayTime(dateTime, zoneId).ToString("MMM d, yyyy");
     }
 
     /// <summary>

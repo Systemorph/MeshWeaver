@@ -5,10 +5,13 @@ namespace MeshWeaver.Markdown.Test;
 
 /// <summary>
 /// Pins the HTML shape of executable code blocks rendered as notebook cells: an executable block that
-/// shows its code (<c>--render X --show-code</c>) is wrapped in a cell frame carrying a toolbar marker
-/// (which the Blazor renderer turns into the Run button) with the code and the kernel result area
-/// inside the same frame — code first, output directly below. Blocks that hide their code, and plain
-/// documentation-only fences, keep their previous shape.
+/// shows its code (<c>--render X --show-code</c>) is wrapped in a cell frame holding the code, the
+/// kernel result area directly below it, and — on the frame's BOTTOM edge — the toolbar marker the
+/// clients turn into the Run button. Blocks that hide their code, and plain documentation-only
+/// fences, keep their previous shape.
+/// <para>The ORDER is the contract, not a detail: every client (Blazor <c>MarkdownHtmlRenderer</c>,
+/// the React <c>"toolbar"</c> segment, React Native's <c>RunCell</c>) renders these segments in
+/// document order, so this single emission decides where the Run button sits on all three.</para>
 /// </summary>
 public class ExecutableCodeCellRenderingTest
 {
@@ -33,12 +36,48 @@ public class ExecutableCodeCellRenderingTest
         html.Should().Contain(ExecutableCodeBlockRenderer.KernelAddressPlaceholder,
             "the kernel result area must sit inside the output segment");
 
-        // Order: toolbar before code, code before output — the notebook reading shape.
+        // Order: code, then output, then the toolbar LAST — Run sits at the foot of the cell,
+        // below the code window (composer-style), never above it.
         var toolbarIdx = html.IndexOf(ExecutableCodeBlockRenderer.CellToolbarClass, StringComparison.Ordinal);
         var codeIdx = html.IndexOf("code-content", StringComparison.Ordinal);
         var outputIdx = html.IndexOf(ExecutableCodeBlockRenderer.CellOutputClass, StringComparison.Ordinal);
-        toolbarIdx.Should().BeLessThan(codeIdx);
+        codeIdx.Should().BeLessThan(outputIdx, "the run's output belongs directly under the code");
+        outputIdx.Should().BeLessThan(toolbarIdx, "the Run toolbar is the composer bar at the cell's foot");
+    }
+
+    [Fact]
+    public void ShowHeaderVariant_AlsoPutsTheToolbarLast()
+    {
+        // --show-header renders the fence header instead of a bare code block, through a different
+        // branch of the renderer. It must reach the same cell shape — the earlier layout put the
+        // toolbar first for BOTH branches, so fixing only one would leave a silent inconsistency.
+        var html = Render("```csharp --render HeaderDemo --show-header\n1 + 1\n```");
+
+        var toolbarIdx = html.IndexOf(ExecutableCodeBlockRenderer.CellToolbarClass, StringComparison.Ordinal);
+        var codeIdx = html.IndexOf("code-content", StringComparison.Ordinal);
+        var outputIdx = html.IndexOf(ExecutableCodeBlockRenderer.CellOutputClass, StringComparison.Ordinal);
+
+        toolbarIdx.Should().BeGreaterThan(-1);
         codeIdx.Should().BeLessThan(outputIdx);
+        outputIdx.Should().BeLessThan(toolbarIdx);
+    }
+
+    [Fact]
+    public void CellFrame_ClosesAfterTheToolbar()
+    {
+        // The toolbar must be INSIDE the cell frame, not orphaned after it — otherwise it renders as
+        // a loose bar under the card with none of the frame's border/background, which reads as a
+        // stray button rather than the cell's own composer bar.
+        var html = Render("```csharp --render FrameDemo --show-code\n1 + 1\n```");
+
+        var cellIdx = html.IndexOf($"<div class=\"{ExecutableCodeBlockRenderer.CellClass}\">", StringComparison.Ordinal);
+        var toolbarIdx = html.IndexOf(ExecutableCodeBlockRenderer.CellToolbarClass, StringComparison.Ordinal);
+        var closeIdx = html.IndexOf("</div>", toolbarIdx, StringComparison.Ordinal);
+
+        cellIdx.Should().BeLessThan(toolbarIdx);
+        // …toolbar div closes, then the frame closes: two consecutive closing tags after the marker.
+        html[closeIdx..].Should().StartWith("</div></div>",
+            "the toolbar closes and the cell frame closes right after it");
     }
 
     [Fact]
