@@ -696,10 +696,20 @@ public static class PackageInstaller
         // before for every reader of that SAME handle. Reactive and bounded by the retype LANDING
         // (it is in flight and always settles); the Timeout is the graceful sink for a wedged owner,
         // never a fixed sleep that would cache the fallback.
+        // 🚨 Explicitly SYSTEM-scoped: the shared-handle read runs through MeshNodeStreamCache's
+        // per-user read gate, and the freshly-installed partition is System-owned with NO user
+        // grants — an ambient USER identity at this subscription (the catalog click's, before it
+        // ran installs as System; any future caller's) turns the reconciliation into
+        // "lacks Read permission on '{root}'" and fails the whole install (education CI,
+        // 2026-08-05, first image carrying #817). Provisioning reads its own outcome as System,
+        // never as whoever happened to trigger it.
         IObservable<System.Reactive.Unit> RootRetypeReconciled() =>
             placeholderRoot is null || root is null || string.IsNullOrEmpty(root.NodeType)
                 ? Observable.Return(System.Reactive.Unit.Default)
-                : hub.GetMeshNodeStream(root.Path)
+                : Observable.Using(
+                        () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
+                              ?? System.Reactive.Disposables.Disposable.Empty,
+                        _ => hub.GetMeshNodeStream(root.Path))
                     .Where(n => n is not null
                         && string.Equals(n.NodeType, root.NodeType, StringComparison.Ordinal))
                     .Take(1)
