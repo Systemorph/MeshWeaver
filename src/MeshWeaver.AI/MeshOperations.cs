@@ -756,8 +756,33 @@ public class MeshOperations
     /// Returns <c>null</c> on timeout or routing failure (node does not exist /
     /// hub couldn't be activated). See <c>Doc/Architecture/CqrsAndContentAccess.md</c>.
     /// </summary>
-    private IObservable<MeshNode?> FetchNode(string resolvedPath, int timeoutSeconds = 10) =>
-        Observable.Create<MeshNode?>(observer =>
+    private IObservable<MeshNode?> FetchNode(string resolvedPath, int timeoutSeconds = 10)
+    {
+        // 🚨 SECURITY: capture the caller's identity HERE, synchronously, while we are still on the
+        // caller's execution context — and re-establish it around the subscribe below.
+        //
+        // `AccessContext` is an AsyncLocal and is CLEARED across `.Subscribe` hops (the same reason
+        // ReadNodeOrUnified captures it for the PII projection). `MeshNodeStreamCache.GetStreamRaw`
+        // reads `accessService.Context ?? CircuitContext` AT SUBSCRIBE TIME to decide whether to
+        // apply its per-user read gate — and when that comes back null it deliberately FALLS
+        // THROUGH to the shared upstream, which was opened under the cache's own system-read
+        // identity. So a lost identity did not fail closed: it read EVERYTHING.
+        //
+        // Measured on memex 2026-08-05: `get @AgenticPrimerDe/02-CodeWunsch` returned 79,650 chars
+        // of a PAID course lesson to a signed-in user with no entitlement and no grant, while the
+        // gating data was entirely correct — `Public|AgenticPrimerDe/02-CodeWunsch|Read|is_allow=f`
+        // is present, and the SQL query path (GenerateAccessControlClause) hides the same node. Only
+        // the exact-path read leaked it, which is why it looked like "children vanish from listings
+        // but direct get by path still works" (noted 2026-07-29 as an operational quirk — it was
+        // this hole).
+        //
+        // Re-establishing the identity makes the EXISTING gate apply; it does not add a second
+        // access model, and it cannot lock out the background/hub-principal paths the gate
+        // deliberately passes through (a null capture stays null).
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var callerIdentity = accessService?.Context ?? accessService?.CircuitContext;
+
+        return Observable.Create<MeshNode?>(observer =>
         {
             var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
             var emitted = 0;
@@ -792,6 +817,13 @@ public class MeshOperations
                 // read immediately after a write sees the fresh value. GetMeshNodeStream also
                 // activates a cold hub on subscribe. See Doc/Architecture/CqrsAndContentAccess.md.
                 // The CTS timeout above maps a never-emitting (non-existent) node to null.
+                // The identity must be ambient WHEN THE STREAM IS BUILT — the cache's read gate
+                // reads it at subscribe time, not on emission (so CarryAccessContext, which
+                // restores around each callback, would be too late). Scoped and disposed here;
+                // a null capture switches to null, which is exactly the pass-through the gate
+                // already documents for background / hub-principal flows.
+                using var identityScope = accessService?.SwitchAccessContext(callerIdentity);
+
                 innerSubscription = hub.GetWorkspace().GetMeshNodeStream(resolvedPath)
                     // Routing-fallback safety: a path with no per-node hub can route to the
                     // closest ancestor, which returns ITS node. Filter by exact path so
@@ -803,8 +835,17 @@ public class MeshOperations
                         node => EmitOnce(node),
                         ex =>
                         {
-                            // DeliveryFailure or other error — node not found / unreachable.
-                            logger.LogDebug(ex, "FetchNode read failed for {Path}", resolvedPath);
+                            // Read DENIED by the cache's per-user gate, or DeliveryFailure /
+                            // node not found. Both collapse to null → the caller reports
+                            // "Not found", which is the safe denial: it does not disclose that a
+                            // gated node exists. Logged distinctly so an operator can tell a
+                            // paywall denial from a routing failure.
+                            if (ex is UnauthorizedAccessException)
+                                logger.LogInformation(
+                                    "FetchNode DENIED for {Path} — caller lacks Read (gated content)",
+                                    resolvedPath);
+                            else
+                                logger.LogDebug(ex, "FetchNode read failed for {Path}", resolvedPath);
                             EmitOnce(null);
                         });
             }
@@ -820,6 +861,7 @@ public class MeshOperations
                 cts.Dispose();
             });
         });
+    }
 
     /// <summary>
     /// Read-your-writes barrier: waits (bounded) for the live mesh-node mirror at
