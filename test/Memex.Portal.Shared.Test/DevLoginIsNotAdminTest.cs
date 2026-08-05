@@ -62,6 +62,23 @@ public class DevLoginIsNotAdminTest
     }
 
     [Fact]
+    public void TheRuleIsPositionIndependent_SoItCanRunOnEverySignin()
+    {
+        // Regression: the grant first lived inside ProvisionDevUser, which runs ONLY when the User
+        // node is missing. On any mesh whose database already held the user — a re-boot reusing the
+        // volume, a seeded user, the second run of a suite — the configured admin silently came back
+        // as an ordinary user and the e2e bootstrap hung on an admin-gated Plugin Catalog it could
+        // no longer read. The rule must therefore be a pure function of (list, username) with no
+        // dependence on whether this is the user's first signin, so it is safe to evaluate every
+        // time; the caller now does exactly that.
+        const string list = "e2e-admin";
+        Assert.True(DevAuthController.IsDevAdmin(list, "e2e-admin"));
+        Assert.True(DevAuthController.IsDevAdmin(list, "e2e-admin"));   // second signin: unchanged
+        Assert.False(DevAuthController.IsDevAdmin(list, "e2e-locked"));
+        Assert.False(DevAuthController.IsDevAdmin(list, "e2e-locked")); // and still not an admin
+    }
+
+    [Fact]
     public void AnEmptyUsernameIsNeverAdmin()
     {
         // Guards the degenerate case where a blank id would otherwise match a stray empty entry.

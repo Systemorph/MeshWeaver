@@ -109,6 +109,20 @@ public class DevAuthController : ControllerBase
             return BadRequest("Person not found");
         }
 
+        // PLATFORM admin is opt-in and explicit, never a side effect of signing in: only the
+        // usernames named in `Authentication:DevAdminUsers` get it, and everyone else stays an
+        // ordinary user — which is what lets the e2e suite prove the purchase funnel at all.
+        //
+        // 🚨 Applied on EVERY signin, not inside ProvisionDevUser. That branch runs only when the
+        // User node is MISSING, so on any mesh whose database already holds the user — a re-boot
+        // reusing the volume, a seeded user, the second run of a suite — the grant would never be
+        // written and the configured admin would silently come back as an ordinary user. That is
+        // exactly how it failed the first time: a fresh identity got the grant, `e2e-admin` did
+        // not, and the bootstrap hung on an admin-gated Plugin Catalog it could no longer read.
+        // GrantPlatformAdmin is an idempotent create-or-update, so re-running it is free.
+        if (_devLoginEnabled && IsConfiguredDevAdmin(node.Id))
+            await _onboarding.GrantPlatformAdmin(node.Id).FirstAsync();
+
         var person = ExtractPersonInfo(node.Id, node.Content);
         if (person == null)
         {
@@ -191,12 +205,6 @@ public class DevAuthController : ControllerBase
         // (installed course copies, skills, agents). This is scoped to `{user}/_Access` with
         // MainNode = {user}; it confers nothing anywhere else.
         await _onboarding.GrantSelfAdmin(username).FirstAsync();
-        // PLATFORM admin is opt-in and explicit, never a side effect of signing in. A harness that
-        // needs one (the e2e bootstrap installs courses through the Plugin Catalog) names it in
-        // `Authentication:DevAdminUsers`; everyone else stays an ordinary user, which is what makes
-        // the suite able to prove the purchase funnel at all.
-        if (IsConfiguredDevAdmin(username))
-            await _onboarding.GrantPlatformAdmin(username).FirstAsync();
         return userNode;
     }
 
