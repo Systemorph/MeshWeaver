@@ -780,7 +780,22 @@ public class MeshOperations
         // access model, and it cannot lock out the background/hub-principal paths the gate
         // deliberately passes through (a null capture stays null).
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var callerIdentity = accessService?.Context ?? accessService?.CircuitContext;
+        // 🚨 An AGENT-FACING read never proceeds with NO identity. The framework's global fallback
+        // deliberately treats an absent AccessContext as System — correct for background tasks
+        // (timers, seed jobs) that legitimately have none, and pinned by
+        // SubscribeRequestIdentityRoutingTest.SubscribeRequest_WithNullContext_FallsBackToSystem.
+        // But System holds Permission.All, so applying that default to a REQUEST-shaped read means
+        // "nobody is asking" is served everything — including gated, PAID content. Measured on
+        // memex 2026-08-05: an unentitled user read a full paid course lesson by exact path
+        // (`get @AgenticPrimerDe/02-CodeWunsch`), and the silo trace showed it reaching the grain
+        // as `userId=system-security`.
+        //
+        // This surface is only ever reached by a caller (MCP tool, agent round), so absence of a
+        // user here means UNAUTHENTICATED, not infrastructure: fall back to Anonymous. That sees
+        // public content and is denied gated content, exactly like a logged-out visitor — and it
+        // leaves the global background-task fallback untouched.
+        var callerIdentity = accessService?.Context ?? accessService?.CircuitContext
+            ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = "Anonymous", IsVirtual = true };
 
         return Observable.Create<MeshNode?>(observer =>
         {
