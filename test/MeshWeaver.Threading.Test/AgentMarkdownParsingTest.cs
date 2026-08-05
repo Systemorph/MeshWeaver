@@ -1,6 +1,5 @@
 using System.Linq;
 using MeshWeaver.AI;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Documentation;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;

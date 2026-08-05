@@ -122,8 +122,10 @@ public class DocumentationLinkIntegrityTest
             // runtime but has no embedded resource to resolve against here. Only the partition
             // root ("Agent", still in knownPaths) remains statically verifiable; typo-catching for
             // agent links now rests with the plugins repo's gate, next to the markdown it guards.
+            // Classify on the trailing-slash-normalized form so "/Agent/" (a root link) stays a
+            // verifiable root, not a skipped child (Copilot catch).
             if (string.Equals(partition, "Agent", StringComparison.OrdinalIgnoreCase)
-                && target.Contains('/'))
+                && target.TrimEnd('/').Contains('/'))
                 continue;
 
             if (!knownPaths.Contains(target.TrimEnd('/')))
