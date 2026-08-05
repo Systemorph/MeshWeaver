@@ -114,6 +114,51 @@ public record PackageManifest
     /// install path).
     /// </summary>
     public ImmutableSortedDictionary<string, string>? InstalledFiles { get; init; }
+
+    /// <summary>
+    /// Opt IN to unattended updates for this installed package: when the source repo's CI goes
+    /// green and this module's content hash actually moved, install the delta without waiting for
+    /// a human to click Update. Unset — the platform default — the record stays on the reminder
+    /// path (an "Update available" notification, nothing installed).
+    ///
+    /// <para><b>Seeded at install time from the deployment's policy</b>
+    /// (<see cref="PluginCatalogOptions.AutoUpdateByDefault"/>): a deployment that opts in — ours
+    /// do, via the Helm chart — gets every freshly installed package auto-updating with no
+    /// per-package step, while the platform default stays explicit-opt-in. Thereafter the record's
+    /// own value is the sole runtime authority in BOTH directions: an update re-stamp carries it
+    /// forward (see <c>PackageInstaller.SeedAutoUpdate</c> — the re-stamp starts from the
+    /// policy-less catalog manifest, so without the carry-forward every update would silently
+    /// reset the opt-in), and flipping the deployment default later changes nothing for
+    /// already-installed packages.</para>
+    ///
+    /// <para>Opted-in updates are still fenced three ways: the content-identity gate (an unchanged
+    /// module is never touched), the additive install (a node the user ADDED is structurally
+    /// invisible to the update), and the per-node
+    /// <see cref="MeshWeaver.Mesh.MeshNode.SyncBehavior"/> claim (a node the user MODIFIED and
+    /// claimed is skipped by both upsert and prune).</para>
+    ///
+    /// <para>Default <c>false</c> — the CLR default — so the flag round-trips loss-free under
+    /// default-suppressing serialization (a declared-<c>true</c> bool loses its true→false
+    /// transition; the trap already diagnosed on this codebase). Only meaningful on an INSTALL
+    /// RECORD, and only consulted when the module's <see cref="ModuleVersion"/> has genuinely
+    /// moved. See <c>Doc/Architecture/PluginUpdateOnGreenBuild</c>.</para>
+    /// </summary>
+    public bool AutoUpdate { get; init; }
+
+    /// <summary>
+    /// The module manifest's per-file hash map as it stands AT THE CATALOG'S REF
+    /// (<see cref="ModuleManifest.Files"/>) — the candidate side of the diff, where
+    /// <see cref="InstalledFiles"/> is the installed side. Set by the source while listing; never
+    /// authored and never written to the install record (the record stores the map it installed, as
+    /// <see cref="InstalledFiles"/>).
+    ///
+    /// <para>Diffing the two yields the actual added/modified/removed file list that a
+    /// build-completion subscriber reports, so nothing has to re-fetch the sidecar it already read.
+    /// Null when the module ships no <c>manifest.lock</c> — the legacy commit-sha comparison applies
+    /// then, and no file-level diff is available.</para>
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableSortedDictionary<string, string>? ManifestFiles { get; init; }
 }
 
 /// <summary>A single file of a package folder read from the source at a git ref.</summary>

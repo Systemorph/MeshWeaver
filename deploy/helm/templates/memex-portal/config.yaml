@@ -213,6 +213,12 @@ data:
   Features__StaticRepoSync__Partitions__2: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__2 | default "Provider" }}"
   Features__StaticRepoSync__Partitions__3: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__3 | default "Harness" }}"
   Features__StaticRepoSync__Partitions__4: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__4 | default "Skill" }}"
+  # ---- Plugin auto-update: the PLATFORM default is explicit opt-in (no unattended installs), but
+  # OUR deployments track the plugin repos continuously — a fresh install record is seeded opted-in,
+  # so a plugin repo's green build reaches these portals with nobody clicking Update. Install-time
+  # seed only; a record's own AutoUpdate flag stays the runtime authority thereafter.
+  # See Doc/Architecture/PluginUpdateOnGreenBuild.md.
+  PluginCatalog__AutoUpdateByDefault: "{{ .Values.config.memex_portal.PluginCatalog__AutoUpdateByDefault | default "true" }}"
   # ---- System email (Microsoft Graph) — BIDIRECTIONAL. Outbound invitations + notifications
   # (/sendMail, Mail.Send app permission) AND optional inbound email→agent channel (inbox
   # change-notification subscription, Mail.ReadWrite app permission). Non-secret here;
