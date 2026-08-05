@@ -101,7 +101,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     /// <summary>
     /// True when every namespace the request targets is owned by a static
     /// partition (Agent, Model, Role, …) — Postgres has nothing to contribute,
-    /// so QueryAsync should yield break instead of issuing SQL. Unscoped
+    /// so QueryRowsAsync should return empty instead of issuing SQL. Unscoped
     /// requests (no namespace anywhere) return false: we still need to fan out
     /// to the writable mesh.
     /// </summary>
@@ -199,13 +199,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     /// </summary>
     public IObservable<IReadOnlyList<object>> QueryNodes(
         MeshQueryRequest request, JsonSerializerOptions options)
-        => _ioPool.Invoke(async ct =>
-        {
-            var results = new List<object>();
-            await foreach (var item in QueryAsync(request, options, ct).ConfigureAwait(false))
-                results.Add(item);
-            return (IReadOnlyList<object>)results;
-        });
+        => _ioPool.Invoke(async ct => await QueryRowsAsync(request, options, ct).ConfigureAwait(false));
 
     /// <summary>
     /// Persistence-layer async boundary: the single async-enumerable pump over
@@ -222,19 +216,20 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     /// rows the typed layer could not accept — and it dropped or mis-cast every one of them.
     /// The SELECT is narrowed in SQL either way, so nothing extra is fetched.
     /// </param>
-    private async IAsyncEnumerable<object> QueryAsync(
+    private async Task<IReadOnlyList<object>> QueryRowsAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct = default,
+        CancellationToken ct = default,
         bool projectSelect = true)
     {
+        var rows = new List<object>();
         // Self-filter — MeshQuery's aggregator deliberately doesn't pre-filter
         // by Matches() ("let each provider own the 'is this mine?' decision in
         // one place" — MeshQuery.SelectMatchingProviders). So when a query
         // targets only excluded (static-owned) namespaces, we'd otherwise
         // round-trip to Postgres for guaranteed-empty SELECTs.
         if (_excludedNamespaces.Count > 0 && OnlyTargetsExcludedNamespaces(request))
-            yield break;
+            return rows;
 
         // Multi-query union: push UNION down to PostgreSQL via the adapter so
         // the database does the dedup-by-path in a single round-trip. The
@@ -243,9 +238,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         // PostgreSqlStorageAdapter.QueryNodesAsync(IReadOnlyList&lt;ParsedQuery&gt;,...).
         if (request.Queries is { Count: > 1 })
         {
-            await foreach (var item in QueryNodesUnionAsync(request, options, ct, projectSelect).ConfigureAwait(false))
-                yield return item;
-            yield break;
+            rows.AddRange(await QueryUnionRowsAsync(request, options, ct, projectSelect).ConfigureAwait(false));
+            return rows;
         }
 
         var parsedQuery = _parser.Parse(request.Query);
@@ -285,8 +279,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                 var structuralFilter = parsedQuery with { TextSearch = null };
                 await foreach (var node in _adapter.VectorSearchAsync(
                     vec, options, structuralFilter, vectorUserId, vectorNamespace, topK, lexicalTerm: parsedQuery.TextSearch, ct: ct).ConfigureAwait(false))
-                    yield return node;
-                yield break;
+                    rows.Add(node);
+                return rows;
             }
             // GenerateEmbeddingAsync returned null (NullEmbeddingProvider, or
             // a transient failure) — fall through to ILIKE so the user still
@@ -336,14 +330,14 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             foreach (var (node, _) in buffered.OrderByDescending(b => b.Score))
             {
                 if (skip > 0) { skip--; continue; }
-                yield return projectSelect && parsedQuery.Select != null
+                rows.Add(projectSelect && parsedQuery.Select != null
                     ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
-                    : node;
+                    : node);
                 count++;
                 if (parsedQuery.Limit.HasValue && count >= parsedQuery.Limit.Value)
-                    yield break;
+                    return rows;
             }
-            yield break;
+            return rows;
         }
 
         var skipOrig = request.Skip ?? 0;
@@ -362,14 +356,16 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                 continue;
             }
 
-            yield return projectSelect && parsedQuery.Select != null
+            rows.Add(projectSelect && parsedQuery.Select != null
                 ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
-                : node;
+                : node);
 
             countOrig++;
             if (parsedQuery.Limit.HasValue && countOrig >= parsedQuery.Limit.Value)
-                yield break;
+                return rows;
         }
+
+        return rows;
     }
 
     /// <summary>
@@ -378,12 +374,13 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     /// then hands the parsed list to the adapter's UNION-emitting overload.
     /// First query's sort/limit/skip apply to the unioned result set.
     /// </summary>
-    private async IAsyncEnumerable<object> QueryNodesUnionAsync(
+    private async Task<IReadOnlyList<object>> QueryUnionRowsAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct,
+        CancellationToken ct,
         bool projectSelect = true)
     {
+        var rows = new List<object>();
         var queries = request.Queries!;
         var parsedList = new List<ParsedQuery>(queries.Count);
         ParsedQuery? firstParsed = null;
@@ -436,13 +433,15 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                 continue;
             if (skip > 0) { skip--; continue; }
 
-            yield return projectSelect && firstParsed!.Select is { } unionSelect
+            rows.Add(projectSelect && firstParsed!.Select is { } unionSelect
                 ? ParsedQuery.ProjectToSelect(node, unionSelect)
-                : node;
+                : node);
             count++;
             if (effectiveLimit.HasValue && count >= effectiveLimit.Value)
-                yield break;
+                return rows;
         }
+
+        return rows;
     }
 
     private static int? MinLimit(int? a, int? b) =>
@@ -952,7 +951,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     }
 
     /// <summary>
-    /// Persistence-layer async boundary: collects all results from <see cref="QueryAsync"/>
+    /// Persistence-layer async boundary: collects all results from <see cref="QueryRowsAsync"/>
     /// into a list. Called exclusively from inside <see cref="IIoPool.Invoke{T}"/>
     /// (see <see cref="Query{T}"/>'s <c>RunQuery</c>) so <c>await</c> always runs
     /// behind the pool's gate on the ThreadPool — no hub/Orleans scheduler is ever
@@ -980,7 +979,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         // node simply stays a node for the caller that asked for nodes.
         var projectSelect = typeof(T) != typeof(MeshNode);
         var results = new List<(string?, T)>();
-        await foreach (var item in QueryAsync(request, options, ct, projectSelect).ConfigureAwait(false))
+        foreach (var item in await QueryRowsAsync(request, options, ct, projectSelect).ConfigureAwait(false))
             if (item is T typed)
                 results.Add(((item as MeshNode)?.Path, typed));
         return results;
