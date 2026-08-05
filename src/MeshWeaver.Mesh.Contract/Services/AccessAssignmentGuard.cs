@@ -1,4 +1,5 @@
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -129,5 +130,96 @@ public static class AccessAssignmentGuard
     {
         if (IsScopeInvalid(node, out var reason))
             throw new InvalidOperationException(reason);
+    }
+
+    /// <summary>
+    /// The roles an ENTITLEMENT legitimately confers on a system-owned space. Everything else —
+    /// including any custom role — counts as write access, because this list is an ALLOWLIST: a
+    /// role nobody here recognises must not be waved through on a space the repo owns.
+    /// </summary>
+    private static readonly HashSet<string> ReadOnlyRoles =
+        new(StringComparer.OrdinalIgnoreCase) { "Viewer", "Commenter" };
+
+    /// <summary>
+    /// The assignment confers WRITE access — any non-denied role outside <see cref="ReadOnlyRoles"/>.
+    /// A <c>Denied</c> role never counts: a deny only ever removes access, and the plugin gating
+    /// writes exactly those on every non-public child.
+    /// </summary>
+    public static bool ConfersWriteAccess(AccessAssignment? assignment)
+    {
+        if (assignment?.Roles is null)
+            return false;
+
+        foreach (var role in assignment.Roles)
+        {
+            if (role.Denied || string.IsNullOrWhiteSpace(role.Role))
+                continue;
+            if (!ReadOnlyRoles.Contains(role.Role))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 🚨 A SYSTEM-OWNED space grants nobody write access. A partition with a <c>_GitSync</c> is
+    /// rewritten from its repo on every sync, so the ONLY identity that may write it is the one the
+    /// importer runs as (<see cref="WellKnownUsers.System"/>). Any other Admin/Editor grant is an
+    /// ownership claim over content the repo owns — and the change it enables is silently reverted
+    /// by the next sync, which is the worst of both worlds.
+    ///
+    /// <para><b>The hole this closes.</b> Core already refuses to MINT a creator grant when a
+    /// deploy writes into a GitSynced partition (<c>EnsurePartitionBootstrap</c>). But a Space
+    /// hand-created BEFORE its <c>_GitSync</c> exists is not system-owned yet, so its creator gets
+    /// Admin the ordinary way and keeps it once the sync is wired. Measured on memex 2026-08-04:
+    /// <c>SST/_Access/rbuergi_Access</c> (Admin) was written at 14:48:07 and <c>SST/_GitSync</c> at
+    /// 14:48:14 — seven seconds later. Seventeen such grants across three meshes came from that
+    /// window and from the pre-fix re-mint.</para>
+    ///
+    /// <para><b>What stays legal</b>, because it is how the funnel works: <c>Viewer</c>/
+    /// <c>Commenter</c> (an entitlement — a purchase, a redeemed coupon, an admin-issued grant),
+    /// every <c>Denied</c> assignment (the gating), and anything the System identity writes for
+    /// itself.</para>
+    /// </summary>
+    /// <param name="node">The grant node, already normalised.</param>
+    /// <param name="assignment">Its content, materialised by the caller through the typed accessor
+    /// — never re-read here as raw JSON, which is how a typed content silently reads as empty.</param>
+    /// <param name="systemOwned">Whether the partition has a <c>_GitSync</c>. The caller reads it;
+    /// keeping it a parameter is what makes this predicate pure and unit-testable with no hub.</param>
+    public static bool IsForbiddenOnSystemOwned(
+        MeshNode? node, AccessAssignment? assignment, bool systemOwned, out string reason)
+    {
+        reason = "";
+        if (!systemOwned || node is null)
+            return false;
+        if (!string.Equals(node.NodeType, AccessAssignmentNodeType, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var scope = ScopeFromPath(node.Path);
+        if (string.IsNullOrEmpty(scope))
+            return false;                       // not a grant path, or the root shape IsScopeInvalid owns
+
+        var subject = assignment?.AccessObject ?? "";
+        if (string.Equals(subject, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase))
+            return false;                       // the importer's own identity — this is the one Admin
+
+        if (!ConfersWriteAccess(assignment))
+            return false;                       // an entitlement, not an ownership claim
+
+        var partition = PartitionOf(scope);
+        reason = $"AccessAssignment '{node.Path}' would give '{subject}' write access to "
+               + $"'{partition}', which is SYSTEM-OWNED (it has {partition}/_GitSync and is rewritten "
+               + "from its repo on every sync). Only '" + WellKnownUsers.System + "' may write it; a "
+               + "live edit by anyone else is reverted by the next sync. Grant Viewer as an "
+               + "entitlement instead, or change the repo and sync it.";
+        return true;
+    }
+
+    /// <summary>The partition a scope belongs to — its first segment. <c>Store/Plugin</c> → <c>Store</c>,
+    /// because <c>_GitSync</c> is wired on the partition root, not on nested scopes.</summary>
+    public static string PartitionOf(string scope)
+    {
+        var slash = scope.IndexOf('/');
+        return slash < 0 ? scope : scope[..slash];
     }
 }
