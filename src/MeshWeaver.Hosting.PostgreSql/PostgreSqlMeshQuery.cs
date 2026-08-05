@@ -214,10 +214,19 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     /// <see cref="CollectQueryResultsAsync{T}"/>), never handed to a caller
     /// whose <c>await foreach</c> would pump it on a hub/grain scheduler.
     /// </summary>
+    /// <param name="projectSelect">
+    /// Whether a <c>select:</c> clause also projects each row to a
+    /// <c>Dictionary&lt;string,object&gt;</c>. TRUE for the untyped surface, whose callers expect
+    /// exactly that (pinned by <c>QuerySyntaxTests.Select_SingleProperty</c>). FALSE for a typed
+    /// <c>Query&lt;MeshNode&gt;</c>: a dictionary is not a MeshNode, so projecting there produced
+    /// rows the typed layer could not accept — and it dropped or mis-cast every one of them.
+    /// The SELECT is narrowed in SQL either way, so nothing extra is fetched.
+    /// </param>
     private async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        [EnumeratorCancellation] CancellationToken ct = default,
+        bool projectSelect = true)
     {
         // Self-filter — MeshQuery's aggregator deliberately doesn't pre-filter
         // by Matches() ("let each provider own the 'is this mine?' decision in
@@ -234,7 +243,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         // PostgreSqlStorageAdapter.QueryNodesAsync(IReadOnlyList&lt;ParsedQuery&gt;,...).
         if (request.Queries is { Count: > 1 })
         {
-            await foreach (var item in QueryNodesUnionAsync(request, options, ct).ConfigureAwait(false))
+            await foreach (var item in QueryNodesUnionAsync(request, options, ct, projectSelect).ConfigureAwait(false))
                 yield return item;
             yield break;
         }
@@ -327,7 +336,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             foreach (var (node, _) in buffered.OrderByDescending(b => b.Score))
             {
                 if (skip > 0) { skip--; continue; }
-                yield return parsedQuery.Select != null
+                yield return projectSelect && parsedQuery.Select != null
                     ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
                     : node;
                 count++;
@@ -353,7 +362,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                 continue;
             }
 
-            yield return parsedQuery.Select != null
+            yield return projectSelect && parsedQuery.Select != null
                 ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
                 : node;
 
@@ -372,7 +381,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     private async IAsyncEnumerable<object> QueryNodesUnionAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct)
+        [EnumeratorCancellation] CancellationToken ct,
+        bool projectSelect = true)
     {
         var queries = request.Queries!;
         var parsedList = new List<ParsedQuery>(queries.Count);
@@ -426,8 +436,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                 continue;
             if (skip > 0) { skip--; continue; }
 
-            yield return firstParsed.Select != null
-                ? ParsedQuery.ProjectToSelect(node, firstParsed.Select)
+            yield return projectSelect && firstParsed!.Select is { } unionSelect
+                ? ParsedQuery.ProjectToSelect(node, unionSelect)
                 : node;
             count++;
             if (effectiveLimit.HasValue && count >= effectiveLimit.Value)
@@ -951,8 +961,26 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     private async Task<List<(string? Path, T Item)>> CollectQueryResultsAsync<T>(
         MeshQueryRequest request, JsonSerializerOptions options, CancellationToken ct)
     {
+        // 🚨 A TYPED query must never be handed a projection. `select:` makes QueryAsync yield
+        // Dictionary<string,object> (the untyped surface's contract, pinned by
+        // QuerySyntaxTests.Select_SingleProperty) — and a dictionary is not a MeshNode, so the
+        // `is T` below silently DROPPED every row: a query that matched returned EMPTY. Upstream in
+        // MeshQuery's merge the same mismatch is a hard `(T)(object)` cast, which throws inside the
+        // merge where the fault reaches no subscriber — the provider then emits neither an Initial
+        // nor an error, the all-providers Initial gate starves, and the caller HANGS IN SILENCE.
+        //
+        // Measured on memex 2026-08-05: every query carrying a `select:` hung past 120 s —
+        // including `nodeType:NodeType select:path limit:5`, which certainly matches — while the
+        // same queries without one answered instantly and Postgres served the underlying
+        // 136-schema union in 57 ms. The MCP `search` tool is Query<MeshNode>, so every agent
+        // search with a select: wedged, and Doc/Architecture/CqrsAndContentAccess tells callers to
+        // add exactly that clause.
+        //
+        // The SELECT still narrows the SQL, so a projected read costs only what it asked for; the
+        // node simply stays a node for the caller that asked for nodes.
+        var projectSelect = typeof(T) != typeof(MeshNode);
         var results = new List<(string?, T)>();
-        await foreach (var item in QueryAsync(request, options, ct).ConfigureAwait(false))
+        await foreach (var item in QueryAsync(request, options, ct, projectSelect).ConfigureAwait(false))
             if (item is T typed)
                 results.Add(((item as MeshNode)?.Path, typed));
         return results;
