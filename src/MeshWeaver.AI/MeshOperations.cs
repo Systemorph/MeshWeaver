@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Collections.Immutable;
 using System.IO;
 using System.IO.Compression;
@@ -1552,17 +1553,41 @@ public class MeshOperations
                         jsonObj["content"] = MergePatch(existingContent, contentPatch);
                 }
 
+                // 🚨 REFUSE what we cannot apply — never report success for a field that was
+                // dropped. The merge below reads a FIXED set of keys off the payload; anything else
+                // the caller sent was parsed into `partial` and then silently discarded while the
+                // tool still answered "Patched: {path}".
+                //
+                // Measured 2026-08-05: seven `{"mainNode":"AgenticPension"}` patches against
+                // root-scoped AccessAssignment nodes on a customer mesh each returned "Patched" and
+                // changed nothing — version stayed 1, the June timestamp stayed. Those grants were
+                // scoped to ROOT (every partition), so the "fix" that reported success left a
+                // mesh-wide privilege escalation exactly where it was. A write that lies about
+                // having happened is worse than one that fails: the failure gets retried.
+                if (UnapplicableFields(jsonObj) is { Count: > 0 } unapplicable)
+                    return Observable.Return(
+                        $"Error: cannot patch {resolvedPath}: {string.Join(", ", unapplicable.Select(f => $"'{f}'"))} "
+                        + $"{(unapplicable.Count == 1 ? "is" : "are")} not patchable. "
+                        + $"Patchable fields: {string.Join(", ", PatchableFields.Order())}. "
+                        + "Identity and audit fields (id, path, namespace, version, created*, lastModified*) are "
+                        + "owned by the mesh; to change a node's shape beyond these, use Update with the full node.");
+
                 var partial = jsonObj.Deserialize<MeshNode>(hub.JsonSerializerOptions)
                     ?? new MeshNode(existing.Id, existing.Namespace);
 
                 var merged = existing with
                 {
                     Name = jsonObj.ContainsKey("name") ? partial.Name : existing.Name,
+                    Description = jsonObj.ContainsKey("description") ? partial.Description : existing.Description,
                     Icon = jsonObj.ContainsKey("icon") ? partial.Icon : existing.Icon,
                     Category = jsonObj.ContainsKey("category") ? partial.Category : existing.Category,
                     Order = jsonObj.ContainsKey("order") ? partial.Order : existing.Order,
                     Content = jsonObj.ContainsKey("content") ? partial.Content : existing.Content,
                     PreRenderedHtml = jsonObj.ContainsKey("preRenderedHtml") ? partial.PreRenderedHtml : existing.PreRenderedHtml,
+                    // MainNode is the SCOPE of a grant, not decoration: AccessAssignmentGuard reads
+                    // it to decide what an _Access node actually confers, and the write boundary
+                    // re-validates it, so a bad value is refused rather than stored.
+                    MainNode = jsonObj.ContainsKey("mainNode") ? partial.MainNode : existing.MainNode,
                 };
 
                 // Validate merged content against the NodeType's schema when the
@@ -3451,6 +3476,27 @@ public class MeshOperations
     private static bool IsNodeTypeNode(MeshNode node) =>
         node.Content is Graph.Configuration.NodeTypeDefinition
         || string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The top-level keys <see cref="Patch"/> actually applies. This list and the <c>merged</c>
+    /// record copy in Patch are ONE fact expressed twice — adding a field to the copy without
+    /// adding it here makes Patch reject a field it now supports, and the reverse makes it claim
+    /// success for a field it silently drops. Change both, and the pinned test will tell you.
+    /// </summary>
+    internal static readonly FrozenSet<string> PatchableFields = new[]
+    {
+        "name", "description", "icon", "category", "order", "content", "preRenderedHtml", "mainNode",
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The keys of a patch payload that <see cref="Patch"/> cannot apply — so it can REFUSE instead
+    /// of reporting a success that did not happen. Pure, so the "never lie about a write" rule is
+    /// testable without a hub. Order is preserved for a stable, readable error message.
+    /// </summary>
+    internal static IReadOnlyList<string> UnapplicableFields(JsonObject fields) =>
+        fields.Select(pair => pair.Key)
+            .Where(key => !PatchableFields.Contains(key))
+            .ToList();
 
     /// <summary>
     /// Returns the node with a fresh RELEASE REQUEST stamped on its content:
