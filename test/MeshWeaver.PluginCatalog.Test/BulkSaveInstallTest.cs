@@ -126,6 +126,39 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
             "a re-install of the unchanged snapshot must not send any bulk batch");
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task WhenTheBulkReadFails_EveryNodeFallsBackToTheRequestPath()
+    {
+        Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch =
+            (_, _, _, _) => Observable.Return(new RepoSnapshot("commit-fallback", Repo));
+        var source = new NodeRepoPackageSource(fetch, "https://github.com/acme/bulk");
+        var manifest = new PackageManifest
+        {
+            Id = "BulkPack",
+            Name = "Bulk Pack",
+            Kind = PackageKind.NodeRepo,
+            TargetPartition = "BulkPack",
+            SourceFolder = "BulkPack",
+            Version = "commit-fallback",
+        };
+        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+
+        // Existence is UNKNOWN when the bulk read fails — bulk routing must be disabled
+        // entirely (an empty-snapshot fallback would bulk-write nodes that may already exist,
+        // bypassing the per-node handler path existing nodes require). Every node then takes
+        // the validating request path, whose handler decides create-vs-update against its own
+        // authoritative read — the pre-bulk installer's exact write-on-failure behavior.
+        _recorder.FailReadMany = true;
+        var result = await PackageInstaller.Install(Mesh, manifest, files, "commit-fallback")
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+        _recorder.FailReadMany = false;
+
+        result.Written.Should().Be(7, "the degraded install still lands every node");
+        _recorder.WriteManyBatches.Should().BeEmpty(
+            "a failed bulk read must disable bulk routing, not route unknown-existence nodes to it");
+        (await Read("BulkPack/Deep")).NodeType.Should().Be("BulkPack/Thing");
+    }
+
     private async Task<MeshNode> Read(string path) =>
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null).Select(n => n!)
@@ -144,13 +177,18 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
 
         public IReadOnlyList<IReadOnlyList<string>> WriteManyBatches => _writeManyBatches.ToArray();
 
+        /// <summary>When set, <see cref="ReadMany"/> errors — simulating a transient bulk-read failure.</summary>
+        public bool FailReadMany { get; set; }
+
         public IObservable<DataChangeNotification> Changes => ((IStorageAdapter)_inner).Changes;
 
         public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
             => ((IStorageAdapter)_inner).Read(path, options);
 
         public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
-            => ((IStorageAdapter)_inner).ReadMany(paths, options);
+            => FailReadMany
+                ? Observable.Throw<MeshNode>(new InvalidOperationException("simulated bulk-read failure"))
+                : ((IStorageAdapter)_inner).ReadMany(paths, options);
 
         public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
             => ((IStorageAdapter)_inner).Write(node, options);
