@@ -290,7 +290,13 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     {
         try
         {
-            var line = $"{DateTime.UtcNow:HH:mm:ss.fff} [{testClass}] {phase}"
+            // pid on every line. The file is shared by EVERY test host in a CI shard (one
+            // process per project, all appending to the same fixed path), so without it the
+            // tail of the log belongs to whichever project finished last — not necessarily
+            // the one that crashed. A core dump is named `dotnet-<pid>.dmp`, so `grep pid=<n>`
+            // is what ties the dump to the trace. Diagnosing the 2026-08-04 FutuRe SIGSEGV
+            // started by reading another project's lines for exactly this reason.
+            var line = $"{DateTime.UtcNow:HH:mm:ss.fff} pid={Environment.ProcessId} [{testClass}] {phase}"
                 + (elapsedMs.HasValue ? $" elapsed={elapsedMs}ms" : "")
                 + (extra is null ? "" : $" {extra}");
             lock (TestTraceLogLock)
