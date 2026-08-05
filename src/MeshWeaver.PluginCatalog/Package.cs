@@ -116,31 +116,34 @@ public record PackageManifest
     public ImmutableSortedDictionary<string, string>? InstalledFiles { get; init; }
 
     /// <summary>
-    /// Opt OUT of unattended updates for this installed package. By default — this flag unset — a
-    /// green CI build of the source repo whose content hash actually moved installs the delta
-    /// without waiting for a human to click Update; setting this keeps the record on the reminder
-    /// path instead (an "Update available" notification, nothing installed).
+    /// Opt IN to unattended updates for this installed package: when the source repo's CI goes
+    /// green and this module's content hash actually moved, install the delta without waiting for
+    /// a human to click Update. Unset — the platform default — the record stays on the reminder
+    /// path (an "Update available" notification, nothing installed).
     ///
-    /// <para><b>Auto-update is the DEFAULT because the update path is already fenced three ways</b>:
-    /// the content-identity gate (an unchanged module is never touched, however many green builds
-    /// land), the additive install (only manifest-tracked nodes are ever written or pruned — a
-    /// node the user ADDED to the partition is structurally invisible to the update), and the
-    /// per-node <see cref="MeshWeaver.Mesh.MeshNode.SyncBehavior"/> claim (a node the user MODIFIED
-    /// and claimed is skipped by both upsert and prune). Opting out is for an installation that
-    /// wants a human reviewing even fenced changes — e.g. a regulated deployment.</para>
+    /// <para><b>Seeded at install time from the deployment's policy</b>
+    /// (<see cref="PluginCatalogOptions.AutoUpdateByDefault"/>): a deployment that opts in — ours
+    /// do, via the Helm chart — gets every freshly installed package auto-updating with no
+    /// per-package step, while the platform default stays explicit-opt-in. Thereafter the record's
+    /// own value is the sole runtime authority in BOTH directions: an update re-stamp carries it
+    /// forward (see <c>PackageInstaller.SeedAutoUpdate</c> — the re-stamp starts from the
+    /// policy-less catalog manifest, so without the carry-forward every update would silently
+    /// reset the opt-in), and flipping the deployment default later changes nothing for
+    /// already-installed packages.</para>
     ///
-    /// <para>🚨 Deliberately an opt-OUT bool (default <c>false</c>), never an <c>AutoUpdate = true</c>
-    /// default: a bool whose declared default is <c>true</c> loses its <c>true → false</c>
-    /// transition under default-suppressing serialization (the omitted-on-wire <c>false</c>
-    /// re-materializes as the declared <c>true</c> on read — the <c>SyncBehavior</c>-adjacent trap
-    /// already diagnosed on this codebase). With the declared default equal to the CLR default the
-    /// round-trip is loss-free in both directions.</para>
+    /// <para>Opted-in updates are still fenced three ways: the content-identity gate (an unchanged
+    /// module is never touched), the additive install (a node the user ADDED is structurally
+    /// invisible to the update), and the per-node
+    /// <see cref="MeshWeaver.Mesh.MeshNode.SyncBehavior"/> claim (a node the user MODIFIED and
+    /// claimed is skipped by both upsert and prune).</para>
     ///
-    /// <para>Only meaningful on an INSTALL RECORD (it is a property of this installation's policy,
-    /// not of the package), and only consulted when the module's <see cref="ModuleVersion"/> has
-    /// genuinely moved. See <c>Doc/Architecture/PluginUpdateOnGreenBuild</c>.</para>
+    /// <para>Default <c>false</c> — the CLR default — so the flag round-trips loss-free under
+    /// default-suppressing serialization (a declared-<c>true</c> bool loses its true→false
+    /// transition; the trap already diagnosed on this codebase). Only meaningful on an INSTALL
+    /// RECORD, and only consulted when the module's <see cref="ModuleVersion"/> has genuinely
+    /// moved. See <c>Doc/Architecture/PluginUpdateOnGreenBuild</c>.</para>
     /// </summary>
-    public bool AutoUpdateDisabled { get; init; }
+    public bool AutoUpdate { get; init; }
 
     /// <summary>
     /// The module manifest's per-file hash map as it stands AT THE CATALOG'S REF
