@@ -35,11 +35,13 @@ namespace MeshWeaver.PluginCatalog;
 /// Keeping that comparison in ONE place is what stops the two paths — the Update button and this
 /// watcher — from ever disagreeing about what "changed" means.</para>
 ///
-/// <para><b>Reminder by default, apply only when asked.</b> A changed module raises a
-/// <c>Notification</c> satellite on the install record, so the bell surfaces it and the catalog card
-/// shows the update. Unattended installation happens ONLY for a package whose install record opts in
-/// (<see cref="PackageManifest.AutoUpdate"/>) — a bad plugin build reaching every instance without a
-/// human in the loop is a much worse failure than a late update.</para>
+/// <para><b>Apply by default, remind on opt-out.</b> A changed module installs unattended unless its
+/// install record opts out (<see cref="PackageManifest.AutoUpdateDisabled"/>); an opted-out record
+/// raises a <c>Notification</c> satellite instead, so the bell surfaces it and the catalog card shows
+/// the update. Default-on is safe because the path is already fenced three ways — the
+/// content-identity gate above, the additive install (user-ADDED nodes are structurally invisible to
+/// the update), and the per-node <c>SyncBehavior</c> claim the installer honors for user-MODIFIED
+/// nodes. See the rationale on <see cref="PackageManifest.AutoUpdateDisabled"/>.</para>
 ///
 /// <para>Instance-scoped, not static: the subscriptions live and die with the mesh
 /// (see <c>Doc/Architecture/NoStaticState</c>). Reactive throughout — no <c>async</c>/<c>await</c>,
@@ -211,10 +213,10 @@ public sealed class PluginUpdateWatcher : IDisposable
             : "content changed";
 
         logger?.LogInformation(
-            "Plugin update watcher: {Id} has an update ({Old} → {New}; {Detail}); autoUpdate={Auto}.",
-            pkg.Id, record.ModuleVersion, pkg.ModuleVersion, detail, record.AutoUpdate);
+            "Plugin update watcher: {Id} has an update ({Old} → {New}; {Detail}); optedOut={OptedOut}.",
+            pkg.Id, record.ModuleVersion, pkg.ModuleVersion, detail, record.AutoUpdateDisabled);
 
-        if (record.AutoUpdate)
+        if (ShouldAutoApply(record))
         {
             ApplyUpdate(accessService, pkg, build, detail);
             return;
@@ -236,7 +238,15 @@ public sealed class PluginUpdateWatcher : IDisposable
     }
 
     /// <summary>
-    /// Unattended install of a changed module — reached ONLY for a record that opted in.
+    /// The default/opt-out rule, extracted so it is pinnable on its own: a changed module installs
+    /// unattended unless the install record explicitly opted out. Pure.
+    /// </summary>
+    // Internal for the BuildCompletionSubscriptionTest pin (InternalsVisibleTo).
+    internal static bool ShouldAutoApply(PackageManifest record) => !record.AutoUpdateDisabled;
+
+    /// <summary>
+    /// Unattended install of a changed module — reached for every record that has NOT opted out
+    /// (the default).
     ///
     /// <para>Delegates to the very same <see cref="CatalogLayoutAreas.InstallOrUpdate"/> the Update
     /// button uses. That matters more than it looks: it keeps the manifest-diff fast path, the
@@ -256,7 +266,7 @@ public sealed class PluginUpdateWatcher : IDisposable
         if (source is null)
         {
             logger?.LogWarning(
-                "Plugin update watcher: {Id} opted in to auto-update but its catalog source is unavailable.", pkg.Id);
+                "Plugin update watcher: {Id} is due an auto-update but its catalog source is unavailable.", pkg.Id);
             return;
         }
 
