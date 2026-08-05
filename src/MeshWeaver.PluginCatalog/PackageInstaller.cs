@@ -706,9 +706,11 @@ public static class PackageInstaller
         IObservable<System.Reactive.Unit> RootRetypeReconciled() =>
             placeholderRoot is null || root is null || string.IsNullOrEmpty(root.NodeType)
                 ? Observable.Return(System.Reactive.Unit.Default)
+                // REQUIRED, never optional: falling back to the ambient identity on a missing
+                // AccessService would re-open the exact "lacks Read on '{root}'" hole this scope
+                // exists to close.
                 : Observable.Using(
-                        () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
-                              ?? System.Reactive.Disposables.Disposable.Empty,
+                        () => hub.ServiceProvider.GetRequiredService<AccessService>().ImpersonateAsSystem(),
                         _ => hub.GetMeshNodeStream(root.Path))
                     .Where(n => n is not null
                         && string.Equals(n.NodeType, root.NodeType, StringComparison.Ordinal))

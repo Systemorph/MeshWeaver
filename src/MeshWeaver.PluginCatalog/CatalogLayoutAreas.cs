@@ -234,12 +234,13 @@ public static class CatalogLayoutAreas
         // PluginUpdateWatcher wraps this very InstallOrUpdate in ImpersonateAsSystem, and the
         // Store plugin's SystemInstall/Provisioning sources do the same. Authorisation for the
         // TRIGGER stays where it belongs: on the catalog surface the click came from.
-        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        // REQUIRED, never optional: a missing AccessService would silently run the install under
+        // the ambient (user) identity — the exact regression this fix removes. Same treatment the
+        // PluginUpdateWatcher already gives it.
+        var accessService = host.Hub.ServiceProvider.GetRequiredService<AccessService>();
 
         var install = InstallOrUpdate(host.Hub, source, sourceRef, pkg, logger);
-        (accessService is null
-                ? install
-                : Observable.Using(() => accessService.ImpersonateAsSystem(), _ => install))
+        Observable.Using(() => accessService.ImpersonateAsSystem(), _ => install)
             .Subscribe(
                 result => logger?.LogInformation("Installed {Id}: {Written} written, {Unchanged} unchanged.",
                     pkg.Id, result.Written, result.Unchanged),
