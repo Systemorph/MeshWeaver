@@ -277,6 +277,28 @@ public static class PackageInstaller
             });
     }
 
+    // Bulk-reads the CURRENT persisted state of every path — ONE round-trip on Postgres
+    // (IStorageAdapter.ReadMany batches `WHERE (namespace, id) IN (…)`), parallel single reads
+    // elsewhere — replacing the per-node read that made a course-sized install pay N sequential
+    // probes before writing anything (#815). Missing paths are absent from the dictionary. A read
+    // FAILURE emits null — "existence unknown" — which the caller must treat as "no bulk routing":
+    // an empty snapshot would make every node look NEW and bulk-write nodes that may exist,
+    // bypassing the per-node handler path existing nodes require. Null instead keeps the old
+    // write-on-failure bias per node THROUGH the validating request path.
+    private static IObservable<IReadOnlyDictionary<string, MeshNode>?> ReadCurrent(
+        IStorageAdapter? persistence, IReadOnlyCollection<string> paths, JsonSerializerOptions options)
+        => persistence is null || paths.Count == 0
+            ? Observable.Return<IReadOnlyDictionary<string, MeshNode>?>(
+                ImmutableDictionary<string, MeshNode>.Empty)
+            : persistence.ReadMany(paths, options)
+                .Where(n => n is not null)
+                .ToList()
+                .Select(found => (IReadOnlyDictionary<string, MeshNode>?)found
+                    .GroupBy(n => n.Path, StringComparer.Ordinal)
+                    .ToImmutableDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal))
+                .Catch<IReadOnlyDictionary<string, MeshNode>?, Exception>(_ =>
+                    Observable.Return<IReadOnlyDictionary<string, MeshNode>?>(null));
+
     // Upserts a node only if it is new or meaningfully changed; returns true if it wrote, false if it
     // skipped an unchanged node. Reads the CURRENT persisted node authoritatively via the storage
     // adapter (the SAME read the CreateOrUpdate handler uses) — no eventual-consistency lag and no
@@ -289,33 +311,39 @@ public static class PackageInstaller
             : Observable.Return<MeshNode?>(null);
         return existing
             .Take(1)
-            .SelectMany(current =>
-            {
-                // A CLAIMED node — the user set a non-Include SyncBehavior on it, typically after
-                // modifying it — is theirs, not the repo's. Skip it, exactly as the static-repo
-                // importer does. This is one of the fences that makes UNATTENDED updates (opted-in
-                // records; our deployments opt in wholesale) safe: a local edit under a claim can
-                // never be clobbered by a green build. An unclaimed local edit IS overwritten —
-                // claiming is the deliberate act that decouples a node from its package.
-                if (current is not null && current.SyncBehavior != SyncBehavior.Include)
-                    return Observable.Return(false);
-                if (current is not null && IsUnchanged(current, node, options))
-                    return Observable.Return(false);
-                if (current is not null && Environment.GetEnvironmentVariable("MW_INSTALL_DIFF") == "1")
-                {
-                    var cur = ContentSignature(current.Content, options);
-                    var inc = ContentSignature(node.Content ?? current.Content, options);
-                    var at = 0;
-                    while (at < cur.Length && at < inc.Length && cur[at] == inc[at]) at++;
-                    var lo = Math.Max(0, at - 120);
-                    Console.WriteLine($"[DIFF] {node.Path} scalars={ScalarsUnchanged(current, node)} " +
-                        $"lens={cur.Length}/{inc.Length} firstDiff@{at}");
-                    Console.WriteLine($"  cur({current.Content?.GetType().Name}): …{cur[lo..Math.Min(cur.Length, at + 160)]}");
-                    Console.WriteLine($"  inc({node.Content?.GetType().Name}): …{inc[lo..Math.Min(inc.Length, at + 160)]}");
-                }
-                return Upsert(hub, node).Select(_ => true);
-            })
+            .SelectMany(current => DecideAndWrite(hub, current, node, options))
             .Catch<bool, Exception>(_ => Upsert(hub, node).Select(_ => true));
+    }
+
+    // The write decision against a KNOWN current state — the body UpsertIfChanged wraps with its
+    // own authoritative read. The node-repo install path calls this directly with one BULK-read
+    // snapshot (ReadCurrent) instead of paying a per-node read round-trip (#815).
+    private static IObservable<bool> DecideAndWrite(
+        IMessageHub hub, MeshNode? current, MeshNode node, JsonSerializerOptions options)
+    {
+        // A CLAIMED node — the user set a non-Include SyncBehavior on it, typically after
+        // modifying it — is theirs, not the repo's. Skip it, exactly as the static-repo
+        // importer does. This is one of the fences that makes UNATTENDED updates (opted-in
+        // records; our deployments opt in wholesale) safe: a local edit under a claim can
+        // never be clobbered by a green build. An unclaimed local edit IS overwritten —
+        // claiming is the deliberate act that decouples a node from its package.
+        if (current is not null && current.SyncBehavior != SyncBehavior.Include)
+            return Observable.Return(false);
+        if (current is not null && IsUnchanged(current, node, options))
+            return Observable.Return(false);
+        if (current is not null && Environment.GetEnvironmentVariable("MW_INSTALL_DIFF") == "1")
+        {
+            var cur = ContentSignature(current.Content, options);
+            var inc = ContentSignature(node.Content ?? current.Content, options);
+            var at = 0;
+            while (at < cur.Length && at < inc.Length && cur[at] == inc[at]) at++;
+            var lo = Math.Max(0, at - 120);
+            Console.WriteLine($"[DIFF] {node.Path} scalars={ScalarsUnchanged(current, node)} " +
+                $"lens={cur.Length}/{inc.Length} firstDiff@{at}");
+            Console.WriteLine($"  cur({current.Content?.GetType().Name}): …{cur[lo..Math.Min(cur.Length, at + 160)]}");
+            Console.WriteLine($"  inc({node.Content?.GetType().Name}): …{inc[lo..Math.Min(inc.Length, at + 160)]}");
+        }
+        return Upsert(hub, node).Select(_ => true);
     }
 
     /// <summary>
@@ -452,7 +480,7 @@ public static class PackageInstaller
         IMessageHub hub, PackageManifest manifest, IReadOnlyList<PackageFile> files,
         string installedFromRef, ILogger? logger, int batchSize)
     {
-        _ = batchSize; // node-repo installs are ordered (Concat), not fanned out
+        _ = batchSize; // node-repo installs are ordered (bucketed bulk saves + Concat), not fanned out
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
         // The CI manifest sidecar (when the package ships one) becomes the install record's diff
         // baseline — the next update touches only what its manifest diff names.
@@ -508,7 +536,25 @@ public static class PackageInstaller
             return 3;                                            // plain content + typed instances
         }
 
-        // Three stages with VISIBILITY BARRIERS between them, solving two races at once:
+        // Three stages, same ordering guarantees as ever — but the writes are now ROUTED (#815):
+        //
+        // • A NEW non-root, non-satellite node takes the BULK path: one transactional
+        //   IStorageAdapter.WriteMany per ordering bucket (Postgres: one NpgsqlBatch per table
+        //   window; the partition-storage proxy: one WriteBatchRequest per owning hub). The
+        //   response IS the visibility barrier — a committed batch needs no 100 ms Exists poll,
+        //   which is what made a ~300-node course install pay minutes of serial round-trips.
+        //   Per-node validation is preserved: the claimed/unchanged skip runs per node against
+        //   the ONE bulk-read snapshot (ReadCurrent), and the create path's type-existence check
+        //   is applied per DISTINCT type up front (ValidateBulkTypes, identical rule:
+        //   static registry → in-package → persistence).
+        // • The ROOT, the underscore satellites, and every node that ALREADY EXISTS keep the
+        //   per-node CreateOrUpdateNodeRequest path unchanged — the root because its create runs
+        //   the standard partition path (provisioning + the placeholder dance below), satellites
+        //   because their guards live in the handler (AccessAssignment scoping, system-owned
+        //   grant rejection, MainNode normalisation), existing nodes because updates must flow
+        //   through the owning per-node hub's stream (version bump + reconciliation).
+        //
+        // The original two races the stage barriers solve, still solved:
         //
         // (1) THE ROOT lands first — as a Space PLACEHOLDER when its real type is dynamic and
         //     ships in this very package (the Store: the root is nodeType Store/Catalog, defined
@@ -517,11 +563,10 @@ public static class PackageInstaller
         //     partition bootstrap: without it, the first CHILD create triggers the heal, whose
         //     generic Space root races OUR typed root through the debounced per-node-hub
         //     persists — last persist wins (observed: the heal's Space replacing the typed root).
-        // (2) THE TYPES land before any instance referencing them: the create path's
-        //     type-existence check reads PERSISTENCE (MeshExtensions, step 3), and a
-        //     freshly-created type node persists through the DEBOUNCED pipeline — an instance
-        //     written right behind its in-package type races that debounce and is refused as
-        //     "not registered". The barrier polls until every type node is persistence-visible.
+        // (2) THE TYPES land before any instance referencing them. Bulk-written types are
+        //     COMMITTED when their batch responds, so only types updated through the per-node
+        //     path (already-existing ones — which are persistence-visible by definition) still
+        //     go through the Exists barrier; on a fresh mesh that set is empty and no poll runs.
         //
         // Then the FINAL root (retyping the placeholder), the plain content, and LAST the
         // underscore satellites (a satellite must anchor under an existing owner).
@@ -550,12 +595,92 @@ public static class PackageInstaller
                         .Timeout(TimeSpan.FromSeconds(30)))
                     .ToObservable().Concat().LastAsync().Select(_ => System.Reactive.Unit.Default);
 
-        IObservable<IList<(string Path, bool Wrote)>> WriteAll(IReadOnlyList<MeshNode> batch) =>
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+
+        // The per-node REQUEST path — decisions run against the bulk-read snapshot (one shared
+        // read instead of N sequential probes), the write itself is the full validating
+        // CreateOrUpdateNodeRequest, retry-on-error parity with UpsertIfChanged.
+        IObservable<IList<(string Path, bool Wrote)>> WriteAll(
+            IReadOnlyList<MeshNode> batch, IReadOnlyDictionary<string, MeshNode> current) =>
             batch.Count == 0
                 ? Observable.Return((IList<(string, bool)>)new List<(string, bool)>())
-                : batch.Select(n => UpsertIfChanged(hub, persistence, n, options)
+                : batch.Select(n => DecideAndWrite(hub, current.GetValueOrDefault(n.Path), n, options)
+                        .Catch<bool, Exception>(_ => Upsert(hub, n).Select(_ => true))
                         .Select(wrote => (n.Path, wrote)))
                     .ToObservable().Concat().ToList(); // sequential to respect the ordering
+
+        // The BULK path for NEW nodes: one transactional WriteMany per ordering bucket. The
+        // response means COMMITTED — storage acceptance is checked loudly (an install must never
+        // report success for a node persistence did not take), and the create path's stamps
+        // (CreatedDate/LastModified, Active state) are applied for parity. System-impersonated
+        // exactly as Upsert is — per call, because ambient impersonation does not survive the
+        // pipeline's scheduler hops.
+        IObservable<IList<(string Path, bool Wrote)>> BulkSave(IReadOnlyList<MeshNode> batch)
+        {
+            if (batch.Count == 0)
+                return Observable.Return((IList<(string, bool)>)new List<(string, bool)>());
+            if (persistence is null)
+                return WriteAll(batch, ImmutableDictionary<string, MeshNode>.Empty);
+            var now = DateTimeOffset.UtcNow;
+            var stamped = batch
+                .Select(n => n with
+                {
+                    State = MeshNodeState.Active,
+                    CreatedDate = n.CreatedDate == default ? now : n.CreatedDate,
+                    LastModified = now,
+                })
+                .ToArray();
+            return Observable.Using(
+                    () => accessService?.ImpersonateAsSystem()
+                          ?? System.Reactive.Disposables.Disposable.Empty,
+                    _ => persistence.WriteMany(stamped, options))
+                .Select(written =>
+                {
+                    if (written.Count != batch.Count)
+                    {
+                        var missing = batch.Select(n => n.Path)
+                            .Except(written.Select(w => w.Path), StringComparer.Ordinal)
+                            .ToArray();
+                        throw new InvalidOperationException(
+                            $"Bulk install of '{manifest.Id}' persisted {written.Count}/{batch.Count} "
+                            + $"node(s) — storage did not accept: {string.Join(", ", missing)}");
+                    }
+                    return (IList<(string, bool)>)batch.Select(n => (n.Path, true)).ToList();
+                });
+        }
+
+        // The same per-node type-existence rule the create path applies (MeshExtensions, step 3:
+        // static registry → persistence), evaluated once per DISTINCT type instead of once per
+        // node — with the types THIS package installs satisfied by construction (the bulk write
+        // of the types commits before any instance batch is sent).
+        IObservable<System.Reactive.Unit> ValidateBulkTypes(IReadOnlyList<MeshNode> bulk)
+        {
+            var inPackage = nodeTypePaths
+                .Concat(root?.Content is NodeTypeDefinition ? new[] { root.Path } : Array.Empty<string>())
+                .ToImmutableHashSet(StringComparer.Ordinal);
+            var unknown = bulk
+                .Select(n => n.NodeType)
+                .Where(t => !string.IsNullOrEmpty(t))
+                .Select(t => t!)
+                .Distinct(StringComparer.Ordinal)
+                .Where(t => !inPackage.Contains(t)
+                    && hub.ServiceProvider.FindStaticNode(t) is null)
+                .ToArray();
+            if (unknown.Length == 0 || persistence is null)
+                return Observable.Return(System.Reactive.Unit.Default);
+            return unknown
+                .Select(t => persistence.Exists(t).Take(1).Select(exists => (Type: t, Exists: exists)))
+                .ToObservable().Merge().ToList()
+                .SelectMany(results =>
+                {
+                    var missing = results.Where(r => !r.Exists).Select(r => r.Type).ToArray();
+                    return missing.Length == 0
+                        ? Observable.Return(System.Reactive.Unit.Default)
+                        : Observable.Throw<System.Reactive.Unit>(new InvalidOperationException(
+                            $"Install of '{manifest.Id}' failed: NodeType(s) not registered: "
+                            + string.Join(", ", missing)));
+                });
+        }
 
         // 🚨 CONFIRM THE SELF-TYPED ROOT'S RETYPE RECONCILED before the install reports success.
         // Stage 2 retypes the Space placeholder to the in-package type via
@@ -611,27 +736,61 @@ public static class PackageInstaller
         // CONSTRUCTION, so stage 0 rewrote it and stage 2 retyped it back — one guaranteed churn
         // write per package per sync (the idempotence pin's "wrote 1 node" on EVERY repo the day
         // the plugins gate was first executed, 2026-07-29), plus a window in which a LIVE plugin
-        // root is a contentless Space. Decide REACTIVELY off the same authoritative read
-        // UpsertIfChanged uses; a read failure means "not final", so a fresh mesh still gets its
-        // placeholder. When the root is already final, stage 0 writes NOTHING — the root's
-        // (idempotent) content upsert happens in stage 2 like any other node.
-        IObservable<bool> PlaceholderNeeded() =>
-            placeholderRoot is null || root is null || persistence is null
-                ? Observable.Return(placeholderRoot is not null)
-                : persistence.Read(root.Path, options)
-                    .Take(1)
-                    .Select(current => current is null
-                        || !string.Equals(current.NodeType, root.NodeType, StringComparison.Ordinal))
-                    .Catch<bool, Exception>(_ => Observable.Return(true));
+        // root is a contentless Space. Decide off the SAME authoritative bulk-read snapshot the
+        // routing uses (ReadCurrent — a read failure yields the empty snapshot, so a fresh mesh
+        // still gets its placeholder). When the root is already final, stage 0 writes NOTHING —
+        // the root's (idempotent) content upsert happens in stage 2 like any other node.
+        bool PlaceholderNeeded(IReadOnlyDictionary<string, MeshNode> current) =>
+            placeholderRoot is not null && root is not null
+                && (!current.TryGetValue(root.Path, out var curRoot)
+                    || !string.Equals(curRoot.NodeType, root.NodeType, StringComparison.Ordinal));
 
         return EnsurePartitionsProvisioned(hub, manifest.TargetPartition ?? manifest.Id, InstalledPartition)
-            .SelectMany(_ => PlaceholderNeeded())
-            .SelectMany(needed => WriteAll(
-                needed || placeholderRoot is null ? stage0 : Array.Empty<MeshNode>()))
-            .SelectMany(rootWrites => Visible(root is null ? [] : [root.Path])
-                .SelectMany(_ => WriteAll(stage1))
-                .SelectMany(typeWrites => Visible(nodeTypePaths)
-                    .SelectMany(_ => WriteAll(stage2))
+            .SelectMany(_ => ReadCurrent(persistence, nodes.Select(n => n.Path).ToArray(), options))
+            .SelectMany(maybeCurrent =>
+            {
+                // Route: NEW non-satellite, non-root nodes take the bulk path per ordering
+                // bucket; the root, satellites and existing nodes keep the request path.
+                // A FAILED bulk read (maybeCurrent == null) means existence is UNKNOWN — bulk
+                // routing is disabled entirely and every node takes the request path, whose
+                // handler decides create-vs-update against its own authoritative read (the same
+                // per-node write-on-failure the pre-bulk installer had).
+                var current = maybeCurrent ?? ImmutableDictionary<string, MeshNode>.Empty;
+                bool IsBulk(MeshNode n) => maybeCurrent is not null && !current.ContainsKey(n.Path);
+                var bulkSources = stage1.Where(n => Order(n) == 0 && IsBulk(n)).ToArray();
+                var bulkTypes = stage1.Where(n => Order(n) == 1 && IsBulk(n)).ToArray();
+                var requestStage1 = stage1.Where(n => !IsBulk(n)).ToArray(); // keeps Order sort
+                var stage2Root = stage2.Where(n => Order(n) == 2).ToArray();
+                var bulkInstances = stage2.Where(n => Order(n) == 3 && IsBulk(n)).ToArray();
+                var requestInstances = stage2.Where(n => Order(n) == 3 && !IsBulk(n)).ToArray();
+                var satellites = stage2.Where(n => Order(n) == 4).ToArray();
+                // Only types updated through the debounced per-node path still need the Exists
+                // barrier; a bulk-written type is committed when its batch responds. (These paths
+                // already exist, so the barrier passes on its first probe — no 100 ms tail.)
+                var requestTypePaths = requestStage1
+                    .Where(n => n.Content is NodeTypeDefinition).Select(n => n.Path).ToArray();
+                var allBulk = bulkSources.Concat(bulkTypes).Concat(bulkInstances).ToArray();
+
+                return ValidateBulkTypes(allBulk)
+                    .SelectMany(_ => WriteAll(
+                        PlaceholderNeeded(current) || placeholderRoot is null
+                            ? stage0
+                            : Array.Empty<MeshNode>(),
+                        current))
+                    .SelectMany(rootWrites => Visible(root is null ? [] : [root.Path])
+                        .SelectMany(_ => BulkSave(bulkSources))
+                        .SelectMany(sourceWrites => BulkSave(bulkTypes)
+                            .SelectMany(typeBulkWrites => WriteAll(requestStage1, current)
+                                .Select(typeReqWrites => (IList<(string Path, bool Wrote)>)sourceWrites
+                                    .Concat(typeBulkWrites).Concat(typeReqWrites).ToList()))
+                            .SelectMany(typeWrites => Visible(requestTypePaths)
+                                .SelectMany(_ => WriteAll(stage2Root, current))
+                                .SelectMany(rootFinalWrites => BulkSave(bulkInstances)
+                                    .SelectMany(instBulkWrites => WriteAll(requestInstances, current)
+                                        .SelectMany(instReqWrites => WriteAll(satellites, current)
+                                            .Select(satWrites => (IList<(string Path, bool Wrote)>)rootFinalWrites
+                                                .Concat(instBulkWrites).Concat(instReqWrites)
+                                                .Concat(satWrites).ToList()))))
                     // The retype's optimistic emit is not the reconciled state — wait for the
                     // shared root handle to carry the in-package type AND for the debounced
                     // persist to land it in storage (a later install reads persistence).
@@ -674,7 +833,6 @@ public static class PackageInstaller
                 {
                     // System-impersonated: the release flips are stream writes posted from a
                     // continuation with no ambient context (see Upsert).
-                    var accessService = hub.ServiceProvider.GetService<AccessService>();
                     using (accessService?.ImpersonateAsSystem())
                         foreach (var path in nodeTypePaths)
                             hub.RequestNodeTypeRelease(path,
@@ -682,6 +840,7 @@ public static class PackageInstaller
                 }
                 return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length, moduleManifest)
                     .Select(_ => result);
+            }));
             });
     }
 
