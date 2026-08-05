@@ -85,6 +85,63 @@ public sealed class RoutingProxyAdapter : IStorageAdapter
                         : Observable.Return<MeshNode?>(d.Message.WrittenNodes.First())));
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The multi-node producer <see cref="WriteBatchRequest"/> was designed for: groups the
+    /// caller's nodes by owning partition-storage hub and posts ONE batch per group, so a
+    /// course-sized install is a handful of messages (and, on Postgres, a handful of
+    /// <c>NpgsqlBatch</c> round-trips) instead of one message per node. Before this override the
+    /// interface default degraded every batch back into per-node <see cref="Write"/> calls — the
+    /// single-node producer the WriteMany commit set out to retire.
+    ///
+    /// <para>Order: the caller's order is preserved by grouping CONSECUTIVE RUNS of the same
+    /// target address (never re-sorting across runs) and posting the runs sequentially —
+    /// <see cref="IStorageAdapter.WriteMany"/>'s contract pins the caller's order onto the
+    /// <see cref="IStorageAdapter.Changes"/> feed, and callers order parents before children on
+    /// purpose. Nodes no partition hub claims are absent from the result, mirroring
+    /// <see cref="Write"/>'s null. A batch error fails the whole observable, mirroring
+    /// <see cref="Write"/>'s throw.</para>
+    /// </remarks>
+    public IObservable<IReadOnlyList<MeshNode>> WriteMany(
+        IReadOnlyCollection<MeshNode> nodes, JsonSerializerOptions options)
+    {
+        if (nodes.Count == 0)
+            return Observable.Return<IReadOnlyList<MeshNode>>(ImmutableList<MeshNode>.Empty);
+
+        // Resolve every node's owning hub IN CALLER ORDER (Concat, not Merge — order is contract).
+        return nodes
+            .Select(n => _router.AddressFor(n.Path).Take(1).Select(addr => (Node: n, Address: addr)))
+            .ToObservable().Concat().ToList()
+            .SelectMany(pairs =>
+            {
+                // Consecutive runs of the same address — one WriteBatchRequest per run.
+                var runs = new List<(Address? Address, List<MeshNode> Nodes)>();
+                foreach (var (node, address) in pairs)
+                {
+                    if (runs.Count == 0 || !Equals(runs[^1].Address, address))
+                        runs.Add((address, new List<MeshNode>()));
+                    runs[^1].Nodes.Add(node);
+                }
+
+                return runs
+                    .Select(run => run.Address is null
+                        // Unowned: absent from the result so the try-then-claim chain moves on.
+                        ? Observable.Return<IReadOnlyList<MeshNode>>(ImmutableList<MeshNode>.Empty)
+                        : _callerHub
+                            .Observe<WriteBatchResponse>(
+                                new WriteBatchRequest(run.Nodes.ToImmutableList(), options),
+                                o => o.WithTarget(run.Address))
+                            .Take(1)
+                            .SelectMany(d => d.Message.Error != null
+                                ? Observable.Throw<IReadOnlyList<MeshNode>>(
+                                    new InvalidOperationException(d.Message.Error))
+                                : Observable.Return<IReadOnlyList<MeshNode>>(d.Message.WrittenNodes)))
+                    .ToObservable().Concat().ToList()
+                    .Select(lists => (IReadOnlyList<MeshNode>)lists
+                        .SelectMany(l => l).ToImmutableList());
+            });
+    }
+
+    /// <inheritdoc/>
     public IObservable<string> Delete(string path)
         => _router.AddressFor(path).SelectMany(addr =>
             addr is null
