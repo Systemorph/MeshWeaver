@@ -26,9 +26,9 @@ namespace MeshWeaver.PluginCatalog.Test;
 /// <c>UserOnboardingService.GrantPlatformAdmin</c> writes), no root-scope grant and no
 /// <c>Roles=["Admin"]</c> claim. Such a grant is never on the <c>Plugins</c> scope walk, and the
 /// install records are written under <c>ImpersonateAsSystem</c> so no creator grant is ever minted
-/// — without the policy, the settings tab's installed-state query
+/// — without the policy, the installed-state query every catalog surface issues
 /// (<c>CatalogLayoutAreas.ObserveInstalled</c>, <c>path:Plugins scope:children</c>) is denied for
-/// the very admin the tab is gated on. The default <c>MonolithMeshTestBase</c> setup would mask
+/// every real principal, platform admins included. The default <c>MonolithMeshTestBase</c> setup would mask
 /// all of this: it seeds a root-scope <c>Public → Admin</c> grant AND a circuit identity carrying
 /// <c>Roles=["Admin"]</c> — the very claim mechanism #804 removed — so this test builds on
 /// <see cref="MonolithMeshTestBase.ConfigureMeshBase"/> instead.</para>
@@ -72,7 +72,7 @@ public class PluginsPartitionReadableTest(ITestOutputHelper output) : MonolithMe
         var result = await PackageInstaller.Install(Mesh, manifest, files, "HEAD").FirstAsync().ToTask();
         result.Written.Should().Be(1);
 
-        // The EXACT installed-state query the settings tab issues (CatalogLayoutAreas.
+        // The EXACT installed-state query the catalog UI issues (CatalogLayoutAreas.
         // ObserveInstalled), evaluated under the admin's identity — RLS filters unreadable nodes
         // out of the result set, so without the PublicRead policy this set stays empty forever.
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -84,7 +84,7 @@ public class PluginsPartitionReadableTest(ITestOutputHelper output) : MonolithMe
             .Match(
                 change => change.Items.Any(n =>
                     n.Path == $"{PackageInstaller.InstalledPartition}/readable-pack"),
-                "a signed-in platform admin must see the install records the plugin-catalog settings tab queries");
+                "a signed-in platform admin must see the install records the catalog's installed-state query returns");
 
         // Read-only: the policy grants exactly Read — its write caps deny Create/Update/Delete
         // (and Comment/Thread) for every non-System identity.
