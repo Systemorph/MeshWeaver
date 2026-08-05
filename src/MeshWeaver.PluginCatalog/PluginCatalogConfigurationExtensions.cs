@@ -1,4 +1,5 @@
 using MeshWeaver.Domain;
+using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Graph;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -28,6 +29,16 @@ public static class PluginCatalogConfigurationExtensions
         => (TBuilder)builder
             .AddMeshNodes(CreatePackageNodeType())
             .AddMeshNodes(CreateCatalogNodeType())
+            // The build-completion subscriber. A mesh-scoped SINGLETON, so its subscriptions live
+            // and die with the mesh rather than surviving disposal into the next test
+            // (Doc/Architecture/NoStaticState). The IHostedService registration is what STARTS it —
+            // the host only starts services registered under the interface, so the bare singleton
+            // alone would leave the build-node subscription never opened (Copilot catch). Forwarded
+            // to the same instance so start/stop and the mesh singleton are one object.
+            .ConfigureServices(services => services
+                .AddSingleton<PluginUpdateWatcher>()
+                .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
+                    sp => sp.GetRequiredService<PluginUpdateWatcher>()))
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();
