@@ -77,7 +77,12 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 // rides on the catalog entry so a consumer can decide "nothing to sync" without
                 // fetching a single package file. Tolerant: a missing/broken sidecar just leaves
                 // ModuleVersion null (legacy commit-sha comparison applies).
-                var moduleVersions = new Dictionary<string, string>(StringComparer.Ordinal);
+                // Keep the WHOLE parsed manifest, not just its version. ModuleVersion answers
+                // "did this module change at all"; the per-file hash map answers "what changed",
+                // which is what a subscriber to the repo's BuildCompletion node diffs against the
+                // install record's InstalledFiles to report an actual file list. Discarding Files
+                // here would force a second fetch of the same sidecar later.
+                var moduleManifests = new Dictionary<string, ModuleManifest>(StringComparer.Ordinal);
                 foreach (var file in snapshot.Files)
                 {
                     var slash = file.Path.IndexOf('/');
@@ -87,7 +92,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         continue;
                     var parsed = ModuleManifest.TryParse(file.Content, logger);
                     if (parsed is not null)
-                        moduleVersions[file.Path[..slash]] = parsed.ModuleVersion;
+                        moduleManifests[file.Path[..slash]] = parsed;
                 }
 
                 var manifests = new List<PackageManifest>();
@@ -116,7 +121,11 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         TargetPartition = id,
                         SourceFolder = id,
                         Version = snapshot.CommitSha,
-                        ModuleVersion = moduleVersions.TryGetValue(id, out var mv) ? mv : null,
+                        ModuleVersion = moduleManifests.TryGetValue(id, out var mm) ? mm.ModuleVersion : null,
+                        // The candidate file set at this ref. Diffed against the install record's
+                        // InstalledFiles to produce the added/modified/removed list; null when the
+                        // module ships no manifest.lock (legacy commit-sha comparison applies).
+                        ManifestFiles = mm?.Files,
                         Category = peeked.Category,
                         Icon = peeked.Icon,
                         Price = peeked.Price,

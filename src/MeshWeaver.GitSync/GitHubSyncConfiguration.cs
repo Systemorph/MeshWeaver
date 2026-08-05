@@ -133,6 +133,18 @@ public static class GitHubSyncConfiguration
                 ExcludeFromContext = new HashSet<string> { "search", "create" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<GitHubIssue>()),
+            },
+            // BuildCompletion satellite (Admin/_Build/{owner}.{repo}). The record of a repo's most
+            // recent GREEN CI run, written by the workflow_run webhook. Consumers SUBSCRIBE to it
+            // rather than being called — that is what keeps GitSync (which writes it) and the plugin
+            // catalog (which reads it) free of any compile-time dependency on each other.
+            new MeshNode(BuildCompletion.NodeType)
+            {
+                Name = "Build Completion",
+                IsSatelliteType = true,
+                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source.WithContentType<BuildCompletion>()),
             });
 
         // Also register the content types on the mesh hub + every per-node hub so reads via
@@ -141,12 +153,14 @@ public static class GitHubSyncConfiguration
             .WithType<GitHubCredential>(nameof(GitHubCredential))
             .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig))
             .WithType<GitHubPullRequest>(nameof(GitHubPullRequest))
-            .WithType<GitHubIssue>(nameof(GitHubIssue)));
+            .WithType<GitHubIssue>(nameof(GitHubIssue))
+            .WithType<BuildCompletion>(nameof(BuildCompletion)));
         builder.ConfigureDefaultNodeHub(c => c
             .WithType<GitHubCredential>(nameof(GitHubCredential))
             .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig))
             .WithType<GitHubPullRequest>(nameof(GitHubPullRequest))
             .WithType<GitHubIssue>(nameof(GitHubIssue))
+            .WithType<BuildCompletion>(nameof(BuildCompletion))
             // The "GitHub" node-menu dropdown (its own context) + the action area its items navigate
             // to. Per-node-hub scoped provider (self-gates to Spaces with a configured repo).
             .WithServices(s =>

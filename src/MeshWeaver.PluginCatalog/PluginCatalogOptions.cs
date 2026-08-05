@@ -44,6 +44,21 @@ public sealed class PluginCatalogOptions
     public List<PluginRegistryReference> Registries { get; set; } = [];
 
     /// <summary>
+    /// The deployment's DEFAULT auto-update policy, consulted ONLY at install time: a fresh install
+    /// record is seeded with <c>AutoUpdate = AutoUpdateByDefault</c>. Defaults to <c>false</c> —
+    /// the platform default is EXPLICIT OPT-IN, so an installation that configures nothing gets
+    /// reminder-only updates. A deployment that wants plugins to track their repos continuously
+    /// sets <c>PluginCatalog:AutoUpdateByDefault=true</c> (our Helm deployments do) and every
+    /// package it installs starts opted in — no per-package step.
+    ///
+    /// <para>Install-time seed, not a live policy: flipping this later changes nothing for
+    /// already-installed packages — the per-record <see cref="PackageManifest.AutoUpdate"/>
+    /// stays the sole runtime authority, and an update re-stamp carries the record's existing choice
+    /// forward untouched (see <c>PackageInstaller.SeedAutoUpdate</c>).</para>
+    /// </summary>
+    public bool AutoUpdateByDefault { get; set; }
+
+    /// <summary>
     /// The registries to actually consume: <see cref="Registries"/> (entries with a URL), or the
     /// legacy <see cref="RegistryUrl"/> as a single unnamed entry, or empty when nothing is
     /// configured (the admin tab shows a "not configured" note).
