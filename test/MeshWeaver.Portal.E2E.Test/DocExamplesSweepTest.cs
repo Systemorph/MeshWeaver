@@ -118,6 +118,27 @@ public class DocExamplesSweepTest(PortalFixture fixture)
             $"no example on {docPath} may render a 'Layout Area Error' div");
         (await page.Locator(".meshweaver-render-error").CountAsync()).Should().Be(0,
             $"no example on {docPath} may trip the per-area ErrorBoundary ('This area failed to render')");
+
+        // 4. No EMBEDDED area paints outside its own box. `.layout-area-container` carries flex
+        //    sizing that is only correct for a FILL area (a routed page / the side panel, marked
+        //    with `fill-area`). Embedded as a flex item, a zero flex basis plus `min-height: 0`
+        //    collapses the box while the content renders at full height and overlaps the block
+        //    below it. Measured as "the last child's bottom edge sits below the container's own"
+        //    rather than via scrollHeight, so a container that is MEANT to scroll cannot be
+        //    mistaken for one that overflows: the `overflow-y: visible` filter excludes those.
+        var overflowing = await page.EvaluateAsync<string>("""
+            () => [...document.querySelectorAll('.layout-area-container:not(.fill-area)')]
+                .filter(el => getComputedStyle(el).overflowY === 'visible' && el.lastElementChild)
+                .filter(el => el.lastElementChild.getBoundingClientRect().bottom
+                              > el.getBoundingClientRect().bottom + 2)
+                .map(el => `${el.className} (content overflows by ${Math.round(
+                      el.lastElementChild.getBoundingClientRect().bottom
+                      - el.getBoundingClientRect().bottom)}px)`)
+                .join(' | ')
+            """);
+        overflowing.Should().BeEmpty(
+            $"no embedded layout area on {docPath} may render outside its own box — its content "
+            + "would paint over whatever follows it");
         }
         finally
         {
