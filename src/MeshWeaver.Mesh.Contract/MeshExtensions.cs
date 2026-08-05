@@ -142,6 +142,7 @@ public static class MeshExtensions
             .Set(new NodeOperationHandlersMarker())
             .AddMeshTypes()
             .WithHandler<CreateNodeRequest>(HandleCreateNodeRequest)
+            .WithHandler<CreateNodesRequest>(HandleCreateNodesRequest)
             .WithHandler<CreateOrUpdateNodeRequest>(HandleCreateOrUpdateNodeRequest)
             .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest)
             .WithHandler<ValidateDeleteRequest>(HandleValidateDeleteRequest)
@@ -663,6 +664,301 @@ public static class MeshExtensions
                             CreateNodeResponse.Fail($"Unexpected error: {ex.Message}",
                                 NodeCreationRejectionReason.Unknown),
                             o => o.ResponseFor(request));
+                    }
+                });
+
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Handles <see cref="CreateNodesRequest"/> — the BULK sibling of
+    /// <see cref="HandleCreateNodeRequest"/>. One request creates N plain nodes with ONE batched
+    /// existence read, ONE partition bootstrap per distinct partition, the full validator/RLS +
+    /// type-existence pass for EVERY node BEFORE anything is written, then ONE
+    /// <see cref="IStorageAdapter.WriteMany"/> in caller order with the change-feed
+    /// <c>Created</c> publishes following post-commit in that same order, and the post-creation
+    /// handlers per created node. Satellites and <c>AccessAssignment</c> nodes are refused (their
+    /// guards and side effects are deliberately per-node); existing paths are skipped and
+    /// reported, never overwritten. Validate-all-then-write: a pre-write failure writes NOTHING.
+    ///
+    /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never Task; the
+    /// terminal response is posted from inside the reactive chain (see
+    /// <see cref="HandleCreateNodeRequest"/>'s note).
+    /// </summary>
+    private static IMessageDelivery HandleCreateNodesRequest(
+        IMessageHub hub,
+        IMessageDelivery<CreateNodesRequest> request)
+    {
+        var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("MeshWeaver.Mesh.CreateNodes");
+        var meshConfig = hub.ServiceProvider.GetService<MeshConfiguration>();
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+
+        void PostFail(string error, NodeCreationRejectionReason reason, string? failedPath = null,
+            ImmutableList<MeshNode>? created = null)
+            => hub.Post(CreateNodesResponse.Fail(error, reason, failedPath, created),
+                o => o.ResponseFor(request));
+
+        if (meshConfig == null)
+        {
+            PostFail("MeshConfiguration not available", NodeCreationRejectionReason.Unknown);
+            return request.Processed();
+        }
+        // FAIL CLOSED on missing storage — same contract as the singular create (a create that
+        // cannot persist must error, never ack).
+        if (persistence == null)
+        {
+            logger.LogError(
+                "[CreateNodes] REFUSED batch of {Count}: no IStorageAdapter on hub {Hub} — the creates would be acked but never persisted.",
+                request.Message.Nodes?.Count ?? 0, hub.Address);
+            PostFail(
+                $"No storage adapter on hub '{hub.Address}' — refusing the batch because it could not be persisted.",
+                NodeCreationRejectionReason.Unknown);
+            return request.Processed();
+        }
+
+        var createdBy = request.Message.CreatedBy;
+        if (string.IsNullOrEmpty(createdBy) && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
+            createdBy = senderId;
+
+        var nodes = request.Message.Nodes ?? ImmutableList<MeshNode>.Empty;
+        if (nodes.Count == 0)
+        {
+            hub.Post(CreateNodesResponse.Ok(ImmutableList<MeshNode>.Empty, ImmutableList<string>.Empty),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
+        // ——— Phase 0: synchronous structural guards — the whole batch fails on the first offender,
+        // so a caller can never land half a plan behind a refusal it didn't see. ———
+        var seenPaths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var candidate in nodes)
+        {
+            if (string.IsNullOrWhiteSpace(candidate.Id) || string.IsNullOrWhiteSpace(candidate.Path))
+            {
+                PostFail("Node path and Id must not be empty",
+                    NodeCreationRejectionReason.ValidationFailed, candidate.Path);
+                return request.Processed();
+            }
+            if (string.IsNullOrWhiteSpace(candidate.NodeType) && candidate.Content == null)
+            {
+                PostFail($"Node '{candidate.Path}' must have a NodeType or Content set; bare nodes are not allowed.",
+                    NodeCreationRejectionReason.ValidationFailed, candidate.Path);
+                return request.Processed();
+            }
+            // Satellites (_Access, _Activity, _Thread, …) carry per-node guards (ownerless-activity,
+            // assignment scope/system-owned) and satellite-MainNode normalization that are
+            // deliberately per-node lifecycle — refuse them here rather than half-support them.
+            if (candidate.Segments.Any(segment => segment.StartsWith('_')))
+            {
+                PostFail(
+                    $"'{candidate.Path}' is a satellite path — satellites are per-node lifecycle; use CreateNodeRequest/CreateOrUpdateNodeRequest.",
+                    NodeCreationRejectionReason.InvalidPath, candidate.Path);
+                return request.Processed();
+            }
+            if (string.Equals(candidate.NodeType, AccessAssignmentNodeTypeName, StringComparison.OrdinalIgnoreCase))
+            {
+                PostFail(
+                    $"'{candidate.Path}' is an AccessAssignment — grants are per-node lifecycle; use CreateNodeRequest.",
+                    NodeCreationRejectionReason.ValidationFailed, candidate.Path);
+                return request.Processed();
+            }
+            if (!seenPaths.Add(candidate.Path))
+            {
+                PostFail($"Duplicate path in batch: '{candidate.Path}'",
+                    NodeCreationRejectionReason.InvalidPath, candidate.Path);
+                return request.Processed();
+            }
+        }
+
+        var options = hub.JsonSerializerOptions;
+        var capturedBy = createdBy;
+        // What WriteMany reported as committed — read by the terminal error path so a storage
+        // failure mid-batch reports what actually landed instead of guessing.
+        var written = ImmutableList<MeshNode>.Empty;
+
+        // ——— Phase 1: existence — ONE batched authoritative read plus the static/config fallback
+        // the singular create consults (a definition-only catalog type-def is NOT a real node). ———
+        persistence.ReadMany(nodes.Select(n => n.Path).ToArray(), options)
+            .Select(existingNode => existingNode.Path)
+            .ToList()
+            .SelectMany(persistedPaths =>
+            {
+                var existing = new HashSet<string>(persistedPaths, StringComparer.Ordinal);
+                foreach (var candidate in nodes)
+                {
+                    if (existing.Contains(candidate.Path))
+                        continue;
+                    var configNode = hub.ServiceProvider.FindStaticNode(candidate.Path);
+                    if (configNode is not null && configNode is not { IsDefinitionOnly: true })
+                        existing.Add(candidate.Path);
+                }
+
+                var existingPaths = nodes.Where(n => existing.Contains(n.Path))
+                    .Select(n => n.Path).ToImmutableList();
+                var toCreate = nodes
+                    .Where(n => !existing.Contains(n.Path))
+                    // The 1b' stale-bare-Id MainNode repair from the singular path (satellites are
+                    // refused above, so the satellite normalization does not apply here).
+                    .Select(n => !string.IsNullOrEmpty(n.NodeType)
+                                 && !string.IsNullOrEmpty(n.Namespace)
+                                 && !meshConfig.IsSatelliteNodeType(n.NodeType)
+                                 && n.MainNode == n.Id
+                        ? n with { MainNode = n.Path }
+                        : n)
+                    .ToImmutableList();
+
+                if (toCreate.Count == 0)
+                {
+                    hub.Post(CreateNodesResponse.Ok(ImmutableList<MeshNode>.Empty, existingPaths),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<(ImmutableList<MeshNode> Created, ImmutableList<string> Existing)>();
+                }
+
+                // ——— Phase 2: partition bootstrap ONCE per distinct partition (the bootstrap
+                // itself is idempotent and re-healing; batching it is pure round-trip economy). ———
+                var bootstrap = toCreate
+                    .Where(n => !string.IsNullOrEmpty(n.Namespace))
+                    .GroupBy(n => n.Segments[0], StringComparer.Ordinal)
+                    .Select(group => EnsurePartitionBootstrap(
+                        hub, group.First(),
+                        new CreateNodeRequest(group.First()) { CreatedBy = capturedBy }, logger))
+                    .Concat()
+                    .ToList()
+                    .Select(_ => System.Reactive.Unit.Default);
+
+                // ——— Phase 3: validators (RLS included) for EVERY node, sequential, before any
+                // write. First failure fails the whole request — nothing has been written yet. ———
+                var validate = toCreate
+                    .Select(n => RunCreationValidatorsObs(
+                            hub, n, new CreateNodeRequest(n) { CreatedBy = capturedBy })
+                        .Select(error => (Node: n, Error: error)))
+                    .Concat()
+                    .Where(t => t.Error != null)
+                    .Take(1)
+                    .Select(t => ((MeshNode Node, (string? ErrorMessage, NodeCreationRejectionReason Reason)? Error)?)t)
+                    .DefaultIfEmpty(null);
+
+                // ——— Phase 4: type existence per DISTINCT NodeType (static provider, else
+                // persistence — same recognition order as the singular create). ———
+                var typesToProbe = toCreate
+                    .Select(n => n.NodeType)
+                    .Where(t => !string.IsNullOrEmpty(t))
+                    .Select(t => t!)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+                var probeTypes = typesToProbe
+                    .Select(type => hub.ServiceProvider.FindStaticNode(type) is not null
+                        ? Observable.Return((Type: type, Exists: true))
+                        : persistence.Exists(type).Select(exists => (Type: type, Exists: exists)))
+                    .Concat()
+                    .Where(t => !t.Exists)
+                    .Take(1)
+                    .Select(t => ((string Type, bool Exists)?)t)
+                    .DefaultIfEmpty(null);
+
+                return bootstrap
+                    .SelectMany(_ => validate)
+                    .SelectMany(validationFailure =>
+                    {
+                        if (validationFailure is { } failure)
+                        {
+                            logger.LogWarning(
+                                "[CreateNodes] validator rejected {Path}: {Error} — batch of {Count} refused, nothing written",
+                                failure.Node.Path, failure.Error!.Value.ErrorMessage, toCreate.Count);
+                            PostFail(failure.Error.Value.ErrorMessage ?? "Validation failed",
+                                failure.Error.Value.Reason, failure.Node.Path);
+                            return Observable.Empty<(ImmutableList<MeshNode>, ImmutableList<string>)>();
+                        }
+
+                        return probeTypes.SelectMany(missingType =>
+                        {
+                            if (missingType is { } missing)
+                            {
+                                var offender = toCreate.First(n => string.Equals(
+                                    n.NodeType, missing.Type, StringComparison.Ordinal));
+                                PostFail($"NodeType '{missing.Type}' is not registered",
+                                    NodeCreationRejectionReason.InvalidNodeType, offender.Path);
+                                return Observable.Empty<(ImmutableList<MeshNode>, ImmutableList<string>)>();
+                            }
+
+                            // ——— Phase 5: stamps — identical to the singular create. ———
+                            var now = DateTimeOffset.UtcNow;
+                            var stamped = toCreate.Select(n => n with
+                            {
+                                State = MeshNodeState.Active,
+                                CreatedDate = n.CreatedDate == default ? now : n.CreatedDate,
+                                CreatedBy = string.IsNullOrEmpty(n.CreatedBy) ? capturedBy : n.CreatedBy,
+                                LastModified = n.LastModified == default ? now : n.LastModified,
+                                LastModifiedBy = string.IsNullOrEmpty(n.LastModifiedBy) ? capturedBy : n.LastModifiedBy,
+                                Version = n.Version > 0 ? n.Version : 1,
+                            }).ToImmutableList();
+
+                            // ——— Phase 6: ONE ordered WriteMany; the Created publishes ride the
+                            // post-commit emission in caller order (commit-then-publish, exactly
+                            // like WriteAndPublishCreated) — so stream caches and live queries
+                            // invalidate for every node, which the installer's System-side bulk
+                            // path never did. ———
+                            return persistence.WriteMany(stamped, options)
+                                .Select(list => list.ToImmutableList())
+                                .Do(list =>
+                                {
+                                    written = list;
+                                    foreach (var saved in list)
+                                        changeFeed?.Publish(MeshChangeEvent.Created(saved));
+                                })
+                                .SelectMany(list =>
+                                {
+                                    if (list.Count != stamped.Count)
+                                    {
+                                        PostFail(
+                                            $"Storage accepted {list.Count} of {stamped.Count} nodes — the batch did not land completely.",
+                                            NodeCreationRejectionReason.Unknown, created: list);
+                                        return Observable.Empty<(ImmutableList<MeshNode>, ImmutableList<string>)>();
+                                    }
+
+                                    // ——— Phase 7: post-creation handlers per created node,
+                                    // sequential — same semantics as the singular create
+                                    // (FailsCreateOnError propagates; best-effort handlers
+                                    // log-and-continue inside the runner). ———
+                                    return list
+                                        .Select(saved => RunPostCreationHandlersObs(hub, saved, capturedBy, logger))
+                                        .Concat()
+                                        .ToList()
+                                        .Select(_ => (list, existingPaths));
+                                });
+                        });
+                    });
+            })
+            .Subscribe(
+                result =>
+                {
+                    logger.LogInformation(
+                        "[CreateNodes] created {Created} node(s), {Existing} already existed, by {CreatedBy}",
+                        result.Item1.Count, result.Item2.Count, capturedBy ?? "system");
+                    hub.Post(CreateNodesResponse.Ok(result.Item1, result.Item2),
+                        o => o.ResponseFor(request));
+                },
+                ex =>
+                {
+                    if (written.Count > 0)
+                    {
+                        logger.LogError(ex,
+                            "[CreateNodes] failed AFTER {Written} node(s) were persisted — reporting the partial landing",
+                            written.Count);
+                        PostFail($"Nodes persisted but a later step failed: {ex.Message}",
+                            NodeCreationRejectionReason.Unknown, created: written);
+                    }
+                    else if (ex is InvalidOperationException)
+                    {
+                        logger.LogWarning(ex, "[CreateNodes] batch refused");
+                        PostFail(ex.Message, NodeCreationRejectionReason.ValidationFailed);
+                    }
+                    else
+                    {
+                        logger.LogError(ex, "[CreateNodes] unexpected error");
+                        PostFail($"Unexpected error: {ex.Message}", NodeCreationRejectionReason.Unknown);
                     }
                 });
 
