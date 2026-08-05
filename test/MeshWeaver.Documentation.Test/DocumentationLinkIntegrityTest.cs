@@ -117,17 +117,6 @@ public class DocumentationLinkIntegrityTest
             if (partition is not ("Doc" or "Agent" or "Skill"))
                 continue; // other mesh partitions can't be validated from embedded resources
 
-            // Agent CHILDREN moved out of the binary: the built-in agents are the pre-installed
-            // Agent PLUGIN (MeshWeaver.Plugins/Agent), so a /Agent/EmailRouter link is correct at
-            // runtime but has no embedded resource to resolve against here. Only the partition
-            // root ("Agent", still in knownPaths) remains statically verifiable; typo-catching for
-            // agent links now rests with the plugins repo's gate, next to the markdown it guards.
-            // Classify on the trailing-slash-normalized form so "/Agent/" (a root link) stays a
-            // verifiable root, not a skipped child (Copilot catch).
-            if (string.Equals(partition, "Agent", StringComparison.OrdinalIgnoreCase)
-                && target.TrimEnd('/').Contains('/'))
-                continue;
-
             if (!knownPaths.Contains(target.TrimEnd('/')))
                 failures.Add($"{nodePath}: ({url}) — resolves to /{target}, which does not exist");
         }
