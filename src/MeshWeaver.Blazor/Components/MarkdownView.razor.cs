@@ -310,5 +310,9 @@ public partial class MarkdownView
             return;
         _runTracker.Record(submission);
         Hub.Post(submission, o => o.WithTarget(KernelAddress));
+        // The toolbar's OnRun is a plain Action, not an EventCallback, so nothing re-renders THIS
+        // view after the click — and RunState is a parameter computed at the parent's last render,
+        // so without this the "stale cell" chip survives the very re-run that cleared it.
+        StateHasChanged();
     }
 }
