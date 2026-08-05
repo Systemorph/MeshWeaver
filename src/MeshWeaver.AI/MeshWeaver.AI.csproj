@@ -3,13 +3,21 @@
     <Nullable>enable</Nullable>
 </PropertyGroup>
     <ItemGroup>
-        <!-- The AI content SECTION (repo-root content/ai) is the SINGLE source of the built-in Agent
-             and Skill nodes, shipped three ways from the one copy:
-             1) EmbeddedResource with LinkBase="Data" → manifest names MeshWeaver.AI.Data.Agent.*.md /
-                .Skill.*.md (unchanged) — the offline FALLBACK if the on-disk section isn't found, so
-                the default AI experience can never disappear;
+        <!-- The AI content SECTION (repo-root content/ai) is the SINGLE source of the built-in Skill
+             nodes, shipped three ways from the one copy:
+             1) EmbeddedResource with LinkBase="Data" → manifest names MeshWeaver.AI.Data.Skill.*.md
+                (unchanged) — the offline FALLBACK if the on-disk section isn't found;
              2) Content copy-to-output ("AiContent" beside the assembly) for a deployed offline build;
-             3) the repo working tree itself — a dev edits it in the mesh and syncs it back here. -->
+             3) the repo working tree itself — a dev edits it in the mesh and syncs it back here.
+
+             🚨 Keep the glob at content/ai/**, NOT content/ai/Skill/**. LinkBase="Data" derives the
+             manifest name from the path RELATIVE to the glob root, so narrowing it would rename
+             every resource MeshWeaver.AI.Data.Skill.x.md → .Data.x.md and BuiltInSkillProvider (which
+             filters on the ".Data.Skill." prefix) would find nothing.
+
+             content/ai/Agent is gone: the built-in agents are the Agent PLUGIN in
+             MeshWeaver.Plugins. BuiltInAgentProvider now yields only the code-defined ThreadNamer
+             and the access policy on the in-memory path. -->
         <EmbeddedResource Include="..\..\content\ai\**\*.md" LinkBase="Data" />
         <Content Include="..\..\content\ai\**\*.md"
                  Link="AiContent\%(RecursiveDir)%(Filename)%(Extension)"

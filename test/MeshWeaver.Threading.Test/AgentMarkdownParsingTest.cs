@@ -1,25 +1,33 @@
-using System;
-using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using MeshWeaver.AI;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Documentation;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
-/// Verifies that all built-in agent markdown files and documentation parse
-/// without illegal references. Catches issues where placeholder paths like
-/// "@path" or "@{address}" are used that the AI agent or renderer would
-/// try to resolve literally.
+/// Pins what <see cref="BuiltInAgentProvider"/> still owns after the built-in agents moved OUT of the
+/// binary and into the <c>Agent</c> plugin (<c>MeshWeaver.Plugins</c>, pre-installed).
+///
+/// <para>This file used to assert the shipped catalog — Assistant, Worker, Researcher,
+/// ToolsReference — and scan every agent's markdown for literal <c>@path</c> placeholders and
+/// unresolvable <c>@@</c> references. Those assertions moved to the plugins repo's gate
+/// (<c>scripts/validate-repos.py</c>), which is where the markdown now lives; asserting them here
+/// would only prove the framework had NOT let go of the content.</para>
+///
+/// <para>What remains here is the half the framework kept, and both halves matter:</para>
+/// <list type="bullet">
+///   <item><b>ThreadNamer survives.</b> It is the one agent with no <c>.md</c> file — built in C#
+///     because the framework itself invokes it to name threads. It was the thing most likely to be
+///     lost in the move, so it is pinned.</item>
+///   <item><b>Nothing else ships.</b> If an agent <c>.md</c> is ever re-added under
+///     <c>content/ai/Agent</c>, it would be embedded and served in-memory while the plugin serves
+///     the same paths from Postgres — two sources for one partition, silently disagreeing. This
+///     test fails the moment that happens.</item>
+/// </list>
 /// </summary>
 public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -29,136 +37,44 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
             .AddDocumentation();
 
     /// <summary>
-    /// Verifies all built-in agent nodes load without exceptions.
+    /// The in-memory offline path still yields the code-defined ThreadNamer and the partition's
+    /// read-only access policy — the agent picker's fallback on a mesh that does not serve Agent
+    /// from the DB (monolith, tests, MAUI).
     /// </summary>
     [Fact]
-    public void BuiltInAgentProvider_LoadsAllNodes()
+    public void TheProviderStillYieldsThreadNamerAndTheAccessPolicy()
     {
-        var provider = new BuiltInAgentProvider();
-        var nodes = provider.GetStaticNodes().ToList();
+        var nodes = new BuiltInAgentProvider().GetStaticNodes().ToList();
 
-        nodes.Should().NotBeEmpty("should have at least the built-in agents");
-        Output.WriteLine($"Loaded {nodes.Count} agent nodes:");
         foreach (var node in nodes)
             Output.WriteLine($"  {node.Path}: {node.NodeType} - {node.Name}");
 
-        // Verify expected agents exist
-        nodes.Should().Contain(n => n.Path == "Agent/Assistant", "Assistant agent should exist (renamed from Orchestrator in c31fd04da)");
-        nodes.Should().Contain(n => n.Path == "Agent/Worker", "Worker agent should exist");
-        nodes.Should().Contain(n => n.Path == "Agent/Researcher", "Researcher agent should exist");
-        nodes.Should().Contain(n => n.Path == "Agent/ToolsReference", "ToolsReference should exist");
+        nodes.Should().Contain(
+            n => n.Path == "Agent/ThreadNamer",
+            "ThreadNamer is defined in C#, not as markdown — the framework invokes it to name "
+            + "threads, so it must survive the agents' move to the plugin");
+        nodes.Should().Contain(
+            n => n.NodeType == "PartitionAccessPolicy",
+            "the Agent partition's PublicRead policy is what makes the catalog readable at all");
     }
 
     /// <summary>
-    /// Verifies no agent instructions contain the literal "@path" placeholder
-    /// which the AI agent would try to use as an actual address.
+    /// 🚨 No agent MARKDOWN ships in the binary any more. A re-added <c>content/ai/Agent/*.md</c>
+    /// would be embedded and served in-memory while the Agent plugin serves the same paths from
+    /// Postgres — the two-sources-for-one-partition split this move exists to end.
     /// </summary>
     [Fact]
-    public void AgentInstructions_NoLiteralPathPlaceholders()
+    public void NoAgentMarkdownIsEmbeddedInTheBinaryAnyMore()
     {
-        var provider = new BuiltInAgentProvider();
-        var nodes = provider.GetStaticNodes().ToList();
-
-        var badPatterns = new[] { "@path/", "@path'", "@@path/", "@@path " };
-        var violations = new List<string>();
-
-        foreach (var node in nodes)
-        {
-            string? instructions = null;
-            if (node.Content is AgentConfiguration config)
-                instructions = config.Instructions;
-            else if (node.Content is MeshWeaver.Markdown.MarkdownContent md)
-                instructions = md.Content;
-
-            if (string.IsNullOrEmpty(instructions))
-                continue;
-
-            foreach (var pattern in badPatterns)
-            {
-                if (instructions.Contains(pattern, StringComparison.OrdinalIgnoreCase))
-                {
-                    violations.Add($"{node.Path}: contains '{pattern}'");
-                }
-            }
-        }
-
-        if (violations.Count > 0)
-        {
-            Output.WriteLine("Violations found:");
-            foreach (var v in violations)
-                Output.WriteLine($"  - {v}");
-        }
-
-        violations.Should().BeEmpty(
-            "agent instructions must not contain literal '@path' â€” " +
-            "the AI agent will try to use it as an actual address. " +
-            "Use a real example node path instead.");
-    }
-
-    /// <summary>
-    /// Verifies that @@ inline references in agent markdown point to nodes
-    /// that actually exist (either as static nodes or in persistence).
-    /// </summary>
-    [Fact]
-    public async Task AgentInstructions_InlineReferences_PointToExistingNodes()
-    {
-        var provider = new BuiltInAgentProvider();
-        var allStaticNodes = provider.GetStaticNodes().ToList();
-
-        // Also get documentation static nodes
-        var docProvider = Mesh.ServiceProvider.GetServices<IStaticNodeProvider>();
-        var allNodes = allStaticNodes
-            .Concat(docProvider.SelectMany(p => p.GetStaticNodes()))
+        var markdownAgents = new BuiltInAgentProvider().GetStaticNodes()
+            .Where(n => n.Content is MeshWeaver.Markdown.MarkdownContent
+                        || (n.NodeType == "Agent" && n.Path != "Agent/ThreadNamer"))
+            .Select(n => n.Path)
             .ToList();
 
-        var allNodePaths = allNodes.Select(n => n.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        // Find all @@Reference patterns in agent instructions (at start of line)
-        var inlineRefRegex = new Regex(@"^@@(\S+)", RegexOptions.Multiline);
-        var missingRefs = new List<string>();
-
-        foreach (var node in allStaticNodes)
-        {
-            string? instructions = null;
-            if (node.Content is AgentConfiguration config)
-                instructions = config.Instructions;
-            else if (node.Content is MeshWeaver.Markdown.MarkdownContent md)
-                instructions = md.Content;
-
-            if (string.IsNullOrEmpty(instructions))
-                continue;
-
-            foreach (Match match in inlineRefRegex.Matches(instructions))
-            {
-                var refPath = match.Groups[1].Value;
-                Output.WriteLine($"  {node.Path}: @@{refPath}");
-
-                // Check if the referenced path exists as a static node
-                if (!allNodePaths.Contains(refPath))
-                {
-                    // Also check if it's a content reference (contains ':')
-                    if (!refPath.Contains(':'))
-                    {
-                        // Try reading via per-node stream
-                        var found = await ReadNode(refPath).Should().Emit();
-                        if (found == null)
-                            missingRefs.Add($"{node.Path}: @@{refPath} â€” node not found");
-                    }
-                    // Content references (e.g., Doc/AI/content:inline-example.md) are harder
-                    // to validate statically â€” skip for now
-                }
-            }
-        }
-
-        if (missingRefs.Count > 0)
-        {
-            Output.WriteLine("\nMissing references:");
-            foreach (var r in missingRefs)
-                Output.WriteLine($"  - {r}");
-        }
-
-        missingRefs.Should().BeEmpty(
-            "@@ inline references must point to existing nodes. " +
-            "Missing nodes will cause rendering errors.");
+        markdownAgents.Should().BeEmpty(
+            "the built-in agents live in the Agent plugin (MeshWeaver.Plugins) now. Shipping one "
+            + "here too gives the Agent partition two disagreeing sources — add it to the plugin "
+            + "instead");
     }
 }
