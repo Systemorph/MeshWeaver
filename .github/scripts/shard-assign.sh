@@ -37,6 +37,19 @@
 #
 # Unlisted projects get DEFAULT_WEIGHT — a deliberate over-estimate, since an
 # unlisted project is a NEW one whose cost nobody has measured yet.
+#
+# ── Splitting a heavyweight across shards ────────────────────────────────────
+# An optional THIRD column splits one project into N parts, each weighted 1/N and
+# scheduled independently — so the halves land on DIFFERENT shards, i.e. different
+# runners. That matters twice over: it lowers the floor (no amount of sharding can
+# beat the heaviest single project), and it introduces no shared-resource contention,
+# because two runners share nothing. `maxParallelThreads: 1` is per-process and stays
+# intact.
+#
+# A split entry prints as `<csproj>#<part>/<parts>`; the test job turns that into an
+# `-class` filter list by enumerating the assembly's classes and taking every Nth.
+# The BUILD job strips the suffix, so a split project's bin is packed into every shard
+# that runs one of its parts.
 set -euo pipefail
 
 : "${SHARD_INDEX:?SHARD_INDEX must be set}"
@@ -46,8 +59,8 @@ DEFAULT_WEIGHT=10
 
 # "<seconds> <project-name>", heaviest first.
 WEIGHTS=$(cat <<'EOF'
-345 MeshWeaver.Hosting.Monolith.Test
-263 MeshWeaver.AI.Test
+345 MeshWeaver.Hosting.Monolith.Test 2
+263 MeshWeaver.AI.Test 2
 239 MeshWeaver.Hosting.Orleans.Test
 130 MeshWeaver.Hosting.PostgreSql.Test
 104 MeshWeaver.Threading.Test
@@ -125,10 +138,15 @@ printf '%s\n' "$WEIGHTS" > "$weights_file"
 # the runner while failing for anyone verifying a change locally.
 find test -name '*.csproj' ! -path '*Cosmos*' ! -path '*/bin/*' \
   | awk -v dflt="$DEFAULT_WEIGHT" '
-      FNR == NR { if (NF == 2) weight[$2] = $1; next }
+      FNR == NR { if (NF >= 2) { weight[$2] = $1; if (NF >= 3) parts[$2] = $3 } next }
       {
         name = $0; sub(/.*\//, "", name); sub(/\.csproj$/, "", name)
-        printf "%06d %s %s\n", (name in weight ? weight[name] : dflt), name, $0
+        w = (name in weight ? weight[name] : dflt)
+        n = (name in parts ? parts[name] : 1)
+        if (n <= 1) { printf "%06d %s %s\n", w, name, $0; next }
+        # Each part is its own schedulable unit at 1/N the weight.
+        for (i = 1; i <= n; i++)
+          printf "%06d %s#%d/%d %s#%d/%d\n", int(w / n), name, i, n, $0, i, n
       }' "$weights_file" - \
   | sort -k1,1nr -k2,2 \
   | awk -v idx="$SHARD_INDEX" -v total="$SHARD_TOTAL" '

@@ -262,12 +262,15 @@ jobs:
         # downloaded.
         for ((i=0; i<SHARD_TOTAL; i++)); do
           SHARD_INDEX=$i .github/scripts/shard-assign.sh \
-            | while read -r csproj; do
+            | while read -r entry; do
+                # A split project arrives as `<csproj>#<part>/<parts>`. Strip the suffix: the
+                # SAME bin has to travel to every shard running one of its parts.
+                csproj="${entry%%#*}"
                 d="$(dirname "$csproj")/bin"
                 # A project that produced no output (helper with nothing to
                 # build) simply contributes nothing to its shard's tarball.
                 [ -d "$d" ] && echo "$d"
-              done > ".build-paths-$i.txt"
+              done | sort -u > ".build-paths-$i.txt"
           # zstd -T0 = all cores. --long=27 (128 MiB match window) dedupes ACROSS
           # files: the self-contained test bins each carry near-identical copies
           # of the same framework + MeshWeaver DLLs, which the default 8 MiB
@@ -408,8 +411,19 @@ jobs:
         echo "Shard $SHARD_INDEX/$SHARD_TOTAL runs ${#selected[@]} projects"
 
         # ── Run each assigned project's native xUnit v3 host ─────────────────
-        for csproj in "${selected[@]}"; do
+        for entry in "${selected[@]}"; do
+          # A heavyweight may be SPLIT across shards, arriving as `<csproj>#<part>/<parts>`.
+          # Each part runs in its own process on its own runner, so the halves share
+          # nothing — no ports, no containers, no state. maxParallelThreads:1 is
+          # per-process and is unaffected.
+          csproj="${entry%%#*}"
+          partspec="${entry#*#}"
+          if [ "$partspec" = "$entry" ]; then part=1; parts=1; else
+            part="${partspec%%/*}"; parts="${partspec##*/}"
+          fi
           name=$(basename "$csproj" .csproj)
+          label="$name"
+          [ "$parts" -gt 1 ] && label="$name (part $part/$parts)"
           dir=$(dirname "$csproj")/bin/Release/net10.0
           # Helper projects (TestDomain, Hub.Fixture, AI.Test.FakeCli) ship no
           # xunit.v3 host — nothing to run. Recorded so the log shows they were
@@ -440,11 +454,30 @@ jobs:
           # CWD = the project's bin dir, exactly like `dotnet test` ran the
           # host: appsettings.json + xunit.runner.json + TestData resolve there.
           mkdir -p "$dir/TestResults"
+          # For a split project, enumerate the assembly's classes and take every Nth from
+          # the SORTED list. Deterministic, and self-maintaining: a newly added test class
+          # is distributed automatically without anyone editing the weight table.
+          classargs=()
+          trxname="$name"
+          if [ "$parts" -gt 1 ]; then
+            mapfile -t allclasses < <( cd "$dir" && dotnet "$name.dll" -list classes 2>/dev/null \
+              | grep -E "^[A-Za-z_][A-Za-z0-9_.]*$" | sort )
+            if [ "${#allclasses[@]}" -eq 0 ]; then
+              echo "::error::$label: could not enumerate test classes — refusing to run a partial shard silently."
+              echo "[CI] $name exit=96 NO_CLASSES (class enumeration failed for a split project)" >> test/test-results.log
+              continue
+            fi
+            for ((ci=part-1; ci<${#allclasses[@]}; ci+=parts)); do
+              classargs+=(-class "${allclasses[$ci]}")
+            done
+            trxname="$name.part$part"
+            echo "$label: ${#classargs[@]} of ${#allclasses[@]} classes"
+          fi
           ( cd "$dir" && timeout --signal=TERM --kill-after=30s 8m \
-              dotnet "$name.dll" -trx "TestResults/$name.trx" )
+              dotnet "$name.dll" -trx "TestResults/$trxname.trx" "${classargs[@]}" )
           rc=$?
           if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
-            marker="[CI] $name exit=$rc TIMEOUT (6m wall-clock cap hit — likely fixture/init hang)"
+            marker="[CI] $label exit=$rc TIMEOUT (6m wall-clock cap hit — likely fixture/init hang)"
           else
             marker="[CI] $name exit=$rc"
           fi
