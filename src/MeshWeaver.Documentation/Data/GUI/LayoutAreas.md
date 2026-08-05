@@ -162,8 +162,9 @@ using MeshWeaver.Messaging;   // Address — the kernel pre-imports neither
 // Two things this example pins down, both easy to get wrong:
 //  • the address must be an Address, not a bare string — the parameter is typed `object`, so a
 //    string compiles and then silently renders an empty area;
-//  • name the area explicitly. An empty reference asks the target to resolve its own default,
-//    which does not resolve from here.
+//  • prefer naming the area. An empty reference resolves to the target's DEFAULT area, as
+//    described above — which is whatever that node registered, not necessarily the one you
+//    want. Embedding this page's default rendered nothing; "Overview" renders its content.
 Controls.Stack
     .WithView(Controls.Markdown("**Above the embed.**"))
     .WithView(new LayoutAreaControl(
