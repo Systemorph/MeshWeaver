@@ -290,7 +290,14 @@ public static class CodeNodeType
                                             {
                                                 LastExecutedAt = DateTimeOffset.UtcNow,
                                                 LastExecutedBy = viewerHome,
-                                                LastActivityPath = activityPath
+                                                LastActivityPath = activityPath,
+                                                // Fingerprint what was ACTUALLY submitted (submit.Code /
+                                                // submit.Language), not `cfg` — the two agree today, but
+                                                // stamping the node's current content would silently
+                                                // record "up to date" for a run of something else the
+                                                // moment any future path submits a transformed source.
+                                                LastExecutedCodeHash =
+                                                    CodeFingerprint.Of(submit.Code, submit.Language)
                                             }
                                         }
                                         : curr)
