@@ -51,7 +51,7 @@ namespace MeshWeaver.PluginCatalog;
 ///
 /// <para>Full flow and configuration: <c>Doc/Architecture/PluginUpdateOnGreenBuild</c>.</para>
 /// </summary>
-public sealed class PluginUpdateWatcher : IDisposable
+public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedService, IDisposable
 {
     private readonly IMessageHub hub;
     private readonly ILogger? logger;
@@ -73,8 +73,30 @@ public sealed class PluginUpdateWatcher : IDisposable
     }
 
     /// <summary>
+    /// Hosted-service start — what actually activates the watcher on boot. Registered as an
+    /// <c>IHostedService</c> in <c>AddPluginCatalog</c> (a bare singleton would sit inert: the host
+    /// only starts services registered under the interface — the Copilot-caught gap that left the
+    /// build-node subscription never opened). Delegates to <see cref="Start"/>; returns immediately
+    /// (the subscription chain is reactive — nothing to await).
+    /// </summary>
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        Start();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Hosted-service stop: closes every subscription (idempotent with <see cref="Dispose"/>).</summary>
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        Dispose();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
     /// Opens a build-node subscription for every catalog that names a source repository. Idempotent:
-    /// calling it again after a catalog is added subscribes only the new repositories.
+    /// calling it again after a catalog is added subscribes only the new repositories. (A catalog
+    /// CREATED after boot is picked up on the next start — the snapshot read is deliberate; the
+    /// per-repo <c>watched</c> guard makes re-running free.)
     /// </summary>
     public void Start()
     {

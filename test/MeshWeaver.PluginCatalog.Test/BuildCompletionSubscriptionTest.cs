@@ -144,6 +144,14 @@ public class BuildCompletionSubscriptionTest(ITestOutputHelper output) : Monolit
 
         Mesh.ServiceProvider.GetService<PluginUpdateWatcher>()
             .Should().BeSameAs(watcher, "it is a mesh-scoped singleton, so its subscriptions die with the mesh");
+
+        // 🚨 Registration alone does NOT start it — the host starts only IHostedService
+        // registrations, and a bare singleton left the build-node subscription never opened
+        // (Copilot catch). The hosted registration must resolve the SAME instance, so what the
+        // host starts is the mesh singleton, not a second inert copy.
+        Mesh.ServiceProvider.GetServices<Microsoft.Extensions.Hosting.IHostedService>()
+            .Should().Contain(s => ReferenceEquals(s, watcher),
+                "the IHostedService forward is what actually opens the subscription on boot");
     }
 
     /// <summary>The opt-in rule: unattended only for a record that opted in. An absent flag (every

@@ -313,6 +313,25 @@ public sealed class GitHubWebhookProcessor
         if (!TryGetRepoUrl(payload, out var repoUrl))
             return Observable.Return(0);
 
+        // 🚨 Only the DEFAULT branch's green builds are publishable. A PR-branch run is green
+        // UNMERGED code — recording it would make the plugin-update watcher offer (or, for an
+        // opted-in record, unattended-install) content the default branch never accepted, at that
+        // branch's sha (Copilot catch). Fail closed: no branch match, no record — a payload whose
+        // branch we cannot read must not become an update either.
+        var headBranch = GetString(run, "head_branch") ?? "";
+        var defaultBranch = payload.TryGetProperty("repository", out var repoElement)
+                            && repoElement.ValueKind == JsonValueKind.Object
+            ? GetString(repoElement, "default_branch") ?? ""
+            : "";
+        if (headBranch.Length == 0 || defaultBranch.Length == 0
+            || !string.Equals(headBranch, defaultBranch, StringComparison.OrdinalIgnoreCase))
+        {
+            logger?.LogDebug(
+                "workflow_run webhook for {Repo}: green build on '{Branch}' is not the default branch "
+                + "('{Default}') — not publishable, no build record.", repoUrl, headBranch, defaultBranch);
+            return Observable.Return(0);
+        }
+
         var headSha = GetString(run, "head_sha") ?? "";
         if (headSha.Length == 0)
         {
