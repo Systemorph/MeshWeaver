@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 
@@ -137,8 +138,8 @@ public static class AccessAssignmentGuard
     /// including any custom role — counts as write access, because this list is an ALLOWLIST: a
     /// role nobody here recognises must not be waved through on a space the repo owns.
     /// </summary>
-    private static readonly HashSet<string> ReadOnlyRoles =
-        new(StringComparer.OrdinalIgnoreCase) { "Viewer", "Commenter" };
+    private static readonly FrozenSet<string> ReadOnlyRoles =
+        new[] { "Viewer", "Commenter" }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The assignment confers WRITE access — any non-denied role outside <see cref="ReadOnlyRoles"/>.
