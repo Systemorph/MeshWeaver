@@ -182,6 +182,11 @@ public static class PackageInstaller
                     // no manifest.lock — the legacy full path stays in charge then).
                     ModuleVersion = moduleManifest?.ModuleVersion ?? manifest.ModuleVersion,
                     InstalledFiles = moduleManifest?.Files ?? manifest.InstalledFiles,
+                    // Transport-only: the candidate-side map rides in on the CATALOG entry for the
+                    // diff and must not be persisted — the record's baseline is InstalledFiles
+                    // alone, exactly as ManifestFiles' own doc promises (Copilot catch: a full
+                    // install passes the catalog manifest through, so without this it leaked in).
+                    ManifestFiles = null,
                     AutoUpdate = SeedAutoUpdate(
                         existingRecord, hub.ServiceProvider.GetService<PluginCatalogOptions>()),
                 },
