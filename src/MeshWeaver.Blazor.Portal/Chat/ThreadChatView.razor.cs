@@ -463,6 +463,22 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private static string? LastSegment(string? path) =>
         string.IsNullOrEmpty(path) ? path : path.Split('/')[^1];
 
+    /// <summary>
+    /// Text for the selected-model status chip: the model node's own label from the live catalog —
+    /// the SAME string the <c>/model</c> picker lists (e.g. "Kimi K3 · $3.00/$15.00") — so the chip
+    /// stops showing the raw wire id ("kimi-k3"). Falls back to the path's last segment while the
+    /// catalog is still loading or when the selection has no node behind it.
+    /// </summary>
+    private string? ModelChipLabel(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return path;
+        var match = availableModels.FirstOrDefault(m =>
+                        string.Equals(m.Path, path, StringComparison.OrdinalIgnoreCase))
+                    ?? availableModels.FirstOrDefault(m =>
+                        string.Equals(LastSegment(m.Path), LastSegment(path), StringComparison.OrdinalIgnoreCase));
+        return string.IsNullOrWhiteSpace(match?.Label) ? LastSegment(path) : match!.Label;
+    }
+
     // (The thin status row's cumulative token figure is rendered by the <ThreadTokenChip> component,
     //  which reads the per-model TokenUsage satellites ({threadPath}/_Usage/*) reactively. The old
     //  inline FormatTokens(int) helper read token state off the Thread node — that state moved onto the

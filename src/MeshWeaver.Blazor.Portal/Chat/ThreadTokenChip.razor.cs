@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Reactive.Linq;
 using MeshWeaver.AI;
@@ -17,11 +18,14 @@ namespace MeshWeaver.Blazor.Portal.Chat;
 /// expands on click into a per-model breakdown (<c>model ↑in ↓out</c>).
 ///
 /// <para>Reads — never recomputes — the per-model <see cref="TokenUsage"/> satellites under the
-/// thread (<c>{threadPath}/_Usage/*</c>). Cost is derived from the built-in
-/// <see cref="ModelPricing.Default(string?)"/> table. Fully reactive: it subscribes to a LIVE
-/// query of those satellites (<c>Hub.GetQuery(...)</c>), which re-emits whenever a round writes or
-/// updates a usage node — no <c>async</c>/<c>await</c>, no <c>.Take(1)</c>, so the chip stays live
-/// for the lifetime of the component.</para>
+/// thread (<c>{threadPath}/_Usage/*</c>). Cost comes from the LIVE model catalog first
+/// (<see cref="ModelPriceCatalog"/>: the price authored on the <c>LanguageModel</c> node) and falls
+/// back to the built-in <see cref="ModelPricing.Defaults"/> table — a model outside that table (any
+/// OpenRouter / BYO-key model) used to bill at $0 here regardless of its node price. Fully
+/// reactive: it subscribes to a LIVE query of those satellites AND of the model catalog
+/// (<c>Hub.GetQuery(...)</c>), which re-emit whenever a round writes usage or an admin edits a
+/// price — no <c>async</c>/<c>await</c>, no <c>.Take(1)</c>, so the chip stays live for the
+/// lifetime of the component.</para>
 /// </summary>
 public partial class ThreadTokenChip : ComponentBase, IDisposable
 {
@@ -33,9 +37,20 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
     /// </summary>
     [Parameter] public string? ThreadPath { get; set; }
 
+    /// <summary>
+    /// The viewer's home path, so the price catalog also covers their bring-your-own-key models
+    /// (<c>{user}/_Memex/{provider}/{model}</c>) — the same <c>userPath</c> the model picker passes
+    /// to <c>AgentPickerProjection.ObserveModels</c>. Null just narrows the catalog to the shared
+    /// providers; the built-in table still backs anything it misses.
+    /// </summary>
+    [Parameter] public string? UserPath { get; set; }
+
     private ILogger<ThreadTokenChip>? _logger;
     private IDisposable? _subscription;
     private string? _subscribedPath;
+    private string? _subscribedUserPath;
+    private ImmutableDictionary<string, ModelPriceRate> _priceCatalog =
+        ImmutableDictionary<string, ModelPriceRate>.Empty;
     private bool _disposed;
     private bool _expanded;
 
@@ -73,12 +88,14 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
-        if (ThreadPath == _subscribedPath) return;
+        if (ThreadPath == _subscribedPath && UserPath == _subscribedUserPath) return;
 
         _subscription?.Dispose();
         _subscription = null;
         _subscribedPath = ThreadPath;
+        _subscribedUserPath = UserPath;
         _expanded = false;
+        _priceCatalog = ImmutableDictionary<string, ModelPriceRate>.Empty;
         ApplyUsage(null);
 
         if (string.IsNullOrEmpty(ThreadPath)) return;
@@ -86,14 +103,39 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
         // Live query of the per-model TokenUsage satellites under the thread ({threadPath}/_Usage/*).
         // A shared, live cache handle — re-emits whenever a round writes/updates a usage node, so the
         // chip stays live; never .Take(1) (that would freeze it).
-        _subscription = Hub.GetQuery(
-                $"tokenchip:{ThreadPath}",
-                $"path:{ThreadPath}/{TokenUsageNodeType.SatelliteSegment} scope:children nodeType:{TokenUsageNodeType.NodeType}")
-            ?.Subscribe(
-                nodes => InvokeAsync(() =>
+        var usage = Hub.GetQuery(
+            $"tokenchip:{ThreadPath}",
+            $"path:{ThreadPath}/{TokenUsageNodeType.SatelliteSegment} scope:children nodeType:{TokenUsageNodeType.NodeType}");
+        if (usage is null) return;
+
+        // Live model catalog — the SAME union the picker reads (shared providers + this thread's
+        // partition + the viewer's BYO providers), projected to id → authored rate.
+        //
+        // 🚨 StartWith(empty) + Catch: the catalog is an ENRICHMENT, never a gate. Without the seed
+        // the chip would render nothing until the model query first emits; without the catch, a
+        // model-query error (a partition the viewer can't read) would kill the combined stream and
+        // take the token counts down with it. Either way costs degrade to the built-in table.
+        var prices = Hub.GetQuery(
+                $"tokenchip-models:{ThreadPath}|{UserPath}",
+                AgentPickerProjection.BuildModelQueries(
+                    currentPath: AgentPickerProjection.PartitionOf(ThreadPath),
+                    userPath: UserPath))
+            .Select(nodes => ModelPriceCatalog.FromNodes(nodes, Hub.JsonSerializerOptions, _logger))
+            .Catch((Exception ex) =>
+            {
+                _logger?.LogDebug(ex, "[ThreadTokenChip] model price query errored for {Path} — falling back to built-in prices", ThreadPath);
+                return Observable.Return(ImmutableDictionary<string, ModelPriceRate>.Empty);
+            })
+            .StartWith(ImmutableDictionary<string, ModelPriceRate>.Empty);
+
+        _subscription = usage
+            .CombineLatest(prices, (nodes, catalog) => (nodes, catalog))
+            .Subscribe(
+                x => InvokeAsync(() =>
                 {
                     if (_disposed) return;
-                    ApplyUsage(nodes);
+                    _priceCatalog = x.catalog;
+                    ApplyUsage(x.nodes);
                     StateHasChanged();
                 }),
                 ex => _logger?.LogDebug(ex, "[ThreadTokenChip] usage query errored for {Path}", ThreadPath));
@@ -102,7 +144,8 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
     /// <summary>
     /// Recomputes the totals and per-model rows from the thread's per-model
     /// <see cref="TokenUsage"/> satellites (<c>{threadPath}/_Usage/*</c>). Cost is summed per model
-    /// from the built-in pricing table (no per-model node price overrides — kept simple).
+    /// at the effective rate — the price authored on the model's catalog node when there is one,
+    /// else the built-in table (<see cref="ModelPriceCatalog.RateFor"/>).
     /// </summary>
     private void ApplyUsage(IEnumerable<MeshNode>? nodes)
     {
@@ -123,7 +166,7 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
             totalCacheWrite += usage.CacheWriteTokens;
             // Cache-aware cost: cache reads bill at the reduced rate, writes at the premium — pricing
             // the whole input at the standard rate would badly over-state a cache-heavy agent's cost.
-            cost += ModelPricing.Default(usage.Model)
+            cost += ModelPriceCatalog.RateFor(usage.Model, _priceCatalog)
                 ?.Cost(usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens) ?? 0m;
             rows.Add(new ModelRow(usage.Model, usage.InputTokens, usage.OutputTokens,
                 usage.CacheReadTokens, usage.CacheWriteTokens));

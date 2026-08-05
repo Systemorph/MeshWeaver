@@ -627,7 +627,16 @@ public static class AgentPickerProjection
         // a model selection must persist the node path onto the composer's ModelName, not the
         // bare model id, so the MeshNode picker resolves it. Without this the /model selection
         // wrote only the name and the picker couldn't resolve the node (the "dialog breaks" bug).
-        return def?.ToModelInfo() is { } info ? info with { Path = node.Path } : null;
+        // Label comes from the NODE (the picker's own list text) so the selected-model chip can show
+        // "Kimi K3 · $3.00/$15.00" rather than the wire id; DisplayName is the fallback for a node
+        // whose Name was never authored.
+        return def?.ToModelInfo() is { } info
+            ? info with
+            {
+                Path = node.Path,
+                Label = !string.IsNullOrWhiteSpace(node.Name) ? node.Name : def.DisplayName,
+            }
+            : null;
     }
 
     private static T? TryDeserialise<T>(JsonElement je, JsonSerializerOptions jsonOptions) where T : class
