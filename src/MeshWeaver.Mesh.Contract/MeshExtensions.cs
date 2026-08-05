@@ -735,6 +735,14 @@ public static class MeshExtensions
         var seenPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (var candidate in nodes)
         {
+            // A null entry (deserialization artifact / caller bug) must refuse the batch as a
+            // structured response, never surface as a NullReferenceException.
+            if (candidate is null)
+            {
+                PostFail("Batch contains a null node entry",
+                    NodeCreationRejectionReason.ValidationFailed);
+                return request.Processed();
+            }
             if (string.IsNullOrWhiteSpace(candidate.Id) || string.IsNullOrWhiteSpace(candidate.Path))
             {
                 PostFail("Node path and Id must not be empty",
@@ -777,6 +785,11 @@ public static class MeshExtensions
         // What WriteMany reported as committed — read by the terminal error path so a storage
         // failure mid-batch reports what actually landed instead of guessing.
         var written = ImmutableList<MeshNode>.Empty;
+        // The paths the write phase ATTEMPTED (set right before WriteMany subscribes). WriteMany
+        // can throw after partially committing (Postgres windows commit per table, then a later
+        // window rethrows) WITHOUT emitting — `written` then stays empty although nodes exist.
+        // The error path probes these to keep the failure report honest.
+        string[]? attemptedPaths = null;
 
         // ——— Phase 1: existence — ONE batched authoritative read plus the static/config fallback
         // the singular create consults (a definition-only catalog type-def is NOT a real node). ———
@@ -900,6 +913,7 @@ public static class MeshExtensions
                             // like WriteAndPublishCreated) — so stream caches and live queries
                             // invalidate for every node, which the installer's System-side bulk
                             // path never did. ———
+                            attemptedPaths = stamped.Select(n => n.Path).ToArray();
                             return persistence.WriteMany(stamped, options)
                                 .Select(list => list.ToImmutableList())
                                 .Do(list =>
@@ -942,24 +956,50 @@ public static class MeshExtensions
                 },
                 ex =>
                 {
-                    if (written.Count > 0)
+                    void ReportError()
                     {
-                        logger.LogError(ex,
-                            "[CreateNodes] failed AFTER {Written} node(s) were persisted — reporting the partial landing",
-                            written.Count);
-                        PostFail($"Nodes persisted but a later step failed: {ex.Message}",
-                            NodeCreationRejectionReason.Unknown, created: written);
+                        if (written.Count > 0)
+                        {
+                            logger.LogError(ex,
+                                "[CreateNodes] failed AFTER {Written} node(s) were persisted — reporting the partial landing",
+                                written.Count);
+                            PostFail($"Nodes persisted but a later step failed: {ex.Message}",
+                                NodeCreationRejectionReason.Unknown, created: written);
+                        }
+                        else if (ex is InvalidOperationException)
+                        {
+                            logger.LogWarning(ex, "[CreateNodes] batch refused");
+                            PostFail(ex.Message, NodeCreationRejectionReason.ValidationFailed);
+                        }
+                        else
+                        {
+                            logger.LogError(ex, "[CreateNodes] unexpected error");
+                            PostFail($"Unexpected error: {ex.Message}", NodeCreationRejectionReason.Unknown);
+                        }
                     }
-                    else if (ex is InvalidOperationException)
-                    {
-                        logger.LogWarning(ex, "[CreateNodes] batch refused");
-                        PostFail(ex.Message, NodeCreationRejectionReason.ValidationFailed);
-                    }
+
+                    // WriteMany can partially COMMIT and then throw without emitting (Postgres
+                    // windows are each their own transaction) — `written` is then empty although
+                    // nodes exist. The attempted paths were all absent before the write (existence-
+                    // filtered), so anything present NOW landed in this batch: probe and report it,
+                    // never claim a clean refusal for a half-landed batch. Best-effort probe: a
+                    // failing read falls back to the plain report rather than masking the error.
+                    if (attemptedPaths is { Length: > 0 } probe && written.Count == 0)
+                        persistence.ReadMany(probe, options)
+                            .ToList()
+                            .Catch<IList<MeshNode>, Exception>(probeEx =>
+                            {
+                                logger.LogWarning(probeEx,
+                                    "[CreateNodes] partial-landing probe failed — reporting without it");
+                                return Observable.Return((IList<MeshNode>)new List<MeshNode>());
+                            })
+                            .Subscribe(found =>
+                            {
+                                written = found.ToImmutableList();
+                                ReportError();
+                            });
                     else
-                    {
-                        logger.LogError(ex, "[CreateNodes] unexpected error");
-                        PostFail($"Unexpected error: {ex.Message}", NodeCreationRejectionReason.Unknown);
-                    }
+                        ReportError();
                 });
 
         return request.Processed();

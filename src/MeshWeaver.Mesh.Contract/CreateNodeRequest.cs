@@ -190,15 +190,22 @@ public class CreateNodesPermissionAttribute() : RequiresPermissionAttribute(Perm
     public override IEnumerable<(string Path, Permission Permission)> GetPermissionChecks(
         IMessageDelivery delivery, string hubPath)
     {
-        if (delivery.Message is not CreateNodesRequest req)
+        // Null request shape / null Nodes / null entries must not throw HERE — the pipeline
+        // permission evaluation runs before the handler can return a structured failure. Fall back
+        // to the Create floor; the handler then refuses the malformed batch cleanly.
+        if (delivery.Message is not CreateNodesRequest { Nodes: not null } req)
         {
             yield return (hubPath, Permission.Create);
             yield break;
         }
 
         var permissions = req.Nodes
+            .Where(n => n is not null)
             .Select(n => CreateNodePermissionAttribute.GetPermissionForNodeType(n.NodeType))
-            .Distinct();
+            .Distinct()
+            .ToList();
+        if (permissions.Count == 0)
+            permissions.Add(Permission.Create);
         foreach (var permission in permissions)
             yield return (hubPath, permission);
     }

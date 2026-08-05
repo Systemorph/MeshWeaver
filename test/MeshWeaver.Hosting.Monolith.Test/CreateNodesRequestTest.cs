@@ -183,6 +183,31 @@ public class CreateNodesRequestTest(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// A null entry in the batch (deserialization artifact / caller bug) refuses the batch as a
+    /// STRUCTURED response — never a NullReferenceException swallowed by the handler, and never a
+    /// throw inside the pipeline's permission evaluation.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task BulkCreate_NullEntry_RefusedStructurally()
+    {
+        var path = $"{TestPartition}/bulk-null-{Guid.NewGuid():N}";
+
+        var response = await Mesh
+            .Observe<CreateNodesResponse>(new CreateNodesRequest(ImmutableList.Create(
+                Node(path, "# fine"), null!)))
+            .Select(d => d.Message)
+            .Should().Emit();
+
+        response.Success.Should().BeFalse();
+        response.RejectionReason.Should().Be(NodeCreationRejectionReason.ValidationFailed);
+        response.Created.Should().BeEmpty();
+
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var sibling = await storage.Read(path, Mesh.JsonSerializerOptions).FirstAsync().ToTask();
+        sibling.Should().BeNull("nothing may land from a refused batch");
+    }
+
+    /// <summary>
     /// The empty batch is a trivial success — no round-trip side effects, empty result lists.
     /// </summary>
     [Fact(Timeout = 30_000)]
