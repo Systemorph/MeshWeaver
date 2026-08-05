@@ -20,6 +20,7 @@ public class DevAuthController : ControllerBase
     private readonly UserOnboardingService _onboarding;
     private readonly IMessageHub _hub;
     private readonly AccessService _accessService;
+    private readonly IConfiguration _configuration;
     private readonly bool _devLoginEnabled;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -35,6 +36,7 @@ public class DevAuthController : ControllerBase
         // (PascalCase), so the string comparison silently disabled self-provisioning for every
         // appsettings that used the natural boolean form.
         _devLoginEnabled = bool.TryParse(configuration["Authentication:EnableDevLogin"], out var enabled) && enabled;
+        _configuration = configuration;
     }
 
     /// <summary>
@@ -172,15 +174,50 @@ public class DevAuthController : ControllerBase
         // id-derivations for the same person, and the circuit's email-local-part heuristic
         // (CircuitAccessHandler.UsernameFromEmail) is aligned with the lowercase convention.
         var username = personId.Trim().ToLowerInvariant();
+        // 🚨 A dev-login user is an ORDINARY USER. This used to pass `Role: Role.Admin.Id`, which
+        // made EVERY throwaway dev identity a claim-Admin — and a claim role is added in
+        // PermissionEvaluator.ComputeRoleState AFTER the per-scope deny subtraction, so no gating
+        // deny could ever remove it. The visible effect was a paywall BYPASS that looked like a
+        // gating bug: a signed-in user saw the CHF 900 checkout (entitlement is a record, and they
+        // had none) yet still read the gated lessons (read came from the Admin claim). Anonymous
+        // was correctly blocked, which is exactly why it survived — the two are denied by
+        // different mechanisms. See AGENTS.md, "the access rule for a system-synced space".
         var request = new UserOnboardingRequest(
             Username: username,
             Email: $"{username}@dev.local",
-            FullName: personId,
-            Role: Role.Admin.Id);
+            FullName: personId);
         var userNode = await _onboarding.CreateUser(request).FirstAsync();
+        // Self-Admin on the user's OWN partition only — they must be able to write their own home
+        // (installed course copies, skills, agents). This is scoped to `{user}/_Access` with
+        // MainNode = {user}; it confers nothing anywhere else.
         await _onboarding.GrantSelfAdmin(username).FirstAsync();
+        // PLATFORM admin is opt-in and explicit, never a side effect of signing in. A harness that
+        // needs one (the e2e bootstrap installs courses through the Plugin Catalog) names it in
+        // `Authentication:DevAdminUsers`; everyone else stays an ordinary user, which is what makes
+        // the suite able to prove the purchase funnel at all.
+        if (IsConfiguredDevAdmin(username))
+            await _onboarding.GrantPlatformAdmin(username).FirstAsync();
         return userNode;
     }
+
+    /// <summary>
+    /// Whether this dev-login username is declared a PLATFORM admin in configuration
+    /// (<c>Authentication:DevAdminUsers</c>, a comma-separated list). Empty/unset → nobody, which
+    /// is the safe default: a dev portal that hands out admin by default cannot be used to test any
+    /// access rule, because every identity passes every gate.
+    /// </summary>
+    private bool IsConfiguredDevAdmin(string username) =>
+        IsDevAdmin(_configuration["Authentication:DevAdminUsers"], username);
+
+    /// <summary>
+    /// Pure form of the rule, so it is unit-testable without a controller, a mesh or a request.
+    /// Empty/unset list → FALSE for everyone; that default is the security property worth pinning.
+    /// </summary>
+    internal static bool IsDevAdmin(string? configuredList, string username) =>
+        !string.IsNullOrWhiteSpace(username)
+        && (configuredList ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(u => string.Equals(u, username, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Signs out the current user.
