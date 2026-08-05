@@ -9,7 +9,7 @@ namespace MeshWeaver.AI;
 /// partition on boot so the provider/model catalog is served from the database on the distributed/PG
 /// path (Orleans routing does NOT consult the in-memory adapter; without this import the model picker
 /// is invisible to <c>namespace:Provider</c> queries). Single-partition like
-/// <see cref="AgentStaticRepoSource"/> / <see cref="HarnessStaticRepoSource"/>: every node it emits —
+/// <see cref="SkillStaticRepoSource"/> / <see cref="HarnessStaticRepoSource"/>: every node it emits —
 /// the <c>ModelProvider</c> providers at <c>Provider/{name}</c>, their <c>LanguageModel</c> children at
 /// <c>Provider/{name}/{modelId}</c>, and the read-only <c>Provider/_Policy</c> — lives under
 /// <c>Provider</c>. The built-in provider is only a sync SOURCE; once imported, the DB is the catalog

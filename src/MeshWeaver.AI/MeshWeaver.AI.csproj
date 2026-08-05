@@ -3,13 +3,19 @@
     <Nullable>enable</Nullable>
 </PropertyGroup>
     <ItemGroup>
-        <!-- The AI content SECTION (repo-root content/ai) is the SINGLE source of the built-in Agent
-             and Skill nodes, shipped three ways from the one copy:
+        <!-- The AI content SECTION (repo-root content/ai) ships the built-in Agent and Skill nodes
+             three ways from one copy:
              1) EmbeddedResource with LinkBase="Data" → manifest names MeshWeaver.AI.Data.Agent.*.md /
-                .Skill.*.md (unchanged) — the offline FALLBACK if the on-disk section isn't found, so
-                the default AI experience can never disappear;
+                .Skill.*.md — the offline FALLBACK if the on-disk section isn't found;
              2) Content copy-to-output ("AiContent" beside the assembly) for a deployed offline build;
-             3) the repo working tree itself — a dev edits it in the mesh and syncs it back here. -->
+             3) the repo working tree itself — a dev edits it in the mesh and syncs it back here.
+
+             🚨 ROLES since the Agent plugin (MeshWeaver.Plugins/Agent): on a portal that serves the
+             Agent partition from the DB, the PLUGIN is the served master — nothing here is imported
+             any more (AgentStaticRepoSource is retired). This embedded copy exists for the
+             IN-MEMORY path only: tests, the monolith, MAUI offline — the fixture the framework's
+             delegation/picker/tool-wiring suites run against. A content improvement belongs in the
+             plugin first; mirror it here when the framework tests depend on it. -->
         <EmbeddedResource Include="..\..\content\ai\**\*.md" LinkBase="Data" />
         <Content Include="..\..\content\ai\**\*.md"
                  Link="AiContent\%(RecursiveDir)%(Filename)%(Extension)"

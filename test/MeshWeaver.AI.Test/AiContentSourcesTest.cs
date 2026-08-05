@@ -36,6 +36,13 @@ public class AiContentSourcesTest
             "bundling them is what stops a new AI partition (Skill, …) from being silently un-imported");
     }
 
+    /// <summary>
+    /// 🚨 <c>Agent</c> stays in this set even though NOTHING imports it any more — the built-in
+    /// agents are the pre-installed <c>Agent</c> plugin now. Membership decides who SERVES the
+    /// partition, not who fills it: a listed partition is served by Postgres and its read-only
+    /// in-memory provider is not registered. Drop <c>Agent</c> and the in-memory provider returns
+    /// and shadows the DB nodes the plugin installs.
+    /// </summary>
     [Fact]
     public void ContentPartitions_cover_the_four_AI_content_partitions()
     {
@@ -45,16 +52,19 @@ public class AiContentSourcesTest
 
     /// <summary>
     /// Every built-in AI catalog defaults to <see cref="PartitionSyncMode.Additive"/> — so a user's own
-    /// skills/agents/providers/harnesses survive the boot re-import (only nodes the build previously
+    /// skills/providers/harnesses survive the boot re-import (only nodes the build previously
     /// shipped and has since dropped are pruned). The provider dependency is unused by the
     /// <c>SyncMode</c> getter (a constant), so a <c>null!</c> provider is fine here.
+    ///
+    /// <para>Additive is also why the <c>Agent</c> plugin needed no version gate to land: the sync
+    /// it replaced never pruned, so plugin and sync could coexist during the transition — the same
+    /// shape <c>Skill</c> has been in for months.</para>
     /// </summary>
     [Fact]
     public void All_built_in_AI_sources_default_to_Additive_sync_mode()
     {
         new IStaticRepoSource[]
         {
-            new AgentStaticRepoSource(null!),
             new ModelStaticRepoSource(null!),
             new HarnessStaticRepoSource(null!),
             new SkillStaticRepoSource(null!)

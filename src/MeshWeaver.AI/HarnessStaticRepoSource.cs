@@ -9,7 +9,7 @@ namespace MeshWeaver.AI;
 /// by the static-repo import on boot, so harnesses are served from the database on the distributed/PG
 /// path (Orleans routing does NOT consult the in-memory adapter — without this import the harness
 /// catalog is invisible to <c>namespace:Harness</c> queries, i.e. the harness picker is empty / the
-/// combobox spins). Mirrors <see cref="AgentStaticRepoSource"/>.
+/// combobox spins). Mirrors <see cref="SkillStaticRepoSource"/>.
 /// </summary>
 public sealed class HarnessStaticRepoSource(BuiltInHarnessProvider provider) : IStaticRepoSource
 {
