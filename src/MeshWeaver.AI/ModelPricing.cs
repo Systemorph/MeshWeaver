@@ -103,6 +103,13 @@ public static class ModelPricing
             ["DeepSeek-V4-Flash"] = new(0.55m, 1.10m, Usd),  // cheapest tier — estimate
             // Moonshot Kimi K2.6 (preview on Azure AI Foundry).
             ["Kimi-K2.6"] = new(0.95m, 4.00m, Usd),
+
+            // OpenRouter gateway ids (org/model slugs — matched whole by Lookup before the
+            // last-segment fallback). A BACKSTOP only: OpenRouter rates move and vary per account,
+            // so the authored price on the LanguageModel node wins via ModelPriceCatalog.RateFor.
+            // Rates as published by the OpenRouter model API, 2026-08.
+            ["z-ai/glm-5.2"] = new(0.6286m, 1.9756m, Usd),
+            ["moonshotai/kimi-k3"] = new(3.00m, 15.00m, Usd),
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
