@@ -159,6 +159,125 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
         (await Read("BulkPack/Deep")).NodeType.Should().Be("BulkPack/Thing");
     }
 
+    /// <summary>
+    /// A bulk-written node must be ANNOUNCED on the mesh-change feed, exactly like one written
+    /// through the per-node request path. The feed is what invalidates the caches that decide
+    /// whether a node is REACHABLE — <c>PathResolutionService</c>'s resolution cache,
+    /// <c>MeshNodeStreamCache</c>, the Orleans path-cache invalidator — so a silent bulk write
+    /// leaves a node that is in storage and does not exist to the running mesh.
+    ///
+    /// <para>That is not hypothetical: it took down every fresh-mesh install (2026-08-05).
+    /// The Store package's <c>Store/Plugin</c> row landed and then answered
+    /// <c>No node found at 'Store/Plugin'</c> forever — the already-installed Edu/Publish roots,
+    /// which are TYPED on it, probed the path during the window between the Store root landing
+    /// and its types landing; that probe cached the miss (prefix + non-empty remainder is a
+    /// perfectly cacheable resolution), the bulk write never invalidated it, no hub was ever
+    /// woken, no compile ever started, and only a process restart healed it.</para>
+    ///
+    /// <para>The adapter's in-process <c>Changes</c> subject is NOT a substitute — it feeds
+    /// synced queries, not the resolution caches. Hence: every path the install reports as
+    /// written carries a <see cref="MeshChangeEvent"/>, whichever path it travelled.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task BulkWrittenNodes_AreAnnouncedOnTheMeshChangeFeed()
+    {
+        Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch =
+            (_, _, _, _) => Observable.Return(new RepoSnapshot("commit-announce", Repo));
+        var source = new NodeRepoPackageSource(fetch, "https://github.com/acme/bulk");
+        var manifest = new PackageManifest
+        {
+            Id = "BulkPack",
+            Name = "Bulk Pack",
+            Kind = PackageKind.NodeRepo,
+            TargetPartition = "BulkPack",
+            SourceFolder = "BulkPack",
+            Version = "commit-announce",
+        };
+        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+
+        var changeFeed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
+        var announced = new ConcurrentBag<string>();
+        using var subscription = changeFeed.Subscribe(c => announced.Add(c.Path));
+
+        var result = await PackageInstaller.Install(Mesh, manifest, files, "commit-announce")
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+
+        result.Written.Should().Be(7);
+        // The bulk buckets are the whole point — pin them explicitly so a regression that
+        // routes them to the silent WriteMany again fails HERE and not three layers away.
+        _recorder.WriteManyBatches.SelectMany(b => b).Should().NotBeEmpty(
+            "this test is only meaningful while the install actually uses the bulk path");
+        announced.Should().Contain(_recorder.WriteManyBatches.SelectMany(b => b),
+            "every bulk-written node must be announced — an unannounced node is in storage but "
+            + "unreachable to the running mesh until the process restarts");
+        announced.Should().Contain(result.WrittenPaths,
+            "the announcement rule is per WRITTEN node, not per write path");
+    }
+
+    /// <summary>
+    /// The production symptom, end to end: a path PROBED while it is still absent — and so
+    /// resolved to its existing ancestor with a remainder, a perfectly cacheable value — must
+    /// become reachable the moment a bulk install lands it. No restart, no recycle.
+    ///
+    /// <para>This is the 2026-08-05 fresh-mesh outage in miniature. Edu and Publish install
+    /// before Store and their roots are TYPED on <c>Store/Plugin</c>, so their overlay watchers
+    /// probed that path in the window between the Store root landing and its types landing. The
+    /// probe cached the miss; the bulk write landed the row without announcing it; nothing ever
+    /// invalidated the cache. <c>Store/Plugin</c> answered <c>No node found</c> for the life of
+    /// the process, no hub was woken, no compile started, and every course install failed on a
+    /// type that was sitting in Postgres the whole time.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ANodeProbedBeforeItExisted_IsReachableRightAfterItsBulkInstall()
+    {
+        Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch =
+            (_, _, _, _) => Observable.Return(new RepoSnapshot("commit-reach", Repo));
+        var source = new NodeRepoPackageSource(fetch, "https://github.com/acme/bulk");
+        var manifest = new PackageManifest
+        {
+            Id = "BulkPack",
+            Name = "Bulk Pack",
+            Kind = PackageKind.NodeRepo,
+            TargetPartition = "BulkPack",
+            SourceFolder = "BulkPack",
+            Version = "commit-reach",
+        };
+
+        // The ROOT first, alone — this is the window's opening. The partition now exists, so a
+        // probe of a not-yet-installed child resolves to prefix=BulkPack + remainder, which is
+        // exactly the shape that gets cached.
+        var rootOnly = await new NodeRepoPackageSource(
+                (_, _, _, _) => Observable.Return(
+                    new RepoSnapshot("commit-root", Repo.Take(1).ToList())),
+                "https://github.com/acme/bulk")
+            .FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+        await PackageInstaller.Install(Mesh, manifest, rootOnly, "commit-root")
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+
+        // PROBE the absent child — the poisoning step. It must not find anything (that is the
+        // point), and whatever the resolver caches here is what the install has to invalidate.
+        var beforeInstall = await Mesh.GetWorkspace().GetMeshNodeStream("BulkPack/Thing")
+            .Take(1).Timeout(TimeSpan.FromSeconds(5))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .FirstAsync().ToTask();
+        beforeInstall.Should().BeNull("the child is genuinely absent at this point");
+
+        // Now the full package — BulkPack/Thing travels the BULK path.
+        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+        await PackageInstaller.Install(Mesh, manifest, files, "commit-reach")
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+        _recorder.WriteManyBatches.SelectMany(b => b).Should().Contain("BulkPack/Thing",
+            "this test is only meaningful while that node travels the bulk path");
+
+        // …and it must be REACHABLE, without restarting anything.
+        var afterInstall = await Mesh.GetWorkspace().GetMeshNodeStream("BulkPack/Thing")
+            .Where(n => n is not null).Select(n => n!)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+        afterInstall.NodeType.Should().Be("NodeType",
+            "a bulk-installed node that was probed while absent must not stay unreachable — "
+            + "that is the fresh-mesh install outage this pins");
+    }
+
     private async Task<MeshNode> Read(string path) =>
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null).Select(n => n!)
