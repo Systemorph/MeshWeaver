@@ -76,6 +76,41 @@ public static class StorageAdapterChangeFeedExtensions
             });
 
     /// <summary>
+    /// Writes <paramref name="nodes"/> in ONE <see cref="IStorageAdapter.WriteMany"/> and
+    /// publishes a <see cref="MeshChangeEvent.Created"/> per node the adapter reports as
+    /// written — the bulk twin of <see cref="WriteAndPublishCreated"/>, with the same
+    /// commit-then-publish ordering (the <c>Do</c> fires on the post-commit emission).
+    ///
+    /// <para><b>Why this exists.</b> A bulk write is a mutation like any other, and the
+    /// mesh-change feed is what invalidates the caches that decide whether a node is
+    /// REACHABLE: <c>PathResolutionService</c>'s resolution cache, <c>MeshNodeStreamCache</c>,
+    /// the Orleans path-cache invalidator. Writing rows without publishing leaves a node that
+    /// EXISTS in storage and does not exist to the running mesh — a path whose resolution was
+    /// cached as a miss (prefix + non-empty remainder is a perfectly cacheable value) stays a
+    /// miss, so routing answers <c>No node found at '…'</c> until the process restarts. That is
+    /// exactly what the installer's System-side bulk path did to <c>Store/Plugin</c> on a fresh
+    /// mesh (2026-08-05): the row was in Postgres, every plugin root typed on it wore the
+    /// missing-type overlay, and no compile ever started because no hub was ever woken.
+    /// The adapter's own in-process <c>Changes</c> subject is NOT a substitute — it feeds
+    /// synced queries, not the resolution caches.</para>
+    ///
+    /// <para>Nodes absent from the adapter's result were not claimed/written (see
+    /// <see cref="IStorageAdapter.WriteMany"/>), so they are not announced — same rule as the
+    /// singular helper's null sentinel.</para>
+    /// </summary>
+    public static IObservable<IReadOnlyList<MeshNode>> WriteManyAndPublishCreated(
+        this IStorageAdapter adapter,
+        IReadOnlyCollection<MeshNode> nodes,
+        JsonSerializerOptions options,
+        IMeshChangeFeed? changeFeed)
+        => adapter.WriteMany(nodes, options)
+            .Do(written =>
+            {
+                foreach (var saved in written)
+                    changeFeed?.Publish(MeshChangeEvent.Created(saved));
+            });
+
+    /// <summary>
     /// Deletes <paramref name="path"/> via <paramref name="adapter"/> and publishes a
     /// <see cref="MeshChangeEvent.Deleted"/> on <paramref name="changeFeed"/> after the
     /// delete emits (post-commit). The deleted path flows through unchanged for further

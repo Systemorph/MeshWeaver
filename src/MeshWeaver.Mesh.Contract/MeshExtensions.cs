@@ -908,20 +908,18 @@ public static class MeshExtensions
                                 Version = n.Version > 0 ? n.Version : 1,
                             }).ToImmutableList();
 
-                            // ——— Phase 6: ONE ordered WriteMany; the Created publishes ride the
-                            // post-commit emission in caller order (commit-then-publish, exactly
-                            // like WriteAndPublishCreated) — so stream caches and live queries
-                            // invalidate for every node, which the installer's System-side bulk
-                            // path never did. ———
+                            // ——— Phase 6: ONE ordered WriteManyAndPublishCreated; the Created
+                            // publishes ride the post-commit emission in caller order
+                            // (commit-then-publish, exactly like WriteAndPublishCreated) — so
+                            // stream caches, live queries AND the resolution caches invalidate
+                            // for every node. The helper is the single publish site every bulk
+                            // write goes through; the installer's System-side bulk path skipped
+                            // it and left nodes in storage that the running mesh could not
+                            // resolve. ———
                             attemptedPaths = stamped.Select(n => n.Path).ToArray();
-                            return persistence.WriteMany(stamped, options)
+                            return persistence.WriteManyAndPublishCreated(stamped, options, changeFeed)
                                 .Select(list => list.ToImmutableList())
-                                .Do(list =>
-                                {
-                                    written = list;
-                                    foreach (var saved in list)
-                                        changeFeed?.Publish(MeshChangeEvent.Created(saved));
-                                })
+                                .Do(list => written = list)
                                 .SelectMany(list =>
                                 {
                                     if (list.Count != stamped.Count)

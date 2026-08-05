@@ -596,6 +596,7 @@ public static class PackageInstaller
                     .ToObservable().Concat().LastAsync().Select(_ => System.Reactive.Unit.Default);
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
 
         // The per-node REQUEST path — decisions run against the bulk-read snapshot (one shared
         // read instead of N sequential probes), the write itself is the full validating
@@ -615,6 +616,18 @@ public static class PackageInstaller
         // (CreatedDate/LastModified, Active state) are applied for parity. System-impersonated
         // exactly as Upsert is — per call, because ambient impersonation does not survive the
         // pipeline's scheduler hops.
+        //
+        // 🚨 ANNOUNCED on the mesh-change feed, per node, post-commit — via
+        // WriteManyAndPublishCreated, never a bare WriteMany. Bypassing the per-node request
+        // path also bypasses its MeshChangeEvent, and that event is what invalidates the
+        // caches deciding whether a node is REACHABLE (PathResolutionService's resolution
+        // cache, MeshNodeStreamCache, the Orleans path-cache invalidator). Without it a node
+        // lands in storage and stays invisible to the running mesh: on a fresh mesh the Store
+        // package's `Store/Plugin` row was written and then answered `No node found` forever
+        // (2026-08-05) — probed by the already-installed Edu/Publish roots during the window
+        // between the Store ROOT landing and its TYPES landing, that probe cached the miss,
+        // and nothing ever invalidated it. Every plugin root typed on Store/Plugin wore the
+        // missing-type overlay, no compile ever started, and only a portal restart healed it.
         IObservable<IList<(string Path, bool Wrote)>> BulkSave(IReadOnlyList<MeshNode> batch)
         {
             if (batch.Count == 0)
@@ -633,7 +646,7 @@ public static class PackageInstaller
             return Observable.Using(
                     () => accessService?.ImpersonateAsSystem()
                           ?? System.Reactive.Disposables.Disposable.Empty,
-                    _ => persistence.WriteMany(stamped, options))
+                    _ => persistence.WriteManyAndPublishCreated(stamped, options, changeFeed))
                 .Select(written =>
                 {
                     if (written.Count != batch.Count)
