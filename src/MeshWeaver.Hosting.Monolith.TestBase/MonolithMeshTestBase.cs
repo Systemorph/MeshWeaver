@@ -130,6 +130,17 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // creates of any non-partition-owning type. AddSpaceType is idempotent,
             // so tests that also call it explicitly are unaffected.
             .AddSpaceType()
+            .AddMeshNodes(TestUsers.DevLoginAdminAccess())
+            // Real STATIC root Admin grant for the DevLogin identity (Roland).
+            // Claim roles no longer grant node permissions (the paywall fix —
+            // PermissionEvaluator): the login context's Roles=["Admin"] is a platform
+            // capability, not data access, so without a real grant every test-body
+            // CreateNode under the DevLogin circuit is denied. Chained HERE, in the base
+            // every suite funnels through, because these are the harness's own identities;
+            // Public, Anonymous, groups and per-test subjects are untouched, so security
+            // assertions about them stay meaningful. A static grant also keeps the
+            // evaluator's synchronous fast path alive where tests deliberately stall the
+            // synced queries (CompileSourceSnapshotWedgeTest).
             .AddMeshNodes(new MeshNode(TestPartition) { Name = "Test Data", NodeType = "Markdown" })
             // 🚨 REPLACE, don't TryAdd. AddInMemoryPersistence already TryAddSingleton'd the
             // pid-scoped default IAssemblyStore, so a TryAdd here would be a no-op and every test
@@ -756,7 +767,19 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             }
             TestPhaseTrace(name, "INIT_HOSTED_SERVICES_STARTED", sw.ElapsedMilliseconds);
 
-            await SetupAccessRightsAsync();
+            // Access-rights provisioning is a SYSTEM act, in tests exactly as in production
+            // (PluginGate / SystemInstall write grants under the System identity). It cannot run
+            // under the DevLogin circuit: claim roles no longer grant node permissions (the
+            // paywall fix — see PermissionEvaluator/PaywallRealGateShapeTests), so creating the
+            // very first `_Access` grant would require the permission that grant confers.
+            {
+                var accessService = Mesh.ServiceProvider.GetService<AccessService>();
+                using (accessService?.ImpersonateAsSystem()
+                       ?? System.Reactive.Disposables.Disposable.Empty)
+                {
+                    await SetupAccessRightsAsync();
+                }
+            }
             TestPhaseTrace(name, "INIT_DONE", sw.ElapsedMilliseconds);
             TestMemTrace(name, "INIT_MEM", forceGc: false);
 

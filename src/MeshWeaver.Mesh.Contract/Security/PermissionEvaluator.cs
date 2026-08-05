@@ -223,7 +223,14 @@ internal static class PermissionEvaluator
                     // accessService.Context (AsyncLocal doesn't flow through
                     // the Rx schedulers cache.GetQuery uses).
                     var currentContext = capturedContext ?? capturedCircuitContext;
-                    if (currentContext?.IsApiToken == true && !p.HasFlag(Permission.Api))
+                    // API-token capability: the token may use the API surface when its NODE
+                    // permissions carry Api (a real Viewer/Editor grant) OR its claim roles do —
+                    // this is the ONE place claim roles act, and it is a CAPABILITY gate, never a
+                    // data grant (claims are excluded from roleIds above; see ComputeRoleState).
+                    // Without the claims half, removing claims from node permissions would zero
+                    // every MCP token on PublicRead-policy content (p = Read only, no Api bit).
+                    if (currentContext?.IsApiToken == true && !p.HasFlag(Permission.Api)
+                        && !ClaimsCarryApi(currentContext))
                         p = Permission.None;
                     logger?.LogTrace("User {UserId} has permissions {Permissions} on node {NodePath} (cap: {Cap})",
                         userId, p, nodePath, permissionCap);
@@ -476,22 +483,35 @@ internal static class PermissionEvaluator
                 roleIds = roleIds.Add(Role.Admin.Id);
         }
 
-        AddClaimRoles(capturedContext);
-        AddClaimRoles(capturedCircuitContext);
-
-        void AddClaimRoles(AccessContext? ctx)
-        {
-            if (ctx?.Roles != null
-                && !string.IsNullOrEmpty(ctx.ObjectId)
-                && ctx.ObjectId == userId)
-            {
-                foreach (var roleName in ctx.Roles)
-                    roleIds = roleIds.Add(roleName);
-            }
-        }
-
+        // 🚨 CLAIM ROLES ARE DELIBERATELY NOT FOLDED INTO NODE PERMISSIONS. They used to be —
+        // AddClaimRoles(capturedContext/capturedCircuitContext) appended AccessContext.Roles to
+        // roleIds RIGHT HERE, after the per-scope walk and after the deny subtraction. That made
+        // every claim role a GLOBAL, UNDENIABLE grant on the entire mesh: the API token attaches
+        // the user's DB/platform roles as claims, so a portal admin's `get` by exact path read
+        // gated PAID course content they had never bought (memex, 2026-08-05 — 79,650 chars of
+        // AgenticPrimerDe/02-CodeWunsch served to an unentitled caller), while `search` over the
+        // SQL fold — which never sees claims — correctly denied the same node. The two read paths
+        // disagreeing IS the paywall bypass.
+        //
+        // The access model (AGENTS.md, "Global admin"): a platform role grants the PLATFORM
+        // gates, deliberately NOT cross-partition data access — it must not read a course it has
+        // not bought. So node data permissions come from AccessAssignment nodes and policies
+        // ONLY, matching the SQL path row for row. Claim roles keep their legitimate job at the
+        // API-token capability check in GetEffectivePermissions (ClaimsCarryApi) — they decide
+        // whether the token may use the API surface, never what data it may read.
+        // Pinned by PaywallRealGateShapeTests (DbRoleClaim_DoesNotGrantNodeRead and siblings).
         return (roleIds, permissionCap, publicGrant);
     }
+
+    /// <summary>
+    /// True when the context's claim roles include a built-in role carrying
+    /// <see cref="Permission.Api"/> (Viewer, Commenter, Editor, Admin, …). Backs the API-token
+    /// capability gate — the only effect claim roles have on permission evaluation.
+    /// </summary>
+    private static bool ClaimsCarryApi(AccessContext ctx)
+        => ctx.Roles is not null
+           && ctx.Roles.Any(r =>
+               BuiltInRolePerms.TryGetValue(r, out var rp) && rp.HasFlag(Permission.Api));
 
     private static List<string> GetScopeHierarchy(string nodePath)
     {

@@ -46,7 +46,11 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
             .ConfigureServices(services =>
                 services.AddPartitionedPostgreSqlPersistence(csb.ConnectionString))
             .AddRowLevelSecurity()
-            .AddGraph();
+            .AddGraph()
+            // Real root Admin grants for the DevLogin identities — claim roles no longer
+            // grant node permissions (the paywall fix); setup writes/reads run under DevLogin
+            // and need actual assignment nodes, same as production. See TestUsers.DevLoginAdminAccess.
+            .AddMeshNodes(TestUsers.DevLoginAdminAccess());
     }
 
     [Fact(Timeout = 60000)]
