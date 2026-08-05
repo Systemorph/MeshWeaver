@@ -59,7 +59,11 @@ public class AnonymousSpaceReadSecurityTests(PostgreSqlFixture fixture, ITestOut
                 services.AddPartitionedPostgreSqlPersistence(csb.ConnectionString))
             .AddRowLevelSecurity()   // same access wiring as memex
             .AddGraph()
-            .AddSpaceType();
+            .AddSpaceType()
+            // Real root Admin grants for the DevLogin identities — claim roles no longer
+            // grant node permissions (the paywall fix); setup writes/reads run under DevLogin
+            // and need actual assignment nodes, same as production. See TestUsers.DevLoginAdminAccess.
+            .AddMeshNodes(TestUsers.DevLoginAdminAccess());
     }
 
     // The client needs a workspace/data context to host the remote stream

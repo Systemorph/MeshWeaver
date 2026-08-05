@@ -54,6 +54,9 @@ public class BootTypeDefEchoTests(PostgreSqlFixture fixture, ITestOutputHelper o
                 services.AddPartitionedPostgreSqlPersistence(csb.ConnectionString))
             .AddRowLevelSecurity()
             .AddGraph()
+            // Real root Admin grants for the DevLogin identities — claim roles no longer
+            // grant node permissions (the paywall fix). See TestUsers.DevLoginAdminAccess.
+            .AddMeshNodes(TestUsers.DevLoginAdminAccess())
             .ConfigureServices(s => s.AddSingleton<ILoggerProvider>(
                 new CapturingLoggerProvider(_saveMeshNodeWarnings)));
     }

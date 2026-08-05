@@ -228,10 +228,14 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
-    /// Cross-scope regression: the sender stamps Admin onto delivery.AccessContext
-    /// (via the PostPipeline), routes a message to a per-node hub, and the
-    /// per-node hub's AccessControlPipeline must read those claim-based roles
-    /// when calling SecurityService.HasPermission.
+    /// Cross-scope regression, INVERTED by the paywall fix: the sender stamps Admin onto
+    /// delivery.AccessContext, the per-node hub restores it — and the restored claim roles
+    /// must NOT grant node permissions. Claim roles are a platform capability (the API-token
+    /// gate), never data access: folding them into effective permissions made every
+    /// platform-admin token an undeniable mesh-wide reader (the memex 2026-08-05 paywall
+    /// bypass — gated paid lessons served by exact-path get while search denied them).
+    /// The context restoration itself still matters (identity + Api capability ride on it);
+    /// what changed is that no amount of restored claims turns into node Read/Write.
     /// </summary>
     [Fact(Timeout = 10_000)]
     public async Task DeliveryAccessContext_RolesFlow_ToReceiverPermissionCheck()
@@ -257,18 +261,19 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             Roles = new[] { "Admin" }
         });
 
-        // No static AccessAssignment exists for this user — the only signal is
-        // the claim-based Admin from the delivery context. The chain must still
-        // resolve Permission.All; if SecurityService didn't read claim-based
-        // roles, we'd see Permission.None.
+        // No AccessAssignment exists for this user — the only signal is the claim-based
+        // Admin from the delivery context. That is a PLATFORM signal, not a data grant:
+        // the receiver's permission check must resolve None. (Before the paywall fix this
+        // asserted Permission.All — which is precisely the bypass, pinned as a feature.)
         await sec.GetEffectivePermissions("any/scope", userId)
-            .Should().Be(Permission.All | Permission.Compile,
-                "claim-based Admin restored from delivery.AccessContext must grant " +
-                "all permissions on the receiver's permission check");
+            .Should().Be(Permission.None,
+                "claim roles restored from delivery.AccessContext are a platform " +
+                "capability and must not grant node data permissions — a grant here is " +
+                "the mesh-wide paywall bypass");
     }
 
     [Fact(Timeout = 10_000)]
-    public async Task ClaimBasedAdmin_GrantsImmediately_EvenWhenNoStaticAssignment()
+    public async Task ClaimBasedAdmin_DoesNotGrantNodePermissions()
     {
         // Resolve a scoped SecurityService directly so the AccessContext we
         // set is the one it reads.
@@ -285,7 +290,11 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
                 "without claim-based roles, the user has no permissions");
 
         // Stamp Admin via AccessContext.Roles — the same path the API token
-        // middleware uses.
+        // middleware uses. Claim roles are a platform capability, never node data
+        // access: the permissions must stay None. (Before the paywall fix this
+        // asserted Permission.All "immediately, even with no assignment" — the
+        // exact mechanism by which a portal-admin's API token read gated paid
+        // course content on memex, 2026-08-05.)
         accessService.SetCircuitContext(new AccessContext
         {
             ObjectId = userId,
@@ -294,9 +303,10 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         });
 
         await sec.GetEffectivePermissions("any/scope", userId)
-            .Should().Be(Permission.All | Permission.Compile,
-                "claim-based Admin must grant all permissions regardless of the " +
-                "synced-query state");
+            .Should().Be(Permission.None,
+                "claim-based roles must not grant node permissions — node data access " +
+                "comes from AccessAssignment nodes and policies only, exactly like the " +
+                "SQL read path");
     }
 
     /// <summary>

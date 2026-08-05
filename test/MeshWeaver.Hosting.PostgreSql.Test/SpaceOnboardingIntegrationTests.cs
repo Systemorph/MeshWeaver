@@ -62,7 +62,11 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
             })
             .AddRowLevelSecurity()
             .AddGraph()
-            .AddSpaceType();
+            .AddSpaceType()
+            // Real root Admin grants for the DevLogin identities — claim roles no longer
+            // grant node permissions (the paywall fix); setup writes/reads run under DevLogin
+            // and need actual assignment nodes, same as production. See TestUsers.DevLoginAdminAccess.
+            .AddMeshNodes(TestUsers.DevLoginAdminAccess());
     }
 
     /// <summary>
