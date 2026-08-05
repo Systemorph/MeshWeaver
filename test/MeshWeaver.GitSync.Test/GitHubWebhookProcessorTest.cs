@@ -253,4 +253,35 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         Assert.Equal("Markdown", imported.NodeType);
         Assert.Contains("Pushed content.", MarkdownBody(imported));
     }
+
+    /// <summary>
+    /// 🚨 Only the DEFAULT branch's green builds become <c>BuildCompletion</c> records. A PR-branch
+    /// run is green UNMERGED code — recording it would make the plugin-update watcher offer (or,
+    /// for an opted-in record, unattended-install) content the default branch never accepted, at
+    /// that branch's sha. Fail-closed: a payload whose branch cannot be read records nothing either.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task Process_WorkflowRun_RecordsOnlyDefaultBranchGreenBuilds()
+    {
+        static JsonElement Run(string branchJson) => JsonDocument.Parse($$"""
+            { "action": "completed",
+              "repository": { "full_name": "test/plugins-repo", "default_branch": "main" },
+              "workflow_run": { "conclusion": "success", "head_sha": "abc1234def", {{branchJson}}
+                                "name": "ci", "id": 7, "run_number": 42,
+                                "updated_at": "2026-08-05T12:00:00Z" } }
+            """).RootElement;
+
+        // A green PR-branch run: publishable-looking, but unmerged — nothing recorded.
+        Assert.Equal(0, await Webhooks.Process("workflow_run", Run("\"head_branch\": \"feat/x\","))
+            .Timeout(60.Seconds()).ToTask());
+        // No branch at all (e.g. a tag run): fail closed.
+        Assert.Equal(0, await Webhooks.Process("workflow_run", Run(""))
+            .Timeout(60.Seconds()).ToTask());
+
+        // The default branch's green run IS the publish signal — recorded at the stable path.
+        Assert.Equal(1, await Webhooks.Process("workflow_run", Run("\"head_branch\": \"main\","))
+            .Timeout(60.Seconds()).ToTask());
+        var record = await WaitForNode("Admin/_Build/test.plugins-repo");
+        Assert.Equal("BuildCompletion", record.NodeType);
+    }
 }

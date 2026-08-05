@@ -37,7 +37,10 @@ public sealed class SpaceInviteMenuProvider : INodeMenuProvider
             Icon: "✉️",
             Order: 8,   // a Space-management action, at the top of the node menu
             Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SpaceInviteLayoutArea.AreaName),
-            Tooltip: "Invite someone to this Space by email");
+            Tooltip: "Invite someone to this Space by email")
+        {
+            LabelKey = "menu.invitePeople"
+        };
 
         return host.Workspace.GetMeshNodeStream(spaceRoot)
             .Select(node => string.Equals(node?.NodeType, SpaceNodeType, StringComparison.Ordinal))

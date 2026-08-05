@@ -53,7 +53,8 @@ public static class TokenUsageSettingsTab
             Group: "Administration",
             Icon: FluentIcons.Database(),
             GroupIcon: FluentIcons.Shield(),
-            Order: 320);
+            Order: 320)
+            { LabelKey = "settings.tokenUsage", GroupKey = "settings.groupAdministration" };
 
         return AdminMenuGate.IsPlatformAdmin(host)
             .Select(isAdmin => isAdmin
@@ -67,7 +68,7 @@ public static class TokenUsageSettingsTab
         var jsonOptions = ws.Hub.JsonSerializerOptions;
         host.UpdateData(FilterDataId, Default);
 
-        stack = stack.WithView(Controls.H2("Token Usage").WithStyle("margin: 0 0 4px 0;"));
+        stack = stack.WithView(Controls.H2(host.Localize("settings.tokenUsage")).WithStyle("margin: 0 0 4px 0;"));
         stack = stack.WithView(Controls.Markdown(
             "Aggregated token usage and estimated cost from the per-model `_Usage` satellites " +
             "(`{thread}/_Usage/{model}`). Cost uses the price on each model's catalog node — the " +
@@ -98,19 +99,19 @@ public static class TokenUsageSettingsTab
                 .CombineLatest(
                     h.Stream.GetDataStream<FilterState>(FilterDataId).StartWith(Default),
                     prices,
-                    (nodes, filter, catalog) => (UiControl?)BuildGrid(nodes, filter, jsonOptions, catalog)));
+                    (nodes, filter, catalog) => (UiControl?)BuildGrid(nodes, filter, jsonOptions, catalog, locale: host.ViewerLocale())));
 
         return stack;
     }
 
-    private static UiControl BuildToolbar(FilterState f)
+    private static UiControl BuildToolbar(FilterState f, string? locale = null)
     {
         var bar = Controls.Stack.WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0;");
-        bar = bar.WithView(Controls.Markdown("**Group:**"));
+        bar = bar.WithView(Controls.Markdown(LocalizationCatalog.Get("ui.groupLabel", locale)));
         foreach (var (key, label) in Groupings)
             bar = bar.WithView(Btn(label, f.GroupBy == key, cur => cur with { GroupBy = key }));
-        bar = bar.WithView(Controls.Markdown("· **Period:**"));
+        bar = bar.WithView(Controls.Markdown(LocalizationCatalog.Get("ui.periodLabel", locale)));
         foreach (var (days, label) in Windows)
             bar = bar.WithView(Btn(label, f.WindowDays == days, cur => cur with { WindowDays = days }));
         return bar;
@@ -128,7 +129,7 @@ public static class TokenUsageSettingsTab
 
     private static UiControl BuildGrid(
         IEnumerable<MeshNode> nodes, FilterState filter, JsonSerializerOptions jsonOptions,
-        IReadOnlyDictionary<string, ModelPriceRate>? priceCatalog = null)
+        IReadOnlyDictionary<string, ModelPriceRate>? priceCatalog = null, string? locale = null)
     {
         var cutoff = filter.WindowDays > 0
             ? DateTimeOffset.UtcNow.AddDays(-filter.WindowDays)
@@ -163,7 +164,7 @@ public static class TokenUsageSettingsTab
             .ToList();
 
         if (rows.Count == 0)
-            return Controls.Markdown("_No token usage recorded in this period._");
+            return Controls.Markdown(LocalizationCatalog.Get("ui.mdNoTokenUsage", locale));
 
         long totIn = rows.Sum(r => r.Input);
         long totOut = rows.Sum(r => r.Output);

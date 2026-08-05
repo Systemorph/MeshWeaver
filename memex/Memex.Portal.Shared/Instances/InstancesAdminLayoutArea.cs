@@ -107,7 +107,7 @@ public static class InstancesAdminLayoutArea
 
         var viewerId = ResolveViewerId(host);
         if (string.IsNullOrEmpty(viewerId))
-            return Observable.Return<UiControl?>(AccessDenied());
+            return Observable.Return<UiControl?>(AccessDenied(locale: host.ViewerLocale()));
 
         return host.Hub.IsGlobalAdmin(viewerId)
             .Where(isAdmin => isAdmin)
@@ -117,12 +117,12 @@ public static class InstancesAdminLayoutArea
             .Catch<bool, Exception>(_ => Observable.Return(false))
             .Select(isAdmin => isAdmin
                 ? BuildAdminView(host)
-                : Observable.Return<UiControl?>(AccessDenied()))
+                : Observable.Return<UiControl?>(AccessDenied(locale: host.ViewerLocale())))
             .Switch();
     }
 
-    private static UiControl AccessDenied()
-        => Controls.Markdown("Access denied — platform admins only.");
+    private static UiControl AccessDenied(string? locale = null)
+        => Controls.Markdown(LocalizationCatalog.Get("ui.accessDeniedAdminsOnly", locale));
 
     private static IObservable<UiControl?> BuildAdminView(LayoutAreaHost host)
     {
@@ -146,7 +146,7 @@ public static class InstancesAdminLayoutArea
                         BuildView(host, ImmutableArray<InstanceInfo>.Empty, options, canQuery: false, logger));
                 return service.GetInstances()
                     .Select(instances => (UiControl?)BuildView(host, instances, options, canQuery: true, logger))
-                    .StartWith((UiControl?)Controls.Markdown("*Querying the cluster…*"));
+                    .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdQueryingCluster")));
             })
             .Switch();
     }
@@ -156,14 +156,14 @@ public static class InstancesAdminLayoutArea
         InstancesOptions options, bool canQuery, ILogger? logger)
     {
         var stack = Controls.Stack
-            .WithView(Controls.Title("Platform Instances", 1))
+            .WithView(Controls.Title(host.Localize("ui.platformInstances"), 1))
             .WithView(Controls.Markdown(
                 "Live from the Kubernetes cluster — every portal instance on "
                 + $"`{options.ClusterName}`, its running version and replica health. "
                 + "Use the log links to jump to Grafana."));
 
         // Refresh
-        stack = stack.WithView(Controls.Button("Refresh")
+        stack = stack.WithView(Controls.Button(host.Localize("ui.refresh"))
             .WithAppearance(Appearance.Outline)
             .WithIconStart(FluentIcons.ArrowClockwise())
             .WithClickAction(ctx =>
@@ -180,7 +180,7 @@ public static class InstancesAdminLayoutArea
                 + "company instance, never public/customer instances). See "
                 + "[Instances](/Doc/Architecture/Instances)."));
         else if (instances.Length == 0)
-            stack = stack.WithView(Controls.Markdown("*No portal instances found on the cluster.*"));
+            stack = stack.WithView(Controls.Markdown(host.Localize("ui.mdNoInstances")));
         else
         {
             var rows = instances
@@ -208,7 +208,7 @@ public static class InstancesAdminLayoutArea
                 .Resizable());
 
             // Grafana log links — one per instance. Markdown anchors (robust for external hosts).
-            stack = stack.WithView(Controls.Title("Logs", 2));
+            stack = stack.WithView(Controls.Title(host.Localize("ui.logs"), 2));
             if (string.IsNullOrWhiteSpace(options.GrafanaBaseUrl))
                 stack = stack.WithView(Controls.Markdown(
                     "*Set `Instances:GrafanaBaseUrl` to enable per-instance Grafana log links.*"));
@@ -224,7 +224,7 @@ public static class InstancesAdminLayoutArea
             }
         }
 
-        stack = stack.WithView(BuildCreateSection(options, logger));
+        stack = stack.WithView(BuildCreateSection(options, logger, locale: host.ViewerLocale()));
         return stack;
     }
 
@@ -232,10 +232,10 @@ public static class InstancesAdminLayoutArea
     /// Guided create-instance: inputs → a generated provisioning PLAN (commands), rendered below.
     /// Mutates no infrastructure — the admin runs the emitted commands themselves.
     /// </summary>
-    private static UiControl BuildCreateSection(InstancesOptions options, ILogger? logger)
+    private static UiControl BuildCreateSection(InstancesOptions options, ILogger? logger, string? locale = null)
     {
         var form = Controls.Stack
-            .WithView(Controls.Title("Create a new instance", 2))
+            .WithView(Controls.Title(LocalizationCatalog.Get("ui.createInstance", locale), 2))
             .WithView(Controls.Markdown(
                 "Generate the vetted provisioning command sequence for a new instance on this "
                 + "cluster. **This produces a plan only — nothing is deployed automatically.**"));
@@ -262,7 +262,7 @@ public static class InstancesAdminLayoutArea
             Placeholder = "defaults from name",
             DataContext = LayoutAreaReference.GetDataPointer(CreateFormId),
         }.WithWidth("220px"));
-        inputs = inputs.WithView(Controls.Button("Generate plan")
+        inputs = inputs.WithView(Controls.Button(LocalizationCatalog.Get("ui.generatePlan", locale))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.CloudAdd())
             .WithClickAction(ctx =>
@@ -285,7 +285,7 @@ public static class InstancesAdminLayoutArea
             .Select(md => (UiControl?)Controls.Markdown(string.IsNullOrEmpty(md)
                 ? "*Fill in the fields and click **Generate plan**.*"
                 : md))
-            .StartWith((UiControl?)Controls.Markdown("*Fill in the fields and click **Generate plan**.*")));
+            .StartWith((UiControl?)Controls.Markdown(LocalizationCatalog.Get("ui.mdFillFieldsGeneratePlan", locale))));
         return form;
     }
 

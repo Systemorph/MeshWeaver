@@ -112,7 +112,7 @@ public static class NotificationLayoutAreas
         // Link to target node
         if (!string.IsNullOrEmpty(notification.TargetNodePath))
         {
-            buttons = buttons.WithView(Controls.Button("Go to Document")
+            buttons = buttons.WithView(Controls.Button(host.Localize("ui.goToDocument"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(_ =>
                 {

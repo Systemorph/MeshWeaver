@@ -132,6 +132,46 @@ When the `LayoutAreaReference` has an empty area name, the target hub resolves i
 > // ^ Resolves to "Content" (the default), NOT "Overview"
 > ```
 
+## Embedding an area inside a container control
+
+The two mechanisms in [Combining Layout Areas](../CombiningLayoutAreas) — the `@@` live embed and the `--render` cell — put an area into **markdown flow**. A layout can also emit a `LayoutAreaControl` **directly as a child of a container control**, which is what a page composed of blocks does:
+
+```csharp
+Controls.Stack
+    .WithView(Controls.Markdown(intro), "Intro")
+    .WithView(new LayoutAreaControl(new Address(childPath), new LayoutAreaReference("")), "Cell")
+    .WithView(Controls.Markdown(epilogue), "Epilogue");
+```
+
+`Controls.Stack` renders a flex box, so the embedded area is a **flex item**. Two sizing contracts follow, and the framework — not the author — selects between them:
+
+| Context | How it is sized |
+|---|---|
+| **Top-level area** (a routed page, or the side panel) | Fills the available height. Marked with the `fill-area` class. |
+| **Embedded area** (anything else) | Sized by its own content, so the blocks around it flow normally. |
+
+An embedded area must never be given a zero flex basis or lose its min-content floor: its box would collapse while its content renders at full height, and the content would paint over the block below it. `LayoutAreaView.razor.css` keeps the fill sizing behind `.fill-area` for exactly this reason.
+
+The example below is that composition, rendered live — the embed takes its natural height and the text beneath it stays clear of it:
+
+```csharp --render EmbeddedAreaInStack --show-code
+using MeshWeaver.Layout;
+using MeshWeaver.Data;        // LayoutAreaReference
+using MeshWeaver.Messaging;   // Address — the kernel pre-imports neither
+
+// Two things this example pins down, both easy to get wrong:
+//  • the address must be an Address, not a bare string — the parameter is typed `object`, so a
+//    string compiles and then silently renders an empty area;
+//  • prefer naming the area. An empty reference resolves to the target's DEFAULT area, as
+//    described above — which is whatever that node registered, not necessarily the one you
+//    want. Embedding this page's default rendered nothing; "Overview" renders its content.
+Controls.Stack
+    .WithView(Controls.Markdown("**Above the embed.**"))
+    .WithView(new LayoutAreaControl(
+        new Address("Doc/GUI/DataGrid"), new LayoutAreaReference("Overview")))
+    .WithView(Controls.Markdown("**Below the embed** — this text must not be painted over."))
+```
+
 # Principle: Define Layout Areas Close to Their Object
 
 Layout areas belong in the same module as the object they represent. This keeps each node type **self-contained and composable** — a parent never needs to know how a child node renders itself, only which area to link to.

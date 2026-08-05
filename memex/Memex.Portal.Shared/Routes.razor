@@ -3,6 +3,7 @@
 @using MeshWeaver.Blazor.Graph
 @using MeshWeaver.Blazor.Pages
 @using Microsoft.AspNetCore.Components.Authorization
+@inject AccessService Access
 
 <BrowserDimensionWatcher @bind-ViewportInformation="@ViewportInformation" />
 
@@ -32,7 +33,7 @@
                     <LayoutView Layout="@typeof(MainLayout)">
                         <div class="meshweaver-render-error" role="alert"
                              style="margin:1rem;padding:1rem;border:1px solid var(--error,#d13438);border-radius:6px;background:rgba(209,52,56,0.08);color:var(--error,#d13438)">
-                            <strong>Something went wrong on this page.</strong>
+                            <strong>@Access.Localize("error.somethingWentWrongOnPage")</strong>
                             <div style="margin-top:0.5rem;white-space:pre-wrap;font-family:monospace;font-size:0.875rem">@pageError.Message</div>
                         </div>
                     </LayoutView>
@@ -40,9 +41,9 @@
             </ErrorBoundary>
         </Found>
         <NotFound>
-            <PageTitle>Not found</PageTitle>
+            <PageTitle>@Access.Localize("error.notFoundTitle")</PageTitle>
             <LayoutView Layout="@typeof(MainLayout)">
-                <p role="alert">Sorry, there's nothing at this address.</p>
+                <p role="alert">@Access.Localize("error.nothingAtAddress")</p>
             </LayoutView>
         </NotFound>
     </Router>

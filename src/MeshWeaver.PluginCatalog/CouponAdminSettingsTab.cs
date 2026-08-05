@@ -177,7 +177,7 @@ public static class CouponAdminSettingsTab
                 "Typed coupon codes at `Admin/Coupons/{CODE}`. A free coupon unlocks its whole " +
                 "plugin list in one redemption; a priced one applies at payment. Open a coupon " +
                 "to edit or delete it with the standard node actions."))
-            .WithView(Controls.Button("＋ New coupon")
+            .WithView(Controls.Button(host.Localize("ui.newCoupon"))
                 .WithAppearance(Appearance.Accent)
                 .WithNavigateToHref("/Store/Coupon/Create?type=Store%2FCoupon"), "NewCoupon")
             .WithView((h, _) => LiveCouponList(h), "CouponList");
@@ -193,7 +193,7 @@ public static class CouponAdminSettingsTab
     {
         var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
-            return Observable.Return<UiControl?>(Controls.Markdown("*The mesh service is not available.*"));
+            return Observable.Return<UiControl?>(Controls.Markdown(host.Localize("ui.mdMeshUnavailable")));
         var options = host.Hub.JsonSerializerOptions;
 
         return meshService
@@ -223,7 +223,7 @@ public static class CouponAdminSettingsTab
         LayoutAreaHost host, ImmutableDictionary<string, MeshNode> coupons, JsonSerializerOptions options)
     {
         if (coupons.IsEmpty)
-            return Controls.Markdown("*No coupons yet — create the first one above.*");
+            return Controls.Markdown(host.Localize("ui.mdNoCoupons"));
 
         var rows = coupons.Values
             .OrderBy(n => n.Id, StringComparer.OrdinalIgnoreCase)
@@ -260,7 +260,7 @@ public static class CouponAdminSettingsTab
 
         return Controls.Stack
             .WithView(grid)
-            .WithView(Controls.Markdown("Open a coupon:"))
+            .WithView(Controls.Markdown(host.Localize("ui.openCoupon")))
             .WithView(openRow);
     }
 }

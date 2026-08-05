@@ -87,9 +87,9 @@ public static class GitHistoryTab
         var spacePath = WorkingTreeTab.SpaceRootPath(node?.Path ?? "");
 
         if (string.IsNullOrEmpty(spacePath))
-            return stack.WithView(Controls.Markdown("Git history is available inside a Space."));
+            return stack.WithView(Controls.Markdown(host.Localize("ui.gitHistoryInSpace")));
         if (string.IsNullOrEmpty(userId))
-            return stack.WithView(Controls.Markdown("Sign in to browse git history."));
+            return stack.WithView(Controls.Markdown(host.Localize("ui.signInForGitHistory")));
 
         // Seed the selection/refresh state once so the sub-views below have a stream to bind to.
         host.UpdateData(ResultId, "");
@@ -97,24 +97,24 @@ public static class GitHistoryTab
         host.UpdateData(SelectedCommitId, "");
         host.UpdateData(SelectedChangeId, "");
 
-        stack = stack.WithView(Controls.H2("Git history"));
+        stack = stack.WithView(Controls.H2(host.Localize("ui.gitHistory")));
         stack = stack.WithView(Controls.Markdown(
             "Browse the commit history of this Space's server-side working tree, see what each commit " +
             "changed, and inspect uncommitted changes — the same checkout the AI assistants edit."));
 
         // Everything keys off the Space's connected repo (slug + branch) from the GitHub-Sync config.
         stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
-            .Select(cfg => (UiControl?)BuildBrowser(workingTrees, userId, cfg))
-            .StartWith((UiControl?)Controls.Markdown("_Loading repository settings…_")));
+            .Select(cfg => (UiControl?)BuildBrowser(workingTrees, userId, cfg, locale: host.ViewerLocale()))
+            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingRepoSettings"))));
 
         return stack;
     }
 
-    private static UiControl BuildBrowser(GitWorkingTreeService wt, string userId, GitHubSyncConfig? cfg)
+    private static UiControl BuildBrowser(GitWorkingTreeService wt, string userId, GitHubSyncConfig? cfg, string? locale = null)
     {
         var repoFullName = WorkingTreeTab.RepoFullName(cfg?.RepositoryUrl);
         if (repoFullName is null)
-            return Controls.Markdown("Connect a GitHub repository in the **GitHub Sync** tab first.");
+            return Controls.Markdown(LocalizationCatalog.Get("ui.connectRepoFirst", locale));
 
         var repoSlug = WorkingTreeTab.RepoSlug(repoFullName);
         var branch = string.IsNullOrWhiteSpace(cfg!.Branch) ? "main" : cfg.Branch;
@@ -138,7 +138,7 @@ public static class GitHistoryTab
                         ex => ctx.Host.UpdateData(ResultId, $"⚠ {ex.Message}"));
                     return Task.CompletedTask;
                 }))
-            .WithView(Controls.Button("Refresh")
+            .WithView(Controls.Button(LocalizationCatalog.Get("ui.refresh", locale))
                 .WithIconStart(FluentIcons.ArrowClockwise())
                 .WithClickAction(ctx =>
                 {
@@ -152,7 +152,7 @@ public static class GitHistoryTab
             .StartWith((UiControl?)Controls.Stack));
 
         // Working-tree (uncommitted) changes.
-        stack = stack.WithView(Controls.H3("Working-tree changes"));
+        stack = stack.WithView(Controls.H3(LocalizationCatalog.Get("ui.workingTreeChanges", locale)));
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(RefreshId)
             .Select(_ => wt.Status(userId, repoSlug)
                 .Select(s => (UiControl?)BuildWorkingTreeChanges(h, s))
@@ -161,13 +161,13 @@ public static class GitHistoryTab
             .StartWith((UiControl?)Controls.Markdown("_…_")));
 
         // Commit history.
-        stack = stack.WithView(Controls.H3("Commits"));
+        stack = stack.WithView(Controls.H3(LocalizationCatalog.Get("ui.commits", locale)));
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(RefreshId)
             .Select(_ => wt.Log(userId, repoSlug, MaxCommits)
                 .Select(commits => (UiControl?)BuildCommitLog(h, commits))
                 .Catch<UiControl?, Exception>(_ => Observable.Return((UiControl?)NotCheckedOut())))
             .Switch()
-            .StartWith((UiControl?)Controls.Markdown("_Loading history…_")));
+            .StartWith((UiControl?)Controls.Markdown(LocalizationCatalog.Get("ui.mdLoadingHistory", locale))));
 
         // Files changed by the selected commit.
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(SelectedCommitId)
@@ -183,7 +183,7 @@ public static class GitHistoryTab
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(SelectedChangeId)
             .Select(key => BuildDiff(wt, userId, repoSlug, key))
             .Switch()
-            .StartWith((UiControl?)SelectAChange()));
+            .StartWith((UiControl?)SelectAChange(locale: locale)));
 
         return stack;
     }
@@ -206,7 +206,7 @@ public static class GitHistoryTab
         var stack = Controls.Stack.WithWidth("100%").WithStyle("gap:6px;");
         stack = stack.WithView(Controls.Markdown($"**Changed in `{Short(hash)}`** — {changes.Count} file(s):"));
         if (changes.Count == 0)
-            return stack.WithView(Controls.Markdown("_No file changes._"));
+            return stack.WithView(Controls.Markdown(host.Localize("ui.mdNoFileChanges")));
         stack = stack.WithView(BuildChangeGrid(host, CommitFileRowsId, changes, c => $"C{Sep}{hash}{Sep}{c.Path}"));
         return stack;
     }
@@ -214,7 +214,7 @@ public static class GitHistoryTab
     private static UiControl BuildCommitLog(LayoutAreaHost host, IReadOnlyList<GitCommit> commits)
     {
         if (commits.Count == 0)
-            return Controls.Markdown("_No commits._");
+            return Controls.Markdown(host.Localize("ui.mdNoCommits"));
 
         var rows = commits.Select(c => new CommitRow(c.Hash, c.ShortHash, c.Date, c.Author, c.Subject)).ToList();
         host.UpdateData(CommitRowsId, rows);
@@ -320,10 +320,10 @@ public static class GitHistoryTab
     // ── helpers ─────────────────────────────────────────────────────────────────────────────
 
     // Fresh control per call — a shared instance would reuse a layout-area control Id across areas/emissions.
-    private static UiControl NotCheckedOut() =>
-        Controls.Markdown("_Not checked out yet — use **Check out / pull** above._");
-    private static UiControl SelectAChange() =>
-        Controls.Markdown("_Select a change to view its diff._");
+    private static UiControl NotCheckedOut(string? locale = null) =>
+        Controls.Markdown(LocalizationCatalog.Get("ui.notCheckedOut", locale));
+    private static UiControl SelectAChange(string? locale = null) =>
+        Controls.Markdown(LocalizationCatalog.Get("ui.mdSelectChange", locale));
 
     private static string Short(string hash) => hash.Length > 8 ? hash[..8] : hash;
 

@@ -86,6 +86,13 @@ public static class NodeMenuItemsExtensions
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger(typeof(NodeMenuItemsExtensions));
 
+        // THE place menu labels are translated. Every provider builds its items with an English
+        // Label plus a LabelKey; this host renders for ONE subscriber, whose AccessContext carries
+        // their language, so resolving here gives each viewer their own menu without threading a
+        // locale through ~20 static provider helpers. Applied AFTER the dedup so the comparison
+        // still runs on the stable untranslated form.
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
+
         foreach (var (context, items) in CollectMenuItemStreamsByContext(host, ctx))
         {
             // Default (unnamed) context lands on "$Menu"; named contexts on "$Menu:{context}".
@@ -96,7 +103,8 @@ public static class NodeMenuItemsExtensions
                 items
                     .DistinctUntilChanged(MenuItemsSequenceComparer.Instance)
                     .Subscribe(
-                        slice => host.UpdateArea(areaContext, new MenuControl([.. slice])),
+                        slice => host.UpdateArea(areaContext,
+                            new MenuControl([.. slice.Select(i => i.Localized(access))])),
                         ex => logger?.LogWarning(ex, "Menu render failed for context '{Context}'", context)));
         }
 

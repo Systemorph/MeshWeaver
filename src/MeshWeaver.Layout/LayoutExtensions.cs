@@ -206,7 +206,14 @@ public static class LayoutExtensions
                 typeof(MeshWeaver.Layout.Catalog.GridConfig),
                 typeof(MeshWeaver.Layout.Catalog.CatalogGroup),
                 typeof(MeshWeaver.Layout.Catalog.SearchResultGroup),
-                typeof(MeshWeaver.Layout.Catalog.GroupedSearchResult)
+                typeof(MeshWeaver.Layout.Catalog.GroupedSearchResult),
+                // Icon lives in MeshWeaver.Domain, so the IUiControl/Skin reflection sweep above
+                // cannot see it — yet it rides inside control state on almost every control
+                // (IconStart/IconEnd, NavItem, MenuItem, ProgressMessage). Unregistered, it
+                // serialises with an auto short-name and the receiving hub adopts the type as a
+                // SIDE EFFECT of the read (ObjectPolymorphicConverter.GetTypeName -> unguarded
+                // GetOrAddType). Measured: 37 fallbacks in one bulk plugin run.
+                typeof(MeshWeaver.Domain.Icon)
             )
             .WithHandler<GetLayoutAreasRequest>(HandleGetLayoutAreasRequest);
 

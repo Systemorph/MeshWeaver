@@ -59,6 +59,38 @@ public interface IStorageAdapter
     /// </summary>
     IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options);
 
+    /// <summary>
+    /// Writes multiple nodes in as few round-trips as the backend allows, emitting
+    /// the nodes this adapter accepted. Mirrors <see cref="ReadMany"/> on the write
+    /// side: the default is correct everywhere, and backends that can do better
+    /// override it (Postgres windows by target table and sends one
+    /// <c>NpgsqlBatch</c> per window).
+    ///
+    /// <para>🚨 <b>Order is part of the contract.</b> The default writes STRICTLY IN
+    /// SEQUENCE — not <c>Merge</c> like <see cref="ReadMany"/> — and an override MUST
+    /// preserve the caller's order when publishing <see cref="Changes"/>. Callers
+    /// order parents before children on purpose (the installer's <c>CopyOrder</c>):
+    /// activating a child's per-node hub while its parent's is still cold is the
+    /// race that used to wedge installs. Batching the STORAGE write is safe — a
+    /// transaction has no ordering to lose — but the change feed is what wakes the
+    /// hubs, so it must still arrive parents-first.</para>
+    ///
+    /// <para>Nodes this adapter does not own are simply absent from the result, the
+    /// same way <see cref="Write"/> emits <c>null</c>, so the try-then-claim chain in
+    /// <c>PersistenceService</c> keeps working unchanged.</para>
+    /// </summary>
+    IObservable<IReadOnlyList<MeshNode>> WriteMany(
+        IReadOnlyCollection<MeshNode> nodes, JsonSerializerOptions options)
+        => System.Reactive.Linq.Observable.Select(
+            System.Reactive.Linq.Observable.ToList(
+                System.Reactive.Linq.Observable.Select(
+                    System.Reactive.Linq.Observable.Where(
+                        System.Reactive.Linq.Observable.Concat(
+                            nodes.Select(n => Write(n, options))),
+                        n => n is not null),
+                    n => n!)),
+            written => (IReadOnlyList<MeshNode>)written);
+
     /// <summary>Deletes a node from storage and emits the deleted path.</summary>
     IObservable<string> Delete(string path);
 
