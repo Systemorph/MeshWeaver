@@ -1,6 +1,7 @@
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
@@ -59,6 +60,15 @@ public static class GitHubSyncConfiguration
         services.AddSingleton<IPartitionSyncSourceProvider>(sp => new GitHubPartitionSyncSourceProvider(
             sp.GetRequiredService<GitHubSyncService>(),
             sp.GetRequiredService<IMessageHub>()));
+        // Wiring a _GitSync makes the partition SYSTEM-OWNED — retract any privileged account
+        // grant that predates it. See SystemOwnedAccessRetractionHandler for the seven-second
+        // window this closes (create the Space, get Admin, wire the sync).
+        services.AddSingleton<INodePostCreationHandler>(sp => new SystemOwnedAccessRetractionHandler(
+            sp.GetRequiredService<IMessageHub>(),
+            sp.GetRequiredService<IMeshService>(),
+            sp.GetRequiredService<IStorageAdapter>(),
+            sp.GetService<AccessService>(),
+            sp.GetService<ILoggerFactory>()?.CreateLogger<SystemOwnedAccessRetractionHandler>()));
         // On-disk per-user git working trees (clone/edit/commit/push) — the working-tree
         // counterpart to content sync, shared by the AI harness + the in-portal editor.
         // Root binds from GitWorkspace:Root (env GitWorkspace__Root=/workspace in the portal,
@@ -133,6 +143,18 @@ public static class GitHubSyncConfiguration
                 ExcludeFromContext = new HashSet<string> { "search", "create" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<GitHubIssue>()),
+            },
+            // BuildCompletion satellite (Admin/_Build/{owner}.{repo}). The record of a repo's most
+            // recent GREEN CI run, written by the workflow_run webhook. Consumers SUBSCRIBE to it
+            // rather than being called — that is what keeps GitSync (which writes it) and the plugin
+            // catalog (which reads it) free of any compile-time dependency on each other.
+            new MeshNode(BuildCompletion.NodeType)
+            {
+                Name = "Build Completion",
+                IsSatelliteType = true,
+                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source.WithContentType<BuildCompletion>()),
             });
 
         // Also register the content types on the mesh hub + every per-node hub so reads via
@@ -141,12 +163,14 @@ public static class GitHubSyncConfiguration
             .WithType<GitHubCredential>(nameof(GitHubCredential))
             .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig))
             .WithType<GitHubPullRequest>(nameof(GitHubPullRequest))
-            .WithType<GitHubIssue>(nameof(GitHubIssue)));
+            .WithType<GitHubIssue>(nameof(GitHubIssue))
+            .WithType<BuildCompletion>(nameof(BuildCompletion)));
         builder.ConfigureDefaultNodeHub(c => c
             .WithType<GitHubCredential>(nameof(GitHubCredential))
             .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig))
             .WithType<GitHubPullRequest>(nameof(GitHubPullRequest))
             .WithType<GitHubIssue>(nameof(GitHubIssue))
+            .WithType<BuildCompletion>(nameof(BuildCompletion))
             // The "GitHub" node-menu dropdown (its own context) + the action area its items navigate
             // to. Per-node-hub scoped provider (self-gates to Spaces with a configured repo).
             .WithServices(s =>
