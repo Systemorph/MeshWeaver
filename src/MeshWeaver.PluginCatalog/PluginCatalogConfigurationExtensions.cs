@@ -89,8 +89,9 @@ public static class PluginCatalogConfigurationExtensions
     // catalog). The records are written exclusively under ImpersonateAsSystem (PackageInstaller),
     // so no creator grant is ever minted, and a platform admin's Admin/_Access grant is scoped to
     // the Admin partition — without this policy NO real signed-in principal holds Read on
-    // "Plugins", and the settings tab's installed-state query (CatalogLayoutAreas.ObserveInstalled,
-    // `path:Plugins scope:children`) is denied for the very admin the tab is gated on (#811).
+    // "Plugins", and the installed-state query every catalog surface issues
+    // (CatalogLayoutAreas.ObserveInstalled, `path:Plugins scope:children`) is denied for every
+    // real principal, platform admins included (#811).
     // PublicRead is safe: PackageManifest carries no secrets. The write caps keep the partition
     // non-writable for every non-System identity (System bypasses the evaluator, so the
     // installer's own record writes are unaffected).
