@@ -45,6 +45,10 @@ public class NodeTypeReleaseGateTest(ITestOutputHelper output) : MonolithMeshTes
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddRowLevelSecurity()
+            // Roland's setup reads need a real grant — claim roles no longer grant node
+            // permissions (the paywall fix). The rel-editor / rel-viewer / ro-user assertions
+            // below are about OTHER identities and stay meaningful.
+            .AddMeshNodes(TestUsers.DevLoginAdminAccess())
             .AddMeshNodes(
                 AssignmentNodeFactory.UserRole("rel-editor", "Editor", "RelGate"),
                 AssignmentNodeFactory.UserRole("rel-viewer", "Viewer", "RelGate"),
