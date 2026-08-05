@@ -130,7 +130,44 @@ Legacy colon form `path/prefix:value` still works for backward compatibility.")]
   @Doc/Architecture/content/icon.svg            (file)
   @Cornerstone/schema/TypeName                  (schema)
   @Cornerstone/model/                           (full model)")] string path)
-        => ops.Get(path).FirstAsync().ToTask();
+        => AsCaller(() => ops.Get(path).FirstAsync().ToTask());
+
+    /// <summary>
+    /// 🚨 Runs an MCP tool under the CALLING USER's identity.
+    ///
+    /// <para><b>The paywall bug this closes.</b> <c>UserContextMiddleware</c> establishes the MCP
+    /// request's <c>AccessContext</c> on the PORTAL hub's <see cref="AccessService"/> (which is why
+    /// <c>git_hub_sync</c> can resolve the caller and refuses without one). <c>ops</c>, however, is
+    /// built on the SESSION hub, and <c>AccessContext</c> is an <c>AsyncLocal</c> that does not
+    /// survive the hops a read takes — so by the time
+    /// <c>MeshNodeStreamCache.GetStreamRaw</c> checks who is asking, it saw nobody. It then
+    /// deliberately passes through to its shared upstream, which was opened under the cache's own
+    /// SYSTEM read identity. Absent identity did not fail closed: it read as
+    /// <c>system-security</c>, which holds <c>Permission.All</c>.</para>
+    ///
+    /// <para>Measured on memex 2026-08-05, and confirmed in the silo trace:
+    /// <c>GrainCallFilter: grain=messagehub/AgenticPrimerDe/02-CodeWunsch, userId=system-security</c>
+    /// — an unentitled signed-in user read a full PAID course lesson (79,650 chars) by exact path,
+    /// while the gating rows were correct and the SQL query path hid the same node.</para>
+    ///
+    /// <para>Re-establishing the caller for the duration of the tool call makes the EXISTING gate
+    /// apply. It is the same pattern <c>git_hub_sync</c> already uses a few methods below
+    /// (<c>using (accessService.SwitchAccessContext(user))</c>) — this just applies it to the READ
+    /// tools, where its absence was a paywall bypass rather than a wrong audit stamp.</para>
+    ///
+    /// <para>A caller with no resolvable identity is left exactly as before (no switch), so
+    /// background / infrastructure flows are unaffected.</para>
+    /// </summary>
+    private Task<string> AsCaller(Func<Task<string>> tool)
+    {
+        var accessService = rootHub.ServiceProvider.GetService<AccessService>();
+        var user = accessService?.Context ?? accessService?.CircuitContext;
+        if (accessService is null || user is null)
+            return tool();
+
+        using (accessService.SwitchAccessContext(user))
+            return tool();
+    }
 
     /// <summary>
     /// Uploads raw file bytes into a node's content collection — the write-side
@@ -183,7 +220,7 @@ Full reference: read the 'tools-reference' MCP resource.")]
         [Description("Query string (e.g., 'nodeType:Agent', 'laptop', 'path:ACME scope:descendants', 'name:*sales*')")] string query,
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null,
         [Description("Maximum number of results to return. Default 50, max 200.")] int limit = 50)
-        => ops.Search(query, basePath, limit).FirstAsync().ToTask();
+        => AsCaller(() => ops.Search(query, basePath, limit).FirstAsync().ToTask());
 
     /// <summary>
     /// Autocompletes a partial @-reference using the in-portal autocomplete engine,
