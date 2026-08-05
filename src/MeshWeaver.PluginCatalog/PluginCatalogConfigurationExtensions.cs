@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Graph;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -29,6 +30,7 @@ public static class PluginCatalogConfigurationExtensions
         => (TBuilder)builder
             .AddMeshNodes(CreatePackageNodeType())
             .AddMeshNodes(CreateCatalogNodeType())
+            .AddMeshNodes(CreateInstalledPartitionPolicy())
             // The build-completion subscriber. A mesh-scoped SINGLETON, so its subscriptions live
             // and die with the mesh rather than surviving disposal into the next test
             // (Doc/Architecture/NoStaticState). The IHostedService registration is what STARTS it —
@@ -81,4 +83,31 @@ public static class PluginCatalogConfigurationExtensions
         Icon = "/static/NodeTypeIcons/box.svg",
         HubConfiguration = config => config.AddPluginCatalogViews(),
     };
+
+    // Read-only, world-readable policy for the install-records partition — the same shape every
+    // other built-in catalog ships (BuiltInAgentProvider / BuiltInSkillProvider / the model
+    // catalog). The records are written exclusively under ImpersonateAsSystem (PackageInstaller),
+    // so no creator grant is ever minted, and a platform admin's Admin/_Access grant is scoped to
+    // the Admin partition — without this policy NO real signed-in principal holds Read on
+    // "Plugins", and the installed-state query every catalog surface issues
+    // (CatalogLayoutAreas.ObserveInstalled, `path:Plugins scope:children`) is denied for every
+    // real principal, platform admins included (#811).
+    // PublicRead is safe: PackageManifest carries no secrets. The write caps keep the partition
+    // non-writable for every non-System identity (System bypasses the evaluator, so the
+    // installer's own record writes are unaffected).
+    private static MeshNode CreateInstalledPartitionPolicy() =>
+        new("_Policy", PackageInstaller.InstalledPartition)
+        {
+            NodeType = "PartitionAccessPolicy",
+            Name = "Access Policy",
+            Content = new PartitionAccessPolicy
+            {
+                PublicRead = true,
+                Create = false,
+                Update = false,
+                Delete = false,
+                Comment = false,
+                Thread = false
+            }
+        };
 }
