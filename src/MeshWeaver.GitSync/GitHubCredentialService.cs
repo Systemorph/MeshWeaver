@@ -93,7 +93,7 @@ public sealed class GitHubCredentialService(IMeshService meshService, IMessageHu
 
         var path = CredentialPath(userId);
         return hub.GetWorkspace()
-            .GetQuery($"github-cred:{userId}", $"path:{path}")
+            .GetQuery($"github-cred:{userId}", $"path:{path} select:path,id,name,nodeType,content")
             .Select(nodes =>
             {
                 var node = nodes?.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase));
