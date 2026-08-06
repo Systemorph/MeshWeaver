@@ -37,9 +37,8 @@ public static class WorkspaceOperations
     /// </summary>
     /// <param name="workspace">The workspace to apply the change to.</param>
     /// <param name="change">The change request to validate and apply.</param>
-    /// <param name="request">Optional originating message delivery for failure propagation.</param>
     /// <returns>A single-emission observable carrying the finished <see cref="ActivityLog"/>.</returns>
-    public static IObservable<ActivityLog> Change(this IWorkspace workspace, DataChangeRequest change, IMessageDelivery? request)
+    public static IObservable<ActivityLog> Change(this IWorkspace workspace, DataChangeRequest change)
     {
         var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger(typeof(WorkspaceOperations));
@@ -51,7 +50,7 @@ public static class WorkspaceOperations
 
         logger.LogDebug("Update called: Creations={Creations}, Updates={Updates}, Deletions={Deletions}",
             change.Creations.Count(), change.Updates.Count(), change.Deletions.Count());
-        return workspace.UpdateStreams(change, request, messages, logger);
+        return workspace.UpdateStreams(change, messages, logger);
     }
 
     /// <summary>
@@ -94,14 +93,8 @@ public static class WorkspaceOperations
         return (isValid, messages);
     }
 
-    private static void UpdateFailed(IMessageDelivery? delivery, Exception? exception)
-    {
-        if (exception != null)
-            throw new DataException($"Data update failed: {exception.Message}", exception);
-    }
-
     private static IObservable<ActivityLog> UpdateStreams(this IWorkspace workspace, DataChangeRequest change,
-        IMessageDelivery? request, ImmutableList<LogMessage> messages, ILogger logger)
+        ImmutableList<LogMessage> messages, ILogger logger)
     {
         logger.LogDebug("Updating streams for workspace {Address} with {Creations} creations, {Updates} updates, {Deletions} deletions", workspace.Hub.Address, change.Creations.Count(), change.Updates.Count(), change.Deletions.Count());
 
@@ -119,7 +112,7 @@ public static class WorkspaceOperations
         // ToArray() forces the writes NOW — Change is eager by contract; the observables only
         // report when each stream has applied its part.
         var applied = groups.Where(g => g.Key.DataSource is not null)
-            .Select(group => UpdateStream(change, group, request, logger))
+            .Select(group => UpdateStream(change, group, logger))
             .ToArray();
 
         if (applied.Length == 0)
@@ -135,17 +128,16 @@ public static class WorkspaceOperations
     /// The <see cref="AsyncSubject{T}"/> replays, so a subscriber that arrives after the write
     /// already committed still gets the log.
     ///
-    /// <para>🚨 Completion is scheduled on the stream hub's action block, NOT signalled inline from
-    /// the transform: the transform's result is applied by the SAME turn that runs it, so completing
-    /// inline would report "committed" to a subscriber (and post the DataChangeResponse) while the
+    /// <para>🚨 Completion rides the stream's post-apply seam (<c>applied</c>), NOT the transform
+    /// itself: the transform's result is applied by the same turn that runs it, so completing from
+    /// inside it would report "committed" to a subscriber (and post the DataChangeResponse) while the
     /// store still holds the pre-change state — ack-on-accept, the shape that raced read-after-write.
-    /// The next turn runs after the apply.</para>
+    /// The seam runs after the apply, in that same turn, so it costs no extra hub message.</para>
     /// </summary>
     private static IObservable<ImmutableList<LogMessage>> UpdateStream(
         DataChangeRequest change,
         IGrouping<(IDataSource? DataSource, object? Partition), (object Instance, OperationType Op, ITypeSource?
             TypeSource, IDataSource? DataSource, object? Partition)> group,
-        IMessageDelivery? request,
         ILogger logger)
     {
         var stream = group.Key.DataSource!.GetStreamForPartition(group.Key.Partition);
@@ -158,48 +150,38 @@ public static class WorkspaceOperations
 
         // Synchronous update — the transform is pure in-memory; the stream's
         // handler serializes UpdateStreamRequests, so no retry logic is needed.
+        var streamMessages = ImmutableList<LogMessage>.Empty;
         stream.Update(store =>
             {
                 var (result, messages) = UpdateDataChangeRequest(store, change, logger, stream, group);
-                Report(stream.Hub, applied, messages);
+                streamMessages = messages;
                 return result;
             },
             ex =>
             {
+                // The failure is REPORTED, never rethrown: every invocation of this callback is
+                // wrapped by the stream in a log-only try/catch, so a throw here could reach no
+                // caller — it only produced a secondary "exceptionCallback threw" ERROR. The log
+                // below is what the caller actually sees.
+                //
                 // A DISPOSED stream is the benign teardown marker the rest of the stream classifies
                 // as Debug-only ("stop the source"), so it stays a WARNING — which still commits
                 // (DataChangeResponse maps Warning → Committed) and keeps shutdown quiet. Any other
                 // failure is a real one and must surface as Failed rather than the silent
                 // "Succeeded" the sub-activity used to report.
+                logger.LogError(ex, "Update of {Stream} failed", stream.StreamIdentity);
                 applied.OnNext([new LogMessage(
                     $"Update of {stream.StreamIdentity} failed: {ex.Message}",
                     ex is ObjectDisposedException ? LogLevel.Warning : LogLevel.Error)]);
                 applied.OnCompleted();
-                UpdateFailed(request, ex);
+            },
+            () =>
+            {
+                applied.OnNext(streamMessages);
+                applied.OnCompleted();
             }
         );
         return applied;
-    }
-
-    /// <summary>
-    /// Reports one stream's messages on the stream hub's NEXT turn, so the change this turn
-    /// returned is already applied when a subscriber sees the log. Falls back to reporting inline
-    /// once the hub is tearing down — there is no later turn then, and an unreported change would
-    /// leave the caller's response pending until its request timeout.
-    /// </summary>
-    private static void Report(IMessageHub streamHub, AsyncSubject<ImmutableList<LogMessage>> applied,
-        ImmutableList<LogMessage> messages)
-    {
-        void Emit()
-        {
-            applied.OnNext(messages);
-            applied.OnCompleted();
-        }
-
-        if (streamHub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
-            Emit();
-        else
-            streamHub.InvokeAsync(Emit);
     }
 
     /// <summary>Finishes a data-update log: status is rolled up from the message levels.</summary>

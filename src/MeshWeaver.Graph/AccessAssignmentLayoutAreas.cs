@@ -239,13 +239,12 @@ public static class AccessAssignmentLayoutAreas
             roles.RemoveAt(indexToRemove);
             if (roles.Count == 0)
             {
-                host.Workspace.RequestChange(
-                    new DataChangeRequest().WithDeletions(node), null);
+                host.Workspace.RequestChange(new DataChangeRequest().WithDeletions(node));
             }
             else
             {
                 var updated = node with { Content = assignment with { Roles = roles } };
-                host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null);
+                host.Workspace.RequestChange(DataChangeRequest.Update([updated]));
             }
         });
     }
@@ -260,7 +259,7 @@ public static class AccessAssignmentLayoutAreas
             var roles = assignment.Roles.ToList();
             roles.Add(new RoleAssignment { Role = selectedRole, Denied = false });
             var updated = node with { Content = assignment with { Roles = roles } };
-            host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null);
+            host.Workspace.RequestChange(DataChangeRequest.Update([updated]));
         });
     }
 
@@ -361,7 +360,7 @@ public static class AccessAssignmentLayoutAreas
             var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
             if (assignment == null) return;
             var updated = node with { Content = assignment with { AccessObject = newAccessObject } };
-            host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null);
+            host.Workspace.RequestChange(DataChangeRequest.Update([updated]));
         });
     }
 }

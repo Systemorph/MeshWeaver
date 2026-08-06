@@ -421,22 +421,22 @@ public class Workspace : IWorkspace
 
 
     /// <inheritdoc />
-    public IObservable<ActivityLog> Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, IMessageDelivery request) =>
+    public IObservable<ActivityLog> Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions) =>
         RequestChange(
             new DataChangeRequest()
             {
                 Updates = instances.ToImmutableList(),
                 Options = updateOptions,
                 ChangedBy = null
-            }, request
+            }
         );
 
 
 
     /// <inheritdoc />
-    public IObservable<ActivityLog> Delete(IReadOnlyCollection<object> instances, IMessageDelivery request) =>
+    public IObservable<ActivityLog> Delete(IReadOnlyCollection<object> instances) =>
         RequestChange(
-            new DataChangeRequest { Deletions = instances.ToImmutableList(), ChangedBy = null }, request
+            new DataChangeRequest { Deletions = instances.ToImmutableList(), ChangedBy = null }
         );
 
     /// <inheritdoc />
@@ -478,8 +478,8 @@ public class Workspace : IWorkspace
     public DataContext DataContext { get; }
 
     /// <inheritdoc />
-    public IObservable<ActivityLog> RequestChange(DataChangeRequest change, IMessageDelivery? request)
-        => this.Change(change, request);
+    public IObservable<ActivityLog> RequestChange(DataChangeRequest change)
+        => this.Change(change);
 
     private bool isDisposing;
 
