@@ -159,3 +159,11 @@ A new module needs a Space *and* a sync entry, and the order matters:
 - Is any new `shared=` reference **partition-level**, not into a sibling type's subtree?
 - Does every folder named by `installPaths`, an embed, or a `shared=` have a backing node file?
 - If the symptom smells like core behaviour: is the running image new enough?
+
+### Where this is going — auto-discovery per repo
+
+Requiring one entry per Space is why modules go missing, so the configuration is moving **up to the
+repo**: a configured plugin repo gains *auto-discover new modules* and *auto-sync discovered
+modules* settings, and a build event then provisions any new module as SYSTEM, writes its
+`_GitSync`, imports and recompiles it — with no per-Space interaction, gated by the free-vs-
+commercial permission rule. Removed modules are surfaced as orphaned, never auto-deleted.
