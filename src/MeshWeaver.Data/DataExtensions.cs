@@ -1639,11 +1639,6 @@ public static class DataExtensions
                 }
 
                 var isSatellite = IsSatelliteContentChange(changeRequest);
-                if (hub.Address.Type != AddressExtensions.ActivityType && !isSatellite)
-                {
-                    hub.ServiceProvider.GetService<ActivityLogBundler>()
-                        ?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
-                }
 
                 var hubPath = hub.Address.ToString();
 
@@ -2395,9 +2390,6 @@ public static class DataExtensions
         return workspace.RequestChange(changeRequest)
             .Select(log =>
             {
-                hub.ServiceProvider.GetService<ActivityLogBundler>()
-                    ?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
-
                 var response = new DataChangeResponse(hub.Version, log);
                 return response.Status == DataChangeStatus.Committed
                     ? UpdateUnifiedReferenceResponse.Ok(response.Version)
@@ -2549,9 +2541,6 @@ public static class DataExtensions
                 return workspace.RequestChange(changeRequest)
                     .Select(log =>
                     {
-                        hub.ServiceProvider.GetService<ActivityLogBundler>()
-                            ?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
-
                         var response = new DataChangeResponse(hub.Version, log);
                         return response.Status == DataChangeStatus.Committed
                             ? DeleteUnifiedReferenceResponse.Ok()
