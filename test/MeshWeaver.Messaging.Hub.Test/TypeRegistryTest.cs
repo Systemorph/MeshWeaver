@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.Loader;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Domain;
@@ -221,6 +222,48 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         property.SetGetMethod(getter);
         property.SetSetMethod(setter);
         return typeBuilder.CreateType()!;
+    }
+
+    /// <summary>
+    /// 🚨 A registry entry from a COLLECTIBLE assembly must not survive that assembly's load context.
+    ///
+    /// <para>Dynamically compiled nodes live in collectible <c>AssemblyLoadContext</c>s and every
+    /// recompile unloads the previous one. A registry that keeps the old <see cref="Type"/> both roots
+    /// the context (it can never be collected) and leaves a landmine: anything that walks the registry
+    /// afterwards dereferences freed metadata. <c>PolymorphicTypeInfoResolver.ComputeDerivedTypes</c>
+    /// does exactly that — it enumerates <c>Types</c> and calls <c>IsAssignableFrom</c> on each entry —
+    /// and a CI core dump caught it faulting there with FutuRe's node types at recompile v5/v8/v15
+    /// (<c>exit=139</c>, AccessViolation, no failing test to point at).</para>
+    ///
+    /// <para>Asserted as the INVARIANT rather than by provoking the crash: an access violation takes
+    /// the whole test host down, so "no stale entry survives unload" is what a test can pin
+    /// deterministically — and it is the property the fix has to hold.</para>
+    /// </summary>
+    [Fact]
+    public void CollectibleType_IsEvictedWhenItsLoadContextUnloads()
+    {
+        var typeRegistry = GetHost().ServiceProvider.GetRequiredService<ITypeRegistry>();
+
+        // A real collectible context holding a real assembly: load THIS assembly again into its own
+        // context, so the type has a genuinely distinct CLR identity — the recompile shape exactly.
+        var context = new AssemblyLoadContext("evict-test", isCollectible: true);
+        var reloaded = context.LoadFromAssemblyPath(typeof(HelloEvent).Assembly.Location);
+        var collectibleType = reloaded.GetType(typeof(HelloEvent).FullName!)!;
+        collectibleType.Assembly.IsCollectible.Should().BeTrue("the fixture must reproduce the recompile shape");
+        collectibleType.Should().NotBeSameAs(typeof(HelloEvent), "a reload is a new CLR identity");
+
+        typeRegistry.WithType(collectibleType, "EvictMe");
+        typeRegistry.TryGetType("EvictMe", out var registered).Should().BeTrue();
+        registered!.Type.Should().BeSameAs(collectibleType);
+
+        context.Unload();
+
+        // The registry must have dropped it — by name, by type, and (the one the crash walked) from
+        // the enumeration the polymorphic resolver iterates.
+        typeRegistry.TryGetType("EvictMe", out _).Should()
+            .BeFalse("an entry from an unloaded context is freed metadata, not a resolvable type");
+        typeRegistry.Types.Should().NotContain(t => t.Key == "EvictMe",
+            "ComputeDerivedTypes walks this enumeration and calls IsAssignableFrom on every entry");
     }
 
     private sealed class CapturingLogger(ConcurrentQueue<string> sink) : ILogger
