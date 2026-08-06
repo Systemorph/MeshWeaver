@@ -53,10 +53,10 @@ public class KernelControlResultNotLoggedTest(ITestOutputHelper output) : Monoli
             $"scalar-result-{40 + 2}-marker"
             """);
 
-        output.WriteLine($"control cell log ({controlLog.Length}):");
-        foreach (var m in controlLog) output.WriteLine($"   {(m.Length > 160 ? m[..160] + "…" : m)}");
-        output.WriteLine($"scalar cell log ({scalarLog.Length}):");
-        foreach (var m in scalarLog) output.WriteLine($"   {(m.Length > 160 ? m[..160] + "…" : m)}");
+        Output.WriteLine($"control cell log ({controlLog.Length}):");
+        foreach (var m in controlLog) Output.WriteLine($"   {(m.Length > 160 ? m[..160] + "…" : m)}");
+        Output.WriteLine($"scalar cell log ({scalarLog.Length}):");
+        foreach (var m in scalarLog) Output.WriteLine($"   {(m.Length > 160 ? m[..160] + "…" : m)}");
 
         // The scalar direction FIRST: it proves result-logging reached this log at all. Without it,
         // an empty log would satisfy the control assertion for entirely the wrong reason.
