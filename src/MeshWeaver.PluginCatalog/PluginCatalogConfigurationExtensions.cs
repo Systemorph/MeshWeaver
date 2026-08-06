@@ -44,7 +44,14 @@ public static class PluginCatalogConfigurationExtensions
                 // Resolves an inbound instance key to its instance + grant for the /api/plugins
                 // surface. Mesh-scoped singleton so its short-lived cache dies with the mesh
                 // (Doc/Architecture/NoStaticState) — a revoked grant must not outlive a test either.
-                .AddSingleton<InstanceRegistryAuthenticator>())
+                .AddSingleton<InstanceRegistryAuthenticator>()
+                // Re-runs the install hooks for ALREADY-installed packages once at startup. Packages
+                // installed before hooks existed never registered their agent/skill sources, so on a
+                // live instance every user's picker is missing them — and nothing else would fix it
+                // until the next package update. Idempotent: on a repaired instance it writes nothing.
+                .AddSingleton<InstalledPackageRepairService>()
+                .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
+                    sp => sp.GetRequiredService<InstalledPackageRepairService>()))
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();
