@@ -34,7 +34,8 @@ public static class InstancesSettingsTab
     private const string ResultDataId = "instanceRegisterResult";
     private const string ListDataId = "instanceList";
 
-    /// <summary>Registers the tab under Security, beside API Tokens.</summary>
+    /// <summary>Registers the tab under Security, beside API Tokens. Available to every signed-in
+    /// user — registering an installation grants it nothing, so it needs no permission gate.</summary>
     public static MessageHubConfiguration AddInstancesSettingsTab(this MessageHubConfiguration config) =>
         config.AddSettingsMenuItems(
             new SettingsMenuItemDefinition(

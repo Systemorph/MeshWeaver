@@ -873,6 +873,8 @@ public static class MemexConfiguration
                         // per-node hub so they resolve when anchored on the type roots (/Agent/AiAgents …).
                         .AddAiCatalogLayoutAreas()
                         .AddApiTokensSettingsTab()
+                        // Register your own MeshWeaver installation and get it an instance key.
+                        .AddInstancesSettingsTab()
                         // Per-user "Notifications" tab: choose bell/email per notification category.
                         .AddNotificationsSettingsTab()
                         // AI menu (top bar) — replaces the retired Models + AI Settings tabs. Each entry
@@ -910,6 +912,10 @@ public static class MemexConfiguration
                         // Coupons tab (platform admins only) — the Store's typed coupon codes at
                         // Admin/Coupons: live list, redemption tallies, create/open.
                         .AddCouponAdminSettingsTab()
+                        // Instance grants (platform admins only) — which plugins each registered
+                        // MeshWeaver installation may pull. Registration is self-service; granting
+                        // is not, and the grants live in the Admin partition out of the owner's reach.
+                        .AddInstanceGrantAdminSettingsTab()
                         // Instance Sync lives in the "Synchronizations" NODE-menu item (not a
                         // settings tab) — wired via AddInstanceSyncTypes on the mesh builder.
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
