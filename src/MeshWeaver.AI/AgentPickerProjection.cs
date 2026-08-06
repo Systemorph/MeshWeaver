@@ -104,6 +104,74 @@ public static class AgentPickerProjection
         => BuildRegistryQuery(SkillNodeType.NodeType, SkillSubNamespace, userPath, spacePath, "",
             PartitionOf(nodeTypePath));
 
+    /// <summary>
+    /// The registry queries in PRECEDENCE order — user, then node (space), then node type, then the
+    /// platform defaults — with the node and node-type layers widened to their partition's WHOLE
+    /// SUBTREE instead of just that partition's <c>/{sub}</c> namespace.
+    ///
+    /// <para><b>Why the two middle layers are wider.</b> A user's own registry entries live where the
+    /// user put them, which is by convention <c>{user}/Skill</c> — narrow and predictable. A space or a
+    /// plugin, by contrast, ships its entries wherever its content is organised: next to the types
+    /// they belong to, under feature folders, several levels deep. Requiring everything to sit in one
+    /// flat <c>{partition}/Skill</c> namespace means a skill authored beside the thing it describes is
+    /// simply never found. Scoping those two layers to the partition subtree makes placement a
+    /// content decision again, at the cost of one extra query per layer.</para>
+    ///
+    /// <para>Returned as SEPARATE query strings for
+    /// <see cref="MeshWeaver.Mesh.Services.MeshQueryRequest.Queries"/>' union — a subtree scope and an
+    /// exact-namespace membership cannot be folded into one <c>namespace:A|B|C</c> clause. Order is
+    /// preserved so callers that care about precedence (first match wins) can rely on it; the union
+    /// itself de-dupes by path.</para>
+    ///
+    /// <para>🚨 This does NOT change what the pickers issue — <see cref="BuildSkillQuery"/> remains the
+    /// single flat-namespace query the combobox and autocomplete use. This overload exists for
+    /// consumers that resolve the full inherited capability set for an agent round.</para>
+    /// </summary>
+    /// <param name="userPath">The user's home partition — contributes <c>{user}/{sub}</c>.</param>
+    /// <param name="spacePath">The context/space path — its partition contributes the whole subtree.</param>
+    /// <param name="nodeTypePath">The current node's TYPE path — its partition contributes the whole subtree.</param>
+    public static string[] BuildSkillSubtreeQueries(
+        string? userPath = null, string? spacePath = null, string? nodeTypePath = null)
+        => BuildSubtreeRegistryQueries(
+            SkillNodeType.NodeType, SkillSubNamespace, userPath, spacePath, PartitionOf(nodeTypePath));
+
+    /// <summary>
+    /// Assembles the precedence-ordered registry queries for
+    /// <see cref="BuildSkillSubtreeQueries"/>: the user's own flat namespace, then the space's and the
+    /// node type's partition SUBTREES, then the platform defaults. Reserved/rogue route partitions are
+    /// filtered exactly as in <see cref="BuildRegistryQuery"/> — a poisoned context must never fail the
+    /// whole query — and a partition contributing twice (space == node type) is listed once.
+    /// </summary>
+    private static string[] BuildSubtreeRegistryQueries(
+        string nodeType, string sub, string? userPath, string? spacePath, string? typePartition)
+    {
+        var queries = new List<string>();
+        var subtrees = new List<string>();
+
+        bool Usable(string? partition) =>
+            !string.IsNullOrEmpty(partition) && !ReservedPartitions.Contains(partition);
+
+        // 1. The user's own — flat namespace, as everywhere else.
+        if (Usable(userPath))
+            queries.Add($"namespace:{userPath}/{sub} nodeType:{nodeType}");
+
+        // 2. + 3. The space's and the node type's partitions — whole subtree each.
+        void AddSubtree(string? path)
+        {
+            var partition = PartitionOf(path);
+            if (!Usable(partition)) return;
+            if (subtrees.Contains(partition!, StringComparer.OrdinalIgnoreCase)) return;
+            subtrees.Add(partition!);
+            queries.Add($"path:{partition} scope:descendants nodeType:{nodeType}");
+        }
+        AddSubtree(spacePath);
+        AddSubtree(typePartition);
+
+        // 4. Platform defaults — always present, last.
+        queries.Add($"namespace:{sub} nodeType:{nodeType}");
+        return queries.ToArray();
+    }
+
     // Rogue/reserved ROUTE partitions — auto-minted page artifacts (login, welcome, settings, …; mirrors
     // the reserved-schema list in PostgreSqlCrossSchemaQueryProvider). They carry NO read policy and never
     // hold registry nodes, so including one in the namespace IN(...) — e.g. when the chat context resolves

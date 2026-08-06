@@ -717,6 +717,9 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             "Collaboration" => new CollaborationPlugin(Hub, chat).CreateTools(),
             "ContentCollection" => new ContentCollectionPlugin(Hub, chat).CreateTools(),
             "Lsp" => new LspPlugin(Hub, chat).CreateTools(),
+            // A per-thread working area backed by mesh nodes (MeshNodeAgentFileStore, our
+            // implementation of the Agent Framework's AgentFileStore abstraction).
+            "AgentFiles" => new AgentFilesPlugin(Hub, chat).CreateTools(),
             _ => Hub.ServiceProvider.GetServices<IAgentPlugin>()
                     .FirstOrDefault(p => string.Equals(p.Name, pluginRef.Name, StringComparison.OrdinalIgnoreCase))
                     ?.CreateTools()
