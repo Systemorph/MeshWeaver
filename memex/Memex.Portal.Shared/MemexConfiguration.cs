@@ -41,7 +41,6 @@ using MeshWeaver.PluginCatalog;
 using MeshWeaver.InstanceSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown.Export.Configuration;
-using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
@@ -925,8 +924,6 @@ public static class MemexConfiguration
                         // Content Indexing tab — Space nodes, only when the indexing pipeline is active.
                         .AddContentIndexSettingsTab();
                 })
-                // Add activity tracking to record user access patterns via ActivityLogBundler
-                .AddActivityTracking()
                 // SignalR mesh transport — external participants (native clients) join over a WebSocket.
                 .AddSignalRHub()
                 // MemexClient node type — per-installation client config under {user}/Client/{id}.
