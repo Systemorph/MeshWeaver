@@ -75,6 +75,7 @@ WEIGHTS=$(cat <<'EOF'
 49 MeshWeaver.Query.Test
 33 MeshWeaver.Auth.Test
 31 MeshWeaver.Graph.Test
+30 MeshWeaver.Hosting.Cosmos.Test
 30 MeshWeaver.PluginCatalog.Test
 27 MeshWeaver.NodeOperations.Test
 26 MeshWeaver.InstanceSync.Test
@@ -128,15 +129,21 @@ weights_file=$(mktemp)
 trap 'rm -f "$weights_file"' EXIT
 printf '%s\n' "$WEIGHTS" > "$weights_file"
 
-# Only Cosmos is excluded — it needs the Cosmos emulator, which is heavy to set
-# up on a runner. Everything else runs (PostgreSql via Testcontainers on the
-# pre-installed Docker, Orleans via in-proc TestCluster, Acme/FutuRe via dynamic
-# Code-piece compilation).
+# EVERY test project runs — there is no exclusion list. PostgreSql and Cosmos come up via
+# Testcontainers on the pre-installed Docker, Orleans via in-proc TestCluster, Acme/FutuRe via
+# dynamic Code-piece compilation.
+#
+# Cosmos was excluded until the emulator was verified on a runner: the CLASSIC
+# azure-cosmos-emulator image really is too heavy (multi-GB, minutes to start, HTTPS-only, and it
+# publishes a linux/amd64 manifest ONLY, so it cannot run on an arm64 dev machine at all). The
+# vnext-preview image CosmosFixture pins is ~0.68 GB, reports ready in ~10 s over plain HTTP, and
+# ships arm64 — so the project now runs like any other, and green-SKIPS (never reds) when Docker
+# is unavailable.
 #
 # The weights arrive as a FILE, not `awk -v` — macOS's awk rejects a -v value
 # containing newlines ("newline in string"), so the -v form silently worked on
 # the runner while failing for anyone verifying a change locally.
-find test -name '*.csproj' ! -path '*Cosmos*' ! -path '*/bin/*' \
+find test -name '*.csproj' ! -path '*/bin/*' \
   | awk -v dflt="$DEFAULT_WEIGHT" '
       FNR == NR { if (NF >= 2) { weight[$2] = $1; if (NF >= 3) parts[$2] = $3 } next }
       {

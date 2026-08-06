@@ -1,108 +1,40 @@
-﻿using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Cosmos;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh.Services;
-using Microsoft.Azure.Cosmos;
 using Xunit;
-using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Cosmos.Test;
 
 /// <summary>
 /// Tests for Cosmos DB Change Feed integration.
-/// These tests require the Cosmos DB Emulator to be running locally.
-/// Tests are skipped when the emulator is not available.
+///
+/// <para>
+/// These need a live endpoint and get it from the shared <see cref="CosmosFixture"/>. When none is
+/// available they <b>skip</b> via <see cref="CosmosFixture.SkipUnlessAvailable"/> — they do NOT
+/// silently return. The previous shape (<c>if (!_emulatorAvailable) return;</c>) reported PASS for
+/// a test that asserted nothing, which is indistinguishable in CI from real coverage.
+/// </para>
 /// </summary>
 [Trait("Category", "Cosmos")]
-public class CosmosChangeFeedTests : IAsyncLifetime
+[Collection("Cosmos")]
+public class CosmosChangeFeedTests(CosmosFixture fixture)
 {
-    private const string ConnectionString = "AccountEndpoint=https://localhost:8081/;AccountKey=C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==";
-    private const string DatabaseName = "MeshWeaverChangeFeedTest";
-    private const string NodesContainer = "nodes";
-    private const string PartitionsContainer = "partitions";
-    private const string LeasesContainer = "leases";
-
-    private CosmosClient? _cosmosClient;
-    private Database? _database;
-    private bool _emulatorAvailable;
-
-    public async ValueTask InitializeAsync()
-    {
-        try
-        {
-            _cosmosClient = new CosmosClient(ConnectionString, new CosmosClientOptions
-            {
-                ConnectionMode = ConnectionMode.Gateway,
-                RequestTimeout = TimeSpan.FromSeconds(5)
-            });
-
-            // Try to connect to the emulator
-            await _cosmosClient.ReadAccountAsync();
-
-            // Create database and containers for testing
-            var databaseResponse = await _cosmosClient.CreateDatabaseIfNotExistsAsync(DatabaseName);
-            _database = databaseResponse.Database;
-
-            await _database.CreateContainerIfNotExistsAsync(
-                new ContainerProperties(NodesContainer, "/namespace"));
-
-            await _database.CreateContainerIfNotExistsAsync(
-                new ContainerProperties(PartitionsContainer, "/partitionKey"));
-
-            await _database.CreateContainerIfNotExistsAsync(
-                new ContainerProperties(LeasesContainer, "/id"));
-
-            _emulatorAvailable = true;
-        }
-        catch
-        {
-            _emulatorAvailable = false;
-        }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_database != null)
-        {
-            try
-            {
-                await _database.DeleteAsync();
-            }
-            catch
-            {
-                // Ignore cleanup errors
-            }
-        }
-
-        _cosmosClient?.Dispose();
-    }
-
     [Fact(Timeout = 30000)]
     public async Task CosmosChangeFeedProcessor_StartsAndStops_Successfully()
     {
-        if (!_emulatorAvailable)
-        {
-            // Skip test if emulator not available
-            return;
-        }
+        fixture.SkipUnlessAvailable();
 
         // Arrange
         var changeNotifier = new System.Reactive.Subjects.Subject<DataChangeNotification>();
-        var nodesContainer = _database!.GetContainer(NodesContainer);
-        var leasesContainer = _database.GetContainer(LeasesContainer);
 
         var processor = new CosmosChangeFeedProcessor(
-            nodesContainer,
-            leasesContainer,
+            fixture.Nodes,
+            fixture.Leases,
             changeNotifier);
 
         // Act & Assert - Start
         await processor.StartAsync(TestContext.Current.CancellationToken);
-
-        // Should not throw
-        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Act & Assert - Stop
         await processor.StopAsync();
@@ -113,28 +45,21 @@ public class CosmosChangeFeedTests : IAsyncLifetime
     [Fact(Timeout = 30000)]
     public async Task CosmosStorageAdapter_WithChangeFeedProcessor_CanBeAttached()
     {
-        if (!_emulatorAvailable)
-        {
-            return;
-        }
+        fixture.SkipUnlessAvailable();
 
         // Arrange
         var changeNotifier = new System.Reactive.Subjects.Subject<DataChangeNotification>();
-        var nodesContainer = _database!.GetContainer(NodesContainer);
-        var partitionsContainer = _database.GetContainer(PartitionsContainer);
-        var leasesContainer = _database.GetContainer(LeasesContainer);
 
-        var storageAdapter = new CosmosStorageAdapter(nodesContainer, partitionsContainer);
+        var storageAdapter = new CosmosStorageAdapter(fixture.Nodes, fixture.Partitions);
         var processor = new CosmosChangeFeedProcessor(
-            nodesContainer,
-            leasesContainer,
+            fixture.Nodes,
+            fixture.Leases,
             changeNotifier);
 
         // Act
         storageAdapter.AttachChangeFeedProcessor(processor);
 
         await storageAdapter.StartChangeFeedProcessorAsync(TestContext.Current.CancellationToken);
-        await Task.Delay(100, TestContext.Current.CancellationToken);
         await storageAdapter.StopChangeFeedProcessorAsync();
 
         // Assert - Should not throw
@@ -144,17 +69,14 @@ public class CosmosChangeFeedTests : IAsyncLifetime
     [Fact(Timeout = 30000)]
     public async Task CreateLeaseContainerAsync_CreatesContainer_WhenNotExists()
     {
-        if (!_emulatorAvailable)
-        {
-            return;
-        }
+        fixture.SkipUnlessAvailable();
 
         // Arrange
         var testLeaseContainerName = $"test-leases-{Guid.NewGuid():N}";
 
         // Act
         var leaseContainer = await CosmosChangeFeedProcessor.CreateLeaseContainerAsync(
-            _database!,
+            fixture.Database,
             testLeaseContainerName,
             TestContext.Current.CancellationToken);
 
@@ -171,10 +93,11 @@ public class CosmosChangeFeedTests : IAsyncLifetime
     // change-feed primitive each storage adapter holds internally) are
     // System.Reactive types and don't need re-tested here.
 
-
     [Fact]
     public void DataChangeNotification_StaticFactoryMethods_CreateCorrectNotifications()
     {
+        // No endpoint needed — pure factory-method assertions.
+
         // Arrange
         var entity = new { Id = "1", Name = "Test" };
 
