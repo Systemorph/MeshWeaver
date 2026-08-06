@@ -114,7 +114,7 @@ public static class ExerciseLayoutAreas
         // flips existence; the node stream carries the authoritative live state
         // once the node is there.
         var attemptStream = hub
-            .GetQuery($"exercise-attempt:{resolvedAttemptPath}", $"path:{resolvedAttemptPath}")
+            .GetQuery($"exercise-attempt:{resolvedAttemptPath}", $"path:{resolvedAttemptPath} select:path")
             .Select(nodes => nodes.Any(n => n.Path == resolvedAttemptPath))
             .DistinctUntilChanged()
             .Select(exists => exists

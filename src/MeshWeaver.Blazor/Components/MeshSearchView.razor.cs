@@ -1473,7 +1473,10 @@ public partial class MeshSearchView : IDisposable
     /// </summary>
     private string BuildNavBelowQuery(string root)
     {
-        var q = $"{BuildTreeLevelQuery(root)} scope:descendants";
+        // CONTENT-BEARING: the nav cards resolve their thumbnail from CONTENT properties
+        // (avatar / logo / icon — MeshNodeThumbnailControl.GetImageUrlForNode), so a
+        // projection that omits `content` would blank every card image.
+        var q = $"{BuildTreeLevelQuery(root)} scope:descendants select:path,id,namespace,name,description,nodeType,icon,order,createdBy,lastModified,content";
         if (!_includeDocuments)
             q += " -nodeType:Document";
         return Regex.Replace(q, @"\s+", " ").Trim();
@@ -1482,7 +1485,7 @@ public partial class MeshSearchView : IDisposable
     /// <summary>Above = the ancestor chain INCLUDING self, so the builder can pull out the current node
     /// and order the rail. Real ancestors only — empty namespace segments are never nodes.</summary>
     private static string BuildNavAboveQuery(string root) =>
-        $"path:{root} scope:ancestorsandself is:main";
+        $"path:{root} scope:ancestorsandself is:main select:path,id,namespace,name,description,nodeType,icon,order,createdBy,lastModified,content";
 
     /// <summary>
     /// The navigator browses the graph when the box is empty; a non-empty box switches to a

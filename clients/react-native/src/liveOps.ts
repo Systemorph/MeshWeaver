@@ -7,6 +7,9 @@
 // parser; the Markdown leaf hydrates its HTML with the shared splitRenderedHtml — no bespoke parser.
 import { Mesh, type MeshWebConnection } from "@meshweaver/client-web";
 import type {
+  ContentListing,
+  DocumentDownload,
+  DocumentExportOptions,
   MarkdownCellSubmission,
   MarkdownKernelSession,
   MeshNodeState,
@@ -27,6 +30,90 @@ async function renderMarkdown(baseUrl: string, markdown: string, nodePath?: stri
   if (text.startsWith("Error:")) throw new Error(text);
   const parsed = JSON.parse(text) as { html?: string; codeSubmissions?: MarkdownCellSubmission[] };
   return { html: parsed.html ?? "", codeSubmissions: parsed.codeSubmissions ?? [] };
+}
+
+/**
+ * Content-collection listing (`POST {baseUrl}/api/mesh/content/list`) — the read half of the file
+ * browser. `path` is `{node}/{collection}[/{dir}]`. Same endpoint and same response shaping as
+ * portal-next's listContent; the sidecar is same-origin and anonymous, so there is no bearer token.
+ */
+async function listContent(baseUrl: string, path: string): Promise<ContentListing> {
+  const resp = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/mesh/content/list`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  const text = await resp.text();
+  if (!resp.ok || text.startsWith("Error:")) throw new Error(text || `content list failed (${resp.status})`);
+  const parsed = JSON.parse(text) as ContentListing;
+  return {
+    collection: String(parsed.collection ?? ""),
+    path: String(parsed.path ?? ""),
+    editable: !!parsed.editable,
+    items: Array.isArray(parsed.items) ? parsed.items : [],
+  };
+}
+
+/** Content upload (`POST {baseUrl}/api/mesh/upload`, multipart). */
+async function uploadContent(baseUrl: string, path: string, file: File): Promise<void> {
+  const form = new FormData();
+  form.append("path", path);
+  form.append("file", file as unknown as Blob, (file as { name?: string }).name ?? "upload");
+  const resp = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/mesh/upload`, { method: "POST", body: form });
+  const text = await resp.text();
+  if (!resp.ok || text.startsWith("Error:")) throw new Error(text || `upload failed (${resp.status})`);
+}
+
+/** Decode a byte[] wire value (base64 string, or a number array) to bytes. */
+function decodeBytes(raw: unknown): Uint8Array {
+  if (typeof raw === "string") {
+    const bin = globalThis.atob ? globalThis.atob(raw) : "";
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  return Array.isArray(raw) ? Uint8Array.from(raw as number[]) : new Uint8Array();
+}
+
+/**
+ * Run a document export the way the Blazor ExportDocumentView does: post ExportDocumentRequest to
+ * the SOURCE node hub, get back an ActivityPath, watch that Activity to a terminal Status, then
+ * decode the RenderedDocument (FileName, MimeType, Content:byte[]) from ActivityLog.ReturnValue.
+ */
+async function exportDocument(mesh: Mesh, sourcePath: string, options: DocumentExportOptions): Promise<DocumentDownload> {
+  if (!sourcePath) throw new Error("no source path to export");
+  const resp = await mesh.connection.observe(sourcePath, "ExportDocumentRequest", {
+    sourcePath,
+    options: {
+      format: options.format === "docx" ? "Docx" : "Pdf", // ExportFormat (string enum)
+      title: options.title ?? null,
+      includeChildren: options.includeChildren ?? false,
+      coverPage: options.coverPage ?? true,
+      tableOfContents: options.tableOfContents ?? true,
+    },
+  });
+  const m = resp.message as Record<string, unknown>;
+  const err = m["error"] ?? m["Error"];
+  if (err) throw new Error(String(err));
+  const activityPath = String(m["activityPath"] ?? m["ActivityPath"] ?? "");
+  if (!activityPath) throw new Error("export did not start (no activity path)");
+
+  for await (const node of mesh.watch(activityPath)) {
+    const content = (node.content ?? {}) as Record<string, unknown>;
+    const status = String(content["status"] ?? content["Status"] ?? "");
+    if (status === "Failed") throw new Error(String(content["error"] ?? content["Error"] ?? "export failed"));
+    if (status === "Succeeded" || status === "Completed") {
+      const rvRaw = content["returnValue"] ?? content["ReturnValue"];
+      const rv = (typeof rvRaw === "string" ? JSON.parse(rvRaw) : rvRaw) as Record<string, unknown> | null;
+      if (!rv) throw new Error("export produced no document");
+      return {
+        fileName: String(rv["fileName"] ?? rv["FileName"] ?? "document"),
+        mimeType: String(rv["mimeType"] ?? rv["MimeType"] ?? "application/octet-stream"),
+        bytes: decodeBytes(rv["content"] ?? rv["Content"]),
+      };
+    }
+  }
+  throw new Error("export activity ended without a document");
 }
 
 function newId(): string {
@@ -131,5 +218,11 @@ export function buildMeshOps(connection: MeshWebConnection, baseUrl: string, par
     startMarkdownKernel: (cells: MarkdownCellSubmission[]) => startMarkdownKernel(connection, mesh, partition, cells),
     getNode: (path: string) => mesh.get(path).then((n) => n.raw as Record<string, unknown>).catch(() => null),
     createNode: (node: Record<string, unknown>) => mesh.create(node).then(() => undefined),
+    // The file-browser and document-export ops. These are plain REST / mesh-request calls with no
+    // browser-only dependency, so RN wires the SAME three the web shells do — without them the
+    // FileBrowser and ExportDocument leaves could only ever render their "not available" state.
+    listContent: (path: string) => listContent(baseUrl, path),
+    uploadContent: (path: string, file: File) => uploadContent(baseUrl, path, file),
+    exportDocument: (sourcePath: string, options: DocumentExportOptions) => exportDocument(mesh, sourcePath, options),
   };
 }

@@ -11,6 +11,7 @@ export default defineConfig({
       "@meshweaver/react/core": fileURLToPath(new URL("../react/src/core.ts", import.meta.url)),
       "react-native": fileURLToPath(new URL("./test/react-native.mock.tsx", import.meta.url)),
       "react-native-svg": fileURLToPath(new URL("./test/react-native-svg.mock.tsx", import.meta.url)),
+      "expo-av": fileURLToPath(new URL("./test/expo-av.mock.tsx", import.meta.url)),
     },
   },
   test: {

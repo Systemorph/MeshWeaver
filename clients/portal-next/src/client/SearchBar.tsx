@@ -27,8 +27,8 @@ import { Search20Regular } from "@fluentui/react-icons";
 import type { AutocompleteRow, LiveMesh, MeshNodeRow } from "./live";
 import { useLiveConnection, useNavigationState } from "./LiveConnection";
 import { NodeIcon, nodeTypeDisplay } from "./icons";
+import { useLocalize } from "@meshweaver/react";
 
-const SEARCH_PLACEHOLDER = "Search the mesh... (e.g. nodeType:Story status:Open)";
 const MAX_RESULTS = 10;
 const CANDIDATE_POOL_SIZE = 50;
 const DEBOUNCE_MS = 250;
@@ -141,6 +141,7 @@ async function fetchSuggestions(
 // ---- the component ---------------------------------------------------------------------------
 
 export function SearchBar() {
+  const t = useLocalize();
   const router = useRouter();
   const live = useLiveConnection();
   const nav = useNavigationState();
@@ -321,7 +322,7 @@ export function SearchBar() {
       <Input
         ref={inputRef}
         contentBefore={<Search20Regular />}
-        placeholder={SEARCH_PLACEHOLDER}
+        placeholder={t("search.meshPlaceholder")}
         value={value}
         autoComplete="off"
         appearance="filled-lighter"
@@ -349,7 +350,7 @@ export function SearchBar() {
           }}
         >
           {isLoading && suggestions.length === 0 ? (
-            <div style={{ padding: "10px 12px", color: "var(--colorNeutralForeground3)" }}>Searching...</div>
+            <div style={{ padding: "10px 12px", color: "var(--colorNeutralForeground3)" }}>{t("common.searching")}</div>
           ) : (
             suggestions.map((s, index) => (
               <div

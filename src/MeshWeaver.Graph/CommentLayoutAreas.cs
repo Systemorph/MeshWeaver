@@ -132,7 +132,7 @@ public static class CommentLayoutAreas
         return Observable.Using(
             () => host.Workspace.GetQuery(
                     $"replies:{hubPath}",
-                    $"namespace:{hubPath} nodeType:{CommentNodeType.NodeType}")
+                    $"namespace:{hubPath} nodeType:{CommentNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
                 .Subscribe(
                     snapshot =>
                     {
