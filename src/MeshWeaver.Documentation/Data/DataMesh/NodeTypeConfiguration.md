@@ -279,7 +279,7 @@ var rows = string.Join("\n", props.Select(p =>
     $"| **{p.Item1}** | `{p.Item2}` |"));
 
 MeshWeaver.Layout.Controls.Markdown(
-    $"### NodeType summary card\n\n| Property | Value |\n|---|---|\n{rows}");
+    $"### NodeType summary card\n\n| Property | Value |\n|---|---|\n{rows}")
 ```
 
 ---
