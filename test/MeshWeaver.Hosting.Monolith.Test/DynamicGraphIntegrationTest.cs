@@ -927,18 +927,25 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     /// Tests the complete flow: node loading, type compilation, and HubConfiguration setting.
     /// This is the end-to-end test for the production scenario.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    // 🚨 The waits below are EXPLICIT because this test performs a real on-demand Roslyn compile.
+    // The default stream-assertion budget is 10s (ObservableAssertions.DefaultTimeout), which a
+    // compile can exceed on a loaded CI runner — the test then fails with "did not emit within 10s"
+    // on PRs that changed nothing (#834). The declared Fact budget already anticipated a slow
+    // operation; the inner waits now match it instead of silently capping at half.
+    [Fact(Timeout = 60_000)]
     public async Task FileSystem_Organizations_GetsHubConfiguration_FromCompiledAssembly()
     {
+        var compileBudget = TimeSpan.FromSeconds(30);
+
         // Act - get the Organizations node (triggers on-demand compilation from disk files)
-        var node = await ReadNode("Organizations").Should().Emit();
+        var node = await ReadNode("Organizations").Should(compileBudget).Emit();
 
         // Assert
         node.Should().NotBeNull("Organizations node should exist on disk");
 
         // Resolve via INodeConfigurationResolver to trigger compilation and populate HubConfiguration.
         var resolver = Mesh.ServiceProvider.GetRequiredService<INodeConfigurationResolver>();
-        node = await resolver.ResolveConfiguration(node!).Should().Emit();
+        node = await resolver.ResolveConfiguration(node!).Should(compileBudget).Emit();
 
         node.HubConfiguration.Should().NotBeNull(
             "Organizations node should have HubConfiguration from the compiled assembly. " +
