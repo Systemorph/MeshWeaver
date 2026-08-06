@@ -89,14 +89,19 @@ public static class SchemaInitialization
         await using (var ensureVUser = dataSource.CreateCommand("SELECT public.ensure_partition_schema('vuser')"))
             await ensureVUser.ExecuteNonQueryAsync();
 
-        // NOTE: the framework schemas `auth` (V27 access-object mirror) and `system_access`
-        // (global/root-scope grants) are NOT created here. The portal's
-        // PostgreSqlPartitionSubscriptionHostedService provisions them (and every other
-        // registered framework partition) at boot, BEFORE any user write — so the mirror
-        // trigger always has a destination. Creating them here would also make
-        // DetectFreshDbAsync see `auth.mesh_nodes`/`system_access.mesh_nodes` and wrongly
-        // classify a fresh DB as non-fresh, running the legacy `user`-schema repair chain
-        // (V05+, which references the long-gone `user` schema) instead of fast-forwarding.
+        // NOTE: `auth` (the V27 access-object mirror) IS created — but by
+        // PostgreSqlSchemaInitializer.InitializeAsync above (step 4.5), not here: the per-boot
+        // auth-mirror self-heal that runs at the end of that same init installs the global
+        // group-recompute triggers ON auth.mesh_nodes and no-ops when the schema is absent, so
+        // the destination has to exist inside that init or a fresh DB never gets them.
+        // DetectFreshDbAsync excludes 'auth', so this does not flip a fresh DB to "existing".
+        //
+        // `system_access` (global/root-scope grants) is NOT created here — nothing in the
+        // migration depends on it, DetectFreshDbAsync does NOT exclude it (creating it would
+        // wrongly classify a fresh DB as non-fresh and run the legacy `user`-schema repair chain,
+        // V05+, which references the long-gone `user` schema), and the portal's
+        // PostgreSqlPartitionSubscriptionHostedService provisions it (and every other registered
+        // framework partition) at boot, BEFORE any user write.
 
         // Detect fresh DB: no CONTENT partition schemas (i.e., no schemas with a mesh_nodes
         // table) existed before this run. Framework schemas don't count.
