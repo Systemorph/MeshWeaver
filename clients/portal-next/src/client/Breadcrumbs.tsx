@@ -11,12 +11,14 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Home16Regular } from "@fluentui/react-icons";
 import { useLiveConnection, useNavigationState } from "./LiveConnection";
+import { useLocalize } from "@meshweaver/react";
 
 function str(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
 export function Breadcrumbs(): ReactNode {
+  const t = useLocalize();
   const { path } = useNavigationState();
   const { state } = useLiveConnection();
   const mesh = state.kind === "live" ? state.mesh : null;
@@ -47,7 +49,7 @@ export function Breadcrumbs(): ReactNode {
 
   return (
     <nav
-      aria-label="Breadcrumb"
+      aria-label={t("menu.breadcrumb")}
       data-mw-breadcrumbs
       style={{
         display: "flex",

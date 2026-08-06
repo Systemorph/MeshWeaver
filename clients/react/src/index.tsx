@@ -130,3 +130,15 @@ export {
 export { resolveIconByName } from "./controls/icon.js";
 export { ensureMeshStyles, meshStylesText, GRID_BREAKPOINTS, MESH_STYLES_ID } from "./render/meshStyles.js";
 export { str, useClick, useField, useOptions, useText, type Field } from "./controls/common.js";
+// Localization — same surface as the core entry (see src/i18n): resolve every user-visible string
+// through these, never a hard-coded literal.
+export {
+  DEFAULT_LOCALE,
+  LOCALE_DISPLAY_NAMES,
+  SUPPORTED_LOCALES,
+  localize,
+  localizePlural,
+  resolveLocale,
+  tryMatchLocale,
+} from "./i18n/localize.js";
+export { LocaleProvider, useLocale, useLocalize, type LocaleContextValue } from "./i18n/LocaleContext.js";

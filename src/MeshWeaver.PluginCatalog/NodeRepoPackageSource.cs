@@ -120,8 +120,16 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         Kind = PackageKind.NodeRepo,
                         TargetPartition = id,
                         SourceFolder = id,
-                        Version = snapshot.CommitSha,
-                        ModuleVersion = moduleManifests.TryGetValue(id, out var mm) ? mm.ModuleVersion : null,
+                        // 🚨 The module's OWN released SemVer when it has one, and only then the
+                        // whole-repo commit sha. A sha is unorderable and repo-wide: every module in
+                        // the repo "changed version" whenever any one of them did, and no dependent
+                        // could express a constraint against it. The manifest's version is per module
+                        // and ordered, so it is what a pin resolves to; the sha stays as the fallback
+                        // for a module whose manifest predates versioning.
+                        Version = moduleManifests.TryGetValue(id, out var mm) && mm.Version is { } semver
+                            ? semver
+                            : snapshot.CommitSha,
+                        ModuleVersion = mm?.ModuleVersion,
                         // The candidate file set at this ref. Diffed against the install record's
                         // InstalledFiles to produce the added/modified/removed list; null when the
                         // module ships no manifest.lock (legacy commit-sha comparison applies).

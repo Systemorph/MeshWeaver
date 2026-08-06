@@ -235,7 +235,7 @@ public static class CommentsView
         return Observable.Using(
             () => host.Workspace.GetQuery(
                     $"comments:{nodePath}",
-                    $"namespace:{nodePath}/{CommentsExtensions.CommentPartition} nodeType:{CommentNodeType.NodeType}")
+                    $"namespace:{nodePath}/{CommentsExtensions.CommentPartition} nodeType:{CommentNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
                 .Subscribe(
                     snapshot =>
                     {

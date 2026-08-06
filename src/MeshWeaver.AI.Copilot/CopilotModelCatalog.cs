@@ -57,7 +57,7 @@ public sealed class CopilotModelCatalog
             // under the namespace don't leak into the picker.
             .GetQuery(
                 $"{LanguageModelNodeType.NodeType}|Copilot",
-                $"namespace:{LanguageModelNodeType.RootNamespace} nodeType:{LanguageModelNodeType.NodeType} provider:Copilot")
+                $"namespace:{LanguageModelNodeType.RootNamespace} nodeType:{LanguageModelNodeType.NodeType} provider:Copilot select:path,id")
             .Select(nodes => (IReadOnlyList<string>)nodes
                 .Select(n => n.Id)
                 .Where(id => !string.IsNullOrEmpty(id))

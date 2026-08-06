@@ -22,7 +22,7 @@ A node repo is exactly the on-disk shape the sample partitions use — a `*.json
 `Source/` (and `Test/`) C# — e.g. the Slide type:
 
 ```text
-Slides/index.json                 the plugin's Space root (the "package node") — INSIDE the folder
+Slides/index.json                 the plugin ROOT — nodeType "Store/Plugin", content PluginContent (INSIDE the folder)
 Slides/Slide.json                 a NodeType node (Content = NodeTypeDefinition{ configuration })
 Slides/Slide/Source/*.cs          the content type + layout areas — compiled live
 Slides/Slide/Test/*.cs            the type's own tests — compiled together with Source
@@ -34,11 +34,27 @@ be part of the partition.
 
 | Concept | Where it lives (node-native) |
 |---|---|
-| The "manifest" | the plugin's **Space root** (`<Plugin>/index.json`) — its Content carries e.g. `minMeshVersion` |
+| The "manifest" | the plugin **root** (`<Plugin>/index.json`, `nodeType: "Store/Plugin"`) — its `PluginContent` carries the cover, price, entry point and install paths |
 | The "kind" (content vs code) | the child's **NodeType** — a NodeType-with-`Source/` vs plain content |
 | The "version" | the **node's version**, mesh-tracked, bumped on every change — nobody hand-bumps a field |
 | The "installer" | **GitSync** — `GitHubSyncService.ImportFromGitHub` / `StaticRepoImporter` |
 | "what to install" | the **StaticRepoSync partition list** |
+
+### The plugin root is a `Store/Plugin` node
+
+The root `<Plugin>/index.json` is **`nodeType: "Store/Plugin"`** — the Store's generic root type —
+carrying a **`PluginContent`** (the cover `Body`, `Description`, `Video`/`Poster`, the `OgImage`
+social preview, `EntryPoint`, `MarketingPath`, `SetupPath`, `InstallPaths`, price). Card-level
+identity (Name, the one-line Description tagline, Icon, Category) stays on the node itself. The
+`Store/Plugin` type owns the install funnel: the anonymous cover, the auto-gated children
+(`AddPluginGating`) and the store card. The canonical reference for the repo shape is
+**`MeshWeaver.Plugins/AGENTS.md`**.
+
+- **Exception — a `Space` root** is correct only when the root's own content IS a partition-level
+  `NodeTypeDefinition` compiling a shared `Source/` model (e.g. `UWDeepfield`, in
+  `MeshWeaver.Reinsurance`); retyping it to `Store/Plugin` would kill that compile.
+- **Deprecated — a `PluginManifest` root** is the pre-"Store retype" form. A bare manifest root has
+  no home page and reads as broken, so don't author new plugins this way.
 
 ## Install = GitSync
 
@@ -63,7 +79,7 @@ configured git source (the plugins repo):
 
 | Verb | Returns |
 |---|---|
-| `GET /api/plugins` | `{ packages:[PackageManifest…] }` — the curated modules from the configured source (node-native `<Plugin>/index.json` Space roots by default) |
+| `GET /api/plugins` | `{ packages:[PackageManifest…] }` — the curated modules from the configured source (node-native `<Plugin>/index.json` **Store/Plugin** roots by default) |
 | `POST /api/plugins/files` `{id}` | `{ files:[{relativePath, content}…] }` — the files that plugin (by id) ships |
 
 A consuming instance browses this from its **Plugin Catalog** admin tab (Settings ▸ Administration,
