@@ -18,37 +18,42 @@ public interface IWorkspace : IAsyncDisposable
     IReadOnlyCollection<Type> MappedTypes { get; }
     /// <summary>Creates or updates the given instances using default update options.</summary>
     /// <param name="instances">The entities to upsert.</param>
-    /// <param name="activity">Optional activity to log the change against; may be null.</param>
     /// <param name="request">The originating message delivery, used for response correlation.</param>
-    void Update(IReadOnlyCollection<object> instances, Activity? activity, IMessageDelivery request) => Update(instances, new(), activity, request);
+    /// <returns>The change's <see cref="ActivityLog"/>; see <see cref="RequestChange"/> for its semantics.</returns>
+    IObservable<ActivityLog> Update(IReadOnlyCollection<object> instances, IMessageDelivery request) => Update(instances, new(), request);
     /// <summary>Creates or updates the given instances using the supplied update options.</summary>
     /// <param name="instances">The entities to upsert.</param>
     /// <param name="updateOptions">Options controlling merge vs. snapshot semantics.</param>
-    /// <param name="activity">Optional activity to log the change against; may be null.</param>
     /// <param name="request">The originating message delivery, used for response correlation.</param>
-    void Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, Activity? activity, IMessageDelivery request);
+    /// <returns>The change's <see cref="ActivityLog"/>; see <see cref="RequestChange"/> for its semantics.</returns>
+    IObservable<ActivityLog> Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, IMessageDelivery request);
     /// <summary>Creates or updates a single instance using default update options.</summary>
     /// <param name="instance">The entity to upsert.</param>
-    /// <param name="activity">Optional activity to log the change against; may be null.</param>
     /// <param name="request">The originating message delivery, used for response correlation.</param>
-    void Update(object instance, Activity? activity, IMessageDelivery request) => Update([instance], activity, request);
+    /// <returns>The change's <see cref="ActivityLog"/>; see <see cref="RequestChange"/> for its semantics.</returns>
+    IObservable<ActivityLog> Update(object instance, IMessageDelivery request) => Update([instance], request);
 
     /// <summary>Deletes the given instances from their mapped collections.</summary>
     /// <param name="instances">The entities to delete.</param>
-    /// <param name="activity">Optional activity to log the change against; may be null.</param>
     /// <param name="request">The originating message delivery, used for response correlation.</param>
-    void Delete(IReadOnlyCollection<object> instances, Activity? activity, IMessageDelivery request);
+    /// <returns>The change's <see cref="ActivityLog"/>; see <see cref="RequestChange"/> for its semantics.</returns>
+    IObservable<ActivityLog> Delete(IReadOnlyCollection<object> instances, IMessageDelivery request);
     /// <summary>Deletes a single instance from its mapped collection.</summary>
     /// <param name="instance">The entity to delete.</param>
-    /// <param name="activity">Optional activity to log the change against; may be null.</param>
     /// <param name="request">The originating message delivery, used for response correlation.</param>
-    void Delete(object instance, Activity? activity, IMessageDelivery request) => Delete([instance], activity, request);
+    /// <returns>The change's <see cref="ActivityLog"/>; see <see cref="RequestChange"/> for its semantics.</returns>
+    IObservable<ActivityLog> Delete(object instance, IMessageDelivery request) => Delete([instance], request);
 
-    /// <summary>Validates and applies a data change request (creations, updates and deletions) to the workspace streams.</summary>
+    /// <summary>
+    /// Validates and applies a data change request (creations, updates and deletions) to the workspace streams.
+    /// <para>The write is issued EAGERLY (on call); the returned observable emits ONE
+    /// <see cref="ActivityLog"/> — carrying validation failures and per-stream errors — once every
+    /// affected stream has applied its part, then completes. Ignore it for a fire-and-run write.</para>
+    /// </summary>
     /// <param name="change">The change request describing the creations, updates and deletions.</param>
-    /// <param name="activity">Optional activity to log the change against; may be null.</param>
     /// <param name="request">Optional originating message delivery, used for response correlation.</param>
-    public void RequestChange(DataChangeRequest change, Activity? activity, IMessageDelivery? request);
+    /// <returns>A single-emission observable carrying the finished <see cref="ActivityLog"/>.</returns>
+    public IObservable<ActivityLog> RequestChange(DataChangeRequest change, IMessageDelivery? request);
     /// <summary>Gets a synchronization stream over the collections backing the given CLR types.</summary>
     /// <param name="types">The CLR types whose collections should be combined into the stream.</param>
     /// <returns>A synchronization stream of the combined entity store.</returns>

@@ -126,7 +126,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         {
             Name = "Updated Name"
         };
-        workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
+        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null);
 
         // Wait for the update to be reflected in the stream (reactive query)
         await meshNodeStream!
@@ -171,7 +171,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
             Content = updatedContent,
             Name = "Synced Title"
         };
-        workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
+        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null);
 
         // Wait for the update to be reflected in the stream (reactive query)
         await nodeStream!
@@ -242,7 +242,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         var currentNode = nodes!.First();
         var updatedContent = new TestContent { Id = "1", Title = "Updated Title", Notes = "Notes" };
         var updatedNode = currentNode with { Content = updatedContent, Name = "Updated Title" };
-        workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
+        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null);
 
         // Wait for the update to be reflected in the stream (reactive query)
         await nodeStream!

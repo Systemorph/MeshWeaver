@@ -44,6 +44,16 @@ public class ImportManager
     }
 
     /// <summary>
+    /// Folds a data change's <see cref="ActivityLog"/> into the import activity, so a save
+    /// failure or warning is reported where the user reads it — on the import's own log.
+    /// </summary>
+    private static void ForwardToActivity(Activity activity, ActivityLog changeLog)
+    {
+        foreach (var message in changeLog.Messages)
+            activity.LogMessage(message.Message, message.LogLevel, message.Scopes);
+    }
+
+    /// <summary>
     /// Handles an incoming import request: runs the (cold) import pipeline under an activity,
     /// saves the resulting instances on success, and posts an <see cref="ImportResponse"/>
     /// (with the activity log) on completion or failure.
@@ -95,14 +105,16 @@ public class ImportManager
                                 Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
                                 return;
                             }
+                            // The save reports into the IMPORT activity — the activity is the unit
+                            // of INTENT ("import this file"); the data change itself no longer
+                            // spins one up, it just hands its log back here.
                             Configuration.Workspace.RequestChange(
                                 DataChangeRequest.Update(
                                     objectsToSave.ToArray(),
                                     null,
                                     request.Message.UpdateOptions),
-                                activity,
                                 request
-                            );
+                            ).Subscribe(saveLog => ForwardToActivity(activity, saveLog));
 
                             // Check if ImportConfiguration should be saved
                             if (request.Message.Configuration != null)
@@ -112,9 +124,8 @@ public class ImportManager
                                 {
                                     Configuration.Workspace.RequestChange(
                                         DataChangeRequest.Update([configToSave]),
-                                        activity,
                                         request
-                                    );
+                                    ).Subscribe(saveLog => ForwardToActivity(activity, saveLog));
                                     activity.LogInformation("Including ImportConfiguration in save operation: {ConfigType}", configToSave.GetType().Name);
                                 }
                             }

@@ -1,6 +1,8 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Data;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Json.Patch;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
@@ -18,90 +20,78 @@ public static class WorkspaceOperations
 {
     /// <summary>
     /// Validates the creations, updates and deletions in a change request and, if all are valid,
-    /// applies them to the matching data-source streams. Validation failures are logged on the
-    /// activity and the change is not applied.
+    /// applies them to the matching data-source streams. Validation failures are reported on the
+    /// returned <see cref="ActivityLog"/> and the change is not applied.
+    ///
+    /// <para>🚨 The write is issued EAGERLY — on call, exactly as before — so a caller that ignores
+    /// the result still writes. The returned observable REPORTS the outcome: it emits ONE
+    /// <see cref="ActivityLog"/> once every affected data-source stream has applied its part, then
+    /// completes (replayed to late subscribers). Subscribe when you need the log — which validations
+    /// failed, which stream errored; ignore it for fire-and-run writes.</para>
+    ///
+    /// <para>This replaces the former <c>Activity</c> parameter. An <c>Activity</c> is a hosted HUB;
+    /// creating one per data change spun a hub (plus one per data source) purely to latch completion
+    /// and accumulate messages — which is what this observable expresses natively. <c>Activity</c>
+    /// stays for INTENT-level work (import, GitSync, compile) where the activity is a persisted node
+    /// with live progress.</para>
     /// </summary>
     /// <param name="workspace">The workspace to apply the change to.</param>
     /// <param name="change">The change request to validate and apply.</param>
-    /// <param name="activity">Optional activity for logging validation and update progress; may be null.</param>
     /// <param name="request">Optional originating message delivery for failure propagation.</param>
-    public static void Change(this IWorkspace workspace, DataChangeRequest change, Activity? activity, IMessageDelivery? request)
+    /// <returns>A single-emission observable carrying the finished <see cref="ActivityLog"/>.</returns>
+    public static IObservable<ActivityLog> Change(this IWorkspace workspace, DataChangeRequest change, IMessageDelivery? request)
     {
-        var allValid = true;
         var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger(typeof(WorkspaceOperations));
         logger.LogDebug("Updating workstream for workspace {Address} with {Creations} creations, {Updates} updates, {Deletions} deletions", workspace.Hub.Address, change.Creations.Count(), change.Updates.Count(), change.Deletions.Count());
 
-        if (change.Creations.Any())
+        var (isValid, messages) = workspace.Validate(change, logger);
+        if (!isValid)
+            return Observable.Return(Finish(workspace.Hub, messages));
+
+        logger.LogDebug("Update called: Creations={Creations}, Updates={Updates}, Deletions={Deletions}",
+            change.Creations.Count(), change.Updates.Count(), change.Deletions.Count());
+        return workspace.UpdateStreams(change, request, messages, logger);
+    }
+
+    /// <summary>
+    /// Runs the creation / update / deletion validators and folds every failure into log messages.
+    /// Validation is pure and synchronous — it never touches a stream.
+    /// </summary>
+    private static (bool IsValid, ImmutableList<LogMessage> Messages) Validate(
+        this IWorkspace workspace, DataChangeRequest change, ILogger logger)
+    {
+        var messages = ImmutableList<LogMessage>.Empty;
+        var isValid = true;
+
+        void Collect((bool IsValid, List<ValidationResult> Results) outcome)
         {
-            var (isValid, results) = workspace.ValidateCreation(change.Creations);
-            if (!isValid)
+            if (outcome.IsValid)
+                return;
+            isValid = false;
+            foreach (var validationResult in outcome.Results.Where(r => r != ValidationResult.Success))
             {
-                allValid = false;
-                foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
+                var message = $"{string.Join(", ", validationResult.MemberNames)} invalid: {validationResult.ErrorMessage}";
+                messages = messages.Add(new LogMessage(message, LogLevel.Error)
                 {
-                    var scopes = new List<KeyValuePair<string, object>>
-                    {
+                    Scopes =
+                    [
                         new("members", validationResult.MemberNames.ToArray()),
                         new("error", validationResult.ErrorMessage!)
-                    };
-                    activity?.LogError($"{validationResult.ErrorMessage}", scopes);
-                    var message =
-                        $"{string.Join(", ", validationResult.MemberNames)} invalid: {validationResult.ErrorMessage!}";
-
-                    // Log validation errors (activityId: {activityId})
-                    workspace.Hub.ServiceProvider.GetService<ILogger>()?.LogWarning("Validation error in activityId {ActivityId}: {Message}", activity?.Id, message);
-                }
+                    ]
+                });
+                logger.LogWarning("Validation error on {Address}: {Message}", workspace.Hub.Address, message);
             }
-
         }
 
+        if (change.Creations.Any())
+            Collect(workspace.ValidateCreation(change.Creations));
         if (change.Updates.Any())
-        {
-            var (isValid, results) = workspace.ValidateUpdate(change.Updates);
-            if (!isValid)
-            {
-                allValid = false;
-                foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
-                {
-                    var scopes = new List<KeyValuePair<string, object>>
-                    {
-                        new("members", validationResult.MemberNames.ToArray())
-                    };
-                    var message =
-                        $"{string.Join(", ", validationResult.MemberNames)} invalid: {validationResult.ErrorMessage!}";
-
-                    // Log validation errors (activityId: {activityId})
-                    activity?.LogError($"Validation error in {message}", scopes);
-                }
-            }
-
-        }
-
+            Collect(workspace.ValidateUpdate(change.Updates));
         if (change.Deletions.Any())
-        {
-            var (isValid, results) = workspace.ValidateDeletion(change.Deletions);
-            if (!isValid)
-            {
-                allValid = false;
-                foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
-                {
-                    var scopes = new List<KeyValuePair<string, object>>
-                    {
-                        new("members", validationResult.MemberNames.ToArray())
-                    };
-                    var message = string.Format("{0} invalid: {1}", string.Join(", ", validationResult.MemberNames), validationResult.ErrorMessage!);
+            Collect(workspace.ValidateDeletion(change.Deletions));
 
-                    // Log validation errors (activityId: {activityId})
-                    activity?.LogError($"Validation error in activityId {message}", scopes);
-                }
-            }
-        }
-
-        if (allValid)
-        {
-            Update(activity, workspace, change, request);
-        }
+        return (isValid, messages);
     }
 
     private static void UpdateFailed(IMessageDelivery? delivery, Exception? exception)
@@ -110,59 +100,112 @@ public static class WorkspaceOperations
             throw new DataException($"Data update failed: {exception.Message}", exception);
     }
 
-    private static void Update(Activity? activity, IWorkspace workspace, DataChangeRequest change, IMessageDelivery? request)
+    private static IObservable<ActivityLog> UpdateStreams(this IWorkspace workspace, DataChangeRequest change,
+        IMessageDelivery? request, ImmutableList<LogMessage> messages, ILogger logger)
     {
-        activity?.LogInformation("Starting Update");
-        var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
-            .CreateLogger(typeof(WorkspaceOperations));
-        logger.LogDebug("Update called: Creations={Creations}, Updates={Updates}, Deletions={Deletions}",
-            change.Creations.Count(), change.Updates.Count(), change.Deletions.Count());
-        workspace.UpdateStreams(change, activity, request);
-    }
-
-    private static void UpdateStreams(this IWorkspace workspace, DataChangeRequest change, Activity? activity, IMessageDelivery? request)
-    {
-        var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
-            .CreateLogger(typeof(WorkspaceOperations));
         logger.LogDebug("Updating streams for workspace {Address} with {Creations} creations, {Updates} updates, {Deletions} deletions", workspace.Hub.Address, change.Creations.Count(), change.Updates.Count(), change.Deletions.Count());
-        foreach (var group in
-                 change.Creations.Select(i => ClassifyForRouting(workspace, i, OperationType.Add))
-                     .Concat(change.Updates.Select(i => ClassifyForRouting(workspace, i, OperationType.Replace)))
-                     .Concat(change.Deletions.Select(i => ClassifyForRouting(workspace, i, OperationType.Remove)))
-                     .GroupBy(x => (x.DataSource, x.Partition)))
-        {
-            if (group.Key.DataSource is null)
-            {
-                activity?.LogWarning("Types {types} could not be mapped to data source", string.Join(", ", group.Select(i => i.Instance.GetType().Name).Distinct()));
-                continue;
-            }
 
-            var stream = group.Key.DataSource.GetStreamForPartition(group.Key.Partition);
-            if (stream is null)
-                throw new DataException($"Data source {group.Key.DataSource.Reference} does not have a stream for partition {group.Key.Partition}");
-            if (!stream.Hub.Started.IsCompleted)
-                throw new DataException($"Data source {group.Key.DataSource.Reference} for partition {group.Key.Partition} is not initialized.");
+        var groups = change.Creations.Select(i => ClassifyForRouting(workspace, i, OperationType.Add))
+            .Concat(change.Updates.Select(i => ClassifyForRouting(workspace, i, OperationType.Replace)))
+            .Concat(change.Deletions.Select(i => ClassifyForRouting(workspace, i, OperationType.Remove)))
+            .GroupBy(x => (x.DataSource, x.Partition))
+            .ToArray();
 
-            // Start sub-activity for data update
-            var subActivity = activity?.StartSubActivity(ActivityCategory.DataUpdate);
+        messages = groups.Where(g => g.Key.DataSource is null)
+            .Aggregate(messages, (acc, g) => acc.Add(new LogMessage(
+                $"Types {string.Join(", ", g.Select(i => i.Instance.GetType().Name).Distinct())} could not be mapped to data source",
+                LogLevel.Warning)));
 
+        // ToArray() forces the writes NOW — Change is eager by contract; the observables only
+        // report when each stream has applied its part.
+        var applied = groups.Where(g => g.Key.DataSource is not null)
+            .Select(group => UpdateStream(change, group, request, logger))
+            .ToArray();
 
-            // Synchronous update — the transform is pure in-memory; the stream's
-            // handler serializes UpdateStreamRequests, so no retry logic is needed.
-            stream!.Update(store =>
-                {
-                    var result = UpdateDataChangeRequest(store, change, logger, stream, subActivity, group);
-                    subActivity?.Complete();
-                    return result;
-                },
-                ex =>
-                {
-                    subActivity?.Complete();
-                    UpdateFailed(request, ex);
-                }
-            );
-        }
+        if (applied.Length == 0)
+            return Observable.Return(Finish(workspace.Hub, messages));
+
+        return applied.Merge()
+            .Aggregate(messages, (acc, streamMessages) => acc.AddRange(streamMessages))
+            .Select(all => Finish(workspace.Hub, all));
     }
+
+    /// <summary>
+    /// Issues one data-source stream's part of the change and reports the messages it produced.
+    /// The <see cref="AsyncSubject{T}"/> replays, so a subscriber that arrives after the write
+    /// already committed still gets the log.
+    ///
+    /// <para>🚨 Completion is scheduled on the stream hub's action block, NOT signalled inline from
+    /// the transform: the transform's result is applied by the SAME turn that runs it, so completing
+    /// inline would report "committed" to a subscriber (and post the DataChangeResponse) while the
+    /// store still holds the pre-change state — ack-on-accept, the shape that raced read-after-write.
+    /// The next turn runs after the apply.</para>
+    /// </summary>
+    private static IObservable<ImmutableList<LogMessage>> UpdateStream(
+        DataChangeRequest change,
+        IGrouping<(IDataSource? DataSource, object? Partition), (object Instance, OperationType Op, ITypeSource?
+            TypeSource, IDataSource? DataSource, object? Partition)> group,
+        IMessageDelivery? request,
+        ILogger logger)
+    {
+        var stream = group.Key.DataSource!.GetStreamForPartition(group.Key.Partition);
+        if (stream is null)
+            throw new DataException($"Data source {group.Key.DataSource.Reference} does not have a stream for partition {group.Key.Partition}");
+        if (!stream.Hub.Started.IsCompleted)
+            throw new DataException($"Data source {group.Key.DataSource.Reference} for partition {group.Key.Partition} is not initialized.");
+
+        var applied = new AsyncSubject<ImmutableList<LogMessage>>();
+
+        // Synchronous update — the transform is pure in-memory; the stream's
+        // handler serializes UpdateStreamRequests, so no retry logic is needed.
+        stream.Update(store =>
+            {
+                var (result, messages) = UpdateDataChangeRequest(store, change, logger, stream, group);
+                Report(stream.Hub, applied, messages);
+                return result;
+            },
+            ex =>
+            {
+                // A DISPOSED stream is the benign teardown marker the rest of the stream classifies
+                // as Debug-only ("stop the source"), so it stays a WARNING — which still commits
+                // (DataChangeResponse maps Warning → Committed) and keeps shutdown quiet. Any other
+                // failure is a real one and must surface as Failed rather than the silent
+                // "Succeeded" the sub-activity used to report.
+                applied.OnNext([new LogMessage(
+                    $"Update of {stream.StreamIdentity} failed: {ex.Message}",
+                    ex is ObjectDisposedException ? LogLevel.Warning : LogLevel.Error)]);
+                applied.OnCompleted();
+                UpdateFailed(request, ex);
+            }
+        );
+        return applied;
+    }
+
+    /// <summary>
+    /// Reports one stream's messages on the stream hub's NEXT turn, so the change this turn
+    /// returned is already applied when a subscriber sees the log. Falls back to reporting inline
+    /// once the hub is tearing down — there is no later turn then, and an unreported change would
+    /// leave the caller's response pending until its request timeout.
+    /// </summary>
+    private static void Report(IMessageHub streamHub, AsyncSubject<ImmutableList<LogMessage>> applied,
+        ImmutableList<LogMessage> messages)
+    {
+        void Emit()
+        {
+            applied.OnNext(messages);
+            applied.OnCompleted();
+        }
+
+        if (streamHub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+            Emit();
+        else
+            streamHub.InvokeAsync(Emit);
+    }
+
+    /// <summary>Finishes a data-update log: status is rolled up from the message levels.</summary>
+    private static ActivityLog Finish(IMessageHub hub, ImmutableList<LogMessage> messages) =>
+        new ActivityLog(ActivityCategory.DataUpdate) { Messages = messages }
+            .Finish((int)hub.Version, null);
 
     // Maps an instance to its routing tuple. An EntityDeltaUpdate (a minimal-bytes
     // string-delta carrying no CLR entity) is routed by its declared Collection +
@@ -202,13 +245,15 @@ public static class WorkspaceOperations
         return EntityDelta.Apply(current, d, stream.Host.JsonSerializerOptions);
     }
 
-    private static ChangeItem<EntityStore>? UpdateDataChangeRequest(EntityStore? store, DataChangeRequest change, ILogger logger, ISynchronizationStream<EntityStore> stream, Activity? subActivity,
+    private static (ChangeItem<EntityStore>? Result, ImmutableList<LogMessage> Messages) UpdateDataChangeRequest(
+        EntityStore? store, DataChangeRequest change, ILogger logger, ISynchronizationStream<EntityStore> stream,
         IGrouping<(IDataSource? DataSource, object? Partition), (object Instance, OperationType Op, ITypeSource?
             TypeSource, IDataSource? DataSource, object? Partition)> group)
     {
+        // Only what a CALLER needs to act on lands in the log — the play-by-play is Debug on the
+        // logger. An empty message list rolls up to Succeeded.
+        var messages = ImmutableList<LogMessage>.Empty;
         logger.LogDebug("Starting update of {Stream} with {StreamId}", stream.StreamIdentity, stream.StreamId);
-        // For sub-activity logging, we use the main activity as we don't have direct access to sub-activity
-        subActivity?.LogInformation("Updating Data Stream {Stream}", stream!.StreamIdentity);
         try
         {
             // Get the current store state (might be different from initial 'store' parameter if updates occurred)
@@ -230,8 +275,9 @@ public static class WorkspaceOperations
                             {
                                 logger.LogError("Skipping {Count} instances with null key in collection {Collection}",
                                     invalidInstances.Count, g.Key.TypeSource!.CollectionName);
-                                subActivity?.LogError("Skipping {Count} instances with null key in collection {Collection}",
-                                    invalidInstances.Count, g.Key.TypeSource!.CollectionName);
+                                messages = messages.Add(new LogMessage(
+                                    $"Skipping {invalidInstances.Count} instances with null key in collection {g.Key.TypeSource!.CollectionName}",
+                                    LogLevel.Error));
                             }
                             var instances =
                                 new InstanceCollection(allInstances
@@ -269,22 +315,15 @@ public static class WorkspaceOperations
 
                         throw new NotSupportedException($"Operation {g.Key.Op} not supported");
                     });
-            subActivity?.LogInformation("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
             logger.LogDebug("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
-            // Complete sub-activity - this would need proper sub-activity tracking to work correctly
-            return stream.ApplyChanges(updates);
+            return (stream.ApplyChanges(updates), messages);
         }
         catch (Exception ex)
         {
-            subActivity?.LogError(ex, "Error updating Data Stream {Stream}: {Message}", stream.StreamIdentity,
-                ex.Message);
             logger.LogError(ex, "Error updating Data Stream {Stream}: {Message}", stream.StreamIdentity, ex.Message);
             stream.OnError(ex);
-            return null;
-        }
-        finally
-        {
-            subActivity?.Complete();
+            return (null, messages.Add(new LogMessage(
+                $"Error updating Data Stream {stream.StreamIdentity}: {ex.Message}", LogLevel.Error)));
         }
     }
 
