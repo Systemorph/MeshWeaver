@@ -402,6 +402,41 @@ fluent-text-field.title-bar-field::part(control) {
     padding: 0 4px;
 }
 
+/* ————————————————————————————————————————————————————————————————— hero CTA pill
+   A bold, solid, caller-coloured button — the look a marketing hero wants, on a real
+   ButtonControl that can raise a dialog (an authored <a> cannot).
+
+   🚨 Why a class + ::part and not just an inline style. `fluent-button` paints its visible
+   surface on the shadow-DOM `control` part, so `style="background: …"` on the HOST changes
+   nothing — the host is a transparent wrapper. Custom properties DO cross the boundary, so the
+   caller sets `--cta-*` on the host (via ButtonControl.WithStyle) and this rule forwards them
+   onto the part. Same mechanism as .title-bar-field above.
+
+   Every value falls back to the Fluent design token, so `.cta-pill` with no custom properties is
+   simply a chunkier accent button — never an unstyled or invisible one. */
+fluent-button.cta-pill::part(control) {
+    background: var(--cta-bg, var(--accent-fill-rest));
+    color: var(--cta-fg, var(--foreground-on-accent-rest));
+    border: none;
+    border-radius: var(--cta-radius, 8px);
+    padding: var(--cta-padding, 12px 22px);
+    height: auto;
+    font-weight: var(--cta-weight, 700);
+    font-size: var(--cta-size, 1rem);
+}
+
+fluent-button.cta-pill:hover::part(control) {
+    filter: brightness(0.94);
+}
+
+/* A disabled pill is the PLACEHOLDER state — the row is already laid out and the label arrives
+   when the viewer's state resolves. Keep it the same size and shape so nothing shifts; only the
+   contrast says "not yet". */
+fluent-button.cta-pill[disabled]::part(control) {
+    opacity: 0.55;
+    cursor: default;
+}
+
 /* Sticky action menu button - stays in top right when scrolling */
 .sticky-action-menu {
     position: fixed;
