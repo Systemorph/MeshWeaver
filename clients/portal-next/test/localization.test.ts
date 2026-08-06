@@ -29,15 +29,40 @@ const ALLOWED_LITERALS = new Set([
   "Memex", // product name
 ]);
 
-/** Every hard-coded user-visible literal bound to a text-bearing attribute in `src`. */
+const TEXT_ATTRS = "title|aria-label|placeholder";
+
+/** A CSS dimension / bare number — a value, never user-visible prose ("8px", "100%", "1.5rem"). */
+const CSS_TOKEN = /^-?\d*\.?\d+(px|rem|em|%|vh|vw|fr|pt|ms|s)?$/i;
+
+function isProse(text: string): boolean {
+  const t = text.trim();
+  return /[A-Za-z]{2}/.test(t) && !CSS_TOKEN.test(t) && !ALLOWED_LITERALS.has(t);
+}
+
+/**
+ * Every hard-coded user-visible string bound to a text-bearing attribute in `src`.
+ *
+ * Catches BOTH shapes. The direct literal (`placeholder="Search…"`) is the obvious one; the
+ * indirect one — `placeholder={SOME_CONST}` where `SOME_CONST` is a string literal in the same
+ * file — is how SearchBar's placeholder survived the first sweep untranslated while the ratchet
+ * reported clean.
+ */
 function hardCodedStrings(src: string): string[] {
   const out: string[] = [];
-  for (const m of src.matchAll(/\b(title|aria-label|placeholder)="([^"]+)"/g)) {
-    const text = m[2];
-    if (ALLOWED_LITERALS.has(text)) continue;
-    if (!/[A-Za-z]{2}/.test(text)) continue; // not prose (css-ish token, single symbol)
-    out.push(`${m[1]}="${text}"`);
+
+  // 1. attribute="literal prose"
+  for (const m of src.matchAll(new RegExp(String.raw`\b(${TEXT_ATTRS})="([^"]+)"`, "g")))
+    if (isProse(m[2])) out.push(`${m[1]}="${m[2]}"`);
+
+  // 2. attribute={CONST} where CONST is a module-level string literal in this file
+  const consts = new Map<string, string>();
+  for (const m of src.matchAll(/^\s*const\s+([A-Za-z_$][\w$]*)\s*(?::\s*string\s*)?=\s*(["'`])([^"'`]*)\2\s*;/gm))
+    consts.set(m[1], m[3]);
+  for (const m of src.matchAll(new RegExp(String.raw`\b(${TEXT_ATTRS})=\{\s*([A-Za-z_$][\w$]*)\s*\}`, "g"))) {
+    const text = consts.get(m[2]);
+    if (text !== undefined && isProse(text)) out.push(`${m[1]}={${m[2]}} // = "${text}"`);
   }
+
   return out;
 }
 
@@ -60,6 +85,18 @@ describe("portal-next shell is localized", () => {
     expect(hardCodedStrings('<Button title="Do the thing" />')).toEqual(['title="Do the thing"']);
     expect(hardCodedStrings('<Button title={t("common.close")} />')).toEqual([]);
     expect(hardCodedStrings('<Button title="AI" />')).toEqual([]); // allow-listed brand token
+  });
+
+  // The hole Copilot caught on this very PR: SearchBar bound its placeholder to a module-level
+  // const, so the literal shipped untranslated while the ratchet reported clean.
+  it("detects a literal reached through a module-level const", () => {
+    const src = 'const SEARCH_PLACEHOLDER = "Search the mesh...";\n<Input placeholder={SEARCH_PLACEHOLDER} />';
+    expect(hardCodedStrings(src)).toEqual(['placeholder={SEARCH_PLACEHOLDER} // = "Search the mesh..."']);
+  });
+
+  it("does not flag a const that holds a non-prose token, or an unknown identifier", () => {
+    expect(hardCodedStrings('const GAP = "8px";\n<div title={GAP} />')).toEqual([]);
+    expect(hardCodedStrings("<div title={fromProps} />")).toEqual([]);
   });
 
   it("binds every text-bearing attribute to the catalog, not a literal", () => {
