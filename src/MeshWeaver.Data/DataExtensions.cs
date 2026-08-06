@@ -1256,8 +1256,7 @@ public static class DataExtensions
                     // Route via the hub's DataChangeRequest pipeline — the workspace
                     // writes through the data-source stream (which owns the typed
                     // InstanceCollection + persistence + reduction fan-out).
-                    hub.GetWorkspace().RequestChange(
-                        DataChangeRequest.Update([merged]), null);
+                    hub.GetWorkspace().RequestChange(DataChangeRequest.Update([merged]));
                 }
                 catch (Exception ex)
                 {
@@ -1649,7 +1648,7 @@ public static class DataExtensions
                 // Every hub now reports its REAL log, including the activity hub, which used to be
                 // handed a synthetic "Succeeded" because an Activity there would have recursed.
                 var changeSubscription = hub.GetWorkspace()
-                    .RequestChange(changeRequest with { ChangedBy = changeRequest.ChangedBy }, request)
+                    .RequestChange(changeRequest with { ChangedBy = changeRequest.ChangedBy })
                     .Select(log => isSatellite || string.IsNullOrEmpty(hubPath)
                         ? log
                         : log with { AffectedPaths = log.AffectedPaths.Add(hubPath) })
@@ -2388,7 +2387,7 @@ public static class DataExtensions
             ChangedBy = changedBy
         };
 
-        return workspace.RequestChange(changeRequest, null)
+        return workspace.RequestChange(changeRequest)
             .Select(log =>
             {
                 var response = new DataChangeResponse(hub.Version, log);
@@ -2539,7 +2538,7 @@ public static class DataExtensions
                     ChangedBy = changedBy
                 };
 
-                return workspace.RequestChange(changeRequest, null)
+                return workspace.RequestChange(changeRequest)
                     .Select(log =>
                     {
                         var response = new DataChangeResponse(hub.Version, log);

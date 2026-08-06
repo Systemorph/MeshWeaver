@@ -92,7 +92,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         var roles = initial.Roles.ToList();
         roles[0] = roles[0] with { Denied = true };
         var updatedNode = node with { Content = initial with { Roles = roles } };
-        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null);
+        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]));
 
         // Assert â€” stream should reflect the change
         var updatedNodes = await nodeStream!
@@ -135,7 +135,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         var roles = initial.Roles.ToList();
         roles[0] = roles[0] with { Denied = false };
         var updatedNode = node with { Content = initial with { Roles = roles } };
-        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null);
+        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]));
 
         var updatedNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items =>
@@ -180,7 +180,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         var roles = initial.Roles.ToList();
         roles.RemoveAt(0);
         var updatedNode = node with { Content = initial with { Roles = roles } };
-        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null);
+        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]));
 
         var updatedNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items =>
@@ -218,7 +218,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         initialNodes.Should().HaveCount(1);
         var node = initialNodes!.First();
 
-        _ = workspace.RequestChange(new DataChangeRequest().WithDeletions(node), null);
+        _ = workspace.RequestChange(new DataChangeRequest().WithDeletions(node));
 
         var updatedNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items => items == null || items.Length == 0);
@@ -252,7 +252,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         var roles = initial.Roles.ToList();
         roles.Add(new RoleAssignment { Role = "Editor", Denied = false });
         var updatedNode = node with { Content = initial with { Roles = roles } };
-        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null);
+        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]));
 
         var updatedNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items =>
@@ -299,7 +299,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         var roles = initial.Roles.ToList();
         roles[1] = roles[1] with { Denied = true };
         var updatedNode = node with { Content = initial with { Roles = roles } };
-        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null);
+        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]));
 
         var updatedNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items =>
