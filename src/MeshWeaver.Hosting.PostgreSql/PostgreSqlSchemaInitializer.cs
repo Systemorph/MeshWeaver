@@ -251,13 +251,43 @@ public static class PostgreSqlSchemaInitializer
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
+        // Step 4.5: Provision the `auth` mirror schema ITSELF — the destination table every
+        // access-object mirror trigger writes to, and the relation the GLOBAL group-recompute
+        // triggers (zzz_group_recompute_ins/_del) hang off. It is a framework schema with no
+        // owner but this initializer, so this init must create it rather than assume someone
+        // else did.
+        //
+        // 🚨 Why this MUST precede step 5: the self-heal opens with
+        // `IF to_regclass('"auth".mesh_nodes') IS NULL THEN RETURN`. Nothing else in the product
+        // creates auth before the migration runs (SchemaInitialization deliberately doesn't; the
+        // portal's PostgreSqlPartitionSubscriptionHostedService provisions it only at boot, i.e.
+        // AFTER the migration container has already come and gone). So on a FRESH database the
+        // heal silently no-opped on its only run, and `public.trg_group_changed()` + the two
+        // zzz_group_recompute_* triggers were never installed — a Group/GroupMembership change
+        // recomputed NOTHING until some later migration run happened to find auth present.
+        // Adding a member to a licensed group granted them nothing; removing one revoked nothing.
+        // Creating auth here makes the heal's guard a genuine fail-safe instead of the normal path.
+        //
+        // Safe for fresh-DB detection: SchemaInitialization.DetectFreshDbAsync explicitly excludes
+        // 'auth' from the content-partition probe, so provisioning it does not flip a fresh DB to
+        // "existing" (which would run the legacy `user`-schema repair chain).
+        //
+        // PUBLIC-INIT ONLY, same as step 5 — per-schema data sources must not provision auth.
+        if (string.Equals(options.Schema, "public", StringComparison.OrdinalIgnoreCase))
+        {
+            await using var cmd = dataSource.CreateCommand("SELECT public.ensure_partition_schema('auth')");
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
         // Step 5: SELF-HEAL the auth mirror. Step 2.5 heals the trigger FUNCTION on every init;
         // this heals the TRIGGERS and the DATA, so the mirror converges on every boot instead of
         // depending on a one-time migration: (a) any partition schema missing the
         // mesh_node_mirror_access_objects trigger (provisioned during a bad window) gets it,
         // (b) mirrored rows that were missed or went stale while the function/trigger was wrong
-        // are reconciled into auth.mesh_nodes. One server-side pass, idempotent, fail-safe (skips
-        // when auth isn't provisioned yet — e.g. a bare test fixture). This is the durable answer
+        // are reconciled into auth.mesh_nodes, and (c) the global group-recompute triggers are
+        // (re)installed on auth.mesh_nodes. One server-side pass, idempotent, fail-safe (skips
+        // when auth isn't provisioned — which step 4.5 now guarantees it is, so the guard is a
+        // belt-and-braces fail-safe, not the fresh-DB path). This is the durable answer
         // to the 2026-07 "spaces invisible in the catalog" incident: even if the mirror breaks
         // again, the next restart repairs both trigger topology and data.
         //
