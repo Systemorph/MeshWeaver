@@ -26,9 +26,18 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Button, Text } from "@fluentui/react-components";
-import { Chat20Regular, Dismiss20Regular, PanelRightContract20Regular, PanelRightExpand20Regular } from "@fluentui/react-icons";
-import { MeshAreaView, StaticAreaSource } from "@meshweaver/react";
+import { useRouter } from "next/navigation";
+import { Button, Spinner, Text } from "@fluentui/react-components";
+import {
+  Add20Regular,
+  ArrowCounterclockwise20Regular,
+  ArrowMaximize20Regular,
+  Chat20Regular,
+  Dismiss20Regular,
+  PanelRightContract20Regular,
+  PanelRightExpand20Regular,
+} from "@fluentui/react-icons";
+import { MeshAreaView, StaticAreaSource, useLocalize } from "@meshweaver/react";
 import type { AreaTree } from "@meshweaver/react";
 import { useLiveConnection, useNavigationState } from "./LiveConnection";
 import { useHydratedTheme } from "./useHydratedTheme";
@@ -42,9 +51,15 @@ export interface SidePanelState {
   width: number;
   contentPath: string | null;
   title: string | null;
+  /**
+   * Chat vs the recent-threads picker. Transient (never persisted) — the Blazor twin is
+   * ThreadChatView's `viewMode`, driven by SidePanelState.RequestAction("New"|"Resume"), which is
+   * likewise per-session.
+   */
+  mode: "chat" | "resume";
 }
 
-const DEFAULT_STATE: SidePanelState = { isVisible: false, width: 25, contentPath: null, title: null };
+const DEFAULT_STATE: SidePanelState = { isVisible: false, width: 25, contentPath: null, title: null, mode: "chat" };
 
 interface SidePanelContextValue {
   state: SidePanelState;
@@ -52,6 +67,12 @@ interface SidePanelContextValue {
   toggle(): void;
   /** Open the panel fresh in new-thread mode (the AI menu's "New thread"). */
   openNewThread(): void;
+  /** Show the recent-threads picker (SidePanel's ↺ / RequestAction("Resume")). */
+  resumeThread(): void;
+  /** Pick a thread out of the resume list, or peek a node. */
+  setContent(path: string | null, title?: string | null): void;
+  /** Move the panel's thread into the main view (SidePanel's ⤢ MoveToMainPanel). */
+  moveToMainPanel(): void;
   close(): void;
   setWidth(width: number): void;
 }
@@ -60,6 +81,9 @@ const SidePanelContext = createContext<SidePanelContextValue>({
   state: DEFAULT_STATE,
   toggle: () => {},
   openNewThread: () => {},
+  resumeThread: () => {},
+  setContent: () => {},
+  moveToMainPanel: () => {},
   close: () => {},
   setWidth: () => {},
 });
@@ -78,6 +102,7 @@ function loadState(): SidePanelState {
       width: typeof parsed.width === "number" && parsed.width > 0 && parsed.width <= 85 ? parsed.width : 25,
       contentPath: typeof parsed.contentPath === "string" ? parsed.contentPath : null,
       title: typeof parsed.title === "string" ? parsed.title : null,
+      mode: "chat", // never restored — a reload always lands on chat, as in Blazor
     };
   } catch {
     return DEFAULT_STATE;
@@ -88,11 +113,27 @@ function isThreadPath(path: string | null | undefined): boolean {
   return !!path && path.toLowerCase().includes(THREAD_SEGMENT.toLowerCase());
 }
 
+/**
+ * The namespace the resume list is scoped to: the partition the current address sits in — i.e. the
+ * address itself for a partition root, and everything before `/_Thread/` when already on a thread.
+ */
+export function namespaceOf(address: string): string {
+  if (!address) return "";
+  const i = address.toLowerCase().indexOf(THREAD_SEGMENT.toLowerCase());
+  if (i >= 0) return address.slice(0, i);
+  return address.split("/")[0] ?? "";
+}
+
 export function SidePanelProvider({ children }: { children: ReactNode }) {
   const live = useLiveConnection();
   const nav = useNavigationState();
+  const router = useRouter();
   const mesh = live.state.kind === "live" ? live.state.mesh : null;
   const [state, setState] = useState<SidePanelState>(DEFAULT_STATE);
+  // MoveToMainPanel needs the CURRENT content path outside the setState updater (it navigates as a
+  // side effect); a ref keeps that read from going stale in the callback's closure.
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   // Restore the persisted state after mount (SSR renders the closed default), mirroring the
   // Blazor RestoreSidePanelStateAsync + the anonymous-circuit guard: never restore a visible
@@ -142,9 +183,35 @@ export function SidePanelProvider({ children }: { children: ReactNode }) {
     });
   }, [mainNodeOfThread]);
 
+  // Clearing the content path is what makes the new-chat composer render — the same reason Blazor's
+  // OnNewThread calls SetContentPath(null) in the always-mounted panel rather than only raising
+  // RequestAction("New"): with a thread displayed, no composer is subscribed to the action, so the
+  // click would otherwise do nothing ("clicking + keeps me on the thread").
   const openNewThread = useCallback(() => {
-    setState((s) => ({ ...s, isVisible: true, contentPath: null, title: null }));
+    setState((s) => ({ ...s, isVisible: true, contentPath: null, title: null, mode: "chat" }));
   }, []);
+
+  const resumeThread = useCallback(() => {
+    setState((s) => ({ ...s, isVisible: true, mode: "resume" }));
+  }, []);
+
+  const setContent = useCallback((path: string | null, title?: string | null) => {
+    setState((s) => ({
+      ...s,
+      isVisible: true,
+      contentPath: path,
+      title: title ?? (path ? (path.split("/").pop() ?? path) : null),
+      mode: "chat",
+    }));
+  }, []);
+
+  // Hand the panel's thread to the main view and close the panel (Blazor's MoveToMainPanel:
+  // clear the content, hide, then NavigateTo($"/{contentPath}")).
+  const moveToMainPanel = useCallback(() => {
+    const path = stateRef.current.contentPath;
+    setState((s) => ({ ...s, isVisible: false, contentPath: null, title: null, mode: "chat" }));
+    if (path) router.push(`/${path}`);
+  }, [router]);
 
   const close = useCallback(() => setState((s) => ({ ...s, isVisible: false })), []);
   const setWidth = useCallback(
@@ -153,8 +220,8 @@ export function SidePanelProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ state, toggle, openNewThread, close, setWidth }),
-    [state, toggle, openNewThread, close, setWidth],
+    () => ({ state, toggle, openNewThread, resumeThread, setContent, moveToMainPanel, close, setWidth }),
+    [state, toggle, openNewThread, resumeThread, setContent, moveToMainPanel, close, setWidth],
   );
 
   return (
@@ -168,8 +235,9 @@ export function SidePanelProvider({ children }: { children: ReactNode }) {
 export function SidePanelToggle() {
   const { state, toggle } = useSidePanel();
   const nav = useNavigationState();
+  const t = useLocalize();
   const onThread = isThreadPath(nav.target?.address);
-  const title = state.isVisible ? "Close side panel" : onThread ? "Show context" : "Chat";
+  const title = state.isVisible ? t("chat.closeSidePanel") : onThread ? t("chat.showContext") : t("chat.chat");
   return (
     <Button
       appearance="transparent"
@@ -189,9 +257,66 @@ export function SidePanelToggle() {
   );
 }
 
+/**
+ * The recent-threads picker — the port of ThreadChatView's ResumeThreads mode. Same query the
+ * Blazor SwitchToResumeModeAsync builds: threads under the current namespace's `_Thread`, newest
+ * first, falling back to an unscoped thread query when there is no namespace.
+ */
+function ResumeThreadList({ namespace, onPick }: { namespace: string; onPick: (path: string, title: string) => void }) {
+  const live = useLiveConnection();
+  const t = useLocalize();
+  const mesh = live.state.kind === "live" ? live.state.mesh : null;
+  const [rows, setRows] = useState<{ path: string; name: string }[] | null>(null);
+
+  useEffect(() => {
+    if (!mesh?.ops?.search) return;
+    let alive = true;
+    const query = namespace
+      ? `nodeType:Thread namespace:${namespace}/_Thread sort:LastModified-desc`
+      : "nodeType:Thread sort:LastModified-desc";
+    mesh.ops
+      .search(query, undefined, 50)
+      .then((rs) => {
+        if (!alive) return;
+        setRows(
+          rs
+            .map((r) => ({ path: String(r.path ?? ""), name: String(r.name ?? "") }))
+            .filter((r) => r.path.length > 0),
+        );
+      })
+      .catch(() => alive && setRows([]));
+    return () => {
+      alive = false;
+    };
+  }, [mesh, namespace]);
+
+  if (rows == null) return <Spinner size="tiny" />;
+  if (rows.length === 0)
+    return (
+      <Text size={200} style={{ color: "var(--colorNeutralForeground3)" }}>
+        {t("chat.noThreadsYet")}
+      </Text>
+    );
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }} data-mw-resume-list>
+      {rows.map((r) => (
+        <Button
+          key={r.path}
+          appearance="subtle"
+          style={{ justifyContent: "flex-start" }}
+          onClick={() => onPick(r.path, r.name || (r.path.split("/").pop() ?? r.path))}
+        >
+          {r.name || r.path.split("/").pop()}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
 /** The docked panel itself — render inside the shell's main grid row, next to the content. */
 export function SidePanelPane() {
-  const { state, close, setWidth } = useSidePanel();
+  const { state, close, setWidth, openNewThread, resumeThread, setContent, moveToMainPanel } = useSidePanel();
+  const t = useLocalize();
   const live = useLiveConnection();
   const nav = useNavigationState();
   const { theme } = useHydratedTheme();
@@ -289,17 +414,55 @@ export function SidePanelPane() {
           borderBottom: "1px solid var(--colorNeutralStroke2)",
         }}
       >
+        {/* The four header actions of Blazor's SidePanel.razor: new thread, resume, open in the
+            main panel (only with a thread), close. */}
+        <Button
+          appearance="transparent"
+          icon={<Add20Regular />}
+          title={t("chat.new")}
+          aria-label={t("chat.new")}
+          onClick={openNewThread}
+        />
+        <Button
+          appearance="transparent"
+          icon={<ArrowCounterclockwise20Regular />}
+          title={t("chat.resume")}
+          aria-label={t("chat.resume")}
+          onClick={resumeThread}
+        />
         <Text weight="semibold" size={300} style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {state.title ?? (state.contentPath ? state.contentPath.split("/").pop() : "New chat")}
+          {state.mode === "resume"
+            ? t("chat.recentThreads")
+            : (state.title ?? (state.contentPath ? state.contentPath.split("/").pop() : t("chat.new")))}
         </Text>
-        <Button appearance="transparent" icon={<Dismiss20Regular />} aria-label="Close side panel" onClick={close} />
+        {state.contentPath ? (
+          <Button
+            appearance="transparent"
+            icon={<ArrowMaximize20Regular />}
+            title={t("chat.openInMainPanel")}
+            aria-label={t("chat.openInMainPanel")}
+            onClick={moveToMainPanel}
+          />
+        ) : null}
+        <Button
+          appearance="transparent"
+          icon={<Dismiss20Regular />}
+          title={t("chat.closeSidePanel")}
+          aria-label={t("chat.closeSidePanel")}
+          onClick={close}
+        />
       </div>
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 8 }}>
-        {source ? (
+        {state.mode === "resume" ? (
+          <ResumeThreadList
+            namespace={namespaceOf(nav.target?.address ?? "")}
+            onPick={(path, title) => setContent(path, title)}
+          />
+        ) : source ? (
           <MeshAreaView source={source} rootArea="" theme={theme} ops={mesh.ops} />
         ) : (
           <Text size={200} style={{ padding: 12, color: "var(--colorNeutralForeground3)" }}>
-            Connecting…
+            {t("ui.connecting")}
           </Text>
         )}
       </div>

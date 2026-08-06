@@ -2,6 +2,9 @@
   <PropertyGroup>
     <ProjectGuid>{a5b12cd3-e456-4f78-9012-34567890abcd}</ProjectGuid>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- MAAI001: same opt-in as MeshWeaver.AI — MeshNodeAgentFileStoreTest drives MAF's
+         [Experimental] AgentFileStore surface directly. Scoped to this one diagnostic. -->
+    <NoWarn>$(NoWarn);MAAI001</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />

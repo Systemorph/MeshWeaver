@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.AspNetCore.Builder;
@@ -21,12 +22,19 @@ namespace Memex.Portal.Shared.Api;
 /// browses/installs over HTTP with NO git/GitHub credentials of its own: the registry's GitHub App
 /// credential stays here and is never handed out (npm/NuGet-style encapsulation).
 ///
-/// <para>🚨 The surface is NOT public: it serves only <b>registered MeshWeaver instances</b>, each
-/// holding a token issued at registration and listed in the registry's
-/// <c>PluginCatalog:RegistryTokens</c> (see <see cref="PluginRegistryTokens"/>). Requests without a
-/// valid <c>Authorization: Bearer</c> token are 401. Only when NO tokens are configured — the
-/// local-dev / e2e-stub mode — does the registry answer anonymously; a production registry always
-/// configures tokens.</para>
+/// <para>🚨 The surface is NOT public: it serves only <b>registered MeshWeaver instances</b>. A
+/// caller presents its instance key (<c>Authorization: Bearer mwi_…</c>); the key resolves to a
+/// <see cref="MeshWeaverInstance"/> node and the admin-owned <see cref="PluginGrant"/> that says
+/// which (source, package) pairs it may read — see <see cref="InstanceRegistryAuthenticator"/>.
+/// Requests without a valid key are 401, and an authenticated caller sees ONLY its granted packages,
+/// in both the listing and the file fetch.</para>
+///
+/// <para>This replaced a flat <c>PluginCatalog:RegistryTokens</c> allowlist that was open when
+/// unset — which is how this registry served its private sources to anonymous callers until
+/// 2026-08-06. The gate now <b>fails closed</b>: <c>PluginCatalog:RequireInstanceKey</c> defaults to
+/// true, and the anonymous mode must be asked for explicitly (local dev / the e2e stub) and warns on
+/// every request. Consumers need no config change — the existing
+/// <c>PluginCatalog:RegistryToken</c> key now carries the instance key.</para>
 ///
 /// <para>Consumed by <see cref="RegistryPackageSource"/>; the wire shapes are produced by
 /// <see cref="PluginRegistryPayloads"/> so producer and consumer cannot drift.</para>
@@ -43,39 +51,65 @@ public static class PluginRegistryEndpoints
 
         group.AddEndpointFilter(async (ctx, next) =>
         {
-            var config = ctx.HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-            var issued = IssuedTokens(config);
-            if (issued.Count == 0)
-                return await next(ctx); // no tokens issued → the open local-dev / e2e-stub registry
-            if (PluginRegistryTokens.Validate(ctx.HttpContext.Request.Headers.Authorization, issued))
+            var http = ctx.HttpContext;
+            var config = http.RequestServices.GetRequiredService<IConfiguration>();
+            var logger = http.RequestServices.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(PluginRegistryEndpoints));
+
+            var authenticator = http.RequestServices.GetRequiredService<InstanceRegistryAuthenticator>();
+            var caller = await authenticator.Authenticate(http.Request.Headers.Authorization)
+                .FirstAsync().ToTask(http.RequestAborted);
+
+            if (caller is not null)
+            {
+                http.Items[CallerItemKey] = caller;
                 return await next(ctx);
-            ctx.HttpContext.RequestServices.GetService<ILoggerFactory>()
-                ?.CreateLogger(typeof(PluginRegistryEndpoints))
-                .LogWarning("Plugin registry: rejected request to {Path} without a valid instance token",
-                    ctx.HttpContext.Request.Path);
+            }
+
+            // Fail CLOSED by default. The legacy open mode survives only for local dev / the e2e
+            // stub, and only when explicitly asked for — it is the mode that served this registry's
+            // private sources to anyone who knew the URL (2026-08-06).
+            if (!RequiresInstanceKey(config))
+            {
+                logger?.LogWarning(
+                    "Plugin registry: serving {Path} ANONYMOUSLY — {Key} is false. Every configured "
+                    + "source is readable by any caller. Register instances and remove this setting.",
+                    http.Request.Path, RequireInstanceKeyConfigKey);
+                return await next(ctx);
+            }
+
+            logger?.LogWarning("Plugin registry: rejected {Path} — no valid instance key presented",
+                http.Request.Path);
             return Results.Json(
-                new { error = "A registered instance token is required (Authorization: Bearer …)." },
+                new { error = "A registered instance key is required (Authorization: Bearer mwi_…)." },
                 statusCode: StatusCodes.Status401Unauthorized);
         });
 
-        group.MapGet("", (IMessageHub rootHub, IConfiguration config, CancellationToken ct) =>
-            List(rootHub, config, ct));
+        group.MapGet("", (HttpContext http, IMessageHub rootHub, IConfiguration config, CancellationToken ct) =>
+            List(rootHub, config, Caller(http), ct));
 
-        group.MapPost("/files", (IMessageHub rootHub, IConfiguration config, FilesBody body, CancellationToken ct) =>
-            Files(rootHub, config, body, ct));
+        group.MapPost("/files", (HttpContext http, IMessageHub rootHub, IConfiguration config,
+                FilesBody body, CancellationToken ct) =>
+            Files(rootHub, config, body, Caller(http), ct));
 
         return endpoints;
     }
 
-    /// <summary>The instance tokens this registry has issued — <c>PluginCatalog:RegistryTokens:N</c>
-    /// (registering an instance = issuing it a token and provisioning it into this list).</summary>
-    private static IReadOnlyList<string> IssuedTokens(IConfiguration config) =>
-        config.GetSection(PluginRegistryTokens.SectionName).GetChildren()
-            .Select(c => c.Value)
-            .Where(v => !string.IsNullOrWhiteSpace(v))
-            // Trim: secrets get copy-pasted with stray whitespace, and Validate compares exact bytes.
-            .Select(v => v!.Trim())
-            .ToList();
+    /// <summary><see cref="HttpContext.Items"/> key holding the authenticated caller.</summary>
+    private const string CallerItemKey = "PluginRegistry.Caller";
+
+    /// <summary>Config flag gating the legacy anonymous mode. Absent ⇒ true ⇒ a key is required.</summary>
+    private const string RequireInstanceKeyConfigKey = "PluginCatalog:RequireInstanceKey";
+
+    /// <summary>Whether an instance key is required. <b>Defaults to true</b> — a registry that
+    /// configures nothing refuses anonymous callers rather than serving them everything.</summary>
+    private static bool RequiresInstanceKey(IConfiguration config) =>
+        !bool.TryParse(config[RequireInstanceKeyConfigKey], out var required) || required;
+
+    /// <summary>The authenticated caller, or null in the legacy anonymous mode (which sees
+    /// everything — there is no instance to scope the catalog to).</summary>
+    private static AuthenticatedInstance? Caller(HttpContext http) =>
+        http.Items.TryGetValue(CallerItemKey, out var v) ? v as AuthenticatedInstance : null;
 
     /// <summary>One configured registry source: the git package source, the ref it serves, and a
     /// display name (for logs). The registry is authoritative on each source's ref (its configured
@@ -132,21 +166,33 @@ public static class PluginRegistryEndpoints
 
     // Merged catalog across all sources; on an id collision the FIRST configured source wins
     // (the registry curates the order).
+    //
+    // 🚨 Scoped to what the CALLER was granted. The grant is per (source, package) — an instance may
+    // hold a whole source (Plugins/*) or a single plugin out of one (Reinsurance/UWDeepfield) — so
+    // the filter runs BEFORE the merge, while each package still knows which source it came from.
+    // A caller therefore cannot even learn that an ungranted package exists.
     private static IObservable<IReadOnlyList<PackageManifest>> ListAll(
-        IReadOnlyList<RegistrySource> sources, ILogger? logger)
-        => Observable.CombineLatest(sources.Select(s => ListFrom(s, sources.Count == 1, logger)))
-            .Select(lists => (IReadOnlyList<PackageManifest>)lists
-                .SelectMany(l => l)
+        IReadOnlyList<RegistrySource> sources, AuthenticatedInstance? caller, ILogger? logger)
+        => Observable.CombineLatest(sources.Select(s =>
+                ListFrom(s, sources.Count == 1, logger).Select(list => (Source: s, Packages: list))))
+            .Select(perSource => (IReadOnlyList<PackageManifest>)perSource
+                .SelectMany(x => x.Packages.Where(p => IsGranted(caller, x.Source, p)))
                 .DistinctBy(p => p.Id, StringComparer.Ordinal)
                 .ToList());
 
-    private static Task<IResult> List(IMessageHub hub, IConfiguration config, CancellationToken ct)
+    // Legacy anonymous mode has no instance to scope to and sees everything — that mode is gated
+    // by PluginCatalog:RequireInstanceKey and warns on every request.
+    private static bool IsGranted(AuthenticatedInstance? caller, RegistrySource source, PackageManifest package)
+        => caller is null || caller.Allows(source.Name, package.Id);
+
+    private static Task<IResult> List(
+        IMessageHub hub, IConfiguration config, AuthenticatedInstance? caller, CancellationToken ct)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(PluginRegistryEndpoints));
         var sources = Sources(hub, config);
         if (sources.Count == 0)
             return Task.FromResult(Results.Content(PluginRegistryPayloads.List([]), "application/json"));
-        return ListAll(sources, logger)
+        return ListAll(sources, caller, logger)
             .Select(list => (IResult)Results.Content(PluginRegistryPayloads.List(list), "application/json"))
             .Catch((Exception ex) =>
             {
@@ -159,7 +205,8 @@ public static class PluginRegistryEndpoints
             .FirstAsync().ToTask(ct);
     }
 
-    private static Task<IResult> Files(IMessageHub hub, IConfiguration config, FilesBody body, CancellationToken ct)
+    private static Task<IResult> Files(
+        IMessageHub hub, IConfiguration config, FilesBody body, AuthenticatedInstance? caller, CancellationToken ct)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(PluginRegistryEndpoints));
         // A missing id is a malformed request → 400 (don't disguise it as a valid empty package).
@@ -177,16 +224,25 @@ public static class PluginRegistryEndpoints
         // Sources resolve SEQUENTIALLY in configured order (same precedence as the merged list) and
         // short-circuit on the first hit — later sources are never even listed when an earlier one
         // has the package (Concat subscribes lazily; FirstOrDefaultAsync unsubscribes on the match).
+        //
+        // 🚨 The caller's grant is part of the resolution, not a check bolted on after it: a package
+        // the caller was not granted simply does not match, so an ungranted id can neither be
+        // fetched NOR shadow a granted package of the same id in a later source.
         var perSource = sources.Select(s => Observable.Defer(() => ListFrom(s, sources.Count == 1, logger)
             .Select(packages => (Source: s, Package: packages.FirstOrDefault(
-                p => string.Equals(p.Id, body.Id, StringComparison.Ordinal))))));
+                p => string.Equals(p.Id, body.Id, StringComparison.Ordinal) && IsGranted(caller, s, p))))));
         return perSource.Concat()
             .FirstOrDefaultAsync(hit => hit.Package is not null)
             .SelectMany(hit =>
             {
                 if (hit.Package is null)
                 {
-                    logger?.LogWarning("Plugin registry: files requested for unknown package '{Id}'", body.Id);
+                    // 404, never 403 — the listing already hides ungranted packages, so answering
+                    // "forbidden" here would turn /files into an oracle for what else this registry
+                    // carries. The log records which instance asked, so operators can still see it.
+                    logger?.LogWarning(
+                        "Plugin registry: files requested for package '{Id}' — unknown, or not granted to {Instance}",
+                        body.Id, caller?.Instance.InstanceId ?? "(anonymous)");
                     return Observable.Return((IResult)Results.Json(
                         new { error = $"Unknown package '{body.Id}'" }, statusCode: StatusCodes.Status404NotFound));
                 }

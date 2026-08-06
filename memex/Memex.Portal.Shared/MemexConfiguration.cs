@@ -41,7 +41,6 @@ using MeshWeaver.PluginCatalog;
 using MeshWeaver.InstanceSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown.Export.Configuration;
-using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
@@ -272,6 +271,10 @@ public static class MemexConfiguration
 
         // Register API token service for MCP bearer auth and OAuth code store
         services.AddSingleton<ApiTokenService>();
+        // Registers MeshWeaver installations and issues their instance keys. Separate from
+        // ApiTokenService on purpose: an instance key identifies a DEPLOYMENT and carries no user
+        // identity or roles, so it can never be replayed as its owner against the mesh API.
+        services.AddSingleton<MeshWeaverInstanceService>();
         services.AddSingleton<OAuthCodeStore>();
         // Automatic, token-based MCP back-connection for the co-hosted Claude Code / Copilot CLIs.
         // The chat clients resolve this at spawn to mint/reuse the per-user MCP ApiToken + URL.
@@ -869,6 +872,8 @@ public static class MemexConfiguration
                         // per-node hub so they resolve when anchored on the type roots (/Agent/AiAgents …).
                         .AddAiCatalogLayoutAreas()
                         .AddApiTokensSettingsTab()
+                        // Register your own MeshWeaver installation and get it an instance key.
+                        .AddInstancesSettingsTab()
                         // Per-user "Notifications" tab: choose bell/email per notification category.
                         .AddNotificationsSettingsTab()
                         // AI menu (top bar) — replaces the retired Models + AI Settings tabs. Each entry
@@ -906,6 +911,10 @@ public static class MemexConfiguration
                         // Coupons tab (platform admins only) — the Store's typed coupon codes at
                         // Admin/Coupons: live list, redemption tallies, create/open.
                         .AddCouponAdminSettingsTab()
+                        // Instance grants (platform admins only) — which plugins each registered
+                        // MeshWeaver installation may pull. Registration is self-service; granting
+                        // is not, and the grants live in the Admin partition out of the owner's reach.
+                        .AddInstanceGrantAdminSettingsTab()
                         // Instance Sync lives in the "Synchronizations" NODE-menu item (not a
                         // settings tab) — wired via AddInstanceSyncTypes on the mesh builder.
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
@@ -915,8 +924,6 @@ public static class MemexConfiguration
                         // Content Indexing tab — Space nodes, only when the indexing pipeline is active.
                         .AddContentIndexSettingsTab();
                 })
-                // Add activity tracking to record user access patterns via ActivityLogBundler
-                .AddActivityTracking()
                 // SignalR mesh transport — external participants (native clients) join over a WebSocket.
                 .AddSignalRHub()
                 // MemexClient node type — per-installation client config under {user}/Client/{id}.

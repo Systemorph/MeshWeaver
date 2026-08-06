@@ -17,6 +17,12 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class SkillNodeTypeTest
 {
+    /// <summary>The projection every registry query carries — referenced from the
+    /// production constant so these expectations can never drift from it. Asserting it
+    /// here is the point: a registry query that stops projecting `content` yields nodes
+    /// whose Content is silently null, which reads as an empty picker.</summary>
+    private const string Proj = AgentPickerProjection.RegistryProjection;
+
     private static readonly JsonSerializerOptions Json = new();
 
     [Fact]
@@ -154,26 +160,30 @@ public class SkillNodeTypeTest
     [Fact]
     public void SkillQueries_AreTheUnifiedRegistryPattern_PlatformPlusSpacePlusUser()
     {
-        // Same shape as agents + models: ONE namespace:A|B|C exact-membership query (platform Skill +
-        // the space's {space}/Skill + the user's {user}/Skill).
+        // ONE layered query set, most specific first: the user's own flat {user}/Skill, the context
+        // partition's whole SUBTREE, then the platform defaults. This is the same set the chat's
+        // picker/autocomplete resolve AND the set MeshAgentSkillsSource feeds the agent framework.
         SkillNodeType.SkillQueries(contextPath: "Acme/Project", userPath: "rbuergi")
-            .Should().ContainSingle()
-            .Which.Should().Be("namespace:rbuergi/Skill|Acme/Skill|Skill nodeType:Skill");
+            .Should().Equal(
+                "namespace:Skill nodeType:Skill" + Proj,
+                "namespace:rbuergi/Skill nodeType:Skill" + Proj,
+                "path:Acme scope:descendants nodeType:Skill" + Proj);
 
         // No context / user → platform defaults only.
-        SkillNodeType.SkillQueries(null, null).Should().ContainSingle()
-            .Which.Should().Be("namespace:Skill nodeType:Skill");
+        SkillNodeType.SkillQueries(null, null).Should().Equal("namespace:Skill nodeType:Skill" + Proj);
     }
 
     [Fact]
     public void SkillQueries_SkipRogueReservedContextPartition()
     {
-        // A rogue/reserved ROUTE context (e.g. "login" — an auto-minted page artifact) must NOT be added
-        // to the namespace IN(...): it has no read policy, so including "login/Skill" fails the WHOLE
-        // query ("lacks Read permission on 'login'") and the picker/autocomplete goes empty.
-        var q = SkillNodeType.SkillQueries(contextPath: "login", userPath: "rbuergi").Single();
-        q.Should().Be("namespace:rbuergi/Skill|Skill nodeType:Skill");
-        q.Should().NotContain("login/Skill");
+        // A rogue/reserved ROUTE context (e.g. "login" — an auto-minted page artifact) must NOT
+        // contribute a layer: it has no read policy, so querying it fails ("lacks Read permission on
+        // 'login'") and the picker/autocomplete goes empty.
+        var queries = SkillNodeType.SkillQueries(contextPath: "login", userPath: "rbuergi");
+        queries.Should().Equal(
+            "namespace:Skill nodeType:Skill" + Proj,
+            "namespace:rbuergi/Skill nodeType:Skill" + Proj);
+        string.Join(" ", queries).Should().NotContain("login");
     }
 
     private static MeshNode InstructionSkillNode(string id) =>

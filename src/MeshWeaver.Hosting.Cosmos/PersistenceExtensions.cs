@@ -48,10 +48,12 @@ public class CosmosStorageAdapterFactory(
                 "Register via Aspire (AddAzureCosmosDatabase + AddKeyedContainer), " +
                 "or set CosmosStorageOptions.ConnectionString.");
 
-        // StorageImporter.CreateFullImportOptions was deleted in the persistence-cull.
-        // Cosmos SDK will use its default System.Text.Json configuration; type
-        // polymorphism via $type lives in the MeshNode contract itself.
-        var cosmosClient = new CosmosClient(connectionString);
+        // 🚨 NOT `new CosmosClient(connectionString)` — the SDK's DEFAULT serializer emits
+        // PascalCase, so MeshNode.Id lands as "Id" and Cosmos rejects every write with
+        // 400 "Document does not contain an id field". CosmosSerialization carries the camelCase
+        // storage contract the SQL generator and the /namespace partition key both assume.
+        // Type polymorphism via $type lives in the MeshNode contract itself.
+        var cosmosClient = CosmosSerialization.CreateClient(connectionString);
 
         var database = cosmosClient.GetDatabase(opts.DatabaseName);
         return new CosmosStorageAdapter(

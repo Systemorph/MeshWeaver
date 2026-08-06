@@ -9,8 +9,10 @@ import { useRouter } from "next/navigation";
 import { Divider, Input, MenuItem, MenuList } from "@fluentui/react-components";
 import { Add20Regular, Search20Regular, Settings20Regular } from "@fluentui/react-icons";
 import { useNavigationState } from "./LiveConnection";
+import { useLocalize } from "@meshweaver/react";
 
 export function MobileMenu({ onClose }: { onClose: () => void }) {
+  const t = useLocalize();
   const router = useRouter();
   const nav = useNavigationState();
   const [query, setQuery] = useState("");
@@ -41,7 +43,7 @@ export function MobileMenu({ onClose }: { onClose: () => void }) {
       <div style={{ padding: 8 }}>
         <Input
           contentBefore={<Search20Regular />}
-          placeholder="Search..."
+          placeholder={t("common.search")}
           value={query}
           style={{ width: "100%" }}
           onChange={(_, d) => setQuery(d.value)}

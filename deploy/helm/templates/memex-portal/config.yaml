@@ -219,6 +219,26 @@ data:
   # seed only; a record's own AutoUpdate flag stays the runtime authority thereafter.
   # See Doc/Architecture/PluginUpdateOnGreenBuild.md.
   PluginCatalog__AutoUpdateByDefault: "{{ .Values.config.memex_portal.PluginCatalog__AutoUpdateByDefault | default "true" }}"
+  # ---- Plugin catalog: which registry this install CONSUMES, and (on a registry install) which
+  # git repos it SERVES. Both were previously un-templated, so an env overlay that set them was
+  # silently dropped — the catalog then reads "not configured" with the values file looking right,
+  # and the only way to wire it was a hand-applied `kubectl set env` that no redeploy reproduces.
+  # Tokens are secrets and live in secrets.yaml / the Key Vault CSI mount, never here.
+  # See Doc/Architecture/PluginRegistry.md.
+  PluginCatalog__RequireInstanceKey: "{{ .Values.pluginCatalog.requireInstanceKey | default true }}"
+  PluginCatalog__RegistryUrl: "{{ .Values.pluginCatalog.registryUrl | default "" }}"
+  PluginCatalog__RegistryRef: "{{ .Values.pluginCatalog.registryRef | default "HEAD" }}"
+  {{- range $i, $r := .Values.pluginCatalog.registries }}
+  PluginCatalog__Registries__{{ $i }}__Name: "{{ $r.name }}"
+  PluginCatalog__Registries__{{ $i }}__Url: "{{ $r.url }}"
+  PluginCatalog__Registries__{{ $i }}__Ref: "{{ $r.ref | default "HEAD" }}"
+  {{- end }}
+  {{- range $i, $s := .Values.pluginCatalog.sources }}
+  PluginCatalog__Sources__{{ $i }}__Name: "{{ $s.name }}"
+  PluginCatalog__Sources__{{ $i }}__RepoPath: "{{ $s.repoPath }}"
+  PluginCatalog__Sources__{{ $i }}__Ref: "{{ $s.ref | default "main" }}"
+  PluginCatalog__Sources__{{ $i }}__Format: "{{ $s.format | default "node-repo" }}"
+  {{- end }}
   # ---- System email (Microsoft Graph) — BIDIRECTIONAL. Outbound invitations + notifications
   # (/sendMail, Mail.Send app permission) AND optional inbound email→agent channel (inbox
   # change-notification subscription, Mail.ReadWrite app permission). Non-secret here;

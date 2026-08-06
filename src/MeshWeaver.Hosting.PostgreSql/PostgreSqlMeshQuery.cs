@@ -1,4 +1,4 @@
-using MeshWeaver.Hosting.Embeddings;
+﻿using MeshWeaver.Hosting.Embeddings;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -64,6 +64,31 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     private readonly IIoPool _ioPool;
 
     /// <summary>
+    /// The change feed this query watches to invalidate its cached snapshot.
+    ///
+    /// <para>🚨 NOT necessarily <c>_adapter.Changes</c>. Under
+    /// <see cref="PostgreSqlPathRoutingAdapter"/> there is ONE adapter PER SCHEMA, each with its
+    /// own change Subject, and a scoped query is served by the adapter for its own partition. But
+    /// a write that changes this query's RESULTS can land in a DIFFERENT schema: the global
+    /// satellite namespaces (<c>_Access</c>, <c>_Activity</c>, …) resolve to their own schemas
+    /// (<c>system_access</c>, …), so an AccessAssignment written at <c>{Partition}/_Access/x</c>
+    /// publishes on the <c>system_access</c> adapter's Subject — which the partition's query was
+    /// never subscribed to. The notification was delivered to a feed nobody in that fold was
+    /// listening on, so the <c>$security-access</c> snapshot stayed frozen at its Initial value
+    /// and permissions were evaluated stale, with no reconciliation path (the pg_notify LISTEN
+    /// fallback is disabled for partitioned PG). That is the residual PaywallRealGateShapeTests
+    /// flake that survived both #849 and #853.</para>
+    ///
+    /// <para>So the partitioned host passes the routing adapter's MERGED feed (every per-schema
+    /// adapter is subscribed into it). Correctness is unaffected: every subscriber already filters
+    /// with <c>PathMatcher.ShouldNotifyForQuery</c>, so a notification from an unrelated schema is
+    /// discarded exactly as before. The direction of the change is deliberately the safe one —
+    /// under-notifying leaves permissions stale, while over-notifying can only cost a redundant
+    /// re-query.</para>
+    /// </summary>
+    private readonly IObservable<DataChangeNotification> _changeFeed;
+
+    /// <summary>
     /// Initializes the PostgreSQL native query provider.
     /// </summary>
     /// <param name="adapter">The storage adapter that translates parsed queries into SQL.</param>
@@ -78,9 +103,13 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         MeshConfiguration? meshConfiguration = null,
         IEnumerable<string>? excludedNamespaces = null,
         IEmbeddingProvider? embeddingProvider = null,
-        IoPoolRegistry? ioPoolRegistry = null)
+        IoPoolRegistry? ioPoolRegistry = null,
+        IObservable<DataChangeNotification>? changeFeed = null)
     {
         _adapter = adapter;
+        // The feed this query watches for invalidation. Defaults to the adapter's own, but a
+        // PARTITIONED host passes the routing adapter's MERGED feed — see _changeFeed.
+        _changeFeed = changeFeed ?? adapter.Changes;
         _accessService = accessService;
         _meshConfiguration = meshConfiguration;
         _excludedNamespaces = (excludedNamespaces ?? Enumerable.Empty<string>())
@@ -662,7 +691,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             var earlyLock = new object();
             var initialDone = false;
 
-            var earlySubscription = _adapter.Changes
+            var earlySubscription = _changeFeed
                 .Where(n => parsedFilters.Any(f =>
                     PathMatcher.ShouldNotifyForQuery(n.Path, f.BasePath, f.Scope, f.Namespaces)))
                 .Subscribe(n =>
@@ -689,12 +718,19 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                     DataChangeNotification[] backlog;
                     // 1) Set up live subscription first — starts buffering immediately.
                     var changeBuffer = new Subject<DataChangeNotification>();
-                    disposables.Add(changeBuffer);
+                    // 🚨 ORDER MATTERS. CompositeDisposable disposes in INSERTION order, so the
+                    // feeding subscription must be registered BEFORE the buffer it writes into.
+                    // The other way round, teardown disposes changeBuffer first while the
+                    // subscription is still live, and a write landing in that window calls OnNext
+                    // on a disposed Subject → ObjectDisposedException thrown back into the
+                    // adapter's fan-out. That is what starved the $security-access query of its
+                    // notification and froze the permission fold (see IsolatedChangeFeed).
                     disposables.Add(
-                        _adapter.Changes
+                        _changeFeed
                             .Where(n => parsedFilters.Any(f =>
                                 PathMatcher.ShouldNotifyForQuery(n.Path, f.BasePath, f.Scope, f.Namespaces)))
                             .Subscribe(changeBuffer));
+                    disposables.Add(changeBuffer);
                     // 🚨 Strict unit-of-work + zero debounce: every change
                     // triggers its own RunQuery, serialised via Concat so the
                     // shared currentItems dictionary is never raced. Buffer
