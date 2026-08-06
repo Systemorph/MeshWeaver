@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -789,6 +790,26 @@ internal static class PermissionEvaluator
         return result;
     }
 
+    /// <summary>
+    /// Snapshot equality for a scope's assignment list — by path AND CONTENT.
+    ///
+    /// <para>🚨 Path-only equality was a SILENT SWALLOW. The fold downstream
+    /// (<see cref="ComputeScopeRoles"/> → <see cref="DeserializeAssignment"/>) is driven entirely by
+    /// each node's CONTENT (<c>roles</c>, <c>denied</c>, <c>accessObject</c>). Comparing only the set
+    /// of paths meant any emission that CORRECTED an assignment's content while the path set stayed
+    /// the same was suppressed by the <c>DistinctUntilChanged</c> in
+    /// <see cref="ObserveScopeAssignments"/> — permanently, not merely late. The subscriber kept the
+    /// first snapshot forever, so a grant that arrived content-empty and was filled in a beat later
+    /// never reached the evaluator. That is the <c>PaywallRealGateShapeTests</c> buyer-wait hang
+    /// (reproduced 1-in-7 locally): the timeout could be raised to any value and it would still hang,
+    /// because the correcting emission was discarded rather than delayed. It also meant EDITING an
+    /// assignment in production (flip a role, set <c>denied</c>) was invisible to every live
+    /// subscriber whose path set did not change.</para>
+    ///
+    /// <para>Erring toward "changed" is the SAFE direction: a false "different" costs one extra fold
+    /// (and the final <c>DistinctUntilChanged()</c> on the resulting <see cref="Permission"/> stops it
+    /// reaching subscribers), whereas a false "same" drops a permission change on the floor.</para>
+    /// </summary>
     private sealed class MeshNodeListPathEquality : IEqualityComparer<IEnumerable<MeshNode>>
     {
         public static readonly MeshNodeListPathEquality Instance = new();
@@ -797,10 +818,44 @@ internal static class PermissionEvaluator
         {
             if (ReferenceEquals(x, y)) return true;
             if (x is null || y is null) return false;
-            var xs = x.Select(n => n.Path).Where(p => !string.IsNullOrEmpty(p)).ToHashSet(StringComparer.Ordinal);
-            var ys = y.Select(n => n.Path).Where(p => !string.IsNullOrEmpty(p)).ToHashSet(StringComparer.Ordinal);
-            return xs.SetEquals(ys);
+            var xs = Signatures(x);
+            var ys = Signatures(y);
+            if (xs.Count != ys.Count) return false;
+            foreach (var kvp in xs)
+            {
+                if (!ys.TryGetValue(kvp.Key, out var other)) return false;
+                if (!string.Equals(kvp.Value, other, StringComparison.Ordinal)) return false;
+            }
+            return true;
         }
+
+        private static Dictionary<string, string> Signatures(IEnumerable<MeshNode> nodes)
+        {
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var n in nodes)
+            {
+                if (string.IsNullOrEmpty(n.Path)) continue;
+                map[n.Path] = ContentSignature(n.Content);
+            }
+            return map;
+        }
+
+        /// <summary>
+        /// A stable string for the parts of an assignment the fold reads. JSON-shaped content is
+        /// compared by its raw text; a typed <see cref="AccessAssignment"/> by the fields
+        /// <see cref="ComputeScopeRoles"/> consumes (its <c>Roles</c> collection makes record value
+        /// equality unreliable). Anything unrecognised falls back to <c>ToString()</c>, which at worst
+        /// reports "changed" — the safe direction.
+        /// </summary>
+        private static string ContentSignature(object? content) => content switch
+        {
+            null => string.Empty,
+            JsonElement je => je.GetRawText(),
+            JsonNode jn => jn.ToJsonString(),
+            AccessAssignment aa =>
+                $"{aa.AccessObject}|{string.Join(",", aa.Roles.Select(r => $"{r.Role}:{r.Denied}"))}",
+            var other => other.ToString() ?? string.Empty,
+        };
 
         public int GetHashCode(IEnumerable<MeshNode> obj) => obj.Count();
     }
