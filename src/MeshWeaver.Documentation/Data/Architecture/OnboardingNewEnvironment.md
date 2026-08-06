@@ -120,6 +120,44 @@ environment, in this order:
    build-numbered image), **Stable for prod** (rolls only to the newest clean release). See
    [Release & Self-Update Strategy](/Doc/Architecture/ReleaseStrategy).
 
+## Plugins — wire the environment to a registry
+
+A new environment starts with **no plugins**, and its **Settings ▸ Administration ▸ Plugin Catalog**
+tab reads "not configured" until you point it at a registry. Plugins live in (usually private) git
+repos; **one** installation is the [registry](/Doc/Architecture/PluginRegistry) — it alone holds the
+git credential and re-serves the catalog over HTTP — and every other installation is a credential-free
+**consumer**.
+
+Consumer (the normal case) — in `values.<env>.yaml`:
+
+```yaml
+pluginCatalog:
+  registryUrl: "https://<registry-host>"      # or `registries: [{name, url, ref}]` for several
+config:
+  memex_portal:
+    PluginCatalog__AutoUpdateByDefault: "true"   # installs track their repo; install-time seed only
+secrets:
+  memex_portal:
+    PluginCatalog__RegistryToken: "<token issued to this installation>"
+```
+
+Registry (only when this environment *is* the registry):
+
+```yaml
+pluginCatalog:
+  sources:
+    - {name: Plugins, repoPath: "https://github.com/<org>/<plugins-repo>", ref: main}
+secrets:
+  memex_portal:
+    PluginCatalog__RegistryTokens: ["<token-per-registered-installation>"]
+```
+
+> 🚨 **A registry with an empty `RegistryTokens` list answers ANY anonymous caller** with the full
+> catalog *and* every package's file content — that is the local-dev / e2e stub mode. Always
+> configure tokens on a production registry, and verify with an unauthenticated
+> `curl https://<registry-host>/api/plugins` (want `401`). Prefer sourcing the token from Key Vault
+> via the SecretProviderClass over putting it in the values file.
+
 ## Sign-in, invitations, email
 
 - **Microsoft, multi-tenant.** Set `Authentication__Microsoft__ClientId` + leave the tenant

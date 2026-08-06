@@ -29,6 +29,29 @@ persistence:
 # leave empty for local/self-host (the in-cluster patch still works; ACR polling just won't auth).
 selfUpdate:
   azureClientId: ""
+# ---- Plugin catalog ---------------------------------------------------------
+# Plugins are folders of mesh nodes in (usually private) git repos. ONE install acts as the
+# REGISTRY: it alone holds the git credential, reads the repos listed in `sources`, and re-serves
+# the catalog over HTTP at /api/plugins. Every other install is a CONSUMER — it sets `registryUrl`
+# (or `registries` for several) and needs NO git access. npm/NuGet-style credential encapsulation.
+#
+# Tokens are secrets: set them under secrets.memex_portal (PluginCatalog__RegistryToken on a
+# consumer, PluginCatalog__RegistryTokens on a registry) or inject them from the Key Vault CSI
+# mount. 🚨 A registry with NO tokens configured serves its whole catalog — and every package's
+# file content — to ANY anonymous caller. That is the local-dev / e2e stub mode; a production
+# registry must always configure tokens.
+#
+# See Doc/Architecture/PluginRegistry.md.
+pluginCatalog:
+  # CONSUMER: base URL of the registry install (e.g. https://memex.meshweaver.cloud).
+  # Empty = no remote catalog (the admin tab shows "not configured").
+  registryUrl: ""
+  registryRef: "HEAD"
+  # CONSUMER, multi-registry alternative to registryUrl — [{name, url, ref}].
+  registries: []
+  # REGISTRY: the git repos whose plugins this install serves — [{name, repoPath, ref, format}].
+  # format: node-repo (default, <Folder>/index.json Space root) | package-json.
+  sources: []
 # ---- Platform-admin Instances overview -------------------------------------
 # The admin "Instances" tab lists every portal on the cluster by querying the k8s API. Reading
 # deployments/ingresses ACROSS namespaces needs a cluster-scoped read grant — enable it ONLY on the
@@ -213,6 +236,10 @@ secrets:
     Anthropic__ApiKey: ""
     AzureFoundry__ApiKey: ""
     Ai__KeyProtection__MasterKey: ""
+    # Plugin catalog. Consumer: the instance token issued to this install. Registry: the list of
+    # tokens it accepts (empty list = serves ANY anonymous caller — dev/e2e only).
+    PluginCatalog__RegistryToken: ""
+    PluginCatalog__RegistryTokens: []
 config:
   memex_postgres:
     POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
