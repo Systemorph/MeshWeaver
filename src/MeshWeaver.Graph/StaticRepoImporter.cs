@@ -878,9 +878,17 @@ public static class StaticRepoImporter
                     // WrittenPaths ride along with the counts: only a node that really landed can
                     // leave a NodeType's assembly stale, so the recompile derivation downstream
                     // (GitHubSyncService → ReleaseAffectedNodeTypes) keys off exactly this list.
-                    .Aggregate((Imported: 0, Failed: 0, Preserved: 0, Written: ImmutableList<string>.Empty),
-                        (acc, x) => (acc.Imported + x.Imported, acc.Failed + x.Failed, acc.Preserved + x.Preserved,
-                            x.Written is null ? acc.Written : acc.Written.Add(x.Written)));
+                    // Collected in ONE materialization pass (not per-element immutable Adds), so a
+                    // large first import stays linear.
+                    .ToList()
+                    .Select(results => (
+                        Imported: results.Sum(x => x.Imported),
+                        Failed: results.Sum(x => x.Failed),
+                        Preserved: results.Sum(x => x.Preserved),
+                        Written: results
+                            .Where(x => x.Written is not null)
+                            .Select(x => x.Written!)
+                            .ToImmutableList()));
 
                 return upserted.SelectMany(count =>
                 {
