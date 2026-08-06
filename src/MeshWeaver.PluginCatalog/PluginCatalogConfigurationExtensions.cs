@@ -40,7 +40,11 @@ public static class PluginCatalogConfigurationExtensions
             .ConfigureServices(services => services
                 .AddSingleton<PluginUpdateWatcher>()
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
-                    sp => sp.GetRequiredService<PluginUpdateWatcher>()))
+                    sp => sp.GetRequiredService<PluginUpdateWatcher>())
+                // Resolves an inbound instance key to its instance + grant for the /api/plugins
+                // surface. Mesh-scoped singleton so its short-lived cache dies with the mesh
+                // (Doc/Architecture/NoStaticState) — a revoked grant must not outlive a test either.
+                .AddSingleton<InstanceRegistryAuthenticator>())
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();
