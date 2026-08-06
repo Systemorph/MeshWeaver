@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
@@ -130,7 +130,13 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         return _scopedDelegates.GetOrAdd(adapter, a =>
             new PostgreSqlMeshQuery(a, _accessService, meshConfiguration: null,
                 excludedNamespaces: null, embeddingProvider: _partitionProvider.EmbeddingProvider,
-                ioPoolRegistry: _ioPoolRegistry));
+                ioPoolRegistry: _ioPoolRegistry,
+                // 🚨 The MERGED feed, not `a.Changes`. This delegate is the adapter for ONE schema,
+                // but writes that change its results land in others — an AccessAssignment at
+                // {Partition}/_Access/x publishes on the `system_access` adapter. Watching only
+                // `a.Changes` meant that notification reached nobody in this fold, the
+                // $security-access snapshot stayed frozen, and permissions evaluated stale.
+                changeFeed: _partitionProvider.MergedChanges));
     }
 
     /// <summary>
