@@ -90,7 +90,7 @@ var newTodo = new TodoItem
 };
 
 var request = DataChangeRequest.Create([newTodo], changedBy: "user-123");
-workspace.RequestChange(request, activity, delivery);
+workspace.RequestChange(request, delivery);
 ```
 
 ## Create Flow
@@ -216,7 +216,7 @@ var updatedTodo = existingTodo with
 };
 
 var request = DataChangeRequest.Update([updatedTodo], changedBy: "user-123");
-workspace.RequestChange(request, activity, delivery);
+workspace.RequestChange(request, delivery);
 ```
 
 ## Update Options
@@ -261,10 +261,10 @@ Convenience wrappers for the most common patterns:
 
 ```csharp
 // Single entity
-workspace.Update(updatedTodo, activity, delivery);
+workspace.Update(updatedTodo, delivery);
 
 // Multiple entities
-workspace.Update([todo1, todo2, todo3], activity, delivery);
+workspace.Update([todo1, todo2, todo3], delivery);
 ```
 
 ---
@@ -277,14 +277,14 @@ Pass the full entity object (not just the ID) so the workspace can resolve and r
 
 ```csharp
 var request = DataChangeRequest.Delete([todoToDelete], changedBy: "user-123");
-workspace.RequestChange(request, activity, delivery);
+workspace.RequestChange(request, delivery);
 ```
 
 ## Workspace Extension Methods
 
 ```csharp
-workspace.Delete(todoToDelete, activity, delivery);
-workspace.Delete([todo1, todo2], activity, delivery);
+workspace.Delete(todoToDelete, delivery);
+workspace.Delete([todo1, todo2], delivery);
 ```
 
 Deleting a **node** (as opposed to an entity in a collection) is a lifecycle operation: `hub.Observe<DeleteNodeResponse>(new DeleteNodeRequest(path)).Subscribe(...)` — see [Node Operations](/Doc/DataMesh/NodeOperations).
