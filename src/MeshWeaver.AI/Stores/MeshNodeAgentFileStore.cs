@@ -125,9 +125,10 @@ public sealed class MeshNodeAgentFileStore : AgentFileStore
         mesh.Stream(() => SearchCore(directory, regexPattern, globPattern, recursive));
 
     // ── The Microsoft Agent Framework surface ─────────────────────────────────────────────────
-    // Sanctioned SDK-boundary adapters: one line each, no async/await, one ToTask per call. Task
-    // appears HERE and nowhere else — these signatures are MAF's, not ours. Where a single value is
-    // required the .Take(1) sits at this boundary, so the live shape above stays live for everyone.
+    // Sanctioned SDK-boundary adapters, uniform: one expression each, NO async/await state machine
+    // (the method just returns a Task), one ToTask per call. Task appears HERE and nowhere else —
+    // these signatures are MAF's, not ours. Where a single value is required the .Take(1) sits at
+    // this boundary, so every reactive method above stays live for every other consumer.
 
     /// <inheritdoc />
     public override Task WriteAsync(string path, string content, CancellationToken cancellationToken = default) =>
@@ -166,27 +167,23 @@ public sealed class MeshNodeAgentFileStore : AgentFileStore
             .Select(entries => (IReadOnlyList<FileStoreEntry>)entries.ToList())
             .ToTask(cancellationToken);
 
-    /// <summary>
-    /// NOT IMPLEMENTED — deliberately. Content search is a QUERY, and in this platform a query is a
-    /// live change feed, not a value you fetch once (CqrsAndContentAccess.md). MAF's signature can
-    /// only express the one-shot snapshot, which is exactly the read shape that is stale the moment
-    /// it returns. Use <see cref="Search"/>, which stays live.
-    ///
-    /// <para>Nothing in MeshWeaver calls this: the store is consumed through its reactive surface,
-    /// and the agent tool path builds its own <see cref="Microsoft.Extensions.AI.AITool"/>s. It
-    /// exists only because the base class declares it abstract.</para>
-    /// </summary>
-    /// <exception cref="NotSupportedException">Always.</exception>
+    /// <inheritdoc />
+    /// <remarks>
+    /// One snapshot of a live query. Content search IS a query here — <see cref="Search"/> keeps
+    /// re-emitting as matching content changes — but MAF's signature carries a single value, so the
+    /// <c>.Take(1)</c> sits at this boundary like every other override's. Callers that want the
+    /// result to stay current bind to <see cref="Search"/> instead.
+    /// </remarks>
     public override Task<IReadOnlyList<FileSearchResult>> SearchAsync(
         string directory,
         string regexPattern,
         string? globPattern = null,
         bool recursive = false,
         CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException(
-            $"{nameof(MeshNodeAgentFileStore)} does not implement the one-shot {nameof(SearchAsync)}: " +
-            $"a mesh content search is a live query. Use {nameof(Search)}, which returns " +
-            "IObservable<IReadOnlyCollection<FileSearchResult>>.");
+        Search(directory, regexPattern, globPattern, recursive)
+            .Take(1)
+            .Select(results => (IReadOnlyList<FileSearchResult>)results.ToList())
+            .ToTask(cancellationToken);
 
     // ── Cores ─────────────────────────────────────────────────────────────────────────────────
 

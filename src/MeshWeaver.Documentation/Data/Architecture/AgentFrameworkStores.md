@@ -61,20 +61,26 @@ This ordering is load-bearing: `MeshNodeStreamHandle.Update` captures `AccessSer
 
 **Writes split by lifecycle, and this is not a detail.** `stream.Update` is *the* mutation API, and overwrite uses it — the owning hub serialises every writer through its single-threaded action block, and a cross-hub write sends only the RFC 7396 merge patch. But `stream.Update` targets a node's per-node hub, and for a path that does not exist yet **that hub never activates**: the write comes back `DeliveryFailure: No node found`. Bringing a node into being is node *lifecycle*, which is what `CreateNode` is for. So: probe → existing means mutate, absent means create.
 
-**`SearchAsync` is deliberately not implemented.** Content search is a query, and in this platform a query is a live change feed, not a value you fetch once. MAF's signature can only express the one-shot snapshot — precisely the read shape that is stale the moment it returns. `Search(...)` returns `IObservable<IReadOnlyCollection<FileSearchResult>>` and keeps re-emitting; the one-shot override throws `NotSupportedException` pointing at it. Nothing in MeshWeaver calls the override; it exists only because the base declares it abstract.
+**Search is a query, so it is live — and the snapshot is taken at the boundary.** `Search(...)` returns `IObservable<IReadOnlyCollection<FileSearchResult>>` and keeps re-emitting as matching content changes; that is the shape MeshWeaver code binds to. `SearchAsync` is the same one-expression adapter as every other override — `.Take(1)` then `ToTask` — because MAF's signature carries a single value. The rule is uniform: the `.Take(1)` lives at the MAF boundary, never in the reactive method.
 
 ## The skills source
 
 `MeshAgentSkillsSource` serves our existing `nodeType:Skill` nodes. Nothing about how skills are authored or stored changes.
 
-Discovery keeps the platform's established layering, and resolves it through `AgentPickerProjection.BuildSkillSubtreeQueries` — the same definition site the chat picker builds on, so there is no parallel reconstruction:
+Discovery goes through `AiSettingsNodeType.ObserveSkillQueries` — **the same call the chat's slash autocomplete and slash execution make**. That sharing is the point, not an implementation detail: the skills a user sees listed are exactly the skills an agent round resolves, *including* sources the user configured or a skill package installed. Nothing reconstructs these query strings.
 
-1. **the user's own** — `{user}/Skill`, a flat namespace;
-2. **the context node's partition** — the whole subtree;
-3. **the node type's partition** — the whole subtree;
-4. **the platform defaults** — `Skill`, always last.
+Two definitions have to agree for that to hold, and both are pinned by tests: `AiSettingsNodeType.DefaultSkillQueryTemplates` (what the settings path resolves when a user has configured nothing) and `AgentPickerProjection.BuildSkillQueries` (the canonical builder). If they drift, a user sees skills an agent does not have — silently.
 
-Layers 2 and 3 are wider than layer 1 on purpose. A user's skills sit where convention puts them. A space or a plugin ships skills wherever its content is organised — beside the types they describe, under feature folders, several levels deep. Requiring a flat `{partition}/Skill` namespace means a skill authored next to the thing it explains is simply never found. Scoping those layers to the partition subtree makes placement a content decision again, at the cost of one extra query per layer. Where two layers define the same skill name, the more specific one wins — which is what lets a user override a platform skill.
+The layers, one query row each:
+
+- **the platform defaults** — `Skill`, always **first** (see below);
+- **the user's own** — `{user}/Skill`, a flat namespace;
+- **the context node's partition** — the whole subtree;
+- **the node type's partition** — the whole subtree.
+
+The two partition layers are wider than the user's on purpose. A user's skills sit where convention puts them. A space or a plugin ships skills wherever its content is organised — beside the types they describe, under feature folders, several levels deep. Requiring a flat `{partition}/Skill` namespace means a skill authored next to the thing it explains is simply never found. Scoping those layers to the partition subtree makes placement a content decision again, at the cost of one extra query per layer.
+
+**Row order is not the precedence signal.** When two layers define the same skill name the more specific one wins — that is what lets a user override a platform skill — and it is resolved from each result's *own partition*, never from the order of the query rows. Order matters for one unrelated reason: the platform row is the only one guaranteed to resolve (every other targets a partition that may not exist), so it stays first. Demoting it makes slash autocomplete surface nothing, which `SkillAutocompleteTest` catches.
 
 **One live query, no per-skill reads.** The synced `GetQuery` collection carries whole nodes, content included, so listing N skills costs one shared subscription and `GetContentAsync` performs no I/O at all.
 

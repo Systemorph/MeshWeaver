@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
@@ -20,12 +21,13 @@ namespace MeshWeaver.AI.Stores;
 /// and discovered through namespace inheritance. This adapter exposes exactly that set through MAF's
 /// interface, so nothing about how we author or store skills changes.</para>
 ///
-/// <para><b>Discovery keeps the platform's layering</b> — <b>1.</b> the user's own, <b>2.</b> the
-/// context node's partition, <b>3.</b> the node type's partition, then the platform defaults — via
-/// <see cref="AgentPickerProjection.BuildSkillSubtreeQueries"/>, the single definition site the chat
-/// picker also builds on. Layers 2 and 3 resolve over the whole partition subtree, so a space or
-/// plugin can author a skill next to the content it belongs to rather than flattening everything
-/// into one namespace. Where two layers define the same skill name the more specific one wins.</para>
+/// <para><b>Discovery goes through the SAME query set the GUI uses</b> —
+/// <see cref="SkillNodeType.SkillQueries"/>, which the chat's combobox, slash menu and autocomplete
+/// also call. That shared entry point is the point: the skills a user sees listed are exactly the
+/// skills an agent round resolves. Layering is <b>1.</b> the user's own, <b>2.</b> the context node's
+/// partition, <b>3.</b> the node type's partition, then the platform defaults; layers 2 and 3 resolve
+/// over the whole partition subtree, so a space or plugin can author a skill next to the content it
+/// belongs to. Where two layers define the same skill name the more specific one wins.</para>
 ///
 /// <para><b>One live query, no per-skill reads.</b> The synced collection carries whole nodes,
 /// content included, so listing N skills costs ONE shared subscription — the body is already in hand
@@ -53,7 +55,9 @@ public sealed class MeshAgentSkillsSource : AgentSkillsSource
 
     private readonly MeshStoreAccess mesh;
     private readonly ILogger<MeshAgentSkillsSource>? logger;
-    private readonly string[] queries;
+    private readonly string? contextPath;
+    private readonly string? userPath;
+    private readonly string? nodeTypePath;
     private readonly IReadOnlyList<string> precedence;
 
     /// <summary>
@@ -72,7 +76,14 @@ public sealed class MeshAgentSkillsSource : AgentSkillsSource
         mesh = new MeshStoreAccess(hub, nameof(MeshAgentSkillsSource));
         logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger<MeshAgentSkillsSource>();
-        queries = AgentPickerProjection.BuildSkillSubtreeQueries(userPath, contextPath, nodeTypePath);
+        // 🚨 Paths only — the QUERIES are resolved live in GetSkills through
+        // AiSettingsNodeType.ObserveSkillQueries, the exact same call the chat's slash autocomplete
+        // and slash execution make. That is what guarantees the skills a user SEES are the skills
+        // this source FEEDS to the agent framework, INCLUDING any sources the user configured or a
+        // skill package installed. Never reconstruct these query strings here.
+        this.contextPath = contextPath;
+        this.userPath = userPath;
+        this.nodeTypePath = nodeTypePath;
 
         // The partitions that define layer precedence, most specific first. A skill's own path tells
         // us which layer it came from — the union returns one flat set, so rank is recovered here
@@ -94,7 +105,14 @@ public sealed class MeshAgentSkillsSource : AgentSkillsSource
     /// edited or removed anywhere in the layered scope. This is the surface MeshWeaver consumes.
     /// </summary>
     public IObservable<IReadOnlyCollection<AgentSkill>> GetSkills() =>
-        mesh.Stream(() => mesh.Query(queries).Select(Project));
+        mesh.Stream(() => AiSettingsNodeType
+            .ObserveSkillQueries(
+                mesh.Hub.GetWorkspace(), mesh.Hub, mesh.Hub.ServiceProvider,
+                userPath, contextPath, nodeTypePath)
+            .Select(resolved => mesh.Query(resolved).Select(Project))
+            // Switch, not Merge: when the user edits their skill sources the old query set is
+            // abandoned rather than left racing the new one.
+            .Switch());
 
     /// <inheritdoc />
     public override Task<IList<AgentSkill>> GetSkillsAsync(

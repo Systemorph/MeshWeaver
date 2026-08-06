@@ -167,16 +167,117 @@ public class MeshNodeAgentFileStoreTest(ITestOutputHelper output) : MonolithMesh
     }
 
     [Fact]
-    public async Task SearchAsync_TheOneShotMafSignature_IsRefused()
+    public async Task SearchAsync_ReturnsOneSnapshotOfTheLiveSearch()
     {
         var store = NewStore();
+        await store.Write("a.md", "alpha\nthe rate is 4.2%\ngamma").FirstAsync().ToTask();
+        await store.Write("b.md", "nothing to see").FirstAsync().ToTask();
 
-        var search = () => store.SearchAsync("", "anything");
+        var results = await store.SearchAsync("", "rate");
 
-        (await search.Should().ThrowAsync<NotSupportedException>(
-                "a mesh content search is a live query; collapsing it to a single snapshot is the "
-                + "stale-read shape CQRS forbids"))
-            .WithMessage("*Search*");
+        var match = results.Should().ContainSingle().Subject;
+        match.FileName.Should().Be("a.md");
+        match.MatchingLines.Should().ContainSingle().Which.LineNumber.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithNoMatches_ReturnsEmpty_RatherThanHanging()
+    {
+        var store = NewStore();
+        await store.Write("a.md", "alpha").FirstAsync().ToTask();
+
+        (await store.SearchAsync("", "nothing-matches-this")).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Search_NonRecursive_SkipsNestedFiles_AndRecursiveFindsThem()
+    {
+        var store = NewStore();
+        await store.Write("top.md", "needle").FirstAsync().ToTask();
+        await store.Write("nested/deep.md", "needle").FirstAsync().ToTask();
+
+        // Default scope is the direct children only.
+        var shallow = await store.Search("", "needle")
+            .Where(list => list.Count > 0).FirstAsync().Timeout(Bound).ToTask();
+        shallow.Select(r => r.FileName).Should().Equal("top.md");
+
+        // Recursive reaches descendants, reporting each path relative to the search root.
+        var deep = await store.Search("", "needle", recursive: true)
+            .Where(list => list.Count > 1).FirstAsync().Timeout(Bound).ToTask();
+        deep.Select(r => r.FileName).Order().Should().Equal("nested/deep.md", "top.md");
+    }
+
+    // ── Liveness ──────────────────────────────────────────────────────────────────────────────
+    // The reactive methods are LIVE: a consumer binds once and keeps seeing the truth. Each of
+    // these subscribes BEFORE the change, so a one-shot implementation would hang them.
+
+    [Fact]
+    public async Task Read_StaysLive_AndReEmitsWhenTheFileChanges()
+    {
+        var store = NewStore();
+        await store.Write("live.md", "first").FirstAsync().ToTask();
+
+        var next = store.Read("live.md").Where(text => text == "second")
+            .FirstAsync().Timeout(Bound).ToTask();
+        await store.Write("live.md", "second").FirstAsync().ToTask();
+
+        (await next).Should().Be("second");
+    }
+
+    [Fact]
+    public async Task ListChildren_StaysLive_AndReEmitsWhenAFileAppears()
+    {
+        var store = NewStore();
+        await store.Write("one.md", "x").FirstAsync().ToTask();
+
+        var next = store.ListChildren("").Where(list => list.Any(e => e.Name == "two.md"))
+            .FirstAsync().Timeout(Bound).ToTask();
+        await store.Write("two.md", "y").FirstAsync().ToTask();
+
+        (await next).Select(e => e.Name).Should().Contain(["one.md", "two.md"]);
+    }
+
+    [Fact]
+    public async Task Search_StaysLive_AndReEmitsWhenMatchingContentAppears()
+    {
+        var store = NewStore();
+        await store.Write("a.md", "nothing yet").FirstAsync().ToTask();
+
+        var next = store.Search("", "needle").Where(list => list.Count > 0)
+            .FirstAsync().Timeout(Bound).ToTask();
+        await store.Write("b.md", "a needle appears").FirstAsync().ToTask();
+
+        (await next).Select(r => r.FileName).Should().Equal("b.md");
+    }
+
+    // ── The Microsoft Agent Framework surface, end to end ─────────────────────────────────────
+
+    [Fact]
+    public async Task CreateDirectoryAsync_AndDeleteAsync_WorkThroughTheMafSurface()
+    {
+        AgentFileStore store = NewStore();
+
+        await store.CreateDirectoryAsync("folder");
+        await store.WriteAsync("folder/note.md", "x");
+
+        (await store.ListChildrenAsync("")).Single(e => e.Name == "folder")
+            .Type.Should().Be(FileStoreEntry.Directory);
+        (await store.ListChildrenAsync("folder")).Select(e => e.Name).Should().Equal("note.md");
+
+        (await store.DeleteAsync("folder/note.md")).Should().BeTrue();
+        (await store.DeleteAsync("folder/note.md")).Should().BeFalse();
+        (await store.FileExistsAsync("folder/note.md")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CreateDirectoryAsync_IsIdempotent()
+    {
+        AgentFileStore store = NewStore();
+
+        await store.CreateDirectoryAsync("folder");
+        await store.CreateDirectoryAsync("folder");
+
+        (await store.ListChildrenAsync("")).Where(e => e.Name == "folder").Should().ContainSingle();
     }
 
     [Fact]
@@ -191,5 +292,6 @@ public class MeshNodeAgentFileStoreTest(ITestOutputHelper output) : MonolithMesh
         (await store.ReadAsync("via-maf.md")).Should().Be("portable");
         (await store.FileExistsAsync("via-maf.md")).Should().BeTrue();
         (await store.ListChildrenAsync("")).Select(e => e.Name).Should().Contain("via-maf.md");
+        (await store.SearchAsync("", "portable")).Select(r => r.FileName).Should().Contain("via-maf.md");
     }
 }
