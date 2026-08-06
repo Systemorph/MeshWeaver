@@ -304,6 +304,93 @@ jobs:
           -p:ContainerRepository=$IMAGE_NS/mw-plugin-test
           -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main;latest"'
 
+  # ─────────────────────────── portal-next (Next.js) ─────────────────────────
+  # The React/Next.js portal. It is NOT a .NET project, so it cannot use the
+  # `dotnet publish -t:PublishContainer` shape the other three legs share — it builds from
+  # clients/portal-next/Dockerfile with the `clients/` directory as context (the app aliases
+  # @meshweaver/react and @meshweaver/client-web to their SOURCE trees in ../react and
+  # ../grpc-web, so the context has to span all three).
+  #
+  # 🚨 WHY THIS JOB EXISTS. Until now nothing built this image in CI: every deployment ran
+  # `memex-portal-next:guiship-20260705-2109`, a hand-tagged one-off from 2026-07-05 that drifted
+  # 11 commits behind main. Every portal-next change — the side-panel actions, the client
+  # localization, the whole React GUI half — merged to main and then simply never shipped, with no
+  # signal that it hadn't. A feature-flagged surface that silently stops receiving updates is worse
+  # than one that is switched off, because it looks live.
+  #
+  # amd64 ONLY, on purpose: every AKS node in memexaks-cluster is amd64, and the runner is amd64,
+  # so this builds natively with no QEMU emulation. memex-local builds its own arm64 image into
+  # Colima's Docker store for local dev (see clients/portal-next/DEPLOY.md), so nothing needs the
+  # arm64 variant from ACR.
+  portal-next-image:
+    name: "Build + push portal-next image"
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Build the EXACT commit the tests passed on — not whatever main is now.
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # PREREQUISITE — grpc-web codegen. grpc-web/src/connection.ts imports ./gen/mesh_pb, which is
+      # GENERATED (gitignored) by `buf generate` from the mesh .proto in the .NET tree
+      # (src/MeshWeaver.Hosting.Grpc/Protos) — OUTSIDE the clients/ build context, and buf ships
+      # glibc binaries that will not run in the musl Alpine build image. So it MUST happen here, on
+      # the host, before the docker build. Without it the Next build fails with
+      # "Module not found: Can't resolve './gen/mesh_pb'".
+      - name: Generate gRPC-web client (buf)
+        run: |
+          set -euo pipefail
+          npm --prefix clients/grpc-web ci --no-audit --no-fund
+          npm --prefix clients/grpc-web run gen
+          test -f clients/grpc-web/src/gen/mesh_pb.ts
+      # Same tag triple as the other legs, computed the same way, so a given main commit's
+      # portal-ai and portal-next images always carry matching tags.
+      - name: Compute image tags (version + short SHA)
+        id: vars
+        run: |
+          set -euo pipefail
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=3.0.0-ci.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: az acr login --name meshweaver
+      # DOCKER_BUILDKIT=1 explicitly: the Dockerfile opens with `# syntax=docker/dockerfile:1` and
+      # relies on Dockerfile.dockerignore (a per-Dockerfile ignore, a BuildKit-only feature) to keep
+      # node_modules/.next/dist out of the context. Without BuildKit that ignore is silently not
+      # applied and the stale host artefacts get copied into the image.
+      - name: Build + push portal-next
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: >
+          docker build
+          --platform linux/amd64
+          -f clients/portal-next/Dockerfile
+          -t ${{ env.ACR }}/memex-portal-next:${{ steps.vars.outputs.version }}
+          -t ${{ env.ACR }}/memex-portal-next:${{ steps.vars.outputs.sha }}
+          -t ${{ env.ACR }}/memex-portal-next:main
+          clients/
+      - name: Push tags
+        run: |
+          set -euo pipefail
+          docker push ${{ env.ACR }}/memex-portal-next:${{ steps.vars.outputs.version }}
+          docker push ${{ env.ACR }}/memex-portal-next:${{ steps.vars.outputs.sha }}
+          docker push ${{ env.ACR }}/memex-portal-next:main
+
   # ───────────────────────────── FAILURE ALERTING ────────────────────────────
   # A red CD after a green merge is otherwise INVISIBLE (nobody watches the Actions tab), and the
   # consequence is severe: the merged commit never gets a deployable image, so every pull-based
@@ -316,7 +403,7 @@ jobs:
   #   only created when none is open (close the issue once CD is green again).
   alert-on-failure:
     name: "Alert: CD failed on main"
-    needs: [portal-image, migration-image, plugin-test-image]
+    needs: [portal-image, migration-image, plugin-test-image, portal-next-image]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
