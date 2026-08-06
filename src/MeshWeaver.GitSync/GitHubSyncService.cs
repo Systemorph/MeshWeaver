@@ -627,7 +627,7 @@ public sealed class GitHubSyncService
     {
         var path = ConfigPath(spacePath, sourceId);
         return hub.GetWorkspace()
-            .GetQuery($"gitsync-cfg:{path}", $"path:{path}")
+            .GetQuery($"gitsync-cfg:{path}", $"path:{path} select:path,id,name,nodeType,content")
             .Select(nodes => nodes?.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)));
     }
 
@@ -642,7 +642,7 @@ public sealed class GitHubSyncService
     {
         var primaryPath = ConfigPath(spacePath);
         var children = hub.GetWorkspace()
-            .GetQuery($"gitsync-cfgs:{spacePath}", $"namespace:{primaryPath} nodeType:{ConfigNodeType}")
+            .GetQuery($"gitsync-cfgs:{spacePath}", $"namespace:{primaryPath} nodeType:{ConfigNodeType} select:path,id,namespace,name,nodeType,content")
             .Select(nodes => (nodes ?? [])
                 .Where(n => string.Equals(n.Namespace, primaryPath, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(n => n.Id, StringComparer.OrdinalIgnoreCase)

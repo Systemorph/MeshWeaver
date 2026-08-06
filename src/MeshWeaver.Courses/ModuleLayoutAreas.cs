@@ -66,18 +66,30 @@ public static class ModuleLayoutAreas
         var lastSlash = modulePath.LastIndexOf('/');
         var coursePath = lastSlash > 0 ? modulePath[..lastSlash] : modulePath;
 
+        // Every child stream below is a SHELL read: BuildContent embeds each child by
+        // Path and labels it by Name/Id/Order, and never touches Content. The
+        // `select:` omits `content` so the JSONB blob is never fetched — see
+        // Doc/Architecture/CqrsAndContentAccess ("select only what you need").
         var theoryStream = hub.GetQuery(
             $"module-theory:{modulePath}",
-            $"path:{modulePath}/{ModuleNodeType.TheorySubNamespace} scope:children");
+            $"path:{modulePath}/{ModuleNodeType.TheorySubNamespace} scope:children select:path,id,name,order");
         var exampleStream = hub.GetQuery(
             $"module-examples:{modulePath}",
-            $"path:{modulePath}/{ModuleNodeType.ExampleSubNamespace} scope:children");
+            $"path:{modulePath}/{ModuleNodeType.ExampleSubNamespace} scope:children select:path,id,name,order");
         var exerciseStream = hub.GetQuery(
             $"module-exercises:{modulePath}",
-            $"path:{modulePath}/{ExerciseNodeType.ExerciseSubNamespace} scope:children nodeType:{ExerciseNodeType.NodeType}");
+            $"path:{modulePath}/{ExerciseNodeType.ExerciseSubNamespace} scope:children nodeType:{ExerciseNodeType.NodeType} select:path,id,name,order");
+        // 🚨 SHARED CACHE ID with CourseLayoutAreas' moduleStream — and the synced-query
+        // cache is keyed by ID ALONE (MeshNodeStreamCache.GetQueryRaw returns the existing
+        // entry and IGNORES the queries on a hit). So the two call sites' query strings MUST
+        // stay byte-identical: whichever subscribes first wins, and a `select:` that differs
+        // between them would silently hand the other consumer a null Content. The course
+        // overview DOES read Content off these module nodes (BuildModuleCards →
+        // ContentAs<ModuleConfiguration>), so `content` stays in the projection here even
+        // though this call site only needs the shells.
         var siblingStream = hub.GetQuery(
             $"course-modules:{coursePath}",
-            $"path:{coursePath} scope:children nodeType:{ModuleNodeType.NodeType}");
+            $"path:{coursePath} scope:children nodeType:{ModuleNodeType.NodeType} select:path,id,name,order,content");
 
         return nodeStream.CombineLatest(theoryStream, exampleStream, exerciseStream, siblingStream,
             (node, theory, examples, exercises, siblings) =>

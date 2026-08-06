@@ -189,11 +189,62 @@ ReferenceEquals(first, second).Should().BeTrue();
 
 **Pick stable ids** — `$"chat-picker:{contextPath}"`, not `Guid.NewGuid()`. Reusing the same id across re-mounts means the upstream subscription (and the provider Initial wave) is reused rather than cycled on every component re-render. A fresh Guid on every call forfeits this entirely.
 
+### 🚨 The id is the ONLY key — `queries` are ignored on a cache hit
+
+`GetQuery(id, queries)` is get-**or**-create. On a hit it returns the registered stream and never
+looks at `queries`:
+
+```csharp
+var current = _queries;
+if (current.TryGetValue(id, out var existing))
+    return existing;          // ← queries not consulted
+```
+
+So two call sites that share an id but pass **different** query strings do not get two collections,
+and they do not get an error: they both get whichever one subscribed first. Whether that is the
+right set is decided by render order, which is why the symptom is intermittent.
+
+The sharp edge is the `select:` projection (below). A metadata-only reader that registers
+`select:path,name` first will hand a *content-reading* consumer of the same id a snapshot whose
+`Content` is null — the content reader then renders empty, on some loads and not others.
+
+- Where an id is genuinely shared, keep the query strings **byte-identical** and project for the
+  most demanding consumer. `course-modules:{coursePath}` — read by both the course overview
+  (needs `content` for card summaries) and the module page (needs shells only) — is the worked
+  example: both sites carry `select:path,id,name,order,content`.
+- Otherwise **scope the id** so unrelated readers cannot collide. The cache is process-wide, so a
+  bare `nodes-in:{ns}` minted by two different modules is one entry, not two: prefix it
+  (`uw-nodes-in:{ns}`, `claims-nodes-in:{ns}`).
+
 ---
 
 ## Typed content
 
 If your nodes carry typed content (`AgentConfiguration`, `ModelDefinition`, etc.), make sure the type is registered in the hub's `TypeRegistry`. The synced query deserialises `MeshNode.Content` using the hub's `JsonSerializerOptions`. A missing TypeRegistry entry means `Content` arrives as a raw `JsonElement`, your `is T` casts fail silently, and the collection appears empty even though the snapshot has items.
+
+### 🚨 …and `select:` decides whether `Content` is fetched at all
+
+A registered `TypeRegistry` entry is necessary but not sufficient: the projection has to ask for the
+column. A synced query runs `Query<MeshNode>`, where a `select:` narrows the **SQL** but leaves the
+row a `MeshNode`. Exactly one column is conditional — `content`. Leave it out of a `select:` and the
+adapter emits `NULL::jsonb AS content`; the node arrives fully formed with `Content == null`, and
+every `ContentAs<T>()` returns null with no error and no empty result.
+
+That is the *same observable symptom* as the missing-TypeRegistry bug above — "the collection
+appears empty even though the snapshot has items" — from a completely different cause. When you
+debug it, check the projection before the registry: it is the cheaper of the two to rule out.
+
+```csharp
+// metadata-only  → content deliberately not loaded
+$"namespace:{ns} nodeType:Module select:path,id,name,order"
+// content-bearing → `content` named deliberately
+$"namespace:{ns} nodeType:Module select:path,id,name,order,content"
+// unproven consumer chain → no select: at all (full node, the conservative default)
+$"namespace:{ns} nodeType:Module"
+```
+
+See [CqrsAndContentAccess](/Doc/Architecture/CqrsAndContentAccess) → "On a synced query, `select:`
+is the switch that loads `Content`" for the full rule.
 
 See [AddingANewNodeType](/Doc/Architecture/AddingANewNodeType) → step 4 for the wiring.
 
