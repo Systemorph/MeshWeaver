@@ -207,29 +207,39 @@ public static class InstanceGrantAdminSettingsTab
         }
 
         var entry = new PluginGrantEntry { Source = source, PackageId = packageId };
-        var workspace = host.Hub.GetWorkspace();
         var path = MeshWeaverInstanceNodeType.GrantPath(instanceId);
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var adminId = accessService?.Context?.ObjectId ?? "";
+        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         target.UpdateData(ResultDataId, host.Localize("instanceGrants.applying"));
 
-        // Read-modify-write through the owning hub's stream: the Admin hub serialises every writer,
-        // so two admins editing different instances (or the same one) cannot clobber each other.
-        workspace.GetMeshNodeStream(path)
-            .Update(current =>
+        // 🚨 Read-then-CreateOrUpdate, NOT stream.Update. An instance's FIRST grant has no node yet,
+        // and Update on a path that does not exist aborts with "no initial state arrived for … within
+        // 30s" — so the very first grant for every instance failed (observed live 2026-08-06 while
+        // rolling this out). CreateOrUpdateNode covers both create and update in one call.
+        //
+        // The prior read is a one-shot by exact path — never a query, which is eventually consistent
+        // and would happily drop an entry another admin just added.
+        host.Hub.GetMeshNode(path, TimeSpan.FromSeconds(10))
+            .Take(1)
+            .SelectMany(existing =>
             {
-                var grant = current.ContentAs<PluginGrant>(host.Hub.JsonSerializerOptions)
+                var grant = existing?.ContentAs<PluginGrant>(host.Hub.JsonSerializerOptions)
                             ?? new PluginGrant { InstanceId = instanceId };
+                // Drop any identical entry first, so Grant is idempotent and Revoke is a removal.
                 var entries = grant.Entries
                     .Where(e => !(string.Equals(e.Source, entry.Source, StringComparison.OrdinalIgnoreCase)
                                   && string.Equals(e.PackageId, entry.PackageId, StringComparison.Ordinal)))
                     .ToList();
                 if (!revoke)
                     entries.Add(entry);
-                return current with
+
+                var node = new MeshNode(instanceId, MeshWeaverInstanceNodeType.GrantNamespace)
                 {
+                    Name = $"Plugin grant: {instanceId}",
                     NodeType = MeshWeaverInstanceNodeType.GrantNodeType,
+                    State = MeshNodeState.Active,
                     Content = grant with
                     {
                         InstanceId = instanceId,
@@ -238,6 +248,7 @@ public static class InstanceGrantAdminSettingsTab
                         UpdatedAt = DateTimeOffset.UtcNow,
                     },
                 };
+                return meshService.CreateOrUpdateNode(node);
             })
             .Subscribe(
                 _ => target.UpdateData(ResultDataId,
