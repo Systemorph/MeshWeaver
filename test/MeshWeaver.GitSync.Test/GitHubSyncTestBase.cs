@@ -28,7 +28,16 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
     protected readonly StubPullRequestDraftService DraftStub = new();
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder)
+        => ConfigureGitHubSync(base.ConfigureMesh(builder));
+
+    /// <summary>
+    /// The GitHub-sync wiring alone (types, services, fake repo client, draft stub, key protector) —
+    /// WITHOUT the default public-admin access <c>ConfigureMesh</c> layers on. Security-shaped tests
+    /// (e.g. <c>SyncTriggerAuthorizationTest</c>) chain this onto <c>ConfigureMeshBase</c> so their
+    /// principals hold exactly the grants they seed, the production shape after #804/#805.
+    /// </summary>
+    protected MeshBuilder ConfigureGitHubSync(MeshBuilder builder)
+        => builder
             .AddGitHubSyncTypes()
             .ConfigureDefaultNodeHub(c => c.AddGitHubSyncSettingsTab().AddGitHubIssuesTab())
             .ConfigureServices(s =>

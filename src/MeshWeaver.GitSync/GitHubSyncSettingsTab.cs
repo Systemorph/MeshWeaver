@@ -58,9 +58,10 @@ public static class GitHubSyncSettingsTab
             Icon: FluentIcons.Document(),
             GroupIcon: FluentIcons.Document(),
             Order: 250,
-            // Visibility AND the Update check are gated on the CONTAINING SPACE below — not on the
-            // current node. The feature rewrites/exports the whole Space, so the right permission to
-            // require is Update on the Space, regardless of which node's Settings page we're on.
+            // Visibility AND the permission check are gated on the CONTAINING SPACE below — not on
+            // the current node. The feature rewrites/exports the whole Space, so the right gate is
+            // Update on the Space (or platform admin), regardless of which node's Settings page
+            // we're on.
             RequiredPermission: Permission.None);
 
         // GitHub Sync acts on the whole Space, so the tab appears on the Settings page of EVERY node
@@ -75,7 +76,14 @@ public static class GitHubSyncSettingsTab
             .Select(node => string.Equals(node?.NodeType, GitHubSyncService.SpaceNodeType, StringComparison.Ordinal))
             .CombineLatest(
                 host.Hub.GetEffectivePermissions(spaceRoot),
-                (isSpace, perms) => isSpace && perms.HasFlag(Permission.Update))
+                // Update on the Space OR platform admin. A GitSynced Space is system-owned — no
+                // real principal holds Update there — and the deploy persona is a platform admin,
+                // who is deliberately NOT a data superuser and may hold no per-space permission at
+                // all (the same OR the sync trigger's authorization applies). Entitlement-only
+                // readers keep the node menu's Check/Update; the setup surface stays hidden from
+                // them — its config writes require what they don't hold.
+                host.Hub.IsGlobalAdmin(),
+                (isSpace, perms, isAdmin) => isSpace && (perms.HasFlag(Permission.Update) || isAdmin))
             .DistinctUntilChanged()
             .Select(show => show ? (IReadOnlyList<SettingsMenuItemDefinition>)new[] { tab } : none)
             .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(_ => Observable.Return(none))

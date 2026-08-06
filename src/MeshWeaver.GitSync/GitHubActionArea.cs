@@ -92,14 +92,25 @@ public static class GitHubActionArea
             return Observable.Return<UiControl?>(Message(
                 "Unknown operation", $"Unrecognized GitHub operation <code>{System.Net.WebUtility.HtmlEncode(op)}</code>.", backHref));
 
-        // Fire the work. The activity node it creates streams its own live progress.
-        action.Subscribe(_ => { }, ex => logger?.LogWarning(ex, "GitHub action {Op} failed for {Space}", op, spacePath));
+        // Fire the work. The activity node it creates streams its own live progress. A failure
+        // BEFORE the activity node exists (authorization denied, sign-in required, a wedged
+        // probe) is pushed through the subject so the render below surfaces it — otherwise the
+        // page would sit on "Starting…" forever with the denial visible only in the server log.
+        action.Subscribe(_ => { }, ex =>
+        {
+            logger?.LogWarning(ex, "GitHub action {Op} failed for {Space}", op, spacePath);
+            pathSubject.OnError(ex);
+        });
 
         // Render the live activity Overview as soon as the activity path arrives;
-        // until then show a "Starting…" placeholder.
+        // until then show a "Starting…" placeholder; on a pre-activity failure, the message.
         return pathSubject
             .Select(path => (UiControl?)BuildLiveView(title!, path, backHref))
-            .StartWith((UiControl?)BuildStarting(title!, backHref));
+            .StartWith((UiControl?)BuildStarting(title!, backHref))
+            .Catch((Exception ex) => Observable.Return<UiControl?>(Message(
+                "GitHub operation failed",
+                System.Net.WebUtility.HtmlEncode(ex.Message),
+                backHref)));
     }
 
     /// <summary>Back button + title + a "Starting…" indeterminate progress, shown until the activity path is known.</summary>
