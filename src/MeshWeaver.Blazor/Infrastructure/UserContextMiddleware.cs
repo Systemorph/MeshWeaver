@@ -22,21 +22,27 @@ namespace MeshWeaver.Blazor.Infrastructure;
 /// <param name="logger">Logger for user resolution warnings and errors.</param>
 public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMiddleware> logger)
 {
-    // Blazor framework files, static assets, and favicon — no user context needed.
+    // Blazor framework files and favicon — no user context needed. NOTE: /static/ is intentionally
+    // NOT excluded (issue #666): the address-based /static/{address}/… content route posts a
+    // GetDataRequest into the mesh, which the never-null PostPipeline guard fail-closes to 500
+    // without an AccessContext. Unauthenticated requests resolve to AnonymousContext below, so public
+    // assets still serve; RLS filters the rest.
     private static readonly string[] ExcludedPrefixes =
-        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico"];
+        ["/_framework", "/_content", "/_blazor", "/favicon.ico"];
 
     /// <summary>
     /// Resolves the user identity from OAuth claims or a Bearer token and sets the
     /// <c>AccessService</c> context for the current request before passing to the next middleware.
-    /// Static-asset paths are bypassed without any identity work.
+    /// Blazor framework paths are bypassed without any identity work; /static/ content assets are
+    /// resolved (issue #666).
     /// </summary>
     /// <param name="context">The current HTTP context.</param>
     public async Task InvokeAsync(HttpContext context)
     {
-        // Skip user resolution for static assets and Blazor framework resources.
+        // Skip user resolution for Blazor framework resources and the favicon.
         // These requests never need an AccessContext and resolving it adds unnecessary
         // overhead (hub lookup, mesh query) on every JS/CSS/SignalR resource download.
+        // (/static/ content assets ARE resolved now — see ExcludedPrefixes, issue #666.)
         var path = context.Request.Path.Value ?? "";
         if (ExcludedPrefixes.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
         {
