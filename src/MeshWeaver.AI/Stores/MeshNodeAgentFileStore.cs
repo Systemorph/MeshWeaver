@@ -268,7 +268,10 @@ public sealed class MeshNodeAgentFileStore : AgentFileStore
     /// files; within each group we order by name so listings are stable across backends and calls.
     /// </summary>
     private IObservable<IReadOnlyCollection<FileStoreEntry>> ListChildrenCore(string directory) =>
-        mesh.Query($"path:{ResolvePath(root, directory)} scope:children")
+        // Metadata-only consumer: a listing reports name + kind and never touches Content, so
+        // `content` is deliberately NOT named. See Doc/DataMesh/QuerySyntax → "select: decides
+        // whether Content is loaded at all".
+        mesh.Query($"path:{ResolvePath(root, directory)} scope:children select:path,id,name,nodeType")
             .Select(nodes => (IReadOnlyCollection<FileStoreEntry>)nodes
                 .Select(node => new FileStoreEntry(
                     NameOf(node.Path),
@@ -290,7 +293,10 @@ public sealed class MeshNodeAgentFileStore : AgentFileStore
         var regex = new Regex(regexPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         var matcher = BuildMatcher(globPattern);
 
-        return mesh.Query($"path:{searchRoot} scope:{scope}")
+        // 🚨 Content-bearing consumer: the regex runs against each node's Content, so `content` is
+        // named DELIBERATELY. Omitting it makes Postgres project NULL::jsonb and every match
+        // silently disappears — no error, no empty result signal, just a search that finds nothing.
+        return mesh.Query($"path:{searchRoot} scope:{scope} select:path,id,name,nodeType,content")
             .Select(nodes => (IReadOnlyCollection<FileSearchResult>)nodes
                 .Where(node => !IsDirectory(node))
                 .Select(node => (Node: node, Relative: RelativeTo(searchRoot, node.Path)))
