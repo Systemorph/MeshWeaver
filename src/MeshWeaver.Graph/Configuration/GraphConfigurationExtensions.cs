@@ -65,6 +65,7 @@ public static class GraphConfigurationExtensions
                 .AddHomeConfigType()
                 .AddKernel()
                 .AddApiTokenType()
+                .AddMeshWeaverInstanceType()
                 .AddMeshDataSourceType()
                 .AddPartitionType()
                 .AddGlobalSettingsType();
