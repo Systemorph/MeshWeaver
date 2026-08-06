@@ -49,13 +49,56 @@ jobs:
   # Two parallel legs, one per image. No `dotnet workload restore` in either:
   # CI logs prove it installs nothing ("No workloads installed for this feature
   # band … Successfully updated workload(s): .") and burned ~75 s per run.
+  # ─────────────────────────────── DELIVERY GATE ───────────────────────────────
+  # 🚨 Gate on the REQUIRED CHECK, not on the workflow run's umbrella conclusion.
+  # A run's conclusion is `failure` if ANY job ends cancelled — including a job that
+  # never executed a step because it waited 15 minutes for a runner and was killed
+  # (main 2026-08-06: three consecutive main commits shipped no image for exactly this
+  # reason, with every test that did run green). Keying delivery on that conclusion
+  # means infrastructure noise silently stops the pull-based self-update, which is the
+  # failure mode the merge gate exists to prevent.
+  #
+  # "Consolidate test results" is the repo's single required check (ruleset
+  # `main pr protection`) and, since the evidence gate in dotnet-test.yml, it can only
+  # be green if tests actually ran (or a proven green-tree marker was reused). So it is
+  # both necessary and sufficient — and strictly stronger than the umbrella conclusion,
+  # which a starved job can poison in either direction.
+  gate:
+    name: "Verify the required check is green"
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      green: ${{ steps.required.outputs.green }}
+    steps:
+      - name: "Read the required check for this commit"
+        id: required
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # Latest run of the required check on this SHA (a re-run appends another).
+          concl=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name=="Consolidate test results")]
+                  | sort_by(.completed_at) | last | .conclusion // "missing"')
+          echo "Required check 'Consolidate test results' on $SHA → $concl"
+          echo "run conclusion (umbrella, informational) → ${{ github.event.workflow_run.conclusion }}"
+          if [ "$concl" = "success" ]; then
+            echo "green=true" >> "$GITHUB_OUTPUT"
+            echo "### ✅ Required check green — shipping images" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "green=false" >> "$GITHUB_OUTPUT"
+            echo "### ⛔ Required check is \`$concl\` — no image will be built" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   portal-image:
     name: "Build + push portal-ai image"
     # Gate: only a SUCCESSFUL test run, from a PUSH (not a PR), on main.
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main'
+    needs: gate
+    if: needs.gate.outputs.green == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -144,10 +187,8 @@ jobs:
 
   migration-image:
     name: "Build + push migration image"
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main'
+    needs: gate
+    if: needs.gate.outputs.green == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -223,10 +264,8 @@ jobs:
   # it — `latest` is the stable tag that variable pins.
   plugin-test-image:
     name: "Build + push mw-plugin-test image"
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main'
+    needs: gate
+    if: needs.gate.outputs.green == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
