@@ -84,25 +84,87 @@ public static class AgentPickerProjection
     /// platform skill defaults live in the bare <c>Skill</c> namespace. Same registry shape as agents/models.</summary>
     public const string SkillSubNamespace = "Skill";
 
-    /// <summary>Array form of <see cref="BuildSkillQuery"/> for the <c>hub.GetQuery</c> surface.</summary>
+    /// <summary>
+    /// THE single canonical skill-registry query set — the ONE definition every consumer shares, so
+    /// the skills a user SEES in the chat (combobox, slash menu, autocomplete) are exactly the skills
+    /// an agent round RESOLVES. Reached through <see cref="SkillNodeType.SkillQueries"/>, which is the
+    /// entry point the GUI and <c>MeshAgentSkillsSource</c> both call.
+    ///
+    /// <para>Layers:</para>
+    /// <list type="bullet">
+    ///   <item>the platform defaults — <c>Skill</c>, always FIRST (see below);</item>
+    ///   <item>the user's own — <c>{user}/Skill</c>, a flat namespace;</item>
+    ///   <item>the context node's partition — the whole SUBTREE;</item>
+    ///   <item>the node type's partition — the whole SUBTREE.</item>
+    /// </list>
+    ///
+    /// <para>🚨 Row order is NOT a precedence signal — consumers resolve precedence from each
+    /// result's own partition (most specific wins). It matters for one concrete reason: the platform
+    /// row is the only one guaranteed to resolve, every other targets a partition that may not exist,
+    /// and demoting it makes slash autocomplete surface nothing (<c>SkillAutocompleteTest</c>).</para>
+    ///
+    /// <para><b>Why the two middle layers are wider.</b> A user's own entries live where convention
+    /// puts them — narrow and predictable. A space or a plugin, by contrast, ships its skills wherever
+    /// its content is organised: next to the types they describe, under feature folders, several
+    /// levels deep. Requiring everything to sit in one flat <c>{partition}/Skill</c> namespace means a
+    /// skill authored beside the thing it explains is simply never found. Scoping those two layers to
+    /// the partition subtree makes placement a content decision again, at the cost of one extra query
+    /// per layer.</para>
+    ///
+    /// <para>Returned as SEPARATE query strings for
+    /// <see cref="MeshWeaver.Mesh.Services.MeshQueryRequest.Queries"/>' union — a subtree scope and an
+    /// exact-namespace membership cannot be folded into one <c>namespace:A|B|C</c> clause. Order is
+    /// preserved so consumers that care about precedence can rely on it; the union de-dupes by path.</para>
+    /// </summary>
+    /// <param name="userPath">The user's home partition — contributes <c>{user}/{sub}</c>.</param>
+    /// <param name="spacePath">The context/space path — its partition contributes the whole subtree.</param>
+    /// <param name="nodeTypePath">The current node's TYPE path — its partition contributes the whole subtree.</param>
     public static string[] BuildSkillQueries(
         string? userPath = null, string? spacePath = null, string? nodeTypePath = null)
-        => new[] { BuildSkillQuery(userPath, spacePath, nodeTypePath) };
+        => BuildSubtreeRegistryQueries(
+            SkillNodeType.NodeType, SkillSubNamespace, userPath, spacePath, PartitionOf(nodeTypePath));
 
     /// <summary>
-    /// THE single canonical skill-registry query — IDENTICAL pattern to agents + models. Skills live in a
-    /// dedicated <c>/Skill</c> sub-namespace PER PARTITION (platform <c>Skill</c> + <c>{space}/Skill</c> +
-    /// <c>{typePartition}/Skill</c> + <c>{user}/Skill</c>), listed directly as a <c>namespace:A|B|C</c>
-    /// exact-membership alternation — one registry pattern for every public top-level domain
-    /// (Agent, Model, Skill, …). <paramref name="nodeTypePath"/> is the current node's TYPE path
-    /// (e.g. <c>Office/Slide</c>); its PARTITION contributes <c>Office/Skill</c>, so skills a plugin
-    /// ships next to its types resolve wherever those types are used. Produces e.g.
-    /// <c>namespace:rbuergi/Skill|AgenticPension/Skill|Office/Skill|Skill nodeType:Skill</c>.
+    /// Assembles the precedence-ordered registry queries for
+    /// <see cref="BuildSkillQueries"/>: the user's own flat namespace, then the space's and the
+    /// node type's partition SUBTREES, then the platform defaults. Reserved/rogue route partitions are
+    /// filtered exactly as in <see cref="BuildRegistryQuery"/> — a poisoned context must never fail the
+    /// whole query — and a partition contributing twice (space == node type) is listed once.
     /// </summary>
-    public static string BuildSkillQuery(
-        string? userPath = null, string? spacePath = null, string? nodeTypePath = null)
-        => BuildRegistryQuery(SkillNodeType.NodeType, SkillSubNamespace, userPath, spacePath, "",
-            PartitionOf(nodeTypePath));
+    private static string[] BuildSubtreeRegistryQueries(
+        string nodeType, string sub, string? userPath, string? spacePath, string? typePartition)
+    {
+        var queries = new List<string>();
+        var subtrees = new List<string>();
+
+        bool Usable(string? partition) =>
+            !string.IsNullOrEmpty(partition) && !ReservedPartitions.Contains(partition);
+
+        // 🚨 Row ORDER is not the precedence signal — see the summary. It matters for a different
+        // reason: the platform row is the ONLY one guaranteed to resolve (every other targets a
+        // partition that may not exist), and it must come first, exactly as it always has. Moving it
+        // last makes slash autocomplete surface nothing (SkillAutocompleteTest). Precedence between
+        // layers is resolved from each result's own partition, never from this order.
+        queries.Add($"namespace:{sub} nodeType:{nodeType}{RegistryProjection}");
+
+        // The user's own — flat namespace, as everywhere else.
+        if (Usable(userPath))
+            queries.Add($"namespace:{userPath}/{sub} nodeType:{nodeType}{RegistryProjection}");
+
+        // The space's and the node type's partitions — whole subtree each.
+        void AddSubtree(string? path)
+        {
+            var partition = PartitionOf(path);
+            if (!Usable(partition)) return;
+            if (subtrees.Contains(partition!, StringComparer.OrdinalIgnoreCase)) return;
+            subtrees.Add(partition!);
+            queries.Add($"path:{partition} scope:descendants nodeType:{nodeType}{RegistryProjection}");
+        }
+        AddSubtree(spacePath);
+        AddSubtree(typePartition);
+
+        return queries.ToArray();
+    }
 
     // Rogue/reserved ROUTE partitions — auto-minted page artifacts (login, welcome, settings, …; mirrors
     // the reserved-schema list in PostgreSqlCrossSchemaQueryProvider). They carry NO read policy and never
