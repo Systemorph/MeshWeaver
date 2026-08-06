@@ -45,7 +45,7 @@ public class DataChangeLogTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetHost().GetWorkspace();
 
         var notifications = await workspace
-            .RequestChange(DataChangeRequest.Update([new ChangeLogRecord("2", "Second")]), null)
+            .RequestChange(DataChangeRequest.Update([new ChangeLogRecord("2", "Second")]))
             .Materialize()
             .ToArray()
             .Timeout(10.Seconds())
@@ -69,7 +69,7 @@ public class DataChangeLogTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetHost().GetWorkspace();
 
         var log = await workspace
-            .RequestChange(DataChangeRequest.Update([new ChangeLogRecord("3", null)]), null)
+            .RequestChange(DataChangeRequest.Update([new ChangeLogRecord("3", null)]))
             .Timeout(10.Seconds())
             .ToTask();
 

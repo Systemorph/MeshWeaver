@@ -112,9 +112,9 @@ public class ImportManager
                                 DataChangeRequest.Update(
                                     objectsToSave.ToArray(),
                                     null,
-                                    request.Message.UpdateOptions),
-                                request
-                            ).Subscribe(saveLog => ForwardToActivity(activity, saveLog));
+                                    request.Message.UpdateOptions))
+                                .Subscribe(saveLog => ForwardToActivity(activity, saveLog),
+                                    ex => activity.LogError($"Saving the imported instances failed: {ex.Message}"));
 
                             // Check if ImportConfiguration should be saved
                             if (request.Message.Configuration != null)
@@ -123,9 +123,9 @@ public class ImportManager
                                 if (configToSave != null)
                                 {
                                     Configuration.Workspace.RequestChange(
-                                        DataChangeRequest.Update([configToSave]),
-                                        request
-                                    ).Subscribe(saveLog => ForwardToActivity(activity, saveLog));
+                                        DataChangeRequest.Update([configToSave]))
+                                        .Subscribe(saveLog => ForwardToActivity(activity, saveLog),
+                                            ex => activity.LogError($"Saving the ImportConfiguration failed: {ex.Message}"));
                                     activity.LogInformation("Including ImportConfiguration in save operation: {ConfigType}", configToSave.GetType().Name);
                                 }
                             }

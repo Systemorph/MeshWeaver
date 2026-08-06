@@ -343,6 +343,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// <param name="update">Maps the current state to the change to apply, or <c>null</c> for a no-op.</param>
     /// <param name="exceptionCallback">Invoked synchronously if the write fails.</param>
     public void Update(Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback)
+        => Update(update, exceptionCallback, null);
+
+    /// <inheritdoc cref="ISynchronizationStream{TStream}.Update(System.Func{TStream,ChangeItem{TStream}},System.Action{System.Exception},System.Action)"/>
+    public void Update(Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback, Action? applied)
     {
         if (!TryGetActiveHub(out var hub))
         {
@@ -400,7 +404,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         if (capturedContext is null && Configuration.RunsAsInfrastructure)
             capturedContext = InfrastructureContext;
         hub.Post(
-            new UpdateStreamRequest(update, exceptionCallback),
+            new UpdateStreamRequest(update, exceptionCallback, applied),
             opt => capturedContext is null ? opt : opt.WithAccessContext(capturedContext));
     }
 
@@ -983,7 +987,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 }
             ).WithHandler<DataChangeRequest>((hub, delivery) =>
                 {
-                    hub.GetWorkspace().RequestChange(delivery.Message, delivery);
+                    _ = hub.GetWorkspace().RequestChange(delivery.Message);
                     return delivery.Processed();
                 }
             ).WithHandler<GetDataResponse>((_, delivery) =>
@@ -1043,6 +1047,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 // AsynchronousCalls.md exists to kill.
                 var update = request.Message.Update;
                 var exceptionCallback = request.Message.ExceptionCallback;
+                var applied = request.Message.Applied;
                 try
                 {
                     // Read the current state right before invoking the update function
@@ -1055,6 +1060,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     // The Message Hub serializes these messages, so only one UpdateStreamRequest
                     // is processed at a time per stream, preventing race conditions
                     SetCurrent(hub, newChangeItem);
+
+                    // Post-apply, SAME turn: the writer's "committed" signal cannot observe the
+                    // pre-change state, and costs no extra hub message. Guarded like the exception
+                    // callback — a writer that throws from its own signal must not kill the turn.
+                    if (applied is not null)
+                    {
+                        try { applied.Invoke(); }
+                        catch (Exception cbEx)
+                        {
+                            logger.LogError(cbEx,
+                                "[SYNC_STREAM] applied callback threw on {StreamId}", StreamId);
+                        }
+                    }
                 }
                 catch (Exception e)
                 {
@@ -1476,8 +1494,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// </summary>
     /// <param name="Update">The transform mapping the current state to the change to apply.</param>
     /// <param name="ExceptionCallback">Invoked synchronously if applying the update throws.</param>
+    /// <param name="Applied">Optional: invoked in the SAME turn, right after the change was applied
+    /// (also for a no-op transform). This is the stream's completion seam — a writer that must report
+    /// "committed" uses it instead of scheduling a second turn, so reporting costs no extra message
+    /// and can never observe the pre-change state.</param>
     [PreventLogging]
-    public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, ChangeItem<TStream>?> Update, [property: JsonIgnore] Action<Exception> ExceptionCallback);
+    public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, ChangeItem<TStream>?> Update, [property: JsonIgnore] Action<Exception> ExceptionCallback, [property: JsonIgnore] Action? Applied = null);
 
     /// <summary>
     /// Synchronisation-protocol message that propagates a state change to the
