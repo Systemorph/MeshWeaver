@@ -646,7 +646,7 @@
   "create.autoGenIdPlaceholder": "Leave empty to auto-generate from name",
   "appearance.light": "Light",
   "appearance.dark": "Dark",
-  "appearance.persistedOnDevice": "This value is persisted on this device and will be recovered during your next visits.",
+  "appearance.persistedOnDevice": "This value is persisted on this device and will be recovered on your next visit.",
   "common.up": "Up",
   "nodeTransfer.exportSubtree": "Export subtree",
   "nodeTransfer.pasteBundle": "Paste a .mesh.json bundle",
@@ -662,5 +662,6 @@
   "chart.noData": "No chart data",
   "pivot.noAggregates": "No pivot aggregates configured",
   "common.total": "Total",
-  "chat.noNamespace": "No namespace to start a thread in."
+  "chat.noNamespace": "No namespace to start a thread in.",
+  "search.meshPlaceholder": "Search the mesh... (e.g. nodeType:Story status:Open)"
 }
