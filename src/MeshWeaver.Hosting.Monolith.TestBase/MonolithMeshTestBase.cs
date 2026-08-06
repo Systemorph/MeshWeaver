@@ -1018,19 +1018,41 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
     private static readonly Address ReadHubAddress = new("test-reader", "shared");
 
+    /// <summary>The ceiling for a mesh read: what a COLD per-node hub activation may take.</summary>
+    private static readonly TimeSpan ReadNodeCeiling = TimeSpan.FromSeconds(60);
+
     /// <summary>
-    /// Default upper bound for a single-node read in tests. Bounded so a misrouted
-    /// request fails the test loudly with a <see cref="TimeoutException"/> instead
-    /// of hanging the whole CI run until the inactivity guard aborts. 30 seconds
-    /// is generous — typical per-node-hub activation + persistence load is sub-second.
+    /// The budget a mesh read gets — the ceiling above, CLAMPED so it always expires INSIDE the
+    /// running test's declared <c>[Fact(Timeout)]</c>.
+    ///
+    /// <para>🚨 This is the same invariant <see cref="EffectiveHardDeadline"/> enforces for the
+    /// watchdog, applied to the other end: <i>the operation's own loud, specific timeout must win
+    /// the race against a generic backstop.</i> It was previously only per-test discipline, and a
+    /// scan found ~123 test files declaring a Fact timeout at or below the operation budget they
+    /// contain. When that inverts, the harness kills the test first and the ONLY output is
+    /// <c>"Test execution timed out after N milliseconds"</c> with no assertion text — you never
+    /// learn WHICH read never came back. That is what made the CI-only hangs in
+    /// VersionHistoryTest / CreatableTypesFileSystemTest / DynamicGraphFileSystemPersistenceTest
+    /// undiagnosable: every one of them reported the harness message, never the operation's.</para>
+    ///
+    /// <para>Clamping does NOT weaken an assertion and does NOT hide a slow read: the test still
+    /// fails, it just fails NAMING the read instead of the harness. A test that genuinely needs to
+    /// tolerate a cold 35-45 s activation must declare a Fact timeout above
+    /// <see cref="ReadNodeCeiling"/> — and now gets the full ceiling when it does.</para>
+    ///
+    /// <para>80% of the declared timeout, leaving headroom for the assertion to be built and
+    /// reported before the harness fires.</para>
     /// </summary>
-    // Wall-clock cap on ReadNodeAsync. 60s matches the mesh hub's RequestTimeout
-    // bump (ConfigureMeshBase) — keeps the watchdog above the underlying
-    // hub-level Timeout so a slow-but-successful activation finishes inside
-    // the budget on CI cold starts (Linux runners commonly take 35-45s for
-    // the first per-node hub activation; the prior 30s tripped before the
-    // hub responded — symptom: FullFlow_CreateThread + similar AI tests).
-    protected static readonly TimeSpan ReadNodeTimeout = TimeSpan.FromSeconds(60);
+    protected static TimeSpan ReadNodeTimeout
+    {
+        get
+        {
+            if (CurrentFactTimeout() is not { } declared)
+                return ReadNodeCeiling;
+            var fitted = declared * 0.8;
+            return fitted < ReadNodeCeiling ? fitted : ReadNodeCeiling;
+        }
+    }
 
     /// <summary>
     /// Recognise the two routing-failure flavours that mean "this path has no
