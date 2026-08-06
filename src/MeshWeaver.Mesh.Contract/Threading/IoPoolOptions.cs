@@ -151,11 +151,13 @@ public sealed record IoPoolOptions
     public int Layout { get; init; } = 256;
 
     /// <summary>
-    /// Concurrent MAF agent-store mesh ops (the <c>AgentStore</c> pool). Each op is a single
-    /// bounded mesh read/write bridged from MAF's <c>Task</c> surface, so the slot is held
-    /// briefly; the cap is a runaway-fan-out stop (a <c>SearchAsync</c> over a large store reads
-    /// many nodes), not a throttle. Generous by default (128) and independent of
-    /// <see cref="Ai"/> so a store call nested inside an agent round can never self-deadlock.
+    /// Concurrent MAF agent-store mesh ops (the <c>AgentStore</c> pool). Most ops are a single
+    /// bounded mesh read/write bridged from MAF's <c>Task</c> surface, so the slot is held briefly;
+    /// the live listing/search subscribes hold one only for the bounded subscribe window. The cap is
+    /// a runaway-fan-out stop — a store is constructed per agent round, and a burst of rounds each
+    /// listing or searching is what it bounds — not a throttle. Generous by default (128) and
+    /// independent of <see cref="Ai"/> so a store call nested inside an agent round can never
+    /// self-deadlock.
     /// </summary>
     public int AgentStore { get; init; } = 128;
 

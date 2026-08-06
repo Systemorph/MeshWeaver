@@ -4,6 +4,7 @@ using System;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using MeshWeaver.AI.Stores;
 using MeshWeaver.Data;
@@ -150,6 +151,48 @@ public class MeshNodeAgentFileStoreTest(ITestOutputHelper output) : MonolithMesh
             .Should().BeTrue();
         (await store.Delete("temp.md").FirstAsync().Timeout(Bound).ToTask())
             .Should().BeFalse("deleting what is not there is reported, not an error");
+    }
+
+    [Fact]
+    public async Task Delete_RefusesToRemoveADirectory()
+    {
+        var store = NewStore();
+        await store.CreateDirectory("folder").FirstAsync().ToTask();
+        await store.Write("folder/note.md", "x").FirstAsync().ToTask();
+
+        (await store.Delete("folder").FirstAsync().Timeout(Bound).ToTask())
+            .Should().BeFalse("delete is a FILE operation; it must not remove a folder");
+
+        // …and the folder and its contents are untouched.
+        (await store.ListChildren("folder").Where(l => l.Count > 0).FirstAsync().Timeout(Bound).ToTask())
+            .Select(e => e.Name).Should().Equal("note.md");
+    }
+
+    [Fact]
+    public async Task CreateDirectory_OverAnExistingFile_IsAConflict()
+    {
+        var store = NewStore();
+        await store.Write("thing", "i am a file").FirstAsync().ToTask();
+
+        var create = () => store.CreateDirectory("thing").FirstAsync().ToTask();
+
+        await create.Should().ThrowAsync<InvalidOperationException>(
+            "reporting success would leave the caller with no directory, and the next write beneath "
+            + "it would land somewhere it did not ask for");
+    }
+
+    [Fact]
+    public async Task Search_WithAnExplosivePattern_FailsFastInsteadOfBurningThePool()
+    {
+        var store = NewStore();
+        // Classic catastrophic-backtracking pair: nested quantifiers over a long non-matching run.
+        await store.Write("bomb.md", new string('a', 4000) + "!").FirstAsync().ToTask();
+
+        var search = () => store.Search("", "(a+)+$").Where(_ => true)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask();
+
+        // The pattern comes from the model; it must be bounded, not left to run the pool out.
+        await search.Should().ThrowAsync<RegexMatchTimeoutException>();
     }
 
     [Theory]

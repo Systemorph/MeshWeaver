@@ -49,6 +49,13 @@ public sealed class MeshNodeAgentFileStore : AgentFileStore
     private readonly IMeshService meshService;
     private readonly string root;
 
+    /// <summary>
+    /// Wall-clock bound on a single regex match. The search pattern is supplied by the model, so it
+    /// is untrusted input running on a bounded pool — an unbounded match is a denial-of-service on
+    /// both the pool and the CPU.
+    /// </summary>
+    private static readonly TimeSpan RegexMatchTimeout = TimeSpan.FromSeconds(2);
+
     /// <summary>The mesh path this store is rooted at. Every store path resolves beneath it.</summary>
     public string Root => root;
 
@@ -95,7 +102,10 @@ public sealed class MeshNodeAgentFileStore : AgentFileStore
         mesh.Once(() => mesh.ProbeNode(ResolvePath(root, path))
             .Select(node => node is not null && !IsDirectory(node)));
 
-    /// <summary>Deletes a file, emitting whether it existed. Cold — the delete runs on Subscribe.</summary>
+    /// <summary>
+    /// Deletes a FILE, emitting whether one existed there. A directory is never deleted through this
+    /// path — it reports <see langword="false"/>, the same as an absent file.
+    /// </summary>
     /// <param name="path">Store-relative path.</param>
     public IObservable<bool> Delete(string path) =>
         mesh.Once(() => DeleteCore(ResolvePath(root, path)));
@@ -236,7 +246,11 @@ public sealed class MeshNodeAgentFileStore : AgentFileStore
     /// </summary>
     private IObservable<bool> DeleteCore(string fullPath) =>
         mesh.ProbeNode(fullPath)
-            .SelectMany(node => node is null
+            .SelectMany(node => node is null || IsDirectory(node)
+                // Absent, or a directory: either way there is no FILE here to delete. Reported as
+                // false rather than deleting the directory — Exists() already draws that distinction,
+                // and a delete that silently removed a folder (and orphaned everything filed under
+                // it) is not what "delete this file" can be allowed to mean.
                 ? Observable.Return(false)
                 : meshService.DeleteNode(fullPath));
 
@@ -254,13 +268,21 @@ public sealed class MeshNodeAgentFileStore : AgentFileStore
         var fullPath = $"{root}/{relative}";
         var (ns, id) = SplitPath(fullPath);
 
-        return mesh.ProbeNode(fullPath).SelectMany(existing => existing is not null
-            ? Observable.Return(existing)
-            : meshService.CreateNode(new MeshNode(id, ns)
+        return mesh.ProbeNode(fullPath).SelectMany(existing => existing switch
+        {
+            // Already a directory — idempotent, nothing to write.
+            not null when IsDirectory(existing) => Observable.Return(existing),
+            // A FILE occupies the path. Returning it would report success while leaving the caller
+            // with no directory, and the next write beneath it would land somewhere it did not ask
+            // for. Surface the conflict.
+            not null => Observable.Throw<MeshNode>(new InvalidOperationException(
+                $"Cannot create directory '{path}': a file already exists at that path.")),
+            _ => meshService.CreateNode(new MeshNode(id, ns)
             {
                 Name = id,
                 NodeType = GroupNodeType.NodeType,
-            }));
+            }),
+        });
     }
 
     /// <summary>
@@ -290,7 +312,12 @@ public sealed class MeshNodeAgentFileStore : AgentFileStore
     {
         var searchRoot = ResolvePath(root, directory);
         var scope = recursive ? "descendants" : "children";
-        var regex = new Regex(regexPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        // 🚨 The pattern comes from the MODEL, not from us. An unbounded Regex over arbitrary input
+        // can backtrack catastrophically, and it would burn a bounded AgentStore pool slot and a core
+        // while doing it. Bound every match; a pattern that trips the bound surfaces as an error the
+        // tool reports, never as a silent empty result.
+        var regex = new Regex(
+            regexPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, RegexMatchTimeout);
         var matcher = BuildMatcher(globPattern);
 
         // 🚨 Content-bearing consumer: the regex runs against each node's Content, so `content` is
