@@ -121,6 +121,16 @@ public interface ISynchronizationStream<TStream>
     /// Side effects only: log, push to a status subject, etc.</para>
     /// </summary>
     void Update(Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback);
+    /// <summary>
+    /// Change-based write that also reports COMPLETION: <paramref name="applied"/> runs in the same
+    /// turn, right after the change was applied (and for a no-op transform too). This is how a writer
+    /// says "committed" without scheduling another turn — and without the risk of reporting while the
+    /// store still holds the pre-change state.
+    /// </summary>
+    /// <param name="update">Builds the change item from the current value, or returns null for a no-op.</param>
+    /// <param name="exceptionCallback">Invoked synchronously if the write fails.</param>
+    /// <param name="applied">Invoked in the same turn, after the change was applied.</param>
+    void Update(Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback, Action? applied);
     /// <summary>Change-based write whose failures are ignored; see the overload taking an exception callback.</summary>
     /// <param name="update">Builds the change item from the current value, or returns null for a no-op.</param>
     void Update(Func<TStream?, ChangeItem<TStream>?> update) => Update(update, _ => { });

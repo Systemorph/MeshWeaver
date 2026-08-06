@@ -753,7 +753,7 @@ public static class JsonSynchronizationStream
         //         .Subscribe(e =>
         //         {
         //             logger.LogDebug("Issuing change request from stream {subscriber} to owner {owner}", reduced.StreamId, reduced.Owner);
-        //             reduced.Host.GetWorkspace().RequestChange(e, null, null);
+        //             reduced.Host.GetWorkspace().RequestChange(e);
         //         })
         // );
 
