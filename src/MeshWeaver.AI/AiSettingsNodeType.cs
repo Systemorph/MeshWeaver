@@ -92,16 +92,30 @@ public static class AiSettingsNodeType
     }
 
     /// <summary>
-    /// The default SKILL SOURCES, one template ROW per source so each resolves (or drops) independently:
-    /// the platform <c>Skill</c> catalog, the current space's <c>{space}/Skill</c>, the current node
-    /// type's <c>{typePartition}/Skill</c> (skills a plugin ships next to its types), and the user's own
-    /// <c>{user}/Skill</c>. A skill package adds a fifth row (<see cref="MergeSkillSource"/>).
+    /// The default SKILL SOURCES — one template ROW per layer so each resolves (or drops)
+    /// independently: the platform <c>Skill</c> catalog, the user's own <c>{user}/Skill</c>, the
+    /// current space's partition SUBTREE, and the current node type's partition SUBTREE (skills a
+    /// plugin ships next to its types). A skill package adds a further row
+    /// (<see cref="MergeSkillSource"/>).
+    ///
+    /// <para>🚨 These templates ARE what the chat resolves by default, and therefore also what
+    /// <c>MeshAgentSkillsSource</c> feeds the agent framework — the two must not diverge, or a user
+    /// would see skills an agent does not have. They are pinned equal to
+    /// <see cref="AgentPickerProjection.BuildSkillQueries"/> by test.</para>
+    ///
+    /// <para>🚨 The platform row stays FIRST. It is the only row guaranteed to resolve — every other
+    /// targets a partition that may not exist — and demoting it makes slash autocomplete surface
+    /// nothing (<c>SkillAutocompleteTest</c>). Row order is NOT the precedence signal: precedence
+    /// between layers is resolved from each result's own partition.</para>
+    ///
+    /// <para>The two middle layers are subtree-scoped so a space or plugin can file a skill next to
+    /// the content it describes instead of only in <c>{partition}/Skill</c>.</para>
     /// </summary>
     public static readonly ImmutableArray<string> DefaultSkillQueryTemplates = ImmutableArray.Create(
         $"namespace:{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}",
-        $"namespace:{CurrentPathToken}/{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}",
-        $"namespace:{NodeTypePathToken}/{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}",
-        $"namespace:{UserPathToken}/{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}");
+        $"namespace:{UserPathToken}/{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}",
+        $"path:{CurrentPathToken} scope:descendants nodeType:{SkillNodeType.NodeType}",
+        $"path:{NodeTypePathToken} scope:descendants nodeType:{SkillNodeType.NodeType}");
 
     /// <summary>
     /// Resolves the user's skill sources for a context: takes <see cref="AiSettings.SkillQueries"/>
