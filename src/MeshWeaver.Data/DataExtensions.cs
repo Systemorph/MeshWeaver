@@ -1256,8 +1256,7 @@ public static class DataExtensions
                     // Route via the hub's DataChangeRequest pipeline — the workspace
                     // writes through the data-source stream (which owns the typed
                     // InstanceCollection + persistence + reduction fan-out).
-                    hub.GetWorkspace().RequestChange(
-                        DataChangeRequest.Update([merged]), null, null);
+                    hub.GetWorkspace().RequestChange(DataChangeRequest.Update([merged]));
                 }
                 catch (Exception ex)
                 {
@@ -1639,35 +1638,38 @@ public static class DataExtensions
                     return;
                 }
 
-                var isActivityHub = hub.Address.Type == AddressExtensions.ActivityType;
-                if (!isActivityHub && !IsSatelliteContentChange(changeRequest))
+                var isSatellite = IsSatelliteContentChange(changeRequest);
+                if (hub.Address.Type != AddressExtensions.ActivityType && !isSatellite)
                 {
                     hub.ServiceProvider.GetService<ActivityLogBundler>()
                         ?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
                 }
 
-                var activity = isActivityHub ? null : new Activity(ActivityCategory.DataUpdate, hub);
+                var hubPath = hub.Address.ToString();
 
-                if (activity != null && !IsSatelliteContentChange(changeRequest))
-                {
-                    var hubPath = hub.Address.ToString();
-                    if (!string.IsNullOrEmpty(hubPath))
-                        activity.RecordAffectedPaths([hubPath]);
-                }
-
-                hub.GetWorkspace().RequestChange(changeRequest with { ChangedBy = changeRequest.ChangedBy }, activity, request);
-                if (activity is null)
-                    hub.Post(new DataChangeResponse(hub.Version, new(ActivityCategory.DataUpdate) { Status = ActivityStatus.Succeeded }),
-                        o => o.ResponseFor(request));
-                else activity.Complete(log =>
-                {
-                    var logger2 = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.ActivityCompletion");
-                    logger2?.LogDebug("DataChangeRequest activity completed: Status={Status}, Messages={MsgCount}, SubActivities={SubCount}, SubStatuses=[{SubStatuses}]",
-                        log.Status, log.Messages.Count, log.SubActivities.Count,
-                        string.Join(", ", log.SubActivities.Select(s => $"{s.Category}:{s.Status}")));
-                    hub.Post(new DataChangeResponse(hub.Version, log),
-                        o => o.ResponseFor(request));
-                });
+                // The write is issued here (RequestChange is eager); the observable reports the
+                // outcome once every affected stream applied its part. This replaces the
+                // Activity-per-change — a hosted hub whose only job was to latch that completion.
+                // Every hub now reports its REAL log, including the activity hub, which used to be
+                // handed a synthetic "Succeeded" because an Activity there would have recursed.
+                var changeSubscription = hub.GetWorkspace()
+                    .RequestChange(changeRequest with { ChangedBy = changeRequest.ChangedBy })
+                    .Select(log => isSatellite || string.IsNullOrEmpty(hubPath)
+                        ? log
+                        : log with { AffectedPaths = log.AffectedPaths.Add(hubPath) })
+                    .Subscribe(
+                        log =>
+                        {
+                            var logger2 = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.ActivityCompletion");
+                            logger2?.LogDebug("DataChangeRequest completed: Status={Status}, Messages={MsgCount}",
+                                log.Status, log.Messages.Count);
+                            hub.Post(new DataChangeResponse(hub.Version, log), o => o.ResponseFor(request));
+                        },
+                        ex => hub.Post(
+                            new DataChangeResponse(hub.Version,
+                                new ActivityLog(ActivityCategory.DataUpdate).Fail(ex.Message)),
+                            o => o.ResponseFor(request)));
+                hub.RegisterForDisposal(changeSubscription);
             });
 
         hub.RegisterForDisposal(subscription);
@@ -2390,30 +2392,18 @@ public static class DataExtensions
             ChangedBy = changedBy
         };
 
-        var activity = hub.Address.Type == AddressExtensions.ActivityType
-            ? null
-            : new Activity(ActivityCategory.DataUpdate, hub);
-        workspace.RequestChange(changeRequest, activity, null);
-
-        if (activity == null)
-            return Observable.Return(UpdateUnifiedReferenceResponse.Ok(hub.Version));
-
-        return Observable.Create<UpdateUnifiedReferenceResponse>(observer =>
-        {
-            activity.Complete(log =>
+        return workspace.RequestChange(changeRequest)
+            .Select(log =>
             {
                 hub.ServiceProvider.GetService<ActivityLogBundler>()
                     ?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
 
                 var response = new DataChangeResponse(hub.Version, log);
-                observer.OnNext(response.Status == DataChangeStatus.Committed
+                return response.Status == DataChangeStatus.Committed
                     ? UpdateUnifiedReferenceResponse.Ok(response.Version)
                     : UpdateUnifiedReferenceResponse.Fail(
-                        response.Log.Messages.LastOrDefault()?.Message ?? "Update failed"));
-                observer.OnCompleted();
+                        response.Log.Messages.LastOrDefault()?.Message ?? "Update failed");
             });
-            return System.Reactive.Disposables.Disposable.Empty;
-        });
     }
 
     /// <summary>
@@ -2556,30 +2546,18 @@ public static class DataExtensions
                     ChangedBy = changedBy
                 };
 
-                var activity = hub.Address.Type == AddressExtensions.ActivityType
-                    ? null
-                    : new Activity(ActivityCategory.DataUpdate, hub);
-                workspace.RequestChange(changeRequest, activity, null);
-
-                if (activity == null)
-                    return Observable.Return(DeleteUnifiedReferenceResponse.Ok());
-
-                return Observable.Create<DeleteUnifiedReferenceResponse>(observer =>
-                {
-                    activity.Complete(log =>
+                return workspace.RequestChange(changeRequest)
+                    .Select(log =>
                     {
                         hub.ServiceProvider.GetService<ActivityLogBundler>()
                             ?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
 
                         var response = new DataChangeResponse(hub.Version, log);
-                        observer.OnNext(response.Status == DataChangeStatus.Committed
+                        return response.Status == DataChangeStatus.Committed
                             ? DeleteUnifiedReferenceResponse.Ok()
                             : DeleteUnifiedReferenceResponse.Fail(
-                                response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed"));
-                        observer.OnCompleted();
+                                response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed");
                     });
-                    return System.Reactive.Disposables.Disposable.Empty;
-                });
             });
     }
 
