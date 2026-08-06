@@ -263,36 +263,36 @@ public class AgentPickerQueriesTest
         queries.Should().NotContain(q => q.Contains("/_Memex"));
     }
 
-    // ─── BuildSkillQuery / SkillQueries: the chat slash-skill registry ───
-    // Skills inherit EXACTLY like agents/models: platform Skill + {space}/Skill + {user}/Skill,
-    // one namespace:A|B|C exact-membership query, reserved partitions filtered.
+    // ─── BuildSkillQueries / SkillQueries: the chat slash-skill registry ───
+    // ONE query set, shared by the GUI (combobox / slash menu / autocomplete) and by
+    // MeshAgentSkillsSource, so what a user sees is what an agent round resolves. Layers, most
+    // specific first: {user}/Skill, the space partition SUBTREE, the node-type partition SUBTREE,
+    // then the platform defaults. Reserved partitions filtered.
 
     [Fact]
-    public void BuildSkillQuery_UserAndSpace_ListsBothPartitionsPlusPlatform()
+    public void BuildSkillQueries_UserAndSpace_ListsBothLayersPlusPlatform()
     {
-        AgentPickerProjection.BuildSkillQuery(userPath: "rbuergi", spacePath: "AgenticPension")
-            .Should().Be("namespace:rbuergi/Skill|AgenticPension/Skill|Skill nodeType:Skill" + Proj,
-                "skills use the SAME per-partition inheritance as agents/models — the user's, the "
-                + "space's and the platform /Skill namespaces, listed directly.");
-        AgentPickerProjection.BuildSkillQueries("rbuergi", "AgenticPension")
-            .Should().ContainSingle().Which.Should()
-            .Be("namespace:rbuergi/Skill|AgenticPension/Skill|Skill nodeType:Skill" + Proj);
+        AgentPickerProjection.BuildSkillQueries(userPath: "rbuergi", spacePath: "AgenticPension")
+            .Should().Equal(
+                "namespace:Skill nodeType:Skill" + Proj,
+                "namespace:rbuergi/Skill nodeType:Skill" + Proj,
+                "path:AgenticPension scope:descendants nodeType:Skill" + Proj);
     }
 
     [Fact]
-    public void BuildSkillQuery_NeitherSet_PlatformDefaultsOnly()
+    public void BuildSkillQueries_NeitherSet_PlatformDefaultsOnly()
     {
-        AgentPickerProjection.BuildSkillQuery().Should().Be("namespace:Skill nodeType:Skill" + Proj);
+        AgentPickerProjection.BuildSkillQueries().Should().Equal("namespace:Skill nodeType:Skill" + Proj);
     }
 
     [Fact]
-    public void BuildSkillQuery_ReservedPartition_IsSkipped()
+    public void BuildSkillQueries_ReservedPartition_IsSkipped()
     {
         // A reserved/rogue ROUTE partition (login, welcome, …) carries no read policy and never holds
         // skills; including it would fail the WHOLE query with "lacks Read permission". It must be
         // filtered — the user's home is kept, the reserved space dropped.
-        AgentPickerProjection.BuildSkillQuery(userPath: "rbuergi", spacePath: "login")
-            .Should().Be("namespace:rbuergi/Skill|Skill nodeType:Skill" + Proj);
+        AgentPickerProjection.BuildSkillQueries(userPath: "rbuergi", spacePath: "login")
+            .Should().Equal("namespace:Skill nodeType:Skill" + Proj, "namespace:rbuergi/Skill nodeType:Skill" + Proj);
     }
 
     [Fact]
@@ -301,8 +301,10 @@ public class AgentPickerQueriesTest
         // SkillNodeType.SkillQueries(contextPath, userPath) is what the chat + autocomplete call:
         // the space partition is derived from the context path's first segment.
         SkillNodeType.SkillQueries("AgenticPension/Foo/_Thread/x", "rbuergi")
-            .Should().ContainSingle().Which.Should()
-            .Be("namespace:rbuergi/Skill|AgenticPension/Skill|Skill nodeType:Skill" + Proj);
+            .Should().Equal(
+                "namespace:Skill nodeType:Skill" + Proj,
+                "namespace:rbuergi/Skill nodeType:Skill" + Proj,
+                "path:AgenticPension scope:descendants nodeType:Skill" + Proj);
     }
 
     // ─── SkillAutocompleteProvider.BuildQueries: pins the FIX ───
@@ -315,11 +317,13 @@ public class AgentPickerQueriesTest
         var access = new AccessService();
         access.SetCircuitContext(new AccessContext { ObjectId = "rbuergi", Name = "rbuergi" });
 
+        // The chatting user's own /Skill namespace MUST be present — passing null userPath (the bug)
+        // hid every user-defined skill from autocomplete.
         SkillAutocompleteProvider.BuildQueries(access, "AgenticPension/Foo")
-            .Should().ContainSingle().Which.Should()
-            .Be("namespace:rbuergi/Skill|AgenticPension/Skill|Skill nodeType:Skill" + Proj,
-                "the chatting user's own /Skill namespace MUST be unioned in — passing null userPath "
-                + "(the bug) hid every user-defined skill from autocomplete.");
+            .Should().Equal(
+                "namespace:Skill nodeType:Skill" + Proj,
+                "namespace:rbuergi/Skill nodeType:Skill" + Proj,
+                "path:AgenticPension scope:descendants nodeType:Skill" + Proj);
     }
 
     [Fact]
@@ -331,8 +335,7 @@ public class AgentPickerQueriesTest
         // On the bare /login route the context partition is reserved — it must be dropped while the
         // user's own /Skill namespace is still unioned.
         SkillAutocompleteProvider.BuildQueries(access, "login")
-            .Should().ContainSingle().Which.Should()
-            .Be("namespace:rbuergi/Skill|Skill nodeType:Skill" + Proj);
+            .Should().Equal("namespace:Skill nodeType:Skill" + Proj, "namespace:rbuergi/Skill nodeType:Skill" + Proj);
     }
 
     [Fact]
@@ -344,34 +347,41 @@ public class AgentPickerQueriesTest
         access.SetCircuitContext(new AccessContext { ObjectId = "system-security", Name = "system-security" });
 
         SkillAutocompleteProvider.BuildQueries(access, "AgenticPension")
-            .Should().ContainSingle().Which.Should()
-            .Be("namespace:AgenticPension/Skill|Skill nodeType:Skill" + Proj);
+            .Should().Equal(
+                "namespace:Skill nodeType:Skill" + Proj,
+                "path:AgenticPension scope:descendants nodeType:Skill" + Proj);
     }
 
     [Fact]
     public void SkillAutocomplete_BuildQueries_NullAccessService_PlatformAndSpaceOnly()
     {
         SkillAutocompleteProvider.BuildQueries(accessService: null, contextPath: "AgenticPension")
-            .Should().ContainSingle().Which.Should()
-            .Be("namespace:AgenticPension/Skill|Skill nodeType:Skill" + Proj);
+            .Should().Equal(
+                "namespace:Skill nodeType:Skill" + Proj,
+                "path:AgenticPension scope:descendants nodeType:Skill" + Proj);
     }
 
     // ─── Skill sources: node-type partition + user-configurable query rows (AiSettings.SkillQueries) ───
 
     [Fact]
-    public void BuildSkillQuery_NodeTypePath_AddsTypePartition()
+    public void BuildSkillQueries_NodeTypePath_AddsTypePartitionSubtree()
     {
         // A node of type Office/Slide surfaces the skills its plugin ships next to its types —
-        // the TYPE path's PARTITION contributes {typePartition}/Skill to the default union.
-        AgentPickerProjection.BuildSkillQuery("rbuergi", "AgenticPension", "Office/Slide")
-            .Should().Be("namespace:rbuergi/Skill|AgenticPension/Skill|Office/Skill|Skill nodeType:Skill" + Proj);
+        // the TYPE path's PARTITION contributes its whole subtree, so a skill filed anywhere under
+        // Office is found, not only one filed in Office/Skill.
+        AgentPickerProjection.BuildSkillQueries("rbuergi", "AgenticPension", "Office/Slide")
+            .Should().Equal(
+                "namespace:Skill nodeType:Skill" + Proj,
+                "namespace:rbuergi/Skill nodeType:Skill" + Proj,
+                "path:AgenticPension scope:descendants nodeType:Skill" + Proj,
+                "path:Office scope:descendants nodeType:Skill" + Proj);
     }
 
     [Fact]
-    public void BuildSkillQuery_ReservedTypePartition_IsSkipped()
+    public void BuildSkillQueries_ReservedTypePartition_IsSkipped()
     {
-        AgentPickerProjection.BuildSkillQuery("rbuergi", nodeTypePath: "settings/Whatever")
-            .Should().Be("namespace:rbuergi/Skill|Skill nodeType:Skill" + Proj);
+        AgentPickerProjection.BuildSkillQueries("rbuergi", nodeTypePath: "settings/Whatever")
+            .Should().Equal("namespace:Skill nodeType:Skill" + Proj, "namespace:rbuergi/Skill nodeType:Skill" + Proj);
     }
 
     [Fact]
@@ -381,10 +391,10 @@ public class AgentPickerQueriesTest
         AiSettingsNodeType.ResolveSkillQueries(
                 new AiSettings(), "AgenticPension/Foo/_Thread/x", "Office/Slide", "rbuergi")
             .Should().Equal(
-                "namespace:Skill nodeType:Skill",
-                "namespace:AgenticPension/Skill nodeType:Skill",
-                "namespace:Office/Skill nodeType:Skill",
-                "namespace:rbuergi/Skill nodeType:Skill");
+                "namespace:Skill nodeType:Skill" + Proj,
+                "namespace:rbuergi/Skill nodeType:Skill" + Proj,
+                "path:AgenticPension scope:descendants nodeType:Skill" + Proj,
+                "path:Office scope:descendants nodeType:Skill" + Proj);
     }
 
     [Fact]
@@ -393,8 +403,8 @@ public class AgentPickerQueriesTest
         // No node type, no space ⇒ those rows drop; global + user remain. Null settings = defaults.
         AiSettingsNodeType.ResolveSkillQueries(null, contextPath: null, nodeTypePath: null, userPath: "rbuergi")
             .Should().Equal(
-                "namespace:Skill nodeType:Skill",
-                "namespace:rbuergi/Skill nodeType:Skill");
+                "namespace:Skill nodeType:Skill" + Proj,
+                "namespace:rbuergi/Skill nodeType:Skill" + Proj);
     }
 
     [Fact]
