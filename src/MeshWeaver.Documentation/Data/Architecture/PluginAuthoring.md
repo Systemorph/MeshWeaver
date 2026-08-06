@@ -17,8 +17,8 @@ changes back to git.
 A plugin is a **folder of mesh nodes** in a git repo — nothing else. The on-disk shape:
 
 ```text
-MyPlugin.json                       the plugin's Space node ("package node": name, description, manifest)
-MyPlugin/
+MyPlugin/                           the plugin folder — the unit of import
+  index.json                        the plugin ROOT — nodeType "Store/Plugin", content PluginContent
   Widget.json                       a NodeType node (Content = NodeTypeDefinition{ configuration })
   Widget/
     Source/
@@ -30,6 +30,12 @@ MyPlugin/
 ```
 
 - `*.json` files ARE MeshNodes, verbatim. `*.cs` files become `Code` nodes keyed by path.
+- The **root** `index.json` is `nodeType: "Store/Plugin"` with a `PluginContent` — the cover
+  (`Body`/`Video`/`Poster`), price, `EntryPoint`, `MarketingPath`, `SetupPath` and `InstallPaths`.
+  The `Store/Plugin` type gives the plugin its store card, its gated children and its cover page. (A
+  `Space` root is correct only when its content is a partition-level `NodeTypeDefinition` compiling a
+  shared `Source/` model, e.g. `UWDeepfield`; a `PluginManifest` root is the deprecated pre-"Store
+  retype" form. Canonical reference: `MeshWeaver.Plugins/AGENTS.md`.)
 - The **NodeType node** carries the type's configuration, e.g.
   `"configuration": "config => config.WithContentType<WidgetContent>().AddDefaultLayoutAreas().AddLayout(l => l.AddWidgetLayoutAreas())"`.
 - The mesh **compiles `Source/` live** on install (Roslyn) — no app rebuild, no NuGet. Version = the
