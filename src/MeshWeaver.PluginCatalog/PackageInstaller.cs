@@ -544,7 +544,8 @@ public static class PackageInstaller
         && (incoming.Icon ?? current.Icon) == current.Icon
         && (incoming.Category ?? current.Category) == current.Category
         && (incoming.State == default ? current.State : incoming.State) == current.State
-        && (incoming.PreRenderedHtml ?? current.PreRenderedHtml) == current.PreRenderedHtml;
+        && (incoming.PreRenderedHtml ?? current.PreRenderedHtml) == current.PreRenderedHtml
+        && (incoming.Order ?? current.Order) == current.Order;
 
     // Content serialized with the hub options ($type discriminators), then CANONICALIZED — object
     // keys sorted recursively — so the comparison is order-insensitive. It must be: on a
