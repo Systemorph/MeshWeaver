@@ -499,7 +499,7 @@ public static class EditorExtensions
         PropertyInfo propertyInfo)
     where T : ContainerControl<T>
     {
-        var label = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
+        var label = propertyInfo.GetEditorLabel();
 
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);
 
@@ -561,7 +561,7 @@ public static class EditorExtensions
             return editor;
 
         var displayAttribute = propertyInfo.GetCustomAttribute<DisplayAttribute>();
-        var propertySkinLabel = displayAttribute?.Name ?? propertyInfo.Name.Wordify();
+        var propertySkinLabel = propertyInfo.GetEditorLabel();
         string? label = null; // // TODO V10: This is to avoid duplication with property skin. do consistently in future. (19.01.2025, Roland Bürgi)
 
         // The viewer's language, read off the AccessContext rather than ambient culture (see
@@ -642,6 +642,26 @@ public static class EditorExtensions
         var optionType = typeof(Option<>).MakeGenericType(elementType);
         return collection.Cast<object>().Select(x => (Option)Activator.CreateInstance(optionType, x, x.ToString()!.Wordify())!).ToArray();
     }
+
+    /// <summary>
+    /// The label for a generated editor field, resolved in the order a .NET author expects:
+    /// <c>[Display(Name = …)]</c>, then <c>[DisplayName(…)]</c>, then the property name word-split.
+    ///
+    /// <para>
+    /// 🚨 <c>[DisplayName]</c> (System.ComponentModel) used to be IGNORED — only
+    /// <see cref="DisplayAttribute"/> (System.ComponentModel.DataAnnotations) was read. Both are
+    /// standard, both are commonly reached for, and a declared label silently rendering as the raw
+    /// property name is indistinguishable from "the attribute does not work". Doc/GUI/Editor's own
+    /// example declares <c>[DisplayName("Full name")]</c> and rendered "Name".
+    /// </para>
+    ///
+    /// <para>Kept in ONE place: MapToControl and the property-skin path both call it, so the field
+    /// label and its skin label can never disagree.</para>
+    /// </summary>
+    private static string GetEditorLabel(this PropertyInfo propertyInfo)
+        => propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name
+           ?? propertyInfo.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
+           ?? propertyInfo.Name.Wordify();
 
     private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo) =>
         new(propertyInfo.Name.ToCamelCase()!);

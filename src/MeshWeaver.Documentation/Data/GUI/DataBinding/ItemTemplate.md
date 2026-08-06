@@ -155,19 +155,14 @@ var rows = new[]
     new UserRow("Charlie", "Viewer"),
 };
 
-// Two things here are load-bearing:
-//
-// 1. The STREAM overload, BindMany(id, template). It publishes the collection into the layout
-//    area's data store under `id` and points the item DataContext at it, which is what lets each
-//    item's binding resolve. The plain-IEnumerable overload embeds the collection in the control
-//    instead, and nothing ever puts it in the store — the items render EMPTY.
-// 2. The property is passed DIRECTLY as a control argument — Controls.Label(u.Name). BindMany
-//    rewrites the expression tree, replacing each property getter with a BINDING; a property read
-//    inside an interpolated string ($"{u.Name}") is consumed by string.Format before the rewriter
-//    can see it. Label, not Text: Controls.Text is an editable TextFieldControl whose value lives
-//    in an input, not as visible text.
-System.Reactive.Linq.Observable.Return((System.Collections.Generic.IEnumerable<UserRow>)rows)
-    .BindMany("usersDemo", u => MeshWeaver.Layout.Controls.Label(u.Name))
+// The property is passed DIRECTLY as a control argument — Controls.Label(u.Name). BindMany
+// rewrites the expression tree, replacing each property getter with a BINDING; a property read
+// inside an interpolated string ($"{u.Name}") is consumed by string.Format before the rewriter
+// can see it, so the item would render empty. Label, not Text: Controls.Text is an editable
+// TextFieldControl whose value lives in an input, not as visible text.
+MeshWeaver.Layout.Controls.Stack
+    .WithView(MeshWeaver.Layout.Controls.Title("Users", 4))
+    .WithView(rows.BindMany(u => MeshWeaver.Layout.Controls.Label(u.Name)))
 ```
 
 # Reference
