@@ -21,7 +21,25 @@ namespace MeshWeaver.Graph;
 /// kept-not-pruned (the repo has no copy at all — a server-side addition). Non-zero means the mesh is
 /// now AHEAD of the repo, so the caller must NOT advance its last-sync baseline until those changes are
 /// committed back.</summary>
-public sealed record StaticRepoImportResult(string Partition, string Fingerprint, string Outcome, int Count = 0, int Preserved = 0);
+public sealed record StaticRepoImportResult(string Partition, string Fingerprint, string Outcome, int Count = 0, int Preserved = 0)
+{
+    /// <summary>
+    /// The node paths this import actually WROTE (created or updated) — skipped-unchanged, claimed,
+    /// preserved and failed nodes are absent. What a caller derives its recompile set from: only a
+    /// node that really landed can leave a NodeType's assembly stale (an unchanged re-import writes
+    /// nothing and must recompile nothing). The partition ROOT's write is not tracked — it lands
+    /// through its own ensure path and is never a compile input. Empty on the Skipped/Failed
+    /// outcomes, mirroring <c>InstallResult.WrittenPaths</c>.
+    /// </summary>
+    public ImmutableList<string> WrittenPaths { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// The node paths this import PRUNED (deleted because the repo no longer carries them). A pruned
+    /// <c>Source/Test</c> node affects its owning NodeType exactly like a written one — stale code
+    /// must LEAVE the assembly — so recompile derivation takes the union of both lists.
+    /// </summary>
+    public ImmutableList<string> PrunedPaths { get; init; } = ImmutableList<string>.Empty;
+}
 
 /// <summary>
 /// Conflict policy for an import that reconciles against a LIVE partition — the GitHub
@@ -713,7 +731,14 @@ public static class StaticRepoImporter
                     // and silently NOT prune a genuinely-removed source file. Same freshness guard as
                     // ReadClaimedRoots; absent (first import) resolves promptly to an empty set (#435).
                     ReadContentManifest(hub, source.Partition),
-                    (claimedRoots, previousContentPaths) => (existingItems, claimedRoots, previousContentPaths)))
+                    // The per-node import manifest gets the SAME authoritative read: parsed from the
+                    // lagged query snapshot it can miss the map a just-completed import wrote, which
+                    // silently degraded the NEXT import to "everything changed" — a full re-write of
+                    // every node (churn versions, and a release request for every type in the
+                    // partition now that updates recompile what they change).
+                    ReadNodeManifest(hub, source.Partition),
+                    (claimedRoots, previousContentPaths, nodeManifest) =>
+                        (existingItems, claimedRoots, previousContentPaths, nodeManifest)))
             .SelectMany(snapshot =>
             {
                 var existing = snapshot.existingItems
@@ -723,12 +748,11 @@ public static class StaticRepoImporter
 
                 // Per-node incremental diff. The previous import stored each source node's token in the
                 // manifest ({partition}/_Activity/import-manifest — an ActivityLog whose ReturnValue holds
-                // the {path→token} map). It's a descendant of the subtree we already read, so parse it from
-                // `existing` — no extra query. A node whose token still matches AND is present is upserted-
-                // skipped below; a missing/empty manifest (first import, or a wipe) hashes everything as
-                // changed → full import (safe). This is what makes a one-node edit re-import one node.
-                var manifest = ParseManifest(
-                    existing.GetValueOrDefault(ManifestPath(source.Partition)), hub.JsonSerializerOptions);
+                // the {path→token} map), read AUTHORITATIVELY above (ReadNodeManifest). A node whose token
+                // still matches AND is present is upserted-skipped below; a missing/empty manifest (first
+                // import, or a wipe) hashes everything as changed → full import (safe). This is what makes
+                // a one-node edit re-import one node.
+                var manifest = snapshot.nodeManifest;
 
                 // The content-collection file paths the source owned at the LAST import (read
                 // authoritatively above from {partition}/_Activity/content-manifest). The inline content
@@ -763,7 +787,7 @@ public static class StaticRepoImporter
                         {
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: skip claimed {Path}", source.Partition, path);
-                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 0));
+                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 0, Written: (string?)null));
                         }
 
                         // 🅶 Git-diff scope: when the caller supplied the changed-path set (a webhook /
@@ -781,7 +805,7 @@ public static class StaticRepoImporter
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: outside git-diff scope, skipping {Path}",
                                 source.Partition, path);
-                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 0));
+                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 0, Written: (string?)null));
                         }
 
                         // Incremental skip: unchanged since the last import (same source token) AND the
@@ -795,7 +819,7 @@ public static class StaticRepoImporter
                         {
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: unchanged, skipping {Path}", source.Partition, path);
-                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 0));
+                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 0, Written: (string?)null));
                         }
 
                         // Two-way conflict resolution: a node changed on the SERVER since the last sync
@@ -810,7 +834,7 @@ public static class StaticRepoImporter
                                 source.Partition, path);
                             NodeTypeCompilationActivity.AppendLog(hub, activityPath,
                                 $"↩ Kept local change to {path} (newer on the server — commit to sync it back).", logger!);
-                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 1));
+                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 1, Written: (string?)null));
                         }
 
                         var materialized = Materialize(sourceNode);
@@ -837,8 +861,8 @@ public static class StaticRepoImporter
                         // Failed and continue. The Failed tally drives the terminal Warning status
                         // below — the activity never reports a green Succeeded while hiding failures.
                         return Upsert(hub, materialized)
-                            .Select(_ => (Imported: 1, Failed: 0, Preserved: 0))
-                            .Catch<(int Imported, int Failed, int Preserved), Exception>(ex =>
+                            .Select(_ => (Imported: 1, Failed: 0, Preserved: 0, Written: (string?)path))
+                            .Catch<(int Imported, int Failed, int Preserved, string? Written), Exception>(ex =>
                             {
                                 logger?.LogWarning(ex,
                                     "[StaticRepoImport] {Partition}: upsert of {Path} failed (continuing).",
@@ -846,13 +870,17 @@ public static class StaticRepoImporter
                                 NodeTypeCompilationActivity.AppendLog(hub, activityPath,
                                     $"⚠ Failed to import {path}: {ex.Message}", logger!,
                                     Microsoft.Extensions.Logging.LogLevel.Warning);
-                                return Observable.Return((Imported: 0, Failed: 1, Preserved: 0));
+                                return Observable.Return((Imported: 0, Failed: 1, Preserved: 0, Written: (string?)null));
                             });
                     })
                     .ToObservable()
                     .Merge(BatchSize)
-                    .Aggregate((Imported: 0, Failed: 0, Preserved: 0),
-                        (acc, x) => (acc.Imported + x.Imported, acc.Failed + x.Failed, acc.Preserved + x.Preserved));
+                    // WrittenPaths ride along with the counts: only a node that really landed can
+                    // leave a NodeType's assembly stale, so the recompile derivation downstream
+                    // (GitHubSyncService → ReleaseAffectedNodeTypes) keys off exactly this list.
+                    .Aggregate((Imported: 0, Failed: 0, Preserved: 0, Written: ImmutableList<string>.Empty),
+                        (acc, x) => (acc.Imported + x.Imported, acc.Failed + x.Failed, acc.Preserved + x.Preserved,
+                            x.Written is null ? acc.Written : acc.Written.Add(x.Written)));
 
                 return upserted.SelectMany(count =>
                 {
@@ -890,23 +918,29 @@ public static class StaticRepoImporter
                         }
                     }
 
+                    // Collect the actually-pruned PATHS (not just a count): a pruned Source/Test
+                    // node affects its owning NodeType exactly like a written one, so the recompile
+                    // derivation downstream needs to see it. A failed prune contributes nothing.
                     var pruned = toPrune.Count == 0
-                        ? Observable.Return(0)
+                        ? Observable.Return(ImmutableList<string>.Empty)
                         : toPrune
                             .Select(t => AsSystem(hub, () => meshService.DeleteNode(t.Path))
-                                .Select(_ => 1)
-                                .Catch<int, Exception>(ex =>
+                                .Select(_ => (string?)t.Path)
+                                .Catch<string?, Exception>(ex =>
                                 {
                                     logger?.LogWarning(ex,
                                         "[StaticRepoImport] {Partition}: prune of {Path} failed (continuing).",
                                         source.Partition, t.Path);
-                                    return Observable.Return(0);
+                                    return Observable.Return<string?>(null);
                                 }))
                             .ToObservable()
                             .Merge(BatchSize)
-                            .Sum();
+                            .Where(p => p is not null)
+                            .Select(p => p!)
+                            .ToList()
+                            .Select(list => list.ToImmutableList());
 
-                    return pruned.SelectMany(prunedCount =>
+                    return pruned.SelectMany(prunedPaths =>
                         // Sync content-collection files (the assets behind @@content/<file> embeds)
                         // collection→collection into each owning node — AFTER the node upsert.
                         SyncContentImports(hub, source, logger).SelectMany(embedCount =>
@@ -934,8 +968,8 @@ public static class StaticRepoImporter
                             var preserved = count.Preserved + keptFromPrune.Length;
                             var preservedNote = preserved > 0 ? $", kept {preserved} local change(s)" : "";
                             var summary = failed > 0
-                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}, pruned {prunedCount}, synced {contentCount} content file(s)."
-                                : $"Imported {count.Imported} node(s){preservedNote}, pruned {prunedCount}, synced {contentCount} content file(s).";
+                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}, pruned {prunedPaths.Count}, synced {contentCount} content file(s)."
+                                : $"Imported {count.Imported} node(s){preservedNote}, pruned {prunedPaths.Count}, synced {contentCount} content file(s).";
                             NodeTypeCompilationActivity.Complete(hub, activityPath, status,
                                 new[]
                                 {
@@ -947,9 +981,13 @@ public static class StaticRepoImporter
                                 logger!);
                             logger?.LogInformation(
                                 "[StaticRepoImport] {Partition}: imported {Count}, failed {Failed}, pruned {Pruned}, content {Content} at {Fingerprint}.",
-                                source.Partition, count.Imported, failed, prunedCount, contentCount, fingerprint);
+                                source.Partition, count.Imported, failed, prunedPaths.Count, contentCount, fingerprint);
                             return new StaticRepoImportResult(source.Partition, fingerprint,
-                                failed > 0 ? "ImportedWithErrors" : "Imported", count.Imported, preserved);
+                                failed > 0 ? "ImportedWithErrors" : "Imported", count.Imported, preserved)
+                            {
+                                WrittenPaths = count.Written,
+                                PrunedPaths = prunedPaths,
+                            };
                         });
                         })));
                 });
@@ -1341,6 +1379,23 @@ public static class StaticRepoImporter
             .Catch((Exception _) => Observable.Return<MeshNode?>(null))
             .Take(1)
             .Select(node => ParseContentManifest(node, hub.JsonSerializerOptions));
+
+    /// <summary>
+    /// Reads the partition's PER-NODE import manifest ({path → source-token} map) AUTHORITATIVELY —
+    /// the owner round-trip via <see cref="MeshNodeStreamExtensions.GetMeshNode"/>, NOT the
+    /// eventually-consistent query snapshot (same freshness guard as <see cref="ReadClaimedRoots"/> /
+    /// <see cref="ReadContentManifest"/>). Parsed from the lagged snapshot, the manifest a
+    /// just-completed import wrote could be invisible to the next import, silently degrading it to
+    /// "everything changed": every node re-written (version churn) and — now that update channels
+    /// recompile what an import lands — every type in the partition needlessly release-requested.
+    /// Absent (first import) or any read failure resolves promptly to an empty map → full import,
+    /// never a wrong one.
+    /// </summary>
+    private static IObservable<ImmutableDictionary<string, string>> ReadNodeManifest(IMessageHub hub, string partition)
+        => hub.GetMeshNode(ManifestPath(partition), TimeSpan.FromSeconds(10))
+            .Catch((Exception _) => Observable.Return<MeshNode?>(null))
+            .Take(1)
+            .Select(node => ParseManifest(node, hub.JsonSerializerOptions));
 
     /// <summary>
     /// Parses the list of source-owned content-collection paths a prior import stored in the content
