@@ -127,7 +127,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             Content = updatedTodo,
             Name = "Updated Title"
         };
-        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null);
+        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]));
 
         // Wait for update to be reflected in the stream (reactive query)
         await nodeStream!
@@ -217,7 +217,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var currentNode = nodes!.First();
         var updatedContent = new MinimalItem { Id = "1", Data = "updated data" };
         var updatedNode = currentNode with { Content = updatedContent };
-        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null);
+        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]));
 
         // Wait for update to be reflected in the stream (reactive query)
         // Since MinimalItem has no [MeshNodeProperty] mappings, we wait for Content change
@@ -270,7 +270,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             Icon = "Star",
             Category = "Premium"
         };
-        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null);
+        _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]));
 
         // Wait for update to be reflected in the stream (reactive query)
         await nodeStream!

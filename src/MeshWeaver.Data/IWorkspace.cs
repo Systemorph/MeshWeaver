@@ -18,31 +18,26 @@ public interface IWorkspace : IAsyncDisposable
     IReadOnlyCollection<Type> MappedTypes { get; }
     /// <summary>Creates or updates the given instances using default update options.</summary>
     /// <param name="instances">The entities to upsert.</param>
-    /// <param name="request">The originating message delivery, used for response correlation.</param>
     /// <returns>The change's <see cref="ActivityLog"/>; see <see cref="RequestChange"/> for its semantics.</returns>
-    IObservable<ActivityLog> Update(IReadOnlyCollection<object> instances, IMessageDelivery request) => Update(instances, new(), request);
+    IObservable<ActivityLog> Update(IReadOnlyCollection<object> instances) => Update(instances, new());
     /// <summary>Creates or updates the given instances using the supplied update options.</summary>
     /// <param name="instances">The entities to upsert.</param>
     /// <param name="updateOptions">Options controlling merge vs. snapshot semantics.</param>
-    /// <param name="request">The originating message delivery, used for response correlation.</param>
     /// <returns>The change's <see cref="ActivityLog"/>; see <see cref="RequestChange"/> for its semantics.</returns>
-    IObservable<ActivityLog> Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, IMessageDelivery request);
+    IObservable<ActivityLog> Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions);
     /// <summary>Creates or updates a single instance using default update options.</summary>
     /// <param name="instance">The entity to upsert.</param>
-    /// <param name="request">The originating message delivery, used for response correlation.</param>
     /// <returns>The change's <see cref="ActivityLog"/>; see <see cref="RequestChange"/> for its semantics.</returns>
-    IObservable<ActivityLog> Update(object instance, IMessageDelivery request) => Update([instance], request);
+    IObservable<ActivityLog> Update(object instance) => Update([instance]);
 
     /// <summary>Deletes the given instances from their mapped collections.</summary>
     /// <param name="instances">The entities to delete.</param>
-    /// <param name="request">The originating message delivery, used for response correlation.</param>
     /// <returns>The change's <see cref="ActivityLog"/>; see <see cref="RequestChange"/> for its semantics.</returns>
-    IObservable<ActivityLog> Delete(IReadOnlyCollection<object> instances, IMessageDelivery request);
+    IObservable<ActivityLog> Delete(IReadOnlyCollection<object> instances);
     /// <summary>Deletes a single instance from its mapped collection.</summary>
     /// <param name="instance">The entity to delete.</param>
-    /// <param name="request">The originating message delivery, used for response correlation.</param>
     /// <returns>The change's <see cref="ActivityLog"/>; see <see cref="RequestChange"/> for its semantics.</returns>
-    IObservable<ActivityLog> Delete(object instance, IMessageDelivery request) => Delete([instance], request);
+    IObservable<ActivityLog> Delete(object instance) => Delete([instance]);
 
     /// <summary>
     /// Validates and applies a data change request (creations, updates and deletions) to the workspace streams.
@@ -51,9 +46,8 @@ public interface IWorkspace : IAsyncDisposable
     /// affected stream has applied its part, then completes. Ignore it for a fire-and-run write.</para>
     /// </summary>
     /// <param name="change">The change request describing the creations, updates and deletions.</param>
-    /// <param name="request">Optional originating message delivery, used for response correlation.</param>
     /// <returns>A single-emission observable carrying the finished <see cref="ActivityLog"/>.</returns>
-    public IObservable<ActivityLog> RequestChange(DataChangeRequest change, IMessageDelivery? request);
+    public IObservable<ActivityLog> RequestChange(DataChangeRequest change);
     /// <summary>Gets a synchronization stream over the collections backing the given CLR types.</summary>
     /// <param name="types">The CLR types whose collections should be combined into the stream.</param>
     /// <returns>A synchronization stream of the combined entity store.</returns>
