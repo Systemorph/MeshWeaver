@@ -410,4 +410,18 @@ memex/aspire/Memex.Portal.Distributed/wwwroot/app/
 
 # The plugins/ dir is a SEPARATE git repo (Systemorph/MeshWeaver.Plugins) nested locally —
 # never tracked here. Content ships via the plugin registry / GitSync, not this repo.
-plugins/
+# 🚨 ANCHORED (leading slash) on purpose: an unanchored `plugins/` matches at EVERY depth, and on
+# macOS's case-insensitive filesystem it also matches `Plugins/` — which silently dropped every NEW
+# file under src/MeshWeaver.AI/Plugins/ and .claude/skills/plugins/. Keep the slash.
+/plugins/
+
+# The Whisper voice model is a 547 MB DOWNLOAD, never a tracked file — GitHub rejects any blob
+# over 100 MB, so committing it makes the push fail for everyone (it did: a `git add -A` swept it
+# in and the pre-receive hook declined the whole branch). The Dockerfile bakes no model; it is
+# mounted at /models/model.bin (see deploy/whisper/docker-compose.yml).
+#
+# 🗄️ BACKUP OF RECORD — a GitHub RELEASE ASSET on this repo, which is exempt from the 100 MB blob
+# limit (2 GB/asset): tag `voice-model-swiss-german`, asset `ggml-swiss-german-turbo-q5_0.bin`
+# (574,041,195 bytes). Re-fetch it exactly as deploy/whisper/README.md documents:
+#   curl -fSL https://github.com/Systemorph/MeshWeaver/releases/download/voice-model-swiss-german/ggml-swiss-german-turbo-q5_0.bin -o deploy/whisper/models/model.bin
+deploy/whisper/models/

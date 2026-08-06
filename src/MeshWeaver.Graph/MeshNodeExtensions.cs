@@ -251,7 +251,7 @@ public static class MeshNodeExtensions
         var pipeline = Observable.Using(
             Impersonate,
             _ => workspace
-            .GetQuery($"UserActivity|{activityPath}", $"path:{activityPath} nodeType:UserActivity")
+            .GetQuery($"UserActivity|{activityPath}", $"path:{activityPath} nodeType:UserActivity select:path,id,namespace,name,nodeType,content")
             .Take(1)
             .Select(nodes => nodes.FirstOrDefault(n =>
                 string.Equals(n.NodeType, "UserActivity", StringComparison.OrdinalIgnoreCase)))

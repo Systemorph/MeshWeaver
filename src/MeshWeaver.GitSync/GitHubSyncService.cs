@@ -381,6 +381,22 @@ public sealed class GitHubSyncService
                 return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath,
                         SyncIgnore.For(config), progress, policy,
                         baseSha: force ? null : config.LastSyncCommitSha)
+                    // 🚨 RECOMPILE WHAT THE SYNC CHANGED — part of the sync transaction, not a
+                    // follow-up human step. Importing new Source/Code nodes and walking away leaves
+                    // every affected NodeType serving its STALE assembly (the "assembly is the
+                    // deliverable" failure the AGENTS.md deploy procedure hand-patched; paid again
+                    // 2026-08-03/04). The set derives from what actually LANDED (written + pruned
+                    // node paths — an unchanged/content-only sync releases nothing) and covers the
+                    // owning types AND every shared=@ sharer, mesh-wide; releases are requested
+                    // under SYSTEM, consistent with how the import's own writes land, and the set
+                    // is logged onto the sync's activity via `progress`.
+                    .SelectMany(x =>
+                    {
+                        var changed = x.Result.WrittenPaths.AddRange(x.Result.PrunedPaths);
+                        return changed.Count == 0
+                            ? Observable.Return(x)
+                            : hub.ReleaseAffectedNodeTypes(changed, progress).Select(_ => x);
+                    })
                     // 🚨 Only advance the last-sync baseline when the mesh is now IN SYNC with the repo.
                     // A two-way import that PRESERVED server-newer nodes leaves the mesh AHEAD of the repo
                     // (those edits aren't committed back yet); advancing LastSyncedAt would move the
@@ -611,7 +627,7 @@ public sealed class GitHubSyncService
     {
         var path = ConfigPath(spacePath, sourceId);
         return hub.GetWorkspace()
-            .GetQuery($"gitsync-cfg:{path}", $"path:{path}")
+            .GetQuery($"gitsync-cfg:{path}", $"path:{path} select:path,id,name,nodeType,content")
             .Select(nodes => nodes?.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)));
     }
 
@@ -626,7 +642,7 @@ public sealed class GitHubSyncService
     {
         var primaryPath = ConfigPath(spacePath);
         var children = hub.GetWorkspace()
-            .GetQuery($"gitsync-cfgs:{spacePath}", $"namespace:{primaryPath} nodeType:{ConfigNodeType}")
+            .GetQuery($"gitsync-cfgs:{spacePath}", $"namespace:{primaryPath} nodeType:{ConfigNodeType} select:path,id,namespace,name,nodeType,content")
             .Select(nodes => (nodes ?? [])
                 .Where(n => string.Equals(n.Namespace, primaryPath, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(n => n.Id, StringComparer.OrdinalIgnoreCase)
