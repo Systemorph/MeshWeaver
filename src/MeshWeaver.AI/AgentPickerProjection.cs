@@ -123,10 +123,23 @@ public static class AgentPickerProjection
         => PartitionOf(path) is { } p && ReservedPartitions.Contains(p);
 
     /// <summary>
+    /// The projection every registry query carries. Agents, skills and models are all
+    /// CONTENT-BEARING reads — the picker deserialises AgentConfiguration / SkillConfiguration /
+    /// ModelDefinition off each row — so <c>content</c> is named DELIBERATELY here. Naming it is
+    /// the point: a <c>select:</c> that omits <c>content</c> makes the storage adapter project
+    /// <c>NULL::jsonb AS content</c>, and every downstream <c>ContentAs&lt;T&gt;()</c> then reads
+    /// null with no error (empty picker, "No suitable agent"). See
+    /// Doc/Architecture/CqrsAndContentAccess.
+    /// </summary>
+    internal const string RegistryProjection =
+        " select:path,id,namespace,name,description,nodeType,icon,order,content";
+
+    /// <summary>
     /// Assembles a per-partition registry query: the platform default namespace (<paramref name="sub"/>)
     /// plus the user's and space's own (<c>{partition}/{sub}</c>), listed directly as a
     /// <c>namespace:A|B|C</c> exact-membership alternation. No scope — agents/models are placed in a
-    /// flat, well-known namespace per partition, so there is no graph search.
+    /// flat, well-known namespace per partition, so there is no graph search. Carries
+    /// <see cref="RegistryProjection"/>.
     /// </summary>
     private static string BuildRegistryQuery(
         string nodeType, string sub, string? userPath, string? spacePath, string extra,
@@ -148,7 +161,7 @@ public static class AgentPickerProjection
         var nsClause = namespaces.Count > 1
             ? $"namespace:{string.Join("|", namespaces)}"
             : $"namespace:{namespaces[0]}";
-        return $"{nsClause} nodeType:{nodeType}{extra}";
+        return $"{nsClause} nodeType:{nodeType}{extra}{RegistryProjection}";
     }
 
     /// <summary>
@@ -441,22 +454,22 @@ public static class AgentPickerProjection
         var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}";
         var queries = new List<string>
         {
-            $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants",
+            $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants{RegistryProjection}",
         };
         // Skip reserved/rogue ROUTE partitions (login, welcome, settings, …): a reserved currentPath/
         // nodeTypePath would make namespace:{login}/Provider read the policy-less reserved partition and
         // fail the WHOLE model query with "lacks Read permission on 'login'" — the picker goes empty.
         // Mirrors BuildRegistryQuery's filter (the agent/skill queries already skip these).
         if (!string.IsNullOrEmpty(currentPath) && !IsReservedPartition(currentPath))
-            queries.Add($"namespace:{currentPath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
+            queries.Add($"namespace:{currentPath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants{RegistryProjection}");
         if (!string.IsNullOrEmpty(nodeTypePath) && !IsReservedPartition(nodeTypePath))
-            queries.Add($"namespace:{nodeTypePath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
+            queries.Add($"namespace:{nodeTypePath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants{RegistryProjection}");
         if (!string.IsNullOrEmpty(userPath))
-            queries.Add($"namespace:{ModelProviderNodeType.UserNamespacePath(userPath)} nodeType:{typeFilter} scope:descendants");
+            queries.Add($"namespace:{ModelProviderNodeType.UserNamespacePath(userPath)} nodeType:{typeFilter} scope:descendants{RegistryProjection}");
         if (selectedProviderPaths != null)
             foreach (var path in selectedProviderPaths)
                 if (!string.IsNullOrEmpty(path))
-                    queries.Add($"namespace:{path} nodeType:{typeFilter} scope:selfAndDescendants");
+                    queries.Add($"namespace:{path} nodeType:{typeFilter} scope:selfAndDescendants{RegistryProjection}");
         return queries.ToArray();
     }
 

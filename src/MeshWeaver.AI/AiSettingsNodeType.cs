@@ -159,7 +159,7 @@ public static class AiSettingsNodeType
             return;
         var path = PathFor(user);
         hub.GetWorkspace()
-            .GetQuery($"{NodeType}|{user}", $"path:{path} nodeType:{NodeType}")
+            .GetQuery($"{NodeType}|{user}", $"path:{path} nodeType:{NodeType} select:path,id,name,nodeType,content")
             .Take(1)
             .SelectMany(nodes =>
             {
@@ -240,7 +240,7 @@ public static class AiSettingsNodeType
         var defaults = BuildDefaults(services);
         EnsureExists(hub, services, user);
         return workspace
-            .GetQuery($"{NodeType}|{user}", $"path:{PathFor(user)} nodeType:{NodeType}")
+            .GetQuery($"{NodeType}|{user}", $"path:{PathFor(user)} nodeType:{NodeType} select:path,id,name,nodeType,content")
             .Select(nodes => Effective(
                 nodes.FirstOrDefault(n => string.Equals(n.NodeType, NodeType, StringComparison.OrdinalIgnoreCase)),
                 defaults, hub.JsonSerializerOptions))
@@ -267,7 +267,7 @@ public static class AiSettingsNodeType
         // it does not clobber an existing customised node). See
         // feedback_optional_node_query_not_access / Doc/Architecture/AsynchronousCalls.md.
         hub.GetWorkspace()
-            .GetQuery($"{NodeType}|{user}", $"path:{path} nodeType:{NodeType}")
+            .GetQuery($"{NodeType}|{user}", $"path:{path} nodeType:{NodeType} select:path,id,name,nodeType,content")
             .Take(1)
             .Where(nodes => !nodes.Any(n =>
                 string.Equals(n.NodeType, NodeType, StringComparison.OrdinalIgnoreCase)))
