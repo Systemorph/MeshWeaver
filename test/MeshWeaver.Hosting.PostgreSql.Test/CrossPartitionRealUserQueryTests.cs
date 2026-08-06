@@ -120,18 +120,55 @@ public class CrossPartitionRealUserQueryTests(PostgreSqlFixture fixture, ITestOu
     }
 
     /// <summary>Control: the System identity (boot/background queries) — known-good on prod.</summary>
+    /// <remarks>
+    /// Asserts TWO independent contracts, and deliberately does not race them against each other:
+    /// <list type="number">
+    ///   <item><b>Liveness</b> (why this class exists) — an Initial/Reset arrives promptly rather
+    ///     than hanging. Checked on the FIRST emission, strictly.</item>
+    ///   <item><b>Cross-partition visibility</b> — System sees every partition's rows.</item>
+    /// </list>
+    ///
+    /// <para>
+    /// 🚨 The second must NOT be asserted on the first emission. <see cref="IMeshService.Query{T}"/>
+    /// is eventually consistent by design (CqrsAndContentAccess.md: "QueryAsync/ObserveQuery are
+    /// eventually consistent — stale after writes"), so an Initial computed before the index caught
+    /// up with <see cref="SeedTwoPartitions"/>'s just-completed writes is CORRECT behaviour, not a
+    /// defect. Asserting content on <c>FirstAsync()</c> made this test a read-your-writes assumption
+    /// the API never promises — it passed only when the index happened to win the race, and failed
+    /// on a runner whose timing shifted. Wait for the emission that carries the row instead
+    /// (AGENTS.md: "wait on the actual condition via stream.Where(...).FirstAsync().Timeout(...)";
+    /// "filter on the emission shape, not the count").
+    /// </para>
+    ///
+    /// <para>
+    /// One <see cref="Observable.Replay{TSource}(IObservable{TSource})"/>-backed subscription serves
+    /// both assertions: re-invoking <see cref="RunUnpinned"/> would open a SECOND query, and the
+    /// buffer means the liveness check cannot miss an emission that already fired.
+    /// </para>
+    /// </remarks>
     [Fact(Timeout = 60_000)]
     public async Task UnpinnedStructuredQuery_AsSystem_EmitsInitial()
     {
         var (nsA, _) = await SeedTwoPartitions();
 
-        var change = await RunUnpinned(WellKnownUsers.System)
+        var changes = RunUnpinned(WellKnownUsers.System).Replay();
+        using var _subscription = changes.Connect();
+
+        // 1. Liveness — unchanged contract, still strict on the first emission.
+        var first = await changes
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(20))
+            .ToTask();
+        first.ChangeType.Should().BeOneOf(QueryChangeType.Initial, QueryChangeType.Reset);
+
+        // 2. Cross-partition visibility — on whichever emission reflects the seeded state.
+        var withRow = await changes
+            .Where(c => c.Items.Any(n => n.Path == $"{nsA}/doc1"))
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(20))
             .ToTask();
 
-        change.ChangeType.Should().BeOneOf(QueryChangeType.Initial, QueryChangeType.Reset);
-        change.Items.Should().Contain(n => n.Path == $"{nsA}/doc1",
+        withRow.Items.Should().Contain(n => n.Path == $"{nsA}/doc1",
             "System sees every partition's rows");
     }
 }
