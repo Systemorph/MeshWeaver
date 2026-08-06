@@ -45,7 +45,7 @@ Only when **no** tokens are configured — the local-dev / e2e-stub mode — doe
 anonymously; a production registry always configures tokens. What a registered instance can then
 read is **curated plugins** only:
 by default the node-native repos the [`MeshWeaver.Plugins`](/Doc/Architecture/Plugins) repo ships —
-`<Plugin>/index.json` **Space** roots carrying a `PluginManifest`, node-per-file — via a
+`<Plugin>/index.json` **Store/Plugin** roots carrying a `PluginContent`, node-per-file — via a
 `NodeRepoPackageSource` (`PluginCatalog:SourceFormat=node-repo`, the default). A `package.json`-manifest
 repo can be served instead with `SourceFormat=package-json`. Nothing outside a published plugin is
 exposed, and the registry's own credential never leaves.
@@ -76,8 +76,8 @@ via the `PluginCatalog:Sources` list:
 Each entry takes `RepoPath` (a URL → via GitSync's client, or a local path), optional `Subdir`,
 `Ref` (default `HEAD`) and `Format` (`node-repo` default / `package-json`). A source lists only
 folders matching its format — the Education repo's courses (DataModeling, AgenticEngineering, …)
-appear once each course folder gains a `<Course>/index.json` Space root carrying a
-`PluginManifest`, the same node-repo convention `MeshWeaver.Plugins` uses. `GET /api/plugins`
+appear once each course folder gains a `<Course>/index.json` Store/Plugin root carrying a
+`PluginContent`, the same node-repo convention `MeshWeaver.Plugins` uses. `GET /api/plugins`
 merges all sources' packages (on an id collision the first configured source wins); `/files`
 resolves an id in the same order. With several sources one failing repo degrades to an empty
 contribution (logged), never a broken catalog. The legacy single-source keys
