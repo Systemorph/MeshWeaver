@@ -269,7 +269,7 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
 }
 
 /// <summary>
-/// Tests that the ActivityLogBundler (data change activity tracking) skips
+/// Tests the source:activity query pipeline over Activity satellites: it skips
 /// satellite nodes and excluded node types like AccessAssignment.
 /// </summary>
 public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -281,7 +281,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
 
     /// <summary>
     /// Manually created activity logs for main content nodes should be queryable
-    /// via source:activity (verifies the query pipeline, not the bundler).
+    /// via source:activity.
     /// </summary>
     [Fact(Timeout = 30000)]
     public async Task ActivityQuery_ReturnsMainNodeWithActivityLog()
