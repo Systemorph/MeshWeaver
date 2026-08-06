@@ -46,10 +46,8 @@ public static class MarkdownOverviewLayoutArea
                 // @@ embeds and when there are none; internal satellites (_Access, _Thread, …) excluded.
                 if (hideHeader)
                     return (UiControl?)content;
-                var subNodes = children
-                    .Where(c => !LastSegment(c.Path).StartsWith('_'))
-                    .OrderBy(c => c.Name ?? c.Id, System.StringComparer.OrdinalIgnoreCase)
-                    .ToList();
+                var subNodes = OrderSubNodes(
+                    children.Where(c => !LastSegment(c.Path).StartsWith('_')));
                 // A module that OWNS this page may supply its own menu (a course lists the whole
                 // course, not the branch you are in). Nothing supplied → core's default child list,
                 // unchanged — which is why docs and spaces are untouched by this.
@@ -65,6 +63,15 @@ public static class MarkdownOverviewLayoutArea
         var i = path.LastIndexOf('/');
         return i < 0 ? path : path[(i + 1)..];
     }
+
+    // Sub-nodes for the side menu, ordered by the node's declared Order (nulls last, per the
+    // MeshNode.Order contract) then by name — mirroring the graph navigator and every other child
+    // list in the codebase. internal for unit testing (InternalsVisibleTo MeshWeaver.Graph.Test).
+    internal static List<MeshNode> OrderSubNodes(IEnumerable<MeshNode> children) =>
+        children
+            .OrderBy(c => c.Order ?? int.MaxValue)
+            .ThenBy(c => c.Name ?? c.Id, System.StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     /// <summary>
     /// Wraps the page content with a collapsible left-hand NavMenu listing the node's sub-nodes,
