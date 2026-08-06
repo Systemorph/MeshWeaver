@@ -20,22 +20,10 @@ import { str } from "./common.js";
 
 type Row = Record<string, Json> & { __id: string };
 
-/** .NET-style numeric formatting ("N0", "C2", "P1"; "{0:N2}" tolerated). Shared with PivotGrid. */
-export function formatValue(v: Json, format?: string): string {
-  if (v == null) return "";
-  const f = format?.replace(/^\{0:(.+)\}$/, "$1");
-  if (f && typeof v === "number") {
-    const m = /^([NCP])(\d+)?$/i.exec(f);
-    if (m) {
-      const digits = m[2] ? Number(m[2]) : m[1].toUpperCase() === "N" ? 0 : 2;
-      const n = v.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
-      if (m[1].toUpperCase() === "C") return `$${n}`;
-      if (m[1].toUpperCase() === "P") return `${(v * 100).toFixed(digits)}%`;
-      return n;
-    }
-  }
-  return str(v);
-}
+// The formatter itself lives in the renderer-free format.ts so the RN pack can share it; re-exported
+// here because data.js has been its import site since the pack was written.
+export { formatValue } from "./format.js";
+import { formatValue } from "./format.js";
 
 function buildColumns(columnDefs: UiControl[]): TableColumnDefinition<Row>[] {
   return columnDefs.map((col, i) => {

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import React from "react";
 import TestRenderer, { type ReactTestRendererJSON } from "react-test-renderer";
-import { RegistryProvider, ScopeProvider, RenderArea, StaticAreaSource, type AreaTree } from "@meshweaver/react/core";
+import { RegistryProvider, ScopeProvider, RenderArea, StaticAreaSource, localize, type AreaTree } from "@meshweaver/react/core";
+
 import { rnPack } from "./rnPack";
+
+// Assert against the CATALOG, not a literal — that also pins that these strings are localized.
+const en = (key: string) => localize(key, "en");
 
 // Headless proof that the mesh display controls render (and the picker binds) — so a streamed portal
 // area lands on real native components, never the Unsupported fallback.
@@ -96,8 +100,20 @@ describe("RN leaf pack renders the mesh display controls", () => {
     expect(hasText("the overview area")).toBe(true);
   });
 
-  it("live-ops controls degrade to a labeled placeholder (not Unsupported)", () => {
-    expect(hasText("Thread chat")).toBe(true);
-    expect(hasText("Search results")).toBe(true);
+  // The live-ops controls used to be labelled placeholder badges ("▦ Thread chat"). They are real
+  // implementations now, so with NO MeshOpsProvider they must render their own EMPTY state — the
+  // same degradation the web pack has — rather than a badge or the Unsupported fallback.
+  it("ThreadChat renders its real empty state and composer without a mesh", () => {
+    expect(hasText("▦ Thread chat")).toBe(false);
+    expect(hasText(en("chat.startConversation"))).toBe(true);
+    expect(hasText(en("common.send"))).toBe(true);
+  });
+
+  it("MeshSearch renders its real search box without a mesh", () => {
+    expect(hasText("▦ Search results")).toBe(false);
+    const placeholders = nodes
+      .filter((n) => n.type === "TextInput")
+      .map((n) => String(n.props.placeholder ?? ""));
+    expect(placeholders).toContain(en("common.typeToSearch"));
   });
 });

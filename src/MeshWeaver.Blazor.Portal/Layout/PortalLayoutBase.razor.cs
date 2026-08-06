@@ -851,9 +851,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     /// <summary>Tooltip for the side-panel toggle, matching its context-aware icon.</summary>
     protected string SidePanelToggleTitle =>
-        IsSidePanelVisible ? "Close side panel"
-        : HasThreadContext ? "Show context"
-        : "Chat";
+        IsSidePanelVisible ? Access.Localize("chat.closeSidePanel")
+        : HasThreadContext ? Access.Localize("chat.showContext")
+        : Access.Localize("chat.chat");
 
     private static string LastSegmentOf(string path)
     {

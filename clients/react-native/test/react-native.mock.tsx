@@ -19,8 +19,20 @@ export const ActivityIndicator = host("ActivityIndicator");
 export const Image = host("Image");
 export const SafeAreaView = host("SafeAreaView");
 export const StatusBar = host("StatusBar");
+export const Modal = host("Modal");
+export const FlatList = host("FlatList");
 
 export const StyleSheet = { create: <T,>(styles: T): T => styles };
+
+// LayoutGridItem resolves its column span against the live viewport width (RN has no media
+// queries). A desktop-ish width keeps the headless assertions on the largest-breakpoint branch.
+export const useWindowDimensions = () => ({ width: 1024, height: 768, scale: 1, fontScale: 1 });
+
+// Redirect / external links open through Linking rather than an <a href>.
+export const Linking = {
+  openURL: async (_url: string) => undefined,
+  canOpenURL: async (_url: string) => true,
+};
 
 // The pack branches on Platform.OS (web renders real HTML for Markdown/Html; native renders <Text>).
 // The headless unit level asserts the NATIVE mapping, so report a native OS.

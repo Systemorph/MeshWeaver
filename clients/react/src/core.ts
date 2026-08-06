@@ -73,6 +73,20 @@ export {
 // Field/option binding + string coercion — shared by ALL leaf packs (the RN pack used to
 // re-implement these because they weren't exported from the core).
 export { str, useClick, useField, useOptions, useText, type Field } from "./controls/common.js";
+// .NET-style value formatting and the PURE pivot (cross-tab) model. Renderer-free on purpose: both
+// the Fluent pack and the React Native pack aggregate and format through THESE, so a pivot total is
+// computed by one implementation rather than one per platform.
+export { formatValue } from "./controls/format.js";
+export {
+  computePivot,
+  formatCell,
+  groupsAt,
+  type PivotAggregateWire,
+  type PivotConfigWire,
+  type PivotDimensionWire,
+  type PivotResult,
+  type PivotRowOut,
+} from "./controls/pivotModel.js";
 // Icon-value classification (pure logic, no DOM) — the one decision table every pack and shell
 // dispatches icons through; each platform renders the classified kinds with its own leaves.
 export {
@@ -90,3 +104,17 @@ export {
 // The vendored Blazor github-markdown CSS (pure strings) — web injects it via meshStyles, the RN
 // web shell injects it verbatim.
 export { githubMarkdownCss, githubMarkdownDarkCss, scopeMarkdownCss } from "./theme/githubMarkdown.js";
+// Localization — the client twin of AccessService.Localize over the SAME strings.{en,de}.json
+// catalog the server ships (kept identical by i18n/localize.test.ts). Every leaf pack and shell
+// resolves user-visible text through these, never a hard-coded literal.
+export {
+  DEFAULT_LOCALE,
+  LOCALE_DISPLAY_NAMES,
+  SUPPORTED_LOCALES,
+  catalogKeys,
+  localize,
+  localizePlural,
+  resolveLocale,
+  tryMatchLocale,
+} from "./i18n/localize.js";
+export { LocaleProvider, useLocale, useLocalize, type LocaleContextValue } from "./i18n/LocaleContext.js";
