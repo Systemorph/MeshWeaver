@@ -221,17 +221,26 @@ public static class CatalogLayoutAreas
     {
         var logger = Logger(host);
 
-        // Capture the caller's identity NOW — the click delivery stamped AccessService.Context. The
-        // fetch runs off-hub (GitCli / Http IIoPool), so the install continuation lands on a pool
-        // thread where that AsyncLocal is wiped; re-establish it for the install's whole lifetime via
-        // Observable.Using so the CreateOrUpdate writes run as the user and don't fail closed.
-        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-        var user = accessService?.Context;
+        // 🚨 The install runs under SYSTEM for its WHOLE lifetime — an install is PROVISIONING,
+        // not a user data write. Post core #804 every partition the installer creates lands under
+        // the System identity with no user grants, so the CLICKING user legitimately holds NOTHING
+        // on it mid-install — any step that authorises against the ambient identity then fails
+        // closed. The previous code re-established the clicking USER's context here instead, and
+        // #817's batch topology made exactly such a step deterministic: the self-typed root's
+        // reconciliation read (PackageInstaller.RootRetypeReconciled → the per-user gate in
+        // MeshNodeStreamCache) ran as the user and every Store install died with
+        // "User '…' lacks Read permission on 'Store'" (education CI, 2026-08-05, first image
+        // carrying #817). System is also what the OTHER install triggers already do — the
+        // PluginUpdateWatcher wraps this very InstallOrUpdate in ImpersonateAsSystem, and the
+        // Store plugin's SystemInstall/Provisioning sources do the same. Authorisation for the
+        // TRIGGER stays where it belongs: on the catalog surface the click came from.
+        // REQUIRED, never optional: a missing AccessService would silently run the install under
+        // the ambient (user) identity — the exact regression this fix removes. Same treatment the
+        // PluginUpdateWatcher already gives it.
+        var accessService = host.Hub.ServiceProvider.GetRequiredService<AccessService>();
 
         var install = InstallOrUpdate(host.Hub, source, sourceRef, pkg, logger);
-        (accessService is null
-                ? install
-                : Observable.Using(() => accessService.SwitchAccessContext(user), _ => install))
+        Observable.Using(() => accessService.ImpersonateAsSystem(), _ => install)
             .Subscribe(
                 result => logger?.LogInformation("Installed {Id}: {Written} written, {Unchanged} unchanged.",
                     pkg.Id, result.Written, result.Unchanged),
