@@ -113,6 +113,7 @@ public static class PackageInstaller
                     manifest.Id, manifest.Version, result.Written, result.Unchanged, partition, installedFromRef);
                 return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length)
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
+                    .SelectMany(_ => RunInstallHooks(hub, partition!, logger))
                     .Select(_ => result);
             });
     }
@@ -179,6 +180,38 @@ public static class PackageInstaller
     /// <para>Best-effort by design: the content has already landed and been recorded, so a root that
     /// will not activate is logged and stepped over rather than failing an install that succeeded.</para>
     /// </summary>
+    /// <summary>
+    /// Runs every registered <see cref="IPartitionInstallHook"/> for the installed partition — the
+    /// step that makes a package's content actually REACHABLE, not merely present.
+    ///
+    /// <para>Writing the nodes is only half an install: the registries that surface them (the agent
+    /// picker, the skill menu) resolve from per-user source lists that nothing else updates. Without
+    /// this, a package's agents sit in the mesh and no picker ever asks for them.</para>
+    ///
+    /// <para>Hooks are best-effort: the content is already committed by the time they run, so a
+    /// failing hook is logged and never fails the install.</para>
+    /// </summary>
+    public static IObservable<Unit> RunInstallHooks(IMessageHub hub, string partition, ILogger? logger)
+    {
+        var hooks = hub.ServiceProvider.GetServices<IPartitionInstallHook>().ToArray();
+        if (hooks.Length == 0 || string.IsNullOrWhiteSpace(partition))
+            return Observable.Return(Unit.Default);
+
+        return hooks
+            .Select(hook => hook.OnPartitionInstalled(partition)
+                .Catch<Unit, Exception>(exception =>
+                {
+                    logger?.LogWarning(exception,
+                        "[PackageInstaller] install hook {Hook} failed for partition {Partition}",
+                        hook.GetType().Name, partition);
+                    return Observable.Return(Unit.Default);
+                }))
+            .ToObservable()
+            .Concat()
+            .DefaultIfEmpty(Unit.Default)
+            .LastAsync();
+    }
+
     private static IObservable<Unit> WarmInstalledRoots(
         IMessageHub hub, IEnumerable<string> paths, ILogger? logger)
     {

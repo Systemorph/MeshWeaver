@@ -46,7 +46,14 @@ public static class AIExtensions
                     .AddSkillType(serveFromPartition)
                     .AddThreadComposerType()
                     .AddAiSettingsType()
-                    .ConfigureServices(services => services.AddAgentChatServices())
+                    .ConfigureServices(services => services
+                        .AddAgentChatServices()
+                        // Makes a package's agents + skills REACHABLE, not merely installed: without
+                        // it, a package writes its agents into its own partition and no user's
+                        // picker ever asks for them. Registered here because AI owns the registries;
+                        // MeshWeaver.PluginCatalog invokes it and neither project references the other.
+                        .AddSingleton<MeshWeaver.Graph.IPartitionInstallHook>(sp =>
+                            new AiSourcesInstallHook(sp.GetRequiredService<IMessageHub>())))
                     // Register AI types on the MESH hub (for MeshQuery deserialization of Thread content)
                     .ConfigureHub(config =>
                     {
