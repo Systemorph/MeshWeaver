@@ -143,7 +143,7 @@ public static class NotificationService
         var path = NotificationSettingsPaths.PathFor(recipient);
         return hub.GetWorkspace()
             .GetQuery($"{NotificationSettingsNodeType.NodeType}|{path}",
-                $"path:{path} nodeType:{NotificationSettingsNodeType.NodeType}")
+                $"path:{path} nodeType:{NotificationSettingsNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
             .Take(1)
             .Select(nodes => nodes
                 .Select(n => n.ContentAs<NotificationSettings>(hub.JsonSerializerOptions))

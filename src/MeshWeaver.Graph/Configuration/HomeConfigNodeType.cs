@@ -103,7 +103,7 @@ public static class HomeConfigNodeType
     /// <summary>Reads the config at an explicit path (defaults to <see cref="ConfigPath"/>); used by tests.</summary>
     internal static IObservable<HomeConfig> Observe(IWorkspace workspace, JsonSerializerOptions options, string configPath) =>
         workspace
-            .GetQuery($"home-config:{configPath}", $"path:{configPath} nodeType:{NodeType}")
+            .GetQuery($"home-config:{configPath}", $"path:{configPath} nodeType:{NodeType} select:path,id,namespace,name,nodeType,content")
             .Select(nodes => Effective(
                 nodes.FirstOrDefault(n => string.Equals(n.NodeType, NodeType, System.StringComparison.OrdinalIgnoreCase)),
                 options))

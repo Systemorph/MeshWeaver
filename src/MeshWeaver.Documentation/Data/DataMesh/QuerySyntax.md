@@ -361,7 +361,7 @@ namespace:ACME scope:descendants context:search       # Searchable nodes under A
 
 ### `select`
 
-Projects results to include only the specified properties. Returns lightweight dictionaries instead of full nodes — ideal for autocomplete, dropdowns, and large-result queries where only a few fields are needed.
+Projects results to include only the specified properties — ideal for autocomplete, dropdowns, and large-result queries where only a few fields are needed.
 
 ```
 select:name                      # Single property
@@ -374,6 +374,47 @@ nodeType:Story select:path,name sort:name limit:10
 ```
 
 > **Always `select:` only the fields the consumer reads.** Existence checks and "is-this-up-to-date?" polls need only `(path, version)`, never the full node. Loading full `Content` for a subtree is the antipattern this qualifier eliminates.
+
+#### 🚨 `select:` decides whether `Content` is loaded at all
+
+The projection has **two different shapes** depending on what the caller is typed on, and the
+difference is invisible at the call site:
+
+| Caller | What a `select:` does |
+|---|---|
+| **untyped** (`Query<object>`, the MCP `search` tool) | each row becomes a `Dictionary<string, object>` of exactly the named fields |
+| **typed on `MeshNode`** (`Query<MeshNode>`, and therefore **every `workspace.GetQuery` / `hub.GetQuery`**) | the row stays a **`MeshNode`** — no dictionary — but the SQL projection is still narrowed |
+
+On the typed path only ONE column is actually conditional: **`content`**. Every other field is
+projected regardless, so naming them is documentation rather than optimisation. But when `content`
+is *not* named, the storage adapter emits `NULL::jsonb AS content` (Postgres) or omits the field
+(Cosmos), and you get a fully-formed `MeshNode` whose **`Content` is silently null**.
+
+That failure is indistinguishable from "this node has no content": no error, no warning, no empty
+result set — every `node.Content is T` / `ContentAs<T>()` downstream just returns null and the
+surface renders empty. It is the same silent-null class as a missing `TypeRegistry` entry.
+
+```
+# ✅ metadata-only consumer — content deliberately not loaded
+namespace:Course/Intro scope:children nodeType:Module select:path,id,name,order
+
+# ✅ content-bearing consumer — `content` named DELIBERATELY
+path:{user}/_Memex/AiSettings nodeType:AiSettings select:path,id,name,nodeType,content
+
+# ❌ reads ContentAs<ModuleConfiguration>() but never asked for content — always null
+namespace:Course/Intro scope:children nodeType:Module select:path,name
+```
+
+**Rule.** Every `GetQuery` should carry a `select:`. If any consumer of that stream reads
+`Content`, `content` must be in the list. When you cannot prove the whole consumer chain is
+content-free, leave the query unprojected — the full node is the conservative default.
+
+> **🚨 The projection travels with the cache ID, and the ID wins.** The synced-query cache is keyed
+> by **id alone**: `GetQuery(id, queries)` returns the already-registered stream and *ignores* the
+> queries on a cache hit. Two call sites that share an id but differ in their `select:` therefore
+> resolve to whichever subscribed first — so a metadata-only reader can starve a content reader of
+> its content, intermittently, depending on render order. Keep the query strings byte-identical
+> wherever an id is shared, and scope ids per module so unrelated readers never collide.
 
 ---
 

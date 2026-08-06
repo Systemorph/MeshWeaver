@@ -90,7 +90,7 @@ public partial class CompileProgressIndicator : IDisposable
             // Prefer an in-flight compile; fall back to a failed one so a layout
             // area that won't load surfaces the compile error rather than a blank.
             var workspace = Hub.GetWorkspace();
-            compileObs = workspace.GetQuery("nodetypes-compiling", "nodeType:NodeType")
+            compileObs = workspace.GetQuery("nodetypes-compiling", "nodeType:NodeType select:path,id,name,nodeType,content")
                 .Select(snapshot =>
                 {
                     var node = snapshot.FirstOrDefault(n => n.ContentAs<NodeTypeDefinition>(Hub.JsonSerializerOptions) is { } d

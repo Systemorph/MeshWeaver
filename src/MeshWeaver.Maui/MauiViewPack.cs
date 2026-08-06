@@ -783,7 +783,7 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         }
 
         _root.Children.Add(panel);
-        var sub = Stream.Hub.GetQuery("comments:" + Model.NodePath, $"namespace:{Model.NodePath}/_Comment nodeType:Comment")
+        var sub = Stream.Hub.GetQuery("comments:" + Model.NodePath, $"namespace:{Model.NodePath}/_Comment nodeType:Comment select:path,id,namespace,name,nodeType,content")
             .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderComments(list, nodes)));
         Disposables.Add(sub);
     }
@@ -863,7 +863,7 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         _root.Children.Add(panel);
         // Live: re-render on every query emission (accept/reject of a satellite re-fires this) — no Take(1),
         // which would freeze the panel after the first snapshot.
-        var sub = Stream.Hub.GetQuery("changes:" + Model.NodePath, $"namespace:{Model.NodePath}/_Tracking nodeType:TrackedChange")
+        var sub = Stream.Hub.GetQuery("changes:" + Model.NodePath, $"namespace:{Model.NodePath}/_Tracking nodeType:TrackedChange select:path,id,namespace,name,nodeType,content")
             .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderTrackedChanges(panel, nodes)));
         Disposables.Add(sub);
     }

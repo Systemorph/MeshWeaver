@@ -613,7 +613,7 @@ public sealed class ChatClientCredentialResolver : IDisposable
             var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}";
             foreach (var path in shared)
             {
-                var sharedQuery = $"namespace:{path} nodeType:{typeFilter} scope:selfAndDescendants";
+                var sharedQuery = $"namespace:{path} nodeType:{typeFilter} scope:selfAndDescendants{AgentPickerProjection.RegistryProjection}";
                 sources.Add(workspace.GetQuery($"ChatClientCredentialResolver.Shared|{path}", sharedQuery));
             }
         }
@@ -752,7 +752,7 @@ public sealed class ChatClientCredentialResolver : IDisposable
         var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}";
         var queries = new List<string>
         {
-            $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants",
+            $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants{AgentPickerProjection.RegistryProjection}",
         };
         // Each watched partition is a USER partition (WatchPartition is called
         // with the resolving user's id). A user's own providers/models live in
@@ -761,8 +761,8 @@ public sealed class ChatClientCredentialResolver : IDisposable
         // (many queries are fine — the synced collection unions them).
         foreach (var p in partitions)
         {
-            queries.Add($"namespace:{ModelProviderNodeType.UserNamespacePath(p)} nodeType:{typeFilter} scope:descendants");
-            queries.Add($"namespace:{p}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
+            queries.Add($"namespace:{ModelProviderNodeType.UserNamespacePath(p)} nodeType:{typeFilter} scope:descendants{AgentPickerProjection.RegistryProjection}");
+            queries.Add($"namespace:{p}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants{AgentPickerProjection.RegistryProjection}");
         }
         return queries.ToArray();
     }

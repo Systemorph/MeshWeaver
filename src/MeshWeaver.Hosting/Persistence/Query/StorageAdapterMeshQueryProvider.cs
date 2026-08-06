@@ -200,7 +200,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     private IObservable<IReadOnlyList<object>> RunQueryNodes(
         MeshQueryRequest request,
         JsonSerializerOptions options,
-        bool useSecurityFilter)
+        bool useSecurityFilter,
+        bool projectSelect = false)
         => CollectMatched(request, options, useSecurityFilter)
             .Select(collected =>
             {
@@ -273,10 +274,25 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         _evaluator.GetFuzzyScore(n, parsedQuery.TextSearch));
                 }
 
+                // 🚨 NEVER hand a projection to a caller typed on MeshNode. ProjectToSelect returns a
+                // Dictionary<string, object> — the UNTYPED surface's contract — and the generic consumer
+                // below filters with `item is T`, so with T = MeshNode every projected row is silently
+                // DROPPED: a query that matches returns the EMPTY set, forever, with no error and no log
+                // line. The synced query then caches that empty snapshot in its Replay(1) and every
+                // consumer of the id sees "no results" for data that is present.
+                //
+                // This is the in-memory twin of the Postgres wedge fixed on 2026-08-05
+                // (PostgreSqlMeshQuery.CollectQueryResultsAsync / MeshQuery.ProjectSelect carry the same
+                // guard and the same comment). That fix never reached this provider, so every
+                // `select:`-carrying workspace.GetQuery / hub.GetQuery — which is Query<MeshNode> — came
+                // back empty on the in-memory adapter while working fine on PG.
+                //
+                // The row-level SELECT still narrows what the adapter loads, so a projected read costs
+                // only what it asked for; the node simply stays a node for the caller that asked for nodes.
                 IEnumerable<object> projected = sorted.Select(node =>
-                    parsedQuery.Select != null
+                    projectSelect && parsedQuery.Select != null
                         ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
-                        : node);
+                        : DropUnprojectedContent(node, parsedQuery));
 
                 // Load cap = (Skip ?? 0) + Limit. request.Skip itself is applied
                 // POST-MERGE in ClipMergedInitial (applying it here too would
@@ -288,6 +304,39 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
                 return (IReadOnlyList<object>)projected.ToList();
             });
+
+
+    /// <summary>
+    /// Mirrors the SQL adapters' content projection for the in-memory store: when a
+    /// <c>select:</c> is present but does NOT name <c>content</c>, blank
+    /// <see cref="MeshNode.Content"/> — the same shape Postgres produces with
+    /// <c>NULL::jsonb AS content</c> (<c>PostgreSqlSqlGenerator.GenerateSelectQuery</c>), Cosmos
+    /// with its explicit field list, and Snowflake with <c>NULL::variant</c>.
+    ///
+    /// <para>🚨 This exists for PARITY, and the parity matters more than the (nonexistent)
+    /// in-memory saving. Without it the in-memory adapter is the ONLY provider that keeps content
+    /// on an unprojected read, so the single nastiest projection defect — a content-reading
+    /// consumer whose <c>select:</c> forgot <c>content</c>, which silently yields
+    /// <c>Content == null</c> and renders empty — is GREEN in every test and only reproduces on a
+    /// real mesh. A test store that cannot express the production failure mode is how that class
+    /// of bug ships. See <c>SyncedQueryProjectionContractTest</c> and
+    /// Doc/Architecture/CqrsAndContentAccess.</para>
+    ///
+    /// <para>Only <c>content</c> is conditional: every other MeshNode field is returned regardless
+    /// of the select list, exactly as the SQL generators project every other column
+    /// unconditionally.</para>
+    /// </summary>
+    private static object DropUnprojectedContent(object node, ParsedQuery parsedQuery)
+    {
+        if (parsedQuery.Select is not { Count: > 0 } select)
+            return node;
+        if (node is not MeshNode meshNode || meshNode.Content is null)
+            return node;
+        foreach (var field in select)
+            if (field.Equals("content", StringComparison.OrdinalIgnoreCase))
+                return node;
+        return meshNode with { Content = null };
+    }
 
     /// <summary>
     /// True when the query explicitly TARGETS satellite nodes — a <c>_</c>-prefixed path segment,
@@ -1167,7 +1216,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             // hub pump and deadlocked under bulk fan-out. useSecurityFilter selects the
             // RLS-filtered (IMeshQueryProvider) vs raw (IMeshQueryCore) read.
             IObservable<List<(string? Path, T Item)>> RunQuery() =>
-                RunQueryNodes(request, options, useSecurityFilter)
+                RunQueryNodes(request, options, useSecurityFilter,
+                        projectSelect: typeof(T) != typeof(MeshNode))
                     .Select(nodes =>
                     {
                         var results = new List<(string?, T)>();

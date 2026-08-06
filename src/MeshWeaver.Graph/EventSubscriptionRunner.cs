@@ -94,7 +94,7 @@ public sealed class EventSubscriptionRunner(
         // Live snapshot of outstanding subscriptions; re-emits on add / fire / cancel. Reading the Admin
         // partition needs an identity → system. (Constant query id: one registry entry, no leak.)
         pendingSub = AsSystem(() => hub.GetWorkspace().GetQuery("event-subscriptions",
-                $"path:{EventSubscriptionNodeType.Namespace} scope:children nodeType:{EventSubscriptionNodeType.NodeType}"))
+                $"path:{EventSubscriptionNodeType.Namespace} scope:children nodeType:{EventSubscriptionNodeType.NodeType} select:path,id,namespace,name,nodeType,content"))
             .Subscribe(nodes =>
             {
                 var list = (nodes ?? [])
@@ -454,7 +454,7 @@ public sealed class EventSubscriptionRunner(
     private void MigrateLegacyScheduledActions()
     {
         legacySub = AsSystem(() => hub.GetWorkspace().GetQuery("event-subscriptions-legacy",
-                $"path:{ScheduledActionNodeType.Namespace} scope:children nodeType:{ScheduledActionNodeType.NodeType}"))
+                $"path:{ScheduledActionNodeType.Namespace} scope:children nodeType:{ScheduledActionNodeType.NodeType} select:path,id,namespace,name,nodeType,content"))
             .Subscribe(nodes =>
             {
                 foreach (var node in nodes ?? [])

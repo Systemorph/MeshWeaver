@@ -155,7 +155,7 @@ public sealed class IssueService
     public IObservable<IReadOnlyList<MeshNode>> WatchIssueNodes(string spacePath) =>
         hub.GetWorkspace()
             .GetQuery($"gh-issues:{spacePath}",
-                $"path:{IssueNamespace(spacePath)} scope:children nodeType:{NodeType}")
+                $"path:{IssueNamespace(spacePath)} scope:children nodeType:{NodeType} select:path,id,name,nodeType,content")
             .Select(nodes => (IReadOnlyList<MeshNode>)(nodes?.ToList() ?? new List<MeshNode>()));
 
     /// <summary>Live content of one issue node (or null when absent) — the authoritative single-node stream.</summary>

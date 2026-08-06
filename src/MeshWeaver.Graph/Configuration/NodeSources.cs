@@ -60,6 +60,12 @@ public static class NodeSources
             return Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>());
 
         var id = CacheId(nodeTypePath);
+        // NO `select:` — deliberately. These are the NodeType's COMPILE INPUTS: the caller
+        // reads each Code node's Content to feed the compiler, so the content blob is the
+        // whole point of the read. A projection omitting `content` would make the adapter
+        // emit NULL::jsonb AS content and the type would compile against empty sources with
+        // no error anywhere. The queries are also caller-authored (NodeTypeDefinition.Sources
+        // / .Tests via CodeQueryResolver), so the projection is not ours to pick.
         return workspace.GetQuery(id, queries)
             .Select(items => (IReadOnlyList<MeshNode>)items.ToList());
     }

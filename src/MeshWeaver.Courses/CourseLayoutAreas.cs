@@ -72,12 +72,18 @@ public static class CourseLayoutAreas
         var options = hub.JsonSerializerOptions;
         var nodeStream = host.Workspace.GetMeshNodeStream();
 
+        // 🚨 CONTENT-BEARING read, and the query string MUST stay byte-identical to
+        // ModuleLayoutAreas' siblingStream — same cache id, and the synced-query cache is
+        // keyed by ID ALONE (it ignores the queries on a hit). BuildModuleCards reads
+        // ContentAs<ModuleConfiguration> off these nodes for the card summary, so `content`
+        // is projected deliberately.
         var moduleStream = hub.GetQuery(
             $"course-modules:{coursePath}",
-            $"path:{coursePath} scope:children nodeType:{ModuleNodeType.NodeType}");
+            $"path:{coursePath} scope:children nodeType:{ModuleNodeType.NodeType} select:path,id,name,order,content");
+        // Shell read: BuildProgress joins these by Path only and never reads Content.
         var exerciseStream = hub.GetQuery(
             $"course-exercises:{coursePath}",
-            $"path:{coursePath} scope:descendants nodeType:{ExerciseNodeType.NodeType}");
+            $"path:{coursePath} scope:descendants nodeType:{ExerciseNodeType.NodeType} select:path,id,name");
 
         // The viewer's attempts for THIS course live under the canonical
         // escaped root in their home partition (see AttemptPathFor). Anonymous
@@ -86,10 +92,12 @@ public static class CourseLayoutAreas
             hub.ServiceProvider.GetService<AccessService>());
         var attemptStream = viewerHome is null
             ? Observable.Return(Enumerable.Empty<MeshNode>())
+            // CONTENT-BEARING: BuildProgress reads ContentAs<ExerciseAttemptStatus> off each
+            // attempt to find the passed exercises, so `content` is projected deliberately.
             : hub.GetQuery(
                 $"course-attempts:{viewerHome}:{coursePath}",
                 $"path:{viewerHome}/{ExerciseAttemptNodeType.CoursesSubNamespace}/{PathEscaping.Escape(coursePath)} "
-                + $"scope:descendants nodeType:{ExerciseAttemptNodeType.NodeType}");
+                + $"scope:descendants nodeType:{ExerciseAttemptNodeType.NodeType} select:path,id,name,content");
 
         return nodeStream.CombineLatest(moduleStream, exerciseStream, attemptStream,
             (node, modules, exercises, attempts) =>

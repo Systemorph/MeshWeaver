@@ -60,7 +60,7 @@ public sealed class InstanceSyncService(
     {
         var ns = ConfigNamespace(spacePath);
         return hub.GetWorkspace()
-            .GetQuery($"instsync-cfgs:{spacePath}", $"namespace:{ns} nodeType:{ConfigNodeType}")
+            .GetQuery($"instsync-cfgs:{spacePath}", $"namespace:{ns} nodeType:{ConfigNodeType} select:path,id,namespace,name,nodeType,content")
             .Select(nodes => (IReadOnlyList<MeshNode>)(nodes ?? [])
                 .Where(n => string.Equals(n.Namespace, ns, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(n => n.Id, StringComparer.OrdinalIgnoreCase)
@@ -72,7 +72,7 @@ public sealed class InstanceSyncService(
     {
         var path = ConfigPath(spacePath, sourceId);
         return hub.GetWorkspace()
-            .GetQuery($"instsync-cfg:{path}", $"path:{path}")
+            .GetQuery($"instsync-cfg:{path}", $"path:{path} select:path,id,name,nodeType,content")
             .Select(nodes => nodes?.FirstOrDefault(n =>
                 string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)));
     }

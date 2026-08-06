@@ -63,7 +63,7 @@ public static class GroupLayoutAreas
 
         var membersStream = host.Workspace.GetQuery(
             $"group-members:{hubPath}",
-            $"namespace:{hubPath} nodeType:GroupMembership");
+            $"namespace:{hubPath} nodeType:GroupMembership select:path,id,namespace,name,nodeType,content");
 
         return nodeStream.CombineLatest(membersStream, (nodes, members) =>
         {
@@ -121,7 +121,7 @@ public static class GroupLayoutAreas
 
         var membersStream = host.Workspace.GetQuery(
             $"group-members-edit:{hubPath}",
-            $"namespace:{hubPath} nodeType:GroupMembership");
+            $"namespace:{hubPath} nodeType:GroupMembership select:path,id,namespace,name,nodeType,content");
 
         return nodeStream.CombineLatest(membersStream, (nodes, members) =>
         {

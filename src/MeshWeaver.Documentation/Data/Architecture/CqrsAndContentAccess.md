@@ -167,6 +167,49 @@ await foreach (var row in mesh.QueryAsync<MeshNode>(
 
 When the projection is not enough — you actually need `Content` for a specific path (compiler input, document viewer, edit form) — fetch *that one node* through `workspace.GetMeshNodeStream(path)`. One authoritative read per path, never a subtree-wide content load.
 
+#### 🚨 On a synced query, `select:` is the switch that loads `Content` — and omitting it fails silently
+
+The advice above is written for the **untyped** query surface, where a `select:` turns each row into
+a `Dictionary<string, object>`. `workspace.GetQuery` / `hub.GetQuery` are **typed on `MeshNode`**, and
+there the projection behaves differently: the row stays a `MeshNode` (the object-level projection is
+deliberately skipped — handing a dictionary to a `MeshNode`-typed caller is what wedged every
+`select:`-carrying query on memex, 2026-08-05), but the **SQL** is still narrowed.
+
+On that path exactly one column is conditional: **`content`**. Everything else — `path`, `name`,
+`nodeType`, `icon`, `order`, `lastModified`, `version`, `state`, `mainNode` — is projected whether or
+not you name it. So on a synced query the field list is *documentation*, and the single bit that
+changes behaviour is whether `content` appears:
+
+```csharp
+// ✅ Shell read — the consumer embeds by Path and labels by Name/Order, never touches Content.
+hub.GetQuery($"course-modules:{p}",
+    $"path:{p} scope:children nodeType:Module select:path,id,name,order");
+
+// ✅ Content-bearing read — `content` named DELIBERATELY.
+hub.GetQuery($"ai-settings:{user}",
+    $"path:{path} nodeType:AiSettings select:path,id,name,nodeType,content");
+
+// ❌ Reads ContentAs<ModuleConfiguration>() but never asked for content.
+//    The adapter emits NULL::jsonb AS content; every ContentAs<T>() returns null.
+//    No error, no warning, no empty result — the card summaries are just blank.
+hub.GetQuery($"course-modules:{p}",
+    $"path:{p} scope:children nodeType:Module select:path,name");
+```
+
+**Rule.** Give every `GetQuery` an explicit `select:`. If *any* consumer of that stream reads
+`Content`, `content` must be in the list. When you cannot prove the whole downstream chain is
+content-free, leave the query unprojected — the full node is the conservative default, because a
+wrong projection fails silently while an absent one only costs bytes.
+
+**Corollary — the projection travels with the cache ID, and the ID wins.** The synced-query cache is
+keyed by **id alone**: `GetQuery(id, queries)` returns the already-registered stream and *ignores*
+`queries` on a hit. Two call sites that share an id but differ in their `select:` therefore resolve
+to whichever subscribed first — a metadata-only reader can starve a content reader of its content,
+intermittently, depending on render order. Keep the query strings byte-identical wherever an id is
+shared (the course-overview and module-page readers of `course-modules:{coursePath}` are the worked
+example), and scope ids per module — `uw-nodes-in:{ns}`, never a bare `nodes-in:{ns}` that a sibling
+module will also mint.
+
 The recompile design that this rule supports is described in [NodeTypeCompilation](/Doc/Architecture/NodeTypeCompilation) — the NodeType keeps a `{sourcePath → version}` snapshot from the synced query, and a divergent emission triggers re-fetch and recompile. Nothing in the catalog row's `Content` is consulted.
 
 ### 🚨 Staleness lives on the owner — never query to check "is this stale?"
