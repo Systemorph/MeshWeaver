@@ -2394,7 +2394,7 @@ internal static class ThreadExecution
                         // after the terminal Cancelled status). Fail-open + no-op on zero tokens.
                         TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                             AgentPickerProjection.PartitionOf(threadPath),
-                            request.ModelName, inputTokens, outputTokens, execLogger,
+                            actualModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
                             cacheReadTokens, cacheWriteTokens)
                         .Subscribe(
                             _ => { },
@@ -2502,7 +2502,7 @@ internal static class ThreadExecution
                                 // Fail-open + no-op on zero tokens.
                                 TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                                     AgentPickerProjection.PartitionOf(threadPath),
-                                    request.ModelName, inputTokens, outputTokens, execLogger,
+                                    actualModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
                                     cacheReadTokens, cacheWriteTokens)
                                 .Subscribe(
                                     _ => { },
