@@ -8,13 +8,23 @@
 # can't name the offending cache.
 #
 # This workflow flips MESHWEAVER_ALC_UNLOAD_GC_PROBE=1, which makes NodeAssemblyLoadContext
-# drive a SYNCHRONOUS full GC immediately after each Unload. A dangling native pointer then
-# faults AT that unload — on the Dispose thread, right after a
-# "ALC_UNLOAD_PROBE forcing GC after unloading <node>" log line — so the culprit node (and a
-# corruption-time dump with a managed Dispose→GC.Collect stack) is captured instead of the
-# opaque delayed crash. GCStress would be the classic tool but needs a checked runtime the
-# hosted runner doesn't have; forcing the collection at the unload point is the retail-runtime
-# equivalent for this specific use-after-unload.
+# drive a collection immediately after each Unload, so a dangling native pointer faults AT that
+# unload — right after a "ALC_UNLOAD_PROBE forcing GC after unloading <node>" line, naming the
+# culprit node — instead of as an opaque delayed crash. GCStress would be the classic tool but
+# needs a checked runtime the hosted runner doesn't have; forcing the collection at the unload
+# point is the retail-runtime equivalent for this specific use-after-unload.
+#
+# 🚨 READ THIS BEFORE RE-DISPATCHING. The 2026-08-06 core dump (run 31083356138) does NOT support
+# the use-after-unload hypothesis this workflow was built on. The faulting frame is
+# bgc_thread_function → gc1 → background_sweep, and the fault is a read of a MethodTable pointer
+# that is EXACTLY ZERO (TRAPNO=14, ERR=0x4, CR2=0x0) — a dangling pointer into a freed
+# LoaderAllocator would be non-null-but-unmapped. So this probe may well never fire; treat a clean
+# run as "the ALC hypothesis stayed unproven", not "the bug is gone".
+#
+# The probe now requests a BACKGROUND (non-blocking) gen2 collection before the blocking pair: a
+# blocking GC.Collect() runs mark_phase/plan_phase and never enters background_sweep, so the
+# original blocking-only form exercised only a path on which no crash has been observed.
+# Full RCA: Doc/Architecture/DebuggingNativeCrashes → the 2026-08-06 section.
 #
 # Run from the Actions tab (workflow_dispatch). Re-dispatch with project=MeshWeaver.FutuRe.Test
 # to probe the other crasher.
