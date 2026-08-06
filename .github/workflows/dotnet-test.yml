@@ -384,10 +384,9 @@ jobs:
         DOTNET_DbgMiniDumpType: 2
         DOTNET_DbgMiniDumpName: /tmp/coredumps/%e-%p.dmp
       run: |
-        # Only Cosmos is excluded — needs the Cosmos emulator which is heavy to
-        # set up on a runner. Everything else runs (PostgreSql via Testcontainers
-        # using pre-installed Docker, Orleans via in-proc TestCluster, Acme/FutuRe
-        # via dynamic Code-piece compilation).
+        # EVERY test project runs — no exclusion list (see .github/scripts/shard-assign.sh).
+        # PostgreSql and Cosmos come up via Testcontainers using pre-installed Docker,
+        # Orleans via in-proc TestCluster, Acme/FutuRe via dynamic Code-piece compilation.
         #
         # set +e so a crashed/aborted test host doesn't terminate the loop — we
         # want EVERY project to attempt to run, then the exit-marker gate below
