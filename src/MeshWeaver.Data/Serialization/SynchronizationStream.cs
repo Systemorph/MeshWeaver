@@ -983,7 +983,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 }
             ).WithHandler<DataChangeRequest>((hub, delivery) =>
                 {
-                    hub.GetWorkspace().RequestChange(delivery.Message, null, delivery);
+                    hub.GetWorkspace().RequestChange(delivery.Message, delivery);
                     return delivery.Processed();
                 }
             ).WithHandler<GetDataResponse>((_, delivery) =>
