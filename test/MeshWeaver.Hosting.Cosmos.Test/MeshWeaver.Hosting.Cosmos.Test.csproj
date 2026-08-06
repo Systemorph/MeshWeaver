@@ -14,7 +14,11 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Orleans.TestingHost" />
     <PackageReference Include="Microsoft.Orleans.Sdk" />
-    <PackageReference Include="Testcontainers.CosmosDb" />
+    <!-- The CORE Testcontainers package (generic ContainerBuilder), not the Testcontainers.CosmosDb
+         module: that module wraps the CLASSIC emulator (linux/amd64-only manifest, HTTPS-only, its
+         own wait strategy), every default of which CosmosFixture would have to override. See the
+         remarks on CosmosFixture for why the vnext-preview image is used instead. -->
+    <PackageReference Include="Testcontainers" />
   </ItemGroup>
 
   <ItemGroup>
