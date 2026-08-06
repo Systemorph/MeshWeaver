@@ -19,7 +19,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Button, FluentProvider, Text } from "@fluentui/react-components";
 import { Dismiss24Regular, Navigation24Regular } from "@fluentui/react-icons";
-import { ThemeToggle } from "@meshweaver/react";
+import { ThemeToggle, useLocalize } from "@meshweaver/react";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { HeaderMenus } from "./HeaderMenus";
 import { MeshNavigationProvider } from "./MeshNavigation";
@@ -33,6 +33,7 @@ import { useHydratedTheme } from "./useHydratedTheme";
 import { useIsMobile } from "./useViewport";
 
 export function PortalShell({ children }: { children: ReactNode }) {
+  const t = useLocalize();
   const { theme, mounted } = useHydratedTheme();
   const isMobile = useIsMobile();
   const [navMenuOpen, setNavMenuOpen] = useState(false);
@@ -91,8 +92,8 @@ export function PortalShell({ children }: { children: ReactNode }) {
                   <Button
                     appearance="transparent"
                     className="navigation-button"
-                    title="Menu"
-                    aria-label="Menu"
+                    title={t("common.menu")}
+                    aria-label={t("common.menu")}
                     icon={
                       navMenuOpen ? (
                         <Dismiss24Regular />

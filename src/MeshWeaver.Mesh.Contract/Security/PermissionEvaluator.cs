@@ -614,8 +614,8 @@ internal static class PermissionEvaluator
         var isAdminScope = key == AdminScope
             || key.StartsWith(AdminScope + "/", StringComparison.Ordinal);
         var selfFilter = isAdminScope
-            ? $"path:{nsQuery} scope:children nodeType:{SecurityCollections.AccessAssignmentNodeType}"
-            : $"namespace:{nsQuery} nodeType:{SecurityCollections.AccessAssignmentNodeType}";
+            ? $"path:{nsQuery} scope:children nodeType:{SecurityCollections.AccessAssignmentNodeType} select:path,id,namespace,name,nodeType,content"
+            : $"namespace:{nsQuery} nodeType:{SecurityCollections.AccessAssignmentNodeType} select:path,id,namespace,name,nodeType,content";
 
         // Self: narrow per-scope query against the singleton cache. Each
         // scope's stream is cached PROCESS-WIDE under the key
@@ -649,7 +649,7 @@ internal static class PermissionEvaluator
         var self = cache.GetQuery(
             $"$security-policy:{key}",
             hub.JsonSerializerOptions,
-            $"{nsFilter} nodeType:{SecurityCollections.PartitionAccessPolicyNodeType}");
+            $"{nsFilter} nodeType:{SecurityCollections.PartitionAccessPolicyNodeType} select:path,id,namespace,name,nodeType,content");
 
         IObservable<ImmutableDictionary<string, PartitionAccessPolicy>> parentOrBase;
         if (string.IsNullOrEmpty(key))
@@ -685,7 +685,7 @@ internal static class PermissionEvaluator
     private static IObservable<MeshNode[]> ObserveAllRoleNodes(IMessageHub hub)
     {
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        return cache.GetQuery(RoleQueryId, hub.JsonSerializerOptions, $"nodeType:{RoleNodeType} scope:subtree")
+        return cache.GetQuery(RoleQueryId, hub.JsonSerializerOptions, $"nodeType:{RoleNodeType} scope:subtree select:path,id,namespace,name,nodeType,content")
             .Select(arr => arr.ToArray());
     }
 
@@ -698,7 +698,7 @@ internal static class PermissionEvaluator
     {
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         return cache.GetQuery(MembershipQueryId, hub.JsonSerializerOptions,
-            $"nodeType:{GroupMembershipNodeType} scope:subtree");
+            $"nodeType:{GroupMembershipNodeType} scope:subtree select:path,id,namespace,name,nodeType,content");
     }
 
     #endregion

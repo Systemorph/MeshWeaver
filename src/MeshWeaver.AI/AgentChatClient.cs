@@ -1613,7 +1613,7 @@ public class AgentChatClient : IAgentChat
             ? Observable.Return(ImmutableArray<string>.Empty)
             : workspace.GetQuery(
                     $"{ModelProviderNodeType.SelectionNodeType}|{selectionUserId}",
-                    $"namespace:{ModelProviderNodeType.UserNamespacePath(selectionUserId!)} nodeType:{ModelProviderNodeType.SelectionNodeType}")
+                    $"namespace:{ModelProviderNodeType.UserNamespacePath(selectionUserId!)} nodeType:{ModelProviderNodeType.SelectionNodeType}{AgentPickerProjection.RegistryProjection}")
                 .Select(nodes => ExtractSelectedProviderPaths(nodes.FirstOrDefault()))
                 .Catch<ImmutableArray<string>, Exception>(_ => Observable.Return(ImmutableArray<string>.Empty))
                 .StartWith(ImmutableArray<string>.Empty)

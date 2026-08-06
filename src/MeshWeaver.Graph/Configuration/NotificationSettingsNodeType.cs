@@ -69,7 +69,7 @@ public static class NotificationSettingsNodeType
         };
 
         return hub.GetWorkspace()
-            .GetQuery($"{NodeType}|{path}", $"path:{path} nodeType:{NodeType}")
+            .GetQuery($"{NodeType}|{path}", $"path:{path} nodeType:{NodeType} select:path,id,namespace,name,nodeType,content")
             .Take(1)
             .SelectMany(nodes =>
             {

@@ -34,14 +34,15 @@ public static class VUserHelper
             Content = new AccessObject { IsVirtual = true }
         };
 
-        // 🚨 CreateNodeRequest must target the MESH hub — that's where
-        // WithNodeOperationHandlers registers the handler. PortalApp.Hub is a
-        // hosted hub at `portal/{userId}` (or `portal/anonymous`) which has no
-        // CreateNodeRequest handler, so a bare Observe without a target sends
-        // the request to portal/anonymous and prod surfaces
-        // "No handler found for message type CreateNodeRequest in portal/anonymous"
-        // — the page-open crash a real user just hit on the sub-thread URL.
-        var meshHub = hub.GetMeshHub();
+        // 🚨 CreateNodeRequest must carry an EXPLICIT target. PortalApp.Hub is a hosted hub at
+        // `portal/{userId}` (or `portal/anonymous`); a bare Observe without a target sends the
+        // request to portal/anonymous, and before that hub declared WithNodeOperationExecution
+        // prod surfaced "No handler found for message type CreateNodeRequest in portal/anonymous"
+        // — the page-open crash a real user hit on the sub-thread URL. NodeOperationTarget resolves
+        // to the portal hub now that it handles node ops, and to the mesh router on any host that
+        // did not opt in — so this is correct either way, and the write stays off the router where
+        // it can be.
+        var target = hub.NodeOperationTarget();
 
         // Provisioning a guest VUser node is an infrastructure write, so it runs as
         // the well-known system identity — NOT ImpersonateAsHub(hub). For an
@@ -55,7 +56,7 @@ public static class VUserHelper
         {
             hub.Observe<CreateNodeResponse>(
                     new CreateNodeRequest(userNode),
-                    o => o.WithTarget(meshHub.Address))
+                    o => o.WithTarget(target))
                 .FirstAsync()
                 .Subscribe(
                     delivery =>

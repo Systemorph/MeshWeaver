@@ -17,6 +17,12 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class SkillNodeTypeTest
 {
+    /// <summary>The projection every registry query carries — referenced from the
+    /// production constant so these expectations can never drift from it. Asserting it
+    /// here is the point: a registry query that stops projecting `content` yields nodes
+    /// whose Content is silently null, which reads as an empty picker.</summary>
+    private const string Proj = AgentPickerProjection.RegistryProjection;
+
     private static readonly JsonSerializerOptions Json = new();
 
     [Fact]
@@ -158,11 +164,11 @@ public class SkillNodeTypeTest
         // the space's {space}/Skill + the user's {user}/Skill).
         SkillNodeType.SkillQueries(contextPath: "Acme/Project", userPath: "rbuergi")
             .Should().ContainSingle()
-            .Which.Should().Be("namespace:rbuergi/Skill|Acme/Skill|Skill nodeType:Skill");
+            .Which.Should().Be("namespace:rbuergi/Skill|Acme/Skill|Skill nodeType:Skill" + Proj);
 
         // No context / user → platform defaults only.
         SkillNodeType.SkillQueries(null, null).Should().ContainSingle()
-            .Which.Should().Be("namespace:Skill nodeType:Skill");
+            .Which.Should().Be("namespace:Skill nodeType:Skill" + Proj);
     }
 
     [Fact]
@@ -172,7 +178,7 @@ public class SkillNodeTypeTest
         // to the namespace IN(...): it has no read policy, so including "login/Skill" fails the WHOLE
         // query ("lacks Read permission on 'login'") and the picker/autocomplete goes empty.
         var q = SkillNodeType.SkillQueries(contextPath: "login", userPath: "rbuergi").Single();
-        q.Should().Be("namespace:rbuergi/Skill|Skill nodeType:Skill");
+        q.Should().Be("namespace:rbuergi/Skill|Skill nodeType:Skill" + Proj);
         q.Should().NotContain("login/Skill");
     }
 

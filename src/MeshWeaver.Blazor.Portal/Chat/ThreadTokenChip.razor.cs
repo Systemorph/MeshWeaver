@@ -105,7 +105,7 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
         // chip stays live; never .Take(1) (that would freeze it).
         var usage = Hub.GetQuery(
             $"tokenchip:{ThreadPath}",
-            $"path:{ThreadPath}/{TokenUsageNodeType.SatelliteSegment} scope:children nodeType:{TokenUsageNodeType.NodeType}");
+            $"path:{ThreadPath}/{TokenUsageNodeType.SatelliteSegment} scope:children nodeType:{TokenUsageNodeType.NodeType} select:path,id,namespace,name,description,nodeType,icon,order,createdBy,lastModified,content");
         if (usage is null) return;
 
         // Live model catalog — the SAME union the picker reads (shared providers + this thread's
