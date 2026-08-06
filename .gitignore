@@ -410,4 +410,7 @@ memex/aspire/Memex.Portal.Distributed/wwwroot/app/
 
 # The plugins/ dir is a SEPARATE git repo (Systemorph/MeshWeaver.Plugins) nested locally —
 # never tracked here. Content ships via the plugin registry / GitSync, not this repo.
-plugins/
+# 🚨 ANCHORED (leading slash) on purpose: an unanchored `plugins/` matches at EVERY depth, and on
+# macOS's case-insensitive filesystem it also matches `Plugins/` — which silently dropped every NEW
+# file under src/MeshWeaver.AI/Plugins/ and .claude/skills/plugins/. Keep the slash.
+/plugins/
