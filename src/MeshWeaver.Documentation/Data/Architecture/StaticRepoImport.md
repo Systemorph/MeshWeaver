@@ -39,13 +39,15 @@ meshHub.GetHostedHub(
     new Address(ImportAddressType /* "import" */, meshHub.Address.Id),   // process-unique
     config => config
         .AddData()                       // IWorkspace, so the upsert-of-existing path can dispatch
-        .WithNodeOperationHandlers()     // Create/CreateOrUpdate handled on THIS action block
+        .WithNodeOperationExecution()    // Create/CreateOrUpdate handled on THIS action block —
+                                         // and IMeshService targets it instead of the router
         .WithInitialization(h => h.RegisterForDisposal(routingService.RegisterStream(h))),
     HostedHubCreation.Always);
 ```
 
 - The `import` address-type is declared **stream-routed** — registered **modularly** by the owning module via `MeshBuilder.AddStreamRoutedAddressType(StaticRepoImporter.ImportAddressType)` in **`AddGraph`** (NOT hard-coded into the core `MeshConfiguration.DefaultStreamRoutedAddressTypes`, which keeps only the framework-core `portal`/`client`/`cache`). The silo's `RoutingGrain` dispatches to it over the cluster memory stream, and `RegisterStream` makes responses (query results, `ImportContent` acks) route back.
-- Because the hub carries `WithNodeOperationHandlers`, the bulk upserts are **handled locally on the import hub** (the inner self-posted `CreateNodeRequest` stays on it too). The mesh router only sees the occasional lock-`CreateNode` / read query — never the create storm.
+- Because the hub carries `WithNodeOperationExecution`, the bulk upserts are **handled locally on the import hub** (the inner self-posted `CreateNodeRequest` stays on it too). The mesh router only sees the occasional read query — never the create storm.
+- 🚨 That opt-in is what makes the isolation **real**. Registering the handlers alone was not enough: `IMeshService` used to post every create/move/delete to `hub.GetMeshHub()` unconditionally, so anything the import routed through `IMeshService` walked straight back onto the router and this hub bought nothing. `MeshExtensions.NodeOperationTarget` now walks up to the nearest hub that declared `WithNodeOperationExecution`. The marker is deliberately **separate** from `WithNodeOperationHandlers`: every per-node hub registers the handlers (it must receive ops addressed to its own node), but a per-node hub also carries `AddAccessControlPipeline`, whose permission check is anchored at the **receiving hub's** path — so targeting one would evaluate `Create` against whatever node the caller happened to be rendering.
 - Even a **total import failure is isolated**: the boot subscription (`StaticRepoImportHostedService`) is fire-and-forget with an `onError` terminal, so a wedged or failing import can never take down the router. The portal serves regardless.
 
 ## What the importer does, per source, per boot

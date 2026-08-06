@@ -34,9 +34,10 @@ public static class NodeCopyHelper
     /// <see cref="CreateOrUpdateNodeRequest"/> handler — the helper just
     /// dispatches.</para>
     ///
-    /// <para><b>Routing</b> — every per-node request is targeted at the root mesh
-    /// hub (<c>hub.GetMeshHub()</c>), where the node-operation handlers are
-    /// guaranteed to be registered. <paramref name="hub"/> may therefore be ANY
+    /// <para><b>Routing</b> — every per-node request is targeted at
+    /// <c>hub.NodeOperationTarget()</c>: the nearest ancestor that declared
+    /// <c>WithNodeOperationExecution</c>, else the root mesh hub, where the node-operation
+    /// handlers are guaranteed to be registered. <paramref name="hub"/> may therefore be ANY
     /// hub (an MCP/REST session hub, a per-node UI hub, the mesh hub itself); it
     /// only supplies the caller identity and the reply address.</para>
     ///
@@ -72,22 +73,23 @@ public static class NodeCopyHelper
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var callerAccessContext = accessService?.Context ?? accessService?.CircuitContext;
 
-        // 🚨 Target the per-node create/upsert requests at the ROOT mesh hub — the hub where
-        // WithNodeOperationHandlers registers the CreateNodeRequest/CreateOrUpdateNodeRequest
-        // handlers (MeshBuilder.AddMesh). An un-targeted Observe delivers to the CALLING hub,
-        // which only works when that hub happens to register the node-op handlers itself
-        // (per-node UI hubs do, via AddMeshDataSource). The MCP/REST session hub
-        // (portal/mcp-{user}-{session}, SessionHubResolver) registers only AddData — every
-        // per-node post bounced with "No handler found for message type CreateNodeRequest"
-        // (memex 2026-07-13, MCP copy tool). Same routing contract as MeshService.MeshAddress,
-        // whose comment pins the identical 2026-05-23 incident for un-walked child-hub writes.
-        var meshAddress = hub.GetMeshHub().Address;
+        // 🚨 Target the per-node create/upsert requests EXPLICITLY — never leave it to the calling
+        // hub. An un-targeted Observe delivers to the CALLER, which only works when that hub happens
+        // to register the node-op handlers itself (per-node UI hubs do, via AddMeshDataSource). The
+        // MCP/REST session hub (portal/mcp-{user}-{session}, SessionHubResolver) used to register
+        // only AddData — every per-node post bounced with "No handler found for message type
+        // CreateNodeRequest" (memex 2026-07-13, MCP copy tool). NodeOperationTarget resolves to the
+        // nearest hub that declared WithNodeOperationExecution — that session hub now does, so an
+        // MCP copy no longer runs its fan-out on the router — and to the root mesh hub otherwise.
+        // Same routing contract as MeshService, whose comment pins the identical 2026-05-23 incident
+        // for un-walked child-hub writes.
+        var operationTarget = hub.NodeOperationTarget();
 
-        // Shared post options for both verbs: route to the mesh hub and stamp the
+        // Shared post options for both verbs: route to that target and stamp the
         // eagerly-captured caller identity (mirrors MeshService.ConfigurePost).
         PostOptions ConfigurePost(PostOptions o)
         {
-            o = o.WithTarget(meshAddress);
+            o = o.WithTarget(operationTarget);
             return callerAccessContext is null ? o : o.WithAccessContext(callerAccessContext);
         }
 

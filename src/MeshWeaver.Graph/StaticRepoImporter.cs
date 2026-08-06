@@ -457,9 +457,12 @@ public static class StaticRepoImporter
     ///   <item><c>WithInitialization(... RegisterStream(hub))</c> — registers the hub with the routing
     ///     service BEFORE any request is posted, so responses (query results, ImportContent acks)
     ///     route back to it instead of falling into the mesh-type NotFound trap.</item>
-    ///   <item><c>WithNodeOperationHandlers()</c> — the node create/upsert handlers, so the import's
-    ///     posts are handled locally on this hub (and the handler's inner self-posted
-    ///     <c>CreateNodeRequest</c> stays on this hub too, never the mesh hub).</item>
+    ///   <item><c>WithNodeOperationExecution()</c> — the node create/upsert handlers PLUS the
+    ///     declaration that makes <c>MeshService</c> target this hub, so the import's posts are
+    ///     handled locally (and the handler's inner self-posted <c>CreateNodeRequest</c> stays on
+    ///     this hub too, never the mesh hub). Before that opt-in existed, <c>MeshService</c> posted
+    ///     to <c>GetMeshHub()</c> unconditionally and this hub's isolation bought nothing — the bulk
+    ///     creates still ran on the router.</item>
     ///   <item><c>AddData()</c> — an <see cref="IWorkspace"/> so the upsert-of-existing path
     ///     (<c>hub.GetMeshNodeStream(path).Update</c>) can dispatch through the shared
     ///     <c>IMeshNodeStreamCache</c>.</item>
@@ -483,7 +486,7 @@ public static class StaticRepoImporter
                 // never-null guard (the import-activity phantom + NotFound storm, atioz 2026-06-18).
                 .WithPostingIdentity(PostingIdentity.System)
                 .AddData()
-                .WithNodeOperationHandlers()
+                .WithNodeOperationExecution()
                 .WithInitialization(h => h.RegisterForDisposal(routingService.RegisterStream(h))),
             HostedHubCreation.Always)!;
     }
