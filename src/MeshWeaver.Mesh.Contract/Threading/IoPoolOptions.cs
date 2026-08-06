@@ -46,6 +46,19 @@ public static class IoPoolNames
     /// </summary>
     public const string Layout = "Layout";
 
+    /// <summary>
+    /// Mesh-node reads/writes issued by the Microsoft Agent Framework agent stores
+    /// (<c>MeshNodeAgentFileStore</c>, <c>MeshAgentSkillsSource</c>) — the leaves that bridge
+    /// MAF's <c>Task</c>-shaped abstract surface onto our reactive mesh APIs.
+    ///
+    /// <para>🚨 Deliberately NOT <see cref="Ai"/>. A store call happens INSIDE a tool call, which
+    /// runs inside an agent round that is already holding an <see cref="Ai"/> slot. Re-entering
+    /// the same bounded pool from within a slot it already holds is the classic nested-gate
+    /// deadlock: at the cap, every holder waits for a slot only a holder can release. A separate
+    /// pool makes the nesting acyclic.</para>
+    /// </summary>
+    public const string AgentStore = "AgentStore";
+
     /// <summary>CPU-bound compilation (Roslyn compile/script). Wave 3.</summary>
     public const string Compile = "Compile";
 
@@ -137,6 +150,17 @@ public sealed record IoPoolOptions
     /// </summary>
     public int Layout { get; init; } = 256;
 
+    /// <summary>
+    /// Concurrent MAF agent-store mesh ops (the <c>AgentStore</c> pool). Most ops are a single
+    /// bounded mesh read/write bridged from MAF's <c>Task</c> surface, so the slot is held briefly;
+    /// the live listing/search subscribes hold one only for the bounded subscribe window. The cap is
+    /// a runaway-fan-out stop — a store is constructed per agent round, and a burst of rounds each
+    /// listing or searching is what it bounds — not a throttle. Generous by default (128) and
+    /// independent of <see cref="Ai"/> so a store call nested inside an agent round can never
+    /// self-deadlock.
+    /// </summary>
+    public int AgentStore { get; init; } = 128;
+
     /// <summary>Concurrent compilations. CPU-bound; defaults to the processor count.</summary>
     public int Compile { get; init; } = Environment.ProcessorCount;
 
@@ -185,6 +209,7 @@ public sealed record IoPoolOptions
             IoPoolNames.Ai => Ai,
             IoPoolNames.Query => Query,
             IoPoolNames.Layout => Layout,
+            IoPoolNames.AgentStore => AgentStore,
             IoPoolNames.Compile => Compile,
             IoPoolNames.Process => Process,
             _ => Default,
