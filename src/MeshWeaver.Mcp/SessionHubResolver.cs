@@ -95,11 +95,11 @@ public static class SessionHubResolver
             address,
             sessionConfig => sessionConfig
                 .AddData()
-                // 🚨 Node CRUD from an MCP session runs HERE, not on the mesh router. Without the
-                // handlers MeshService falls back to the mesh hub and every create/move/delete
+                // 🚨 Node CRUD from an MCP session runs HERE, not on the mesh router. Without this
+                // opt-in MeshService falls back to the mesh hub and every create/move/delete
                 // executes on the router's action block, starving routing (see
                 // MeshExtensions.NodeOperationTarget).
-                .WithNodeOperationHandlers()
+                .WithNodeOperationExecution()
                 .WithInitialization(hub =>
                     hub.RegisterForDisposal(routingService.RegisterStream(hub))),
             HostedHubCreation.Always)
