@@ -107,6 +107,103 @@ Run these in order; each one kills off a class of hypothesis.
 6. **`eeheap -gc`** — heap size, to rule in/out memory pressure. Cross-check against
    `_meshweaver-memory-delta.log` in the same artifact for the deltas around the crash.
 
+## When `clrstack` on the faulting thread prints NOTHING
+
+An empty managed stack on the crashing thread is not a dead end — it is the answer to a different
+question: **the thread is runtime-internal** (a GC / finalizer / EE worker), so there are no managed
+frames to show and SOS has nothing more to give. Switch to native symbols.
+
+Two traps make this look impossible when it is not:
+
+- **lldb cannot map modules out of a `createdump` minidump.** `image list` shows only the executable,
+  so `bt` prints bare addresses and every frame looks unsymbolisable. You symbolise by hand instead —
+  the addresses are perfectly good.
+- **A backtrace address is a RETURN address.** The frame you want is the target of the `call`
+  immediately *before* it, not the function the address lands in. Disassembling the few bytes ahead of
+  the return address is what names the real callee.
+
+The recipe, end to end (each step is seconds):
+
+```bash
+# 1. Which thread, and what did the kernel say? si_code 1 = SEGV_MAPERR; si_addr is the deref'd pointer.
+eu-readelf -n dump.dmp | grep -E "SIGINFO|si_signo:|fault address:|  pid: "
+
+# 2. Load base of libcoreclr in the crashed process (NT_FILE mappings inside the core).
+eu-readelf -n dump.dmp | grep libcoreclr.so | head -1     # e.g. 7f17d1000000-...
+
+# 3. Native backtrace (bare addresses are expected).
+lldb --core dump.dmp -o "thread list" -o "bt all" -o quit
+
+# 4. RVA = frame address − load base. Fetch the MATCHING symbols by build-id and resolve.
+BID=$(eu-readelf -n /usr/share/dotnet/shared/Microsoft.NETCore.App/<ver>/libcoreclr.so \
+      | awk '/Build ID/{print $3}')
+curl -sfL -o coreclr.dbg \
+  "https://msdl.microsoft.com/download/symbols/_.debug/elf-buildid-sym-$BID/_.debug"
+eu-addr2line -f -C -e coreclr.dbg 0x<RVA>
+```
+
+Run steps 2–4 in a **linux/amd64** container whose runtime patch matches `_runtimes.txt` from the
+artifact (the shard already records it) — then `libcoreclr.so` is byte-identical and the build-id
+lookup succeeds. The `.debug` carries a symbol table but no DWARF lines, so you get function names,
+not line numbers; that is enough to name the phase.
+
+### Recovering the FAULTING registers (PRSTATUS is not them)
+
+`createdump` records the crashing thread's `PRSTATUS` from *inside its own signal handler*, so the
+`rip` you read there is `waitpid` in libc — not the fault. The real faulting context is the
+`ucontext_t` the kernel pushed onto the **alternate signal stack**; find it by scanning that stack for
+the `mcontext` signature (no debugger needed — plain Python over the ELF core):
+
+```python
+# gregs[] at ucontext+40; indices: RIP=16, ERR=19, TRAPNO=20, CR2=22
+# match TRAPNO==14 (page fault) and a RIP inside libcoreclr's mapping
+```
+
+`CR2` is the dereferenced address and `ERR` decodes the access (`0x4` = user-mode **read** of a
+non-present page). Then disassemble a window around the faulting RVA — that names the exact
+dereference, which is what turns "it segfaulted in the GC" into a specific claim.
+
+### 2026-08-06: `MeshWeaver.FutuRe.Test exit=139` (run 31083356138)
+
+Resolved this way in minutes after the 2026-08-04 attempt stalled for want of symbols. Crash was
+**mid-run** (75 s in, 44 ms into a fresh fixture's `PreWarmNodeTypeHubs`), not at process exit. The
+faulting thread carried **no managed frames** and symbolised to:
+
+```
+CorUnix::CPalThread::ThreadEntry → CreateSuspendableThread
+  → WKS::gc_heap::bgc_thread_function() → WKS::gc_heap::gc1()
+    → WKS::gc_heap::background_sweep()      ← faulting frame
+```
+
+and the recovered `ucontext` pinned the instruction (`TRAPNO=14`, `ERR=0x4`, `CR2=0x0`):
+
+```asm
+mov rax, QWORD PTR [r15]     ; rax = object->MethodTable      (r15 = the object being swept)
+and rax, 0xfffffffffffffff8  ; strip the GC low bits
+mov ecx, DWORD PTR [rax]     ; ← FAULT: read MT->m_dwFlags, rax == 0
+```
+
+**The swept object's MethodTable pointer is exactly NULL.** That single fact is worth more than the
+whole stack, because of what it *rules out*:
+
+- **It is not the collectible-ALC use-after-unload shape.** A dangling pointer into a freed
+  `LoaderAllocator` is a non-null address that happens to be unmapped. Zero is not that. Several
+  earlier fixes (and the `alc-unload-probe` workflow) were aimed at that hypothesis; this dump does
+  not support it. Do not keep paying it forward.
+- **It is not MeshWeaver corrupting the heap.** There is no `unsafe`, no `GCHandle`, no pinning, no
+  `stackalloc` of object memory and no custom GC configuration anywhere in `src/` — pure managed code
+  has no way to zero a MethodTable.
+
+A zero MT inside the swept range means the sweep walked memory the GC believed held an object but that
+is in fact zeroed — a gap that was never filled with a free object, or a walk that ran past the true
+allocated end of the region. That is runtime-internal bookkeeping, so treat it as a **CoreCLR
+background-GC issue** and report it upstream with this dump rather than "fixing" it here. What
+MeshWeaver contributes is the *workload* that provokes it: per-`[Fact]` mesh build + teardown with
+collectible NodeType assemblies loading and unloading, and 48 gen2 GCs in 75 s.
+
+🚨 **Do not "fix" this by turning off concurrent GC** in the test host. That hides the fault without
+changing anything about why it happens, and the same workload runs in prod.
+
 ## Reading the result honestly
 
 The trap in this class of bug is confirmation: the stack shows *a* plausible culprit and it is
