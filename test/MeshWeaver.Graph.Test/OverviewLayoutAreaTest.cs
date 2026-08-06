@@ -39,6 +39,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
                 .WithView(OverviewView, BuildOverviewView)
                 .WithView(nameof(MarkdownOverviewView), MarkdownOverviewView)
                 .WithView(nameof(EditToggleView), EditToggleView)
+                .WithView(nameof(CollectionEditView), CollectionEditView)
                 .WithView(nameof(PreRenderedHtmlView), PreRenderedHtmlView)
                 .WithView(nameof(NoPreRenderedHtmlView), NoPreRenderedHtmlView));
     }
@@ -82,6 +83,21 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
         // Use MapToToggleableControl directly for a single property
         var prop = typeof(TestTodo).GetProperty(nameof(TestTodo.Category))!;
         return host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit: true, host);
+    }
+
+    /// <summary>
+    /// A collection property in EDIT mode (isToggleable:false starts directly in edit) — the #777
+    /// regression seam: its edit control must NOT be a bound TextFieldControl.
+    /// </summary>
+    private static UiControl CollectionEditView(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var entity = new TestWithTags { Id = "t1", Tags = ["a", "b", "c"] };
+        var dataId = "collectionEditData";
+        host.UpdateData(dataId, entity);
+
+        var prop = typeof(TestWithTags).GetProperty(nameof(TestWithTags.Tags))!;
+        // isToggleable:false → renders directly in edit mode, so the EDIT control is what shows.
+        return host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit: true, host, isToggleable: false);
     }
 
     [HubFact]
@@ -176,6 +192,32 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
             .Should().Within(3.Seconds()).Match(c => c is TextFieldControl or NumberFieldControl or SelectControl);
 
         editControl.Should().NotBeNull("should switch to an edit control");
+    }
+
+    [HubFact]
+    public async Task CollectionProperty_EditControl_IsReadOnlyLabel_NotTextField()
+    {
+        var reference = new LayoutAreaReference(nameof(CollectionEditView));
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(), reference);
+
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Should().Within(5.Seconds()).Match(x => x != null);
+
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        var editAreaName = stack.Areas.Last().Area?.ToString();
+        editAreaName.Should().NotBeNullOrEmpty();
+
+        // isToggleable:false renders the EDIT control directly. #777: a collection must render
+        // read-only, never a bound TextFieldControl — a keystroke there overwrites the whole list.
+        var editControl = await stream
+            .GetControlStream(editAreaName!)
+            .Should().Within(5.Seconds()).Match(c => c is not null);
+
+        editControl.Should().BeOfType<LabelControl>(
+            "a collection edit must be read-only; a bound text field would let one keystroke destroy the list");
     }
 
     [HubFact]
@@ -339,4 +381,16 @@ public record TestDocument
 
     [UiControl<MarkdownEditorControl, MarkdownControl>(SeparateEditView = true)]
     public string Content { get; init; } = "";
+}
+
+/// <summary>
+/// Test entity with a collection property — the #777 regression seam: its Edit control must be
+/// read-only, never a bound text field.
+/// </summary>
+public record TestWithTags
+{
+    [Key]
+    public string Id { get; init; } = "";
+
+    public string[] Tags { get; init; } = [];
 }
