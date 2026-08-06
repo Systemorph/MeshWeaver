@@ -457,10 +457,11 @@ Recommended: 'icon' as an inline SVG starting with <svg, using currentColor. 'co
     /// Triggers a Space's GitHub sync headlessly — the same one-click Commit / Update / Check the
     /// browser's <c>GitHubAction</c> layout area runs, reachable now from MCP. Each op runs as a mesh
     /// <b>Activity</b> (progress / cancel / persisted log) via <see cref="GitHubActivityExtensions"/>;
-    /// the tool FIRES the activity under the caller's identity and returns its handle IMMEDIATELY —
-    /// it never blocks the MCP handler on the long-running GitHub I/O. The caller observes progress
-    /// reactively with <c>get @{activityPath}</c> (its live <c>ActivityLog</c> carries the commit sha
-    /// + files-written line and the terminal Status).
+    /// the caller's identity AUTHORIZES the trigger and the activity then EXECUTES as System (a
+    /// GitSynced Space is system-owned — no user holds partition write there), and the tool returns
+    /// the handle IMMEDIATELY — it never blocks the MCP handler on the long-running GitHub I/O. The
+    /// caller observes progress reactively with <c>get @{activityPath}</c> (its live
+    /// <c>ActivityLog</c> carries the commit sha + files-written line and the terminal Status).
     /// </summary>
     // NOT Idempotent: 'commit' mints a new commit on each call. OpenWorld: it pushes to / reads from
     // GitHub, an external service (same classification as the instance Sync tool).
@@ -472,7 +473,7 @@ Operations (`op`):
   • update           — pull the branch HEAD from GitHub and import the deltas back into the Space.
   • check            — ask GitHub (live) for the branch HEAD and whether the Space is up to date.
 
-Runs under YOUR identity (needs Editor/Update on the Space for commit) and requires the Space's GitHub sync config (`{space}/_GitSync`) to already exist — configure it once in the Space's GitHub settings tab. Each op runs as an Activity: this returns the activity path immediately (it does NOT wait for the push to finish). Observe progress + result with `get` on that path — the activity log carries the commit sha and files written, and its Status goes Succeeded/Failed. `sourceId` selects a specific sync source (blank = the primary).
+Your call AUTHORIZES the operation — `check` and `update` need Read on the Space (any signed-in reader; the repo is the source of truth and an update only converges the Space to it), `commit` needs Update on the Space, and a platform admin may trigger any op — and the sync itself then EXECUTES under the System identity (a GitSynced Space is system-owned, so no per-space write grant exists or is needed). Your GitHub credential is still what pushes and what commits are attributed to. Requires the Space's GitHub sync config (`{space}/_GitSync`) to already exist — configure it once in the Space's GitHub settings tab. Each op runs as an Activity: this returns the activity path immediately (it does NOT wait for the push to finish). Observe progress + result with `get` on that path — the activity log carries the commit sha and files written, and its Status goes Succeeded/Failed. `sourceId` selects a specific sync source (blank = the primary).
 
 When the sync source has two-way enabled, `update` never overwrites a node changed on the server since the last sync (it is kept and carried back on the next `commit`); pass `force: true` to overwrite local changes from the repo regardless. `force` only affects `update`.")]
     public Task<string> GitHubSync(
@@ -514,8 +515,9 @@ When the sync source has two-way enabled, `update` never overwrites a node chang
         // pattern as StartThread) and complete as soon as the handle exists. The activity keeps running
         // via the retained subscription after this Task completes.
         // 🚨 AccessContext is an AsyncLocal wiped across the .Subscribe hop: re-establish the caller's
-        // identity AT the trigger so CreateNode stamps them as the activity owner (ActivityRunner then
-        // re-stamps that owner on every subsequent cross-hub write).
+        // identity AT the trigger so the op's authorization check evaluates THEM (the click
+        // authorizes; the activity itself then executes as System — see
+        // GitHubActivityExtensions.TriggerAuthorizedAsSystem).
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         cts.Token.Register(() => tcs.TrySetResult(JsonSerializer.Serialize(new
