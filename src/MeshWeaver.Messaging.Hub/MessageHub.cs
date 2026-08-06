@@ -57,77 +57,6 @@ public sealed class MessageHub : IMessageHub
         Address? Target,
         long RegisteredAtTicks);
 
-    /// <summary>
-    /// Cross-process dispose trace. Off by default — set <c>MESHWEAVER_DISPOSE_TRACE=1</c>
-    /// to enable. When enabled, every phase boundary (Quiescing entry/exit,
-    /// DisposeHostedHubs entry/exit, ShutDown entry/exit) is enqueued onto a
-    /// single bounded <see cref="System.Threading.Channels.Channel{T}"/> drained
-    /// by one writer task — the previous implementation took a global lock
-    /// per call and serialized hub teardown under load (~0.7% of test
-    /// thread-time). Drops the trace line silently when the channel is full
-    /// so a stalled writer can never delay dispose. <c>tail -f</c> the file
-    /// to spot a stalled phase.
-    /// </summary>
-    private static readonly bool DisposeTraceEnabled =
-        Environment.GetEnvironmentVariable("MESHWEAVER_DISPOSE_TRACE") is "1" or "true" or "True";
-    private static readonly string DisposeTraceLogPath =
-        Path.Combine(Path.GetTempPath(), "meshweaver-dispose-trace.log");
-
-    /// <summary>
-    /// Bounded async queue + single-writer drain task. Bounded depth means a
-    /// misbehaving disk (slow append, locked file) puts back-pressure on the
-    /// channel rather than serializing hub teardown via lock contention.
-    /// Drop-write on full so the trace stays best-effort.
-    /// </summary>
-    private static readonly System.Threading.Channels.Channel<string>? DisposeTraceChannel =
-        DisposeTraceEnabled
-            ? System.Threading.Channels.Channel.CreateBounded<string>(
-                new System.Threading.Channels.BoundedChannelOptions(4096)
-                {
-                    FullMode = System.Threading.Channels.BoundedChannelFullMode.DropWrite,
-                    SingleReader = true
-                })
-            : null;
-
-    static MessageHub()
-    {
-        if (DisposeTraceChannel is null) return;
-        var reader = DisposeTraceChannel.Reader;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                while (await reader.WaitToReadAsync())
-                {
-                    while (reader.TryRead(out var line))
-                    {
-                        try { File.AppendAllText(DisposeTraceLogPath, line + Environment.NewLine); }
-                        catch
-                        {
-                            // Tracing must never throw out of the writer; drop the line.
-                        }
-                    }
-                }
-            }
-            catch
-            {
-                // Outer guard — channel completion is the only normal exit path.
-            }
-        });
-    }
-
-    private static void DisposeTrace(Address address, string phase, long elapsedMs, string? extra = null)
-    {
-        if (DisposeTraceChannel is null) return;
-        // pid: this file is shared by every test host in a CI shard, and a core dump is named
-        // `dotnet-<pid>.dmp` — without it you cannot tell which process's lines you are reading.
-        var line = extra is null
-            ? $"{DateTime.UtcNow:HH:mm:ss.fff} pid={Environment.ProcessId} {address} {phase} elapsed={elapsedMs}ms"
-            : $"{DateTime.UtcNow:HH:mm:ss.fff} pid={Environment.ProcessId} {address} {phase} elapsed={elapsedMs}ms {extra}";
-        // Non-blocking: drops on full so a stuck writer never delays dispose.
-        DisposeTraceChannel.Writer.TryWrite(line);
-    }
-
     private readonly ILogger logger;
     /// <summary>The immutable configuration this hub was built from.</summary>
     public MessageHubConfiguration Configuration { get; }
@@ -1454,8 +1383,6 @@ public sealed class MessageHub : IMessageHub
 
         logger.LogDebug("POSTING initial ShutdownRequest for hub {Address} with Version={Version} (disposal preparation took {elapsed}ms)",
             Address, Version, totalStopwatch.ElapsedMilliseconds);
-        DisposeTrace(Address, "DISPOSE_INVOKED", totalStopwatch.ElapsedMilliseconds,
-            $"hostedHubsCount={hostedHubs.Hubs.Count()}");
         Post(new ShutdownRequest(MessageHubRunLevel.Quiescing, Version));
 
         // Safety net: if the reactive shutdown path ever wedges, force-complete disposal after
@@ -1809,8 +1736,6 @@ public sealed class MessageHub : IMessageHub
                 TryLog(LogLevel.Information,
                     "[QUIESCE-START] {Address}: {Count} pending callbacks at dispose entry: {Pending}",
                     Address, initialPendingSnapshot.Length, FormatPendingCallbacks(initialPendingSnapshot));
-                DisposeTrace(Address, "QUIESCE_START", disposalStopwatch.ElapsedMilliseconds,
-                    $"pending={initialPendingSnapshot.Length}");
 
                 // CRITICAL: do the wait OFF the action block. The action block processes
                 // messages serially (MaxDegreeOfParallelism = 1) — a blocking wait on the
@@ -1859,8 +1784,9 @@ public sealed class MessageHub : IMessageHub
                     RunLevel = MessageHubRunLevel.DisposeHostedHubs;
                 }
 
-                DisposeTrace(Address, "HOSTED_DISPOSE_START", disposalStopwatch.ElapsedMilliseconds,
-                    $"hostedHubsCount={hostedHubs.Hubs.Count()}");
+                TryLog(LogLevel.Debug,
+                    "[HOSTED-DISPOSE-START] {Address}: disposing {Count} hosted hub(s) at {Elapsed}ms",
+                    Address, hostedHubs.Hubs.Count(), disposalStopwatch.ElapsedMilliseconds);
                 // Dispose the hosted hubs (each disposes synchronously) and OBSERVE their
                 // collective completion via the collection's `DisposalCompleted` observable —
                 // no `await hostedHubs.Disposal`, no Task.Run. Each child hub completes its own
@@ -1874,13 +1800,18 @@ public sealed class MessageHub : IMessageHub
                         _ => { },
                         ex =>
                         {
-                            DisposeTrace(Address, "HOSTED_DISPOSE_ERROR", hostedSw.ElapsedMilliseconds,
-                                $"{ex.GetType().Name}: {ex.Message}");
+                            // A hosted-hub disposal fault must SURFACE — this arm previously
+                            // recorded it only into an off-by-default trace file, i.e. nowhere.
+                            TryLog(LogLevel.Warning, ex,
+                                "[HOSTED-DISPOSE-ERROR] {Address}: hosted hub disposal faulted after {Elapsed}ms",
+                                Address, hostedSw.ElapsedMilliseconds);
                             PostShutDownPhase(hostedSw);
                         },
                         () =>
                         {
-                            DisposeTrace(Address, "HOSTED_DISPOSE_OK", hostedSw.ElapsedMilliseconds);
+                            TryLog(LogLevel.Debug,
+                                "[HOSTED-DISPOSE-OK] {Address}: hosted hubs disposed in {Elapsed}ms",
+                                Address, hostedSw.ElapsedMilliseconds);
                             PostShutDownPhase(hostedSw);
                         });
                 break;
@@ -1988,8 +1919,6 @@ public sealed class MessageHub : IMessageHub
                 TryLog(LogLevel.Information,
                     "[QUIESCE-OK] {Address}: drained {Count} callback(s) in {Elapsed}ms",
                     Address, initialPendingSnapshot.Length, quiesceSw.ElapsedMilliseconds);
-                DisposeTrace(Address, "QUIESCE_OK", quiesceSw.ElapsedMilliseconds,
-                    $"drained={initialPendingSnapshot.Length}");
             }
             else
             {
@@ -1998,8 +1927,6 @@ public sealed class MessageHub : IMessageHub
                 TryLog(LogLevel.Warning,
                     "[QUIESCE-TIMEOUT] {Address}: {Count} callback(s) still pending after {Timeout}s — forcibly cancelling. Pending: {Pending}",
                     Address, stuck.Length, QuiesceTimeout.TotalSeconds, detail);
-                DisposeTrace(Address, "QUIESCE_TIMEOUT", quiesceSw.ElapsedMilliseconds,
-                    $"pending={stuck.Length}|{detail}");
                 // Sticky flag — tests recursively inspect this and treat any hub with
                 // QuiescingTimedOut=true as a dispose failure. Forces visibility on leaked
                 // Observe subscriptions instead of silently extending dispose budgets.
@@ -2042,12 +1969,12 @@ public sealed class MessageHub : IMessageHub
             TryLog(LogLevel.Debug, "[DISPOSE-TRACE] {address}: POSTING ShutDown request, Version={version}",
                 Address, Version);
             Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
-            DisposeTrace(Address, "POSTED_SHUTDOWN", sw.ElapsedMilliseconds);
         }
         catch (Exception postEx)
         {
-            DisposeTrace(Address, "POSTED_SHUTDOWN_FAILED", sw.ElapsedMilliseconds,
-                $"{postEx.GetType().Name}: {postEx.Message}");
+            TryLog(LogLevel.Warning, postEx,
+                "[POSTED-SHUTDOWN-FAILED] {Address}: posting the ShutDown request faulted after {Elapsed}ms",
+                Address, sw.ElapsedMilliseconds);
             SignalDisposalFaulted(postEx);
         }
     }
@@ -2066,6 +1993,23 @@ public sealed class MessageHub : IMessageHub
         try
         {
             logger?.Log(level, message, args);
+        }
+        catch
+        {
+            // Swallow — diagnostic logging must never throw out of the dispose path.
+        }
+    }
+
+    /// <summary>
+    /// <see cref="TryLog(LogLevel, string, object?[])"/> carrying the causing exception, so a
+    /// fault raised inside the dispose pipeline keeps its stack trace instead of being flattened
+    /// into the message. Same best-effort contract: never throws out of the dispose path.
+    /// </summary>
+    private void TryLog(LogLevel level, Exception exception, string message, params object?[] args)
+    {
+        try
+        {
+            logger?.Log(level, exception, message, args);
         }
         catch
         {
