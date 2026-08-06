@@ -38,6 +38,7 @@ import { useSyncExternalStore } from "react";
 import { useLiveConnection, useNavigationState } from "./LiveConnection";
 import { useSidePanel } from "./SidePanel";
 import { MenuItemIcon } from "./icons";
+import { useLocalize } from "@meshweaver/react";
 
 /** NodeMenuItemDefinition off the wire (camelCase). */
 export interface MenuItemDef {
@@ -175,6 +176,7 @@ function MenuButton({
 }
 
 export function HeaderMenus() {
+  const t = useLocalize();
   const live = useLiveConnection();
   const nav = useNavigationState();
   const router = useRouter();
@@ -247,7 +249,7 @@ export function HeaderMenus() {
       <MenuButton
         context="Node"
         icon={<Cube20Regular />}
-        title="Node menu"
+        title={t("menu.node")}
         items={nodeItems}
         header={nodeName}
         onItem={handleItem}
@@ -255,7 +257,7 @@ export function HeaderMenus() {
       <MenuButton
         context="Mesh"
         icon={<Grid20Regular />}
-        title="Mesh menu"
+        title={t("menu.mesh")}
         items={meshItems}
         header={nodeName}
         onItem={handleItem}
@@ -273,8 +275,8 @@ export function HeaderMenus() {
       <Button
         appearance="transparent"
         icon={<Settings20Regular />}
-        title="Settings"
-        aria-label="Settings"
+        title={t("common.settings")}
+        aria-label={t("common.settings")}
         onClick={navigateToSettings}
       />
     </>

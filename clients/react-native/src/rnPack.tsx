@@ -30,6 +30,11 @@ import {
   type MarkdownKernelSession,
   type SkinComponent,
 } from "@meshweaver/react/core";
+import { rnSkins } from "./rnSkins";
+import { rnContainerControls } from "./rnContainers";
+import { rnLiveControls } from "./rnMeshLive";
+import { rnDataControls } from "./rnData";
+import { rnDocumentControls } from "./rnDocuments";
 
 // Binding helpers (useField/useOptions/str) come from the shared core — the RN pack used to carry
 // its own copies before the core exported them.
@@ -617,18 +622,32 @@ const LayoutAreaDefinitionCard: ControlComponent = ({ control }) => {
   );
 };
 
-// Live-ops controls (chat/search/collection) need a connected mesh (useMeshOps) — labeled placeholders
-// until the live-portal wiring lands, so a streamed area never falls through to "Unsupported".
-const livePlaceholder = (label: string): ControlComponent =>
-  function LivePlaceholder() {
-    return <View style={styles.embed}><Text style={styles.label}>▦ {label}</Text></View>;
-  };
-
 const fallback: ControlComponent = ({ control }) => <Text style={{ color: "#d83b01" }}>Unsupported: {control.$type}</Text>;
+
+/**
+ * Controls registered as labelled placeholders rather than real implementations.
+ *
+ * EMPTY, and the parity ratchet (parity.test.ts) pins it that way: adding a new placeholder fails
+ * the build. It used to hold ThreadChat / MeshSearch / MeshNodeCollection / Appearance, which
+ * rendered a dead "▦ Thread chat" badge over an already-connected mesh — the live wiring had landed
+ * in liveOps.ts long before, so the badges were pure staleness.
+ */
+export const rnPlaceholderControlTypes: ReadonlySet<string> = new Set<string>();
 
 export const rnPack: LeafPack = {
   defaultContainer: stack,
-  skins: { LayoutStack: stack, Layout: stack, LayoutGrid: stack, Card: card, NavMenu: stack, NavGroup: stack, Toolbar: stack, __default: passthrough },
+  skins: {
+    LayoutStack: stack,
+    Layout: stack,
+    LayoutGrid: stack,
+    Card: card,
+    NavMenu: stack,
+    NavGroup: stack,
+    Toolbar: stack,
+    // Tabs / Splitter / MenuItem / Property / EditForm / the semantic wrappers / LayoutGridItem.
+    ...rnSkins,
+    __default: passthrough,
+  },
   controls: {
     Label,
     Markdown,
@@ -674,10 +693,14 @@ export const rnPack: LeafPack = {
     ThreadMessageBubble,
     MeshNodeCard,
     LayoutAreaDefinition: LayoutAreaDefinitionCard,
-    ThreadChat: livePlaceholder("Thread chat"),
-    MeshSearch: livePlaceholder("Search results"),
-    MeshNodeCollection: livePlaceholder("Node collection"),
-    Appearance: livePlaceholder("Appearance"),
+    // NamedArea / Commentable / Redirect / Dialog / Video / SlideShow
+    ...rnContainerControls,
+    // ThreadChat / MeshSearch / MeshNodeCollection / Appearance / MeshNodeContentEditor
+    ...rnLiveControls,
+    // PivotGrid / Chart
+    ...rnDataControls,
+    // DocumentSource / ExportDocument / NodeExport / NodeImport / FileBrowser
+    ...rnDocumentControls,
   },
   fallback,
 };

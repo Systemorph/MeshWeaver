@@ -18,6 +18,7 @@ import { useRouter } from "next/navigation";
 import { Avatar, Button, Menu, MenuList, MenuPopover, MenuTrigger, Text } from "@fluentui/react-components";
 import { ArrowHookUpLeft20Regular } from "@fluentui/react-icons";
 import { useLiveConnection } from "./LiveConnection";
+import { useLocalize } from "@meshweaver/react";
 
 /** UserProfile.GetInitials — first letter, or first+last word initials. */
 export function initialsOf(name: string): string {
@@ -51,6 +52,7 @@ async function signOut() {
 }
 
 export function UserProfileMenu() {
+  const t = useLocalize();
   const live = useLiveConnection();
   const router = useRouter();
   const mesh = live.state.kind === "live" ? live.state.mesh : null;
@@ -87,7 +89,7 @@ export function UserProfileMenu() {
       <MenuTrigger disableButtonEnhancement>
         <Button
           appearance="transparent"
-          aria-label="User profile"
+          aria-label={t("menu.userProfile")}
           icon={<Avatar name={displayName} initials={initialsOf(displayName)} size={24} color="colorful" />}
         />
       </MenuTrigger>

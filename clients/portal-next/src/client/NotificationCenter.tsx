@@ -30,6 +30,7 @@ import { useRouter } from "next/navigation";
 import type { LiveMesh, MeshNodeRow } from "./live";
 import { useLiveConnection, useNavigationState } from "./LiveConnection";
 import { formatRelativeTime } from "./icons";
+import { useLocalize } from "@meshweaver/react";
 
 const NOTIFICATION_QUERY = "nodeType:Notification sort:CreatedAt-desc";
 
@@ -82,6 +83,7 @@ function DefaultTypeIcon({ type }: { type: string }) {
 }
 
 export function NotificationCenter() {
+  const t = useLocalize();
   const live = useLiveConnection();
   const nav = useNavigationState();
   const router = useRouter();
@@ -165,7 +167,7 @@ export function NotificationCenter() {
 
   return (
     <>
-      <Button appearance="transparent" title="Notifications" aria-label="Notifications" onClick={toggle}
+      <Button appearance="transparent" title={t("notifications.title")} aria-label={t("notifications.title")} onClick={toggle}
         icon={
           unreadCount > 0 ? (
             <div style={{ position: "relative" }}>
@@ -193,7 +195,7 @@ export function NotificationCenter() {
           <div
             data-mw-notifications-panel
             role="dialog"
-            aria-label="Notifications"
+            aria-label={t("notifications.title")}
             style={{
               position: "fixed",
               top: 0,
@@ -216,12 +218,12 @@ export function NotificationCenter() {
               <Button
                 appearance="transparent"
                 icon={<Dismiss20Regular />}
-                aria-label="Close"
+                aria-label={t("common.close")}
                 onClick={() => setOpen(false)}
               />
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
-              <Link onClick={() => markAllRead(items)}>Mark all read</Link>
+              <Link onClick={() => markAllRead(items)}>{t("notifications.markAllRead")}</Link>
             </div>
             {items.length === 0 ? (
               <div
@@ -235,7 +237,7 @@ export function NotificationCenter() {
                 }}
               >
                 <Alert32Regular />
-                <p>You&rsquo;re all caught up.</p>
+                <p>{t("notifications.allCaughtUp")}</p>
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowY: "auto", paddingRight: 4 }}>
@@ -315,7 +317,7 @@ export function NotificationCenter() {
                     </span>
                     {!item.isRead && (
                       <span
-                        title="Unread"
+                        title={t("notifications.unread")}
                         style={{
                           width: 8,
                           height: 8,

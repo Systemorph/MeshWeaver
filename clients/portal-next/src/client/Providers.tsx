@@ -17,6 +17,7 @@ import { useServerInsertedHTML } from "next/navigation";
 // second copy under some loaders — the dual-package hazard).
 import { createDOMRenderer, renderToStyleElements, RendererProvider, SSRProvider } from "@fluentui/react-components";
 import { LiveConnectionProvider } from "./LiveConnection";
+import { ViewerLocaleProvider } from "./ViewerLocale";
 
 export function Providers({ children }: { children: ReactNode }) {
   const [renderer] = useState(() => createDOMRenderer());
@@ -26,7 +27,10 @@ export function Providers({ children }: { children: ReactNode }) {
   return (
     <RendererProvider renderer={renderer}>
       <SSRProvider>
-        <LiveConnectionProvider>{children}</LiveConnectionProvider>
+        <LiveConnectionProvider>
+          {/* Inside the live connection: the locale comes off the signed-in user's own node. */}
+          <ViewerLocaleProvider>{children}</ViewerLocaleProvider>
+        </LiveConnectionProvider>
       </SSRProvider>
     </RendererProvider>
   );

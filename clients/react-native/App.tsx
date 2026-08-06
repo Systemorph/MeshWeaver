@@ -6,6 +6,7 @@ import {
   StaticAreaSource,
   EmbeddedAreaProvider,
   MeshOpsProvider,
+  LocaleProvider,
   createGrpcEmbeddedFactory,
   type AreaSource,
   type AreaSourceFactory,
@@ -63,12 +64,23 @@ const CHAT: ChatOptions | null = {
 // doesn't bury real warnings (harmless; gone in a release build).
 LogBox.ignoreLogs([/Support for defaultProps will be removed/]);
 
+/** The device's preferred language (Expo web → navigator.language; native → the same global). */
+function deviceLocale(): string | null {
+  const nav = (globalThis as { navigator?: { language?: string } }).navigator;
+  return nav?.language ?? null;
+}
+
 export default function App() {
   ensureWebStyles();
   seedDefaultInstances(); // populate the switcher with the known environments on first run (idempotent)
   return (
     <ThemeProvider>
-      <AppInner />
+      {/* The viewer's language. The RN app talks to the sidecar ANONYMOUSLY (no user node to read a
+          profile Locale off), so the device language is the authority here — resolved once, to a
+          supported tag, exactly as AccessContext.Locale is server-side. */}
+      <LocaleProvider locale={deviceLocale()}>
+        <AppInner />
+      </LocaleProvider>
     </ThemeProvider>
   );
 }
