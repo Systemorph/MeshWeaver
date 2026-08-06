@@ -18,7 +18,8 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class SkillQueryLayeringTest
 {
-    private const string PlatformDefaults = "namespace:Skill nodeType:Skill";
+    private const string Proj = AgentPickerProjection.RegistryProjection;
+    private const string PlatformDefaults = "namespace:Skill nodeType:Skill" + Proj;
 
     [Fact]
     public void AllLayers_AreEmitted_PlatformFirstThenUserThenSpaceThenNodeType()
@@ -30,9 +31,9 @@ public class SkillQueryLayeringTest
 
         queries.Should().Equal(
             PlatformDefaults,
-            "namespace:rbuergi/Skill nodeType:Skill",
-            "path:AgenticPension scope:descendants nodeType:Skill",
-            "path:Office scope:descendants nodeType:Skill");
+            "namespace:rbuergi/Skill nodeType:Skill" + Proj,
+            "path:AgenticPension scope:descendants nodeType:Skill" + Proj,
+            "path:Office scope:descendants nodeType:Skill" + Proj);
     }
 
     [Fact]
@@ -41,7 +42,7 @@ public class SkillQueryLayeringTest
         // A user's own skills are placed by convention in {user}/Skill; widening that layer to the
         // whole user partition would sweep in every node the user owns.
         AgentPickerProjection.BuildSkillQueries(userPath: "rbuergi")
-            .Should().Equal(PlatformDefaults, "namespace:rbuergi/Skill nodeType:Skill");
+            .Should().Equal(PlatformDefaults, "namespace:rbuergi/Skill nodeType:Skill" + Proj);
     }
 
     [Fact]
@@ -50,7 +51,7 @@ public class SkillQueryLayeringTest
         // The whole point: a skill authored deep inside the space (e.g. AgenticPension/Reports/Skill/x)
         // must be found, which a flat namespace:{partition}/Skill membership filter would miss.
         AgentPickerProjection.BuildSkillQueries(spacePath: "AgenticPension/Reports/Q3")
-            .Should().Equal(PlatformDefaults, "path:AgenticPension scope:descendants nodeType:Skill");
+            .Should().Equal(PlatformDefaults, "path:AgenticPension scope:descendants nodeType:Skill" + Proj);
     }
 
     [Fact]
@@ -60,7 +61,7 @@ public class SkillQueryLayeringTest
         // enough and the union would otherwise pay for the duplicate.
         AgentPickerProjection.BuildSkillQueries(
                 spacePath: "Office/Decks/Deck1", nodeTypePath: "Office/Slide")
-            .Should().Equal(PlatformDefaults, "path:Office scope:descendants nodeType:Skill");
+            .Should().Equal(PlatformDefaults, "path:Office scope:descendants nodeType:Skill" + Proj);
     }
 
     [Theory]
@@ -107,10 +108,10 @@ public class SkillQueryLayeringTest
         // One row per layer. A template list that loses a row silently removes a whole layer of
         // skills from both the chat and the agent framework.
         AiSettingsNodeType.DefaultSkillQueryTemplates.Should().Equal(
-            "namespace:Skill nodeType:Skill",
-            "namespace:{userPath}/Skill nodeType:Skill",
-            "path:{currentPath} scope:descendants nodeType:Skill",
-            "path:{nodeTypePath} scope:descendants nodeType:Skill");
+            "namespace:Skill nodeType:Skill" + Proj,
+            "namespace:{userPath}/Skill nodeType:Skill" + Proj,
+            "path:{currentPath} scope:descendants nodeType:Skill" + Proj,
+            "path:{nodeTypePath} scope:descendants nodeType:Skill" + Proj);
     }
 
     [Fact]

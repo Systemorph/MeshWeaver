@@ -71,10 +71,10 @@ public sealed class ModelDiscoveryService
     {
         if (string.IsNullOrEmpty(nodePath))
             return BuildSynced("root",
-                $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{TypeFilter} scope:descendants");
+                $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{TypeFilter} scope:descendants{AgentPickerProjection.RegistryProjection}");
 
         return BuildSynced($"node@{nodePath}",
-            $"namespace:{nodePath}/{ModelProviderNodeType.RootNamespace} nodeType:{TypeFilter} scope:descendants");
+            $"namespace:{nodePath}/{ModelProviderNodeType.RootNamespace} nodeType:{TypeFilter} scope:descendants{AgentPickerProjection.RegistryProjection}");
     }
 
     /// <summary>

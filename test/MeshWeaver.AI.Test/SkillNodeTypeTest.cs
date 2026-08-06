@@ -17,6 +17,12 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class SkillNodeTypeTest
 {
+    /// <summary>The projection every registry query carries — referenced from the
+    /// production constant so these expectations can never drift from it. Asserting it
+    /// here is the point: a registry query that stops projecting `content` yields nodes
+    /// whose Content is silently null, which reads as an empty picker.</summary>
+    private const string Proj = AgentPickerProjection.RegistryProjection;
+
     private static readonly JsonSerializerOptions Json = new();
 
     [Fact]
@@ -159,12 +165,12 @@ public class SkillNodeTypeTest
         // picker/autocomplete resolve AND the set MeshAgentSkillsSource feeds the agent framework.
         SkillNodeType.SkillQueries(contextPath: "Acme/Project", userPath: "rbuergi")
             .Should().Equal(
-                "namespace:Skill nodeType:Skill",
-                "namespace:rbuergi/Skill nodeType:Skill",
-                "path:Acme scope:descendants nodeType:Skill");
+                "namespace:Skill nodeType:Skill" + Proj,
+                "namespace:rbuergi/Skill nodeType:Skill" + Proj,
+                "path:Acme scope:descendants nodeType:Skill" + Proj);
 
         // No context / user → platform defaults only.
-        SkillNodeType.SkillQueries(null, null).Should().Equal("namespace:Skill nodeType:Skill");
+        SkillNodeType.SkillQueries(null, null).Should().Equal("namespace:Skill nodeType:Skill" + Proj);
     }
 
     [Fact]
@@ -174,7 +180,9 @@ public class SkillNodeTypeTest
         // contribute a layer: it has no read policy, so querying it fails ("lacks Read permission on
         // 'login'") and the picker/autocomplete goes empty.
         var queries = SkillNodeType.SkillQueries(contextPath: "login", userPath: "rbuergi");
-        queries.Should().Equal("namespace:Skill nodeType:Skill", "namespace:rbuergi/Skill nodeType:Skill");
+        queries.Should().Equal(
+            "namespace:Skill nodeType:Skill" + Proj,
+            "namespace:rbuergi/Skill nodeType:Skill" + Proj);
         string.Join(" ", queries).Should().NotContain("login");
     }
 

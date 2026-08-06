@@ -412,6 +412,10 @@ public static class NodeTypeLayoutAreas
         // hangs forever, so the Shell's side-menu CombineLatest never completes and the NodeType GUI
         // shell never renders (the FutuRe/LineOfBusiness 50s render deadlock). GetQuery emits
         // empty-on-absent and re-emits on change, so the menu always renders.
+        // NO `select:` — the query is CALLER-SUPPLIED (a NodeType's own Sources/Tests
+        // query) and the cache id IS that string, so the projection belongs to whoever
+        // authored the query, not here. Leaving it unprojected keeps the full node,
+        // which is the conservative choice at an open seam.
         return host.Workspace.GetQuery(query, query)
             .Select(nodes => (IReadOnlyList<MeshNode>)nodes.ToList())
             .Catch<IReadOnlyList<MeshNode>, Exception>(ex =>
@@ -821,6 +825,8 @@ public static class NodeTypeLayoutAreas
         if (queryList.Count == 0)
             return Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>());
 
+        // NO `select:` — caller-supplied queries again (the code-tree group), and the id is
+        // derived from them; see QueryNodesStream above for the same reasoning.
         return host.Workspace.GetQuery("codegroup:" + string.Join("|", queryList), queryList.ToArray())
             .Select(nodes =>
             {

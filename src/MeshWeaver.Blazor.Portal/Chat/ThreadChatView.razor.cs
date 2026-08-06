@@ -2968,8 +2968,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
 
         var query = string.IsNullOrEmpty(ns)
-            ? "nodeType:Thread sort:LastModified-desc"
-            : $"nodeType:Thread namespace:{ns}/_Thread sort:LastModified-desc";
+            ? "nodeType:Thread sort:LastModified-desc select:path,id,namespace,name,description,nodeType,icon,order,createdBy,lastModified,content"
+            : $"nodeType:Thread namespace:{ns}/_Thread sort:LastModified-desc select:path,id,namespace,name,description,nodeType,icon,order,createdBy,lastModified,content";
 
         viewMode = ChatViewMode.ResumeThreads;
         resumeLoading = true;
@@ -3055,7 +3055,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         myThreadsSubscription?.Dispose();
         var me = _userHome;
-        myThreadsSubscription = Hub.GetQuery("my-threads", "nodeType:Thread -content.status:Done sort:LastModified-desc")
+        myThreadsSubscription = Hub.GetQuery("my-threads", "nodeType:Thread -content.status:Done sort:LastModified-desc select:path,id,namespace,name,description,nodeType,icon,order,createdBy,lastModified,content")
             .Subscribe(
                 snapshot => InvokeAsync(() =>
                 {
@@ -3127,7 +3127,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (string.IsNullOrEmpty(path))
             return;
         childThreadsSubscription = Hub.GetQuery($"child-threads|{path}",
-                $"namespace:{path} scope:descendants nodeType:Thread sort:LastModified-desc")
+                $"namespace:{path} scope:descendants nodeType:Thread sort:LastModified-desc select:path,id,namespace,name,description,nodeType,icon,order,createdBy,lastModified,content")
             .Subscribe(
                 snapshot => InvokeAsync(() =>
                 {
