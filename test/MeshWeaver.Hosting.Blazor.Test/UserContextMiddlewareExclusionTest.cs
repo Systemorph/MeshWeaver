@@ -13,7 +13,6 @@ public class UserContextMiddlewareExclusionTest
     [InlineData("/_framework/blazor.web.js")]
     [InlineData("/_content/MeshWeaver.Blazor/css/app.css")]
     [InlineData("/_blazor/negotiate")]
-    [InlineData("/static/images/logo.png")]
     [InlineData("/favicon.ico")]
     public async Task ExcludedPrefixes_SkipUserResolution(string path)
     {
@@ -41,6 +40,9 @@ public class UserContextMiddlewareExclusionTest
     [InlineData("/ACME/Overview")]
     [InlineData("/User/Alice")]
     [InlineData("/")]
+    // #666: /static/ is deliberately NOT excluded — the address-based content route posts a
+    // GetDataRequest into the mesh and needs an AccessContext (else the never-null guard 500s).
+    [InlineData("/static/AgenticEngineering/content/videos/module1-intro.mp4")]
     public async Task NonExcludedPaths_AttemptUserResolution(string path)
     {
         RequestDelegate next = _ => Task.CompletedTask;
@@ -61,7 +63,6 @@ public class UserContextMiddlewareExclusionTest
     [Theory]
     [InlineData("/_FRAMEWORK/blazor.web.js")]
     [InlineData("/_Content/something")]
-    [InlineData("/Static/image.png")]
     [InlineData("/FAVICON.ICO")]
     public async Task ExcludedPrefixes_AreCaseInsensitive(string path)
     {
