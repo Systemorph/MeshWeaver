@@ -114,3 +114,48 @@ Ask the hops in order, and stop at the first `no`:
 A compile that fails with `CS0246`/`CS0103` on types that plainly exist is almost always a source
 **discovery** problem, not a source problem: read the compile activity's source-discovery trace,
 which lists the queries it ran and the nodes each matched.
+
+## How a module actually reaches an instance — and how to add a new one
+
+This is the part that surprises people, so it is worth stating plainly:
+
+> **On our instances, modules arrive through per-Space GitSync, not through the plugin catalog.**
+
+On `memex.meshweaver.cloud` there are **37 `{Space}/_GitSync` configs** — one per deployed Space,
+each naming a repo and a subdirectory — and the install-records partition holds **no install
+records at all**. Every reinsurance and education Space is there because it has a sync entry. A
+module with **no sync entry is simply not on the mesh**, no matter how green its repo is. That is
+the whole explanation for "the module is merged but I cannot find it".
+
+### Adding a NEW module to an instance
+
+A new module needs a Space *and* a sync entry, and the order matters:
+
+1. **Do not hand-create the Space.** Creating it makes the creator **Admin on a system-owned
+   partition** — which the access rules forbid, and which every human-run sync re-mints. See
+   [Access Control](/Doc/Architecture/AccessControl).
+2. **Provision it** through the install/Store flow, so the Space is created by the *system*
+   identity and carries no personal grant. Making the package **install-by-default** is the
+   supported way to have this happen without a manual step per instance.
+3. **Then** the Space's `_GitSync` is configured (repo + subdirectory + branch), and from that point
+   `check` / `update` carry every later change.
+4. **Verify by effect, not by log**: read the sync activity's node count, then confirm the affected
+   types' `compilationStatus` — see (B) above.
+
+### Updating an EXISTING module
+
+1. Merge on green in the module's repo.
+2. Let the update reach the instance — automatically where the catalog channel is wired, or by
+   running `update` on the Space.
+3. **Confirm the recompiles.** The import alone does not rebuild; check every affected type,
+   including `shared=` sharers whose own nodes never changed.
+4. If core itself changed, remember hop (C) — the image.
+
+### The checklist that catches the usual failures
+
+- Does the Space have a `_GitSync`? (no entry ⇒ not deployed, and no amount of syncing helps)
+- Did the import report the node count you expected?
+- Is every affected type `Ok`, and does its `compiledSources` match `currentSourceVersions`?
+- Is any new `shared=` reference **partition-level**, not into a sibling type's subtree?
+- Does every folder named by `installPaths`, an embed, or a `shared=` have a backing node file?
+- If the symptom smells like core behaviour: is the running image new enough?
