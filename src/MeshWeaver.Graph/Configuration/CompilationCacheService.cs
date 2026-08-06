@@ -481,11 +481,11 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         // Initiate unload outside the lock - the context will be collected when all references are released
         Unload();
 
-        // Diagnostic probe (opt-in, off by default): drive the collection synchronously so a
+        // Diagnostic probe (opt-in, off by default): drive a collection right after the unload so a
         // use-after-unload dangling native pointer trips at THIS unload — naming the culprit node
-        // and yielding a corruption-time dump — instead of a delayed background-GC SIGSEGV. Used
+        // and yielding a corruption-time dump — instead of a delayed SIGSEGV with no precursor. Used
         // by the alc-unload-probe workflow to pin the reflection/serialization cache that retains
-        // an accessor into a collectible node assembly (the exit=139 teardown crash).
+        // an accessor into a collectible node assembly (the exit=139 crash).
         if (UnloadGcProbe)
         {
             // Write to Console DIRECTLY, not via _logger: this runs INSIDE ServiceProvider.Dispose()
@@ -493,6 +493,23 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
             // container and throws ObjectDisposedException BEFORE writing — so the probe never named
             // the culprit. Console is the only sink alive during teardown.
             Console.Error.WriteLine($"ALC_UNLOAD_PROBE forcing GC after unloading {Name}");
+
+            // 🚨 BACKGROUND leg first. A parameterless GC.Collect() is blocking:true — it runs the
+            // non-concurrent gen2 path (mark_phase / plan_phase) and never enters background_sweep,
+            // so the probe originally exercised only a path on which no crash has ever been observed.
+            // Every FutuRe exit=139 dump so far faults on the CONCURRENT collector
+            // (bgc_thread_function → gc1 → background_sweep), so the probe has to start one.
+            //
+            // NB this probe is aimed at the use-after-unload hypothesis (a dangling pointer into a
+            // freed collectible LoaderAllocator). The 2026-08-06 dump does NOT support that
+            // hypothesis: the swept object's MethodTable pointer was exactly 0, and a freed-metadata
+            // pointer is non-null-but-unmapped, not zero. Keep the probe honest about what it can
+            // prove — see Doc/Architecture/DebuggingNativeCrashes.
+            GC.Collect(2, GCCollectionMode.Forced, blocking: false);
+
+            // Then the blocking pair, unchanged: it forces finalizers to run so a dead collectible
+            // LoaderAllocator is actually destroyed (rather than merely detected) before the next
+            // unload, which is what makes a dangling pointer fault deterministically.
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
