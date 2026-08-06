@@ -24,9 +24,11 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// out on its fold barrier; in a live portal it is a silently stale security cache.</para>
 ///
 /// <para>So: deliver to a SNAPSHOT of the observers, isolate each one, and never let a throw from
-/// one reach another. A faulted observer is dropped from the feed (it can never recover — an
-/// observer that threw has violated the Rx contract) and LOGGED, because a swallowed fault on the
-/// security-fold path is precisely what made this take three CI runs to see.</para>
+/// one reach another. A DISPOSED observer is dropped (provably dead — every later notification
+/// would throw again); any OTHER throw is isolated but the observer stays subscribed, because
+/// permanently disabling a live subscriber over a transient fault would just relocate this very
+/// bug. Either way it is LOGGED: a swallowed fault on the security-fold path is precisely what
+/// made this take three CI runs to see.</para>
 /// </summary>
 internal sealed class IsolatedChangeFeed : IObservable<DataChangeNotification>, IObserver<DataChangeNotification>, IDisposable
 {
@@ -68,16 +70,28 @@ internal sealed class IsolatedChangeFeed : IObservable<DataChangeNotification>, 
             {
                 observer.OnNext(value);
             }
-            catch (Exception ex)
+            catch (ObjectDisposedException ex)
             {
-                // ISOLATED: the next observer still gets the notification. Drop the faulted one —
-                // an observer that throws out of OnNext has broken the Rx contract and will keep
-                // throwing — and say so, loudly enough to find. Warning, not Debug: a dropped
-                // change notification means some subscriber's view of the mesh is now stale.
+                // PROVABLY DEAD, so drop it: the subscriber's sink is disposed and every later
+                // notification would throw again. This is the shape the disposal-order race
+                // produced (a CompositeDisposable killing changeBuffer while its feed was live).
                 Remove(observer);
                 _logger?.LogWarning(ex,
-                    "Change-feed observer {Observer} threw on {Path} ({adapter}); it has been dropped from the feed. "
-                    + "Delivery to the remaining {Remaining} observer(s) was NOT affected.",
+                    "Change-feed observer {Observer} was disposed while still subscribed ({Adapter}); dropped from the feed "
+                    + "at {Path}. Delivery to the other {Remaining} observer(s) was NOT affected.",
+                    observer.GetType().Name, _adapter, value.Path, observers.Count - 1);
+            }
+            catch (Exception ex)
+            {
+                // ISOLATED but KEPT. A transient throw must not permanently disable a live
+                // subscriber — dropping it here would starve it of every future change, which is
+                // the very failure this class exists to prevent, just moved. Only a disposed sink
+                // (above) is provably unrecoverable. Warning, not Debug: a subscriber that missed
+                // a change has a stale view of the mesh, and on the security-fold path that means
+                // stale permissions.
+                _logger?.LogWarning(ex,
+                    "Change-feed observer {Observer} threw on {Path} ({Adapter}) and MISSED that notification; it remains "
+                    + "subscribed. Delivery to the other {Remaining} observer(s) was NOT affected.",
                     observer.GetType().Name, value.Path, _adapter, observers.Count - 1);
             }
         }

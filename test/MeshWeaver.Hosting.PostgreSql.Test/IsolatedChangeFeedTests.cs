@@ -62,10 +62,10 @@ public class IsolatedChangeFeedTests
     }
 
     [Fact]
-    public void A_throwing_observer_is_dropped_and_the_rest_keep_receiving()
+    public void A_DISPOSED_observer_is_dropped_and_the_rest_keep_receiving()
     {
         var feed = new IsolatedChangeFeed(null, "test");
-        var thrower = new Thrower();
+        var thrower = new Thrower();   // throws ObjectDisposedException — provably dead
         var downstream = new Recorder();
         feed.Subscribe(thrower);
         feed.Subscribe(downstream);
@@ -73,10 +73,40 @@ public class IsolatedChangeFeedTests
         feed.OnNext(Change("one"));
         feed.OnNext(Change("two"));
 
-        // An observer that throws out of OnNext has broken the Rx contract — it is removed rather
-        // than re-invoked on every subsequent write.
+        // Its sink is disposed, so every later notification would throw again: drop it rather than
+        // re-invoke it on every write for the life of the process.
         thrower.Calls.Should().Be(1);
         downstream.Paths.Should().Equal("one", "two");
+    }
+
+    /// <summary>
+    /// A TRANSIENT fault must NOT unsubscribe a live observer. Dropping it would starve that
+    /// subscriber of every future change — which is the exact failure this class exists to
+    /// prevent, merely relocated. Only a disposed sink is treated as unrecoverable.
+    /// </summary>
+    [Fact]
+    public void A_transiently_throwing_observer_stays_subscribed()
+    {
+        var feed = new IsolatedChangeFeed(null, "test");
+        var seen = new List<string>();
+        var throwOnce = true;
+        feed.Subscribe(new AnonymousObserver(n =>
+        {
+            if (throwOnce)
+            {
+                throwOnce = false;
+                throw new InvalidOperationException("transient");
+            }
+            seen.Add(n.Path);
+        }));
+        var downstream = new Recorder();
+        feed.Subscribe(downstream);
+
+        feed.OnNext(Change("missed"));   // observer throws; it misses THIS one
+        feed.OnNext(Change("recovered")); // …but is still subscribed for the next
+
+        seen.Should().Equal("recovered");
+        downstream.Paths.Should().Equal("missed", "recovered");
     }
 
     [Fact]
