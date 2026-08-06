@@ -460,13 +460,13 @@ return stream
             return Observable.Return(DeleteUnifiedReferenceResponse.Fail(...));
 
         var changeRequest = new DataChangeRequest { Deletions = [entityValue.Value], ... };
-        workspace.RequestChange(changeRequest, activity, null);
 
-        return Observable.Create<DeleteUnifiedReferenceResponse>(observer =>
-        {
-            activity.Complete(log => { observer.OnNext(...); observer.OnCompleted(); });
-            return Disposable.Empty;
-        });
+        // RequestChange issues the write eagerly and REPORTS through its observable:
+        // one ActivityLog once every affected stream applied its part, then completes.
+        return workspace.RequestChange(changeRequest, null)
+            .Select(log => new DataChangeResponse(hub.Version, log).Status == DataChangeStatus.Committed
+                ? DeleteUnifiedReferenceResponse.Ok()
+                : DeleteUnifiedReferenceResponse.Fail(log.Messages.LastOrDefault()?.Message ?? "Delete failed"));
     });
 ```
 
