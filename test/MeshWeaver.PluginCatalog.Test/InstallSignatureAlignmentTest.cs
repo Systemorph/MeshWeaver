@@ -94,4 +94,28 @@ public class InstallSignatureAlignmentTest(ITestOutputHelper output) : MonolithM
                 "an unknown incoming member means the file carries something the persisted shape " +
                 "does not — alignment must fall back to the raw compare, never silently drop it");
     }
+
+    /// <summary>#727 defect 2: a change to <c>Order</c> ALONE must read as a change — the installer
+    /// skipped order-only updates because <c>ScalarsUnchanged</c> did not compare Order.</summary>
+    [Fact(Timeout = 30000)]
+    public void OrderOnlyChange_IsDetected()
+    {
+        var current = Node(new PluginCatalogContent { SourceRepoPath = "/repo" }) with { Order = 10 };
+        var incoming = current with { Order = 20 };
+
+        PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
+            .Should().BeFalse("an order-only change must be written, not skipped as unchanged");
+    }
+
+    /// <summary>Control: identical nodes (same Order) still read as unchanged — the fix must not
+    /// over-trigger a rewrite.</summary>
+    [Fact(Timeout = 30000)]
+    public void SameOrder_IsStillUnchanged()
+    {
+        var current = Node(new PluginCatalogContent { SourceRepoPath = "/repo" }) with { Order = 10 };
+        var incoming = current with { };
+
+        PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
+            .Should().BeTrue("nodes identical in every applied field (Order included) stay unchanged");
+    }
 }
