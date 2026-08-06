@@ -67,6 +67,20 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
             tableMappings: PartitionDefinition.DefaultSegmentTableMappings(),
             nodeTypeTableMappings: PartitionDefinition.DefaultNodeTypeTableMappings());
 
+        // Global instance-key validation index. MeshWeaverInstanceService writes one
+        // MeshWeaverInstanceIndex node per registered installation at
+        // MeshWeaverInstance/{keyHashPrefix} (under the system identity) mapping an incoming
+        // instance key to its owner-scoped instance node. Exactly the ApiToken case above: not an
+        // OwnsPartition type, and the router does not lazy-create schemas, so without this the
+        // FIRST registration fails with `42P01: relation "meshweaverinstance.mesh_nodes" does not
+        // exist` — observed on memex-cloud 2026-08-06, which is why it is declared here rather
+        // than left to a PartitionDefinition node.
+        yield return CreatePartition("MeshWeaverInstance", "meshweaverinstance",
+            "Instance key validation index — MeshWeaverInstance/{keyHashPrefix} nodes mapping an "
+                + "instance key to its registered installation.",
+            tableMappings: PartitionDefinition.DefaultSegmentTableMappings(),
+            nodeTypeTableMappings: PartitionDefinition.DefaultNodeTypeTableMappings());
+
         // Global access-grant scope. A `_Access`-namespace AccessAssignment with MainNode=""
         // is a ROOT-SCOPE grant that applies across every partition (platform-admin / global
         // viewer) — the canonical "namespace == _Access globally" pattern. It is NOT legacy

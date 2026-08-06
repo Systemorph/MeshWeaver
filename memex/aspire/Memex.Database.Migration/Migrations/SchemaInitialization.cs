@@ -78,6 +78,16 @@ public static class SchemaInitialization
         await using (var ensureApiToken = dataSource.CreateCommand("SELECT public.ensure_partition_schema('apitoken')"))
             await ensureApiToken.ExecuteNonQueryAsync();
 
+        // MeshWeaverInstance key-validation index schema. Exactly the ApiToken case above:
+        // MeshWeaverInstanceService writes the global MeshWeaverInstance/{keyHashPrefix} index node
+        // (MeshWeaverInstanceIndex → the owner-scoped instance node) under the system identity, and
+        // the plugin registry reads it back by exact path on every instance-key request. Not an
+        // OwnsPartition type and the router never lazily CREATE-SCHEMAs, so without this the FIRST
+        // registration fails with `42P01: relation "meshweaverinstance.mesh_nodes" does not exist`
+        // — observed on memex-cloud 2026-08-06, the same shape VUser hit below. Idempotent.
+        await using (var ensureInstance = dataSource.CreateCommand("SELECT public.ensure_partition_schema('meshweaverinstance')"))
+            await ensureInstance.ExecuteNonQueryAsync();
+
         // VUser (virtual-user) partition. VirtualUserMiddleware creates a VUser/{id} node for
         // every cookie-less request (bots, prefetchers, anonymous visitors); like ApiToken, VUser
         // is not an OwnsPartition type and the router never lazily CREATE-SCHEMAs, so without
