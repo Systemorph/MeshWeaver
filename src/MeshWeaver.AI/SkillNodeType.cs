@@ -73,10 +73,15 @@ public static class SkillNodeType
     };
 
     /// <summary>
-    /// The DEFAULT query that discovers the skills available in a context — the SAME unified registry
-    /// pattern as agents and models: platform <c>Skill</c> + the current space's <c>{space}/Skill</c> +
-    /// the current node type's <c>{typePartition}/Skill</c> + the user's <c>{user}/Skill</c>, as one
-    /// <c>namespace:A|B|C</c> exact-membership query (<see cref="AgentPickerProjection.BuildSkillQueries"/>).
+    /// THE entry point for discovering the skills available in a context — shared by the chat's
+    /// combobox / slash menu / autocomplete AND by <c>MeshAgentSkillsSource</c> (which feeds the
+    /// Microsoft Agent Framework). That sharing is deliberate: the skills a user SEES must be the
+    /// skills an agent round RESOLVES, so both sides read one query set
+    /// (<see cref="AgentPickerProjection.BuildSkillQueries"/>) and nothing rebuilds it.
+    ///
+    /// <para>Layers, most specific first: the user's <c>{user}/Skill</c>, the current space's
+    /// partition SUBTREE, the current node type's partition SUBTREE, then the platform <c>Skill</c>
+    /// defaults.</para>
     /// <paramref name="contextPath"/> names the space (its partition); <paramref name="nodeTypePath"/> the
     /// current node's TYPE path (its partition contributes the plugin-shipped skills, e.g. a node of type
     /// <c>Office/Slide</c> surfaces <c>Office/Skill/*</c>); <paramref name="userPath"/> the user's home.
