@@ -145,7 +145,16 @@ public static class TokenUsageNodeType
         long cacheReadTok = cacheReadTokens ?? 0;
         long cacheWriteTok = cacheWriteTokens ?? 0;
         if (inTok == 0 && outTok == 0 && cacheReadTok == 0 && cacheWriteTok == 0)
+        {
+            // #595: make the silent no-op diagnosable. A terminal (Cancelled/Error) round whose
+            // provider never emitted usage lands here with all-zero counts and vanishes from
+            // accounting — "provider returned no counts" was indistinguishable from "no work done".
+            // Debug, not Information: this fires on every zero-token round, so it must stay off the
+            // Loki hot path (AGENTS.md log-cost rule).
+            logger?.LogDebug("[TokenUsage] RecordUsage no-op for {ThreadPath} (model {ModelId}): "
+                + "provider reported no tokens", threadPath, modelId ?? "(unknown)");
             return Observable.Return(System.Reactive.Unit.Default); // no-token round → no-op
+        }
 
         var model = string.IsNullOrWhiteSpace(modelId) ? "(unknown)" : modelId!;
         var key = new string(model.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
