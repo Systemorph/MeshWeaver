@@ -160,6 +160,46 @@ public static class AiSettingsNodeType
     }
 
     /// <summary>
+    /// The default AGENT sources, as tokenized templates — the same set
+    /// <see cref="AgentPickerProjection.BuildAgentQueries"/> defines, so there is one definition.
+    /// </summary>
+    public static ImmutableArray<string> DefaultAgentQueryTemplates { get; } =
+        AgentPickerProjection.BuildAgentQueries(UserPathToken, CurrentPathToken).ToImmutableArray();
+
+    /// <summary>
+    /// Pure merge for "install this package": appends the package's AGENT source query
+    /// (<c>namespace:{sourceNamespace}/Agent nodeType:Agent</c>) to
+    /// <see cref="AiSettings.AgentQueries"/>. Mirrors <see cref="MergeSkillSource"/> exactly — an
+    /// empty list is seeded with the code defaults FIRST so adding a package never silently drops
+    /// the standard sources, and an already-present source is not duplicated.
+    ///
+    /// <para>This is the piece whose absence made every plugin-shipped agent invisible: a package
+    /// wrote its agents into its own partition and nothing ever told the picker to look there.</para>
+    /// </summary>
+    public static AiSettings MergeAgentSource(AiSettings settings, string sourceNamespace)
+    {
+        var rows = settings.AgentQueries.IsDefaultOrEmpty
+            ? DefaultAgentQueryTemplates
+            : settings.AgentQueries;
+        var query = $"namespace:{sourceNamespace}/{AgentPickerProjection.AgentSubNamespace} "
+                    + $"nodeType:{AgentNodeType.NodeType}{AgentPickerProjection.RegistryProjection}";
+        return rows.Contains(query, StringComparer.OrdinalIgnoreCase)
+            ? settings with { AgentQueries = rows }
+            : settings with { AgentQueries = rows.Add(query) };
+    }
+
+    /// <summary>
+    /// Pure merge of EVERY registry source a package contributes — agents and skills together, so a
+    /// caller cannot register one and forget the other. Idempotent.
+    /// </summary>
+    /// <param name="settings">The user's current settings.</param>
+    /// <param name="partition">The package's partition, e.g. <c>Essentials</c>.</param>
+    public static AiSettings MergePackageSources(AiSettings settings, string partition) =>
+        MergeSkillSource(
+            MergeAgentSource(settings, partition),
+            $"{partition}/{AgentPickerProjection.SkillSubNamespace}");
+
+    /// <summary>
     /// Installs a SKILL PACKAGE for <paramref name="user"/>: appends the package's skill folder (e.g.
     /// <c>Office/Skill</c>) to the user's <see cref="AiSettings.SkillQueries"/> sources — idempotent,
     /// fire-and-forget, same keyed-query read discipline as <see cref="EnsureExists"/> (never a
