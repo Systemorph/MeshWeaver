@@ -8,7 +8,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
-using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
@@ -101,7 +100,6 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddFutuRe()
-            .AddActivityTracking()
             .AddRowLevelSecurity()
             .ConfigureServices(services =>
             {
