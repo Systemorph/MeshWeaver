@@ -117,16 +117,33 @@ public class CrossPartitionRealUserQueryTests(PostgreSqlFixture fixture, ITestOu
     /// <c>(id, userId)</c>) and cannot inherit a sibling's snapshot. Identity comes from the
     /// ambient <see cref="AccessContext"/>, not a request field — callers wrap in
     /// <c>SwitchAccessContext</c>/<c>ImpersonateAsSystem</c>, which is how production drives it.
-    /// Content is NOT requested: these assert on <c>Path</c> only. A test that needs content should
-    /// read the node's content reducer stream rather than widening this query.
+    /// </para>
+    ///
+    /// <para>
+    /// 🚨 <see cref="Projection"/> is not an optimisation, it is required here. Unlike the one-shot
+    /// <c>IMeshService.Query</c> this replaced, <c>GetQuery</c> registers a PERSISTENT synced query
+    /// (<c>Replay(1).RefCount()</c>) that stays subscribed for the workspace's lifetime. Two of
+    /// these are deliberately UNSCOPED cross-partition reads, so without a projection each one holds
+    /// a live cross-schema subscription streaming the full CONTENT of every Markdown node in a
+    /// database shared with every other test class in this process. These tests read
+    /// <see cref="MeshNode.Path"/> and nothing else.
     /// </para>
     /// </summary>
     private IObservable<IEnumerable<MeshNode>> RunUnpinned(string id, string? namespaceScope = null) =>
         Mesh.GetWorkspace().GetQuery(
             $"test:unpinned:{id}",
             namespaceScope is null
-                ? "nodeType:Markdown limit:10"
-                : $"namespace:{namespaceScope} nodeType:Markdown limit:10");
+                ? $"nodeType:Markdown limit:10 {Projection}"
+                : $"namespace:{namespaceScope} nodeType:Markdown limit:10 {Projection}");
+
+    /// <summary>
+    /// 🚨 <c>id</c> and <c>namespace</c>, NOT <c>path</c>: <see cref="MeshNode.Path"/> is a COMPUTED
+    /// property (<c>Namespace + "/" + Id</c>), not a stored column, so a projection naming only
+    /// <c>path</c> yields a node whose <c>Path</c> is empty and every assertion below silently
+    /// compares against the wrong string. <c>content</c> is deliberately absent — a test needing
+    /// content reads the node's content reducer stream instead of widening this query.
+    /// </summary>
+    private const string Projection = "select:id,namespace";
 
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
