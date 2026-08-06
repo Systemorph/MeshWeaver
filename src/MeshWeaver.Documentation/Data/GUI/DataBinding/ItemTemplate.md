@@ -155,13 +155,15 @@ var rows = new[]
     new UserRow("Charlie", "Viewer"),
 };
 
+// 🚨 The template passes the property DIRECTLY as a control argument — Controls.Text(u.Name).
+// BindMany rewrites the expression tree, replacing each property getter with a BINDING; a property
+// read inside an interpolated string ($"{u.Name}") is consumed by string.Format before the rewriter
+// can see it, so the item renders EMPTY. Same reason the framework controls are used here rather
+// than hand-built HTML. Label (not Text) because Controls.Text is an editable
+// TextFieldControl — its value lives in an input, not as visible text.
 MeshWeaver.Layout.Controls.Stack
-    .WithView(MeshWeaver.Layout.Controls.Html("<b>Users</b>"))
-    .WithView(
-        rows.BindMany(u =>
-            MeshWeaver.Layout.Controls.Html($"<div>{u.Name} — <em>{u.Role}</em></div>")
-        )
-    )
+    .WithView(MeshWeaver.Layout.Controls.Title("Users", 4))
+    .WithView(rows.BindMany(u => MeshWeaver.Layout.Controls.Label(u.Name)))
 ```
 
 # Reference
