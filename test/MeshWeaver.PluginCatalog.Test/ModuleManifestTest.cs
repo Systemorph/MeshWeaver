@@ -44,6 +44,43 @@ public class ModuleManifestTest
         m.Files["Widget/Thing.json"].Should().Be("hash-type");
     }
 
+    /// <summary>
+    /// The module's released SemVer is carried alongside the content hash. The two are NOT
+    /// interchangeable: the hash identifies a tree exactly but is unordered, so nothing can express
+    /// "at least 1.2" against it — which is why a consumer had to track a moving ref instead.
+    /// </summary>
+    [Fact]
+    public void ParsesTheReleasedSemVerAlongsideTheContentHash()
+    {
+        var m = ModuleManifest.TryParse(
+            """
+            {
+              "schema": "mw-manifest/1",
+              "module": "Widget",
+              "moduleVersion": "3fa1b2c4d5e6f708",
+              "version": "2.5.1",
+              "files": { "Widget/index.json": "hash-root" }
+            }
+            """);
+
+        m.Should().NotBeNull();
+        m!.Version.Should().Be("2.5.1");
+        m.ModuleVersion.Should().Be("3fa1b2c4d5e6f708", "the content hash stays what it was");
+    }
+
+    /// <summary>
+    /// A manifest generated before versioning has no <c>version</c>. That must parse and degrade to
+    /// the previous behaviour — a missing version is a legacy manifest, never a broken one.
+    /// </summary>
+    [Fact]
+    public void ManifestWithoutAVersion_StillParses_WithNoVersion()
+    {
+        var m = ModuleManifest.TryParse(Valid);
+
+        m.Should().NotBeNull();
+        m!.Version.Should().BeNull("callers fall back to what they used before versioning existed");
+    }
+
     [Theory]
     [InlineData("not json at all")]
     [InlineData("[]")]

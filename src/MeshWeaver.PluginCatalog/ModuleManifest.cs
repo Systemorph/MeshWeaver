@@ -29,6 +29,21 @@ public sealed record ModuleManifest
     /// Equal versions ⇒ identical file set ⇒ nothing to sync.</summary>
     public string ModuleVersion { get; init; } = "";
 
+    /// <summary>
+    /// The module's released SemVer (<c>MAJOR.MINOR.PATCH</c>), published by the plugins repo as the
+    /// git tag <c>&lt;Module&gt;/vMAJOR.MINOR.PATCH</c>.
+    ///
+    /// <para>🚨 Distinct from <see cref="ModuleVersion"/>, and not interchangeable with it.
+    /// <see cref="ModuleVersion"/> is a content HASH: it identifies a tree exactly but is UNORDERED,
+    /// so nothing can express "at least 1.2" against it — which is why a consumer had no choice but
+    /// to track a moving ref. This is the ordered number a dependency can actually be pinned to.</para>
+    ///
+    /// <para><c>null</c> for a module whose manifest predates versioning; callers fall back to
+    /// whatever they used before (for a node repo, the whole-repo commit sha) rather than treating a
+    /// missing version as an error.</para>
+    /// </summary>
+    public string? Version { get; init; }
+
     /// <summary>The git commit the manifest was generated at (traceability only — excluded from
     /// <see cref="ModuleVersion"/>).</summary>
     public string? SourceCommit { get; init; }
@@ -73,6 +88,11 @@ public sealed record ModuleManifest
                 Module = r.TryGetProperty("module", out var m) && m.ValueKind == JsonValueKind.String
                     ? m.GetString()! : "",
                 ModuleVersion = version.GetString()!,
+                // Optional by design: a manifest generated before versioning has no `version`, and
+                // that must degrade to the old behaviour rather than refuse to parse.
+                Version = r.TryGetProperty("version", out var semver)
+                          && semver.ValueKind == JsonValueKind.String
+                    ? semver.GetString() : null,
                 SourceCommit = r.TryGetProperty("sourceCommit", out var c) && c.ValueKind == JsonValueKind.String
                     ? c.GetString() : null,
                 Files = map.ToImmutable(),
