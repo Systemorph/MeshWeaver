@@ -1,3 +1,4 @@
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
 using MeshWeaver.Data;
@@ -180,6 +181,18 @@ public sealed class MeshWeaverInstanceService(
     // The global index namespace is not user-writable — the same System-scoped write ApiTokenService
     // does for ApiTokenIndex. The Defer/Finally layout matters: the System context must be active
     // during CaptureContext at Subscribe time, not merely when the using-block was constructed.
+    //
+    // 🚨 The index lives at the TOP-LEVEL path MeshWeaverInstance/{keyHashPrefix}, and a top-level
+    // segment is its own Postgres schema. The router does NOT lazy-create schemas, so without the
+    // provisioning step the FIRST registration dies with
+    //   42P01: relation "meshweaverinstance.mesh_nodes" does not exist
+    // (observed on memex-cloud 2026-08-06). Provisioned HERE rather than declared in
+    // DefaultPartitionProvider on purpose: an eager declaration provisions the schema at EVERY
+    // mesh boot — including every test mesh — for a partition that is written only when someone
+    // registers an installation. ApiToken/VUser are declared eagerly because they sit on a
+    // per-request path and cannot afford a first-request provision; registration is rare and
+    // deliberate, so it takes the same lazy route PackageInstaller uses for its target partition.
+    // EnsurePartitionProvisioned is idempotent and promise-cached; non-Postgres providers no-op.
     private IObservable<MeshNode> WriteIndex(string hash, string instancePath, string instanceId)
     {
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
@@ -197,12 +210,20 @@ public sealed class MeshWeaverInstanceService(
             },
         };
 
-        return Observable.Defer(() =>
+        var providers = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToArray();
+        var provisioned = providers.Length == 0
+            ? Observable.Return(Unit.Default)
+            : Observable.Merge(providers.Select(p =>
+                    p.EnsurePartitionProvisioned(MeshWeaverInstanceNodeType.IndexNamespace)))
+                .DefaultIfEmpty(Unit.Default)
+                .LastAsync();
+
+        return provisioned.SelectMany(_ => Observable.Defer(() =>
         {
             var disposable = accessService.SwitchAccessContext(
                 new AccessContext { ObjectId = WellKnownUsers.System, Name = "system-security" });
             return nodeFactory.CreateNode(indexNode).Finally(() => disposable.Dispose());
-        });
+        }));
     }
 }
 
