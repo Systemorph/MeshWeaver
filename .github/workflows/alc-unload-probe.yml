@@ -128,7 +128,7 @@ jobs:
           # Corruption-time mini dump(s).
           cp /tmp/coredumps/*.dmp probe-diagnostics/ 2>/dev/null || true
           # MonolithMeshTestBase phase/dispose/memory traces (which test class was tearing down).
-          for f in meshweaver-test-trace meshweaver-dispose-trace meshweaver-memory-delta; do
+          for f in meshweaver-test-trace meshweaver-memory-delta; do
             [ -f "/tmp/$f.log" ] && cp "/tmp/$f.log" "probe-diagnostics/_$f.log" || true
           done
           # ILogger sink (the ALC_UNLOAD_PROBE warnings land here if routed to the file helper).

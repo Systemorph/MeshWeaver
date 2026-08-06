@@ -153,7 +153,7 @@ jobs:
           find "$REPRO_PROJECT" -name 'blame-*.dmp' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
           # MonolithMeshTestBase phase/dispose/memory traces (the watcher + INIT/DISPOSE
           # trace that pinpoints the wedge), written to the process tempdir.
-          for f in meshweaver-test-trace meshweaver-dispose-trace meshweaver-memory-delta; do
+          for f in meshweaver-test-trace meshweaver-memory-delta; do
             [ -f "/tmp/$f.log" ] && cp "/tmp/$f.log" "repro-diagnostics/_$f.log" || true
           done
           # XUnitFileOutputHelper writes per-test/background-hub logs under bin/.../test-logs
