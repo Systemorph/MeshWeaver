@@ -621,12 +621,19 @@ public class CreateNodePermissionAttribute() : RequiresPermissionAttribute(Permi
     /// Maps node types to their required permission for creation.
     /// Thread and ThreadMessage → Thread; Comment → Comment; default → Create.
     /// </summary>
+    /// <remarks>
+    /// <c>MeshWeaverInstance</c> sits with ApiToken on <see cref="Permission.Api"/>: registering an
+    /// installation is self-service credential creation in the user's OWN partition, the same class
+    /// of act as minting a personal token. It grants no access by itself — what the instance may
+    /// pull lives in admin-owned <c>PluginGrant</c> nodes under the Admin partition, which this
+    /// permission deliberately does not reach.
+    /// </remarks>
     public static Permission GetPermissionForNodeType(string? nodeType)
         => nodeType switch
         {
             "Thread" or "ThreadMessage" => Permission.Thread,
             "Comment" => Permission.Comment,
-            "ApiToken" or "ModelProvider" => Permission.Api,
+            "ApiToken" or "ModelProvider" or "MeshWeaverInstance" => Permission.Api,
             _ => Permission.Create
         };
 

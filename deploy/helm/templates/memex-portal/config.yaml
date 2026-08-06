@@ -225,6 +225,7 @@ data:
   # and the only way to wire it was a hand-applied `kubectl set env` that no redeploy reproduces.
   # Tokens are secrets and live in secrets.yaml / the Key Vault CSI mount, never here.
   # See Doc/Architecture/PluginRegistry.md.
+  PluginCatalog__RequireInstanceKey: "{{ .Values.pluginCatalog.requireInstanceKey | default true }}"
   PluginCatalog__RegistryUrl: "{{ .Values.pluginCatalog.registryUrl | default "" }}"
   PluginCatalog__RegistryRef: "{{ .Values.pluginCatalog.registryRef | default "HEAD" }}"
   {{- range $i, $r := .Values.pluginCatalog.registries }}

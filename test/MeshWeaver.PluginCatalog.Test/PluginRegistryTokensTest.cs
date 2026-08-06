@@ -1,5 +1,10 @@
 using Xunit;
 
+// The type under test is [Obsolete] — superseded by instance keys + PluginGrant. The test stays
+// because the member is still public and must keep behaving as documented for anyone bound to it;
+// InstanceKeysTest / PluginGrantTest cover the mechanism that replaced it.
+#pragma warning disable CS0618
+
 namespace MeshWeaver.PluginCatalog.Test;
 
 /// <summary>

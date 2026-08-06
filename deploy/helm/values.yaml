@@ -43,6 +43,10 @@ selfUpdate:
 #
 # See Doc/Architecture/PluginRegistry.md.
 pluginCatalog:
+  # REGISTRY: require a registered instance key on /api/plugins. Defaults to TRUE — a registry that
+  # configures nothing refuses anonymous callers instead of serving them every source. Set false
+  # ONLY for local dev / the e2e stub; the portal then warns on every anonymous request.
+  requireInstanceKey: true
   # CONSUMER: base URL of the registry install (e.g. https://memex.meshweaver.cloud).
   # Empty = no remote catalog (the admin tab shows "not configured").
   registryUrl: ""

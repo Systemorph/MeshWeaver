@@ -13,8 +13,15 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Memex.Portal.Shared.Settings;
 
 /// <summary>
-/// Settings tab for managing API tokens.
+/// Settings tab for managing personal API tokens.
 /// Registered via AddApiTokensSettingsTab() on MessageHubConfiguration.
+///
+/// <para>Built from framework controls only. This tab previously emitted hand-built HTML strings
+/// for every element — including an inline <c>onclick</c> that reached into <c>document</c> and
+/// <c>navigator.clipboard</c> — and hard-coded its English copy, so a German viewer read it in
+/// English. Both are now bugs by AGENTS.md ("Never hand-roll UI", "ALWAYS think about
+/// internationalization"); the rendering is <c>Controls.*</c> and every user-visible string is a
+/// catalog key.</para>
 /// </summary>
 public static class ApiTokensSettingsTab
 {
@@ -45,10 +52,9 @@ public static class ApiTokensSettingsTab
         var userName = userContext?.Name ?? "";
         var userEmail = userContext?.Email ?? "";
 
-        stack = stack.WithView(Controls.H2(host.Localize("settings.apiTokens")).WithStyle("margin: 0 0 8px 0;"));
-        stack = stack.WithView(Controls.Html(
-            "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
-            "Manage personal access tokens for API and MCP access.</p>"));
+        stack = stack
+            .WithView(Controls.Title(host.Localize("settings.apiTokens"), 2))
+            .WithView(Controls.Markdown(host.Localize("apiTokens.intro")));
 
         const string createDataId = "apiTokenCreate";
         const string resultDataId = "apiTokenResult";
@@ -69,44 +75,28 @@ public static class ApiTokensSettingsTab
         // workspace.GetMeshNodeStream(...).Update commit, deletes drop rows on
         // DeleteNode commit. No refresh trigger needed.
 
-        // Create token form
-        var createSection = Controls.Stack.WithWidth("100%")
-            .WithStyle("padding: 16px; background: var(--neutral-layer-2); border-radius: 8px; gap: 12px; margin-bottom: 24px;");
-
-        createSection = createSection.WithView(
-            Controls.Html("<h3 style=\"margin: 0 0 8px 0; font-size: 1rem;\">Create New Token</h3>"));
-
         var formRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 12px; align-items: flex-end; flex-wrap: wrap;");
 
         formRow = formRow.WithView(new TextFieldControl(new JsonPointerReference("label"))
         {
-            Label = "Label",
-            Placeholder = "e.g. Claude Code",
+            Label = host.Localize("apiTokens.field.label"),
+            Placeholder = host.Localize("apiTokens.field.labelPlaceholder"),
             DataContext = LayoutAreaReference.GetDataPointer(createDataId)
         }.WithWidth("240px"));
 
         formRow = formRow.WithView(new NumberFieldControl(new JsonPointerReference("expiryDays"), "Int32")
         {
-            Label = "Expires in (days)",
+            Label = host.Localize("apiTokens.field.expiryDays"),
             DataContext = LayoutAreaReference.GetDataPointer(createDataId)
         }.WithWidth("140px"));
-
-        // Inline token result area driven by a data-bound render ID.
-        // Using data binding (not UpdateArea with DialogControl) so the result survives
-        // workspace stream rebuilds triggered by CreateNodeAsync. A separate counter
-        // key guarantees each Generate click produces a distinct stream emission (so
-        // repeated tokens show a dialog even if the raw token string is identical).
-        const string tokenRenderKey = "apiTokenRenderKey";
 
         formRow = formRow.WithView(Controls.Button(host.Localize("ui.generateToken"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
-                // Immediate feedback so user knows click fired.
-                ctx.Host.UpdateData(resultDataId,
-                    "<p style=\"padding: 8px 12px; color: var(--neutral-foreground-hint);\">Starting…</p>");
+                ctx.Host.UpdateData(resultDataId, host.Localize("apiTokens.starting"));
 
                 // Subscribe (no await) to read current form data, then kick off the token
                 // creation via the service's observable API — fires hub.Post + RegisterCallback
@@ -122,9 +112,7 @@ public static class ApiTokensSettingsTab
 
                         if (string.IsNullOrEmpty(label))
                         {
-                            ctx.Host.UpdateData(resultDataId,
-                                "<p style=\"padding: 8px 12px; background: var(--warning-fill-rest, #fef3c7); " +
-                                "color: var(--warning-color, #92400e); border-radius: 6px;\">Please enter a label.</p>");
+                            ctx.Host.UpdateData(resultDataId, host.Localize("apiTokens.needLabel"));
                             return;
                         }
 
@@ -133,8 +121,7 @@ public static class ApiTokensSettingsTab
                             : null;
 
                         ctx.Host.UpdateData(resultDataId,
-                            $"<p style=\"padding: 8px 12px; color: var(--neutral-foreground-hint);\">" +
-                            $"Creating token '{Esc(label)}'…</p>");
+                            $"{host.Localize("apiTokens.creating")} **{label}**…");
 
                         // Observable-based service call — subscribes to the underlying
                         // hub.Post + RegisterCallback pipeline without any await.
@@ -142,52 +129,38 @@ public static class ApiTokensSettingsTab
                             .Subscribe(
                                 result =>
                                 {
-                                    var rawToken = result.RawToken;
-                                    var tokenHtml =
-                                        "<div style=\"padding: 16px; background: var(--neutral-layer-2); border-radius: 8px; " +
-                                        "border: 1px solid var(--warning-color, #d4a72c); margin-bottom: 16px; " +
-                                        "width: 100%; box-sizing: border-box;\">" +
-                                        "<div style=\"font-weight: 600; margin-bottom: 8px; color: var(--warning-color, #92400e);\">" +
-                                        "Copy your token now — it won't be shown again!</div>" +
-                                        "<div style=\"font-family: ui-monospace, monospace; background: var(--neutral-layer-4); " +
-                                        "padding: 12px; border-radius: 6px; word-break: break-all; user-select: all; " +
-                                        "border: 1px solid var(--neutral-stroke-rest); cursor: pointer;\" " +
-                                        "onclick=\"var r=document.createRange();r.selectNodeContents(this);" +
-                                        "var s=window.getSelection();s.removeAllRanges();s.addRange(r);" +
-                                        "navigator.clipboard&&navigator.clipboard.writeText(this.textContent);\">" +
-                                        $"{Esc(rawToken)}</div>" +
-                                        "<div style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint); " +
-                                        "margin-top: 6px;\">Click the token above to select &amp; copy to clipboard.</div>" +
-                                        "</div>";
-
-                                    ctx.Host.UpdateData(resultDataId, tokenHtml);
-                                    ctx.Host.UpdateData(tokenRenderKey, DateTimeOffset.UtcNow.Ticks);
+                                    // The token is shown ONCE — only its hash is stored. A fenced
+                                    // block renders it selectable/copyable without this tab
+                                    // shipping its own clipboard JavaScript.
+                                    ctx.Host.UpdateData(resultDataId,
+                                        $"**{host.Localize("apiTokens.copyNow")}**\n\n"
+                                        + $"```\n{result.RawToken}\n```");
                                     // No list refresh trigger — the synced query
                                     // below re-emits automatically when the new
                                     // node commits to the workspace.
                                 },
                                 ex => ctx.Host.UpdateData(resultDataId,
-                                    "<p style=\"padding: 8px 12px; color: #f87171; background: var(--neutral-layer-2); " +
-                                    $"border-radius: 6px;\">Error: {Esc(ex.Message)}</p>"));
+                                    $"{host.Localize("apiTokens.error")} {ex.Message}"));
                     });
 
                 return Task.CompletedTask;
             }));
 
-        createSection = createSection.WithView(formRow);
+        var createSection = Controls.Stack.WithWidth("100%")
+            .WithStyle("padding: 16px; background: var(--neutral-layer-2); border-radius: 8px; gap: 12px; margin-bottom: 24px;")
+            .WithView(Controls.Title(host.Localize("apiTokens.createHeading"), 3))
+            .WithView(formRow);
         stack = stack.WithView(createSection);
 
         // Result area (newly created token display) — full width so the token text has room.
         stack = stack.WithView((h, _) =>
             h.Stream.GetDataStream<string>(resultDataId)
-                .Select(html => string.IsNullOrEmpty(html)
+                .Select(markdown => string.IsNullOrEmpty(markdown)
                     ? (UiControl?)Controls.Stack.WithWidth("100%")
-                    : (UiControl?)Controls.Stack.WithWidth("100%").WithView(Controls.Html(html)))
+                    : (UiControl?)Controls.Stack.WithWidth("100%").WithView(Controls.Markdown(markdown)))
                 .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
-        // Token list
-        stack = stack.WithView(
-            Controls.Html("<h3 style=\"margin: 0 0 12px 0; font-size: 1rem;\">Your Tokens</h3>"));
+        stack = stack.WithView(Controls.Title(host.Localize("apiTokens.yourTokens"), 3));
 
         // Live token list — bound directly to the synced query. The view
         // re-renders whenever the underlying mesh-query collection changes
@@ -196,60 +169,56 @@ public static class ApiTokensSettingsTab
         // shape — every emission is a complete snapshot.
         stack = stack.WithView((h, _) =>
             string.IsNullOrEmpty(userId)
-                ? Observable.Return<UiControl?>(Controls.Html(
-                    "<p style=\"color: var(--neutral-foreground-hint);\">No user identity found.</p>"))
+                ? Observable.Return<UiControl?>(Controls.Markdown(host.Localize("apiTokens.noIdentity")))
                 : tokenService.GetTokensForUser(userId)
                     .Select(tokens => tokens.Count == 0
-                        ? (UiControl?)Controls.Html(
-                            "<p style=\"color: var(--neutral-foreground-hint);\">No tokens yet. Create one above.</p>")
-                        : BuildTokenList(tokens, tokenService, resultDataId, locale: host.ViewerLocale())));
+                        ? (UiControl?)Controls.Markdown(host.Localize("apiTokens.none"))
+                        : BuildTokenList(host, tokens, tokenService, resultDataId)));
 
         return stack;
     }
 
     private static UiControl BuildTokenList(
+        LayoutAreaHost host,
         IReadOnlyList<ApiTokenInfo> tokens,
         ApiTokenService tokenService,
-        string resultDataId, string? locale = null)
+        string resultDataId)
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
 
         foreach (var token in tokens)
         {
-            var status = token.IsRevoked ? "Revoked"
-                : (token.ExpiresAt.HasValue && token.ExpiresAt.Value < DateTimeOffset.UtcNow)
-                    ? "Expired" : "Active";
-            var statusColor = status == "Active" ? "#4ade80"
-                : status == "Expired" ? "#fbbf24" : "#f87171";
+            var expired = token.ExpiresAt.HasValue && token.ExpiresAt.Value < DateTimeOffset.UtcNow;
+            var statusKey = token.IsRevoked ? "apiTokens.status.revoked"
+                : expired ? "apiTokens.status.expired"
+                : "apiTokens.status.active";
+            var never = host.Localize("apiTokens.never");
 
             var row = Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("padding: 12px; border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; align-items: center; gap: 16px;");
 
-            row = row.WithView(Controls.Html(
-                $"<div style=\"flex: 1;\">" +
-                $"<strong>{Esc(token.Label)}</strong>" +
-                $"<div style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint);\">" +
-                $"ID: {Esc(token.HashPrefix)} | " +
-                $"Created: {token.CreatedAt:yyyy-MM-dd} | " +
-                $"Expires: {(token.ExpiresAt?.ToString("yyyy-MM-dd") ?? "Never")} | " +
-                $"Last used: {(token.LastUsedAt?.ToString("yyyy-MM-dd HH:mm") ?? "Never")}" +
-                "</div></div>"));
+            // Markdown, not an HTML string: the label and hash are user/system data and Markdown
+            // renders them as text rather than as markup we had to hand-escape.
+            row = row.WithView(Controls.Markdown(
+                    $"**{token.Label}**  \n"
+                    + $"`{token.HashPrefix}` · {host.Localize("apiTokens.created")} {token.CreatedAt:yyyy-MM-dd}"
+                    + $" · {host.Localize("apiTokens.expires")} {(token.ExpiresAt?.ToString("yyyy-MM-dd") ?? never)}"
+                    + $" · {host.Localize("apiTokens.lastUsed")} {(token.LastUsedAt?.ToString("yyyy-MM-dd HH:mm") ?? never)}")
+                .WithStyle("flex: 1;"));
 
-            row = row.WithView(Controls.Html(
-                $"<span style=\"color: {statusColor}; font-weight: 600; font-size: 0.85rem;\">{status}</span>"));
+            row = row.WithView(Controls.Markdown($"**{host.Localize(statusKey)}**"));
 
             var capturedForDelete = token;
             // Delete button — available for revoked or expired tokens to clean up the list.
-            if (token.IsRevoked || (token.ExpiresAt.HasValue && token.ExpiresAt.Value < DateTimeOffset.UtcNow))
+            if (token.IsRevoked || expired)
             {
-                row = row.WithView(Controls.Button(LocalizationCatalog.Get("common.delete", locale))
+                row = row.WithView(Controls.Button(host.Localize("common.delete"))
                     .WithAppearance(Appearance.Outline)
                     .WithClickAction(ctx =>
                     {
                         ctx.Host.UpdateData(resultDataId,
-                            "<p style=\"padding: 8px 12px; color: var(--neutral-foreground-hint); " +
-                            $"background: var(--neutral-layer-2); border-radius: 6px;\">Deleting '{Esc(capturedForDelete.Label)}'…</p>");
+                            $"{host.Localize("apiTokens.deleting")} **{capturedForDelete.Label}**…");
 
                         // Reactive: Subscribe to the service observable
                         // (hub.Post + RegisterCallback under the hood). The
@@ -257,11 +226,9 @@ public static class ApiTokensSettingsTab
                         // query above sees the deletion.
                         tokenService.DeleteToken(capturedForDelete.NodePath).Subscribe(
                             _ => ctx.Host.UpdateData(resultDataId,
-                                "<p style=\"padding: 8px 12px; color: #4ade80; background: var(--neutral-layer-2); " +
-                                $"border-radius: 6px;\">Token '{Esc(capturedForDelete.Label)}' deleted.</p>"),
+                                $"{host.Localize("apiTokens.deleted")} **{capturedForDelete.Label}**"),
                             ex => ctx.Host.UpdateData(resultDataId,
-                                "<p style=\"padding: 8px 12px; color: #f87171; background: var(--neutral-layer-2); " +
-                                $"border-radius: 6px;\">Failed to delete: {Esc(ex.Message)}</p>"));
+                                $"{host.Localize("apiTokens.deleteFailed")} {ex.Message}"));
                         return Task.CompletedTask;
                     }));
             }
@@ -269,11 +236,12 @@ public static class ApiTokensSettingsTab
             if (!token.IsRevoked)
             {
                 var captured = token;
-                row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.revoke", locale))
+                row = row.WithView(Controls.Button(host.Localize("ui.revoke"))
                     .WithAppearance(Appearance.Outline)
                     .WithClickAction(ctx =>
                     {
-                        ctx.Host.UpdateData(resultDataId, BuildPendingHtml($"Revoking '{Esc(captured.Label)}'…"));
+                        ctx.Host.UpdateData(resultDataId,
+                            $"{host.Localize("apiTokens.revoking")} **{captured.Label}**…");
 
                         // Reactive: subscribe to the factored-out observable.
                         // Revoke(...) bridges the service call to a single outcome
@@ -282,7 +250,7 @@ public static class ApiTokensSettingsTab
                         // list row flips to "Revoked" automatically when the
                         // synced query sees the IsRevoked change.
                         Revoke(tokenService, captured.NodePath, captured.Label).Subscribe(
-                            outcome => ctx.Host.UpdateData(resultDataId, BuildOutcomeHtml(outcome)));
+                            outcome => ctx.Host.UpdateData(resultDataId, OutcomeMarkdown(host, outcome)));
                         return Task.CompletedTask;
                     }));
             }
@@ -293,13 +261,11 @@ public static class ApiTokensSettingsTab
         return container;
     }
 
-    private static string Esc(string s) => System.Web.HttpUtility.HtmlEncode(s);
-
     /// <summary>
     /// Outcome of a token revoke/delete invocation — surfaced to both the
     /// click handler and the test. <see cref="Success"/> is the user-facing
     /// pass/fail; <see cref="Message"/> carries the optional error detail to
-    /// embed in the result HTML. Kept internal so it stays a presentation-
+    /// embed in the result text. Kept internal so it stays a presentation-
     /// layer concern, not an exported API.
     /// </summary>
     internal record TokenActionOutcome(bool Success, string Label, string? Message = null);
@@ -321,19 +287,12 @@ public static class ApiTokensSettingsTab
             .Catch<TokenActionOutcome, Exception>(ex =>
                 Observable.Return(new TokenActionOutcome(false, label, ex.Message)));
 
-    private static string BuildPendingHtml(string message) =>
-        "<p style=\"padding: 8px 12px; color: var(--neutral-foreground-hint); " +
-        $"background: var(--neutral-layer-2); border-radius: 6px;\">{Esc(message)}</p>";
-
-    private static string BuildOutcomeHtml(TokenActionOutcome outcome)
+    private static string OutcomeMarkdown(LayoutAreaHost host, TokenActionOutcome outcome)
     {
         if (outcome.Success)
-            return "<p style=\"padding: 8px 12px; color: #4ade80; background: var(--neutral-layer-2); " +
-                $"border-radius: 6px;\">Token '{Esc(outcome.Label)}' revoked.</p>";
-        var detail = string.IsNullOrEmpty(outcome.Message)
-            ? "Failed to revoke token."
-            : $"Failed to revoke: {Esc(outcome.Message)}";
-        return "<p style=\"padding: 8px 12px; color: #f87171; background: var(--neutral-layer-2); " +
-            $"border-radius: 6px;\">{detail}</p>";
+            return $"{host.Localize("apiTokens.revoked")} **{outcome.Label}**";
+        return string.IsNullOrEmpty(outcome.Message)
+            ? host.Localize("apiTokens.revokeFailed")
+            : $"{host.Localize("apiTokens.revokeFailed")} {outcome.Message}";
     }
 }
