@@ -1,4 +1,4 @@
-using MeshWeaver.Hosting.Embeddings;
+﻿using MeshWeaver.Hosting.Embeddings;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive;
@@ -84,6 +84,15 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     /// own scoped query serving by delegating to a per-schema <see cref="PostgreSqlMeshQuery"/>.
     /// </summary>
     internal PostgreSqlStorageAdapter? GetSchemaAdapter(string path) => _adapter.GetSchemaAdapter(path);
+
+    /// <summary>
+    /// The routing adapter's MERGED change feed — every per-schema adapter's <c>Changes</c> is
+    /// subscribed into it. A SCOPED query must watch this rather than only its own partition's
+    /// adapter, because a write that changes its results can land in a different schema: the
+    /// global satellite namespaces (<c>_Access</c> → <c>system_access</c>, …) have their own.
+    /// See <c>PostgreSqlMeshQuery._changeFeed</c> for the failure this closes.
+    /// </summary>
+    internal IObservable<DataChangeNotification> MergedChanges => _adapter.Changes;
 
     /// <summary>Embedding provider for vector scoring, shared with the per-schema delegate.</summary>
     internal IEmbeddingProvider? EmbeddingProvider => _embeddingProvider;

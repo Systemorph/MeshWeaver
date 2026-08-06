@@ -1334,6 +1334,16 @@ public static class EditorExtensions
         {
             editCtrl = new CheckBoxControl(jsonPointer) { Required = isRequired };
         }
+        else if (propType != typeof(string)
+                 && typeof(System.Collections.IEnumerable).IsAssignableFrom(propType))
+        {
+            // #777: a collection has no scalar text form. The TextFieldControl fallthrough below binds
+            // it Immediate, so a single keystroke overwrites the whole list with a string and corrupts
+            // the node's content (the node then fails to deserialize and the form degrades to editing
+            // JsonElement internals). Render the value read-only — the same LabelControl the display
+            // path uses — until a real collection editor exists, so an edit can never destroy the list.
+            editCtrl = new LabelControl(jsonPointer);
+        }
         else
         {
             var textCtrl = new TextFieldControl(jsonPointer)
