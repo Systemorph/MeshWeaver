@@ -78,11 +78,25 @@ public class CrossPartitionRealUserQueryTests(PostgreSqlFixture fixture, ITestOu
         return (nsA, nsB);
     }
 
-    private IObservable<QueryResultChange<MeshNode>> RunUnpinned(string? userId) =>
+    /// <summary>
+    /// The unpinned (cross-partition) query the production surfaces issue.
+    /// <para>
+    /// 🚨 <paramref name="namespaceScope"/> is not decoration: without it this is a GLOBAL
+    /// <c>nodeType:Markdown</c> query capped at <c>Limit</c>, so any assertion about a SPECIFIC
+    /// seeded row only holds while fewer than <c>Limit</c> other Markdown nodes exist anywhere.
+    /// Against a shared database with sibling tests writing concurrently the seeded row is simply
+    /// paged out — an intermittent failure that lands on PRs which changed nothing (#834). Tests
+    /// that assert on a particular row MUST scope; tests that only assert the shape of the first
+    /// emission may stay global.
+    /// </para>
+    /// </summary>
+    private IObservable<QueryResultChange<MeshNode>> RunUnpinned(string? userId, string? namespaceScope = null) =>
         Mesh.ServiceProvider.GetRequiredService<IMeshService>()
             .Query<MeshNode>(new MeshQueryRequest
             {
-                Query = "nodeType:Markdown",
+                Query = namespaceScope is null
+                    ? "nodeType:Markdown"
+                    : $"namespace:{namespaceScope} nodeType:Markdown",
                 Limit = 10,
                 UserId = userId!,
             });
@@ -125,13 +139,14 @@ public class CrossPartitionRealUserQueryTests(PostgreSqlFixture fixture, ITestOu
     {
         var (nsA, _) = await SeedTwoPartitions();
 
-        var change = await RunUnpinned(WellKnownUsers.System)
+        var change = await RunUnpinned(WellKnownUsers.System, namespaceScope: nsA)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(20))
             .ToTask();
 
         change.ChangeType.Should().BeOneOf(QueryChangeType.Initial, QueryChangeType.Reset);
         change.Items.Should().Contain(n => n.Path == $"{nsA}/doc1",
-            "System sees every partition's rows");
+            "System reads a partition it was never granted — the query is scoped to that partition, "
+            + "so this cannot be crowded out by rows other tests happen to be writing");
     }
 }
