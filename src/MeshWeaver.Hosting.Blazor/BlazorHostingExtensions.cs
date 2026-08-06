@@ -179,7 +179,7 @@ public static class BlazorHostingExtensions
         // Lazy resolution of IMessageHub to avoid circular dependency during startup
         IMessageHub? mainHub = null;
 
-        app.MapGet("/static/{**path}",
+        app.MapMethods("/static/{**path}", ["GET", "HEAD"],
             (HttpContext context, string path) =>
         {
             // Resolve hub on first request
