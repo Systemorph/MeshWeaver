@@ -272,6 +272,10 @@ public static class MemexConfiguration
 
         // Register API token service for MCP bearer auth and OAuth code store
         services.AddSingleton<ApiTokenService>();
+        // Registers MeshWeaver installations and issues their instance keys. Separate from
+        // ApiTokenService on purpose: an instance key identifies a DEPLOYMENT and carries no user
+        // identity or roles, so it can never be replayed as its owner against the mesh API.
+        services.AddSingleton<MeshWeaverInstanceService>();
         services.AddSingleton<OAuthCodeStore>();
         // Automatic, token-based MCP back-connection for the co-hosted Claude Code / Copilot CLIs.
         // The chat clients resolve this at spawn to mint/reuse the per-user MCP ApiToken + URL.
