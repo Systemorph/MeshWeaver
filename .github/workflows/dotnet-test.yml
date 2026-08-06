@@ -190,10 +190,18 @@ jobs:
   build:
     name: "Build solution (once)"
     needs: precheck
-    # Skipped when this exact tree is already green (see the file header). `test`
+    # Skipped ONLY when this exact tree is already green (see the file header). `test`
     # needs `build`, so it skips with it; `collect-results` is if:always() and
     # reports the reused result.
-    if: needs.precheck.outputs.skip != 'true'
+    #
+    # 🚨 `!cancelled()` is what makes the skip FAIL-OPEN. A `needs` job that ends
+    # cancelled — the probe waiting 15 min for a runner and being killed with zero
+    # steps executed, main 2026-08-06 — skips every dependent REGARDLESS of this `if`,
+    # unless the condition contains always()/!cancelled(). That silently skipped the
+    # build and all six shards, and the run still reported a green required check.
+    # With !cancelled(), an unanswerable probe means "we don't know" ⇒ TEST IT; only a
+    # genuine workflow cancellation (where !cancelled() is false) still stops the run.
+    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' }}
     timeout-minutes: 25
     runs-on: ubuntu-latest
     steps:
@@ -672,9 +680,25 @@ jobs:
             done <<< "$fails"
           fi
         done
+        # 🚨 EVIDENCE GATE: "no failures" is only green if tests actually RAN. With zero
+        # trx anywhere, this step used to exit 0 — so a run in which the probe was
+        # starved, build skipped and no shard executed still published a SUCCESSFUL
+        # required check. A required check that passes on no evidence is worse than a
+        # flaky one: it lets an untested tree merge and ship.
+        trx_count=$(find all-results -name '*.trx' 2>/dev/null | wc -l | tr -d ' ')
+        if [ "$trx_count" = "0" ]; then
+          echo "::error::No test results found in any shard — the suite did not run, so this run proves nothing. Failing (the reuse path is the ONLY sanctioned way to skip tests)."
+          {
+            echo "### ❌ No test evidence"
+            echo
+            echo "Zero \`.trx\` files across all shards, and this was not a green-tree reuse."
+            echo "The suite did not execute — refusing to report success."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
         if [ "$any" = "0" ]; then
-          echo "_No failed tests in trx (a crashed/killed host fails via the exit-marker gate below)._" >> "$GITHUB_STEP_SUMMARY"
-          echo "No failed tests found in trx across all shards."
+          echo "_No failed tests in ${trx_count} trx file(s) (a crashed/killed host fails via the exit-marker gate below)._" >> "$GITHUB_STEP_SUMMARY"
+          echo "No failed tests found in trx across all shards (${trx_count} result files)."
         else
           # 🚨 GATE (TRX-based, reporter-independent): the consolidated run pass/fail
           # gate. Fail on any test failure across shards, independent of the Publish
