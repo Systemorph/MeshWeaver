@@ -92,16 +92,30 @@ public static class AiSettingsNodeType
     }
 
     /// <summary>
-    /// The default SKILL SOURCES, one template ROW per source so each resolves (or drops) independently:
-    /// the platform <c>Skill</c> catalog, the current space's <c>{space}/Skill</c>, the current node
-    /// type's <c>{typePartition}/Skill</c> (skills a plugin ships next to its types), and the user's own
-    /// <c>{user}/Skill</c>. A skill package adds a fifth row (<see cref="MergeSkillSource"/>).
+    /// The default SKILL SOURCES — one template ROW per layer so each resolves (or drops)
+    /// independently: the platform <c>Skill</c> catalog, the user's own <c>{user}/Skill</c>, the
+    /// current space's partition SUBTREE, and the current node type's partition SUBTREE (skills a
+    /// plugin ships next to its types). A skill package adds a further row
+    /// (<see cref="MergeSkillSource"/>).
+    ///
+    /// <para>🚨 These templates ARE what the chat resolves by default, and therefore also what
+    /// <c>MeshAgentSkillsSource</c> feeds the agent framework — the two must not diverge, or a user
+    /// would see skills an agent does not have. They are pinned equal to
+    /// <see cref="AgentPickerProjection.BuildSkillQueries"/> by test.</para>
+    ///
+    /// <para>🚨 The platform row stays FIRST. It is the only row guaranteed to resolve — every other
+    /// targets a partition that may not exist — and demoting it makes slash autocomplete surface
+    /// nothing (<c>SkillAutocompleteTest</c>). Row order is NOT the precedence signal: precedence
+    /// between layers is resolved from each result's own partition.</para>
+    ///
+    /// <para>The two middle layers are subtree-scoped so a space or plugin can file a skill next to
+    /// the content it describes instead of only in <c>{partition}/Skill</c>.</para>
     /// </summary>
     public static readonly ImmutableArray<string> DefaultSkillQueryTemplates = ImmutableArray.Create(
-        $"namespace:{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}",
-        $"namespace:{CurrentPathToken}/{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}",
-        $"namespace:{NodeTypePathToken}/{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}",
-        $"namespace:{UserPathToken}/{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}");
+        $"namespace:{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}{AgentPickerProjection.RegistryProjection}",
+        $"namespace:{UserPathToken}/{AgentPickerProjection.SkillSubNamespace} nodeType:{SkillNodeType.NodeType}{AgentPickerProjection.RegistryProjection}",
+        $"path:{CurrentPathToken} scope:descendants nodeType:{SkillNodeType.NodeType}{AgentPickerProjection.RegistryProjection}",
+        $"path:{NodeTypePathToken} scope:descendants nodeType:{SkillNodeType.NodeType}{AgentPickerProjection.RegistryProjection}");
 
     /// <summary>
     /// Resolves the user's skill sources for a context: takes <see cref="AiSettings.SkillQueries"/>
@@ -144,6 +158,46 @@ public static class AiSettingsNodeType
             ? settings with { SkillQueries = rows }
             : settings with { SkillQueries = rows.Add(query) };
     }
+
+    /// <summary>
+    /// The default AGENT sources, as tokenized templates — the same set
+    /// <see cref="AgentPickerProjection.BuildAgentQueries"/> defines, so there is one definition.
+    /// </summary>
+    public static ImmutableArray<string> DefaultAgentQueryTemplates { get; } =
+        AgentPickerProjection.BuildAgentQueries(UserPathToken, CurrentPathToken).ToImmutableArray();
+
+    /// <summary>
+    /// Pure merge for "install this package": appends the package's AGENT source query
+    /// (<c>namespace:{sourceNamespace}/Agent nodeType:Agent</c>) to
+    /// <see cref="AiSettings.AgentQueries"/>. Mirrors <see cref="MergeSkillSource"/> exactly — an
+    /// empty list is seeded with the code defaults FIRST so adding a package never silently drops
+    /// the standard sources, and an already-present source is not duplicated.
+    ///
+    /// <para>This is the piece whose absence made every plugin-shipped agent invisible: a package
+    /// wrote its agents into its own partition and nothing ever told the picker to look there.</para>
+    /// </summary>
+    public static AiSettings MergeAgentSource(AiSettings settings, string sourceNamespace)
+    {
+        var rows = settings.AgentQueries.IsDefaultOrEmpty
+            ? DefaultAgentQueryTemplates
+            : settings.AgentQueries;
+        var query = $"namespace:{sourceNamespace}/{AgentPickerProjection.AgentSubNamespace} "
+                    + $"nodeType:{AgentNodeType.NodeType}{AgentPickerProjection.RegistryProjection}";
+        return rows.Contains(query, StringComparer.OrdinalIgnoreCase)
+            ? settings with { AgentQueries = rows }
+            : settings with { AgentQueries = rows.Add(query) };
+    }
+
+    /// <summary>
+    /// Pure merge of EVERY registry source a package contributes — agents and skills together, so a
+    /// caller cannot register one and forget the other. Idempotent.
+    /// </summary>
+    /// <param name="settings">The user's current settings.</param>
+    /// <param name="partition">The package's partition, e.g. <c>Essentials</c>.</param>
+    public static AiSettings MergePackageSources(AiSettings settings, string partition) =>
+        MergeSkillSource(
+            MergeAgentSource(settings, partition),
+            $"{partition}/{AgentPickerProjection.SkillSubNamespace}");
 
     /// <summary>
     /// Installs a SKILL PACKAGE for <paramref name="user"/>: appends the package's skill folder (e.g.

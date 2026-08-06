@@ -39,7 +39,11 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     // The pg:{adapter} write I/O pool — every WRITE / provisioning DB round-trip runs inside it
     // (Invoke), never a bare Observable.FromAsync. Unbounded fallback when no registry is wired.
     private readonly IIoPool _ioPool;
-    private readonly Subject<DataChangeNotification> _changes = new();
+    // NOT a Subject<T>. Subject fan-out is synchronous and ordered, so the first observer that
+    // throws aborts delivery to every observer after it — and the publish sites used to wrap that
+    // in `catch { /* best-effort */ }`, turning a starved subscriber into silence. See
+    // IsolatedChangeFeed for the failure this caused (a permanently stale security fold).
+    private readonly IsolatedChangeFeed _changes;
 
     // Per-adapter cache of "does {schema}.content_chunks exist?" — drives whether the vector search
     // UNIONs the indexed-content branch (DocumentPaths-resolved Document rows). INSTANCE field (never
@@ -67,7 +71,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// for every row committed to <c>mesh_nodes</c> (and satellite tables),
     /// so synced-query subscribers see writes from any process in the cluster.
     /// </remarks>
-    public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
+    public IObservable<DataChangeNotification> Changes => _changes;
 
     /// <summary>
     /// Internal hook for <see cref="PostgreSqlChangeListener"/> to push
@@ -97,6 +101,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         _partitionDefinition = partitionDefinition;
         _schemaName = partitionDefinition?.Schema;
         _logger = logger;
+        _changes = new IsolatedChangeFeed(logger, partitionDefinition?.Schema ?? "public");
         _readPool = readPool ?? IoPool.Unbounded;
         _ioPool = ioPool ?? IoPool.Unbounded;
     }
@@ -436,12 +441,11 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             // PostgreSqlChangeListener still publishes for cross-process; the
             // listener's pg_notify dedup (PostgreSqlExtensions LISTEN/NOTIFY
             // dedup) makes the double-fire idempotent.
-            try
-            {
-                _changes.OnNext(DataChangeNotification.Updated(
-                    string.IsNullOrEmpty(node.Path) ? node.Id : node.Path, node));
-            }
-            catch { /* never throw — change feed is best-effort */ }
+            // No try/catch: IsolatedChangeFeed already isolates and LOGS a faulty observer, so a
+            // throw escaping here would be a bug in the feed itself, not a subscriber's fault to
+            // swallow.
+            _changes.OnNext(DataChangeNotification.Updated(
+                string.IsNullOrEmpty(node.Path) ? node.Id : node.Path, node));
             return node;
         });
 
@@ -531,12 +535,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         {
             if (!committed.Contains(node.Path))
                 continue;
-            try
-            {
-                _changes.OnNext(DataChangeNotification.Updated(
-                    string.IsNullOrEmpty(node.Path) ? node.Id : node.Path, node));
-            }
-            catch { /* never throw — change feed is best-effort */ }
+            _changes.OnNext(DataChangeNotification.Updated(
+                string.IsNullOrEmpty(node.Path) ? node.Id : node.Path, node));
         }
     }
 
@@ -648,8 +648,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         => _ioPool.Invoke(async ct =>
         {
             await DeleteAsyncCore(path, ct).ConfigureAwait(false);
-            try { _changes.OnNext(DataChangeNotification.Deleted(path)); }
-            catch { /* never throw — change feed is best-effort */ }
+            _changes.OnNext(DataChangeNotification.Deleted(path));
             return path;
         });
 
@@ -666,8 +665,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             var removed = await DeleteAsyncCore(path, ct).ConfigureAwait(false) > 0;
             if (removed)
             {
-                try { _changes.OnNext(DataChangeNotification.Deleted(path)); }
-                catch { /* never throw — change feed is best-effort */ }
+                _changes.OnNext(DataChangeNotification.Deleted(path));
             }
             return removed;
         });

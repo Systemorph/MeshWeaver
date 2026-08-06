@@ -6,8 +6,9 @@ namespace MeshWeaver.Portal.E2E;
 /// <summary>
 /// End-to-end guard for the chat composer's <c>/</c> slash-skill menu — the exact surface that broke in
 /// the atioz demo ("certain users got no auto-expand on skills"). Skills resolve as a per-partition
-/// <c>nodeType:Skill</c> union: the platform <c>Skill</c> catalog + the current space's <c>{space}/Skill</c>
-/// + the chatting user's <c>{user}/Skill</c> (<see cref="MeshWeaver.AI.AgentPickerProjection.BuildSkillQuery"/>).
+/// <c>nodeType:Skill</c> union: the chatting user's <c>{user}/Skill</c> + the current space's partition
+/// subtree + the node type's partition subtree + the platform <c>Skill</c> catalog (the layered set
+/// <c>AgentPickerProjection.BuildSkillQueries</c> defines, which the agent framework also consumes).
 /// The per-user/per-space legs are RLS-gated, so they only appear if the GUI forwards the user's
 /// AccessContext through the Monaco completion JS-interop hop (where the circuit's AsyncLocal context is
 /// nulled). This test drives the REAL Monaco <c>/</c> suggest widget — the only way to exercise that hop.
