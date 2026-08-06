@@ -1,6 +1,5 @@
 using System.Text.Json;
 using MeshWeaver.Data.Completion;
-using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.Completion;
 using MeshWeaver.Hosting.Persistence.Http;
 using MeshWeaver.Hosting.Persistence.Query;
