@@ -1,5 +1,7 @@
 ﻿using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging.Serialization;
@@ -72,9 +74,73 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         typeByName[typeName] = typeDefinition;
         nameByType[type] = typeName;
         IndexFullNameAlias(type, typeDefinition, typeName);
+        TrackCollectible(type);
 
         return this;
     }
+
+    // Collectible load contexts this registry currently holds types from, so it subscribes to each
+    // one's Unloading exactly once. ConditionalWeakTable and NOT a dictionary: an ALC used as a
+    // dictionary KEY is a strong root, which is the very leak this eviction exists to close.
+    private readonly ConditionalWeakTable<AssemblyLoadContext, object> trackedContexts = new();
+
+    /// <summary>
+    /// A registry entry for a type from a COLLECTIBLE assembly (a dynamically compiled node — every
+    /// recompile mints a new assembly with a new CLR identity) strongly roots that assembly's
+    /// <see cref="AssemblyLoadContext"/>. Two consequences, exactly as for Autofac's shared
+    /// reflection cache (<c>ReflectionCacheEviction</c>, which mirrors this for its own store):
+    /// <list type="number">
+    /// <item>the context can never be collected — an unbounded leak; and</item>
+    /// <item>after the context IS unloaded, anything walking this registry dereferences <b>freed
+    /// metadata</b> → <see cref="AccessViolationException"/> / SIGSEGV. That is not hypothetical:
+    /// <c>PolymorphicTypeInfoResolver.ComputeDerivedTypes</c> enumerates <see cref="Types"/> and
+    /// calls <c>IsAssignableFrom</c> on every entry, and a CI core dump caught it faulting there
+    /// while FutuRe's node types sat at recompile v5/v8/v15 (exit=139, no failing test).</item>
+    /// </list>
+    /// So the registry cleans up after itself: it subscribes to the context's <c>Unloading</c> the
+    /// first time it takes a type from it. The event holds a delegate to THIS registry, never the
+    /// reverse — the only reference to the context is the weak key below, so nothing here defeats
+    /// the collection it enables.
+    /// </summary>
+    private void TrackCollectible(Type type)
+    {
+        if (!type.Assembly.IsCollectible)
+            return;
+        var context = AssemblyLoadContext.GetLoadContext(type.Assembly);
+        if (context is null || !context.IsCollectible)
+            return;
+        // AddOrUpdate would re-subscribe on every registration; Add throws on a duplicate key, so
+        // TryAdd-shaped semantics via TryGetValue keeps it to one handler per context.
+        if (trackedContexts.TryGetValue(context, out _))
+            return;
+        trackedContexts.Add(context, Sentinel);
+        context.Unloading += EvictLoadContext;
+    }
+
+    private static readonly object Sentinel = new();
+
+    /// <summary>
+    /// Drops every entry whose type came from <paramref name="context"/>. Runs from the context's
+    /// <c>Unloading</c> event — i.e. BEFORE the metadata is freed, while <c>type.Assembly</c> is
+    /// still safe to read.
+    /// </summary>
+    public void EvictLoadContext(AssemblyLoadContext context)
+    {
+        foreach (var (name, definition) in typeByName)
+            if (BelongsTo(definition.Type, context))
+                typeByName.TryRemove(name, out _);
+        foreach (var (name, definition) in aliasByName)
+            if (BelongsTo(definition.Type, context))
+                aliasByName.TryRemove(name, out _);
+        foreach (var (type, _) in nameByType)
+            if (BelongsTo(type, context))
+                nameByType.TryRemove(type, out _);
+        trackedContexts.Remove(context);
+        context.Unloading -= EvictLoadContext;
+    }
+
+    private static bool BelongsTo(Type type, AssemblyLoadContext context) =>
+        type.Assembly.IsCollectible && AssemblyLoadContext.GetLoadContext(type.Assembly) == context;
 
     // Resolution alias: index the full (namespace-qualified) name alongside the canonical name, so a
     // full-name $type discriminator — persisted data, OR a payload written before the short-name $type
