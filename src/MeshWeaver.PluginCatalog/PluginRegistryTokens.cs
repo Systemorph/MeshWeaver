@@ -18,8 +18,11 @@ namespace MeshWeaver.PluginCatalog;
 /// </summary>
 public static class PluginRegistryTokens
 {
-    /// <summary>Config key holding the registry's issued instance tokens
+    /// <summary>Config key that used to hold the registry's issued instance tokens
     /// (<c>PluginCatalog:RegistryTokens:0</c>, <c>:1</c>, …).</summary>
+    [Obsolete("Superseded by registered MeshWeaverInstance nodes. The registry no longer reads this " +
+              "list; a caller presents an instance key (InstanceKeys) that resolves to an instance " +
+              "and its admin-owned PluginGrant. Left only so an existing config binding still compiles.")]
     public const string SectionName = "PluginCatalog:RegistryTokens";
 
     /// <summary>The HTTP auth scheme the token travels under.</summary>
@@ -35,6 +38,10 @@ public static class PluginRegistryTokens
     /// (<see cref="CryptographicOperations.FixedTimeEquals(ReadOnlySpan{byte}, ReadOnlySpan{byte})"/>)
     /// so a mismatch reveals nothing about how much of a token matched.
     /// </summary>
+    [Obsolete("Superseded by InstanceRegistryAuthenticator: a flat allowlist cannot express WHICH " +
+              "plugins an instance may pull, and it was open when unset — which is how this registry " +
+              "served its private sources anonymously until 2026-08-06. Resolve an instance key to a " +
+              "MeshWeaverInstance + PluginGrant instead.")]
     public static bool Validate(string? authorizationHeader, IReadOnlyCollection<string> issuedTokens)
     {
         if (issuedTokens.Count == 0 || string.IsNullOrWhiteSpace(authorizationHeader))
