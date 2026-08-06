@@ -689,12 +689,19 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                     DataChangeNotification[] backlog;
                     // 1) Set up live subscription first — starts buffering immediately.
                     var changeBuffer = new Subject<DataChangeNotification>();
-                    disposables.Add(changeBuffer);
+                    // 🚨 ORDER MATTERS. CompositeDisposable disposes in INSERTION order, so the
+                    // feeding subscription must be registered BEFORE the buffer it writes into.
+                    // The other way round, teardown disposes changeBuffer first while the
+                    // subscription is still live, and a write landing in that window calls OnNext
+                    // on a disposed Subject → ObjectDisposedException thrown back into the
+                    // adapter's fan-out. That is what starved the $security-access query of its
+                    // notification and froze the permission fold (see IsolatedChangeFeed).
                     disposables.Add(
                         _adapter.Changes
                             .Where(n => parsedFilters.Any(f =>
                                 PathMatcher.ShouldNotifyForQuery(n.Path, f.BasePath, f.Scope, f.Namespaces)))
                             .Subscribe(changeBuffer));
+                    disposables.Add(changeBuffer);
                     // 🚨 Strict unit-of-work + zero debounce: every change
                     // triggers its own RunQuery, serialised via Concat so the
                     // shared currentItems dictionary is never raced. Buffer
