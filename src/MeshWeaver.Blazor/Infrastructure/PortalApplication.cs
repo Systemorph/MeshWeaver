@@ -125,6 +125,11 @@ public class PortalApplication : IDisposable
         // (stream.Update writes, fire-and-forget posts). See PortalErrorSink.
         if (errorSink is not null)
             config = config.WithPortalErrorReporting(errorSink);
+        // 🚨 Node CRUD issued from this circuit's hub runs on the PORTAL hub, never the mesh router —
+        // MeshExtensions.NodeOperationTarget walks up to the nearest hub that declared itself an
+        // execution target. The portal hub qualifies because it carries no per-node access pipeline;
+        // a per-node hub deliberately does not (see WithNodeOperationExecution).
+        config = config.WithNodeOperationExecution();
         // 🚨 SOURCE of the never-null AccessContext invariant for the portal hub.
         // This PostPipeline step runs OUTERMOST (added after UserServicePostPipeline, and
         // AddPipeline wraps outer-first) so it stamps the circuit user BEFORE

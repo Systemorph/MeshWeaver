@@ -123,6 +123,75 @@ public static class MeshExtensions
 
     private sealed record NodeOperationHandlersMarker;
 
+    private sealed record NodeOperationExecutionMarker;
+
+    /// <summary>
+    /// Declares this hub a node-CRUD EXECUTION TARGET: <see cref="NodeOperationTarget"/> will send
+    /// <see cref="CreateNodeRequest"/> and friends here instead of to the root mesh hub. Implies
+    /// <see cref="WithNodeOperationHandlers"/>; idempotent.
+    ///
+    /// <para>🚨 <b>This is deliberately NOT the same marker as
+    /// <see cref="WithNodeOperationHandlers"/>.</b> Every per-node hub registers the handlers (via
+    /// <c>AddMeshDataSource</c>) because it must be able to RECEIVE node ops addressed to its own
+    /// node — the delete fan-out posts <c>DeleteNodeRequest</c> to <c>new Address(path)</c>, and the
+    /// create handler forwards its <c>Argument</c> the same way. Handling ops for YOUR node says
+    /// nothing about being a good place to EXECUTE someone else's write, so the two capabilities need
+    /// two markers. Conflating them targets a caller's own node hub, and per-node hubs are exactly
+    /// the ones carrying <c>AddAccessControlPipeline</c>, whose
+    /// <c>CreateNodePermissionAttribute</c> anchors its check at the RECEIVING HUB's path: a learner
+    /// copying a course module into their own partition was denied
+    /// "lacks Create permission on 'TestCourse/Module1/Ex1'" — Create evaluated on the read-only
+    /// source they were merely rendering. Silent privilege reduction, and the exact hazard
+    /// <c>EducationLayoutAreas.EnsurePersonalCopy</c> documents.</para>
+    ///
+    /// <para>So this marker goes only on hubs that are a genuine off-router work queue and carry no
+    /// per-node access pipeline: the dedicated <c>import/{id}</c> hub, an MCP session hub, the Blazor
+    /// portal hub.</para>
+    /// </summary>
+    /// <param name="config">The hub configuration.</param>
+    /// <returns>The configuration for chaining.</returns>
+    public static MessageHubConfiguration WithNodeOperationExecution(this MessageHubConfiguration config)
+        => config.Get<NodeOperationExecutionMarker>() is not null
+            ? config
+            : config.Set(new NodeOperationExecutionMarker()).WithNodeOperationHandlers();
+
+    /// <summary>
+    /// The address node CRUD (<see cref="CreateNodeRequest"/> and friends) must be TARGETED at: the
+    /// NEAREST hub up the parent chain that opted in via <see cref="WithNodeOperationExecution"/>
+    /// and is not the root mesh hub.
+    ///
+    /// <para>🚨 <b>The mesh hub is the ROUTER — it must not execute work.</b> Targeting it makes every
+    /// create/delete/move run on the router's own action block; a burst starves real
+    /// <c>SubscribeRequest</c> traffic and the whole portal wedges (atioz 2026-06-11:
+    /// "11× CreateOrUpdateNodeRequest + 3× CreateNodeRequest@mesh/&lt;self&gt; stale &gt;60s"). The
+    /// dedicated <c>import/{id}</c> hub exists precisely to keep bulk creates off the router, but
+    /// <c>MeshService</c> used to post to <c>GetMeshHub()</c> unconditionally — so that isolation
+    /// bought nothing. This walk is what makes it real.</para>
+    ///
+    /// <para>Falls back to the mesh root whenever no ancestor opted in — which is still the common
+    /// case (a per-node hub rendering a layout area), so that traffic behaves exactly as before.</para>
+    /// </summary>
+    /// <param name="hub">The hub issuing the operation.</param>
+    /// <returns>The address to target.</returns>
+    public static Address NodeOperationTarget(this IMessageHub hub)
+    {
+        // Walk with the SAME self-reference guard GetMeshHub uses: a hub whose ParentHub resolves
+        // to itself (the root) would otherwise spin this loop forever — an infinite loop on the
+        // CRUD path, which presents as a hang, not an error.
+        var current = hub;
+        while (current is not null)
+        {
+            if (current.Configuration.Get<NodeOperationExecutionMarker>() is not null
+                && !string.Equals(current.Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal))
+                return current.Address;
+            var parent = current.Configuration.ParentHub;
+            if (parent is null || ReferenceEquals(parent, current))
+                break;
+            current = parent;
+        }
+        return hub.GetMeshHub().Address;
+    }
+
     /// <summary>
     /// Registers handlers for mesh node operations. Idempotent — calling twice on the
     /// same configuration is a no-op on the second call. Without this guard, every
