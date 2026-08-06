@@ -1,6 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 <PropertyGroup>
     <Nullable>enable</Nullable>
+    <!-- MAAI001: opt in to the Microsoft Agent Framework's [Experimental] storage abstractions
+         (AgentFileStore, AgentSkillsSource) that MeshWeaver.AI.Stores implements over mesh nodes.
+         Scoped deliberately to this one diagnostic — not a blanket suppression. -->
+    <NoWarn>$(NoWarn);MAAI001</NoWarn>
 </PropertyGroup>
     <ItemGroup>
         <!-- The AI content SECTION (repo-root content/ai) ships the built-in Agent and Skill nodes
@@ -26,6 +30,9 @@
         <PackageReference Include="Azure.AI.OpenAI" />
         <PackageReference Include="Azure.Core" />
         <PackageReference Include="HtmlAgilityPack" />
+        <!-- Glob matching for MeshNodeAgentFileStore.Search — the same Matcher semantics MAF's own
+             AgentFileStore documents for its globPattern parameter. -->
+        <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" />
         <PackageReference Include="Microsoft.Extensions.Http" />
         <PackageReference Include="Microsoft.Extensions.AI" />
         <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
