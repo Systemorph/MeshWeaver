@@ -271,7 +271,7 @@ var rows = string.Join("\n", items.Select(i =>
 MeshWeaver.Layout.Controls.Markdown(
     $"| Label | Area | Permission | Order |\n" +
     $"|-------|------|------------|------:|\n" +
-    rows);
+    rows)
 ```
 
 ---

@@ -455,7 +455,7 @@ var bodyRows = string.Join("", rows.Select(r =>
     $"<tr><td><code>{r.Type}</code></td><td>{r.Purpose}</td><td><code>{r.Example}</code></td></tr>"));
 
 MeshWeaver.Layout.Controls.Html(
-    $"<table style='width:100%;border-collapse:collapse'>{header}<tbody>{bodyRows}</tbody></table>");
+    $"<table style='width:100%;border-collapse:collapse'>{header}<tbody>{bodyRows}</tbody></table>")
 ```
 
 ---

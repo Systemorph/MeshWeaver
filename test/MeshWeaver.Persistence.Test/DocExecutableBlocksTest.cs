@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Documentation;
@@ -153,5 +154,81 @@ public class DocExecutableBlocksTest(ITestOutputHelper output) : MonolithMeshTes
         totalBlocks.Should().BeGreaterThanOrEqualTo(MinExecutableBlocks,
             "the total number of executable doc blocks must not regress "
             + "(raise the ratchet when adding blocks)");
+    }
+
+    /// <summary>
+    /// A <c>--render</c> block must END IN AN EXPRESSION, never a statement.
+    ///
+    /// <para>
+    /// 🚨 This is the one defect <see cref="EveryExecutableBlock_ExecutesInKernel"/> structurally
+    /// CANNOT catch. Roslyn scripting yields a submission value only for a trailing EXPRESSION; a
+    /// trailing statement (anything ending in <c>;</c>) yields nothing. The cell then runs perfectly
+    /// — <see cref="SubmitCodeResponse.Success"/> is <c>true</c>, there is no <c>Error</c> — but it
+    /// produces NO control, so the page's area never receives its first data and renders the
+    /// "Rendering {area}… awaiting first data" skeleton forever. And
+    /// <see cref="SubmitCodeResponse"/> carries only <c>SubmissionId</c>/<c>Success</c>/<c>Error</c>
+    /// — no produced value — so no execution-level assertion can see the difference. The check has
+    /// to be on the SOURCE.
+    /// </para>
+    ///
+    /// <para>
+    /// Found 2026-08-06: <c>DataMesh/CRUD</c>, <c>DataMesh/NodeTypeConfiguration</c> and
+    /// <c>GUI/NodeMenu</c> had each acquired a trailing semicolon and had been rendering an empty
+    /// skeleton in the browser, green in CI the whole time. Only the browser sweep
+    /// (<c>DocExamplesRenderTest</c>) saw it, and that suite does not run in CI — so nothing caught
+    /// it. This fact closes that gap in the suite that DOES run.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void RenderBlocks_EndInAnExpression_SoTheAreaReceivesAControl()
+    {
+        var assembly = typeof(DocumentationExtensions).Assembly;
+        var prefix = $"{assembly.GetName().Name}.Data.";
+        var offenders = new List<string>();
+        var checkedBlocks = 0;
+
+        foreach (var name in assembly.GetManifestResourceNames()
+                     .Where(n => n.StartsWith(prefix, StringComparison.Ordinal)
+                                 && n.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                     .OrderBy(n => n, StringComparer.Ordinal))
+        {
+            using var stream = assembly.GetManifestResourceStream(name)!;
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            var lines = reader.ReadToEnd().Split('\n');
+
+            for (var i = 0; i < lines.Length; i++)
+            {
+                // A --render fence, per CommonMark: ≤3 spaces of indent then a ``` run. A
+                // deeper-indented fence is CONTENT (an escaped teaching sample), not a fence.
+                if (!Regex.IsMatch(lines[i], @"^ {0,3}`{3,}\s*csharp\s+.*--render(\s|$)"))
+                    continue;
+
+                var body = new List<string>();
+                var j = i + 1;
+                for (; j < lines.Length && !Regex.IsMatch(lines[j], @"^ {0,3}`{3,}\s*\r?$"); j++)
+                    body.Add(lines[j].TrimEnd('\r'));
+
+                var last = body.LastOrDefault(l =>
+                    !string.IsNullOrWhiteSpace(l) && !l.TrimStart().StartsWith("//", StringComparison.Ordinal));
+                checkedBlocks++;
+
+                if (last is not null && last.TrimEnd().EndsWith(";", StringComparison.Ordinal))
+                {
+                    var area = Regex.Match(lines[i], @"--render\s+(\S+)").Groups[1].Value;
+                    offenders.Add(
+                        $"{name[prefix.Length..]} (--render {area}): last line is a STATEMENT — '{last.Trim()}'");
+                }
+
+                i = j;
+            }
+        }
+
+        Output.WriteLine($"--render blocks checked: {checkedBlocks}");
+        checkedBlocks.Should().BeGreaterThan(0, "the scan must actually find --render blocks");
+        offenders.Should().BeEmpty(
+            "a --render block must end in an EXPRESSION so the submission yields the control the "
+            + "area binds to; a trailing ';' executes green but renders an empty skeleton forever. "
+            + "Drop the trailing semicolon. Offenders:\n{0}",
+            string.Join("\n", offenders));
     }
 }
