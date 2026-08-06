@@ -87,6 +87,57 @@ public class PackageInstallTest(ITestOutputHelper output) : MonolithMeshTestBase
         }
     }
 
+    /// <summary>
+    /// 🚨 An install must leave its partition root ACTIVATED, not dark.
+    ///
+    /// <para>An install runs entirely as SYSTEM and used to never touch the root hub of what it wrote.
+    /// A node type's gating — which seeds the cover grants that make the partition readable — runs on
+    /// HUB ACTIVATION, and a viewer cannot activate a hub they hold no Read on yet. So nothing ever
+    /// started it: a fully installed package that nobody could open (observed as a compiled Store with
+    /// 286 straight denials, and as the education gate painting an empty "your exercises" grid, where
+    /// the harness only recovered by having an admin RECYCLE the roots — something no real learner can
+    /// do).</para>
+    ///
+    /// <para>Probed with <see cref="HostedHubCreation.Never"/>, which is a pure read: asking for the
+    /// stream instead would itself activate the hub and the assertion would pass vacuously.</para>
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task Install_LeavesTheInstalledRootActivated_NotDark()
+    {
+        var repo = CreateTempDir();
+        try
+        {
+            var git = new GitCli(Mesh.ServiceProvider.GetRequiredService<IoPoolRegistry>());
+            WriteFile(repo, "warm-pack/package.json",
+                """{"id":"warm-pack","name":"Warm Pack","kind":"content","targetPartition":"WarmTest","version":"1.0.0"}""");
+            WriteFile(repo, "warm-pack/Page.md", "# Warm\n\nThe root must be live once this lands.");
+
+            await git.Run(repo, ["init"]).FirstAsync().ToTask();
+            await git.Run(repo, ["add", "-A"]).FirstAsync().ToTask();
+            await git.Run(repo, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init"])
+                .FirstAsync().ToTask();
+
+            var source = new GitPackageSource(git, repo);
+            var pkg = (await source.ListPackages("HEAD").FirstAsync().ToTask())[0];
+            var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().ToTask();
+
+            // Nothing has touched the partition yet — the hub must not exist before the install.
+            Mesh.GetHostedHub(new Address("WarmTest"), c => c, HostedHubCreation.Never)
+                .Should().BeNull("nothing has activated the partition before its install");
+
+            await PackageInstaller.Install(Mesh, pkg, files, "HEAD").FirstAsync().ToTask();
+
+            Mesh.GetHostedHub(new Address("WarmTest"), c => c, HostedHubCreation.Never)
+                .Should().NotBeNull(
+                    "the installer must warm the root it just wrote — otherwise its gating never runs "
+                    + "and nobody but an admin recycling it can ever open the partition");
+        }
+        finally
+        {
+            TryDelete(repo);
+        }
+    }
+
     [Fact(Timeout = 120000)]
     public async Task AgentPackage_InstallsAsAgentNode()
     {

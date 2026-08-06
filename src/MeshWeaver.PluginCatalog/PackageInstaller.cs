@@ -1,6 +1,9 @@
 using System.Collections.Immutable;
+using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -108,7 +111,9 @@ public static class PackageInstaller
                 logger?.LogInformation(
                     "Installed package {Id} v{Version}: {Written} written, {Unchanged} unchanged into {Partition} @ {Ref}",
                     manifest.Id, manifest.Version, result.Written, result.Unchanged, partition, installedFromRef);
-                return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length).Select(_ => result);
+                return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length)
+                    .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
+                    .Select(_ => result);
             });
     }
 
@@ -149,6 +154,68 @@ public static class PackageInstaller
     // Internal for the BuildCompletionSubscriptionTest pin (InternalsVisibleTo).
     internal static bool SeedAutoUpdate(PackageManifest? existingRecord, PluginCatalogOptions? options) =>
         existingRecord?.AutoUpdate ?? options?.AutoUpdateByDefault ?? false;
+
+    /// <summary>How long one root gets to activate before the warm gives up on it.</summary>
+    private static readonly TimeSpan WarmTimeout = TimeSpan.FromSeconds(90);
+
+    /// <summary>
+    /// ACTIVATES each partition root this install just wrote, by opening its node stream once.
+    ///
+    /// <para>🚨 Without this a fresh install lands <b>DARK</b>. An install runs entirely as SYSTEM and
+    /// never touches the installed partition's root hub; a node type's gating (which seeds the cover
+    /// grants that make the partition readable) runs on HUB ACTIVATION; and a viewer cannot activate a
+    /// hub they hold no Read on yet. So nobody can open what was just installed — observed as a fully
+    /// installed Store with compiled types and 286 straight denials, and as the education install gate
+    /// painting an empty "your exercises" grid. The Store's own <c>PluginHubWarmer</c> covers
+    /// <c>Store/Plugin</c> roots once they appear, but nothing covers a partition core installs that
+    /// is not a plugin — a course, for instance. The installer is the one component that always knows
+    /// what it just wrote, so the first touch belongs here.</para>
+    ///
+    /// <para>SYSTEM, explicitly and inside the subscription: the install pipeline hops schedulers and
+    /// an ambient impersonation does not survive the hop (the same reason <c>Upsert</c> scopes its own).
+    /// Sequential (<c>Concat</c>), because each activation's gating pass writes its partition's access
+    /// table and concurrent passes deadlock (40P01) on the shared effective-permissions rebuild.</para>
+    ///
+    /// <para>Best-effort by design: the content has already landed and been recorded, so a root that
+    /// will not activate is logged and stepped over rather than failing an install that succeeded.</para>
+    /// </summary>
+    private static IObservable<Unit> WarmInstalledRoots(
+        IMessageHub hub, IEnumerable<string> paths, ILogger? logger)
+    {
+        var workspace = hub.GetWorkspace();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var roots = paths
+            .Select(path => path.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault())
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .Select(root => root!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (roots.Length == 0)
+            return Observable.Return(Unit.Default);
+
+        return roots
+            .Select(root => Observable
+                .Using(
+                    () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
+                    _ => workspace.GetMeshNodeStream(root)
+                        .Where(node => node is not null)
+                        .Take(1)
+                        .Timeout(WarmTimeout))
+                .Select(_ => root)
+                .Catch<string, Exception>(exception =>
+                {
+                    logger?.LogWarning(exception,
+                        "[PackageInstaller] warming installed root {Root} failed — it stays dark until "
+                        + "something else activates it", root);
+                    return Observable.Empty<string>();
+                }))
+            .ToObservable()
+            .Concat()
+            .Do(root => logger?.LogInformation("[PackageInstaller] warmed installed root {Root}", root))
+            .DefaultIfEmpty(string.Empty)
+            .LastAsync()
+            .Select(_ => Unit.Default);
+    }
 
     private static IObservable<MeshNode> WriteInstalledRecord(
         IMessageHub hub, PackageManifest manifest, string installedFromRef, int count,
@@ -273,7 +340,9 @@ public static class PackageInstaller
                             onError: msg => logger?.LogWarning(
                                 "Release request for {Path} failed: {Msg}", nodeTypePath, msg));
                 }
-                return WriteInstalledRecord(hub, manifest, installedFromRef, all.Length).Select(_ => result);
+                return WriteInstalledRecord(hub, manifest, installedFromRef, all.Length)
+                    .SelectMany(_ => WarmInstalledRoots(hub, all.Select(n => n.Path), logger))
+                    .Select(_ => result);
             });
     }
 
@@ -864,6 +933,7 @@ public static class PackageInstaller
                                 onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
                 }
                 return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length, moduleManifest)
+                    .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
                     .Select(_ => result);
             }));
             });
@@ -1008,6 +1078,7 @@ public static class PackageInstaller
                 }
                 return WriteInstalledRecord(hub, manifest, installedFromRef,
                         newManifest.Files.Count, newManifest)
+                    .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
                     .Select(_ => result);
             });
     }
