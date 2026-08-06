@@ -104,6 +104,20 @@ Run these in order; each one kills off a class of hypothesis.
 5. **`verifyheap`** — clean output means **no GC heap corruption**, which distinguishes "this code is
    the culprit" from "this code is an innocent victim of corruption elsewhere". Requires
    `DbgMiniDumpType: 2` (already set).
+
+   ⚠️ **It may not run at all.** On a large dump `dotnet-dump` can die inside its own scan:
+
+   ```
+   Scanning heap: 6 MB / 266 MB (2%)...
+   Unhandled exception: System.NullReferenceException
+      at Microsoft.Diagnostics.DebugServices.Implementation.Utilities.Invoke(…)
+   ```
+
+   That is the TOOL failing, not a verdict — it says nothing about the heap either way. Do not read
+   it as "clean" and do not retry it hoping for a different answer (2026-08-06, a 1.2 GB FutuRe
+   dump). When it happens, step 5 is simply unavailable: say so rather than implying culprit-vs-victim
+   was established, and get the confidence elsewhere — a **deterministic repro** is worth more than
+   `verifyheap` anyway, because it pins the cause instead of describing the wreckage.
 6. **`eeheap -gc`** — heap size, to rule in/out memory pressure. Cross-check against
    `_meshweaver-memory-delta.log` in the same artifact for the deltas around the crash.
 
