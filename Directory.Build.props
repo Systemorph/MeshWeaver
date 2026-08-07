@@ -49,8 +49,22 @@
          +build.<ticks> suffix below keeps every build distinct (NodeType cache invalidation).
          It is also the content-version for static-repo / GitHub data-sync
          (Doc/Architecture/DataSyncSetup.md §3): a release tagged v$(PlatformVersion) is what
-         a deployed binary syncs from. -->
-    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0</PlatformVersion>
+         a deployed binary syncs from.
+
+         🚨 The -rc1 label is NOT cosmetic — dropping it breaks SemVer PRECEDENCE against the
+         already-published v3.0.0-preview1. Pre-release identifiers compare ASCII-lexically
+         (SemVer §11.4), and "ci" < "preview1", so a bare 3.0.0 core yields:
+
+             3.0.0-ci.2054      <  3.0.0-preview1      ← every CI build sorts BELOW the old preview
+             3.0.0-rc1.ci.2054  >  3.0.0-preview1      ← correct
+
+         The self-updater picks the NEWEST version off the registry (ReleaseStrategy.md), so with
+         a bare core it would pin to 3.0.0-preview1 the moment that image reached the registry and
+         never roll forward again. Keep a pre-release label on the core until 3.0.0 ships clean.
+
+         It also has to RESOLVE: data-sync pulls content from the tag v$(PlatformVersion), and
+         v3.0.0 does not exist (only v3.0.0-preview1 and now v3.0.0-rc1). -->
+    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0-rc1</PlatformVersion>
   </PropertyGroup>
   <!-- Multi-arch container publish race fix (main-cd / release-images / edge-images pass
        -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"). The SDK's _PublishMultiArchContainers
