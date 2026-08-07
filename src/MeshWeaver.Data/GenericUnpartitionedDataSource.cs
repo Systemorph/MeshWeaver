@@ -641,13 +641,28 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
         stream.RegisterForDisposal(
             stream
                 .Synchronize()
-                .Where(x => isFirst || (x.ChangedBy is not null && !x.ChangedBy.Equals(Id)))
+                .Where(x => isFirst || x.ChangedBy is null || !x.ChangedBy.Equals(Id))
                 .Subscribe(change =>
                 {
                     if (isFirst)
                     {
                         isFirst = false;
                         return; // Skip processing on first emission (initialization)
+                    }
+                    // #678: every local producer attributes ChangedBy (ApplyChanges falls back
+                    // to StreamId, BuildChangeItem/patch adoption to ClientId) — the one
+                    // remaining null producer is cross-hub Full adoption, which never targets a
+                    // data-source stream. An unattributed change here is therefore an invariant
+                    // breach, and it used to be dropped by the Where with NO trace —
+                    // indistinguishable from a write that never happened. Keep the drop (a
+                    // change we cannot attribute must not be echoed into the type sources,
+                    // where it could double-apply as someone else's write), but make it LOUD.
+                    if (change.ChangedBy is null)
+                    {
+                        Logger.LogWarning(
+                            "Data source stream {Id}: DROPPED an unattributed change (ChangedBy=null, ChangeType={ChangeType}, Version={Version}) — invariant breach, see #678",
+                            Id, change.ChangeType, change.Version);
+                        return;
                     }
                     // A single bad change must NOT kill the data-source sync
                     // subscription — if it does, every query/catalog fed by this
@@ -765,13 +780,28 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
         stream.RegisterForDisposal(
             stream
                 .Synchronize()
-                .Where(x => isFirst || (x.ChangedBy is not null && !x.ChangedBy.Equals(Id)))
+                .Where(x => isFirst || x.ChangedBy is null || !x.ChangedBy.Equals(Id))
                 .Subscribe(change =>
                 {
                     if (isFirst)
                     {
                         isFirst = false;
                         return; // Skip processing on first emission (initialization)
+                    }
+                    // #678: every local producer attributes ChangedBy (ApplyChanges falls back
+                    // to StreamId, BuildChangeItem/patch adoption to ClientId) — the one
+                    // remaining null producer is cross-hub Full adoption, which never targets a
+                    // data-source stream. An unattributed change here is therefore an invariant
+                    // breach, and it used to be dropped by the Where with NO trace —
+                    // indistinguishable from a write that never happened. Keep the drop (a
+                    // change we cannot attribute must not be echoed into the type sources,
+                    // where it could double-apply as someone else's write), but make it LOUD.
+                    if (change.ChangedBy is null)
+                    {
+                        Logger.LogWarning(
+                            "Data source stream {Id}: DROPPED an unattributed change (ChangedBy=null, ChangeType={ChangeType}, Version={Version}) — invariant breach, see #678",
+                            Id, change.ChangeType, change.Version);
+                        return;
                     }
                     // A single bad change must NOT kill the data-source sync
                     // subscription — if it does, every query/catalog fed by this
