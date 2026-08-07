@@ -1413,9 +1413,23 @@ internal static class NodeTypeCompilationHelpers
                             $"Roslyn produced assembly at: {outcome.Result!.AssemblyLocation}",
                             LogLevel.Information));
                     else
+                    {
                         activityMessages.Add(new LogMessage(
                             $"Roslyn failed: {outcome.Error?.Message ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs ? string.Join("; ", errs.Select(m => m.Message)) : "Compilation produced no assembly")}",
                             LogLevel.Error));
+                        // 🚨 Non-Roslyn abort (an infrastructure exception escaping the compile
+                        // pipeline — NOT a CompilationException, whose message already carries the
+                        // full diagnostics): record the exception TYPE + STACK on the activity log.
+                        // Reducing the fault to `.Message` everywhere made the recurring CI
+                        // first-compile "Object reference not set to an instance of an object"
+                        // (#612, PR-884 run 31153582625) UNDIAGNOSABLE — no sink anywhere carried
+                        // the throw site. The activity log is THE official diagnosis surface;
+                        // faults must reach it whole (wedges-to-zero).
+                        if (outcome.Error is not null and not CompilationException)
+                            activityMessages.Add(new LogMessage(
+                                $"Compile aborted by {outcome.Error.GetType().FullName}:\n{outcome.Error}",
+                                LogLevel.Error));
+                    }
                     if (newReleasePath is not null)
                         activityMessages.Add(new LogMessage(
                             $"Release created: {newReleasePath}", LogLevel.Information));
@@ -1488,11 +1502,23 @@ internal static class NodeTypeCompilationHelpers
                             };
                         }
 
-                        var errorSummary = outcome.Error?.Message
-                            ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
+                        // 🚨 Name the exception TYPE for a non-Roslyn abort. A bare `.Message`
+                        // ("Object reference not set to an instance of an object.") on the node's
+                        // CompilationError told the CI triage NOTHING about what died (#612 /
+                        // PR-884 occurrence); the full stack goes to the activity log above and to
+                        // the logger below — this UI-facing summary at least names the class.
+                        var errorSummary = outcome.Error switch
+                        {
+                            null => outcome.Result?.Log?.Errors() is { Count: > 0 } errs
                                 ? string.Join("; ", errs.Select(m => m.Message))
-                                : "Compilation produced no assembly");
-                        logger?.LogWarning("Compile failure for {HubPath}: {Error}", hubPath, errorSummary);
+                                : "Compilation produced no assembly",
+                            CompilationException ce => ce.Message,
+                            { } other => $"{other.GetType().Name}: {other.Message}",
+                        };
+                        // Pass the exception OBJECT so the stack reaches the log sink — message-only
+                        // logging is what left the recurring CI compile-NRE undiagnosable.
+                        logger?.LogWarning(outcome.Error,
+                            "Compile failure for {HubPath}: {Error}", hubPath, errorSummary);
                         return curr with
                         {
                             Content = def with
