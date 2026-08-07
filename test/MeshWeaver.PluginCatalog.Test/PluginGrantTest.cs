@@ -100,5 +100,39 @@ public class PluginGrantTest
             new PluginGrantEntry { Source = "Reinsurance", PackageId = "UWDeepfield" }.ToString());
     }
 
+    // TryParse reads the Source/Package notation off PluginCatalog:DefaultGrants config — the list
+    // a registry operator uses to opt sources into every new registration. Operator-typed, so a
+    // malformed entry must parse to null (skipped), never throw the registration surface down.
+    [Theory]
+    [InlineData("Plugins/*", "Plugins", "*")]
+    [InlineData("Plugins", "Plugins", "*")] // bare source = whole source
+    [InlineData("Reinsurance/UWDeepfield", "Reinsurance", "UWDeepfield")]
+    [InlineData("  Plugins / * ", "Plugins", "*")] // operator-typed: whitespace tolerated
+    public void TryParse_ReadsTheSourceSlashPackageNotation(string text, string source, string package)
+    {
+        var entry = PluginGrantEntry.TryParse(text);
+        Assert.NotNull(entry);
+        Assert.Equal(source, entry!.Source);
+        Assert.Equal(package, entry.PackageId);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("/")] // separator only — no source
+    [InlineData("/Store")] // no source
+    [InlineData("Plugins/")] // separator but nothing after it
+    public void TryParse_MalformedEntry_IsNullNotAThrow(string? text)
+        => Assert.Null(PluginGrantEntry.TryParse(text));
+
+    [Fact]
+    public void TryParse_RoundTripsToString()
+    {
+        // The notation is symmetric: what an entry renders as, TryParse reads back identically.
+        var entry = new PluginGrantEntry { Source = "Reinsurance", PackageId = "UWDeepfield" };
+        Assert.Equal(entry, PluginGrantEntry.TryParse(entry.ToString()));
+    }
+
     private static bool MemexAllows(string source, string package) => MemexGrant.Allows(source, package);
 }
