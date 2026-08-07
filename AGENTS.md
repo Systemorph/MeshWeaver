@@ -31,7 +31,9 @@ git worktree remove /Users/roland/code/MW-my-change   # once merged/abandoned
 
 CI builds **Release with warnings-as-errors**: `dotnet build --no-restore -c Release -p:CIRun=true -warnaserror`. A plain local `dotnet build` (Debug, no `-warnaserror`) passes while CI fails — warnings are promoted to errors there. Pushing a red branch wastes a CI cycle and, per the green-merge gate, blocks the pull-based self-update if it reaches main. So **before every push**:
 
-1. **Sync with `main` first.** `git fetch origin main && git merge origin/main` (or rebase). A PR check builds your branch **merged with current main** — a stale branch inherits main's state (including any half-committed-WIP red, e.g. a `.razor` referencing a type whose `.cs` wasn't committed), and you discover it only on CI. Build what CI builds.
+1. **🚨 Sync with `main` FIRST — every push, every PR, no exceptions.** `git fetch origin main && git merge origin/main` (or rebase), and do it again before you merge if main has moved since. A PR check builds your branch **merged with current main** — a stale branch inherits main's state (including any half-committed-WIP red, e.g. a `.razor` referencing a type whose `.cs` wasn't committed), and you discover it only on CI. Build what CI builds.
+
+   **This is now enforced**: the `main pr protection` ruleset sets `strict_required_status_checks_policy`, so GitHub refuses to merge a branch that is behind main. The rule exists because the cost is invisible and large — a stale branch re-samples flakes that main has ALREADY fixed, and every one of those looks like a defect in *your* change. PR #794 burned five CI runs and most of a day that way: three different red tests, two of them already fixed on main, none of them caused by the branch. **If CI fails on something your diff does not touch, merge main before you investigate anything.**
 2. **Build with CI's flags**: `dotnet build -c Release -warnaserror` for at least the projects you touched and their dependents. Green here ⇒ green there for compile/warning errors. The classic miss: **CS9107** — a primary-constructor parameter captured *and* passed to a base ctor (warning in Debug, ERROR under `-warnaserror`). Fix it at the root: use the base's exposed member (e.g. `protected Output`) instead of capturing the param; do NOT just `NoWarn` it.
 3. **Only push when that Release/`-warnaserror` build is clean.** Then verify the PR check went green (`gh pr checks`) before declaring done.
 
@@ -106,6 +108,40 @@ gh pr merge PR_NUMBER --merge
 ```
 
 **If `FORBIDDEN`**: re-authenticate with `! gh auth login`.
+
+### 🚨 A merged fix can look SHIPPED while producing no image — CD only reacts to a PUSH
+
+`main-cd.yml` builds and pushes the deployment images, and **every image job is gated on**:
+
+```yaml
+github.event.workflow_run.conclusion == 'success' &&
+github.event.workflow_run.event == 'push' &&          # <-- the trap
+github.event.workflow_run.head_branch == 'main'
+```
+
+Two ways that leaves a merged change undeployed, both of them SILENT:
+
+1. **No Build-and-Test run on main at all.** CD reacts to that workflow completing; if it never ran
+   on the merge commit (a CI incident, a stalled queue), CD sits `SKIPPED` forever with nothing to
+   react to. Merged, green PR, no image, portals never move.
+2. **You "fixed" it with `workflow_dispatch` — which can never ship.** The obvious repair is
+   `gh workflow run "MeshWeaver Build and Test" --ref main`. That RUNS and it genuinely tests the
+   merge commit (`workflow_dispatch` never reuses a green tree), so main ends up showing a **green
+   Build-and-Test**. But its `event` is `workflow_dispatch`, not `push`, so CD **still** skips. You
+   now have the most convincing possible "it shipped" signal — green main — and no image.
+   `main-cd.yml` has no `workflow_dispatch` trigger of its own, so CD cannot be kicked directly.
+
+**Before believing something is deployed, check the IMAGE, never the green tick:**
+
+```bash
+az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv
+az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+  "kubectl get deploy -A -o custom-columns=NS:.metadata.namespace,IMAGE:.spec.template.spec.containers[0].image --no-headers | grep memex-portal-ai"
+```
+
+If no new tag exists, the only thing that produces one is a **real push to main** — i.e. the next PR
+merge. Then the portals self-update on their 6 h poll (`SelfUpdateOptions.PollInterval`), or
+immediately after `kubectl rollout restart` (the poll fires on startup via `StartWith(-1L)`).
 
 ### 🚨 "Is the build finished?" — filter by WORKFLOW, never wait for all check suites
 
