@@ -105,6 +105,43 @@ public class InstanceRegistrationDefaultGrantsTest(ITestOutputHelper output) : M
     }
 
     [Fact]
+    public async Task Register_GrantAlreadyCoveringDefaults_KeepsAdminAttribution()
+    {
+        // A grant node can pre-exist its instance (an admin re-provisioning after an orphan
+        // cleanup). When it already covers every configured default, the seed must not write at
+        // all — a no-op write would re-stamp GrantedByUserId/UpdatedAt to System/now and erase
+        // WHO last made the access decision.
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var preexisting = new MeshNode("dg-attributed-instance", MeshWeaverInstanceNodeType.GrantNamespace)
+        {
+            Name = "Plugin grant: dg-attributed-instance",
+            NodeType = MeshWeaverInstanceNodeType.GrantNodeType,
+            State = MeshNodeState.Active,
+            Content = new PluginGrant
+            {
+                InstanceId = "dg-attributed-instance",
+                Entries = [new PluginGrantEntry { Source = "Plugins" }],
+                GrantedByUserId = "admin-someone",
+                UpdatedAt = DateTimeOffset.UtcNow.AddDays(-1),
+            },
+        };
+        using (accessService.ImpersonateAsSystem())
+            await meshService.CreateNode(preexisting).Should().Emit();
+
+        await Service("Plugins/*").Register(
+                "user-defaults", "Default Grants", "defaults@test.com",
+                "dg-attributed-instance", "Attributed instance")
+            .Should().Emit();
+
+        var grantNode = await ReadGrantNode("dg-attributed-instance").Should().Emit();
+        var grant = grantNode!.ContentAs<PluginGrant>(Mesh.JsonSerializerOptions)!;
+        grant.GrantedByUserId.Should().Be("admin-someone",
+            "a seed that adds nothing must leave the admin's attribution untouched");
+        grant.Allows("Plugins", "Store").Should().BeTrue();
+    }
+
+    [Fact]
     public async Task Register_MalformedDefaultEntries_AreSkippedNotFatal()
     {
         // Operator-typed config: one bad entry must neither fail registration nor poison the list.

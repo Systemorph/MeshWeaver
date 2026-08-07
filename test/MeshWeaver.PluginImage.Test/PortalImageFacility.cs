@@ -202,13 +202,19 @@ public sealed class PortalImageFacility : IAsyncLifetime
     {
         SkipIfUnavailable();
 
-        var file = await _portal!.ExecAsync(new[]
-            { "sh", "-c", "ls /app/MeshWeaver.BusinessRules*.dll 2>/dev/null" });
-        Assert.NotEqual(0L, file.ExitCode);
+        // Assert the condition POSITIVELY (probe exits 0, count is 0) rather than off a non-zero
+        // `ls` exit — a broken probe (wrong path, missing shell) would also exit non-zero and make
+        // an absence assertion pass vacuously. The `ls /app/MeshWeaver.*.dll` guard proves the
+        // probe is looking at a real app directory full of platform assemblies.
+        var file = await _portal!.ExecAsync(new[] { "sh", "-c",
+            "ls /app/MeshWeaver.*.dll >/dev/null && ls /app/MeshWeaver.BusinessRules*.dll 2>/dev/null | wc -l" });
+        Assert.Equal(0L, file.ExitCode);
+        Assert.Equal("0", file.Stdout.Trim());
 
-        var deps = await _portal!.ExecAsync(new[]
-            { "sh", "-c", "grep -q '\"MeshWeaver.BusinessRules' /app/*.deps.json" });
-        Assert.NotEqual(0L, deps.ExitCode);
+        var deps = await _portal!.ExecAsync(new[] { "sh", "-c",
+            "ls /app/*.deps.json >/dev/null && grep -l 'MeshWeaver.BusinessRules' /app/*.deps.json | wc -l" });
+        Assert.Equal(0L, deps.ExitCode);
+        Assert.Equal("0", deps.Stdout.Trim());
     }
 
     public async ValueTask DisposeAsync() => await SafeDisposeAsync();
