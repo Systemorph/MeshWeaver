@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 using Xunit;
@@ -30,8 +31,37 @@ public class MemexTemplateGeneratorTest : IDisposable
     private string GeneratorScript =>
         Path.Combine(RepoRoot, "tools", "generate-memex-template.cs");
 
+    /// <summary>
+    /// Loud gate for the hidden network dependency (#679): <c>dotnet run script.cs</c>
+    /// implicitly RESTORES the file-based app, so an unreachable nuget.org fails every
+    /// test here with an NU1900 that points at NuGet internals — a phantom flake someone
+    /// then triages. Skipping with the cause on the result is honest. (Deliberately
+    /// duplicated from NuGetAssemblyResolverTest — this project is standalone, with no
+    /// shared test-utility reference to host a common helper.)
+    /// </summary>
+    private static async Task SkipUnlessNuGetOrgReachable()
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        try
+        {
+            using var response = await http.GetAsync("https://api.nuget.org/v3/index.json",
+                TestContext.Current.CancellationToken);
+            Assert.SkipUnless(response.IsSuccessStatusCode,
+                $"api.nuget.org service index answered {(int)response.StatusCode} — feed unhealthy; " +
+                "the generator's implicit restore needs the live feed (#679)");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            Assert.Skip($"api.nuget.org unreachable ({ex.GetType().Name}: {ex.Message}) — the " +
+                "generator's implicit `dotnet run` restore needs the live feed; a network outage " +
+                "presents as a SKIP, not a phantom test failure (#679)");
+        }
+    }
+
     private async Task RunGenerator(string version = "0.0.0-test")
     {
+        await SkipUnlessNuGetOrgReachable();
+
         var psi = new ProcessStartInfo("dotnet", $"run \"{GeneratorScript}\" -- {version} \"{RepoRoot}\" \"{_outputPath}\"")
         {
             WorkingDirectory = RepoRoot,
@@ -43,6 +73,19 @@ public class MemexTemplateGeneratorTest : IDisposable
         var stdout = await process.StandardOutput.ReadToEndAsync();
         var stderr = await process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
+
+        // The feed can die BETWEEN the probe above and the restore. NU1900 / "unable to
+        // load the service index" name exactly that condition and nothing the generator
+        // itself can cause — so it is the outage skip, not a masked generator defect.
+        if (process.ExitCode != 0)
+        {
+            var combined = stdout + stderr;
+            Assert.SkipWhen(
+                combined.Contains("NU1900") ||
+                combined.Contains("Unable to load the service index", StringComparison.OrdinalIgnoreCase),
+                "nuget.org became unreachable during the generator's implicit restore — network " +
+                $"outage, not a generator defect (#679).\nstdout: {stdout}\nstderr: {stderr}");
+        }
 
         process.ExitCode.Should().Be(0, $"generator failed.\nstdout: {stdout}\nstderr: {stderr}");
         _lastStdout = stdout;
