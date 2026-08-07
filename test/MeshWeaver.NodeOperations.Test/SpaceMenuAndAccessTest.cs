@@ -122,7 +122,12 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
         typeNames.Should().Contain("Thread", "Thread should be creatable under Space");
         typeNames.Should().Contain("Agent", "Agent should be creatable under Space");
 
-        await NodeFactory.DeleteNode(spaceId).Should().Emit();
+        // The recursive delete fans out a DeleteNodeRequest per descendant (here: the creator
+        // _Access grant), each ACTIVATING that leaf's per-node hub — 5-45s cold start on a loaded
+        // CI shard (HandleDeleteNodeRequest). The operation's own ceiling is
+        // MeshOperationOptions.Timeout (30s); waiting only the 10s assertion default sat BELOW the
+        // operation's contract and was the shard-5 red on otherwise-green runs.
+        await NodeFactory.DeleteNode(spaceId).Should().Within(30.Seconds()).Emit();
     }
 
     [Fact(Timeout = 60000)]
@@ -153,6 +158,8 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
         children.Should().Contain(c => c.NodeType == "Markdown" && c.Path == $"{spaceId}/Overview",
             "Overview markdown page should exist as child");
 
-        await NodeFactory.DeleteNode(spaceId).Should().Emit();
+        // Same wait-to-the-operation's-contract as above — this delete additionally fans out to
+        // the Overview child's hub, so two cold per-node activations sit inside the wait.
+        await NodeFactory.DeleteNode(spaceId).Should().Within(30.Seconds()).Emit();
     }
 }
