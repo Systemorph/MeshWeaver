@@ -91,7 +91,12 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         final.Messages.Select(m => m.Message).Should()
             .Contain(m => m.Contains("Loading fuse")).And
             .Contain(m => m.Contains("Boom!")).And
-            .Contain(m => m.Contains("ðŸŽ†"), "fireworks return value lands as the terminal message");
+            // 🚨 The fireworks return value is a CONTROL, and a control is rendered by UpdateView
+            // — KernelExecutor deliberately no longer ALSO logs its ToString(), which would print
+            // "HtmlControl { Id = , Style = … }" into the output pane beside the very thing it
+            // describes. So the log carries the 4 progress lines and not the return value.
+            .NotContain(m => m.Contains("HtmlControl"),
+                "a rendered control must not also be dumped as its record ToString()");
     }
 
     /// <summary>
@@ -120,7 +125,9 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             .Select(change => (Count: (change?.Content as ActivityLog)?.Messages.Count ?? 0,
                                ElapsedMs: sw.ElapsedMilliseconds))
             .DistinctUntilChanged(o => o.Count)
-            .TakeUntil(o => o.Count >= 5) // 4 progress + 1 fireworks return-value
+            // 4 progress lines. The fireworks RETURN VALUE is a control, which UpdateView renders
+            // and KernelExecutor deliberately does not also log — so it never becomes a message.
+            .TakeUntil(o => o.Count >= 4)
             .ToList()
             .Should().Within(30.Seconds()).Emit();
 
@@ -129,8 +136,9 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             + "single-tick delivery would mean the executor blocked the activity hub. Observed: ["
             + string.Join(", ", observations.Select(o => $"{o.Count}@{o.ElapsedMs}ms")) + "]");
 
-        observations.Last().Count.Should().Be(5,
-            "terminal snapshot should contain all 4 progress messages + fireworks return value");
+        observations.Last().Count.Should().Be(4,
+            "terminal snapshot should contain the 4 progress messages; the fireworks return value "
+            + "is a control, rendered by UpdateView rather than logged as its record ToString()");
     }
 
     /// <summary>

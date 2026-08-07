@@ -376,7 +376,16 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     if (returnValue is not null)
                     {
                         UpdateView(viewId, returnValue);
-                        scriptOutputLogger.LogInformation("{Value}", returnValue.ToString() ?? "");
+                        // A CONTROL is already rendered by UpdateView above — logging it as well
+                        // prints its record ToString() into the cell's output pane beside the very
+                        // thing it describes ("StackControl { Id = , Style = , Skins = System.
+                        // Collections.Immutable.ImmutableList`1[...] }"). Observed on
+                        // RiskTransfer/01-GrossToNet under the rendered loss-book grid.
+                        //
+                        // Everything else still logs: for `1 + 1` or a string, that line IS the
+                        // cell's output and the only thing the learner sees.
+                        if (returnValue is not IUiControl)
+                            scriptOutputLogger.LogInformation("{Value}", returnValue.ToString() ?? "");
                     }
                     return returnValue;
                 }));

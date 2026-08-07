@@ -44,10 +44,20 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         MeshNode? parent = null;
         if (!string.IsNullOrEmpty(nodePath))
         {
+            // FIRST read of a mesh-backed node: this waits for the mesh to hydrate the partition,
+            // not for a quick in-memory lookup. 5 s was an unjustified outlier — the sibling call
+            // below, part of the same logical operation in this same helper, already allows 60 s,
+            // and the method timeout is 60 s. On a cold 2-core CI runner the read had simply not
+            // produced its first emission yet, and the assertion reported "emitted nothing at
+            // all" — which reads as a wedge rather than as a bound below legitimate hydration.
+            //
+            // A bound ALIGNMENT, not cover for a hang: the read does complete (green locally in
+            // ~1 s), and a real wedge still fails — at the same 60 s the rest of the operation
+            // already uses, instead of 12x sooner for no stated reason.
             parent = await workspace.GetMeshNodeStream(nodePath)
                 .Take(1)
                 .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
-                .Should().Within(TimeSpan.FromSeconds(5)).Emit();
+                .Should().Within(60.Seconds()).Emit();
         }
         return await CreatableTypesProvider.GetCreatableTypes(nodePath, parent)
             .Should().Within(20.Seconds()).Emit();
@@ -949,10 +959,20 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
         MeshNode? parent = null;
         if (!string.IsNullOrEmpty(nodePath))
         {
+            // FIRST read of a mesh-backed node: this waits for the mesh to hydrate the partition,
+            // not for a quick in-memory lookup. 5 s was an unjustified outlier — the sibling call
+            // below, part of the same logical operation in this same helper, already allows 60 s,
+            // and the method timeout is 60 s. On a cold 2-core CI runner the read had simply not
+            // produced its first emission yet, and the assertion reported "emitted nothing at
+            // all" — which reads as a wedge rather than as a bound below legitimate hydration.
+            //
+            // A bound ALIGNMENT, not cover for a hang: the read does complete (green locally in
+            // ~1 s), and a real wedge still fails — at the same 60 s the rest of the operation
+            // already uses, instead of 12x sooner for no stated reason.
             parent = await workspace.GetMeshNodeStream(nodePath)
                 .Take(1)
                 .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
-                .Should().Within(TimeSpan.FromSeconds(5)).Emit();
+                .Should().Within(60.Seconds()).Emit();
         }
         return await CreatableTypesProvider.GetCreatableTypes(nodePath, parent)
             .Should().Within(60.Seconds()).Emit();
