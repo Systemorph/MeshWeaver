@@ -107,6 +107,40 @@ gh pr merge PR_NUMBER --merge
 
 **If `FORBIDDEN`**: re-authenticate with `! gh auth login`.
 
+### 🚨 A merged fix can look SHIPPED while producing no image — CD only reacts to a PUSH
+
+`main-cd.yml` builds and pushes the deployment images, and **every image job is gated on**:
+
+```yaml
+github.event.workflow_run.conclusion == 'success' &&
+github.event.workflow_run.event == 'push' &&          # <-- the trap
+github.event.workflow_run.head_branch == 'main'
+```
+
+Two ways that leaves a merged change undeployed, both of them SILENT:
+
+1. **No Build-and-Test run on main at all.** CD reacts to that workflow completing; if it never ran
+   on the merge commit (a CI incident, a stalled queue), CD sits `SKIPPED` forever with nothing to
+   react to. Merged, green PR, no image, portals never move.
+2. **You "fixed" it with `workflow_dispatch` — which can never ship.** The obvious repair is
+   `gh workflow run "MeshWeaver Build and Test" --ref main`. That RUNS and it genuinely tests the
+   merge commit (`workflow_dispatch` never reuses a green tree), so main ends up showing a **green
+   Build-and-Test**. But its `event` is `workflow_dispatch`, not `push`, so CD **still** skips. You
+   now have the most convincing possible "it shipped" signal — green main — and no image.
+   `main-cd.yml` has no `workflow_dispatch` trigger of its own, so CD cannot be kicked directly.
+
+**Before believing something is deployed, check the IMAGE, never the green tick:**
+
+```bash
+az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv
+az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+  "kubectl get deploy -A -o custom-columns=NS:.metadata.namespace,IMAGE:.spec.template.spec.containers[0].image --no-headers | grep memex-portal-ai"
+```
+
+If no new tag exists, the only thing that produces one is a **real push to main** — i.e. the next PR
+merge. Then the portals self-update on their 6 h poll (`SelfUpdateOptions.PollInterval`), or
+immediately after `kubectl rollout restart` (the poll fires on startup via `StartWith(-1L)`).
+
 ### 🚨 "Is the build finished?" — filter by WORKFLOW, never wait for all check suites
 
 The merge gate is "CI green", so you must be able to tell when CI is actually *done*. **Never wait
