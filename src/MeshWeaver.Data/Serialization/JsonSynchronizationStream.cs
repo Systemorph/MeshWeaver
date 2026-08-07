@@ -671,6 +671,40 @@ public static class JsonSynchronizationStream
         var logger = GetLogger(hub.ServiceProvider);
         var request = delivery.Message with { Subscriber = delivery.Sender };
 
+        // 🚨 RE-SUBSCRIBE IS A REFRESH, NOT A SECOND SUBSCRIPTION (issue #606).
+        //
+        // Resubscribe() re-posts a SubscribeRequest carrying the SAME StreamId — it means
+        // "re-assert my stream", not "open another one". Building a second reduced stream here
+        // left the FIRST one live and rendering forever (nothing but an UnsubscribeRequest ever
+        // disposes a server-side stream, and a resubscribe never sends one). For a
+        // LayoutAreaReference each of those is a whole LayoutAreaHost + render graph, so every
+        // change-feed pulse on the owner path permanently added one more render pipeline —
+        // the unbounded growth that killed the pod.
+        //
+        // Serve the refresh off the stream we ALREADY have: re-assert its current state as a
+        // Full, which the outbound forwarding subscription below (registered when that stream
+        // was created) delivers to the subscriber — exactly the "fresh snapshot" the caller
+        // asked for, and exactly what its ExpectResubscribeFull latch is armed to accept.
+        // A genuinely orphaned mirror (owner recycled ⇒ new workspace ⇒ empty registry) still
+        // takes the full create path below.
+        if (workspace is Workspace registry
+            && registry.GetClientSubscription(request.Subscriber, request.StreamId, request.Reference)
+                is ISynchronizationStream<TReduced> alreadyServing)
+        {
+            logger.LogDebug(
+                "Owner {Owner} already serves stream {StreamId} for {Subscriber} — re-asserting the current snapshot instead of creating a second stream",
+                hub.Address, request.StreamId, request.Subscriber);
+            if (alreadyServing.Current is { Value: not null } snapshot)
+                alreadyServing.Update(
+                    _ => new ChangeItem<TReduced>(snapshot.Value, alreadyServing.StreamId, alreadyServing.Hub.Version),
+                    ex => logger.LogWarning(ex,
+                        "Stream {StreamId}: could not re-assert snapshot for resubscribing subscriber {Subscriber}",
+                        alreadyServing.StreamId, request.Subscriber));
+            // Nothing yet to re-assert (the initial subscribe is still hydrating) — its own
+            // first Full is already on its way to this subscriber; do NOT build a second stream.
+            return alreadyServing;
+        }
+
         var fromWorkspace = workspace
             .ReduceManager
             .ReduceStream<TReduced>(
@@ -756,6 +790,13 @@ public static class JsonSynchronizationStream
         //             reduced.Host.GetWorkspace().RequestChange(e);
         //         })
         // );
+
+        // Record it as THE stream for this (subscriber, StreamId) so a later resubscribe
+        // refreshes it instead of stacking another one (see the guard at the top). Registered
+        // AFTER the outbound forwarding subscription exists, so a re-assert can never find a
+        // stream that has no way to reach the subscriber. Unregisters itself on disposal.
+        (workspace as Workspace)?.RegisterClientSubscription(
+            request.Subscriber, request.StreamId, request.Reference, reduced);
 
         return reduced;
     }
