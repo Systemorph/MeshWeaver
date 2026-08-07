@@ -26,6 +26,21 @@ public class ImportManager
     public IMessageHub Hub { get; }
 
     /// <summary>
+    /// The mesh-scoped file-system pool the import's async leaves (open + read the data set, run
+    /// the format import) bridge through.
+    ///
+    /// <para>🚨 MUST be the registry pool, never <see cref="IoPool.Unbounded"/> when a mesh
+    /// exists: Unbounded work is INVISIBLE to teardown — <c>CurrentInFlight</c> is hard-wired 0
+    /// and it has no cancellation source, so <c>IoPoolRegistry.DrainAll()</c> can neither see nor
+    /// stop it. An import still running there survives every drain phase, "teardown complete" is
+    /// signalled anyway, and the leaf then dereferences a collectible node ALC's freed metadata
+    /// after the scope disposes and unloads it — the FutuRe.Test teardown SIGSEGV (dump
+    /// dotnet-3029: crash 8 ms into the NEXT test's INIT). The Unbounded fallback is only for a
+    /// manager constructed outside DI (unit tests without a mesh), where no ALC unload follows.</para>
+    /// </summary>
+    private readonly IIoPool ioPool;
+
+    /// <summary>
     /// Creates the manager, folding the hub's configured import lambdas into <see cref="Configuration"/>.
     /// </summary>
     /// <param name="workspace">The workspace to import into.</param>
@@ -37,6 +52,8 @@ public class ImportManager
 
         Workspace = workspace;
         Hub = hub;
+        ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+            ?? IoPool.Unbounded;
         Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportBuilder(workspace, hub.ServiceProvider), (c, l) => l.Invoke(c));
 
         // Don't initialize the import hub in constructor - do it lazily to avoid timing issues
@@ -237,10 +254,11 @@ public class ImportManager
             return ImportWithConfiguredExcelImporter(importRequest, excelConfig, activity);
 
         // Read the data set (file/stream I/O leaf), then run the format import —
-        // composed reactively, each leaf bridged through the IIoPool once.
-        return IoPool.Unbounded
+        // composed reactively, each leaf bridged through the mesh-scoped IIoPool once
+        // (never Unbounded: teardown must be able to see, cancel and join these — see ioPool).
+        return ioPool
             .Run(_ => ReadDataSetAsync(importRequest, activity, cancellationToken))
-            .SelectMany(read => IoPool.Unbounded
+            .SelectMany(read => ioPool
                 .Run(_ => read.format.Import(importRequest, read.dataSet, activity, cancellationToken)))
             .Select(imported => imported!);
     }
@@ -301,7 +319,7 @@ public class ImportManager
             //    bridged through the IIoPool; the Excel parse + EntityStore build
             //    that follow are SYNCHRONOUS (ConfiguredExcelImporter.Import returns
             //    IEnumerable), so they live in a plain Select. No async/await here. ──
-            return IoPool.Unbounded.Run(_ => streamProvider.Invoke(importRequest))
+            return ioPool.Run(_ => streamProvider.Invoke(importRequest))
                 .Select(stream =>
                 {
                     if (stream == null)

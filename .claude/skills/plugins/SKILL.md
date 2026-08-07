@@ -67,6 +67,10 @@ pluginCatalog:
   sources:
     - {name: Plugins,   repoPath: "https://github.com/Systemorph/MeshWeaver.Plugins", ref: main}
     - {name: Education, repoPath: "https://github.com/Systemorph/education",          ref: main}
+  # Sources every NEW instance registration is granted automatically (seeded into the instance's
+  # Admin/_PluginGrant node — admins can still revoke per instance). Platform repo only; never
+  # list private/paid sources here. Empty = registering grants nothing (the strict default).
+  defaultGrants: ["Plugins/*"]
 secrets:
   memex_portal:
     PluginCatalog__RegistryTokens: ["<token-for-install-a>", "<token-for-install-b>"]
