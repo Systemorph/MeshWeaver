@@ -257,6 +257,26 @@ public sealed class FakeGitHubRepoClient : IGitHubRepoClient
         }
     });
 
+    public IObservable<GitHubIssue> SetIssueState(
+        string repositoryUrl, int number, GitHubIssueState state, string accessToken) => Observable.Defer(() =>
+    {
+        lock (_lock)
+        {
+            var key = Key(repositoryUrl);
+            if (!_issues.TryGetValue(key, out var m) || !m.TryGetValue(number, out var issue))
+                return Observable.Throw<GitHubIssue>(new InvalidOperationException(
+                    $"Fake repo '{repositoryUrl}' has no issue #{number}."));
+            var updated = issue with
+            {
+                State = state,
+                ClosedAt = state == GitHubIssueState.Closed ? DateTimeOffset.UtcNow : null,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            m[number] = updated;
+            return Observable.Return(updated);
+        }
+    });
+
     // ── Pull requests (richer) ────────────────────────────────────────────────
 
     public IObservable<IReadOnlyList<GitHubPullRequestSummary>> ListPullRequests(
