@@ -240,8 +240,39 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
 
     // ---- ExecuteScript --------------------------------------------------------
 
+    /// <summary>
+    /// 🐛 CHARACTERIZATION TEST for a data-loss defect this class's mesh exposes — read the
+    /// whole comment before "fixing" the assertion.
+    ///
+    /// <para>This class persists to the FILE SYSTEM (<c>AddFileSystemPersistence</c>). A node whose
+    /// Content is a <c>CodeConfiguration</c> is serialized by
+    /// <c>CSharpFileParser.Serialize</c> → <c>SerializeCodeConfiguration</c>
+    /// (<c>src/MeshWeaver.Hosting/Persistence/Parsers/CSharpFileParser.cs:100</c>), which writes
+    /// <b>only <c>config.Code</c></b> — no <c>&lt;meshweaver&gt;</c> header. The read side
+    /// (<c>ParseNode</c>, same file) therefore rebuilds <c>CodeConfiguration { Code, Language }</c>
+    /// and every other field is silently lost: <c>IsExecutable</c>, <c>ActivityParentPath</c>, the
+    /// <c>Last*</c> execution stamps. So a Code node created here with
+    /// <c>IsExecutable = true</c> reads back <b>false</b>, and the run is legitimately refused.</para>
+    ///
+    /// <para>That is a genuine bug, and it is NOT this test's or #841's to fix: repairing it means
+    /// emitting a header block from <c>SerializeCodeConfiguration</c>, and that same serializer is
+    /// what <c>GitSync</c> uses to write <c>.cs</c> files into users' git repositories
+    /// (<c>GitHubSyncService</c>, <c>NodeFileMapper</c>) — a cross-repo format change that needs its
+    /// own decision. Track it separately.</para>
+    ///
+    /// <para>What #841 changed, and what this test now pins: the refusal <b>reaches the caller</b>.
+    /// Before, <c>ExecuteScript</c> was fire-and-forget and answered <c>Dispatched</c> plus a guessed
+    /// activity path for this very node — so this exact data-loss bug had been live and completely
+    /// invisible, and the old assertion (<c>NotContain("status":"Error")</c>) passed vacuously
+    /// because the old code could not produce an Error verdict at all.</para>
+    ///
+    /// <para><b>When the serializer is fixed, this test SHOULD fail</b> — flip it back to asserting
+    /// <c>status: "Dispatched"</c> with a real activity path. The happy path itself is covered on an
+    /// in-memory mesh by
+    /// <c>ExecuteScriptDispatchDiagnosticsTest.Dispatch_Succeeds_NamesAnActivityThatReachesATerminalStatus</c>.</para>
+    /// </summary>
     [Fact]
-    public async Task ExecuteScript_ForIsExecutableCodeNode_CompletesWithoutError()
+    public async Task ExecuteScript_ForIsExecutableCodeNode_SurfacesTheFileSystemRoundTripLoss()
     {
         // Seed the script directly via IMeshService (the "created through
         // IMeshService" path per our testing rule â€” script nodes skip the MCP
@@ -264,13 +295,16 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
         var result = await ops.ExecuteScript($"@Scripts/{id}", timeoutSeconds: 30)
             .Should().Within(35.Seconds()).Emit();
 
-        // Budget is 30s on the kernel completion callback. The key assertion is
-        // that ExecuteScript does NOT hang beyond the budget AND doesn't return
-        // "Not found" (which would signal the content-read path failed). Either
-        // "Executed" (kernel actually ran) or "Timeout" (kernel took longer)
-        // means the routing worked.
-        result.Should().NotContain("\"status\":\"Error\"",
-            because: "the content read of an existing Code node must succeed â€” Error here means the script wasn't found or wasn't recognised as executable");
+        var verdict = JsonDocument.Parse(result).RootElement;
+
+        // The routing worked (we got a real verdict from the owning hub, not a timeout or a
+        // "not found"), and the verdict is TRUTHFUL about what the hub actually saw.
+        verdict.GetProperty("status").GetString().Should().Be("Error", result);
+        verdict.GetProperty("message").GetString().Should().Contain("IsExecutable = false",
+            "the file-system round-trip drops IsExecutable, and the caller must be TOLD that "
+            + "rather than handed a 'Dispatched' for a run that never starts");
+        verdict.TryGetProperty("activityPath", out _).Should().BeFalse(
+            "no activity exists, so no path may be offered to poll");
     }
 
     // NOTE: There used to be an `ExecuteScript_ForBrokenScript_ReportsErrorStatus`
@@ -286,6 +320,13 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
     /// path: HandleExecuteScript reads the local workspace, sees IsExecutable=false,
     /// and posts the error response â€” should be milliseconds. Anything slower means
     /// an await/deadlock has slipped into the read path.
+    ///
+    /// <para>Pre-#841 this test asserted the DEFECT: ExecuteScript was fire-and-forget, so
+    /// the refusal went to a caller that never observed it, the reply still said
+    /// "Dispatched", and the only way to detect the rejection was to poll the (guessed)
+    /// activity path and confirm nothing ever appeared. The dispatch now waits for the
+    /// owning hub's verdict, so the refusal is asserted where it belongs — in the reply —
+    /// and the "sleep then check nothing happened" probe is gone.</para>
     /// </summary>
     // Timeout includes the cold class init for the first [Fact] in this
     // ShareMeshAcrossTests class â€” building the SP + AddGraph + AddAI is
@@ -308,34 +349,15 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
             });
 
         var ops = new MeshOperations(Mesh);
-        var result = await ops.ExecuteScript($"@Scripts/{id}", timeoutSeconds: 10)
+        var result = await ops.ExecuteScript($"@Scripts/{id}", timeoutSeconds: 30)
             .FirstAsync().ToTask();
 
-        // ExecuteScript is fire-and-forget: it returns a "Dispatched" envelope
-        // with the ActivityLog path before the per-node Code hub finishes its
-        // own gate check (CodeNodeType.HandleExecuteScript verifies
-        // CodeConfiguration.IsExecutable). For a non-executable node the
-        // dispatch reply still says "Dispatched", but no Activity ever gets
-        // written â€” the rejection lands in the response that ExecuteScript
-        // doesn't await. Verify the rejection path: read the would-be
-        // activity path and assert no activity was created.
-        var dispatched = JsonDocument.Parse(result);
-        var activityPath = dispatched.RootElement.GetProperty("activityPath").GetString();
-        activityPath.Should().NotBeNull();
-
-        // Allow a short window for any background activity creation; assert
-        // the activity was NEVER created for a non-executable node.
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-        MeshNode? activityNode = null;
-        await foreach (var node in meshService
-            .QueryAsync<MeshNode>($"path:{activityPath}", ct: TestContext.Current.CancellationToken))
-        {
-            activityNode = node;
-            break;
-        }
-        activityNode.Should().BeNull(
-            "non-executable Code nodes must NOT spawn an ActivityLog â€” the " +
-            "per-node hub's IsExecutable=false gate must reject before activity creation.");
+        var verdict = JsonDocument.Parse(result).RootElement;
+        verdict.GetProperty("status").GetString().Should().Be("Error", result);
+        verdict.GetProperty("message").GetString().Should().Contain("IsExecutable");
+        verdict.TryGetProperty("activityPath", out _).Should().BeFalse(
+            "non-executable Code nodes must NOT spawn an ActivityLog, so the caller must not "
+            + "be handed a path to poll — the refusal itself is the answer.");
     }
 
     // ---- Delete + Get --------------------------------------------------------

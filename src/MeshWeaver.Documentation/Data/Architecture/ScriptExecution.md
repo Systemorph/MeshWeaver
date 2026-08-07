@@ -142,6 +142,29 @@ Agents call the same path as `ExecuteScriptRequest` but through the MCP tool sur
 }
 ```
 
+The tool returns the **dispatch verdict**, not the run's result — it comes back as soon as the run is accepted, and the script keeps going:
+
+```jsonc
+// Accepted. `activityPath` is what the OWNING hub created — never a path the caller
+// reconstructed, so it is correct even when ActivityParentPath / the partition default /
+// the {viewer} sentinel route the activity somewhere other than the Code node's partition.
+{ "status": "Dispatched", "path": "rbuergi/daily-rollup",
+  "submissionId": "…", "activityPath": "rbuergi/_Activity/…" }
+
+// Refused or faulted. There is NO activityPath — nothing was created, and nothing is pending.
+{ "status": "Error", "path": "rbuergi/daily-rollup",
+  "message": "Not executable: 'rbuergi/daily-rollup' has CodeConfiguration.IsExecutable = false." }
+```
+
+`Dispatched` therefore means "an Activity node exists at `activityPath`", and every way the
+dispatch can fail — the node is missing or unreadable, it is not executable, the Activity could not
+be created, the request never routed, the acknowledgement never came — arrives as `status: "Error"`
+carrying the reason (and the exception type where there was one). The owning hub logs the same
+verdict at `Warning`/`Error` on the `MeshWeaver.Graph.CodeNodeType` channel, so an operator can find
+a failed dispatch in pod stdout without the caller's transcript. Poll `get @{activityPath}` for
+progress and the terminal status; a script's own exception surfaces there, not in the dispatch
+verdict.
+
 ---
 
 ## Creating typed / restricted-partition nodes — the `execute_script` escape hatch
