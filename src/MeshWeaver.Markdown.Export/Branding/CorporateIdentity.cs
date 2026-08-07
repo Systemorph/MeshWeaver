@@ -21,7 +21,7 @@ public record CorporateIdentity
 
     /// <summary>
     /// Path to the logo. Supports <c>content:...</c> mesh paths (e.g. <c>content:Systemorph/logo.svg</c>),
-    /// absolute URLs, or portal-relative paths (e.g. <c>/static/...</c>).
+    /// absolute URLs, or portal-relative paths (e.g. <c>/api/content/...</c>).
     /// SVG is preferred for crisp scaling in PDF and DOCX.
     /// </summary>
     public string? LogoPath { get; init; }
@@ -47,7 +47,7 @@ public record CorporateIdentity
     /// <summary>
     /// Optional path to a Word template (.docx) whose header/footer, page setup and
     /// embedded logo are reused by the DOCX export. Supports the same path styles as
-    /// <see cref="LogoPath"/> (<c>content:...</c>, <c>/static/storage/content/...</c>).
+    /// <see cref="LogoPath"/> (<c>content:...</c>, <c>/api/content/...</c>).
     /// When set, the first embedded raster image and the major font name from the template
     /// also flow into PDF exports, so the two formats share the same look.
     /// </summary>

@@ -264,7 +264,11 @@ builder.UseOrleansMeshServer(address, silo =>
             // thing and is always called "storage" (the Monolith's appsettings names it so).
             // Registering it under the configured name would both shadow the per-node collection
             // and still leave MapContentCollection(…, "storage", …) unresolved.
-            : hub.AddContentCollection(_ => storageConfig with { Name = "storage", IsStatic = true });
+            //
+            // 🚨 IsStatic stays FALSE (issue #587): this mesh-level store holds EVERY partition's
+            // content, and publishing it by URL was the reported hole. The per-node collections
+            // mapped over it are what get published — each owned by a node, gated on Read of it.
+            : hub.AddContentCollection(_ => storageConfig with { Name = "storage" });
     });
 
 // Hard gate: refuse to start if the DB isn't migrated. Aspire's

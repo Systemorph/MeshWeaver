@@ -4,7 +4,7 @@
   "name": "TaskFlow Product Launch",
   "nodeType": "ACME/Project",
   "description": "Launch campaign for TaskFlow - our new workflow automation platform",
-  "icon": "/static/storage/content/ACME/Project/icon.svg",
+  "icon": "/api/content/ACME/Project/icon.svg",
   "isPersistent": true,
   "content": {
     "$type": "Project",

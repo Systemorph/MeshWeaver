@@ -14,6 +14,11 @@ public class UserContextMiddlewareExclusionTest
     [InlineData("/_content/MeshWeaver.Blazor/css/app.css")]
     [InlineData("/_blazor/negotiate")]
     [InlineData("/favicon.ico")]
+    // 🚨 /static is excluded again (issue #587). It serves BUILD ASSETS ONLY now — read straight
+    // out of a shipped assembly's manifest, with no hub post and no permission evaluation. The
+    // contract is that /static performs no access check, so it must not resolve a caller to check.
+    [InlineData("/static/NodeTypeIcons/box.svg")]
+    [InlineData("/static/DocContent/logo.svg")]
     public async Task ExcludedPrefixes_SkipUserResolution(string path)
     {
         var nextCalled = false;
@@ -40,9 +45,11 @@ public class UserContextMiddlewareExclusionTest
     [InlineData("/ACME/Overview")]
     [InlineData("/User/Alice")]
     [InlineData("/")]
-    // #666: /static/ is deliberately NOT excluded — the address-based content route posts a
-    // GetDataRequest into the mesh and needs an AccessContext (else the never-null guard 500s).
-    [InlineData("/static/AgenticEngineering/content/videos/module1-intro.mp4")]
+    // 🚨 The ACCESS-CONTROLLED content route MUST resolve a caller: it posts a GetDataRequest into
+    // the mesh (which the never-null PostPipeline guard 500s without an AccessContext), and that
+    // request's [RequiresPermission(Read)] is what gates the file. This is where the media that used
+    // to be served unauthenticated under /static now lives (issue #587).
+    [InlineData("/api/content/AgenticEngineering/content/videos/module1-intro.mp4")]
     public async Task NonExcludedPaths_AttemptUserResolution(string path)
     {
         RequestDelegate next = _ => Task.CompletedTask;

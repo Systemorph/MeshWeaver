@@ -349,8 +349,10 @@ public static class ContentLayoutArea
         // interpolated into an attribute so a crafted name cannot break out of it (XSS).
         var encodedPath = string.Join('/',
             filePath.Split('/').Select(Uri.EscapeDataString));
-        var contentUrl =
-            $"/static/{host.Hub.Address}/{Uri.EscapeDataString(ContentCollectionsExtensions.EncodeCollectionName(collectionName))}/{encodedPath}";
+        // Access-controlled content route — NEVER /static (issue #587): a PDF in a private Space
+        // must not be readable by URL alone.
+        var contentUrl = ContentCollectionsExtensions.GetContentFileUrl(
+            host.Hub.Address.ToString()!, collectionName, encodedPath);
         var urlAttribute = System.Net.WebUtility.HtmlEncode(contentUrl);
         var fileName = System.Net.WebUtility.HtmlEncode(Path.GetFileName(filePath));
         return new HtmlControl(

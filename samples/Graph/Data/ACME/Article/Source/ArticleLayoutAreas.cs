@@ -88,7 +88,7 @@ public static class ArticleLayoutAreas
             {
                 var ns = node.Namespace;
                 imgSrc = !string.IsNullOrEmpty(ns)
-                    ? $"/static/storage/content/{ns}/{thumbnail}"
+                    ? $"/api/content/{ns}/{thumbnail}"
                     : thumbnail;
             }
             container = container.WithView(Controls.Html(

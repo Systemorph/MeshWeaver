@@ -21,7 +21,9 @@ public static class TodoApplicationExtensions
     public static MessageHubConfiguration ConfigureTodoApplication(this MessageHubConfiguration configuration)
     {
         return configuration
-                .AddEmbeddedResourceContentCollection("Todo", typeof(TodoApplicationAttribute).Assembly, "Content")
+                // isStatic: markdown-embedded resources are fetched as
+                // /api/content/{address}/Todo/{file} — published, still gated on Read (issue #587).
+                .AddEmbeddedResourceContentCollection("Todo", typeof(TodoApplicationAttribute).Assembly, "Content", isStatic: true)
                 .WithTypes(
                     typeof(TodoStatus)
                 )
@@ -48,7 +50,7 @@ public static class TodoApplicationExtensions
                         .WithView(nameof(TodoLayoutAreas.MyTasks), TodoLayoutAreas.MyTasks)
                         .WithView(nameof(TodoLayoutAreas.Backlog), TodoLayoutAreas.Backlog)
                         .WithView(nameof(TodoLayoutAreas.TodaysFocus), TodoLayoutAreas.TodaysFocus)
-                        .WithThumbnailsPath("/static/app/Todo/Todo/thumbnails")
+                        .WithThumbnailsPath("/api/content/app/Todo/Todo/thumbnails")
                 )
                 .AddContentCollections()
             ;

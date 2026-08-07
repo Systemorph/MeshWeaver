@@ -5,7 +5,7 @@
   "nodeType": "Northwind/AnalyticsCatalog",
   "category": "Analytics",
   "description": "Dashboards and analytics views for Northwind data",
-  "icon": "/static/storage/content/Northwind/icons/analytics.svg",
+  "icon": "/api/content/Northwind/icons/analytics.svg",
   "order": 3,
   "isPersistent": true,
   "content": {

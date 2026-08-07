@@ -1299,7 +1299,7 @@ public static class NodeTypeLayoutAreas
         formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Icon)))
         {
             Label = "Icon",
-            Placeholder = "content:icon.svg, /static/…, <svg>…</svg>, or URL",
+            Placeholder = "content:icon.svg, <svg>…</svg>, or URL",
             Immediate = true,
             DataContext = nodeFieldsContext
         });

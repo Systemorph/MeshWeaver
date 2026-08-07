@@ -38,6 +38,67 @@ public static class ContentCollectionsExtensions
     public const string DefaultCollectionName = "content";
 
     /// <summary>
+    /// 🚨 THE ONE ROUTE THAT SERVES MESH CONTENT FILES: <c>/api/content/{node}/{collection}/{file}</c>
+    /// (issue #587).
+    ///
+    /// <para>Every byte a content collection holds — uploads, attachments, PDFs, course media, a
+    /// Space's images, a doc page's diagrams — is served here and NOWHERE else. The endpoint
+    /// resolves the owning node with <see cref="MeshWeaver.Mesh.Services.IPathResolver"/> and asks
+    /// THAT node's hub for the collection with a <c>GetDataRequest</c>, which carries
+    /// <c>[RequiresPermission(Read)]</c> — so the file is gated by exactly the decision an ordinary
+    /// node read makes, with partition scoping, group expansion, public-read policies and per-subject
+    /// denies applying verbatim. Responses are <c>private</c>: never shared-cacheable.</para>
+    ///
+    /// <para><b>Never build a <c>/static</c> URL for mesh content.</b> <c>/static</c> is the public
+    /// BUILD-ASSET route (<see cref="StaticAssetMount"/>) — no identity, no permission check, no
+    /// mesh. It used to serve content collections too, and
+    /// <c>/static/storage/content/{node}/{file}</c> in particular exposed every partition's uploads
+    /// at a fully predictable URL to anyone who asked. Content is not mounted there any more, so a
+    /// <c>/static</c> URL for it is a 404 — and a silent broken image is the mildest of the ways
+    /// that hurts.</para>
+    /// </summary>
+    public const string ContentFileRoutePrefix = "/api/content";
+
+    /// <summary>
+    /// Builds the canonical, ACCESS-CONTROLLED URL that serves one file out of a content collection:
+    /// <c>{ContentFileRoutePrefix}/{address}/{collection}/{path}</c>.
+    ///
+    /// <para>This is the single place that shape is constructed — a caller that hand-assembles the
+    /// string is how <c>/static</c> URLs crept back in. Use it for every image, video, PDF, download
+    /// link and markdown resource that lives in a collection.</para>
+    /// </summary>
+    /// <param name="address">The path/address of the node the collection is mounted on.</param>
+    /// <param name="collection">The collection name (encoded here — a qualified name may contain '/').</param>
+    /// <param name="path">The file's path within the collection.</param>
+    /// <returns>The content-file URL.</returns>
+    public static string GetContentFileUrl(string address, string collection, string path)
+        => $"{ContentFileRoutePrefix}/{address.Trim('/')}/{EncodeCollectionName(collection)}/{path.TrimStart('/')}";
+
+    /// <summary>
+    /// Builds the access-controlled URL for a file that belongs to a NODE — the
+    /// <c>{ContentFileRoutePrefix}/{nodePath}/{fileName}</c> shape, where the file path is relative
+    /// to the node itself.
+    ///
+    /// <para>This replaces <c>/static/storage/content/{nodePath}/{fileName}</c>, which read the
+    /// mesh-level backing store directly and so consulted no partition's policy at all — the
+    /// headline hole of issue #587. It is a pure prefix substitution: the store lays every node's
+    /// content out at <c>content/{nodePath}/…</c>, so the same bytes are reached, with the owning
+    /// node's Read check in front of them.</para>
+    ///
+    /// <para><b>Node-relative, deliberately.</b> A Space's <c>content</c> collection is mounted on
+    /// the partition ROOT and inherited by children, so the file of a child node lives at
+    /// <c>{childPathRelativeToRoot}/{fileName}</c> within it. The route reconstructs that from the
+    /// resolved node — which is why this shape carries NO collection segment, and why
+    /// <see cref="GetContentFileUrl"/> (which names a collection explicitly) means the other thing:
+    /// a path relative to that collection's own root, as the file browser lists it.</para>
+    /// </summary>
+    /// <param name="nodePath">The owning node's full mesh path (e.g. <c>ACME/Project</c>).</param>
+    /// <param name="fileName">The file's path relative to that node.</param>
+    /// <returns>The content-file URL.</returns>
+    public static string GetNodeContentFileUrl(string nodePath, string fileName)
+        => $"{ContentFileRoutePrefix}/{nodePath.Trim('/')}/{fileName.TrimStart('/')}";
+
+    /// <summary>
     /// Encodes a collection name for use as a URL segment by replacing '/' with '~'
     /// (a qualified name like "Submissions@Microsoft/2026" would otherwise split into
     /// path segments; ASP.NET Core URL-decodes %2F before route matching).
@@ -445,8 +506,18 @@ public static class ContentCollectionsExtensions
 
     /// <summary>
     /// Normalizes a resource URL referenced from content: absolute and root-relative URLs are
-    /// returned unchanged; a bare relative URL is rewritten under the <c>/static</c> route for
-    /// the given collection (and address, when present).
+    /// returned unchanged; a bare relative URL is rewritten under the ACCESS-CONTROLLED
+    /// <see cref="ContentFileRoutePrefix"/> route for the given collection.
+    ///
+    /// <para>🚨 This used to emit <c>/static/…</c>, which served the file to anyone with the URL and
+    /// no permission check whatsoever (issue #587). A markdown image inside a private Space was
+    /// world-readable. It now emits <c>/api/content/{address}/{collection}/{file}</c>, which the
+    /// owning node's hub gates on <c>Read</c>.</para>
+    ///
+    /// <para>An ADDRESS-LESS collection cannot be attributed to an owning node, so there is nothing
+    /// to evaluate a permission against and no safe URL to build: the relative URL is returned
+    /// unchanged and resolves against the page it appears on. Passing the owning address is what
+    /// makes a collection's resources addressable.</para>
     /// </summary>
     /// <param name="resourceUrl">The resource URL to adapt; may be <c>null</c> or empty.</param>
     /// <param name="collection">The collection the resource belongs to.</param>
@@ -470,10 +541,9 @@ public static class ContentCollectionsExtensions
             return resourceUrl;
         }
 
-        // Prepend with /static/{address}/{collection} or /static/{collection}
-        return address != null
-            ? $"/static/{address}/{collection}/{resourceUrl}"
-            : $"/static/{collection}/{resourceUrl}";
+        return address is null
+            ? resourceUrl
+            : GetContentFileUrl(address.ToString()!, collection, resourceUrl);
     }
 
 
@@ -501,10 +571,17 @@ public static class ContentCollectionsExtensions
         /// <param name="collectionName">The name of the collection to register.</param>
         /// <param name="assembly">The assembly whose embedded resources back the collection.</param>
         /// <param name="relativePath">The resource path prefix (relative to the assembly's default namespace).</param>
+        /// <param name="isStatic">
+        /// PUBLISHES the collection on the access-controlled content route — see
+        /// <see cref="ContentCollectionConfig.IsStatic"/>. Default <c>false</c>: registered for
+        /// in-mesh use, but not fetchable by URL. Being an embedded resource is NOT on its own a
+        /// reason to publish — a plugin can embed private content.
+        /// </param>
         /// <returns>The configured message hub configuration.</returns>
         public MessageHubConfiguration AddEmbeddedResourceContentCollection(string collectionName,
             Assembly assembly,
-            string relativePath)
+            string relativePath,
+            bool isStatic = false)
             => configuration.WithServices(services =>
             {
                 var resourcePrefix = $"{assembly.GetName().Name}.{relativePath}";
@@ -522,6 +599,8 @@ public static class ContentCollectionsExtensions
                         SourceType = "EmbeddedResource",
                         // IsEditable defaults to false — embedded resources are read-only.
                         // ExposeInChildren defaults to false — backing store, hidden by design.
+                        // IsStatic defaults to false — publishing on the content route is declared.
+                        IsStatic = isStatic,
                         Settings = new Dictionary<string, string>
                         {
                             ["AssemblyName"] = assembly.GetName().Name ?? "",
@@ -639,10 +718,17 @@ public static class ContentCollectionsExtensions
         /// <param name="targetCollectionName">The name of the mapped collection (e.g., "avatars")</param>
         /// <param name="sourceCollectionName">The name of the registered source collection (e.g., "storage")</param>
         /// <param name="subdirectory">The subdirectory within storage (e.g., "persons" or dynamic path)</param>
+        /// <param name="isStatic">
+        /// PUBLISHES the MAPPED collection on the access-controlled content route — see
+        /// <see cref="ContentCollectionConfig.IsStatic"/>. Default <c>false</c>. This is the
+        /// MAPPING's decision, never the backing store's: the store must never publish every
+        /// per-node view over it.
+        /// </param>
         /// <returns>The configured message hub configuration</returns>
         public MessageHubConfiguration MapContentCollection(string targetCollectionName,
             string sourceCollectionName,
-            string subdirectory)
+            string subdirectory,
+            bool isStatic = false)
             => configuration
                 .AddContentCollections() // Registers $Content, $FileBrowser, $Collection layout areas
                 .WithServices(services =>
@@ -654,7 +740,8 @@ public static class ContentCollectionsExtensions
                             targetCollectionName,
                             sourceCollectionName,
                             subdirectory,
-                            configuration.Address));
+                            configuration.Address,
+                            isStatic));
 
                     return services;
                 });
@@ -670,7 +757,8 @@ internal class MappedContentCollectionConfigProvider(
     string targetCollectionName,
     string sourceCollectionName,
     string subdirectory,
-    Address address)
+    Address address,
+    bool isStatic = false)
     : IContentCollectionConfigProvider
 {
     public const string MappedSourceType = "Mapped";
@@ -688,6 +776,9 @@ internal class MappedContentCollectionConfigProvider(
         // bind it — the resolved config picks IsEditable from this wrapper.)
         IsEditable = true,
         ExposeInChildren = true,
+        // Publishing on the content route is the MAPPING's decision, not the backing store's:
+        // inheriting it from the source would publish every per-node view over that store.
+        IsStatic = isStatic,
         Settings = new Dictionary<string, string>
         {
             [SourceCollectionKey] = sourceCollectionName,

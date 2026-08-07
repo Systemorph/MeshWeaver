@@ -29,8 +29,8 @@ public static class ProfitabilityLayoutAreas
         layout
             .AddLayoutAreaCatalog()
             .WithThumbnailPattern(
-                area => $"/static/storage/content/FutuRe/Analysis/thumbnails/{area}.svg",
-                area => $"/static/storage/content/FutuRe/Analysis/thumbnails/{area}.svg")
+                area => $"/api/content/FutuRe/Analysis/thumbnails/{area}.svg",
+                area => $"/api/content/FutuRe/Analysis/thumbnails/{area}.svg")
             .WithDefaultArea(LayoutAreaCatalogArea.LayoutAreas)
             .WithView(nameof(KeyMetrics), KeyMetrics)
             .WithView(nameof(ProfitabilityTable), ProfitabilityTable)

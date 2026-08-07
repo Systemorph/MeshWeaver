@@ -55,7 +55,7 @@ Two more link rules:
 Name: Human-readable page title          # shown in catalogs and the TOC
 Category: Architecture                   # grouping hint
 Description: One-line summary — lands on the node's Description column and search.
-Icon: <svg …/>                           # inline SVG or /static/… path
+Icon: <svg …/>                           # inline SVG, content:file.svg, or an absolute URL
 ---
 ```
 
