@@ -24,7 +24,8 @@ markdown only** — no application code changes.
 | Shared storage | **Azure Files (RWX)** drives mounted at explicit paths: `/data` (caches), `/mnt/content` (content collection), `/mnt/attachments`, `/mnt/users` — via a custom `azurefile-memex` StorageClass tuned for the non-root portal (uid 1654) |
 | Database | Self-managed **Postgres (pgvector) StatefulSet** on a Premium-SSD PVC |
 | Backup / PITR | **pgBackRest** → **Azure Blob** (full + diff CronJobs + WAL archiving) → restore `--type=time` |
-| Observability | **OpenTelemetry Collector DaemonSet** captures cluster-wide pod logs + portal OTLP → **Azure Files** log archive (`/mnt/otel-logs`) |
+| Observability | **OpenTelemetry Collector DaemonSet** captures cluster-wide pod logs + portal OTLP → **Azure Files** log archive (`/mnt/otel-logs`); **Grafana + Loki + Promtail + Prometheus** in `monitoring` for search and dashboards |
+| Error ticketing | **`mw-log-watcher`** (optional, `monitoring`) reads red logs from Loki and opens one triaged GitHub issue per distinct fault — off until configured |
 | Identity | **Workload Identity (OIDC)** so pgBackRest reaches Blob **keyless** |
 
 ### Topology
@@ -494,6 +495,42 @@ the Prometheus / Grafana / Loki stack). `values.aks.yaml` sets
 `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, so the portal exports metrics/traces to the
 in-cluster collector. Application logs reach Loki out-of-band via Promtail
 scraping pod stdout (no app wiring).
+
+### Red-log ticketing — `mw-log-watcher` (optional, off by default)
+
+Loki makes errors *findable*; this makes them *reported*. `mw-log-watcher` is a small Deployment in
+`monitoring` that reads `fail:`/`crit:` lines from Loki, groups them by fault, and POSTs each
+distinct fingerprint to the portal — which triages it with an agent and opens **one** GitHub issue in
+the repository that owns the code. Ten thousand identical errors are one ticket; recurrences comment
+on it and reopen it if it was closed.
+
+```
+Loki ──query_range from a persisted cursor──▶ mw-log-watcher ──POST /api/log-incidents──▶ portal
+        (ns monitoring, own PVC)                                                            │
+                                                          Admin/_LogIncident/{fingerprint} ◀┘
+                                                          agent triage ─▶ GitHub App ─▶ issue
+```
+
+Three properties worth knowing before you operate it:
+
+- **It is not in the portal's namespace, deliberately.** The component that notices the portal is
+  throwing errors must survive the portal being the thing that is broken. When the portal is wedged
+  the watcher keeps reading Loki and queues to its PVC; delivery is delayed, nothing is lost.
+- **Its state directory must be a persistent volume.** The cursor and the undelivered queue live
+  there. On an `emptyDir` a pod restart replays the lookback window and re-reports.
+- **It is off until configured, in two independent ways.** No `LogWatch:IngestToken` on the portal ⇒
+  the ingest endpoint is not mapped at all (reaching it spends model budget and opens issues, so
+  absence means off, never open). No repository routed ⇒ the control plane idles rather than running
+  agent rounds that could never end in a ticket.
+
+Deploy steps, verification table, and how to turn it off: **[DEPLOY-RUNBOOK.md § 6b](DEPLOY-RUNBOOK.md)**.
+Design and configuration reference:
+**[LogWatchTriage.md](../../src/MeshWeaver.Documentation/Data/Architecture/LogWatchTriage.md)**.
+
+A provisioned Grafana alert rule (`dashboards/memex-red-log-alerts.yaml`) covers the human-facing
+half — it shows red-log volume in Grafana but deliberately does **not** open tickets. Ticketing hangs
+off the watcher's cursor instead, because an alert notification that fires while its receiver is down
+is simply lost: acceptable for a nudge, not for "every distinct error gets a ticket".
 
 ### Apply it
 
