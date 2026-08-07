@@ -40,6 +40,9 @@ public static class InstanceGrantAdminSettingsTab
     private const string SourceOptionsDataId = "instanceGrantSourceOptions";
     private const string ResultDataId = "instanceGrantResult";
     private const string ListDataId = "instanceGrantList";
+    private const string MintFormDataId = "registrationKeyMintForm";
+    private const string MintResultDataId = "registrationKeyMintResult";
+    private const string KeyListDataId = "registrationKeyList";
 
     /// <summary>Registers the instance-grants settings tab provider (global admins only).</summary>
     public static MessageHubConfiguration AddInstanceGrantAdminSettingsTab(
@@ -113,8 +116,189 @@ public static class InstanceGrantAdminSettingsTab
             .StartWith("")
             .Select(md => string.IsNullOrEmpty(md) ? (UiControl)Controls.Stack : Controls.Markdown(md)));
 
-        return stack.WithView(GrantList(host));
+        stack = stack.WithView(GrantList(host));
+
+        return stack.WithView(RegistrationKeySection(host));
     }
+
+    /// <summary>
+    /// Registration bootstrap keys (<c>mwr_…</c>) — what a NEW deployment presents on first startup
+    /// to auto-register itself (<c>POST /api/instances/register</c>). Minted here so provisioning a
+    /// new environment needs no per-instance token copying; instances registered with a key are
+    /// owned by the admin who minted it, and revoking the key stops further registrations without
+    /// touching the instances it already created.
+    /// </summary>
+    private static UiControl RegistrationKeySection(LayoutAreaHost host)
+    {
+        host.UpdateData(MintFormDataId, new Dictionary<string, object?>
+        {
+            ["description"] = "",
+            ["expiresDays"] = "",
+            ["keyId"] = "",
+        });
+
+        return Controls.Stack
+            .WithView(Controls.Title(host.Localize("registrationKeys.heading"), 3))
+            .WithView(Controls.Markdown(host.Localize("registrationKeys.hint")))
+            .WithView(MintForm(host))
+            .WithView(host.Stream
+                .GetDataStream<string>(MintResultDataId)
+                .StartWith("")
+                .Select(md => string.IsNullOrEmpty(md) ? (UiControl)Controls.Stack : Controls.Markdown(md)))
+            .WithView(KeyList(host))
+            .WithStyle("margin-top: 24px; gap: 8px;");
+    }
+
+    private static UiControl MintForm(LayoutAreaHost host)
+    {
+        var dataContext = LayoutAreaReference.GetDataPointer(MintFormDataId);
+
+        return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 12px; align-items: flex-end; flex-wrap: wrap;")
+            .WithView(new TextFieldControl(new JsonPointerReference("description"))
+            {
+                Label = host.Localize("registrationKeys.field.description"),
+                DataContext = dataContext,
+            }.WithWidth("260px"))
+            .WithView(new TextFieldControl(new JsonPointerReference("expiresDays"))
+            {
+                Label = host.Localize("registrationKeys.field.expiresDays"),
+                Placeholder = "∞",
+                DataContext = dataContext,
+            }.WithWidth("110px"))
+            .WithView(Controls.Button(host.Localize("registrationKeys.mint"))
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(ctx =>
+                {
+                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
+                        .Take(1)
+                        .Subscribe(data => Mint(ctx.Host, host, data));
+                    return Task.CompletedTask;
+                }))
+            .WithView(new TextFieldControl(new JsonPointerReference("keyId"))
+            {
+                Label = host.Localize("registrationKeys.field.keyId"),
+                DataContext = dataContext,
+            }.WithWidth("160px"))
+            .WithView(Controls.Button(host.Localize("registrationKeys.revoke"))
+                .WithAppearance(Appearance.Outline)
+                .WithClickAction(ctx =>
+                {
+                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
+                        .Take(1)
+                        .Subscribe(data => Revoke(ctx.Host, host, data, revoked: true));
+                    return Task.CompletedTask;
+                }))
+            .WithView(Controls.Button(host.Localize("registrationKeys.restore"))
+                .WithAppearance(Appearance.Outline)
+                .WithClickAction(ctx =>
+                {
+                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
+                        .Take(1)
+                        .Subscribe(data => Revoke(ctx.Host, host, data, revoked: false));
+                    return Task.CompletedTask;
+                }));
+    }
+
+    private static void Mint(
+        LayoutAreaHost target, LayoutAreaHost host, Dictionary<string, object?>? data)
+    {
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var context = accessService?.Context ?? accessService?.CircuitContext;
+        if (context?.ObjectId is not { Length: > 0 } userId)
+        {
+            target.UpdateData(MintResultDataId, host.Localize("registrationKeys.error.failed"));
+            return;
+        }
+
+        DateTimeOffset? expiresAt = null;
+        var daysText = data?.GetValueOrDefault("expiresDays")?.ToString()?.Trim();
+        if (!string.IsNullOrEmpty(daysText))
+        {
+            if (!int.TryParse(daysText, out var days) || days <= 0)
+            {
+                target.UpdateData(MintResultDataId, host.Localize("registrationKeys.error.expiry"));
+                return;
+            }
+            expiresAt = DateTimeOffset.UtcNow.AddDays(days);
+        }
+
+        var service = host.Hub.ServiceProvider.GetRequiredService<RegistrationKeyService>();
+        service.Mint(
+                userId, context.Name ?? "", context.Email ?? "",
+                data?.GetValueOrDefault("description")?.ToString()?.Trim() ?? "", expiresAt)
+            .Subscribe(
+                result => target.UpdateData(MintResultDataId,
+                    $"{host.Localize("registrationKeys.minted")}\n\n```\n{result.RawKey}\n```\n\n"
+                    + host.Localize("registrationKeys.keyShownOnce")),
+                ex => target.UpdateData(MintResultDataId,
+                    $"{host.Localize("registrationKeys.error.failed")} {ex.Message}"));
+    }
+
+    private static void Revoke(
+        LayoutAreaHost target, LayoutAreaHost host, Dictionary<string, object?>? data, bool revoked)
+    {
+        var keyId = data?.GetValueOrDefault("keyId")?.ToString()?.Trim() ?? "";
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var context = accessService?.Context ?? accessService?.CircuitContext;
+        if (keyId.Length == 0 || context?.ObjectId is not { Length: > 0 } userId)
+        {
+            target.UpdateData(MintResultDataId, host.Localize("registrationKeys.error.keyId"));
+            return;
+        }
+
+        // The key node lives in the MINTER's partition, so revocation runs under the viewing
+        // admin's own identity and applies to keys they minted — platform admin is not a data
+        // superuser (AccessControl.md), and another admin's key is theirs to revoke.
+        var service = host.Hub.ServiceProvider.GetRequiredService<RegistrationKeyService>();
+        service.SetRevoked($"{userId}/{RegistrationKeyService.KeyNamespace}/{keyId}", revoked)
+            .Subscribe(
+                _ => target.UpdateData(MintResultDataId,
+                    $"{host.Localize(revoked ? "registrationKeys.revoked" : "registrationKeys.restored")} `{keyId}`"),
+                ex => target.UpdateData(MintResultDataId,
+                    $"{host.Localize("registrationKeys.error.failed")} {ex.Message}"));
+    }
+
+    private static UiControl KeyList(LayoutAreaHost host)
+    {
+        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        return Controls.Stack
+            .WithView(meshService
+                .Query(new MeshQueryRequest
+                {
+                    Query = $"nodeType:{MeshWeaverInstanceNodeType.RegistrationKeyNodeType}",
+                })
+                .Select(results => results
+                    // The node type covers keys AND their routing-index rows; the index rows live
+                    // under the top-level instance-credential namespace and are not keys.
+                    .Where(r => !r.Path.StartsWith(
+                        MeshWeaverInstanceNodeType.IndexNamespace + "/", StringComparison.Ordinal))
+                    .Select(r => new KeyRow(r.Id ?? r.Path.Split('/').Last(), r.Name ?? "", r.Path))
+                    .OrderBy(r => r.KeyId, StringComparer.Ordinal)
+                    .ToList())
+                .Select(rows => rows.Count == 0
+                    ? (UiControl)Controls.Markdown(host.Localize("registrationKeys.none"))
+                    : KeyGrid(host, rows)));
+    }
+
+    private static UiControl KeyGrid(LayoutAreaHost host, IReadOnlyList<KeyRow> rows)
+    {
+        host.UpdateData(KeyListDataId, rows);
+        return new DataGridControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(KeyListDataId)))
+            .WithColumn(new PropertyColumnControl<string>
+            { Property = nameof(KeyRow.KeyId).ToCamelCase() }
+                .WithTitle(host.Localize("registrationKeys.column.id")))
+            .WithColumn(new PropertyColumnControl<string>
+            { Property = nameof(KeyRow.Description).ToCamelCase() }
+                .WithTitle(host.Localize("registrationKeys.column.description")))
+            .WithColumn(new PropertyColumnControl<string>
+            { Property = nameof(KeyRow.Path).ToCamelCase() }
+                .WithTitle(host.Localize("registrationKeys.column.owner")));
+    }
+
+    /// <summary>Plain row record bound into the registration-key <see cref="DataGridControl"/>.</summary>
+    internal record KeyRow(string KeyId, string Description, string Path);
 
     /// <summary>The registry's configured source names — the only values a grant's Source may take.</summary>
     private static IReadOnlyList<string> SourceNames(LayoutAreaHost host)

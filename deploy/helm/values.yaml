@@ -62,6 +62,13 @@ pluginCatalog:
   # revoke per instance. Empty = strict default: registering grants nothing. Never list
   # private/paid sources here.
   defaultGrants: []
+  # CONSUMER: first-startup auto-registration. Set the logical App ID here and the mwr_ bootstrap
+  # key as secrets.memex_portal.PluginCatalog__BootstrapKey — on first boot the install registers
+  # itself at the registry and stores the issued instance key; no token copying. Empty = manual
+  # registration (the mwi_ key goes in PluginCatalog__RegistryToken as before).
+  instanceId: ""
+  # CONSUMER: this install's public URL recorded on the instance node; defaults to the ingress host.
+  homeUrl: ""
 # ---- Platform-admin Instances overview -------------------------------------
 # The admin "Instances" tab lists every portal on the cluster by querying the k8s API. Reading
 # deployments/ingresses ACROSS namespaces needs a cluster-scoped read grant — enable it ONLY on the
