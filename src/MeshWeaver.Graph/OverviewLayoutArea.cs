@@ -49,7 +49,17 @@ public static class OverviewLayoutArea
         // node's Content (node → /data, NEVER /data → node) so those labels stay correct. This is a
         // pure read mirror — there is no save loop and no drift: it follows the node, and all WRITES
         // still go straight to the node via the node-bound DataContext above.
-        host.RegisterForDisposal($"overview-content-projection_{dataId}",
+        // 🚨 ReplaceDisposable, NEVER RegisterForDisposal (issue #606). This method runs INSIDE the
+        // area's render — once per emission of the node/permission stream — so an APPENDING
+        // registration adds one more live node-stream subscription per re-render, under a synthetic
+        // key that no area teardown reaps (DisposeExistingAreas / DisposeChildAreas only remove keys
+        // that StartsWith(context.Area), and "overview-content-projection_…" never does). Every
+        // accumulated projection stays live: it fires ANOTHER UpdateData on every subsequent node
+        // emission, and it pins a MeshNodeStreamCache entry so that path's upstream sync stream can
+        // never be idle-released. Nothing frees any of it until the whole host dies.
+        // ReplaceDisposable disposes the previous projection for this key first, so exactly ONE is
+        // ever live regardless of render count.
+        host.ReplaceDisposable($"overview-content-projection_{dataId}",
             host.Workspace.GetMeshNodeStream(node.Path)
                 .Select(n => n?.Content)
                 .Where(c => c is not null)

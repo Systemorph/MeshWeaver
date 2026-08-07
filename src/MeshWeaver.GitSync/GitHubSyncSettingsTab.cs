@@ -187,7 +187,9 @@ public static class GitHubSyncSettingsTab
         // Editable commit + re-import. Prefill from the Space's saved config once it arrives (same
         // synced-query empty-first-emission caveat as the repo form).
         host.UpdateData(CommitFormId, new Dictionary<string, object?> { ["commit"] = "main" });
-        host.RegisterForDisposal("gh-commit-prefill", sync.WatchConfig(spacePath)
+        // ReplaceDisposable (not the appending RegisterForDisposal) — BuildContent runs per render,
+        // and a synthetic key like this is never reaped by the area teardown (issue #606).
+        host.ReplaceDisposable("gh-commit-prefill", sync.WatchConfig(spacePath)
             .Where(c => c is not null)
             .Take(1)
             .Subscribe(cfg => host.UpdateData(CommitFormId, new Dictionary<string, object?>

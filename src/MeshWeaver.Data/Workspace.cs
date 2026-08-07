@@ -664,5 +664,88 @@ public class Workspace : IWorkspace
         this.CreateSynchronizationStream<TReduced, TReference>(delivery);
     }
 
+    // 🚨 ONE server-side stream per (subscriber, StreamId) — issue #606.
+    //
+    // A SubscribeRequest carries the SUBSCRIBER's StreamId, and a resubscribe deliberately
+    // REUSES it ("refresh MY stream" — JsonSynchronizationStream.Resubscribe). Before this
+    // registry the owner treated every arrival as a brand-new subscription and built another
+    // reduced stream — for a LayoutAreaReference that is a whole new LayoutAreaHost + render
+    // graph (LayoutExtensions' AddWorkspaceReferenceStream factory) — while the previous one
+    // kept running, kept rendering and kept pushing DataChangedEvents to the same subscriber.
+    // Nothing ever released it: only an UnsubscribeRequest disposes a server-side stream, and
+    // a resubscribe never sends one.
+    //
+    // That made the accumulation unbounded on the ordinary serving path: the layout-area
+    // stream's staleness gate is INERT for EntityStore reductions (EntityStore has no
+    // `long Version`, so `receivedVersion` never advances while `announcedVersion` is
+    // fabricated as received+1 — see the version gate in JsonSynchronizationStream), so
+    // EVERY change-feed event on the owner path resubscribes. Measured: one write to a node
+    // added one more live render pipeline, so a single subsequent write produced 1 → 10 Full
+    // frames after 8 writes, each leaked host holding its EntityStore, its menu/node-stream
+    // subscriptions (which pin MeshNodeStreamCache entries so their upstream sync streams can
+    // never be idle-released) and its whole control tree.
+    //
+    // The registry is an INSTANCE field on the workspace, so its lifetime IS the owner hub's
+    // (no static state, and an owner recycle correctly starts from empty → a genuinely
+    // orphaned mirror still gets a fresh stream).
+    private readonly ConcurrentDictionary<(string Subscriber, string StreamId), ClientSubscription>
+        _clientSubscriptions = new();
+
+    // 🚨 A CLASS, never a record: SynchronizationStream is itself a record whose generated
+    // GetHashCode/Equals recurse into StreamConfiguration (which holds the stream back) — a
+    // record wrapper around one stack-overflows the process the moment the dictionary hashes
+    // or compares it. See the _evictedRemoteStreams field note.
+    private sealed class ClientSubscription(WorkspaceReference reference, ISynchronizationStream stream)
+    {
+        public WorkspaceReference Reference { get; } = reference;
+        public ISynchronizationStream Stream { get; } = stream;
+    }
+
+    /// <summary>
+    /// Returns the server-side stream already serving <paramref name="streamId"/> for
+    /// <paramref name="subscriber"/> under the SAME reference, or <c>null</c>. A hit means the
+    /// arriving SubscribeRequest is a RE-subscribe of a stream this owner still serves, so the
+    /// caller must re-assert the current snapshot on it instead of building a second one.
+    /// </summary>
+    internal ISynchronizationStream? GetClientSubscription(
+        Address? subscriber, string? streamId, WorkspaceReference reference)
+    {
+        if (subscriber is null || string.IsNullOrEmpty(streamId))
+            return null;
+        if (!_clientSubscriptions.TryGetValue((subscriber.ToString(), streamId), out var existing))
+            return null;
+        if (!Equals(existing.Reference, reference))
+            return null;
+        // A stream whose sync hub is past Started is tearing down — its registry entry is
+        // removed at ShutDown, so this window is short; treat it as absent and let the caller
+        // build a fresh stream rather than re-asserting into a corpse.
+        return existing.Stream.Hub is { RunLevel: <= MessageHubRunLevel.Started }
+            ? existing.Stream
+            : null;
+    }
+
+    /// <summary>
+    /// Records <paramref name="stream"/> as THE server-side stream for
+    /// (<paramref name="subscriber"/>, <paramref name="streamId"/>) and unregisters it when the
+    /// stream is disposed, so the entry can never outlive what it points at.
+    /// </summary>
+    internal void RegisterClientSubscription(
+        Address? subscriber, string? streamId, WorkspaceReference reference, ISynchronizationStream stream)
+    {
+        if (subscriber is null || string.IsNullOrEmpty(streamId))
+            return;
+        var key = (subscriber.ToString(), streamId);
+        _clientSubscriptions[key] = new ClientSubscription(reference, stream);
+        // Pair-exact removal by REFERENCE identity (never value equality — see ClientSubscription):
+        // a later stream that legitimately took over this key must not be unregistered by an
+        // earlier stream's teardown.
+        stream.RegisterForDisposal(System.Reactive.Disposables.Disposable.Create(() =>
+        {
+            if (_clientSubscriptions.TryGetValue(key, out var current)
+                && ReferenceEquals(current.Stream, stream))
+                _clientSubscriptions.TryRemove(key, out _);
+        }));
+    }
+
 
 }
