@@ -1748,10 +1748,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // content so the corrupt row is identifiable in Loki without flooding the log.
     private const int RawJsonLogMax = 512;
     private static string TruncateRaw(JsonElement je)
-    {
-        var raw = je.GetRawText();
-        return raw.Length <= RawJsonLogMax ? raw : raw[..RawJsonLogMax] + "… (truncated)";
-    }
+        => TruncateRawText(je.GetRawText());
+
+    private static string TruncateRawText(string raw)
+        => raw.Length <= RawJsonLogMax ? raw : raw[..RawJsonLogMax] + "… (truncated)";
 
     private static MeshNode ConvertContentTypedToJsonElement(MeshNode node, JsonSerializerOptions options)
     {
@@ -1940,11 +1940,23 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         MeshNode node, JsonSerializerOptions options, ILogger logger,
         MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry)
     {
-        if (node.Content is not JsonElement je || je.ValueKind != JsonValueKind.Object)
+        // Untyped JSON content arrives in TWO shapes: a JsonElement (storage read) or a JsonNode
+        // (the AS-WRITTEN shape — application code builds content as JsonObject, and a change
+        // notification's entity supplement forwards the written node verbatim). BOTH must be
+        // round-tripped to a typed instance here; passing a JsonNode through untouched left
+        // consumers' `Content is X` soft-casts silently failing (issue #889 — the buyer's
+        // AccessAssignment folding to nothing).
+        var rawText = node.Content switch
+        {
+            JsonElement el when el.ValueKind == JsonValueKind.Object => el.GetRawText(),
+            System.Text.Json.Nodes.JsonObject jo => jo.ToJsonString(),
+            _ => null,
+        };
+        if (rawText is null)
             return node;
         try
         {
-            var deserialized = JsonSerializer.Deserialize<object>(je.GetRawText(), options);
+            var deserialized = JsonSerializer.Deserialize<object>(rawText, options);
             if (deserialized is null)
                 return node;
             // 🚨 Bad-data tolerance: Deserialize<object> degrades BACK to a JsonElement when
@@ -1964,7 +1976,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     "MeshNodeStreamCache.GetQuery: Content for {Path} stayed an untyped JsonElement after "
                     + "deserialization (TypeRegistry lacks the $type discriminator) — downstream "
                     + "'Content is X'/'as X' consumers will fail (renders empty). Raw: {RawJson}",
-                    node.Path, TruncateRaw(je));
+                    node.Path, TruncateRawText(rawText));
                 return node;
             }
             return node with { Content = deserialized };
@@ -1978,7 +1990,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             logger.LogWarning(ex,
                 "MeshNodeStreamCache.GetQuery: FAILED to deserialize Content for {Path} — content stays an "
                 + "untyped JsonElement; downstream 'Content is X' will fail (renders empty). Raw: {RawJson}",
-                node.Path, TruncateRaw(je));
+                node.Path, TruncateRawText(rawText));
             return node;
         }
     }

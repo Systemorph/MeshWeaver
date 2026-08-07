@@ -107,14 +107,72 @@ public class TwoWaySyncTest(ITestOutputHelper output) : GitHubSyncTestBase(outpu
         Assert.NotNull(await WaitForNode($"{a}/ServerOnly"));
     }
 
+    /// <summary>
+    /// The remaining #675 route, closed by #677: a NO-OP "Update to latest" (unchanged content
+    /// fingerprint → Skipped, Preserved = 0) verified NOTHING against the live partition, so it must
+    /// not advance the conflict horizon (LastSyncedAt) — advancing it past a pending uncommitted
+    /// server addition disarms the two-way protection and a LATER push prunes the addition. The
+    /// no-op still records the commit as SEEN (LastSyncCommitSha): a repo commit touching no node
+    /// files must not leave the Space forever "behind" in the up-to-date display.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task NoOpUpdate_DoesNotAdvanceConflictHorizon_ButRecordsSeenCommit()
+    {
+        await Connect();
+        var a = "GhZ" + Guid.NewGuid().ToString("N")[..8];
+        await CreateSpace(a, "Space Z");
+        await CreateMarkdown($"{a}/Welcome", "Welcome", "# Welcome\n\nv1.");
+
+        var repo = "https://github.com/test/space-z";
+        await Sync.SaveConfig(a, repo, "main", subdirectory: null,
+                createBranchIfMissing: true, createRepoIfMissing: true,
+                direction: SyncDirection.Bidirectional, sourceId: null, twoWay: true)
+            .Timeout(30.Seconds()).ToTask();
+
+        var c1 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        var exported = await WaitForConfig(a, c => c.LastSyncedAt != null && c.LastSyncCommitSha == c1.CommitSha);
+
+        // Baseline import: establishes the Succeeded fingerprint marker (so the LATER update
+        // short-circuits) and advances the horizon — nothing is server-newer yet, so it reconciled.
+        await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).ToTask();
+        var reconciled = await WaitForConfig(a, c => c.LastSyncedAt > exported.LastSyncedAt);
+
+        // A user adds a node on the SERVER after the horizon — not in the repo at any commit.
+        await CreateMarkdown($"{a}/ServerOnly", "ServerOnly", "# ServerOnly\n\nadded on the server.");
+
+        // A repo commit that changes NO node content (identical tree, new sha).
+        var noOp = await PushRepoTree(repo, Fake.Tree(repo).ToImmutableList(), "no-op commit");
+
+        // The no-op update short-circuits on the unchanged fingerprint. It must record the commit
+        // as seen WITHOUT moving the conflict horizon past the pending server addition.
+        var noOpResult = await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).ToTask();
+        Assert.Equal("Skipped", noOpResult.Outcome);
+        var afterNoOp = await WaitForConfig(a, c => c.LastSyncCommitSha == noOp.CommitSha);
+        Assert.Equal(reconciled.LastSyncedAt, afterNoOp.LastSyncedAt);
+
+        // The consequence the horizon exists for: the next REAL push runs the prune for real, and
+        // the server addition must survive it (pre-#677 the advanced horizon let it be pruned here).
+        await PushRepoFile(repo, "Docs.md", "# Docs\n\nfrom the repo.");
+        var update = await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).ToTask();
+        Assert.NotNull(await WaitForNode($"{a}/Docs"));
+        Assert.NotNull(await WaitForNode($"{a}/ServerOnly"));
+        Assert.True(update.Preserved > 0,
+            $"the kept server addition must count as preserved (was {update.Preserved})");
+    }
+
     /// <summary>Simulates a repo-side commit: the current tree plus one added file.</summary>
     private Task<GitHubPushResult> PushRepoFile(string repo, string path, string content) =>
+        PushRepoTree(repo, Fake.Tree(repo).Append(new RepoFile(path, content)).ToImmutableList(), $"add {path}");
+
+    /// <summary>Simulates a repo-side commit of exactly <paramref name="files"/> (a push of an
+    /// identical tree models a commit touching no node files — new sha, same content).</summary>
+    private Task<GitHubPushResult> PushRepoTree(string repo, ImmutableList<RepoFile> files, string message) =>
         Fake.Push(new GitHubPushRequest
         {
             RepositoryUrl = repo,
             Branch = "main",
-            Files = Fake.Tree(repo).Append(new RepoFile(path, content)).ToImmutableList(),
-            CommitMessage = $"add {path}",
+            Files = files,
+            CommitMessage = message,
             AuthorName = "octocat",
             AuthorEmail = "octocat@users.noreply.github.com",
             AccessToken = "ghp_test_token",

@@ -47,10 +47,17 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
 /// live node and prunes extras. Two-way (<see cref="PreserveServerNewer"/>) instead PRESERVES a node
 /// that was changed on the server since the last sync, so a local edit made between syncs is carried
 /// back to the repo on the next commit rather than silently overwritten — "newer on the server wins".
-/// A <see cref="Force"/> import ignores the policy and overwrites regardless (the deliberate-discard
-/// escape hatch). Boot / built-in static-repo imports pass no policy → <see cref="GitFirst"/>.
+/// <see cref="PreserveServerAdditions"/> is the PRUNE-only subset of that protection: a node
+/// created/changed on the server since the last sync and ABSENT from the repo is kept (not pruned)
+/// even when overwrite conflicts stay git-first — the bidirectional-space guard (issue #604), where
+/// mesh-side edits are first-class and a full-mirror prune would destroy uncommitted additions.
+/// A <see cref="Force"/> import ignores the policy and overwrites/prunes regardless (the
+/// deliberate-discard escape hatch). Boot / built-in static-repo imports pass no policy →
+/// <see cref="GitFirst"/> (one-way mirrors keep FullReplace semantics unchanged).
 /// </summary>
-public sealed record ImportConflictPolicy(bool PreserveServerNewer, DateTimeOffset? Since, bool Force = false)
+public sealed record ImportConflictPolicy(
+    bool PreserveServerNewer, DateTimeOffset? Since, bool Force = false,
+    bool PreserveServerAdditions = false)
 {
     /// <summary>The git-first default: the repo is authoritative; local edits are overwritten/pruned.</summary>
     public static readonly ImportConflictPolicy GitFirst = new(false, null, false);
@@ -63,6 +70,18 @@ public sealed record ImportConflictPolicy(bool PreserveServerNewer, DateTimeOffs
     /// </summary>
     public bool PreservesServerCopyOf(MeshNode? target) =>
         PreserveServerNewer && !Force && Since is { } since
+        && target is not null && target.LastModified > since;
+
+    /// <summary>
+    /// True when <paramref name="target"/> must be kept from the PRUNE: it was created/changed on
+    /// the server since the last sync (<see cref="Since"/>) while the repo carries no copy — a
+    /// server-side addition to be committed back, not a stale extra to remove. Applies under full
+    /// two-way (<see cref="PreserveServerNewer"/>) AND under prune-only protection
+    /// (<see cref="PreserveServerAdditions"/>); a <see cref="Force"/> import prunes regardless, and
+    /// with no recorded baseline there is nothing to protect. Pure — unit-testable.
+    /// </summary>
+    public bool PreservesFromPruneOf(MeshNode? target) =>
+        (PreserveServerNewer || PreserveServerAdditions) && !Force && Since is { } since
         && target is not null && target.LastModified > since;
 }
 
@@ -805,6 +824,20 @@ public static class StaticRepoImporter
                         if (changedNodePaths is not null && target is not null
                             && !changedNodePaths.Contains(path))
                         {
+                            // 🚨 A server-newer node OUTSIDE the diff scope is still a pending LOCAL
+                            // change: the repo copy didn't change, so there is nothing to apply — but
+                            // the mesh is AHEAD of the repo for this node (the edit isn't committed
+                            // back yet). Count it PRESERVED so the caller does not advance the
+                            // conflict horizon (LastSyncedAt) past it — otherwise a LATER repo edit
+                            // to this file would no longer see it as "newer on the server" and
+                            // silently overwrite the edit (the diff-scope shape of issue #677).
+                            if (policy?.PreservesServerCopyOf(target) == true)
+                            {
+                                logger?.LogDebug(
+                                    "[StaticRepoImport] {Partition}: outside git-diff scope, {Path} is server-newer — counted preserved.",
+                                    source.Partition, path);
+                                return Observable.Return((Imported: 0, Failed: 0, Preserved: 1, Written: (string?)null));
+                            }
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: outside git-diff scope, skipping {Path}",
                                 source.Partition, path);
@@ -820,6 +853,18 @@ public static class StaticRepoImporter
                             && manifest.TryGetValue(path, out var prevToken)
                             && string.Equals(prevToken, token, StringComparison.Ordinal))
                         {
+                            // 🚨 Same shape as the diff-scope skip above: an unchanged repo copy of a
+                            // SERVER-NEWER node means the mesh is ahead (a pending local edit, not
+                            // yet committed back). Count it preserved so the conflict horizon stays
+                            // put; skipping with 0 let the horizon advance past the edit and disarm
+                            // the two-way protection for the next repo push (issue #677).
+                            if (policy?.PreservesServerCopyOf(target) == true)
+                            {
+                                logger?.LogDebug(
+                                    "[StaticRepoImport] {Partition}: unchanged in repo, {Path} is server-newer — counted preserved.",
+                                    source.Partition, path);
+                                return Observable.Return((Imported: 0, Failed: 0, Preserved: 1, Written: (string?)null));
+                            }
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: unchanged, skipping {Path}", source.Partition, path);
                             return Observable.Return((Imported: 0, Failed: 0, Preserved: 0, Written: (string?)null));
@@ -904,9 +949,10 @@ public static class StaticRepoImporter
                     var toPrune = ComputePrunableNodes(
                         existing.Values, nodes.Select(n => n.Path), manifest.Keys, excludedRoots, syncMode);
 
-                    // Two-way: never prune a node CREATED/changed on the server since the last sync. It
-                    // isn't in the repo yet, but it's a local addition to be committed back — not a stale
-                    // extra to remove. A forced import prunes it (the repo state wins).
+                    // Never prune a node CREATED/changed on the server since the last sync when the
+                    // policy protects it (two-way, OR prune-only protection for bidirectional spaces —
+                    // issue #604). It isn't in the repo yet, but it's a local addition to be committed
+                    // back — not a stale extra to remove. A forced import prunes it (the repo state wins).
                     // 🚨 A node KEPT here counts as PRESERVED exactly like a kept upsert conflict — it is
                     // the same statement: "this local change is not in the repo yet, so the mesh is AHEAD".
                     // Reporting 0 here let GitHubSyncService.ReimportAtCommit advance the sync baseline
@@ -915,14 +961,15 @@ public static class StaticRepoImporter
                     // one cycle later, which is precisely what that baseline guard exists to prevent.
                     // Deterministic repro: TwoWaySyncTest.TwoWay_ServerAddition_SurvivesEveryLaterRepoPush.
                     var keptFromPrune = Array.Empty<MeshNode>();
-                    if (policy is { PreserveServerNewer: true, Force: false, Since: { } pruneSince })
+                    if (policy is not null)
                     {
-                        keptFromPrune = toPrune.Where(n => n.LastModified > pruneSince).ToArray();
-                        toPrune = toPrune.Where(n => n.LastModified <= pruneSince).ToArray();
+                        keptFromPrune = toPrune.Where(policy.PreservesFromPruneOf).ToArray();
+                        if (keptFromPrune.Length > 0)
+                            toPrune = toPrune.Where(n => !policy.PreservesFromPruneOf(n)).ToArray();
                         foreach (var kept in keptFromPrune)
                         {
                             logger?.LogInformation(
-                                "[StaticRepoImport] {Partition}: two-way — keeping server-added {Path} (not pruned).",
+                                "[StaticRepoImport] {Partition}: keeping server-added {Path} (not pruned).",
                                 source.Partition, kept.Path);
                             NodeTypeCompilationActivity.AppendLog(hub, activityPath,
                                 $"↩ Kept {kept.Path} (added on the server — commit to sync it back).", logger!);
@@ -932,11 +979,24 @@ public static class StaticRepoImporter
                     // Collect the actually-pruned PATHS (not just a count): a pruned Source/Test
                     // node affects its owning NodeType exactly like a written one, so the recompile
                     // derivation downstream needs to see it. A failed prune contributes nothing.
+                    // 🚨 EVERY successful prune names its path — server log AND activity log (issue
+                    // #604): a prune is a destructive act on user data, and an aggregate count alone
+                    // made a deleted node indistinguishable from a bug ("my page vanished and nothing
+                    // says why"). The activity log is the diagnosis surface, so the deletion must be
+                    // as auditable as the "⚠ Failed to import …" lines already are.
                     var pruned = toPrune.Count == 0
                         ? Observable.Return(ImmutableList<string>.Empty)
                         : toPrune
                             .Select(t => AsSystem(hub, () => meshService.DeleteNode(t.Path))
-                                .Select(_ => (string?)t.Path)
+                                .Select(_ =>
+                                {
+                                    logger?.LogInformation(
+                                        "[StaticRepoImport] {Partition}: pruned {Path} (absent from the source).",
+                                        source.Partition, t.Path);
+                                    NodeTypeCompilationActivity.AppendLog(hub, activityPath,
+                                        $"🗑 Pruned {t.Path} (absent from the repo).", logger!);
+                                    return (string?)t.Path;
+                                })
                                 .Catch<string?, Exception>(ex =>
                                 {
                                     logger?.LogWarning(ex,
@@ -978,9 +1038,14 @@ public static class StaticRepoImporter
                             // kept-not-pruned (server additions). Both leave the mesh ahead of the repo.
                             var preserved = count.Preserved + keptFromPrune.Length;
                             var preservedNote = preserved > 0 ? $", kept {preserved} local change(s)" : "";
+                            // The summary NAMES the pruned nodes (issue #604) — the count alone left
+                            // a destructive import unauditable ("pruned 7" — which seven? unknown).
+                            var prunedNote = prunedPaths.Count > 0
+                                ? $"pruned {prunedPaths.Count} ({string.Join(", ", prunedPaths)})"
+                                : "pruned 0";
                             var summary = failed > 0
-                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}, pruned {prunedPaths.Count}, synced {contentCount} content file(s)."
-                                : $"Imported {count.Imported} node(s){preservedNote}, pruned {prunedPaths.Count}, synced {contentCount} content file(s).";
+                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}, {prunedNote}, synced {contentCount} content file(s)."
+                                : $"Imported {count.Imported} node(s){preservedNote}, {prunedNote}, synced {contentCount} content file(s).";
                             NodeTypeCompilationActivity.Complete(hub, activityPath, status,
                                 new[]
                                 {
