@@ -94,18 +94,19 @@ public class PlatformAgentsVisibleInPickerTest(PortalFixture fixture)
                 TimeSpan.FromSeconds(30)))
             .Should().BeTrue("the composer must bind to the MeshWeaver harness before /agent opens the picker");
 
-        // Open the agent picker the way a user does.
+        // Open the agent picker the way a user does: type "/agent" and SUBMIT it. Submitting is
+        // what opens the picker widget — pressing Enter inside the editor only adds a line.
+        // ChatComposerSwitchSelectionTest.SubmitSlashCommandAsync is the reference interaction.
         await page.Keyboard.PressAsync("Escape");
         await editor.ClickAsync();
         await page.Keyboard.PressAsync("ControlOrMeta+A");
         await page.Keyboard.PressAsync("Backspace");
         await page.Keyboard.TypeAsync("/agent");
-        await page.Keyboard.PressAsync("Enter");
+        await page.Locator(".thread-chat-footer .selector-bar fluent-button").Last
+            .ClickAsync(new LocatorClickOptions { Timeout = 15_000 });
 
         // The picker's rendered rows — this is what the user actually looks at.
-        var rows = page.Locator(
-            ".agent-picker .monaco-list-row, .suggest-widget.visible .monaco-list-row, "
-            + "fluent-option, .picker-list .picker-item");
+        var rows = page.Locator(".thread-chat-widget .thread-chat-widget-item");
         var seen = "";
         var found = await PollAsync(async () =>
         {

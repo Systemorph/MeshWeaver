@@ -86,6 +86,25 @@ The lesson generalises: when you add a seam that asks *"is there a node at this 
 definition-only entry must answer **no**. Only the seams asking *"does this TYPE exist?"* (NodeType
 resolution, `StaticTypeName` linking, creatable-type lists) may see it.
 
+### "Can't we just drop the definition, since the platform knows Agent anyway?"
+
+Reasonable question — the platform *does* reference `Agent` and `Skill` intrinsically
+(`AgentPickerProjection`, the AI settings skill sources, the harness). Those references are all
+**query-side**: they filter by the `nodeType` *string*. None of them supplies the type's
+`HubConfiguration` delegate, and none registers the type as *existing*.
+
+Measured, not assumed — dropping `AddMeshNodes(typeDefinition)` for `Agent` on the DB-synced path
+fails **5 of 5** `PreInstalledPackageInstallTest` cases:
+
+- `PackageInstaller`'s required-node-type gate (`FindStaticNode(t) is null`) rejects the package, so
+  the `Agent` catalog **does not install at all**;
+- `AgentPickerProjection.ObserveAgents` — the pipeline the chat combobox binds to — emits `[]`.
+
+So the definition entry is load-bearing, and `IsDefinitionOnly` is what lets it be load-bearing
+*without* occupying the partition-root path. With the existence-probe guard above in place, the bare
+path is owned by the durable row: on a real portal the `Agent` partition root reads back as
+`Agent | Store/Plugin | v2` from Postgres, next to the installer-written `Agent/_Policy`.
+
 ## Collecting across namespaces (the registry)
 
 A catalog's **effective set at runtime is never one partition** — it is collected from a **collection of namespaces**: the user's own, the active space, and the platform tier. The default tiers, in precedence order:
