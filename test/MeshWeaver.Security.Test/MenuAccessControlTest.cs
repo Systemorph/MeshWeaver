@@ -213,7 +213,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         // fix for the old flake, where the menu was read before the Editor role propagated.
         var expected = new[]
         {
-            "Edit", "Create", "Copy", "Import", "Files", "Data", "Export", "Versions", "Pin", "Recycle",
+            "Edit", "Create MeshNode", "Copy", "Import MeshNode", "Files", "Data", "Export MeshNode", "Versions", "Pin", "Recycle",
             "Stop synchronization"
         };
         var items = await FetchAllMenuItems(client, nodeAddress, LabelsAre(expected));
@@ -241,7 +241,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         var expected = new[]
         {
-            "Edit", "Create", "Copy", "Move", "Import", "Files", "Data", "Export", "Versions", "Delete", "Pin", "Recycle",
+            "Edit", "Create MeshNode", "Copy", "Move", "Import MeshNode", "Files", "Data", "Export MeshNode", "Versions", "Delete", "Pin", "Recycle",
             "Stop synchronization"
         };
         var items = await FetchAllMenuItems(client, nodeAddress, LabelsAre(expected));
@@ -271,7 +271,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var nodeItems = await FetchMenuItems(client, nodeAddress, NodeMenuItemsExtensions.NodeMenuContext,
             items => items.Any(i => i.Label == "Delete"));
         var meshItems = await FetchMenuItems(client, nodeAddress, NodeMenuItemsExtensions.MeshMenuContext,
-            items => items.Any(i => i.Label == "Create"));
+            items => items.Any(i => i.Label == "Create MeshNode"));
 
         nodeItems.Should().BeInAscendingOrder(i => i.Order, "Node menu items should be sorted by Order");
         meshItems.Should().BeInAscendingOrder(i => i.Order, "Mesh menu items should be sorted by Order");
@@ -291,9 +291,9 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // Import lives in the Mesh menu — wait until it appears (Editor role propagated).
         var meshItems = await FetchMenuItems(client, nodeAddress, NodeMenuItemsExtensions.MeshMenuContext,
-            items => items.Any(i => i.Label == "Import"));
+            items => items.Any(i => i.Label == "Import MeshNode"));
 
-        var importItem = meshItems.FirstOrDefault(i => i.Label == "Import");
+        var importItem = meshItems.FirstOrDefault(i => i.Label == "Import MeshNode");
         importItem.Should().NotBeNull("Import menu item should exist in the Mesh menu for Editor");
         importItem!.Area.Should().Be(MeshNodeLayoutAreas.ImportMeshNodesArea,
             "Import should navigate to ImportMeshNodes area, not $Import");
