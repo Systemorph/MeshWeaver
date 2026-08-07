@@ -98,8 +98,29 @@ public static class NodeMenuItemsExtensions
             // Default (unnamed) context lands on "$Menu"; named contexts on "$Menu:{context}".
             var area = context.Length == 0 ? MenuControl.MenuArea : MenuControl.GetMenuArea(context);
             var areaContext = new RenderingContext(area);
-            host.RegisterForDisposal(
-                MenuControl.MenuArea,
+            // 🚨 ReplaceDisposable keyed on the WRITTEN area — never the appending
+            // RegisterForDisposal, and never one shared key for every context (issue #606).
+            //
+            // RenderMenus is a GLOBAL predicate renderer (`WithRenderer(_ => true, …)`), so it runs
+            // on EVERY area render — and a render re-runs on every emission of the node/permission
+            // stream the providers themselves are built on. The appending overload therefore stacked
+            // one MORE live GetMeshNodeStream+permissions subscription per re-render, under the
+            // constant key "$Menu" which no area teardown ever reaps (DisposeExistingAreas /
+            // DisposeChildAreas only remove keys that StartsWith(context.Area), and "$Menu" never
+            // starts with "Overview"/"Edit"/…). Every stacked subscription stayed live for the
+            // host's whole lifetime, each one holding the node stream + the permission stream (and
+            // so pinning a MeshNodeStreamCache entry, which blocks the idle release of that path's
+            // upstream sync stream), and each one an additional writer of the SAME $Menu area.
+            //
+            // Keyed PER CONTEXT (not the shared MenuArea constant): each menu context writes its
+            // OWN area, so one live writer per area is exactly right — two live subscriptions
+            // writing the same area were racing writers, not a feature. The shared constant would
+            // make context B's registration dispose context A's. The key is deliberately NOT the
+            // bare area name either: RenderArea registers the rendered UiControls under the area
+            // key, and replacing that bucket would dispose the live menu control alongside the
+            // stale subscription.
+            host.ReplaceDisposable(
+                $"menu-subscription:{area}",
                 items
                     .DistinctUntilChanged(MenuItemsSequenceComparer.Instance)
                     .Subscribe(

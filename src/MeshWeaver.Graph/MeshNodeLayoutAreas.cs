@@ -1778,7 +1778,12 @@ public static class MeshNodeLayoutAreas
         // no SetupAutoSave save subscription. The one-way /data projection below keeps the
         // derived-label read views (dimension/options/date) correct from the Layout layer.
         var boundContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: true);
-        host.RegisterForDisposal($"editnode-content-projection_{dataId}",
+        // 🚨 ReplaceDisposable, NEVER RegisterForDisposal — see the identical seam in
+        // OverviewLayoutArea.BuildPropertyOverview (issue #606). BuildEditNodeContent re-runs on
+        // every emission of the node/permission CombineLatest, and the appending overload would
+        // stack one more live node-stream subscription per render under a key no area teardown
+        // reaps.
+        host.ReplaceDisposable($"editnode-content-projection_{dataId}",
             host.Workspace.GetMeshNodeStream(nodePath)
                 .Select(n => n?.Content)
                 .Where(c => c is not null)
