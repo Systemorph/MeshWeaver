@@ -132,7 +132,7 @@ public static class ReportsCatalogLayoutAreas
             {
                 var ns = child.Namespace;
                 imgSrc = !string.IsNullOrEmpty(ns)
-                    ? $"/static/storage/content/{ns}/{thumbnail}"
+                    ? $"/api/content/{ns}/{thumbnail}"
                     : thumbnail;
             }
             rightHtml = $@"<div style=""flex-shrink: 0; margin-left: 24px;"">

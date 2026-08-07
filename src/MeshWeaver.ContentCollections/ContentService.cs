@@ -159,6 +159,9 @@ public class ContentService : IContentService
             BasePath = fullPath,
             Address = mappedConfig.Address,
             IsEditable = mappedConfig.IsEditable,
+            // 🚨 HTTP publication comes from the MAPPING, never the source. Inheriting the backing
+            // store's flag here would publish every per-node view over it (issue #587).
+            IsStatic = mappedConfig.IsStatic,
             Settings = sourceConfig.Settings is { } src
                 ? new Dictionary<string, string>(src) { ["BasePath"] = fullPath }
                 : new Dictionary<string, string> { ["BasePath"] = fullPath }

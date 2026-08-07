@@ -42,7 +42,25 @@ public record ContentCollectionConfig
     public bool IsEditable { get; set; }
 
     /// <summary>
-    /// Whether this collection's files should be served under the /static route.
+    /// 🚨 PUBLISHES the collection on the portal's access-controlled content route
+    /// (<see cref="ContentCollectionsExtensions.ContentFileRoutePrefix"/>). Default <c>false</c> —
+    /// NOT publishable, and the route answers 404 for it, identically for every caller.
+    ///
+    /// <para>The flag existed before issue #587 but was read NOWHERE — set at two sites, consulted
+    /// at zero — so every collection registered anywhere on the mesh was fetchable by URL merely by
+    /// existing. It is now the mount check: registering a collection makes it available to layout
+    /// areas, autocomplete and the file browser; declaring it here is the separate, deliberate act
+    /// of publishing its bytes over HTTP.</para>
+    ///
+    /// <para>A published collection is still fully ACCESS-CONTROLLED: the route resolves the owning
+    /// node and asks that node's hub for the collection with a <c>GetDataRequest</c>, which carries
+    /// <c>[RequiresPermission(Read)]</c>. Publishing decides <i>reachable</i>, never
+    /// <i>readable</i>. Nothing is served on the public <c>/static</c> route any more — that carries
+    /// build assets only (<see cref="StaticAssetMount"/>).</para>
+    ///
+    /// <para>The <c>bool</c> type-default is <c>false</c>, which is also the safe value, so the
+    /// wire-default suppression noted on <see cref="IsEditable"/> can only ever drop a
+    /// <c>false</c> — a dropped value fails CLOSED.</para>
     /// </summary>
     public bool IsStatic { get; set; }
 

@@ -16,5 +16,5 @@
     "createdAt": "2026-01-17T11:00:00+00:00",
     "status": "Active"
   },
-  "icon": "/static/storage/content/FutuRe/icon.svg"
+  "icon": "/api/content/FutuRe/icon.svg"
 }

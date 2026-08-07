@@ -2,7 +2,7 @@ namespace MeshWeaver.Layout;
 
 /// <summary>
 /// Renders an original source file (PDF or DOCX) inline in the browser and highlights a passage in
-/// it. The Blazor view (<c>DocumentSourceView</c>) loads <see cref="FileUrl"/> (a <c>/static/…</c>
+/// it. The Blazor view (<c>DocumentSourceView</c>) loads <see cref="FileUrl"/> (a <c>/api/content/…</c>
 /// route serving the raw file) and, by <see cref="Mime"/>, drives PDF.js (PDF) or mammoth (DOCX) to
 /// render the document, then finds <see cref="Highlight"/> in the rendered text and marks it.
 ///
@@ -13,7 +13,7 @@ namespace MeshWeaver.Layout;
 /// view time. Unsupported types and load failures degrade to a download link plus the highlighted passage
 /// text — never a blank pane.</para>
 /// </summary>
-/// <param name="FileUrl">The URL that serves the raw original file (e.g. <c>/static/{collection}/{file}</c>).</param>
+/// <param name="FileUrl">The URL that serves the raw original file (e.g. <c>/api/content/{node}/{collection}/{file}</c>).</param>
 /// <param name="Mime">The file's content type (drives PDF vs DOCX rendering). Null = infer / fall back.</param>
 /// <param name="Highlight">The passage to find and mark in the rendered document (query terms or chunk text).</param>
 /// <param name="FileName">Display name for the file, used as the download-link text in the fallback.</param>

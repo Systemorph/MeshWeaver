@@ -22,7 +22,7 @@ namespace MeshWeaver.Graph;
 /// On "Use as Icon" the dialog writes via <c>stream.Update</c> (the mesh-node
 /// stream cache) to set
 /// <see cref="MeshNode.Icon"/> to <c>content:&lt;fileName&gt;</c>. The resolver
-/// rewrites that to <c>/static/storage/content/{nodePath}/{fileName}</c> at
+/// rewrites that to <c>/api/content/{nodePath}/{fileName}</c> at
 /// render time, so the file the user just uploaded via the embedded
 /// <see cref="FileBrowserControl"/> is immediately reachable.
 /// </para>
@@ -63,7 +63,7 @@ public static class NodeIconPickerDialog
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("icon"))
         {
             Label = "Icon reference",
-            Placeholder = "content:logo.png, /static/…, <svg>…</svg>, or absolute URL",
+            Placeholder = "content:logo.png, <svg>…</svg>, or absolute URL",
             Immediate = true,
             DataContext = formPointer
         });

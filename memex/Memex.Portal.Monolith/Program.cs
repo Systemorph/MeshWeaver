@@ -54,9 +54,15 @@ builder.UseMeshWeaver(
         // Register storage collection at mesh level for static file serving (monolith only)
         if (storageConfig != null)
         {
-            // Storage collection: read-only static backing store, hidden from children.
+            // Storage collection: read-only backing store, hidden from children.
             // IsEditable / ExposeInChildren default to false — leave unset.
-            storageConfig = storageConfig with { IsStatic = true };
+            //
+            // 🚨 IsStatic stays FALSE (issue #587). This is the mesh-level store holding EVERY
+            // partition's content under content/{nodePath}/… . Publishing it by URL is exactly the
+            // reported hole: /static/storage/content/{node}/{file} handed out any partition's
+            // uploads at a fully predictable address with no permission check anywhere. The store is
+            // reached through the per-node collections mapped over it, each owned by a node and
+            // therefore gated on Read of that node.
             config.ConfigureHub(hub => hub.AddContentCollection(_ => storageConfig));
         }
 

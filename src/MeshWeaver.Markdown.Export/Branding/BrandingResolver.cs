@@ -127,14 +127,10 @@ public class BrandingResolver
         if (string.IsNullOrWhiteSpace(path))
             return Observable.Return<LogoImage?>(null);
 
-        // content:... paths and the conventional /static/storage/content/{collection}/{path}
-        // shape both resolve through the content service; anything else is skipped.
-        const string staticPrefix = "/static/storage/content/";
-        var rel = path.StartsWith("content:", StringComparison.OrdinalIgnoreCase)
-            ? path["content:".Length..]
-            : path.StartsWith(staticPrefix, StringComparison.OrdinalIgnoreCase)
-                ? path[staticPrefix.Length..]
-                : null;
+        // A content: reference, the ACCESS-CONTROLLED content-route URL, and the pre-#587
+        // /static/storage/content/{collection}/{path} shape (still persisted on nodes written
+        // before the fix) all resolve through the content service; anything else is skipped.
+        var rel = ContentPathReference.TryGetRelativePath(path);
         if (rel is null)
         {
             // Unsupported path shape — either an absolute URL or a relative path we can't resolve server-side.

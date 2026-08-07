@@ -226,7 +226,7 @@ public partial class FileBrowser : IDisposable
     private string GetLink(FileItem item)
     {
         // Use full address string (e.g., "Cornerstone/Microsoft/2026") for URL generation
-        // Both /static and /content endpoints use IMeshCatalog.ResolvePathAsync for dynamic resolution
+        // Both /api/content and /content endpoints use IMeshCatalog.ResolvePathAsync for dynamic resolution
         var addressString = Address?.ToString();
 
         // Encode slashes in collection name as ~ to avoid URL path parsing issues
@@ -235,8 +235,9 @@ public partial class FileBrowser : IDisposable
 
         if (ShouldDownload(item.Name))
         {
-            // Download files: /static/{address}/{encodedCollection}{item.Path}?download
-            return $"/static/{addressString}/{encodedCollection}{item.Path}?download";
+            // Download files: /api/content/{address}/{encodedCollection}{item.Path}?download —
+            // the ACCESS-CONTROLLED route (issue #587). /static applies no permission check.
+            return $"{ContentCollectionsExtensions.ContentFileRoutePrefix}/{addressString}/{encodedCollection}{item.Path}?download";
         }
 
         // URL-mirrored host: files live in the same collection-named URL space as folders —
@@ -396,7 +397,7 @@ public partial class FileBrowser : IDisposable
             // The browser will handle the download based on the content-disposition header
             foreach (var file in filesToDownload)
             {
-                var downloadUrl = $"/static/{addressString}/{encodedCollection}{file.Path}?download";
+                var downloadUrl = $"{ContentCollectionsExtensions.ContentFileRoutePrefix}/{addressString}/{encodedCollection}{file.Path}?download";
                 await JSRuntime.InvokeVoidAsync("open", downloadUrl, "_blank");
                 // Add a small delay between downloads to avoid browser blocking multiple downloads
                 await Task.Delay(100);

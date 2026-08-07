@@ -2,7 +2,7 @@
 Name: Documentation
 Category: Documentation
 Description: Your AI-powered data mesh platform — explore the docs, or just ask the assistant
-Icon: /static/storage/content/MeshWeaver/logo.svg
+Icon: /api/content/MeshWeaver/logo.svg
 ---
 
 <div style="background: linear-gradient(135deg, #1e88e5 0%, #6a1b9a 100%); border-radius: 18px; padding: 44px 36px; margin: 4px 0 32px 0; color: #fff;">

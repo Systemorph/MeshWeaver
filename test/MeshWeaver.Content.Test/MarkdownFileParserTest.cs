@@ -200,7 +200,7 @@ public class MarkdownFileParserTest
 
         // Assert
         node.Should().NotBeNull();
-        node!.Icon.Should().Be("/static/storage/content/Cornerstone/icons/custom.svg");
+        node!.Icon.Should().Be("/api/content/Cornerstone/icons/custom.svg");
     }
 
     [Fact(Timeout = 20000)]
@@ -356,11 +356,11 @@ public class MarkdownFileParserTest
     [Fact(Timeout = 20000)]
     public void Serialize_ResolvedAbsoluteIconPath_IsOmittedFromYaml()
     {
-        // Arrange - Icon starts with /static/storage/content/ (was resolved from relative path)
+        // Arrange - Icon starts with the resolved content route (was resolved from a relative path)
         var node = new MeshNode("doc", "ns")
         {
             Name = "Test Node",
-            Icon = "/static/storage/content/ns/icons/custom.svg",
+            Icon = "/api/content/ns/icons/custom.svg",
             Content = new MarkdownContent { Content = "# Content" }
         };
 
@@ -391,19 +391,19 @@ public class MarkdownFileParserTest
 
         // Act - Parse (resolves relative icon), serialize, re-parse
         var node = _parser.Parse("/root/Cornerstone/doc.md", originalContent, "Cornerstone/doc.md");
-        node!.Icon.Should().Be("/static/storage/content/Cornerstone/icons/custom.svg");
+        node!.Icon.Should().Be("/api/content/Cornerstone/icons/custom.svg");
 
         var serialized = _parser.Serialize(node);
 
         // The resolved absolute path should NOT appear in serialized YAML
-        serialized.Should().NotContain("/static/storage/content/");
+        serialized.Should().NotContain("/api/content/");
 
         // Re-parse — Thumbnail is still in YAML and should resolve again
         var reparsed = _parser.Parse("/root/Cornerstone/doc.md", serialized, "Cornerstone/doc.md");
 
         // Assert — icon resolves to the same absolute URL (no double-resolution)
         reparsed.Should().NotBeNull();
-        reparsed!.Icon.Should().Be("/static/storage/content/Cornerstone/icons/custom.svg");
+        reparsed!.Icon.Should().Be("/api/content/Cornerstone/icons/custom.svg");
     }
 
     [Fact(Timeout = 20000)]

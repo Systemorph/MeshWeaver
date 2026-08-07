@@ -97,7 +97,7 @@ Retrieval mechanism + the visible-vs-embeddable rule are pinned by `LayoutAreaRe
 # 6. Give it a logo and an icon
 
 - **`icon`** — a RENDERABLE value shown in lists, menus, and the page header: an inline `<svg>`, an emoji, or an image URL (e.g. `/static/NodeTypeIcons/space.svg`). **NEVER a Fluent icon name** like `Building` (a name is not an image — it won't render). See §2.
-- **`logo`** — an image URL or data URI for the large header image (e.g. a served `/static/...svg`). Without a logo the header falls back to the node icon or the name's initials.
+- **`logo`** — an image URL or data URI for the large header image. Prefer a `content:logo.svg` reference on the Space, which renders as the access-controlled `/api/content/{Space}/logo.svg`. **Never point it at `/static/…`** for content: that route serves application build assets only and applies no access check, so a Space's logo placed there would be world-readable. Without a logo the header falls back to the node icon or the name's initials.
 
 # 7. (Optional) Link a GitHub repository
 

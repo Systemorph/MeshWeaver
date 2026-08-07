@@ -27,7 +27,7 @@ public class NodeRepoPluginListingTest
             """{"$type":"MeshNode","id":"Widget","path":"Widget","name":"Widget Plugin","nodeType":"Space","description":"A widget plugin.","content":{"$type":"PluginManifest","description":"A widget plugin."}}"""),
         // Retyped storefront root — listed WITH the card fields.
         new("AgenticEngineering/index.json",
-            """{"$type":"MeshNode","id":"AgenticEngineering","path":"AgenticEngineering","name":"Agentic Engineering","nodeType":"Store/Plugin","description":"Build agents that build software.","category":"Education","icon":"<svg xmlns='http://www.w3.org/2000/svg'/>","content":{"$type":"PluginContent","description":"The full course.","price":900,"currency":"CHF","poster":"/static/AgenticEngineering/content/videos/agentic.poster.png"}}"""),
+            """{"$type":"MeshNode","id":"AgenticEngineering","path":"AgenticEngineering","name":"Agentic Engineering","nodeType":"Store/Plugin","description":"Build agents that build software.","category":"Education","icon":"<svg xmlns='http://www.w3.org/2000/svg'/>","content":{"$type":"PluginContent","description":"The full course.","price":900,"currency":"CHF","poster":"/api/content/AgenticEngineering/content/videos/agentic.poster.png"}}"""),
         // A free-to-browse plugin root without a price — listed, Price null.
         new("Chess/index.json",
             """{"$type":"MeshNode","id":"Chess","path":"Chess","name":"Chess","nodeType":"Store/Plugin","category":"Games","content":{"$type":"PluginContent"}}"""),
@@ -63,7 +63,7 @@ public class NodeRepoPluginListingTest
         course.Icon.Should().Contain("<svg");
         course.Price.Should().Be(900m);
         course.Currency.Should().Be("CHF");
-        course.Poster.Should().Be("/static/AgenticEngineering/content/videos/agentic.poster.png");
+        course.Poster.Should().Be("/api/content/AgenticEngineering/content/videos/agentic.poster.png");
 
         var chess = packages.Single(p => p.Id == "Chess");
         chess.Category.Should().Be("Games");

@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Reactive.Linq;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
@@ -251,7 +252,7 @@ public static class DocumentLayoutAreas
     /// <summary>
     /// Renders the original source file (PDF/DOCX) for a <c>Document</c> node with the matched passage
     /// highlighted. Reads <c>?q=</c> (the passage/terms) and <c>?index=</c> (so "back to blocks" returns
-    /// to the same block). The raw file is served from the <c>/static/…</c> route.
+    /// to the same block). The raw file is served from the access-controlled <c>/api/content/…</c> route.
     /// </summary>
     public static IObservable<UiControl?> Source(LayoutAreaHost host, RenderingContext _)
     {
@@ -295,7 +296,7 @@ public static class DocumentLayoutAreas
     }
 
     /// <summary>
-    /// The <c>/static/…</c> URL that serves the raw original file for a collection-relative path. Each
+    /// The <c>/api/content/…</c> URL that serves the raw original file for a collection-relative path. Each
     /// path segment is URL-encoded (so spaces, <c>#</c>, <c>?</c>, unicode in a file name don't break or
     /// truncate the URL) while the <c>/</c> separators are preserved.
     /// </summary>
@@ -303,7 +304,9 @@ public static class DocumentLayoutAreas
     {
         var collection = EncodeSegments(collectionPath);
         var file = EncodeSegments(filePath.Replace('\\', '/'));
-        return string.IsNullOrEmpty(collection) ? $"/static/{file}" : $"/static/{collection}/{file}";
+        return string.IsNullOrEmpty(collection)
+            ? $"{ContentCollectionsExtensions.ContentFileRoutePrefix}/{file}"
+            : $"{ContentCollectionsExtensions.ContentFileRoutePrefix}/{collection}/{file}";
     }
 
     /// <summary>URL-encodes each <c>/</c>-delimited segment of <paramref name="path"/>, preserving the slashes.</summary>

@@ -5,7 +5,7 @@
   "nodeType": "Markdown",
   "category": "AI Use Cases",
   "description": "Structured data from unstructured sources like PDFs, Excel files, and images",
-  "icon": "/static/storage/content/Systemorph/Marketing/icons/table-simple.svg",
+  "icon": "/api/content/Systemorph/Marketing/icons/table-simple.svg",
   "addressSegments": 0,
   "isPersistent": true,
   "content": {

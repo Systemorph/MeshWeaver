@@ -27,7 +27,7 @@ When the user asks "what type is this?", "open the type", or "show me the model"
 
 **Every node you `Create` MUST have an inline SVG `icon`, and every node you `Update`/`Patch` that lacks one should get one. This applies to ALL node types — NodeTypes, data instances, Markdown pages, agents, scripts, everything — not just Markdown.**
 
-- The value must start with `<svg` (inline markup, rendered directly into the page). **Never** a file path (`/static/…​.svg`), **never** an emoji, **never** blank.
+- The value must start with `<svg` (inline markup, rendered directly into the page). **Never** a file path (`/api/content/…​.svg`), **never** an emoji, **never** blank.
 - **Use `currentColor` for `fill`/`stroke` instead of hard-coded colours.** Inline icons render inheriting the surrounding text colour, so `currentColor` keeps them legible in **both light and dark mode**. A hard-coded dark stroke (e.g. `#0f172a`) disappears on a dark background — that is the #1 icon bug. For multi-colour illustrative icons, pick colours that read on both light and dark surfaces.
 - Set an explicit `width`/`height` (e.g. `24`) and a `viewBox` so the icon renders crisply inside the ~48px icon box.
 - Make it **distinct and topical** — design the glyph to represent that node's subject (a hurricane swirl for a storm bond, a seismograph trace for an earthquake bond, a shield-and-bolt for an insurance-linked security). Distinct icons make the navigator scannable.

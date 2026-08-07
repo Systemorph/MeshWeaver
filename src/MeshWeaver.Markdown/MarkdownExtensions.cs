@@ -16,7 +16,7 @@ public static class MarkdownExtensions
     // immutable after Build().
     //
     // Key is (collection.ToString(), currentNodePath) because the only places those
-    // parameters reach are ImgPathMarkdownExtension (uses $"static/{collection}/{path}")
+    // parameters reach are ImgPathMarkdownExtension (uses $"api/content/{collection}/{path}")
     // and LinkUrlCleanup/LayoutAreaMarkdownExtension (string compare on path).
     //
     // Cap the cache so a long-running portal that renders many distinct nodes doesn't
@@ -63,20 +63,34 @@ public static class MarkdownExtensions
             // emoji still work via unambiguous `:shortcode:` (`:smile:`, `:warning:`). Issue #402.
             .UseEmojiAndSmiley(enableSmileys: false)
             .UseYamlFrontMatter()
-            .Use(new ImgPathMarkdownExtension(path => ToStaticHref(path, collection)))
+            .Use(new ImgPathMarkdownExtension(path => ToContentHref(path, collection)))
             .Use(new LinkUrlCleanupExtension(currentNodePath))
             .Use(new LayoutAreaMarkdownExtension(currentNodePath))
             .Use(new ExecutableCodeBlockExtension())
             .Build();
 
     /// <summary>
-    /// Builds the static-content href for an asset path within a collection (<c>static/{collection}/{path}</c>).
+    /// Builds the href for an image referenced from markdown: the ACCESS-CONTROLLED content route
+    /// (<c>api/content/{collection}/{path}</c>), site-relative so it resolves against the app's
+    /// <c>&lt;base href&gt;</c>.
+    ///
+    /// <para>🚨 This used to emit <c>static/{collection}/{path}</c>. Every image in every markdown
+    /// document in the product went through it, and <c>/static</c> served content collections with
+    /// no authentication and no permission check whatsoever — so an image inside a private Space
+    /// was readable by anyone who had (or guessed) the URL. Issue #587.</para>
     /// </summary>
     /// <param name="path">The asset path relative to the collection.</param>
     /// <param name="collection">The content collection the asset belongs to.</param>
-    /// <returns>The static href string.</returns>
-    public static string ToStaticHref(string path, object? collection)
-        => $"static/{collection}/{path}";
+    /// <returns>The content href string.</returns>
+    public static string ToContentHref(string path, object? collection)
+        => $"{ContentRoutePrefix}/{collection}/{path}";
+
+    /// <summary>
+    /// The site-relative content route markdown images are rewritten onto. Mirrors
+    /// <c>ContentCollectionsExtensions.ContentFileRoutePrefix</c> without the leading slash — this
+    /// assembly sits below MeshWeaver.ContentCollections and cannot reference it.
+    /// </summary>
+    public const string ContentRoutePrefix = "api/content";
 
     /// <summary>
     /// Test hook — clears the pipeline cache. Production code never calls this.
