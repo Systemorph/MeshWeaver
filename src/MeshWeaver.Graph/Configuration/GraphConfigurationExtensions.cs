@@ -204,8 +204,17 @@ public static class GraphConfigurationExtensions
             builder.ConfigureHub(config => config
                 .AddDefaultLayoutAreas()
                 .AddContentCollections()
+                // isStatic: every node card, menu and React client builds
+                // /static/NodeTypeIcons/{icon}.svg — this collection IS a /static mount.
+                // isPublic: node-type icons are the ONE asset class that must serve before any
+                // identity exists — the login page, public course covers, the nav and every
+                // anonymous card render them. They are SVGs compiled into this assembly (i.e.
+                // already public in the shipped package), carry no user data, and are declared
+                // public so /static serves them anonymously with shared-cacheable headers. Every
+                // other collection is access-controlled by default (issue #587).
                 .AddEmbeddedResourceContentCollection("NodeTypeIcons",
-                    typeof(GraphConfigurationExtensions).Assembly, "Icons")
+                    typeof(GraphConfigurationExtensions).Assembly, "Icons",
+                    isStatic: true, isPublic: true)
                 // High-level subtree-copy operation. Relays NodeCopyDispatchRequest
                 // through the Templates/Import/NodeCopy script template via
                 // ScriptDispatch.RelayToScript so callers see request/response

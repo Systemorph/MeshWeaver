@@ -159,6 +159,11 @@ public class ContentService : IContentService
             BasePath = fullPath,
             Address = mappedConfig.Address,
             IsEditable = mappedConfig.IsEditable,
+            // 🚨 /static exposure comes from the MAPPING, never the source. The mesh-level backing
+            // store is mounted static so the `/static/storage/…` shape resolves; inheriting that
+            // here would silently publish every per-node view over it on /static as well.
+            IsStatic = mappedConfig.IsStatic,
+            IsPublic = mappedConfig.IsPublic,
             Settings = sourceConfig.Settings is { } src
                 ? new Dictionary<string, string>(src) { ["BasePath"] = fullPath }
                 : new Dictionary<string, string> { ["BasePath"] = fullPath }

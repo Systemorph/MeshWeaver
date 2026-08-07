@@ -21,7 +21,8 @@ public static class TodoApplicationExtensions
     public static MessageHubConfiguration ConfigureTodoApplication(this MessageHubConfiguration configuration)
     {
         return configuration
-                .AddEmbeddedResourceContentCollection("Todo", typeof(TodoApplicationAttribute).Assembly, "Content")
+                // isStatic: markdown-embedded resources render as /static/{address}/Todo/{file}.
+                .AddEmbeddedResourceContentCollection("Todo", typeof(TodoApplicationAttribute).Assembly, "Content", isStatic: true)
                 .WithTypes(
                     typeof(TodoStatus)
                 )
