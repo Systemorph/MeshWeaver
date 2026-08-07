@@ -159,13 +159,29 @@ public sealed class InstanceAutoRegistrationService(
         // deployment should come up with. The second phase runs for a MANUALLY tokened install too
         // — "a new instance ships with the platform plugins" is not conditional on how it got its key.
         subscriptions.Add(EnsureRegistered(options!, registry)
+            // 🚨 A failed registration must NOT sink the install phase. The phases are independent:
+            // what matters to phase 2 is whether a usable key can be RESOLVED, not how phase 1
+            // went. The case that forced this: two replicas start together, both see no stored
+            // credential, one registers and the other gets 409 — the loser's convergence read can
+            // still miss the sibling's just-committed write, and it would then skip installing
+            // although the deployment holds a perfectly good key moments later. Phase 2 resolves
+            // the token itself and fails closed (a warning + a 401 from the registry) when there
+            // genuinely is none.
+            .Catch((Exception ex) =>
+            {
+                logger.LogError(ex,
+                    "First-startup instance registration against {Url} failed (401 = invalid or "
+                    + "revoked bootstrap key, 409 = instance id already taken). Continuing to the "
+                    + "install phase, which uses whatever key this installation already holds.",
+                    registry.Url);
+                return Observable.Return(Unit.Default);
+            })
             .SelectMany(_ => InstallDefaults(options!, registry))
             .Subscribe(
                 _ => { },
                 ex => logger.LogError(ex,
-                    "First-startup plugin provisioning against {Url} failed. Fix the configuration "
-                    + "(401 = invalid/revoked bootstrap key, 409 = instance id already taken) and "
-                    + "restart; no retry is attempted.", registry.Url)));
+                    "First-startup plugin provisioning against {Url} failed; no retry is attempted.",
+                    registry.Url)));
     }
 
     /// <summary>
@@ -333,10 +349,58 @@ public sealed class InstanceAutoRegistrationService(
     }
 
     /// <summary>
-    /// Selects the catalog entries matching <paramref name="wanted"/> and installs them, in order,
-    /// through the same path the catalog tab's Install button uses. Split out from
-    /// <see cref="InstallDefaults"/> so the selection + install behaviour is testable against any
-    /// <see cref="IPackageSource"/> rather than only a live HTTP registry.
+    /// Orders packages so a dependency is installed BEFORE anything that declares it
+    /// (<see cref="PackageManifest.Requires"/>, entries shaped <c>Store@^1.0.0</c>) — a depth-first
+    /// topological sort, falling back to catalog order within a cycle.
+    ///
+    /// <para>🚨 Not cosmetic: installing out of order FAILS. On the first live run, catalog
+    /// (alphabetical) order put <c>Chess</c> before <c>Training</c>, and the install died with
+    /// "NodeType(s) not registered: Training/Tour". A person clicking Install picks the order
+    /// implicitly; an unattended install has to derive it.</para>
+    ///
+    /// <para>Dependencies outside <paramref name="packages"/> are ignored — the instance was not
+    /// granted them, so they cannot be installed and there is nothing to order against.</para>
+    /// </summary>
+    internal static IReadOnlyList<PackageManifest> InDependencyOrder(
+        IReadOnlyList<PackageManifest> packages, ILogger logger)
+    {
+        var byId = packages.ToDictionary(p => p.Id, StringComparer.Ordinal);
+        var ordered = new List<PackageManifest>(packages.Count);
+        var state = new Dictionary<string, int>(StringComparer.Ordinal);   // 1 = visiting, 2 = done
+
+        void Visit(PackageManifest pkg)
+        {
+            if (state.TryGetValue(pkg.Id, out var s))
+            {
+                if (s == 1)
+                    logger.LogWarning(
+                        "Dependency cycle involving package '{Id}' — installing it in catalog order.",
+                        pkg.Id);
+                return;
+            }
+            state[pkg.Id] = 1;
+            foreach (var requirement in pkg.Requires)
+            {
+                // "Store@^1.0.0" → "Store". The version constraint is not resolved here: the
+                // registry serves one version per package, so ordering is all that is available.
+                var depId = requirement.Split('@')[0].Trim();
+                if (depId.Length > 0 && byId.TryGetValue(depId, out var dep) && !ReferenceEquals(dep, pkg))
+                    Visit(dep);
+            }
+            state[pkg.Id] = 2;
+            ordered.Add(pkg);
+        }
+
+        foreach (var pkg in packages)
+            Visit(pkg);
+        return ordered;
+    }
+
+    /// <summary>
+    /// Selects the catalog entries matching <paramref name="wanted"/> and installs them, in
+    /// dependency order, through the same path the catalog tab's Install button uses. Split out
+    /// from <see cref="InstallDefaults"/> so the selection + install behaviour is testable against
+    /// any <see cref="IPackageSource"/> rather than only a live HTTP registry.
     /// </summary>
     internal static IObservable<Unit> InstallSelected(
         IMessageHub hub, IPackageSource source, string sourceRef,
@@ -358,11 +422,12 @@ public sealed class InstanceAutoRegistrationService(
                 return Observable.Return(Unit.Default);
             }
 
+            var ordered = InDependencyOrder(selected, logger);
             logger.LogInformation(
-                "First-startup default install: {Count} package(s) — {Packages}",
-                selected.Count, string.Join(", ", selected.Select(p => p.Id)));
+                "First-startup default install: {Count} package(s), in dependency order — {Packages}",
+                ordered.Count, string.Join(", ", ordered.Select(p => p.Id)));
 
-            return selected
+            return ordered
                 .Select(pkg => CatalogLayoutAreas
                     .InstallOrUpdate(hub, source, sourceRef, pkg, logger)
                     .Do(result => logger.LogInformation(
