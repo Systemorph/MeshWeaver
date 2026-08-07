@@ -9,6 +9,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -41,6 +42,9 @@ public static class PackageInstaller
 
     /// <summary>Bounded concurrency for the per-node upsert fan-out (mirrors <c>NodeCopyHelper</c>).</summary>
     public const int DefaultBatchSize = 8;
+
+    /// <summary>The well-known id of a partition's access policy satellite (<c>{partition}/_Policy</c>).</summary>
+    public const string PartitionPolicyId = "_Policy";
 
     /// <summary>
     /// Installs <paramref name="manifest"/>'s content <paramref name="files"/> into its target
@@ -111,7 +115,11 @@ public static class PackageInstaller
                 logger?.LogInformation(
                     "Installed package {Id} v{Version}: {Written} written, {Unchanged} unchanged into {Partition} @ {Ref}",
                     manifest.Id, manifest.Version, result.Written, result.Unchanged, partition, installedFromRef);
-                return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length)
+                // The public-read policy lands BEFORE the roots are warmed: warming ACTIVATES each
+                // root hub, whose gating pass seeds the partition's access table — it must see the
+                // policy this package declares, not a partition nobody can read.
+                return EnsurePreInstalledPublicRead(hub, manifest, partition, logger)
+                    .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
                     .SelectMany(_ => RunInstallHooks(hub, partition!, logger))
                     .Select(_ => result);
@@ -210,6 +218,54 @@ public static class PackageInstaller
             .Concat()
             .DefaultIfEmpty(Unit.Default)
             .LastAsync();
+    }
+
+    /// <summary>
+    /// Establishes the PUBLIC READ a <see cref="PackageManifest.PreInstalled"/> package promises —
+    /// a <c>PartitionAccessPolicy { PublicRead = true }</c> at <c>{partition}/_Policy</c>, written
+    /// by the INSTALLER as part of installing the package.
+    ///
+    /// <para><b>Why the installer owns it.</b> A pre-installed package is platform content: it is
+    /// written entirely under SYSTEM (so no creator grant is ever minted) into a partition no user
+    /// holds a role on, and a platform admin's grant is scoped to the <c>Admin</c> partition. Without
+    /// a policy NOBODY can read what was just installed — which is exactly how the <c>Skill</c>
+    /// catalog came to depend on a hand-placed <c>_Policy</c> node while <c>Agent</c>, which never
+    /// got that hand-treatment, was simply unreachable (#902). Declaring <c>preInstalled</c> is the
+    /// package's whole statement of intent; the grant that makes it true must come from the install,
+    /// not from an operator remembering to place a node.</para>
+    ///
+    /// <para>The shape is the one every built-in catalog already ships (the <c>Plugins</c> records
+    /// partition, the built-in Agent/Model/Documentation namespaces): read-only publication, no
+    /// secrets. CREATE-ONLY — an existing policy (shipped by the package itself, or tuned by an
+    /// operator) is left completely alone, so this can never silently widen or narrow a deliberate
+    /// choice. Failure PROPAGATES: an install that could not establish its declared public read has
+    /// not installed properly, and swallowing that is the defect class this closes.</para>
+    /// </summary>
+    public static IObservable<Unit> EnsurePreInstalledPublicRead(
+        IMessageHub hub, PackageManifest manifest, string? partition, ILogger? logger)
+    {
+        if (!manifest.PreInstalled || string.IsNullOrWhiteSpace(partition))
+            return Observable.Return(Unit.Default);
+
+        var policyPath = $"{partition}/{PartitionPolicyId}";
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var existing = persistence is not null
+            ? persistence.Read(policyPath, hub.JsonSerializerOptions).Take(1)
+            : Observable.Return<MeshNode?>(null);
+
+        return existing.SelectMany(current => current is not null
+            ? Observable.Return(Unit.Default)
+            : Upsert(hub, new MeshNode(PartitionPolicyId, partition!)
+                {
+                    NodeType = PartitionAccessPolicyNodeType.NodeType,
+                    Name = "Access Policy",
+                    State = MeshNodeState.Active,
+                    Content = new PartitionAccessPolicy { PublicRead = true },
+                })
+                .Do(_ => logger?.LogInformation(
+                    "[PackageInstaller] {Id} is pre-installed — published {Partition} read-only to "
+                    + "everyone via {Path}", manifest.Id, partition, policyPath))
+                .Select(_ => Unit.Default));
     }
 
     private static IObservable<Unit> WarmInstalledRoots(
@@ -966,7 +1022,11 @@ public static class PackageInstaller
                             hub.RequestNodeTypeRelease(path,
                                 onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
                 }
-                return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length, moduleManifest)
+                // Same order as the content path: publish the partition BEFORE warming its roots
+                // (activation's gating pass must see the declared policy).
+                return EnsurePreInstalledPublicRead(hub, manifest, manifest.TargetPartition ?? manifest.Id, logger)
+                    .SelectMany(_ => WriteInstalledRecord(
+                        hub, manifest, installedFromRef, nodes.Length, moduleManifest))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
                     .Select(_ => result);
             }));
@@ -1110,8 +1170,13 @@ public static class PackageInstaller
                             hub.RequestNodeTypeRelease(path,
                                 onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
                 }
-                return WriteInstalledRecord(hub, manifest, installedFromRef,
-                        newManifest.Files.Count, newManifest)
+                // An UPDATE re-asserts the declared public read too: a package that only just
+                // flipped to preInstalled (or whose policy was lost) must converge on the next
+                // sync rather than wait for a full re-install. Create-only, so an existing policy
+                // is untouched and this is free on the common path.
+                return EnsurePreInstalledPublicRead(hub, manifest, manifest.TargetPartition ?? manifest.Id, logger)
+                    .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
+                        newManifest.Files.Count, newManifest))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
                     .Select(_ => result);
             });
