@@ -68,7 +68,14 @@ public static class PluginCatalogConfigurationExtensions
                 // until the next package update. Idempotent: on a repaired instance it writes nothing.
                 .AddSingleton<InstalledPackageRepairService>()
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
-                    sp => sp.GetRequiredService<InstalledPackageRepairService>()))
+                    sp => sp.GetRequiredService<InstalledPackageRepairService>())
+                // THE DEFAULT INSTALL: every package declaring `preInstalled` in its manifest is
+                // installed (and re-published) on this instance at startup. Mesh-scoped singleton +
+                // the IHostedService forward that actually STARTS it — the same two-registration
+                // idiom as the watcher above; the bare singleton alone would never run.
+                .AddSingleton<PreInstalledPackageService>()
+                .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
+                    sp => sp.GetRequiredService<PreInstalledPackageService>()))
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();

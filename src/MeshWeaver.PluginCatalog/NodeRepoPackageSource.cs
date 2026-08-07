@@ -139,6 +139,9 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         Price = peeked.Price,
                         Currency = peeked.Currency,
                         Poster = peeked.Poster,
+                        // The package's own declaration that it belongs to the platform's default
+                        // install — read off the ROOT's content, where the plugins repo authors it.
+                        PreInstalled = peeked.PreInstalled,
                     });
                 }
                 return (IReadOnlyList<PackageManifest>)manifests
@@ -160,7 +163,8 @@ public sealed class NodeRepoPackageSource : IPackageSource
 
     private readonly record struct PeekedRoot(
         string? NodeType, string? Name, string? Description,
-        string? Category, string? Icon, decimal? Price, string? Currency, string? Poster);
+        string? Category, string? Icon, decimal? Price, string? Currency, string? Poster,
+        bool PreInstalled);
 
     // Reads the node's type/name/description — plus the storefront card fields (category/icon on
     // the node, price/currency/poster inside the content) — straight from the JSON: no MeshNode
@@ -175,6 +179,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
             decimal? price = null;
             string? currency = null;
             string? poster = null;
+            var preInstalled = false;
             if (r.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Object)
             {
                 if (content.TryGetProperty("price", out var p) && p.ValueKind == JsonValueKind.Number
@@ -184,6 +189,11 @@ public sealed class NodeRepoPackageSource : IPackageSource
                     currency = c.GetString();
                 if (content.TryGetProperty("poster", out var po) && po.ValueKind == JsonValueKind.String)
                     poster = po.GetString();
+                // Only a literal `true` opts in — anything else (absent, false, a string) leaves the
+                // package out of the default install. A malformed value must never silently install
+                // a package on every instance.
+                if (content.TryGetProperty("preInstalled", out var pre))
+                    preInstalled = pre.ValueKind == JsonValueKind.True;
             }
             return new PeekedRoot(
                 r.TryGetProperty("nodeType", out var nt) ? nt.GetString() : null,
@@ -191,7 +201,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 r.TryGetProperty("description", out var d) ? d.GetString() : null,
                 r.TryGetProperty("category", out var cat) ? cat.GetString() : null,
                 r.TryGetProperty("icon", out var ic) ? ic.GetString() : null,
-                price, currency, poster);
+                price, currency, poster, preInstalled);
         }
         catch (JsonException ex)
         {
