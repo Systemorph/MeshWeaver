@@ -24,15 +24,24 @@ namespace MeshWeaver.GitSync;
 /// synced. The write runs under the system identity (an infrastructure mirror update, the same
 /// identity model as the instance-sync pull and <c>StaticRepoImporter</c>).
 ///
-/// <para><c>push</c> events keep GitSync'd Spaces CURRENT without polling: every Space whose
-/// sync config targets the pushed repository + branch — and, when the config scopes a
-/// subdirectory, whose subdirectory the push actually touched — gets the same headless
-/// "Update to latest" the GUI button and the MCP <c>git_hub_sync</c> tool run
+/// <para><b><c>workflow_run</c> success keeps GitSync'd Spaces CURRENT without polling — and only
+/// ever with content CI accepted.</b> A green build of a repository's DEFAULT branch gives every
+/// Space whose sync config targets that repository + branch the same headless "Update to latest"
+/// the GUI button and the MCP <c>git_hub_sync</c> tool run
 /// (<see cref="GitHubActivityExtensions.UpdateToLatestFromGitHub"/>, <c>force: false</c> so
 /// two-way conflict resolution still protects server-side edits). The mesh writes run under
 /// the system identity; the GitHub pull authenticates as the sync config's CREATOR (their
-/// connected credential, or the GitHub App when they have none). Register the repo webhook
-/// with the <c>Pushes</c> event next to <c>Issues</c>/<c>Issue comments</c>.</para>
+/// connected credential, or the GitHub App when they have none).</para>
+///
+/// <para>🚨 <b>The import is gated on CI, so <c>push</c> imports nothing.</b> A push event arrives
+/// BEFORE the build it starts, so importing on push shipped content to live Spaces seconds ahead of
+/// the gate meant to vet it. Because a repo's own content CI is the only thing that knows whether a
+/// commit is installable, the green build — not the merge — is the publish signal. A repository with
+/// NO CI workflow therefore never auto-imports: give it one, or sync it by hand.</para>
+///
+/// <para>Register the repo webhook with <c>Workflow runs</c> (required — it is the trigger) and
+/// <c>Pushes</c> (optional; logged only, and the breadcrumb that tells you a repo's pushes are
+/// arriving while its green builds are not) next to <c>Issues</c>/<c>Issue comments</c>.</para>
 ///
 /// <para>Pull-request events are intentionally ignored: PR state is read LIVE (delegated) and
 /// never materialized, so there is no node to refresh. Reactive end-to-end — no
@@ -173,48 +182,57 @@ public sealed class GitHubWebhookProcessor
     }
 
     /// <summary>
-    /// Whether one sync source should update for <paramref name="push"/>: the branch must match,
-    /// the source must be allowed to import, and — when the source scopes a subdirectory and the
-    /// push's change set is known — the push must have touched that subdirectory.
-    /// </summary>
-    internal static bool ConfigMatchesPush(GitHubSyncConfig? cfg, PushEvent push)
-    {
-        if (cfg is null || cfg.Direction == SyncDirection.ExportOnly)
-            return false;
-        if (!string.Equals(cfg.Branch, push.Branch, StringComparison.OrdinalIgnoreCase))
-            return false;
-        if (push.ChangedPaths is null)
-            return true;
-        var sub = cfg.Subdirectory?.Trim('/') ?? "";
-        if (sub.Length == 0)
-            return push.ChangedPaths.Count > 0;
-        return push.ChangedPaths.Any(p =>
-            p.Equals(sub, StringComparison.OrdinalIgnoreCase)
-            || p.StartsWith(sub + "/", StringComparison.OrdinalIgnoreCase));
-    }
-
-    /// <summary>
-    /// A verified <c>push</c> → the same headless "Update to latest" for every matching sync
-    /// source. TRIGGERS the updates (each runs as its own activity, fire-and-forget with error
-    /// logging) and emits the number triggered — it does NOT await the imports, so the webhook
-    /// response returns within GitHub's delivery timeout.
+    /// A verified <c>push</c> → nothing. **The import is gated on CI**, so it is triggered by the
+    /// repository's GREEN build (<see cref="ProcessWorkflowRun"/>), not by the push that started it.
+    ///
+    /// <para>🚨 This used to import on every push, and that is precisely the hole it left: the push
+    /// event arrives BEFORE the build it triggers, so a red main reached production seconds ahead
+    /// of the gate meant to stop it (observed 2026-08-07 — a merge synced at 09:20:53, its CI failed
+    /// at 09:52). Content repos are GitSync'd straight into live Spaces, so "imported, then found
+    /// broken" is indistinguishable from shipping broken content to users.</para>
+    ///
+    /// <para>The push is still parsed and logged: it is the signal that a build is COMING, and the
+    /// log line is what makes "the merge landed but nothing synced" diagnosable — a repo whose
+    /// pushes are seen but whose green builds never arrive has no CI workflow, and will never
+    /// auto-import until it gets one.</para>
     /// </summary>
     private IObservable<int> ProcessPush(JsonElement payload)
     {
         if (!TryParsePush(payload, out var push) || !TryGetRepoUrl(payload, out var repoUrl))
             return Observable.Return(0);
 
-        return MatchingSyncTargets(repoUrl, push).Select(targets =>
+        logger?.LogInformation(
+            "GitHub push webhook ({Repo}@{Branch}) — no import: the sync is CI-gated and waits for a "
+            + "green build of this ref (workflow_run/success on the default branch).",
+            repoUrl, push.Branch);
+        return Observable.Return(0);
+    }
+
+    /// <summary>
+    /// A verified GREEN build of the default branch → the headless "Update to latest" for every sync
+    /// source that targets this repo + branch and is not already at this commit. TRIGGERS the updates
+    /// (each its own activity, fire-and-forget with error logging) and emits the number triggered — it
+    /// does NOT await the imports, so the webhook response returns within GitHub's delivery timeout.
+    ///
+    /// <para>Scoping differs from the old push path in one way that matters: a <c>workflow_run</c>
+    /// payload carries no file list, so a source's <c>Subdirectory</c> cannot be used to skip it.
+    /// Every source of the repo is brought to latest; an unchanged subdirectory imports as a no-op.
+    /// The <c>lastSyncCommitSha</c> check below is what keeps that cheap — it makes a re-run of an
+    /// already-imported commit (a flake re-run, a manual re-dispatch) trigger nothing at all.</para>
+    /// </summary>
+    private IObservable<int> TriggerSyncForGreenBuild(string repoUrl, string branch, string headSha)
+        => MatchingBuildTargets(repoUrl, branch, headSha).Select(targets =>
         {
             if (targets.Count == 0)
             {
                 logger?.LogInformation(
-                    "GitHub push webhook for {Repo}@{Branch} matched no synced Space.", repoUrl, push.Branch);
+                    "Green build of {Repo}@{Branch} ({Sha}) matched no sync source that needs updating.",
+                    repoUrl, branch, headSha);
                 return 0;
             }
             logger?.LogInformation(
-                "GitHub push webhook ({Repo}@{Branch}) → updating {Count} sync source(s) to latest.",
-                repoUrl, push.Branch, targets.Count);
+                "Green build of {Repo}@{Branch} ({Sha}) → updating {Count} sync source(s) to latest.",
+                repoUrl, branch, headSha, targets.Count);
             var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
             foreach (var t in targets)
                 Observable.Using(
@@ -223,24 +241,39 @@ public sealed class GitHubWebhookProcessor
                             t.SpacePath, t.UserId, sourceId: t.SourceId))
                     .Subscribe(
                         activity => logger?.LogInformation(
-                            "Push-triggered update of {Space} completed ({Activity}).", t.SpacePath, activity),
+                            "Build-triggered update of {Space} completed ({Activity}).", t.SpacePath, activity),
                         exception => logger?.LogWarning(exception,
-                            "Push-triggered update of {Space} (source {Source}) failed.",
+                            "Build-triggered update of {Space} (source {Source}) failed.",
                             t.SpacePath, t.SourceId ?? "(primary)"));
             return targets.Count;
         });
+
+    /// <summary>
+    /// Whether one sync source should import for a green build of <paramref name="branch"/> at
+    /// <paramref name="headSha"/>: the branch must match, the source must be allowed to import, and
+    /// the source must not already sit on that commit.
+    /// </summary>
+    internal static bool ConfigMatchesBuild(GitHubSyncConfig? cfg, string branch, string headSha)
+    {
+        if (cfg is null || cfg.Direction == SyncDirection.ExportOnly)
+            return false;
+        if (!string.Equals(cfg.Branch, branch, StringComparison.OrdinalIgnoreCase))
+            return false;
+        // Already imported this exact commit — a re-run of the same green build must be a no-op.
+        return !string.Equals(cfg.LastSyncCommitSha, headSha, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>The distinct sync sources whose config targets <paramref name="repoUrl"/> AND
-    /// matches the push's branch + touched paths.</summary>
-    private IObservable<IReadOnlyList<PushTarget>> MatchingSyncTargets(string repoUrl, PushEvent push)
+    /// matches the green build's branch, minus those already at <paramref name="headSha"/>.</summary>
+    private IObservable<IReadOnlyList<PushTarget>> MatchingBuildTargets(
+        string repoUrl, string branch, string headSha)
     {
         var target = ParseSafe(repoUrl);
         return QueryConfigNodesAsSystem()
             .Select(c => (IReadOnlyList<PushTarget>)c.Items
                 .Where(n => RepoMatches(n, target))
-                .Where(n => ConfigMatchesPush(
-                    n.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger), push))
+                .Where(n => ConfigMatchesBuild(
+                    n.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger), branch, headSha))
                 .Select(ToPushTarget)
                 .Where(t => t is not null)
                 .Select(t => t!)
@@ -373,16 +406,27 @@ public sealed class GitHubWebhookProcessor
         return Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
                 _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)).FirstAsync())
-            .Select(d =>
+            .SelectMany(d =>
             {
                 if (!d.Message.Success)
                 {
                     // Never throw: GitHub retries a non-2xx delivery, so a write failure would turn
                     // into a delivery storm. Surface it and report "nothing recorded".
                     logger?.LogWarning("Recording build completion at {Path} failed: {Error}", path, d.Message.Error);
-                    return 0;
+                    return Observable.Return(0);
                 }
-                return 1;
+                // The build record is the CI gate's verdict; the import is what the verdict authorises.
+                // Both hang off this one green-build event so they cannot disagree about what shipped.
+                return TriggerSyncForGreenBuild(repoUrl, completion.Branch, headSha)
+                    .Select(_ => 1)
+                    .Catch((Exception ex) =>
+                    {
+                        // A failed import must not fail the delivery — the build record is already
+                        // written, and a non-2xx would make GitHub redeliver and re-import.
+                        logger?.LogWarning(ex,
+                            "Green build of {Repo} recorded, but triggering the sync failed.", repoUrl);
+                        return Observable.Return(1);
+                    });
             });
     }
 

@@ -167,38 +167,44 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
     }
 
     [Fact]
-    public void ConfigMatchesPush_BranchDirectionAndSubdirectory()
+    public void ConfigMatchesBuild_BranchDirectionAndAlreadySyncedSha()
     {
-        var main = new GitHubWebhookProcessor.PushEvent("main", ["Store/index.json", "README.md"]);
+        const string sha = "abc123def456";
         var cfg = new GitHubSyncConfig { RepositoryUrl = "https://github.com/o/r", Branch = "main" };
 
         // Branch must match; export-only sources never import.
-        Assert.True(GitHubWebhookProcessor.ConfigMatchesPush(cfg, main));
-        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(cfg with { Branch = "develop" }, main));
-        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(
-            cfg with { Direction = SyncDirection.ExportOnly }, main));
-        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(null, main));
+        Assert.True(GitHubWebhookProcessor.ConfigMatchesBuild(cfg, "main", sha));
+        Assert.False(GitHubWebhookProcessor.ConfigMatchesBuild(cfg, "develop", sha));
+        Assert.False(GitHubWebhookProcessor.ConfigMatchesBuild(cfg with { Branch = "develop" }, "main", sha));
+        Assert.False(GitHubWebhookProcessor.ConfigMatchesBuild(
+            cfg with { Direction = SyncDirection.ExportOnly }, "main", sha));
+        Assert.False(GitHubWebhookProcessor.ConfigMatchesBuild(null, "main", sha));
 
-        // A subdirectory-scoped source updates only when the push touched its subdirectory.
-        Assert.True(GitHubWebhookProcessor.ConfigMatchesPush(cfg with { Subdirectory = "Store" }, main));
-        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(cfg with { Subdirectory = "Chess" }, main));
-        // Prefix must be segment-aligned: "Store" must not match "StoreFront/…".
-        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(
-            cfg with { Subdirectory = "Store" },
-            new GitHubWebhookProcessor.PushEvent("main", ["StoreFront/index.json"])));
+        // 🚨 A source already sitting on this commit imports nothing — this is what makes a RE-RUN
+        // of an already-imported green build (a flake re-run, a manual re-dispatch) a no-op instead
+        // of a repeat import of every Space in the repo.
+        Assert.False(GitHubWebhookProcessor.ConfigMatchesBuild(
+            cfg with { LastSyncCommitSha = sha }, "main", sha));
+        Assert.False(GitHubWebhookProcessor.ConfigMatchesBuild(
+            cfg with { LastSyncCommitSha = sha.ToUpperInvariant() }, "main", sha));
+        // A different commit is a real update.
+        Assert.True(GitHubWebhookProcessor.ConfigMatchesBuild(
+            cfg with { LastSyncCommitSha = "0000000000" }, "main", sha));
 
-        // UNKNOWN change set (truncated push) → every candidate syncs rather than missing one.
-        var unknown = new GitHubWebhookProcessor.PushEvent("main", null);
-        Assert.True(GitHubWebhookProcessor.ConfigMatchesPush(cfg with { Subdirectory = "Chess" }, unknown));
-
-        // An empty change set (no-op push) syncs nothing.
-        var empty = new GitHubWebhookProcessor.PushEvent("main", []);
-        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(cfg, empty));
-        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(cfg with { Subdirectory = "Store" }, empty));
+        // Subdirectory scoping does NOT apply: a workflow_run payload carries no file list, so every
+        // source of the repo is brought to latest and an untouched subdirectory imports as a no-op.
+        // Skipping here would strand a Space whose files changed in a commit we cannot inspect.
+        Assert.True(GitHubWebhookProcessor.ConfigMatchesBuild(cfg with { Subdirectory = "Chess" }, "main", sha));
     }
 
+    /// <summary>
+    /// 🚨 The import is CI-GATED: a push imports NOTHING, and the repository's green build imports
+    /// every matching Space. Pinning both halves in one test is deliberate — the failure this guards
+    /// against is a push that quietly keeps importing, which is invisible unless the same fixture
+    /// proves the green build is what moved the content.
+    /// </summary>
     [Fact(Timeout = 120000)]
-    public async Task Process_PushEvent_TriggersUpdateToLatestOnMatchingSpaces()
+    public async Task Process_GreenBuild_TriggersUpdateToLatest_AndPushDoesNot()
     {
         await Connect();
         var repo = "https://github.com/test/push-auto";
@@ -223,32 +229,46 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         accessService.ClearPersistentCircuitContext();
         accessService.SetCircuitContext(null);
         accessService.SetContext(null);
-        int triggered;
+        int recorded;
         try
         {
-            // A push on a DIFFERENT branch matches nothing.
-            var otherBranch = JsonDocument.Parse("""
-            { "ref": "refs/heads/develop", "size": 1,
-              "repository": { "full_name": "test/push-auto" },
-              "commits": [ { "added": ["Welcome.md"], "modified": [], "removed": [] } ] }
-            """).RootElement;
-            Assert.Equal(0, await Webhooks.Process("push", otherBranch).Timeout(60.Seconds()).ToTask());
-
-            // The main-branch push triggers the headless update for BOTH sync sources.
-            var payload = JsonDocument.Parse("""
+            // 🚨 A push imports NOTHING — not even on the right branch. The build it starts has not
+            // run yet, so importing here would ship content the gate has not vetted.
+            var pushPayload = JsonDocument.Parse("""
             { "ref": "refs/heads/main", "size": 1,
               "repository": { "full_name": "test/push-auto" },
               "commits": [ { "added": [], "modified": ["Welcome.md"], "removed": [] } ] }
             """).RootElement;
-            triggered = await Webhooks.Process("push", payload).Timeout(60.Seconds()).ToTask();
+            Assert.Equal(0, await Webhooks.Process("push", pushPayload).Timeout(60.Seconds()).ToTask());
+
+            // A RED build imports nothing either — that is the whole point of the gate.
+            var redBuild = JsonDocument.Parse("""
+            { "action": "completed",
+              "repository": { "full_name": "test/push-auto", "default_branch": "main" },
+              "workflow_run": { "conclusion": "failure", "head_branch": "main",
+                                "head_sha": "deadbeef", "id": 1, "run_number": 1,
+                                "name": "CI", "updated_at": "2026-08-07T10:00:00Z" } }
+            """).RootElement;
+            Assert.Equal(0, await Webhooks.Process("workflow_run", redBuild).Timeout(60.Seconds()).ToTask());
+
+            // The GREEN build of the default branch is what imports — for BOTH sync sources.
+            var greenBuild = JsonDocument.Parse("""
+            { "action": "completed",
+              "repository": { "full_name": "test/push-auto", "default_branch": "main" },
+              "workflow_run": { "conclusion": "success", "head_branch": "main",
+                                "head_sha": "cafebabe", "id": 2, "run_number": 2,
+                                "name": "CI", "updated_at": "2026-08-07T10:05:00Z" } }
+            """).RootElement;
+            recorded = await Webhooks.Process("workflow_run", greenBuild).Timeout(60.Seconds()).ToTask();
         }
         finally
         {
             accessService.SetCircuitContext(new AccessContext { ObjectId = UserId, Name = TestUsers.Admin.Name });
         }
-        Assert.Equal(2, triggered);
+        Assert.Equal(1, recorded);   // the build completion was recorded
 
-        // The import runs as a background activity — observe the node landing in Space B.
+        // The import runs as a background activity — observe the node landing in Space B, which is
+        // the proof that the GREEN BUILD (and nothing before it) moved the content.
         var imported = await WaitForNode($"{b}/Welcome");
         Assert.Equal("Markdown", imported.NodeType);
         Assert.Contains("Pushed content.", MarkdownBody(imported));
