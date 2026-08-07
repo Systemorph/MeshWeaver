@@ -8,7 +8,7 @@ namespace MeshWeaver.Data;
 /// exposes their content as reactive synchronization streams, and serves as the single
 /// surface for reading and mutating entities mapped to the hub's address.
 /// </summary>
-public interface IWorkspace : IAsyncDisposable
+public interface IWorkspace : IDisposable
 {
     /// <summary>The message hub that owns and serializes access to this workspace.</summary>
     IMessageHub Hub { get; }
@@ -115,9 +115,6 @@ public interface IWorkspace : IAsyncDisposable
     /// <summary>Registers a disposable to be disposed when the workspace is disposed.</summary>
     /// <param name="disposable">The disposable whose lifetime is tied to the workspace.</param>
     void AddDisposable(IDisposable disposable);
-    /// <summary>Registers an async disposable to be disposed when the workspace is disposed.</summary>
-    /// <param name="disposable">The async disposable whose lifetime is tied to the workspace.</param>
-    void AddDisposable(IAsyncDisposable disposable);
     /// <summary>Gets the entity-store stream for a specific data-source partition identified by stream identity.</summary>
     /// <param name="kvpKey">The stream identity (owner address plus partition) to resolve.</param>
     /// <returns>The synchronization stream for the partition, or null if no data source owns it.</returns>

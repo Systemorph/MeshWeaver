@@ -132,7 +132,7 @@ public class Workspace : IWorkspace
             if (string.Equals(key.Item1.ToString(), path, StringComparison.OrdinalIgnoreCase)
                 && _remoteStreamCache.TryRemove(key, out var removed))
             {
-                // Keep ownership of the evicted stream so DisposeAsync still tears
+                // Keep ownership of the evicted stream so Dispose still tears
                 // down its `sync/` hub — dropping it here orphaned the hub (never
                 // disposed → TimerQueue-pinned forever). Only a materialised stream
                 // has a hub to dispose.
@@ -288,7 +288,7 @@ public class Workspace : IWorkspace
     // live subscribers keep them attached). The workspace still OWNS their lifetime —
     // each carries a per-stream `sync/` hub whose 5s stale-callback scanner roots it
     // in the global TimerQueue, so an evicted-and-never-disposed stream leaks its hub
-    // forever (the RunLevel=1 MeshHub_IsCollected failure). Disposed in DisposeAsync
+    // forever (the RunLevel=1 MeshHub_IsCollected failure). Disposed in Dispose
     // alongside the still-cached streams, re-establishing the workspace-rooted
     // disposal that eviction severed — OR earlier, per identity, by
     // <see cref="DetachRemoteStreams"/> when the shared mesh-node cache idle-releases a
@@ -367,7 +367,7 @@ public class Workspace : IWorkspace
     /// evicted-stream parking set when the caller lost its release race (a consumer
     /// re-attached between detach and the final zero-subscriber check). The workspace
     /// re-owns their lifetime: they stay live for their attached subscribers and are
-    /// disposed by a later successful release or by <see cref="DisposeAsync"/>.
+    /// disposed by a later successful release or by <see cref="Dispose"/>.
     /// </summary>
     internal void ParkRemoteStreams(IReadOnlyList<ISynchronizationStream> streams)
     {
@@ -484,14 +484,27 @@ public class Workspace : IWorkspace
     private bool isDisposing;
 
     /// <summary>
-    /// Disposes the workspace: drains registered sync and async disposables, disposes cached and
-    /// evicted remote streams (tearing down their per-stream sync hubs), disposes the data context,
-    /// and unsubscribes from the change feed. Idempotent.
+    /// Disposes the workspace: drains registered disposables, disposes cached and evicted remote
+    /// streams (tearing down their per-stream sync hubs), disposes the data context, and
+    /// unsubscribes from the change feed. Idempotent.
+    ///
+    /// <para>🚨 SYNCHRONOUS and reactive-only — no <c>async</c>, no <c>await</c>, no
+    /// <see cref="ValueTask"/>. Teardown is a synchronous Dispose that cancels and joins; every
+    /// step below is either an <c>IDisposable.Dispose()</c> (which unsubscribes an Rx subscription)
+    /// or a synchronous unhook.</para>
+    ///
+    /// <para>This used to be <c>async ValueTask DisposeAsync()</c> whose only <c>await</c> drained a
+    /// bag of <see cref="IAsyncDisposable"/>. That bag was ALWAYS EMPTY: the
+    /// <c>AddDisposable(IAsyncDisposable)</c> overload had zero callers across src/ and test/ — the
+    /// single caller (ThreadSubmission) passes an Rx subscription, which binds the IDisposable
+    /// overload. So the await was dead code that nonetheless made the whole teardown path async,
+    /// and its continuation captured whatever scheduler disposal ran on. Workspace disposal IS
+    /// reachable from a hub action block, so that continuation could be queued behind the very turn
+    /// waiting for disposal to finish.</para>
     /// </summary>
-    /// <returns>A task that completes when disposal finishes.</returns>
-    public async ValueTask DisposeAsync()
+    public void Dispose()
     {
-        _logger.LogInformation("Workspace {WorkspaceId} starting DisposeAsync, Thread: {ThreadId}",
+        _logger.LogInformation("Workspace {WorkspaceId} starting Dispose, Thread: {ThreadId}",
             Id, Thread.CurrentThread.ManagedThreadId);
 
         if (isDisposing)
@@ -500,20 +513,6 @@ public class Workspace : IWorkspace
             return;
         }
         isDisposing = true;
-
-        _logger.LogDebug("Workspace {WorkspaceId} disposing {AsyncCount} async disposables", Id, asyncDisposables.Count);
-        while (asyncDisposables.TryTake(out var d))
-        {
-            try
-            {
-                await d.DisposeAsync();
-                _logger.LogTrace("Workspace {WorkspaceId} disposed async disposable {DisposableType}", Id, d.GetType().Name);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Workspace {WorkspaceId} error disposing async disposable {DisposableType}", Id, d.GetType().Name);
-            }
-        }
 
         _logger.LogDebug("Workspace {WorkspaceId} disposing {SyncCount} sync disposables", Id, disposables.Count);
         while (disposables.TryTake(out var d))
@@ -587,10 +586,9 @@ public class Workspace : IWorkspace
             _logger.LogDebug(ex, "Workspace {WorkspaceId} failed to dispose change-feed subscription", Id);
         }
 
-        _logger.LogInformation("Workspace {WorkspaceId} DisposeAsync completed", Id);
+        _logger.LogInformation("Workspace {WorkspaceId} Dispose completed", Id);
     }
     private readonly ConcurrentBag<IDisposable> disposables = new();
-    private readonly ConcurrentBag<IAsyncDisposable> asyncDisposables = new();
 
     /// <inheritdoc />
     public void AddDisposable(IDisposable disposable)
@@ -598,7 +596,7 @@ public class Workspace : IWorkspace
         if (isDisposing)
         {
             // Same contract as MessageHub.RegisterForDisposal: a registrant added after
-            // disposal has begun is disposed IMMEDIATELY. The drain loop in DisposeAsync
+            // disposal has begun is disposed IMMEDIATELY. The drain loop in Dispose
             // has already run, so bagging it would leak it — and any Rx Timeout timer it
             // roots via the global TimerQueue — past the container's lifetime (the
             // post-teardown ObjectDisposedException straggler class).
@@ -614,11 +612,6 @@ public class Workspace : IWorkspace
         disposables.Add(disposable);
     }
 
-    /// <inheritdoc />
-    public void AddDisposable(IAsyncDisposable disposable)
-    {
-        asyncDisposables.Add(disposable);
-    }
 
     /// <inheritdoc />
     public ISynchronizationStream<EntityStore>? GetStream(StreamIdentity identity)
