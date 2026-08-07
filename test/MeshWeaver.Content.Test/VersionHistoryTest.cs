@@ -55,6 +55,21 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// raw call returns whatever's on disk at the moment of invocation and can
     /// race the WriteVersion side of the just-completed save.
     /// </summary>
+    /// <summary>
+    /// Per-STEP wait budget. Every await in this class is bounded by it, and the sum of the
+    /// steps on any path stays inside the 20 s method timeout.
+    ///
+    /// <para>🚨 Why this exists: the awaits used to run on <c>Emit()</c>'s 10 s default, and the
+    /// rollback poll claimed <c>ReadNodeTimeout</c> (60 s) — inside a <c>Timeout = 20000</c> test.
+    /// Those bounds contradict each other: the method timeout always fired first, so a slow step
+    /// produced "Test execution timed out after 20000 milliseconds" naming NOTHING (main
+    /// 2026-08-06, shard 4). A bound larger than the method timeout is not a bound; it is a
+    /// guarantee of an undiagnosable failure. 4 s is ~10x the observed per-operation cost in this
+    /// project (246 tests in 96 s), so a step that exceeds it is stuck, not slow — and it now says
+    /// which step.</para>
+    /// </summary>
+    private static TimeSpan Step => TimeSpan.FromSeconds(4);
+
     private IObservable<IList<MeshNodeVersion>> WaitForVersions(
         string path, Func<IList<MeshNodeVersion>, bool> predicate)
     {
@@ -70,21 +85,21 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         // Arrange
         var node = MeshNode.FromPath("test/mynode") with { Name = "V1", State = MeshNodeState.Active, NodeType = "Markdown" };
-        var created = await NodeFactory.CreateNode(node).Should().Emit();
+        var created = await NodeFactory.CreateNode(node).Should().Within(Step).Emit();
 
         // Update 3 times
         var updated1 = created with { Name = "V2" };
-        await NodeFactory.UpdateNode(updated1).Should().Emit();
+        await NodeFactory.UpdateNode(updated1).Should().Within(Step).Emit();
 
         var updated2 = updated1 with { Name = "V3" };
-        await NodeFactory.UpdateNode(updated2).Should().Emit();
+        await NodeFactory.UpdateNode(updated2).Should().Within(Step).Emit();
 
         var updated3 = updated2 with { Name = "V4" };
-        await NodeFactory.UpdateNode(updated3).Should().Emit();
+        await NodeFactory.UpdateNode(updated3).Should().Within(Step).Emit();
 
         // Act — wait for at least one snapshot to land (writes are async via the
         // version-writing storage decorator; polling Where() avoids racing them).
-        var versions = await WaitForVersions("test/mynode", v => v.Count >= 1).Should().Within(5.Seconds()).Emit();
+        var versions = await WaitForVersions("test/mynode", v => v.Count >= 1).Should().Within(Step).Emit();
 
         // Assert
         versions.Should().NotBeEmpty("node was created and updated 3 times");
@@ -96,24 +111,24 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         // Arrange
         var node = MeshNode.FromPath("test/snapshot") with { Name = "V1", State = MeshNodeState.Active, NodeType = "Markdown" };
-        var created = await NodeFactory.CreateNode(node).Should().Emit();
+        var created = await NodeFactory.CreateNode(node).Should().Within(Step).Emit();
 
         // Get the version of the first save — wait for it to land
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
         var options = Mesh.JsonSerializerOptions;
 
-        var versionsAfterCreate = await WaitForVersions("test/snapshot", v => v.Count >= 1).Should().Within(5.Seconds()).Emit();
+        var versionsAfterCreate = await WaitForVersions("test/snapshot", v => v.Count >= 1).Should().Within(Step).Emit();
 
         // Update to V2
         var updated = created with { Name = "V2" };
-        await NodeFactory.UpdateNode(updated).Should().Emit();
+        await NodeFactory.UpdateNode(updated).Should().Within(Step).Emit();
 
         // Act - get the first version
         var firstVersion = versionsAfterCreate.LastOrDefault();
         firstVersion.Should().NotBeNull("there should be at least one version after create");
 
         var historicalNode = await versionQuery.GetVersion("test/snapshot", firstVersion!.Version, options)
-            .Should().Emit();
+            .Should().Within(Step).Emit();
 
         // Assert
         historicalNode.Should().NotBeNull("the first version should be retrievable");
@@ -125,43 +140,43 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         // Arrange
         var node = MeshNode.FromPath("test/before") with { Name = "V1", State = MeshNodeState.Active, NodeType = "Markdown" };
-        var created = await NodeFactory.CreateNode(node).Should().Emit();
+        var created = await NodeFactory.CreateNode(node).Should().Within(Step).Emit();
 
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
         var options = Mesh.JsonSerializerOptions;
 
         // Capture version after v1 create — wait for snapshot to land
-        var versionsAfterV1 = await WaitForVersions("test/before", v => v.Count >= 1).Should().Within(5.Seconds()).Emit();
+        var versionsAfterV1 = await WaitForVersions("test/before", v => v.Count >= 1).Should().Within(Step).Emit();
         var v1Version = versionsAfterV1.LastOrDefault();
         v1Version.Should().NotBeNull("there should be a version after create");
         Output.WriteLine($"After Create: versions = [{string.Join(", ", versionsAfterV1.Select(v => v.Version))}]");
 
         // Update to V2
-        await NodeFactory.UpdateNode(created with { Name = "V2" }).Should().Emit();
+        await NodeFactory.UpdateNode(created with { Name = "V2" }).Should().Within(Step).Emit();
 
         // Update to V3
-        await NodeFactory.UpdateNode(created with { Name = "V3" }).Should().Emit();
+        await NodeFactory.UpdateNode(created with { Name = "V3" }).Should().Within(Step).Emit();
 
         // Capture all versions — wait for all three snapshots to land
-        var allVersions = await WaitForVersions("test/before", v => v.Count >= 3).Should().Within(5.Seconds()).Emit();
+        var allVersions = await WaitForVersions("test/before", v => v.Count >= 3).Should().Within(Step).Emit();
         Output.WriteLine($"After all updates: versions = [{string.Join(", ", allVersions.Select(v => v.Version))}]");
         foreach (var v in allVersions)
         {
-            var snapshot = await versionQuery.GetVersion("test/before", v.Version, options).Should().Emit();
+            var snapshot = await versionQuery.GetVersion("test/before", v.Version, options).Should().Within(Step).Emit();
             Output.WriteLine($"  Version {v.Version}: Name='{snapshot?.Name}'");
         }
         var v3Version = allVersions.FirstOrDefault();
         v3Version.Should().NotBeNull("there should be a latest version");
 
         // Act - get the version before v3 (should be v2)
-        var beforeV3 = await versionQuery.GetVersionBefore("test/before", v3Version!.Version, options).Should().Emit();
+        var beforeV3 = await versionQuery.GetVersionBefore("test/before", v3Version!.Version, options).Should().Within(Step).Emit();
 
         // Assert
         beforeV3.Should().NotBeNull("there should be a version before v3");
         beforeV3!.Name.Should().Be("V2", "the version before v3 should be v2");
 
         // Act - get the version before v1 (should be null since v1 is the first)
-        var beforeV1 = await versionQuery.GetVersionBefore("test/before", v1Version!.Version, options).Should().Emit();
+        var beforeV1 = await versionQuery.GetVersionBefore("test/before", v1Version!.Version, options).Should().Within(Step).Emit();
 
         // Assert
         beforeV1.Should().BeNull("there should be no version before the first one");
@@ -179,14 +194,14 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
             Content = activityLog,
             MainNode = "test/primary"
         };
-        var created = await NodeFactory.CreateNode(node).Should().Emit();
+        var created = await NodeFactory.CreateNode(node).Should().Within(Step).Emit();
 
         // Update multiple times
-        await NodeFactory.UpdateNode(created with { Name = "Satellite V2" }).Should().Emit();
-        await NodeFactory.UpdateNode(created with { Name = "Satellite V3" }).Should().Emit();
+        await NodeFactory.UpdateNode(created with { Name = "Satellite V2" }).Should().Within(Step).Emit();
+        await NodeFactory.UpdateNode(created with { Name = "Satellite V3" }).Should().Within(Step).Emit();
 
         // Act — wait for the satellite's snapshot to land
-        var versions = await WaitForVersions("test/satellite", v => v.Count >= 1).Should().Within(5.Seconds()).Emit();
+        var versions = await WaitForVersions("test/satellite", v => v.Count >= 1).Should().Within(Step).Emit();
 
         // Assert - satellite content should now be included in version history
         versions.Should().NotBeEmpty("satellite content nodes should now have version history");
@@ -197,19 +212,19 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         // Arrange
         var node = new MeshNode("rollback", TestPartition) { Name = "Original", NodeType = "Markdown", State = MeshNodeState.Active };
-        var created = await NodeFactory.CreateNode(node).Should().Emit();
+        var created = await NodeFactory.CreateNode(node).Should().Within(Step).Emit();
 
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
         var options = Mesh.JsonSerializerOptions;
 
         // Capture the original version — wait for snapshot to land
         var nodePath = $"{TestPartition}/rollback";
-        var versionsAfterCreate = await WaitForVersions(nodePath, v => v.Count >= 1).Should().Within(5.Seconds()).Emit();
+        var versionsAfterCreate = await WaitForVersions(nodePath, v => v.Count >= 1).Should().Within(Step).Emit();
         var originalVersion = versionsAfterCreate.LastOrDefault();
         originalVersion.Should().NotBeNull("there should be a version after create");
 
         // Update to "Modified"
-        await NodeFactory.UpdateNode(created with { Name = "Modified" }).Should().Emit();
+        await NodeFactory.UpdateNode(created with { Name = "Modified" }).Should().Within(Step).Emit();
 
         // Act - post RollbackNodeRequest to the node hub
         var client = GetClient();
@@ -224,7 +239,9 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
             .SelectMany(_ => Mesh.GetMeshNode(nodePath, ReadNodeTimeout))
             .Where(n => n?.Name == "Original")
             .Should()
-            .Within(ReadNodeTimeout)
+            // NOT ReadNodeTimeout (60 s): a bound three times the method timeout can never
+            // fire, so the failure was always the bare method timeout with no diagnosis.
+            .Within(Step)
             .Emit();
 
         currentNode.Should().NotBeNull("the node should still exist after rollback");
