@@ -22,9 +22,11 @@ namespace MeshWeaver.PluginCatalog;
 /// with no manual refresh.
 ///
 /// <para>The rendering is source-agnostic (<see cref="RenderFromSource"/>): the <c>PluginCatalog</c>
-/// node Overview builds its source from the node's <see cref="PluginCatalogContent"/>, while the
-/// platform-admin <see cref="PluginCatalogSettingsTab"/> builds a <see cref="RegistryPackageSource"/>
-/// pointed at the configured registry — both render + install through the same helpers here.</para>
+/// node Overview builds its source from the node's <see cref="PluginCatalogContent"/> and renders +
+/// installs through the helpers here. (The old platform-admin "Plugin Catalog" settings tab that
+/// also consumed this rendering was retired — browsing and provisioning is the Store's job; the
+/// global-settings About tab shows the read-only installed inventory via
+/// <see cref="ObserveInstalledManifests"/>.)</para>
 /// </summary>
 public static class CatalogLayoutAreas
 {
@@ -105,6 +107,20 @@ public static class CatalogLayoutAreas
     // the node view and the registry endpoints build sources identically). Null when unconfigured.
     internal static IPackageSource? BuildSource(LayoutAreaHost host, string? sourceRepoPath, string? sourceSubdir) =>
         PackageSources.FromRepo(host.Hub, sourceRepoPath, sourceSubdir, Logger(host));
+
+    /// <summary>
+    /// The live installed-plugin inventory: every <c>Package</c> record in the install registry,
+    /// deserialized to its <see cref="PackageManifest"/> and sorted by display name. This is the
+    /// read-only "what is running on this instance" view the About tab shows every user — the
+    /// catalog cards above join the SAME records against a package source for install status.
+    /// </summary>
+    public static IObservable<IReadOnlyList<PackageManifest>> ObserveInstalledManifests(LayoutAreaHost host)
+        => ObserveInstalled(host).Select(nodes => (IReadOnlyList<PackageManifest>)nodes
+            .Select(n => n.ContentAs<PackageManifest>(host.Hub.JsonSerializerOptions))
+            .Where(m => m is not null && !string.IsNullOrEmpty(m!.Id))
+            .Select(m => m!)
+            .OrderBy(m => m.Name ?? m.Id, StringComparer.OrdinalIgnoreCase)
+            .ToList());
 
     // Live map of installed packages (the Plugins registry children), as a list.
     private static IObservable<IReadOnlyList<MeshNode>> ObserveInstalled(LayoutAreaHost host)
