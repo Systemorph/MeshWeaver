@@ -1527,7 +1527,19 @@ public static class MeshExtensions
                                 lock (collectedMessages) collectedMessages.AddRange(warningMsgs);
 
                                 // 3. Collect descendant paths (paths only — no content).
-                                return CollectPathsForDelete(hub, path, capturedRequest.Recursive, opts.Timeout, logger)
+                                //    🚨 The subtree-deletion scope opens BEFORE the plan is
+                                //    enumerated: from here until the operation completes
+                                //    (success or failure — Observable.Using releases the
+                                //    scope on OnError / OnCompleted / unsubscribe alike),
+                                //    the storage write guard refuses every in-process write
+                                //    at or under `path`, so nothing can be created between
+                                //    planning and commit (issue #839's mid-flight Release
+                                //    satellites). Cross-process writers are covered by the
+                                //    storage-verified drain loop in DeleteSubtreeUntilDrained.
+                                return Observable.Using(
+                                    () => recentlyDeleted?.BeginSubtreeDeletion(path)
+                                          ?? System.Reactive.Disposables.Disposable.Empty,
+                                    _ => CollectPathsForDelete(hub, path, capturedRequest.Recursive, opts.Timeout, logger)
                                     .SelectMany(collected =>
                                     {
                                         if (!capturedRequest.Recursive && collected.HasUnlistedChildren)
@@ -1569,30 +1581,25 @@ public static class MeshExtensions
                                                 return Observable.Empty<System.Reactive.Unit>();
                                             }
 
-                                        // 4. Bottom-up fan-out. Descendants → per-node hubs (each
-                                        //    re-enters this handler with Recursive=false);
-                                        //    root → local storage delete (already validated above,
-                                        //    no need to re-enter via hub.Observe and avoid recursion).
+                                        // 4. Bottom-up fan-out with storage-verified drain.
+                                        //    Descendants → per-node hubs (each re-enters this
+                                        //    handler with Recursive=false); root → local storage
+                                        //    delete (already validated above). After each pass the
+                                        //    subtree is RE-ENUMERATED from storage; anything that
+                                        //    appeared mid-flight is deleted in a follow-up pass
+                                        //    (bounded), and success is only reported once the
+                                        //    enumeration comes back empty. The "delete wins"
+                                        //    tombstones are marked per pass inside
+                                        //    DeleteSubtreeUntilDrained, BEFORE any leaf hub is
+                                        //    activated (see the resurrect-race note there).
                                         logger.LogDebug(
                                             "[DeleteNode] committing path={Path} count={Count}",
                                             path, collected.ToDelete.Count);
 
-                                        // 🚨 "Delete wins" — tombstone every path BEFORE the fan-out.
-                                        // FanOutDeleteSubtree ACTIVATES each leaf's per-node hub to
-                                        // process its own delete, and that activation's save (the
-                                        // workspace sees the just-loaded node as an "add") is exactly
-                                        // what resurrects the row. Marking here — before any leaf hub
-                                        // is activated — guarantees the resurrecting save's guard
-                                        // already sees the tombstone. Marking only on success (after
-                                        // the delete) lost a check-before-mark race: the activation
-                                        // save checked ~14 ms before the mark and slipped through.
-                                        foreach (var dp in collected.ToDelete)
-                                            recentlyDeleted?.MarkDeleted(dp);
-                                        recentlyDeleted?.MarkDeleted(path);
-
-                                        return FanOutDeleteSubtree(
+                                        return DeleteSubtreeUntilDrained(
                                                 meshHub, storage, path, collected.ToDelete,
-                                                capturedRequest, request.AccessContext, logger, collectedMessages)
+                                                capturedRequest, request.AccessContext,
+                                                recentlyDeleted, logger, collectedMessages)
                                             .Timeout(opts.Timeout)
                                             // 5. Post-deletion side effects for the ROOT node — e.g.
                                             //    dropping the backing partition store when a
@@ -1655,7 +1662,7 @@ public static class MeshExtensions
                                             })
                                             .Select(_ => System.Reactive.Unit.Default);
                                         });
-                                    });
+                                    }));
                             });
                     });
             })
@@ -1713,18 +1720,31 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// Phase 1 — enumerate the paths to delete. **Paths only** via the catalog
-    /// query with <c>select:path</c> projection — <see cref="MeshNode.Content"/>
-    /// is stale on a query row and must never be read (per
-    /// <c>Doc/Architecture/CqrsAndContentAccess.md</c>). Validators that need a
-    /// live node use <c>workspace.GetMeshNodeStream(path)</c> downstream.
+    /// Phase 1 — enumerate the paths to delete, AUTHORITATIVELY from storage via
+    /// <see cref="IStorageAdapter.ListDescendantPaths"/>. **Paths only** — no
+    /// content is loaded; validators that need a live node use
+    /// <c>workspace.GetMeshNodeStream(path)</c> downstream.
     ///
-    /// <para>Uses <c>scope:descendants</c> (strictly children-and-below — root
-    /// excluded) so the bottom-up fan-out in
-    /// <see cref="HierarchicalPathDeletion.DeleteSubtree"/>
-    /// terminates at the root rather than re-entering through it. The root
-    /// path is added to the returned set after the query so it is deleted
-    /// last (when it becomes a leaf).</para>
+    /// <para>🚨 The plan must NOT come from the catalog query (<c>IMeshService.Query</c>):
+    /// that index is eventually consistent — stale after writes per
+    /// <c>Doc/Architecture/CqrsAndContentAccess.md</c> — and planning off it let
+    /// dozens of live descendants survive a "successful" recursive delete
+    /// (issue #839: 32/~90 and 68 survivors on 2026-08-05/06). Storage enumeration
+    /// needs no RLS exemption either — it is infrastructure below the security
+    /// layer, and the handler already gated the operation on the caller's Delete
+    /// permission at the root (Phase 2); per-leaf checks fire at each descendant's
+    /// own hub via the recursive DeleteNodeRequest fan-out.</para>
+    ///
+    /// <para>The enumeration is strict descendants (root excluded) so the
+    /// bottom-up fan-out in <see cref="HierarchicalPathDeletion.DeleteSubtree"/>
+    /// terminates at the root rather than re-entering through it. The root path
+    /// is added to the returned set afterwards so it is deleted last (when it
+    /// becomes a leaf).</para>
+    ///
+    /// <para><c>HasUnlistedChildren</c> counts DIRECT children only (one extra
+    /// path segment) — the pre-existing non-recursive contract. Deeper satellite
+    /// descendants under node-less segments (<c>{path}/_Thread/{id}</c>) never
+    /// blocked a non-recursive delete and still don't.</para>
     /// </summary>
     private static IObservable<(bool RootExists, ImmutableHashSet<string> ToDelete, bool HasUnlistedChildren)>
         CollectPathsForDelete(
@@ -1734,50 +1754,27 @@ public static class MeshExtensions
             TimeSpan timeout,
             ILogger logger)
     {
-        var meshService = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
+        var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var empty = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
 
-        // 🚨 Descendant enumeration is INFRASTRUCTURE — the handler already gated
-        // the operation on the caller's Delete permission at the ROOT (Phase 2:
-        // CheckDeletePermissionForNode). Subtree enumeration is then just routing:
-        // "what paths am I about to delete?". User-level RLS filtering on this
-        // query would HIDE descendants the caller can't see, making non-recursive
-        // delete proceed (HasUnlistedChildren=false) and recursive delete miss
-        // entire branches from AffectedPaths. Run the query as System; per-leaf
-        // delete checks fire at each descendant's own hub via the recursive
-        // DeleteNodeRequest fan-out.
         if (!recursive)
         {
-            // Non-recursive: only delete the root if it has no children. The
-            // children-scope query with `select:path` projects each match to a
-            // dict — use `Query<object>` so the projected items survive
-            // the type filter (a `MeshNode` cast would drop every dict).
-            return meshService
-                .Query<object>(MeshQueryRequest.FromQuery(
-                    $"namespace:{path} scope:children select:path",
-                    MeshWeaver.Mesh.Security.WellKnownUsers.System))
+            // Non-recursive: only delete the root if it has no DIRECT children.
+            return storage.ListDescendantPaths(path)
                 .Take(1)
-                .Select(change => (RootExists: true, empty.Add(path), change.Items.Count > 0))
+                .Select(descendants => (
+                    RootExists: true,
+                    empty.Add(path),
+                    descendants.Any(d => IsDirectChildOf(d, path))))
                 .Timeout(timeout);
         }
 
-        // Recursive: enumerate strict descendants via `scope:descendants`.
-        // `select:path` projects each result to a dict (`{ "path": "..." }`),
-        // so Query<object> is required — `Query<MeshNode>` would
-        // silently drop every dict at the type filter. Root is added
-        // explicitly so it is deleted last (after its subtree).
-        return meshService
-            .Query<object>(MeshQueryRequest.FromQuery(
-                $"namespace:{path} scope:descendants select:path",
-                MeshWeaver.Mesh.Security.WellKnownUsers.System))
+        return storage.ListDescendantPaths(path)
             .Take(1)
-            .Select(change =>
+            .Select(descendants =>
             {
                 var set = empty
-                    .Union(change.Items
-                        .OfType<IDictionary<string, object?>>()
-                        .Select(d => d.TryGetValue("path", out var v) ? v as string : null)
-                        .Where(p => !string.IsNullOrEmpty(p))!)
+                    .Union(descendants.Where(p => !string.IsNullOrEmpty(p)))
                     .Add(path);
                 logger.LogDebug("[DeleteNode] collected path={Path} total={Count}", path, set.Count);
                 return (RootExists: true, set, false);
@@ -1786,12 +1783,137 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// True when <paramref name="candidate"/> is exactly one path segment below
+    /// <paramref name="parent"/> (i.e. a direct child, not a deeper descendant).
+    /// </summary>
+    private static bool IsDirectChildOf(string candidate, string parent)
+        => candidate.Length > parent.Length + 1
+           && candidate[parent.Length] == '/'
+           && candidate.StartsWith(parent, StringComparison.OrdinalIgnoreCase)
+           && candidate.IndexOf('/', parent.Length + 1) < 0;
+
+    /// <summary>
+    /// Upper bound on enumerate → delete passes in <see cref="DeleteSubtreeUntilDrained"/>.
+    /// Each pass beyond the first only runs when the post-pass storage enumeration found
+    /// survivors (mid-flight creations from another process); a subtree that cannot be
+    /// drained within this bound fails the operation LOUDLY instead of reporting success
+    /// over live descendants.
+    /// </summary>
+    private const int MaxDeleteDrainPasses = 5;
+
+    /// <summary>
+    /// Runs <see cref="FanOutDeleteSubtree"/> passes until storage VERIFIES the subtree is
+    /// empty. After each pass the subtree is re-enumerated authoritatively
+    /// (<see cref="IStorageAdapter.ListDescendantPaths"/>); survivors — nodes that appeared
+    /// mid-flight, e.g. compile-watcher <c>Release</c> satellites written from another
+    /// process — are tombstoned and deleted in a follow-up pass. Success is ONLY reported
+    /// once an enumeration comes back empty; exhausting <see cref="MaxDeleteDrainPasses"/>
+    /// with survivors still present fails the operation (issue #839: the previous shape
+    /// reported success off a point-in-time plan and never looked back at storage).
+    /// </summary>
+    private static IObservable<IReadOnlyList<string>> DeleteSubtreeUntilDrained(
+        IMessageHub meshHub,
+        IStorageAdapter storage,
+        string rootPath,
+        ImmutableHashSet<string> plannedPaths,
+        DeleteNodeRequest baseRequest,
+        AccessContext? callerAccessContext,
+        RecentlyDeletedRegistry? recentlyDeleted,
+        ILogger logger,
+        ImmutableList<LogMessage>.Builder collectedMessages)
+        => RunDeletePass(
+            meshHub, storage, rootPath, plannedPaths, baseRequest, callerAccessContext,
+            recentlyDeleted, logger, collectedMessages,
+            pass: 1, deletedSoFar: ImmutableList<string>.Empty);
+
+    private static IObservable<IReadOnlyList<string>> RunDeletePass(
+        IMessageHub meshHub,
+        IStorageAdapter storage,
+        string rootPath,
+        ImmutableHashSet<string> toDelete,
+        DeleteNodeRequest baseRequest,
+        AccessContext? callerAccessContext,
+        RecentlyDeletedRegistry? recentlyDeleted,
+        ILogger logger,
+        ImmutableList<LogMessage>.Builder collectedMessages,
+        int pass,
+        ImmutableList<string> deletedSoFar)
+    {
+        // 🚨 "Delete wins" — tombstone every path of THIS pass BEFORE the fan-out.
+        // FanOutDeleteSubtree ACTIVATES each leaf's per-node hub to process its own
+        // delete, and that activation's save (the workspace sees the just-loaded node
+        // as an "add") is exactly what resurrects the row. Marking here — before any
+        // leaf hub is activated — guarantees the resurrecting save's guard already
+        // sees the tombstone. Marking only on success (after the delete) lost a
+        // check-before-mark race: the activation save checked ~14 ms before the mark
+        // and slipped through.
+        foreach (var dp in toDelete)
+            recentlyDeleted?.MarkDeleted(dp);
+        recentlyDeleted?.MarkDeleted(rootPath);
+
+        return FanOutDeleteSubtree(
+                meshHub, storage, rootPath, toDelete, baseRequest, callerAccessContext,
+                logger, collectedMessages, rootAlreadyDeleted: pass > 1)
+            .Catch<IReadOnlyList<string>, Exception>(ex =>
+            {
+                // Fold this pass's partial deletions into the accumulated total so
+                // the caller's failure response reports every path actually removed.
+                var passDeleted = ex.Data["DeletedPaths"] as IReadOnlyList<string>
+                    ?? Array.Empty<string>();
+                ex.Data["DeletedPaths"] = (IReadOnlyList<string>)deletedSoFar.AddRange(passDeleted);
+                return Observable.Throw<IReadOnlyList<string>>(ex);
+            })
+            .SelectMany(deletedPaths =>
+            {
+                var acc = deletedSoFar.AddRange(deletedPaths);
+
+                // VERIFY against storage — the plan was a point-in-time snapshot;
+                // only an empty re-enumeration proves the subtree is actually gone.
+                return storage.ListDescendantPaths(rootPath)
+                    .Take(1)
+                    .SelectMany(survivors =>
+                    {
+                        var survivorSet = survivors
+                            .Where(p => !string.IsNullOrEmpty(p))
+                            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase)
+                            .Remove(rootPath);
+                        if (survivorSet.IsEmpty)
+                            return Observable.Return((IReadOnlyList<string>)acc);
+
+                        if (pass >= MaxDeleteDrainPasses)
+                        {
+                            var ex = new InvalidOperationException(
+                                $"Recursive delete of '{rootPath}' could not drain the subtree after "
+                                + $"{pass} pass(es): {survivorSet.Count} descendant(s) still present "
+                                + $"(e.g. '{survivorSet.First()}'). A writer keeps re-creating nodes "
+                                + "under the subtree faster than they can be deleted.");
+                            ex.Data["DeletedPaths"] = (IReadOnlyList<string>)acc;
+                            return Observable.Throw<IReadOnlyList<string>>(ex);
+                        }
+
+                        logger.LogInformation(
+                            "[DeleteNode] drain pass {Pass} path={Path} survivors={Count} — "
+                            + "nodes appeared mid-flight; deleting them too",
+                            pass + 1, rootPath, survivorSet.Count);
+
+                        return RunDeletePass(
+                            meshHub, storage, rootPath, survivorSet, baseRequest,
+                            callerAccessContext, recentlyDeleted, logger, collectedMessages,
+                            pass + 1, acc);
+                    });
+            });
+    }
+
+    /// <summary>
     /// Bottom-up traversal of the path set via <see cref="HierarchicalPathDeletion"/>.
     /// <para>
     /// <b>Root path:</b> deleted via local <see cref="IStorageAdapter.Delete"/>
     /// — already validated by the calling handler before fan-out. This avoids
     /// self-recursion that would arise if we posted <see cref="DeleteNodeRequest"/>
-    /// at our own address (the same handler would re-enter).
+    /// at our own address (the same handler would re-enter). On drain passes
+    /// (<paramref name="rootAlreadyDeleted"/>) the root row is usually gone —
+    /// <see cref="IStorageAdapter.DeleteIfExists"/> makes the re-delete idempotent
+    /// while still removing (and publishing) a root that was re-created mid-flight.
     /// </para>
     /// <para>
     /// <b>Descendant paths:</b> posted as non-recursive <see cref="DeleteNodeRequest"/>
@@ -1812,7 +1934,8 @@ public static class MeshExtensions
         DeleteNodeRequest baseRequest,
         AccessContext? callerAccessContext,
         ILogger logger,
-        ImmutableList<LogMessage>.Builder collectedMessages)
+        ImmutableList<LogMessage>.Builder collectedMessages,
+        bool rootAlreadyDeleted = false)
     {
         return HierarchicalPathDeletion.DeleteSubtree(
             rootPath,
@@ -1832,6 +1955,19 @@ public static class MeshExtensions
                     // branch for THEIR own path, so each leaf publishes once.
                     logger.LogDebug("[DeleteNode] storage.Delete (root) {Path}", path);
                     var changeFeed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
+
+                    if (rootAlreadyDeleted)
+                        // Drain pass: the root row was deleted in pass 1. DeleteIfExists
+                        // is the idempotent variant — a no-op when the row is gone, a
+                        // real delete + publish when something re-created it mid-flight.
+                        return storage.DeleteIfExists(path)
+                            .Do(removed =>
+                            {
+                                if (removed)
+                                    changeFeed?.Publish(MeshChangeEvent.Deleted(path));
+                            })
+                            .Select(_ => path);
+
                     return storage.DeleteAndPublish(path, changeFeed)
                         .Do(_ =>
                         {
@@ -2799,19 +2935,19 @@ public static class MeshExtensions
 
         // Move = Copy (with satellites + descendants) → reactive delete of every source path.
         // Delete only fires after Copy succeeds (SelectMany short-circuits on copy error).
+        // Source-subtree enumeration is AUTHORITATIVE from storage (ListDescendantPaths),
+        // never the eventually-consistent catalog query — the same stale-plan defect that
+        // left recursive-delete survivors (issue #839) would leave source rows behind here.
         meshService.CopyNode(sourcePath, targetPath, includeDescendants: true, includeSatellites: true)
             .SelectMany(copied =>
-                meshService.Query<object>(MeshQueryRequest.FromQuery(
-                        $"path:{sourcePath} scope:subtree select:path"))
+                storage.ListDescendantPaths(sourcePath)
                     .Take(1)
                     .Timeout(TimeSpan.FromSeconds(15))
-                    .SelectMany(change =>
+                    .SelectMany(descendants =>
                     {
-                        var paths = change.Items
-                            .OfType<IDictionary<string, object?>>()
-                            .Select(d => d.TryGetValue("path", out var v) ? v as string : null)
+                        var paths = descendants
                             .Where(p => !string.IsNullOrEmpty(p))
-                            .Select(p => p!)
+                            .Append(sourcePath)
                             .ToImmutableList();
 
                         if (paths.IsEmpty)

@@ -58,3 +58,18 @@ public record ListChildPathsRequest(string? ParentPath)
 public record ListChildPathsResponse(
     ImmutableList<string> NodePaths,
     ImmutableList<string> DirectoryPaths);
+
+/// <summary>
+/// Enumerates every strict descendant node path under a root inside this
+/// partition — the routed twin of <see cref="Mesh.Services.IStorageAdapter.ListDescendantPaths"/>,
+/// so the partition hub answers with its adapter's NATIVE prefix enumeration
+/// (Postgres: one UNION across primary + satellite tables) instead of the
+/// caller degrading to a level-by-level <see cref="ListChildPathsRequest"/> walk.
+/// </summary>
+public record ListDescendantPathsRequest(string RootPath)
+    : IRequest<ListDescendantPathsResponse>;
+
+/// <summary>Result of a <see cref="ListDescendantPathsRequest"/>.</summary>
+public record ListDescendantPathsResponse(
+    ImmutableList<string> Paths,
+    string? Error = null);

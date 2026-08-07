@@ -11,7 +11,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// embedded-resource — whose only way to enumerate descendants is to walk
 /// the parent→children tree recursively. Subclasses provide the
 /// <see cref="IStorageAdapter"/> primitives against their backing store;
-/// the base layers the public <see cref="ListDescendantPaths"/> walk on top
+/// the base layers the public <see cref="WalkDescendantPaths"/> walk on top
 /// for the pedestrian query provider's use.
 ///
 /// <para>
@@ -21,7 +21,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// per-adapter query provider (<c>StorageAdapterMeshQueryProvider</c>) know
 /// nothing about it.
 /// Only a dedicated <see cref="IMeshQueryProvider"/> registered for
-/// pedestrian-backed partitions consumes <see cref="ListDescendantPaths"/>.
+/// pedestrian-backed partitions consumes <see cref="WalkDescendantPaths"/>.
 /// Postgres / Cosmos / blob backends don't extend this — they route queries
 /// through their own native push-down provider.
 /// </para>
@@ -70,7 +70,7 @@ public abstract class SimpleMeshNodeStorage : IStorageAdapter
     /// Subscribers do <see cref="IStorageAdapter.Read"/> per path when they actually need
     /// content. Cold observable; the walk fires on Subscribe.
     /// </summary>
-    public IObservable<string> ListDescendantPaths(string? parentPath)
+    public IObservable<string> WalkDescendantPaths(string? parentPath)
         => Observable.Defer(() => WalkPaths(parentPath));
 
     private IObservable<string> WalkPaths(string? parent)
