@@ -85,6 +85,14 @@ app.MapGet("/static/{**path}", async (HttpContext ctx, string path) =>
     var filePath = string.Join('/', path[(slash + 1)..].Split('/').Select(Uri.UnescapeDataString));
     var content = app.Services.GetRequiredService<IMessageHub>().ServiceProvider.GetService<IContentService>();
     if (content is null) return Results.NotFound();
+    // 🚨 PUBLIC MOUNTS ONLY (issue #587). This sidecar resolves no identity at all — there is no
+    // UserContextMiddleware and no caller to attribute a read to — so it may serve exactly the
+    // collections that are declared both mounted on /static AND world-readable, i.e. the shipped
+    // icon/doc assets this endpoint exists for. Anything access-controlled (user content,
+    // attachments, per-Space collections) is not servable here and answers 404; it is reachable
+    // through the portal's gated /static endpoint instead.
+    var config = content.GetCollectionConfig(collection);
+    if (config is not { IsStatic: true, IsPublic: true }) return Results.NotFound();
     // HTTP-boundary await: the read leaf runs on the collection's IIoPool; the endpoint awaits
     // the replayed single emission only.
     var stream = await content.GetContent(collection, filePath).Take(1);

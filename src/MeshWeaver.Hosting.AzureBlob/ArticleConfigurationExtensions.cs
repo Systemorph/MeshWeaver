@@ -50,12 +50,19 @@ public static class ArticleConfigurationExtensions
     /// <param name="collectionName">The name of the collection</param>
     /// <param name="containerName">The Azure Blob container name</param>
     /// <param name="clientName">The name of the Azure client (default: "default")</param>
+    /// <param name="isStatic">
+    /// MOUNTS the collection on the <c>/static</c> route — see
+    /// <see cref="ContentCollectionConfig.IsStatic"/>. Default <c>false</c>: not mounted, and
+    /// <c>/static</c> answers 404 for it. Mounted files stay access-controlled (attributed to the
+    /// owning node and gated on Read).
+    /// </param>
     /// <returns>The configured message hub configuration</returns>
     public static MessageHubConfiguration AddAzureBlobContentCollection(
         this MessageHubConfiguration configuration,
         string collectionName,
         string containerName,
-        string clientName = "default")
+        string clientName = "default",
+        bool isStatic = false)
         => configuration
             .AddContentCollections()
             .WithServices(services =>
@@ -71,6 +78,7 @@ public static class ArticleConfigurationExtensions
                     {
                         Name = collectionName,
                         SourceType = AzureBlobStreamProviderFactory.SourceType,
+                        IsStatic = isStatic,
                         Settings = new Dictionary<string, string>
                         {
                             ["ContainerName"] = containerName,

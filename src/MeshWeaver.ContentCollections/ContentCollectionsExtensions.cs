@@ -501,10 +501,24 @@ public static class ContentCollectionsExtensions
         /// <param name="collectionName">The name of the collection to register.</param>
         /// <param name="assembly">The assembly whose embedded resources back the collection.</param>
         /// <param name="relativePath">The resource path prefix (relative to the assembly's default namespace).</param>
+        /// <param name="isStatic">
+        /// MOUNTS the collection on the <c>/static</c> route — see
+        /// <see cref="ContentCollectionConfig.IsStatic"/>. Default <c>false</c>: not mounted, and
+        /// <c>/static</c> answers 404 for it.
+        /// </param>
+        /// <param name="isPublic">
+        /// Declares the mounted collection WORLD-READABLE — see
+        /// <see cref="ContentCollectionConfig.IsPublic"/>. Default <c>false</c> (access-controlled).
+        /// Pass <c>true</c> only for assets that are public by construction and needed before
+        /// sign-in (node-type icons, shipped documentation assets); being an embedded resource is
+        /// NOT on its own a reason — a plugin can embed private content.
+        /// </param>
         /// <returns>The configured message hub configuration.</returns>
         public MessageHubConfiguration AddEmbeddedResourceContentCollection(string collectionName,
             Assembly assembly,
-            string relativePath)
+            string relativePath,
+            bool isStatic = false,
+            bool isPublic = false)
             => configuration.WithServices(services =>
             {
                 var resourcePrefix = $"{assembly.GetName().Name}.{relativePath}";
@@ -522,6 +536,10 @@ public static class ContentCollectionsExtensions
                         SourceType = "EmbeddedResource",
                         // IsEditable defaults to false — embedded resources are read-only.
                         // ExposeInChildren defaults to false — backing store, hidden by design.
+                        // IsStatic defaults to false — /static serves only what is mounted.
+                        // IsPublic defaults to false — a mount is access-controlled unless declared.
+                        IsStatic = isStatic,
+                        IsPublic = isPublic,
                         Settings = new Dictionary<string, string>
                         {
                             ["AssemblyName"] = assembly.GetName().Name ?? "",
@@ -540,9 +558,18 @@ public static class ContentCollectionsExtensions
         /// </summary>
         /// <param name="collectionName">The name of the collection</param>
         /// <param name="pathFactory">Factory function to compute the path based on service provider</param>
+        /// <param name="isStatic">
+        /// MOUNTS the collection on the <c>/static</c> route — see
+        /// <see cref="ContentCollectionConfig.IsStatic"/>. Default <c>false</c>: not mounted, and
+        /// <c>/static</c> answers 404 for it. A mount is still access-controlled (the file is
+        /// attributed to its owning node) unless <see cref="ContentCollectionConfig.IsPublic"/> is
+        /// also declared — which this builder never does, because a file-system collection is
+        /// backed by writable user storage.
+        /// </param>
         /// <returns>The configured message hub configuration</returns>
         public MessageHubConfiguration AddFileSystemContentCollection(string collectionName,
-            Func<IServiceProvider, string> pathFactory)
+            Func<IServiceProvider, string> pathFactory,
+            bool isStatic = false)
             => configuration
                 .AddContentCollections()
                 .WithServices(services =>
@@ -565,6 +592,7 @@ public static class ContentCollectionsExtensions
                             // Filesystem collections registered via this builder
                             // are user-facing and meant to surface in children.
                             ExposeInChildren = true,
+                            IsStatic = isStatic,
                             Settings = new Dictionary<string, string> { ["BasePath"] = basePath }
                         };
 
@@ -639,10 +667,17 @@ public static class ContentCollectionsExtensions
         /// <param name="targetCollectionName">The name of the mapped collection (e.g., "avatars")</param>
         /// <param name="sourceCollectionName">The name of the registered source collection (e.g., "storage")</param>
         /// <param name="subdirectory">The subdirectory within storage (e.g., "persons" or dynamic path)</param>
+        /// <param name="isStatic">
+        /// MOUNTS the mapped collection on the <c>/static</c> route — see
+        /// <see cref="ContentCollectionConfig.IsStatic"/>. Default <c>false</c>: not mounted, and
+        /// <c>/static</c> answers 404 for it. Mounted files are still access-controlled (attributed
+        /// to the node the mapping hangs off).
+        /// </param>
         /// <returns>The configured message hub configuration</returns>
         public MessageHubConfiguration MapContentCollection(string targetCollectionName,
             string sourceCollectionName,
-            string subdirectory)
+            string subdirectory,
+            bool isStatic = false)
             => configuration
                 .AddContentCollections() // Registers $Content, $FileBrowser, $Collection layout areas
                 .WithServices(services =>
@@ -654,7 +689,8 @@ public static class ContentCollectionsExtensions
                             targetCollectionName,
                             sourceCollectionName,
                             subdirectory,
-                            configuration.Address));
+                            configuration.Address,
+                            isStatic));
 
                     return services;
                 });
@@ -670,7 +706,8 @@ internal class MappedContentCollectionConfigProvider(
     string targetCollectionName,
     string sourceCollectionName,
     string subdirectory,
-    Address address)
+    Address address,
+    bool isStatic = false)
     : IContentCollectionConfigProvider
 {
     public const string MappedSourceType = "Mapped";
@@ -688,6 +725,10 @@ internal class MappedContentCollectionConfigProvider(
         // bind it — the resolved config picks IsEditable from this wrapper.)
         IsEditable = true,
         ExposeInChildren = true,
+        // /static exposure is the MAPPING's decision, not the backing store's: the store is
+        // mounted static so the mesh-level `/static/storage/…` shape works, but that must not
+        // silently publish every per-node view over it.
+        IsStatic = isStatic,
         Settings = new Dictionary<string, string>
         {
             [SourceCollectionKey] = sourceCollectionName,

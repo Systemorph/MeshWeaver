@@ -832,6 +832,16 @@ public static class MemexConfiguration
                             Name = "content",
                             IsEditable = true,
                             ExposeInChildren = true,
+                            // Mounted on /static: images, thumbnails and PDFs in this Space are
+                            // fetched as /static/{Space}/content/{file} (MeshNodeLayoutAreas'
+                            // image renderer, ContentLayoutArea's PDF viewer) and as
+                            // /static/storage/content/{Space}/{file} through the mesh-level store.
+                            // The mount does NOT make them public — every request is attributed to
+                            // the owning node and gated on Read (issue #587).
+                            IsStatic = true,
+                            // Never inherited from the Storage config section: user content is
+                            // access-controlled, full stop.
+                            IsPublic = false,
                             BasePath = basePath,
                             Settings = contentStorageConfig.Settings is { } src
                                 ? new Dictionary<string, string>(src) { ["BasePath"] = basePath }
@@ -841,8 +851,10 @@ public static class MemexConfiguration
                     }
 
                     // Map "attachments" to "storage" with per-node subdirectory
-                    // (needed by FutuRe and other samples that store datacube.csv, etc.)
-                    config = config.MapContentCollection("attachments", "storage", $"attachments/{nodePath}");
+                    // (needed by FutuRe and other samples that store datacube.csv, etc.).
+                    // isStatic: the file browser's download links are /static/{node}/attachments/…
+                    config = config.MapContentCollection(
+                        "attachments", "storage", $"attachments/{nodePath}", isStatic: true);
 
                     // Shared large static assets (e.g. the on-device Whisper models the native client
                     // downloads) live in a FileSystem content collection on the MeshWeaver space, backed
@@ -860,6 +872,9 @@ public static class MemexConfiguration
                             Address = config.Address,
                             IsEditable = true,
                             ExposeInChildren = true,
+                            // The native client downloads these over /static/MeshWeaver/static/… —
+                            // a real mount, still gated on Read of the MeshWeaver node.
+                            IsStatic = true,
                             Settings = new Dictionary<string, string> { ["BasePath"] = staticAssetsMount },
                         });
 

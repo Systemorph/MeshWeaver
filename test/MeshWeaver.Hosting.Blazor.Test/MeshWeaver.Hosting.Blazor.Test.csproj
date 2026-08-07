@@ -9,5 +9,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <!-- StaticContentAccessTest drives the REAL /static endpoint over a real monolith mesh
+         (real PermissionEvaluator, real AccessAssignments) — no mocks. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
   </ItemGroup>
 </Project>

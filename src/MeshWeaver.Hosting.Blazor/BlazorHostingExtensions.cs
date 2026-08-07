@@ -17,6 +17,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Components.Server.Circuits;
+using Microsoft.Extensions.Logging;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Hosting.Blazor;
@@ -171,6 +172,19 @@ public static class BlazorHostingExtensions
     /// The endpoint first checks if the first segment matches a registered collection name.
     /// If yes, serves from the mesh hub's content service directly.
     /// If no, uses address-based resolution via IMeshCatalog.ResolvePath.
+    ///
+    /// <para>🚨 TWO EXPLICIT DECLARATIONS gate this route (issue #587), both defaulting to the
+    /// closed value:</para>
+    /// <list type="number">
+    /// <item><see cref="ContentCollectionConfig.IsStatic"/> — is the collection MOUNTED here at
+    ///   all? Not declared ⇒ 404, for every caller alike. Content must be mounted explicitly;
+    ///   merely being registered on a hub never publishes it.</item>
+    /// <item><see cref="ContentCollectionConfig.IsPublic"/> — is the mount world-readable? Not
+    ///   declared ⇒ the file is attributed to its owning mesh node and the caller must hold
+    ///   <see cref="MeshWeaver.Mesh.Security.Permission.Read"/> on it (<see cref="StaticContentGate"/>),
+    ///   the same decision <c>AccessControlPipeline</c> applies to the <c>GetDataRequest</c> behind
+    ///   an ordinary <c>/content/…</c> read.</item>
+    /// </list>
     /// </summary>
     private static void MapStaticContent(this IEndpointRouteBuilder app, IServiceProvider services)
     {
@@ -188,11 +202,17 @@ public static class BlazorHostingExtensions
             if (string.IsNullOrEmpty(path))
                 return Task.FromResult(Results.NotFound("Path is required"));
 
+            // 🚨 Resolve the caller SYNCHRONOUSLY, before any scheduler hop. AccessContext is an
+            // AsyncLocal and does not survive the Rx hops below, and concurrent /static requests
+            // carry different users — so the identity is captured here per request and threaded
+            // explicitly through the chain, never re-read from the ambient service downstream.
+            var caller = ResolveStaticCaller(context, mainHub);
+
             // Compose the entire endpoint as IObservable<IResult>; the HTTP framework
             // boundary mandates Task<IResult>, so we ToTask once at the very end.
             // No await on hub round-trips — chain via SelectMany; deadlock surface
             // (await pathResolver.ResolvePath / hub.Observe) eliminated.
-            return ResolveStatic(context, mainHub, path, collectionCache)
+            return ResolveStatic(context, mainHub, path, caller, collectionCache)
                 .Catch<IResult, Exception>(ex =>
                     Observable.Return(Results.Problem($"Error retrieving static content: {ex.Message}")))
                 .FirstAsync()
@@ -200,16 +220,41 @@ public static class BlazorHostingExtensions
         });
     }
 
+    /// <summary>
+    /// The identity of a <c>/static</c> request. NEVER null — an unauthenticated caller resolves to
+    /// the well-known Anonymous context, whose permissions are exactly the Anonymous grants.
+    ///
+    /// <para><c>UserContextMiddleware</c> runs for <c>/static</c> (it is deliberately NOT in its
+    /// <c>ExcludedPrefixes</c> — #666) and stamps the fully-resolved identity on the mesh-wide
+    /// <c>AccessService</c>, including the Bearer-token path that a claims principal alone cannot
+    /// see. Prefer that. Fall back to resolving the claims principal directly for hosts that do not
+    /// run the middleware, so the gate can never be silently defeated by a missing middleware.</para>
+    /// </summary>
+    private static AccessContext ResolveStaticCaller(HttpContext context, IMessageHub mainHub)
+    {
+        // The mesh registers ONE AccessService singleton and every hosted hub inherits it
+        // (MessageHubConfiguration only adds its own when the parent scope has none), so this is
+        // the very instance the middleware wrote to.
+        var ambient = mainHub.ServiceProvider.GetService<AccessService>()?.Context;
+        return ambient is not null && !string.IsNullOrEmpty(ambient.ObjectId)
+            ? ambient
+            : UserContextMiddleware.ResolveHttpCaller(context.User, mainHub.ServiceProvider);
+    }
+
     private static IObservable<IResult> ResolveStatic(
         HttpContext context,
         IMessageHub mainHub,
         string path,
+        AccessContext caller,
         System.Collections.Concurrent.ConcurrentDictionary<string, ContentCollectionConfig> collectionCache)
     {
         var pathParts = path.Split('/');
         if (pathParts.Length < 2)
             return Observable.Return(Results.NotFound(
                 "Invalid path format. Expected: /static/{collection}/{filePath} or /static/{address}/{collection}/{filePath}"));
+
+        var logger = mainHub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(StaticContentGate));
 
         var firstSegment = pathParts[0];
         var decodedFirstSegment = DecodeCollectionName(firstSegment);
@@ -220,9 +265,31 @@ public static class BlazorHostingExtensions
         {
             // Pattern 1: /static/{collection}/{filePath}
             var collectionName = decodedFirstSegment;
+
+            // 🚨 MOUNT CHECK. /static serves ONLY collections that explicitly declare
+            // IsStatic — anything else is not on this route at all. IsStatic existed but was
+            // read NOWHERE, so every collection registered anywhere on the mesh hub was
+            // servable by URL. Being unmounted is not an access decision, so it answers 404
+            // ahead of the gate and discloses nothing about the caller's rights.
+            if (!knownCollection.IsStatic)
+                return Observable.Return(NotMounted(collectionName));
+
             var filePath = DecodeContentPath(string.Join("/", pathParts.Skip(1)));
-            return (mainHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded)
-                .Run(_ => ServeFromCollection(context, mainHub, collectionName, filePath, collectionCache));
+            var serve = Observable.Defer(() =>
+                (mainHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded)
+                    .Run(_ => ServeFromCollection(context, mainHub, collectionName, filePath, knownCollection.IsPublic)));
+
+            // 🚨 A collection declared IsPublic serves to anyone — that is the deliberate
+            // opt-in (node-type icons must render on the login page). Everything else is
+            // attributed to its owning node and gated on Read.
+            if (knownCollection.IsPublic)
+                return serve;
+
+            return StaticContentGate
+                .Authorize(mainHub, caller, StaticContentGate.RootStoreOwnerCandidate(filePath), logger)
+                .SelectMany(verdict => verdict == StaticContentGate.Verdict.Allowed
+                    ? serve
+                    : Observable.Return(StaticContentGate.DenyResult(verdict)));
         }
 
         // Pattern 2: /static/{address}/{collection}/{filePath} — observable chain.
@@ -247,18 +314,13 @@ public static class BlazorHostingExtensions
             var targetAddress = (Address)resolution.Prefix;
             var qualifiedCollectionName = $"{resolution.Prefix}/{addressCollectionName}";
 
-            // 🚨 STAMP THE CALLER on the post. The user-context middleware deliberately skips
-            // /static/ (perf), so nothing has resolved an identity for this request — and a hub
-            // post with no AccessContext is refused by the never-null PostPipeline guard. That
-            // refusal is INVISIBLE at one replica (local delivery) and killed ~half of all /static
-            // requests at two: whenever the target partition's hub lived on the OTHER silo, the
-            // cross-silo post died with "AccessContext must never be null" and the file 500'd
-            // (#694 — the reason memex runs single-replica). Resolve the caller here (claims →
-            // mesh user; anonymous otherwise) and stamp the DELIVERY — per-request, never the
-            // ambient AccessService (concurrent static requests carry different users). Identity
-            // only names WHO is asking; the owning hub's RLS still decides what they may read, so
-            // anonymous gets exactly the Anonymous grants and gated files stay gated.
-            var caller = UserContextMiddleware.ResolveHttpCaller(context.User, mainHub.ServiceProvider);
+            // 🚨 STAMP THE CALLER on the post (#694). A hub post with no AccessContext is refused
+            // by the never-null PostPipeline guard — invisible at one replica (local delivery) and
+            // fatal at two, where whenever the target partition's hub lived on the OTHER silo the
+            // cross-silo post died with "AccessContext must never be null" and the file 500'd (the
+            // reason memex ran single-replica). The identity was resolved per-request at the
+            // endpoint and threaded in as `caller` — never re-read from the ambient AccessService
+            // here, which the Rx hops above have already left behind.
 
             // Cached collection config — short-circuit; otherwise compose hub.Observe.
             IObservable<ContentCollectionConfig?> configObs = collectionCache.TryGetValue(qualifiedCollectionName, out var cached)
@@ -275,7 +337,17 @@ public static class BlazorHostingExtensions
                                 {
                                     Name = e.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "",
                                     SourceType = e.TryGetProperty("sourceType", out var typeProp) ? typeProp.GetString() ?? "" : "",
-                                    BasePath = e.TryGetProperty("basePath", out var pathProp) ? pathProp.GetString() : null
+                                    BasePath = e.TryGetProperty("basePath", out var pathProp) ? pathProp.GetString() : null,
+                                    // 🚨 The serving classification MUST survive the wire. This hand-rolled
+                                    // projection copied only name/sourceType/basePath, so a remote
+                                    // collection arrived with IsStatic/IsPublic silently false — the mount
+                                    // check would then 404 every legitimately-mounted remote collection.
+                                    // Both are suppressed when false (WhenWritingDefault), so an absent
+                                    // property means false, which is the safe value either way.
+                                    IsStatic = e.TryGetProperty("isStatic", out var staticProp)
+                                               && staticProp.ValueKind == JsonValueKind.True,
+                                    IsPublic = e.TryGetProperty("isPublic", out var publicProp)
+                                               && publicProp.ValueKind == JsonValueKind.True,
                                 })
                                 .ToArray(),
                             GetDataResponse { Data: IReadOnlyCollection<ContentCollectionConfig> direct } => direct,
@@ -288,11 +360,17 @@ public static class BlazorHostingExtensions
                         return built;
                     });
 
-            return configObs.SelectMany(collectionConfig =>
+            var serve = configObs.SelectMany(collectionConfig =>
             {
                 if (collectionConfig == null)
                     return Observable.Return(Results.NotFound(
                         $"Content collection '{addressCollectionName}' not found at {resolution.Prefix}"));
+
+                // 🚨 MOUNT CHECK — the owning node's collection must declare IsStatic. See the
+                // pattern-1 note; the address shape needs the remote config first, so this runs
+                // after the read gate rather than before it.
+                if (!collectionConfig.IsStatic)
+                    return Observable.Return(NotMounted(addressCollectionName));
 
                 var portal = mainHub.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
                 var portalContentService = portal.ServiceProvider.GetService<IContentService>();
@@ -305,10 +383,64 @@ public static class BlazorHostingExtensions
                 return portalContentService.GetCollection(qualifiedCollectionName)
                     .SelectMany(contentCollection => contentCollection == null
                         ? Observable.Return(Results.NotFound($"Content collection '{addressCollectionName}' not found"))
-                        : ServeFile(context, contentCollection, addressFilePath));
+                        : ServeFile(context, contentCollection, addressFilePath, collectionConfig.IsPublic));
             });
+
+            // 🚨 GATE FIRST — before the collection config is even looked up.
+            //
+            // Two reasons it has to be here and not deeper. (1) The config lookup is the only step
+            // that ever touched access control (its GetDataRequest carries
+            // [RequiresPermission(Read)]), and `collectionCache` SHORT-CIRCUITS it: once any
+            // authorized caller populated the cache, every later caller — anonymous included —
+            // skipped the permission-bearing hop entirely and the file was read locally from the
+            // resolved BasePath. That cache hit was a standing bypass. (2) The bytes are read by
+            // the PORTAL's content service straight off the resolved BasePath, so nothing
+            // downstream consults the owning partition at all.
+            //
+            // The collection is mounted on `resolution.Prefix`, so that node is the owner floor;
+            // appending the file path lets the resolver attribute the file to a deeper node when
+            // the content mirrors the node tree (a paid lesson's media stays gated).
+            return StaticContentGate
+                .Authorize(mainHub, caller,
+                    StaticContentGate.AddressOwnerCandidate(resolution.Prefix, addressFilePath), logger)
+                .SelectMany(verdict => verdict == StaticContentGate.Verdict.Allowed
+                    ? serve
+                    : Observable.Return(StaticContentGate.DenyResult(verdict)));
         });
     }
+
+    /// <summary>
+    /// The <c>Cache-Control</c> value for a served file.
+    ///
+    /// <para>🚨 Only an explicitly-PUBLIC collection may be stored by a SHARED cache. Everything
+    /// else is <c>private</c>: a CDN, corporate proxy or any intermediary that once saw an
+    /// authorized fetch would otherwise keep serving that partition's file to callers this gate
+    /// denies — the leak survives the fix (issue #587, point 4). Gated content stays cacheable in
+    /// the caller's OWN browser but revalidates, so a revoked grant takes effect within
+    /// <see cref="GatedCacheSeconds"/> instead of the 30 days <c>immutable</c> promised.</para>
+    /// </summary>
+    /// <param name="isPublic">Whether the owning collection declared <see cref="ContentCollectionConfig.IsPublic"/>.</param>
+    /// <returns>The header value.</returns>
+    internal static string CacheControlFor(bool isPublic) =>
+        isPublic
+            ? $"public, max-age={(int)TimeSpan.FromDays(30).TotalSeconds}, immutable"
+            : $"private, max-age={GatedCacheSeconds}, must-revalidate";
+
+    /// <summary>Browser-local lifetime of an access-controlled static file, in seconds.</summary>
+    internal const int GatedCacheSeconds = 300;
+
+    /// <summary>
+    /// The response for a collection that exists but is not mounted on <c>/static</c>
+    /// (<see cref="ContentCollectionConfig.IsStatic"/> not declared). 404, not 403: whether a
+    /// collection is published on this route is a hosting decision, identical for every caller, so
+    /// the answer must not vary with identity.
+    /// </summary>
+    /// <param name="collectionName">The collection that is not mounted.</param>
+    /// <returns>The 404 result.</returns>
+    internal static IResult NotMounted(string collectionName) =>
+        Results.NotFound(
+            $"Content collection '{collectionName}' is not served under /static. "
+            + "Mount it explicitly (IsStatic) to publish it on this route.");
 
     /// <summary>
     /// Serves a file from a known collection (pattern: /static/{collection}/{filePath}).
@@ -318,7 +450,7 @@ public static class BlazorHostingExtensions
         IMessageHub hub,
         string collectionName,
         string filePath,
-        System.Collections.Concurrent.ConcurrentDictionary<string, ContentCollectionConfig> _)
+        bool isPublic)
     {
         if (string.IsNullOrEmpty(filePath))
         {
@@ -335,7 +467,7 @@ public static class BlazorHostingExtensions
         return await contentService.GetCollection(collectionName)
             .SelectMany(contentCollection => contentCollection == null
                 ? Observable.Return(Results.NotFound($"Content collection '{collectionName}' not found"))
-                : ServeFile(context, contentCollection, filePath))
+                : ServeFile(context, contentCollection, filePath, isPublic))
             .Take(1);
     }
 
@@ -344,7 +476,12 @@ public static class BlazorHostingExtensions
     /// read (including the small-file buffering for the ETag hash) runs on the collection's pool;
     /// this layer only shapes the HTTP result on the emissions.
     /// </summary>
-    private static IObservable<IResult> ServeFile(HttpContext context, ContentCollection contentCollection, string filePath)
+    /// <param name="context">The current request.</param>
+    /// <param name="contentCollection">The resolved collection.</param>
+    /// <param name="filePath">The file's path within the collection.</param>
+    /// <param name="isPublic">Whether the collection is declared public — decides shared vs private caching.</param>
+    private static IObservable<IResult> ServeFile(
+        HttpContext context, ContentCollection contentCollection, string filePath, bool isPublic)
         => contentCollection.GetContent(filePath)
             .SelectMany(stream =>
             {
@@ -377,9 +514,13 @@ public static class BlazorHostingExtensions
                         {
                             if (bytes is null)
                                 return Results.NotFound("File not found");
-                            var cacheDuration = TimeSpan.FromDays(30);
-                            context.Response.Headers.CacheControl = $"public, max-age={cacheDuration.TotalSeconds}, immutable";
-                            context.Response.Headers.Expires = DateTime.UtcNow.AddDays(30).ToString("R");
+                            context.Response.Headers.CacheControl = CacheControlFor(isPublic);
+                            // Expires is the HTTP/1.0 twin of max-age; a shared cache that honours
+                            // it must not be handed a 30-day promise for gated content either.
+                            context.Response.Headers.Expires = (isPublic
+                                    ? DateTime.UtcNow.AddDays(30)
+                                    : DateTime.UtcNow.AddSeconds(GatedCacheSeconds))
+                                .ToString("R");
                             var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(bytes));
                             context.Response.Headers.ETag = $"\"{hash}\"";
                             // Range processing on this branch too: a file under the buffering
@@ -390,6 +531,11 @@ public static class BlazorHostingExtensions
                             return FileResultFor(bytes, filePath, isDownloadRequested);
                         });
                 }
+
+                // Large files stream straight through. They previously carried NO Cache-Control at
+                // all, which lets a shared cache apply its own heuristic freshness — the same leak
+                // as an explicit `public`. Classify them too.
+                context.Response.Headers.CacheControl = CacheControlFor(isPublic);
 
                 // Return the stream directly without loading it all into memory
                 return Observable.Return(Results.Stream(

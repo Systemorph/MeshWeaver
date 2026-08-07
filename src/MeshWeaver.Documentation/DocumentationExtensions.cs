@@ -68,11 +68,18 @@ public static class DocumentationExtensions
             }
         });
 
+        // isPublic: the shipped platform documentation. Its assets are embedded in this
+        // assembly (published on nuget.org) and the Doc partition itself carries static
+        // Anonymous/Public Read grants (DocumentationNodeProvider), so serving them
+        // anonymously over /static discloses nothing that isn't already public. Declared
+        // rather than assumed — every other collection is access-controlled (issue #587).
         builder.ConfigureHub(config => config
             .AddEmbeddedResourceContentCollection(
                 "DocContent",
                 typeof(DocumentationExtensions).Assembly,
-                "Content"));
+                "Content",
+                isStatic: true,
+                isPublic: true));
 
         // Give every Doc-partition CHILD node hub a node-scoped, READ-ONLY "content" collection backed
         // DIRECTLY by the shipped embedded assets under Content/<node-subpath>/. This is what makes a
@@ -101,10 +108,15 @@ public static class DocumentationExtensions
             var subPath = address[prefix.Length..].Replace('/', '.');
             return config
                 .AddContentCollections()
+                // isStatic: doc-page assets (the @@content/ diagrams, logos and images) are
+                // fetched as /static/{Doc/Page}/content/{file}, so this is a /static mount.
+                // NOT isPublic: it stays access-controlled and inherits the Doc partition's own
+                // Anonymous/Public Read grants — one decision, not a parallel one.
                 .AddEmbeddedResourceContentCollection(
                     ContentCollectionsExtensions.DefaultCollectionName,
                     typeof(DocumentationExtensions).Assembly,
-                    $"Content.{subPath}");
+                    $"Content.{subPath}",
+                    isStatic: true);
         });
 
         // Doc namespace caps: read-only docs (no Create/Update/Delete) but

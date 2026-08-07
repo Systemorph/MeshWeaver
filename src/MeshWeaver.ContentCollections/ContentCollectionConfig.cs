@@ -47,6 +47,29 @@ public record ContentCollectionConfig
     public bool IsStatic { get; set; }
 
     /// <summary>
+    /// 🚨 ACCESS CLASSIFICATION for the <c>/static</c> route. <c>true</c> declares the
+    /// collection's files WORLD-READABLE: served to any caller with no authentication, no
+    /// permission check, and shared-cacheable (<c>Cache-Control: public</c>) headers.
+    ///
+    /// <para>Default <c>false</c> = ACCESS-CONTROLLED: every file is attributed to the mesh node
+    /// that owns it and the caller must hold <see cref="MeshWeaver.Mesh.Security.Permission.Read"/>
+    /// on that node — the same decision <c>AccessControlPipeline</c> applies to the
+    /// <c>GetDataRequest</c> behind the ordinary <c>/content/{address}/{collection}/{file}</c>
+    /// read. Public exposure is therefore a DELIBERATE declaration, never the default (issue
+    /// #587: everything under a content collection — per-partition uploads, attachments, PDFs —
+    /// was world-readable to anyone with or guessing a URL).</para>
+    ///
+    /// <para>Set it only for asset classes that are public by construction — assets compiled into
+    /// the shipped assembly and needed before sign-in (<c>NodeTypeIcons</c>, <c>DocContent</c>).
+    /// Anything sourced from user storage MUST stay <c>false</c>.</para>
+    ///
+    /// <para>The <c>bool</c> type-default is <c>false</c>, which is also the safe value, so the
+    /// wire-default suppression noted on <see cref="IsEditable"/> can only ever drop a
+    /// <c>false</c> — a dropped value fails CLOSED.</para>
+    /// </summary>
+    public bool IsPublic { get; set; }
+
+    /// <summary>
     /// Whether this collection should be visible to child nodes in the hierarchy.
     /// When false, only the node that owns the collection can see it.
     /// <para>Default <c>false</c> for the same wire-default reason as <see cref="IsEditable"/>:
