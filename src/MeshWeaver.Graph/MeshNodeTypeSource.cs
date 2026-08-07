@@ -104,6 +104,18 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     // resurrect the row via the activation-save below. See RecentlyDeletedRegistry.
     private readonly RecentlyDeletedRegistry? _recentlyDeletedRegistry;
 
+    // Latest node the ROUTING-supplied own-node stream has delivered — captured by a
+    // ctor-time subscription so the durable-first activation seed can GRAFT the routing
+    // node's NON-PERSISTABLE enrichment (the in-process HubConfiguration delegate) onto
+    // the raw durable row. The routing node is ENRICHED by ResolveHubConfiguration; the
+    // durable row can never carry the delegate (it does not serialize). Without the graft,
+    // every HubConfiguration-reading consumer of the workspace's own node — the compile
+    // watcher's truly-static exclusion, the first-build kickoff, NodeTypeDataModelAreas —
+    // sees null on a durable-first seed and misclassifies a static NodeType as "needs a
+    // first build" (the spurious activation compile that rewrote ContentNarrowing's
+    // persisted bytes). See GraftRoutingEnrichment.
+    private MeshNode? _latestRoutingNode;
+
     internal MeshNodeTypeSource(
         IWorkspace workspace,
         object dataSource,
@@ -125,6 +137,19 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         _ownNodeStream = ownNodeStream?
             .DistinctUntilChanged()
             .Replay(1).RefCount();
+        // Capture the latest routing emission for the enrichment graft (see
+        // _latestRoutingNode). Subscribed at construction so the snapshot is in hand
+        // BEFORE Initialize's durable-first seed emits: on Monolith the routing leg is
+        // Observable.Return(enriched) (synchronous), on Orleans it replays the node the
+        // grain activation already resolved. Subscribing this stream touches no hub or
+        // workspace construction — it is the routing layer's already-materialized value.
+        if (_ownNodeStream is not null)
+        {
+            var enrichmentCaptureSub = _ownNodeStream.Subscribe(
+                n => Volatile.Write(ref _latestRoutingNode, n),
+                _ => { });
+            workspace.Hub.RegisterForDisposal(enrichmentCaptureSub);
+        }
         _logger = workspace.Hub.ServiceProvider.GetService<ILogger<MeshNodeTypeSource>>();
         _ownNodeCache = workspace.Hub.ServiceProvider
             .GetService<MeshDataSourceExtensions.OwnNodeCache>();
@@ -696,12 +721,27 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     /// </para>
     /// <para>
     /// So the seed is the durable row (<c>Doc/Architecture/MeshNodeVersioning.md</c>: "the node
-    /// loads its persisted Version verbatim on activation"), MERGED with — not replaced by —
-    /// the routing stream, and every emission passes <see cref="AcceptOwnNodeEmission"/>, which
-    /// drops any node whose <see cref="MeshNode.Version"/> regresses below the highest already
-    /// held. Merge (rather than Concat) is deliberate: a slow or faulted storage read can never
-    /// delay or block activation — the routing stream still seeds, exactly as before — while a
-    /// stale routing emission loses to the durable one on version.
+    /// loads its persisted Version verbatim on activation"), and the routing stream FOLLOWS it,
+    /// with every emission passing <see cref="AcceptOwnNodeEmission"/>, which drops any node
+    /// whose <see cref="MeshNode.Version"/> regresses below the highest already held.
+    /// </para>
+    /// <para>
+    /// 🚨 <b>Concat (durable settles FIRST), not Merge — the #648/#590/#667 activation family.</b>
+    /// The previous <c>Observable.Merge</c> raced the two legs and the framework's initial-store
+    /// build (<c>GetInitialValueAsync</c>) takes the FIRST accepted emission and then DISPOSES
+    /// the subscription — so on any asynchronous backend (Postgres, blob) the synchronously-
+    /// replaying routing cache reliably beat the durable read, the hub seeded an arbitrarily
+    /// stale snapshot as live state, and the late durable emission was never even observed.
+    /// Every write then minted below the durable row, the MonotonicWriteGuard refused it, and
+    /// the <c>AdoptDurableTruth</c> rebase clobbered the acked write in RAM (the #590 "updates
+    /// stop persisting" / #648 acked-write-loss shape). Concat subscribes the routing leg only
+    /// after the durable read has SETTLED (emitted its row-or-null and completed, or degraded to
+    /// Empty on a fault), so when a durable row exists it is by construction the activation
+    /// seed. Activation therefore HOLDS for the duration of one storage read — #667's "wait,
+    /// don't Not-found": messages queue against the initializing stream instead of being
+    /// answered from absent/stale state. A FAULTED read still falls back to the routing leg
+    /// (see <see cref="DurableSeed"/>), with the storage-level MonotonicWriteGuard as the
+    /// backstop against a rollback from that degraded seed.
     /// </para>
     /// <para>
     /// When no stream is supplied (fixtures that bypass routing), falls back
@@ -714,13 +754,23 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         CancellationToken cancellationToken)
     {
         if (_ownNodeStream is not null)
-            // Tag the source and filter DOWNSTREAM of the merge: Observable.Merge serialises
-            // notifications through its gate, so the version bookkeeping and
+            // Tag the source and filter DOWNSTREAM of the concatenation: Concat subscribes the
+            // legs strictly one after the other, so the version bookkeeping and
             // BuildInstanceCollection stay single-threaded — a Where placed on each leg
-            // instead would run on that leg's own thread, outside the gate.
-            return Observable.Merge(
-                    DurableSeed().Select(n => (Node: n, Durable: true)),
-                    _ownNodeStream.Select(n => (Node: n, Durable: false)))
+            // instead would run on that leg's own thread, outside the sequential chain.
+            //
+            // 🚨 Concat, NOT Merge: the durable read must SETTLE before the cache-backed
+            // routing leg may seed — see the contract in this method's doc. The framework's
+            // initial-store build takes the FIRST accepted emission and disposes the
+            // subscription, so under Merge a stale routing replay that won the race became
+            // the activation seed and the late durable row was discarded unobserved.
+            //
+            // The durable row is grafted with the routing node's non-persistable enrichment
+            // (GraftRoutingEnrichment) so a durable-first seed never strips the in-process
+            // HubConfiguration delegate that the compile watcher / first-build kickoff /
+            // data-model areas read off the workspace's own node.
+            return DurableSeed().Select(n => (Node: GraftRoutingEnrichment(n), Durable: true))
+                .Concat(_ownNodeStream.Select(n => (Node: n, Durable: false)))
                 .Where(e => AcceptOwnNodeEmission(e.Node, e.Durable))
                 .Select(e => BuildInstanceCollection(e.Node));
 
@@ -734,6 +784,29 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // queued CreateNodeRequest / GetDataResponse traffic isn't held forever.
         _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
         return Observable.Return(_lastSaved);
+    }
+
+    /// <summary>
+    /// Grafts the ROUTING node's non-persistable enrichment onto the durable activation
+    /// seed: the in-process <see cref="MeshNode.HubConfiguration"/> delegate that
+    /// <c>ResolveHubConfiguration</c> computed cannot survive a round-trip through storage,
+    /// so a durable row read straight from the store never carries it. The durable row stays
+    /// authoritative for VERSION and CONTENT (the write-loss family's invariant); only the
+    /// delegate rides over — and only when the routing snapshot describes the SAME path.
+    /// Consumers of the workspace's own node that key on the delegate (the compile watcher's
+    /// truly-static exclusion, the first-build kickoff, <c>NodeTypeDataModelAreas</c>) then
+    /// behave identically whether the seed came from the durable read or the routing replay.
+    /// Fail-open: no routing snapshot (or no delegate on it) leaves the row untouched.
+    /// </summary>
+    private MeshNode? GraftRoutingEnrichment(MeshNode? durableRow)
+    {
+        if (durableRow is null || durableRow.HubConfiguration is not null)
+            return durableRow;
+        var routing = Volatile.Read(ref _latestRoutingNode);
+        if (routing?.HubConfiguration is null
+            || !string.Equals(routing.Path, durableRow.Path, StringComparison.OrdinalIgnoreCase))
+            return durableRow;
+        return durableRow with { HubConfiguration = routing.HubConfiguration };
     }
 
     /// <summary>
@@ -758,15 +831,18 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     /// logged at Warning with the exception and then dropped. Either way the routing stream
     /// still seeds and the hub comes up exactly as it did before this change.</para>
     ///
-    /// <para><b>No wall-clock bound, on purpose.</b> The merge (not concat) in
-    /// <c>Initialize</c> already makes a stalled read harmless: it cannot delay or block
-    /// activation, it just never contributes. A <c>Timeout</c> would therefore change nothing
-    /// about liveness — it would only be able to make things worse, because a cold-partition
-    /// read under a boot storm legitimately takes tens of seconds and a budget short enough to
-    /// be a useful signal would start SKIPPING the seed on exactly the slow activations that
-    /// need it most. The stall does not go unguarded: <c>MonotonicWriteGuardStorageAdapter</c>
-    /// is the independent backstop — a hub that never got its seed and adopts a stale snapshot
-    /// still cannot roll the store back. That is why the fix is two changes and not one.</para>
+    /// <para><b>No wall-clock bound, on purpose.</b> <c>Initialize</c> concatenates this read
+    /// AHEAD of the routing leg, so a slow read now HOLDS activation for its duration — that is
+    /// the design (#667's "wait, don't Not-found"): a cold-partition read under a boot storm
+    /// legitimately takes tens of seconds, and answering messages from absent/stale state in
+    /// that window is precisely the write-loss family this seed exists to kill. A
+    /// <c>Timeout</c> here would re-open that hole on exactly the slow activations that need
+    /// the durable seed most — the read either settles truthfully (row, null, or a FAULT that
+    /// degrades to the routing leg via the Catch below) or the storage adapter is defective,
+    /// and a defective adapter must surface as held callers' bounded errors, not as a silent
+    /// stale seed. <c>MonotonicWriteGuardStorageAdapter</c> stays the independent backstop —
+    /// a hub whose seed degraded to the cache-backed routing leg still cannot roll the store
+    /// back.</para>
     /// </summary>
     private IObservable<MeshNode?> DurableSeed()
     {

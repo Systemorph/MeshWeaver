@@ -694,6 +694,32 @@ public static class DataExtensions
         IMessageHub hub, IMessageDelivery<PatchDataRequest> request)
     {
         var hubPath = hub.Address.ToString();
+
+        // 🚨 Single-writer activation invariant (#648): a SUPERSEDED activation must
+        // refuse-and-redirect, never merge-and-ack. A hub past Started is quiescing or
+        // disposing — its in-RAM state is about to die and its persistence writes are
+        // dropped by the teardown guards, so applying a patch here manufactures a
+        // Success-acked write whose state the fresh activation never sees (the stale-
+        // second-activation write loss of TwoSiloRecycleConvergence, run 30159928718).
+        // At handler entry the merge turn has provably NOT run, so OwnerDisposing is
+        // exact: the caller's re-enqueue machinery redirects the SAME update to the
+        // fresh activation, where it re-diffs against the freshest state.
+        if (hub.RunLevel > MessageHubRunLevel.Started)
+        {
+            var supersededErr = new MeshNodeError(
+                MeshNodeErrorCode.OwnerDisposing,
+                hubPath,
+                "superseded activation: this owner is quiescing/disposing — the patch was "
+                + "NOT applied; safe to retry against the fresh activation");
+            hub.Post(new PatchDataResponse(false, hub.Version)
+                {
+                    Error = supersededErr.Message,
+                    NodeError = supersededErr,
+                },
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
         try
         {
             var reference = request.Message.Reference;
@@ -881,8 +907,14 @@ public static class DataExtensions
     /// patch can never flap a field — string edits merge by splice, conflicting scalars are refused.
     /// Without base values (legacy / one-off senders) it falls back to the
     /// <see cref="DropStaleMonotonicTriggers"/> guard + plain <see cref="MergePatchRecursive"/>.
+    /// <returns>The number of REFUSED keys — fields whose conflicting write was dropped in favour of
+    /// the newer live value. 🚨 The caller MUST NOT ack a patch as Success when every intended change
+    /// was refused (refusals &gt; 0 and the node is unchanged): a refused write did not land, and
+    /// acking it Success is the silent acked-write-loss of #648. Monotonic-trigger DROPS are not
+    /// counted — a backward move of a strictly-increasing trigger is a legal merge outcome
+    /// (superseded by the newer instant), not a lost write.</returns>
     /// </summary>
-    internal static void ApplyMeshNodeMerge(
+    internal static int ApplyMeshNodeMerge(
         System.Text.Json.Nodes.JsonObject currentNode,
         System.Text.Json.Nodes.JsonObject patchNode,
         bool isMeshNode,
@@ -906,17 +938,23 @@ public static class DataExtensions
                 // request LOST (memex-cloud 2026-07-20 GitSync burst: every explicit Store/Plugin
                 // compile trigger was dropped while mirrors lagged the owner).
                 RebaseMonotonicTriggers(currentNode, patchNode, baseValues, jsonOpts, logger, hubPath);
+                var refused = 0;
                 Serialization.MeshNodePatchMerge.Apply(currentNode, patchNode, baseValues,
-                    onRefuse: key => logger?.LogWarning(
-                        "[MergeGuard] {HubPath}: refused stale/reordered cross-hub write to '{Key}' "
-                        + "(changed since the writer's base) — kept the newer live value.", hubPath, key));
-                return;
+                    onRefuse: key =>
+                    {
+                        refused++;
+                        logger?.LogWarning(
+                            "[MergeGuard] {HubPath}: refused stale/reordered cross-hub write to '{Key}' "
+                            + "(changed since the writer's base) — kept the newer live value.", hubPath, key);
+                    });
+                return refused;
             }
             // No base carried (MCP one-off / legacy sender): keep the monotonic-trigger guard so a bare
             // RequestedReleaseAt patch still can't flap, then merge last-write-wins.
             DropStaleMonotonicTriggers(currentNode, patchNode, jsonOpts, logger, hubPath);
         }
         MergePatchRecursive(currentNode, patchNode);
+        return 0;
     }
 
     /// <summary>
@@ -1139,7 +1177,7 @@ public static class DataExtensions
                     // request) so a reordered/stale write can't flap a field; falls back to the
                     // monotonic-trigger guard + last-write-wins when no base is carried.
                     var preMergeNode = currentNode.DeepClone().AsObject();
-                    ApplyMeshNodeMerge(currentNode, patchNode,
+                    var refusedKeys = ApplyMeshNodeMerge(currentNode, patchNode,
                         typeof(T).FullName == "MeshWeaver.Mesh.MeshNode",
                         request.Message, jsonOpts,
                         hub.ServiceProvider.GetService<ILoggerFactory>()
@@ -1151,10 +1189,19 @@ public static class DataExtensions
                     // commit — the version bump below would otherwise MANUFACTURE the difference
                     // that makes it look like a change. On THIS deferred path a no-op commit also
                     // never emits, so the post-commit subscription would time out and NACK a write
-                    // that in fact succeeded. Ack success up front against the untouched state.
+                    // that in fact succeeded. Ack success up front against the untouched state —
+                    // 🚨 UNLESS the merge REFUSED keys and nothing landed: then the caller's write
+                    // provably did not happen, and acking Success is the #648 acked-write-loss.
+                    // NACK with Conflict so the caller re-reads and re-applies.
                     if (System.Text.Json.Nodes.JsonNode.DeepEquals(preMergeNode, currentNode))
                     {
-                        AckOnce(true);
+                        if (refusedKeys > 0)
+                            AckOnce(false, new MeshNodeError(
+                                MeshNodeErrorCode.Conflict, hubPath,
+                                $"cross-hub write refused: {refusedKeys} field(s) changed on the owner "
+                                + "since the writer's base and nothing was applied — re-read and re-apply"));
+                        else
+                            AckOnce(true);
                         return;
                     }
 
@@ -1441,10 +1488,18 @@ public static class DataExtensions
                                 .Timeout(TimeSpan.FromSeconds(10))
                                 .Subscribe(
                                     _ => RunMergeTurn(deferred: true),
+                                    // 🚨 NOT NotFound (#667): the store never initialized within the
+                                    // bound — that is an activation that has not LOADED, not an owner
+                                    // answering "no such node". A NotFound here is a false negative
+                                    // for a node that exists (it poisons existence checks and the
+                                    // stream cache's negative cache); OwnerNotReady states the truth
+                                    // — the patch was provably never applied — and is auto-retried
+                                    // by the caller against the loaded activation.
                                     _ => AckOnce(false, new MeshNodeError(
-                                        MeshNodeErrorCode.NotFound, hubPath,
-                                        "Target MeshNode not found for patch apply "
-                                        + "(store did not initialize within the bound)")));
+                                        MeshNodeErrorCode.OwnerNotReady, hubPath,
+                                        "owner activation has not loaded its state within the bound — "
+                                        + "the patch was NOT applied; safe to retry once the "
+                                        + "activation has loaded")));
                             hub.RegisterForDisposal(deferSub);
                             return null; // no write this turn — the deferred attempt commits
                         }
@@ -1465,18 +1520,27 @@ public static class DataExtensions
                     // reordered/stale cross-hub patch merge instead of flapping; falls back to the
                     // monotonic-trigger guard + last-write-wins when no base is carried.
                     var preMergeNode = currentNode.DeepClone().AsObject();
-                    ApplyMeshNodeMerge(currentNode, patchNode, isMeshNode: true,
+                    var refusedKeys = ApplyMeshNodeMerge(currentNode, patchNode, isMeshNode: true,
                         request.Message, jsonOpts, mergeGuardLogger, hubPath);
                     // 🚨 Owner-side no-change backstop: a patch whose every value already matches
-                    // the live node (an MCP patch re-asserting current state, a refused three-way
-                    // merge, an importer re-writing unchanged content) must NOT bump the Version,
-                    // persist a history row or tick the change feed. Gate BEFORE the bump — the
-                    // bump itself would otherwise manufacture the difference. Ack success with the
-                    // untouched state; the no-emission path is already handled (AckOnce latches,
-                    // postSub timeout dedupes) exactly like the NotFound no-op above.
+                    // the live node (an MCP patch re-asserting current state, an importer
+                    // re-writing unchanged content) must NOT bump the Version, persist a history
+                    // row or tick the change feed. Gate BEFORE the bump — the bump itself would
+                    // otherwise manufacture the difference. Ack success with the untouched state;
+                    // the no-emission path is already handled (AckOnce latches, postSub timeout
+                    // dedupes) exactly like the NotFound no-op above.
+                    // 🚨 #648 invariant: a merge that REFUSED keys and changed nothing must NOT
+                    // ack Success — the caller's write provably did not land. NACK with Conflict
+                    // so the caller re-reads and re-applies instead of believing the lie.
                     if (System.Text.Json.Nodes.JsonNode.DeepEquals(preMergeNode, currentNode))
                     {
-                        AckOnce(true);
+                        if (refusedKeys > 0)
+                            AckOnce(false, new MeshNodeError(
+                                MeshNodeErrorCode.Conflict, hubPath,
+                                $"cross-hub write refused: {refusedKeys} field(s) changed on the owner "
+                                + "since the writer's base and nothing was applied — re-read and re-apply"));
+                        else
+                            AckOnce(true);
                         return null;
                     }
                     // The OWNER bumps the Version on apply (same rule as the deferred path).

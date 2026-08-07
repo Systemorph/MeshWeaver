@@ -57,9 +57,21 @@ public enum MeshNodeErrorCode
     /// this code is the owner's explicit statement that the write is gone, so the
     /// mirror may safely re-enqueue the SAME update against the fresh activation:
     /// the re-enqueue re-diffs against the freshest state, making it idempotent and
-    /// ordering-safe. Every other NACK code stays terminal (never auto-retried).
+    /// ordering-safe. Together with <see cref="OwnerNotReady"/> these are the only
+    /// auto-retried NACK codes; every other code stays terminal.
     /// </summary>
-    OwnerDisposing = 7
+    OwnerDisposing = 7,
+    /// <summary>
+    /// The owning activation is up but has NOT finished loading its durable state
+    /// (activation seed in flight — a slow storage read, a NodeType assembly reload
+    /// window) — the patch was provably NEVER applied. 🚨 Deliberately distinct from
+    /// <see cref="NotFound"/>: answering "not found" for a node that exists poisons
+    /// every existence check built on the read (and the stream cache's negative
+    /// cache) — the #667 deploy-window write loss. Same retry contract as
+    /// <see cref="OwnerDisposing"/>: the write never happened, so the mirror may
+    /// safely re-enqueue the SAME update once the activation has loaded.
+    /// </summary>
+    OwnerNotReady = 8
 }
 
 /// <summary>

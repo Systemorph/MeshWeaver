@@ -1076,7 +1076,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 var lateErr = resp.NodeError ?? new MeshNodeError(
                                     MeshNodeErrorCode.Unknown, _path!,
                                     resp.Error ?? "Update rejected by owner");
-                                if (lateErr.Code == MeshNodeErrorCode.OwnerDisposing
+                                // OwnerNotReady carries the same provably-never-applied contract
+                                // as OwnerDisposing (activation had not loaded its state — #667),
+                                // so the same idempotent re-enqueue applies.
+                                if (lateErr.Code is MeshNodeErrorCode.OwnerDisposing
+                                        or MeshNodeErrorCode.OwnerNotReady
                                     && attempt < MaxOwnerDisposingReenqueues)
                                 {
                                     diagLogger?.LogWarning(
@@ -1143,6 +1147,31 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             var err = resp.NodeError ?? new MeshNodeError(
                                                 MeshNodeErrorCode.Unknown, _path!,
                                                 resp.Error ?? "Update rejected by owner");
+                                            // 🚨 Refuse-and-REDIRECT (#648): OwnerDisposing /
+                                            // OwnerNotReady are the owner's explicit statement
+                                            // that the patch was provably NEVER applied — a
+                                            // superseded activation quiescing, or an activation
+                                            // whose durable seed had not loaded. Re-enqueue the
+                                            // SAME update against the fresh/loaded activation
+                                            // (the re-diff against the freshest state makes it
+                                            // idempotent), chaining its outcome to THIS caller.
+                                            // Every other code stays a fail-fast terminal.
+                                            if (err.Code is MeshNodeErrorCode.OwnerDisposing
+                                                    or MeshNodeErrorCode.OwnerNotReady
+                                                && attempt < MaxOwnerDisposingReenqueues)
+                                            {
+                                                diagLogger?.LogWarning(
+                                                    "[UpdateRemote] OWNER_NACK_REENQUEUE hub={Hub} target={Path} code={Code} attempt={Attempt} — the patch was never applied; re-enqueueing against the fresh activation",
+                                                    _workspace.Hub.Address, _path, err.Code, attempt + 1);
+                                                using (accessServiceAtEntry is not null && capturedContextAtEntry is not null
+                                                    ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
+                                                    : null)
+                                                {
+                                                    composite.Add(UpdateRemote(update, attempt + 1)
+                                                        .Subscribe(observer.OnNext, observer.OnError, observer.OnCompleted));
+                                                }
+                                                return;
+                                            }
                                             diagLogger?.LogWarning(
                                                 "[UpdateRemote] OWNER_REJECTED hub={Hub} target={Path} code={Code} msg={Msg}",
                                                 _workspace.Hub.Address, _path, err.Code, err.Message);
