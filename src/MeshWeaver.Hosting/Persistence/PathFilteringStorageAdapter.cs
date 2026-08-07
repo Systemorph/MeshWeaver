@@ -61,6 +61,14 @@ public sealed class PathFilteringStorageAdapter(IStorageAdapter inner, Func<stri
         => inner.ListChildPaths(parentPath);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Forwarded unfiltered like <see cref="ListChildPaths"/> — the inner store only
+    /// ever holds paths the predicate accepted, so its enumeration is already scoped.
+    /// </remarks>
+    public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
+        => inner.ListDescendantPaths(rootPath);
+
+    /// <inheritdoc />
     public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
         string fullPath, JsonSerializerOptions options)
         => matches(fullPath)

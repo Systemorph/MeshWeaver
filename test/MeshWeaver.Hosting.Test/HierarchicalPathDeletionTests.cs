@@ -273,4 +273,42 @@ public class HierarchicalPathDeletionTests
         deleted.Should().Equal("a/b", "a");
         fake.Started.Count(p => p == "a/b").Should().Be(1);
     }
+
+    // ─── Virtual (node-less) intermediate levels — issue #839 ────────────────
+
+    [Fact]
+    public async Task Descendants_behind_nodeless_intermediate_levels_are_deleted()
+    {
+        // The set contains 'a/x/y/z' but NO node at 'a/x' or 'a/x/y' — the shape every
+        // satellite dictionary produces ({path}/_Thread/{id}, {nodeType}/Release/{v}).
+        // The old set-connected recursion never visited the branch: 'a/x/y/z' was
+        // counted in the plan, silently skipped, and survived a "successful" delete.
+        var fake = new FakeDeleter();
+        var deleted = await HierarchicalPathDeletion
+            .DeleteSubtree("a", new[] { "a/x/y/z", "a/b" }, fake.Delete)
+            .Should().Emit();
+
+        deleted.Should().HaveCount(3);
+        deleted.Should().Contain("a/x/y/z");
+        deleted.Should().Contain("a/b");
+        deleted.Last().Should().Be("a", "root must be deleted last");
+        // Virtual levels carry no node — deleteOne must never fire for them.
+        fake.Started.Should().NotContain("a/x");
+        fake.Started.Should().NotContain("a/x/y");
+    }
+
+    [Fact]
+    public async Task Nodeless_level_descendant_deleted_before_its_ancestor_node()
+    {
+        // Node at 'a/nt' AND a release satellite at 'a/nt/Release/1' with no node at
+        // 'a/nt/Release': bottom-up order must still hold across the virtual level —
+        // the satellite goes first, then 'a/nt', then the root.
+        var fake = new FakeDeleter();
+        var deleted = await HierarchicalPathDeletion
+            .DeleteSubtree("a", new[] { "a/nt", "a/nt/Release/1" }, fake.Delete)
+            .Should().Emit();
+
+        deleted.Should().Equal("a/nt/Release/1", "a/nt", "a");
+        fake.Started.Should().NotContain("a/nt/Release");
+    }
 }

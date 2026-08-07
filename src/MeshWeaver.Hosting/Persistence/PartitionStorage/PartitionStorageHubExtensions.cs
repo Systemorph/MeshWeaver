@@ -40,7 +40,8 @@ public static class PartitionStorageHubExtensions
             .WithHandler<DeleteBatchRequest>(HandleDeleteBatch)
             .WithHandler<ReadNodeRequest>(HandleReadNode)
             .WithHandler<ExistsRequest>(HandleExists)
-            .WithHandler<ListChildPathsRequest>(HandleListChildPaths);
+            .WithHandler<ListChildPathsRequest>(HandleListChildPaths)
+            .WithHandler<ListDescendantPathsRequest>(HandleListDescendantPaths);
     }
 
     // ── Handlers ─────────────────────────────────────────────────────────
@@ -112,6 +113,26 @@ public static class PartitionStorageHubExtensions
             .Subscribe(
                 exists => hub.Post(new ExistsResponse(exists), o => o.ResponseFor(request)),
                 _ => hub.Post(new ExistsResponse(false), o => o.ResponseFor(request)));
+
+        return request.Processed();
+    }
+
+    private static IMessageDelivery HandleListDescendantPaths(
+        IMessageHub hub, IMessageDelivery<ListDescendantPathsRequest> request)
+    {
+        var adapter = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
+
+        // Errors are FORWARDED (unlike ListChildPaths' empty fallback): the caller is
+        // the recursive-delete verifier, and an enumeration that failed must fail the
+        // delete loudly — an empty answer here would falsely verify a drained subtree.
+        adapter.ListDescendantPaths(request.Message.RootPath)
+            .Subscribe(
+                paths => hub.Post(
+                    new ListDescendantPathsResponse(paths.ToImmutableList()),
+                    o => o.ResponseFor(request)),
+                ex => hub.Post(
+                    new ListDescendantPathsResponse(ImmutableList<string>.Empty, Error: ex.Message),
+                    o => o.ResponseFor(request)));
 
         return request.Processed();
     }
