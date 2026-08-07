@@ -134,6 +134,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         // InstalledFiles to produce the added/modified/removed list; null when the
                         // module ships no manifest.lock (legacy commit-sha comparison applies).
                         ManifestFiles = mm?.Files,
+                        Requires = peeked.Requires,
                         Category = peeked.Category,
                         Icon = peeked.Icon,
                         Price = peeked.Price,
@@ -160,7 +161,8 @@ public sealed class NodeRepoPackageSource : IPackageSource
 
     private readonly record struct PeekedRoot(
         string? NodeType, string? Name, string? Description,
-        string? Category, string? Icon, decimal? Price, string? Currency, string? Poster);
+        string? Category, string? Icon, decimal? Price, string? Currency, string? Poster,
+        ImmutableList<string> Requires);
 
     // Reads the node's type/name/description — plus the storefront card fields (category/icon on
     // the node, price/currency/poster inside the content) — straight from the JSON: no MeshNode
@@ -175,6 +177,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
             decimal? price = null;
             string? currency = null;
             string? poster = null;
+            var requires = ImmutableList<string>.Empty;
             if (r.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Object)
             {
                 if (content.TryGetProperty("price", out var p) && p.ValueKind == JsonValueKind.Number
@@ -184,6 +187,16 @@ public sealed class NodeRepoPackageSource : IPackageSource
                     currency = c.GetString();
                 if (content.TryGetProperty("poster", out var po) && po.ValueKind == JsonValueKind.String)
                     poster = po.GetString();
+                // 🚨 The plugin's declared dependencies ("Store@^1.0.0"). Read here because an
+                // UNATTENDED install has to order by them: installing a package before the one it
+                // depends on fails outright ("NodeType(s) not registered: Training/Tour" — Chess
+                // installed before Training on the first live run). A human clicking Install picks
+                // the order themselves, which is why this stayed unread for so long.
+                if (content.TryGetProperty("requires", out var req) && req.ValueKind == JsonValueKind.Array)
+                    requires = req.EnumerateArray()
+                        .Where(e => e.ValueKind == JsonValueKind.String)
+                        .Select(e => e.GetString()!)
+                        .ToImmutableList();
             }
             return new PeekedRoot(
                 r.TryGetProperty("nodeType", out var nt) ? nt.GetString() : null,
@@ -191,7 +204,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 r.TryGetProperty("description", out var d) ? d.GetString() : null,
                 r.TryGetProperty("category", out var cat) ? cat.GetString() : null,
                 r.TryGetProperty("icon", out var ic) ? ic.GetString() : null,
-                price, currency, poster);
+                price, currency, poster, requires);
         }
         catch (JsonException ex)
         {
