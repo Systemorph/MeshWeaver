@@ -82,7 +82,7 @@ public static class PluginCatalogConfigurationExtensions
 
     // NOTE: the old AddPluginCatalog(sourceRepoPath, …) overload — which seeded a browsable
     // "Plugins" Space + a PluginCatalog node — was removed. The catalog is now a platform-admin
-    // Settings tab (PluginCatalogSettingsTab) reading a REMOTE registry over HTTP, and a registry
+    // About tab (read-only installed inventory; provisioning is the Store's job), and a registry
     // instance exposes its source via /api/plugins. Install records still live in the "Plugins"
     // partition (as Package nodes), but there is no browsable Space root, so no user can navigate
     // into it and hit "Access denied on 'Plugins'".
