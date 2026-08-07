@@ -193,6 +193,15 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
         => inner.ListChildPaths(parentPath);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Explicit forward — the interface default would walk <c>this.ListChildPaths</c>
+    /// level by level and strip the backend's native prefix enumeration (the Postgres
+    /// satellite-UNION), the same trap <see cref="ResolvePath"/> documents.
+    /// </remarks>
+    public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
+        => inner.ListDescendantPaths(rootPath);
+
+    /// <inheritdoc />
     public IObservable<bool> Exists(string path) => inner.Exists(path);
 
     /// <inheritdoc />

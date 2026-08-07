@@ -89,16 +89,23 @@ public static class PersistenceExtensions
             return;
         }
 
-        // 🚨 MonotonicWriteGuard is the OUTERMOST decorator — a refused (backward) write must
-        // not produce a version-history snapshot either, so it has to sit ABOVE the
-        // version writer, not below it. See MonotonicWriteGuardStorageAdapter for why a
-        // regressing MeshNode.Version is never a legitimate newer state.
+        // 🚨 SubtreeDeletionGuard is the OUTERMOST decorator — a write refused because its
+        // subtree is being recursively deleted must produce NO side effect anywhere below
+        // (no monotonic high-water observation, no version-history snapshot). Below it,
+        // MonotonicWriteGuard sits ABOVE the version writer for the same reason: a refused
+        // (backward) write must not produce a version-history snapshot either. The deletion
+        // guard resolves RecentlyDeletedRegistry lazily (null on meshes without Graph →
+        // pass-through) — the SAME mesh-scoped instance the delete handler opens its
+        // BeginSubtreeDeletion scope on.
         services.AddSingleton<IStorageAdapter>(sp =>
-            new MonotonicWriteGuardStorageAdapter(
-                new VersionWritingStorageAdapter(
-                    sp.GetRequiredKeyedService<IStorageAdapter>(InnerStorageAdapterKey),
-                    sp.GetService<IVersionQuery>()),
-                sp.GetService<ILogger<MonotonicWriteGuardStorageAdapter>>()));
+            new SubtreeDeletionGuardStorageAdapter(
+                new MonotonicWriteGuardStorageAdapter(
+                    new VersionWritingStorageAdapter(
+                        sp.GetRequiredKeyedService<IStorageAdapter>(InnerStorageAdapterKey),
+                        sp.GetService<IVersionQuery>()),
+                    sp.GetService<ILogger<MonotonicWriteGuardStorageAdapter>>()),
+                sp.GetService<MeshWeaver.Mesh.Services.RecentlyDeletedRegistry>(),
+                sp.GetService<ILogger<SubtreeDeletionGuardStorageAdapter>>()));
 
         // Sentinel so repeat calls (Orleans default + host-explicit persistence)
         // see the prior decoration and bail above instead of stacking another

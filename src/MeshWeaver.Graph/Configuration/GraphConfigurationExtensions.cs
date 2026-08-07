@@ -249,10 +249,11 @@ public static class GraphConfigurationExtensions
                     // PartitionDefinition.DefaultActivityParentPath without
                     // bridging an async catalog query into the sync handler.
                     services.AddSingleton<PartitionRegistry>();
-                    // Mesh-scoped "delete wins" tombstone shared across every per-node hub —
-                    // stops a hub that (re)activates after a delete from resurrecting the row
-                    // via its activation-triggered save. See RecentlyDeletedRegistry.
-                    services.AddSingleton<RecentlyDeletedRegistry>();
+                    // RecentlyDeletedRegistry is registered at the MESH ROOT (MeshBuilder.Register)
+                    // — NOT here. A hub-level registration created a second instance, and the
+                    // SubtreeDeletionGuardStorageAdapter (persistence container) then guarded a
+                    // registry no delete handler ever opened a scope on (#839). Hub SPs fall back
+                    // to the root, so consumers here resolve the shared root instance.
                     // Mesh-scoped deck sibling-slide cache: one shared, replayed sibling
                     // query per deck so slide navigation never re-runs the query per
                     // slide render (see DeckSlidesCache / SlideLayoutAreas.ObserveDeckSlides).

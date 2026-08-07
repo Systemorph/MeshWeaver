@@ -257,6 +257,28 @@ public sealed class PersistenceService : IStorageAdapter
                 })
             .Select(acc => ((IEnumerable<string>)acc.Nodes, (IEnumerable<string>)acc.Dirs));
 
+    /// <summary>
+    /// Authoritative subtree enumeration for the recursive-delete planner and its
+    /// post-delete verification: union of every WRITABLE provider's
+    /// <see cref="IStorageAdapter.ListDescendantPaths"/>. Writable-only is deliberate —
+    /// the set answers "what must a recursive delete remove / what survived it", and
+    /// read-only providers (Embedded, Static) can neither be deleted from nor leak
+    /// survivors. Errors propagate: an enumeration that fails must fail the delete
+    /// loudly instead of reporting a drained subtree it never actually saw.
+    /// </summary>
+    public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
+        => _writable
+            .Select(p => p.Adapter.ListDescendantPaths(rootPath))
+            .Merge()
+            .Aggregate(
+                seed: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                accumulator: (acc, paths) =>
+                {
+                    foreach (var path in paths ?? Array.Empty<string>()) acc.Add(path);
+                    return acc;
+                })
+            .Select(acc => (IReadOnlyCollection<string>)acc);
+
     /// <inheritdoc />
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
         => _allOrdered

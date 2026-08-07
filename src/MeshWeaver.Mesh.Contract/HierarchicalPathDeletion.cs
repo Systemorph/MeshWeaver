@@ -16,6 +16,18 @@ namespace MeshWeaver.Mesh;
 /// tree progress independently — a leaf at depth 5 doesn't have to wait for
 /// an unrelated leaf at the same depth to finish.</para>
 ///
+/// <para><b>Virtual (node-less) levels are traversed, not skipped.</b> A path
+/// set routinely contains descendants whose intermediate segments carry no
+/// node of their own — satellite dictionaries like <c>{path}/_Thread/{id}</c>,
+/// compile-watcher releases at <c>{nodeType}/Release/{version}</c>, source
+/// folders at <c>{space}/Source/{file}</c>. The traversal recurses through
+/// those virtual levels (grouping descendants by their next path segment) and
+/// invokes <c>deleteOne</c> ONLY for paths actually present in the
+/// set. The previous shape recursed only into paths present in the set, so an
+/// entire branch anchored under a node-less segment was silently never visited
+/// — the delete reported success while the branch survived in storage
+/// (issue #839).</para>
+///
 /// <para>Fail-fast semantics: when the per-node delegate fires
 /// <c>OnError</c> for some descendant, the per-subtree <c>Observable.Merge</c>
 /// propagates the error, sibling subtrees cancel, and the parent is **not**
@@ -35,15 +47,16 @@ public static class HierarchicalPathDeletion
     /// </summary>
     /// <param name="rootPath">The subtree root. Added to the path set if absent.</param>
     /// <param name="descendantPaths">
-    /// Strict descendants of <paramref name="rootPath"/> (i.e., results of a
-    /// <c>scope:descendants</c> query). The root itself MUST NOT be included
+    /// Strict descendants of <paramref name="rootPath"/> (i.e., results of an
+    /// authoritative storage enumeration). The root itself MUST NOT be included
     /// to avoid an infinite re-entry through the same delete request.
     /// </param>
     /// <param name="deleteOne">
     /// Per-node delete delegate. Returns <c>IObservable&lt;Unit&gt;</c> that
     /// emits once + <c>OnCompleted</c> on success, or <c>OnError</c> on
     /// failure. Called once per path in the set, only after all that path's
-    /// descendants have already completed.
+    /// descendants have already completed. Never called for virtual
+    /// (node-less) intermediate levels.
     /// </param>
     /// <returns>
     /// An observable emitting (once) the ordered list of paths that were
@@ -79,22 +92,38 @@ public static class HierarchicalPathDeletion
         ImmutableList<string>.Builder deleted)
     {
         var prefix = nodePath + "/";
-        var children = allPaths
-            .Where(p => p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-                && p.IndexOf('/', prefix.Length) < 0)
+        // Every direct child LEVEL under nodePath that anchors at least one
+        // path in the set — whether or not the level itself is in the set.
+        // Grouping by the next path segment (rather than filtering the set for
+        // exact depth+1 members) is what carries the traversal across virtual
+        // node-less levels (`{path}/_Thread`, `{nodeType}/Release`, …) so the
+        // real descendants beneath them are still visited and deleted.
+        var childLevels = allPaths
+            .Where(p => p.Length > prefix.Length
+                && p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Select(p =>
+            {
+                var next = p.IndexOf('/', prefix.Length);
+                return next < 0 ? p : p[..next];
+            })
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToImmutableList();
 
-        var childOps = children.Count == 0
+        var childOps = childLevels.Count == 0
             ? Observable.Return(string.Empty)
             : Observable
-                .Merge(children.Select(c =>
+                .Merge(childLevels.Select(c =>
                     DeleteSubtreeImpl(c, allPaths, deleteOne, deleted)))
                 .LastOrDefaultAsync();
 
-        return childOps.SelectMany(_ => deleteOne(nodePath)
-            .Do(deletedPath =>
-            {
-                lock (deleted) deleted.Add(deletedPath);
-            }));
+        return childOps.SelectMany(_ => allPaths.Contains(nodePath)
+            ? deleteOne(nodePath)
+                .Do(deletedPath =>
+                {
+                    lock (deleted) deleted.Add(deletedPath);
+                })
+            // Virtual level: no node lives here — nothing to delete, just
+            // propagate completion upward after the descendants are gone.
+            : Observable.Return(nodePath));
     }
 }

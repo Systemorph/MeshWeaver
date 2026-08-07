@@ -184,6 +184,29 @@ public sealed class RoutingProxyAdapter : IStorageAdapter
                     .Select(d => ((IEnumerable<string>)d.Message.NodePaths, (IEnumerable<string>)d.Message.DirectoryPaths)));
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Routed to the partition hub owning the root's partition (every strict
+    /// descendant shares the root's first segment) so the answer comes from the
+    /// backing adapter's NATIVE prefix enumeration — the interface default would
+    /// degrade into a level-by-level <see cref="ListChildPathsRequest"/> walk that
+    /// under-enumerates flat single-level backends. A reported error is re-thrown:
+    /// the caller is the recursive-delete verifier and must fail loudly rather
+    /// than treat an unenumerated subtree as drained.
+    /// </remarks>
+    public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
+        => _router.AddressFor(rootPath).SelectMany(addr =>
+            addr is null
+                ? Observable.Return<IReadOnlyCollection<string>>(ImmutableList<string>.Empty)
+                : _callerHub
+                    .Observe<ListDescendantPathsResponse>(
+                        new ListDescendantPathsRequest(rootPath), o => o.WithTarget(addr))
+                    .Take(1)
+                    .SelectMany(d => d.Message.Error != null
+                        ? Observable.Throw<IReadOnlyCollection<string>>(
+                            new InvalidOperationException(d.Message.Error))
+                        : Observable.Return<IReadOnlyCollection<string>>(d.Message.Paths)));
+
     // ── Partition objects: not yet routed via hub messages. ─────────────
     //
     // The new partition-storage hub config does not yet carry partition-

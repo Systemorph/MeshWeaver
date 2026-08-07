@@ -191,6 +191,15 @@ public record MeshBuilder
             })
             .AddSingleton(BuildHub)
             .AddSingleton<AccessService>()
+            // Mesh-ROOT "delete wins" tombstone + subtree-deletion scope. ONE instance,
+            // registered at the root deliberately: the delete handler resolves it off a
+            // hub ServiceProvider (which falls back to the root) while the
+            // SubtreeDeletionGuardStorageAdapter resolves it inside the persistence
+            // container — a hub-level registration (the previous home, in AddGraph)
+            // created a SECOND instance there, so the guard checked a registry no delete
+            // ever opened a scope on and silently passed every write under a subtree
+            // being deleted (#839's write-guard test caught it).
+            .AddSingleton<Services.RecentlyDeletedRegistry>()
             // Controlled I/O pools — mesh-scoped governor over the shared
             // ThreadPool for genuinely-async / sync-blocking leaves (file system,
             // blob, …). Resolved by leaf adapters via IoPoolRegistry; dies with

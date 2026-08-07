@@ -312,6 +312,16 @@ internal sealed class SnowflakePathRoutingAdapter : IStorageAdapter
                 ? a.ListChildPaths(parentPath)
                 : Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []));
 
+    /// <summary>
+    /// Routes to the per-schema adapter's native satellite-UNION descendant
+    /// enumeration (every strict descendant shares the root's first segment).
+    /// Unroutable segment → nothing stored here → empty.
+    /// </summary>
+    public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
+        => AdapterForRead(rootPath) is { } a
+            ? a.ListDescendantPaths(rootPath)
+            : Observable.Return<IReadOnlyCollection<string>>([]);
+
     /// <inheritdoc/>
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
         => AdapterForRead(nodePath) is { } a

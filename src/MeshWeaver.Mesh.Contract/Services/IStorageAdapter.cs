@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Text.Json;
 
@@ -114,6 +115,54 @@ public interface IStorageAdapter
     /// </summary>
     /// <param name="parentPath">Parent path (empty/null for root level).</param>
     IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath);
+
+    /// <summary>
+    /// Enumerates every STRICT descendant node path under <paramref name="rootPath"/>
+    /// (the root itself is excluded), straight from storage — the AUTHORITATIVE
+    /// subtree enumeration the recursive-delete planner and its post-delete
+    /// verification are built on (issue #839: planning off the eventually-consistent
+    /// query catalog let stale/late rows survive a "successful" recursive delete).
+    /// Emits one complete snapshot and completes.
+    ///
+    /// <para>The default walks <see cref="ListChildPaths"/> level by level, recursing
+    /// into node paths AND directory paths — correct for backends whose child listing
+    /// surfaces intermediate directory levels (FileSystem, InMemory, Caching).
+    /// Backends whose listing is a flat single-level row scan (Postgres and friends)
+    /// MUST override with a native prefix enumeration across every table of the
+    /// partition, and decorators MUST forward to their inner adapter so the native
+    /// override survives the chain (same rule as <see cref="ResolvePath"/>).</para>
+    /// </summary>
+    IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
+        => System.Reactive.Linq.Observable.Select(
+            WalkDescendantPaths(this, rootPath),
+            set => (IReadOnlyCollection<string>)set.ToImmutableList());
+
+    /// <summary>
+    /// Level-by-level descendant walk over <see cref="ListChildPaths"/>: node paths at
+    /// each level are collected, and BOTH node paths and directory paths are recursed
+    /// into (a node can have children of its own; a directory is a node-less
+    /// intermediate level that still anchors real descendants).
+    /// </summary>
+    private static IObservable<System.Collections.Immutable.ImmutableHashSet<string>> WalkDescendantPaths(
+        IStorageAdapter adapter, string parentPath)
+        => System.Reactive.Linq.Observable.SelectMany(
+            System.Reactive.Linq.Observable.Take(adapter.ListChildPaths(parentPath), 1),
+            level =>
+            {
+                var nodes = (level.NodePaths ?? Enumerable.Empty<string>())
+                    .Where(p => !string.IsNullOrEmpty(p))
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                var recurseInto = nodes.Union(
+                    (level.DirectoryPaths ?? Enumerable.Empty<string>())
+                        .Where(p => !string.IsNullOrEmpty(p)));
+                if (recurseInto.Count == 0)
+                    return System.Reactive.Linq.Observable.Return(nodes);
+                return System.Reactive.Linq.Observable.Aggregate(
+                    System.Reactive.Linq.Observable.Merge(
+                        recurseInto.Select(child => WalkDescendantPaths(adapter, child))),
+                    nodes,
+                    (acc, sub) => acc.Union(sub));
+            });
 
     /// <summary>Existence check for a single node path.</summary>
     IObservable<bool> Exists(string path);

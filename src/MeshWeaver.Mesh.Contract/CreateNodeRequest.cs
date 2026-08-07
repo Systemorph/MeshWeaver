@@ -242,6 +242,18 @@ public record DeleteNodeRequest(string Path) : IRequest<DeleteNodeResponse>
     /// UI can render a confirmation dialog. The second call — with this flag set — proceeds.
     /// </summary>
     public bool ConfirmWarnings { get; init; }
+
+    /// <summary>
+    /// Root of the recursive delete this request is a leaf of, set ONLY by the subtree fan-out.
+    /// Per-leaf validators use it the same way <see cref="ValidateDeleteRequest.RootPath"/> is
+    /// used in pre-flight: an invariant that is moot when the whole subtree is going away (e.g.
+    /// the space-admin "keep at least one admin" rule for an <c>_Access</c> grant whose space is
+    /// itself being deleted) exempts the leaf. Without this, the fan-out's per-leaf delete
+    /// re-enters the handler with no cascade context and the validator refuses the grant —
+    /// pre-flight (which carries the root) passes while the actual delete fails. Guard-rail,
+    /// not a security boundary: the leaf's own Delete permission check still applies.
+    /// </summary>
+    public string? CascadeRootPath { get; init; }
 }
 
 /// <summary>

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -154,6 +155,26 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
 
             return Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(
                 (nodePaths, directoryPaths));
+        });
+
+    /// <summary>
+    /// Native descendant enumeration: a direct prefix scan over the path-keyed
+    /// store — exact and race-free against the dictionary that IS the storage of
+    /// record. Declared on this class (not inherited from the base) for the same
+    /// interface-slot reason as <see cref="ResolvePath"/> below.
+    /// </summary>
+    public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
+        => Observable.Defer(() =>
+        {
+            var root = Norm(rootPath);
+            if (string.IsNullOrEmpty(root))
+                return Observable.Return<IReadOnlyCollection<string>>(
+                    _nodes.Keys.ToImmutableList());
+            var prefix = root + "/";
+            return Observable.Return<IReadOnlyCollection<string>>(
+                _nodes.Keys
+                    .Where(k => k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    .ToImmutableList());
         });
 
     /// <inheritdoc />

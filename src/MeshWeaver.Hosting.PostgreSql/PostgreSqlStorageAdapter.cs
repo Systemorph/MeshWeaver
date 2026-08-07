@@ -720,6 +720,84 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         return (paths, Enumerable.Empty<string>());
     }
 
+    /// <summary>
+    /// Native authoritative descendant enumeration: ONE round-trip UNION across the
+    /// partition's primary <c>mesh_nodes</c> table AND every satellite table named in
+    /// <see cref="PartitionDefinition.TableMappings"/> (threads, access, activities,
+    /// annotations, code, …), matching every row whose namespace equals the root or is
+    /// prefixed by it. This is what the recursive-delete planner and its post-delete
+    /// verification run on — the interface default's <see cref="ListChildPaths"/> walk
+    /// cannot work here because the PG child listing is a flat single-table
+    /// namespace-equality scan with no directory levels, so it would never descend into
+    /// node-less intermediate segments (<c>{path}/_Thread/{id}</c>,
+    /// <c>{nodeType}/Release/{version}</c>) — exactly the rows that survived (issue #839).
+    /// An absent (never-provisioned) schema means nothing to enumerate → empty.
+    /// </summary>
+    public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
+        => _readPool.Invoke(ct => ListDescendantPathsAsyncCore(rootPath, ct))
+            .Catch<IReadOnlyCollection<string>, Exception>(ex => IsUndefinedTable(ex)
+                ? Observable.Return<IReadOnlyCollection<string>>([])
+                : Observable.Throw<IReadOnlyCollection<string>>(ex));
+
+    private async Task<IReadOnlyCollection<string>> ListDescendantPathsAsyncCore(
+        string rootPath, CancellationToken ct)
+    {
+        var normalizedRoot = NormalizePath(rootPath);
+
+        // Primary + every distinct satellite table (case-insensitive dedup —
+        // multiple suffixes can map to the same table, e.g. _Comment / _Approval /
+        // _Tracking all → annotations). Same table set as ResolvePathAsyncCore.
+        var tables = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "mesh_nodes" };
+        if (_partitionDefinition?.TableMappings is { } mappings)
+            foreach (var t in mappings.Values)
+                if (!string.IsNullOrEmpty(t))
+                    tables.Add(t);
+
+        // A descendant row's namespace either equals the root (direct children) or is
+        // prefixed by `{root}/`. 🚨 The prefix predicate is LIKE with an explicit
+        // ESCAPE and an escaped pattern: mesh paths routinely contain `_`
+        // (`X/_Thread`), which is a single-char LIKE wildcard — unescaped it would
+        // match sibling subtrees (`X/aThread/…`) into the DELETION plan.
+        var branches = tables.Select(t =>
+        {
+            var qualified = string.IsNullOrEmpty(_schemaName)
+                ? $"\"{t}\""
+                : $"\"{_schemaName}\".\"{t}\"";
+            return string.IsNullOrEmpty(normalizedRoot)
+                ? $"SELECT namespace, id FROM {qualified}"
+                : $"SELECT namespace, id FROM {qualified} WHERE namespace = $1 OR namespace LIKE $2 ESCAPE '\\'";
+        });
+        var sql = string.Join("\n UNION ALL\n", branches);
+
+        await using var cmd = _dataSource.CreateCommand(sql);
+        if (!string.IsNullOrEmpty(normalizedRoot))
+        {
+            cmd.Parameters.AddWithValue(normalizedRoot);
+            cmd.Parameters.AddWithValue(EscapeLikePattern(normalizedRoot) + "/%");
+        }
+
+        var paths = new List<string>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            var ns = reader.GetString(0);
+            var id = reader.GetString(1);
+            paths.Add(string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}");
+        }
+
+        return paths;
+    }
+
+    /// <summary>
+    /// Escapes the LIKE wildcards (<c>\</c>, <c>%</c>, <c>_</c>) in a literal path so it can
+    /// be used as a LIKE prefix with <c>ESCAPE '\'</c>.
+    /// </summary>
+    private static string EscapeLikePattern(string literal)
+        => literal
+            .Replace("\\", "\\\\")
+            .Replace("%", "\\%")
+            .Replace("_", "\\_");
+
     /// <inheritdoc />
     public IObservable<bool> Exists(string path)
         => WithTransientRetry(() => _ioPool.Invoke(ct => ExistsAsyncCore(path, ct)), "Exists")

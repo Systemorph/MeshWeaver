@@ -86,4 +86,94 @@ public sealed class RecentlyDeletedRegistry
         }
         return true;
     }
+
+    // ─── Active subtree deletions ────────────────────────────────────────────
+    //
+    // Unlike the TTL tombstones above (a backstop against the resurrect-save
+    // race), an ACTIVE subtree deletion is a hard invariant with an explicit
+    // lifetime: HandleDeleteNodeRequest opens a scope BEFORE it enumerates the
+    // deletion plan and closes it when the operation completes (success OR
+    // failure — the scope rides an Observable.Using, so error/timeout/unsubscribe
+    // all release it). While the scope is open, the storage write guard
+    // (SubtreeDeletionGuardStorageAdapter) refuses every write at or under the
+    // root — so a node created mid-delete (e.g. a compile-watcher Release
+    // satellite) cannot land under a subtree that is being torn down. No timer,
+    // no TTL: the invariant holds exactly as long as the delete is in flight.
+
+    private readonly ConcurrentDictionary<string, int> _activeSubtreeDeletions =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Marks <paramref name="rootPath"/>'s subtree as being deleted. Ref-counted, so two
+    /// concurrent deletes of the same root (double-click) each hold the scope independently.
+    /// Dispose the returned scope when the delete operation completes — success or failure.
+    /// </summary>
+    public IDisposable BeginSubtreeDeletion(string rootPath)
+    {
+        if (string.IsNullOrEmpty(rootPath))
+            return EmptyScope.Instance;
+        _activeSubtreeDeletions.AddOrUpdate(rootPath, 1, (_, count) => count + 1);
+        return new SubtreeDeletionScope(this, rootPath);
+    }
+
+    /// <summary>
+    /// True when <paramref name="path"/> equals — or lies under — a subtree root whose
+    /// deletion is currently in flight. <paramref name="deletionRoot"/> carries the matching
+    /// root for diagnostics. The active-set is empty outside delete operations, so the scan
+    /// is O(active deletes), i.e. effectively free on the write hot path.
+    /// </summary>
+    public bool IsUnderActiveDeletion(string? path, out string? deletionRoot)
+    {
+        deletionRoot = null;
+        if (string.IsNullOrEmpty(path) || _activeSubtreeDeletions.IsEmpty)
+            return false;
+        foreach (var kv in _activeSubtreeDeletions)
+        {
+            var root = kv.Key;
+            if (path.Length < root.Length
+                || !path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (path.Length == root.Length || path[root.Length] == '/')
+            {
+                deletionRoot = root;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void EndSubtreeDeletion(string rootPath)
+    {
+        while (true)
+        {
+            if (!_activeSubtreeDeletions.TryGetValue(rootPath, out var count))
+                return;
+            if (count <= 1)
+            {
+                if (_activeSubtreeDeletions.TryRemove(
+                        new KeyValuePair<string, int>(rootPath, count)))
+                    return;
+            }
+            else if (_activeSubtreeDeletions.TryUpdate(rootPath, count - 1, count))
+                return;
+        }
+    }
+
+    private sealed class SubtreeDeletionScope(RecentlyDeletedRegistry registry, string rootPath)
+        : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                registry.EndSubtreeDeletion(rootPath);
+        }
+    }
+
+    private sealed class EmptyScope : IDisposable
+    {
+        public static readonly EmptyScope Instance = new();
+        public void Dispose() { }
+    }
 }
