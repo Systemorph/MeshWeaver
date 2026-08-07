@@ -70,24 +70,30 @@ app.UseStaticFiles();
 app.UseMeshWeaverGrpcWeb();     // browser / React-Native gRPC-web (Connect + Deliver)
 app.MapMeshWeaverGrpc();        // the mesh gRPC service (Open + Connect + Deliver)
 
-// Serve mesh content collections at /static/{collection}/{filePath} — e.g. the NodeType icons
-// (/static/NodeTypeIcons/box.svg) the doc headers <img> reference. The full Blazor portal maps this
-// (BlazorHostingExtensions.MapStaticContent); the headless sidecar didn't, so those icons 404'd and the
-// React-Native client couldn't render them. AddGraph() already registers the NodeTypeIcons collection
-// (embedded resources) on the mesh hub — this just exposes the "known collection" pattern over HTTP.
-app.MapGet("/static/{**path}", async (HttpContext ctx, string path) =>
+// 🚨 PUBLIC BUILD ASSETS ONLY — /static/{mount}/{file} (issue #587).
+//
+// The React-Native client's doc headers reference /static/NodeTypeIcons/box.svg; the full Blazor
+// portal serves those from the mesh's StaticAssetMounts, and this headless sidecar mirrors it.
+// A mount reads its bytes straight out of a shipped assembly's manifest — no content service, no
+// hub, no identity. That is the whole contract: this endpoint performs NO access check, so nothing
+// access-controlled may be reachable through it.
+//
+// It used to resolve ANY registered content collection by name, which made every partition's
+// uploads world-readable here (the sidecar resolves no identity at all). Mesh content is served by
+// the portal's access-controlled /api/content route instead; this sidecar does not serve it.
+app.MapGet("/static/{**path}", (HttpContext ctx, string path) =>
 {
-    var slash = path.IndexOf('/');
+    var mounts = app.Services.GetRequiredService<IMessageHub>().ServiceProvider
+        .GetServices<StaticAssetMount>();
+    // Decode FIRST, then validate: `%2E%2E` survives the server's URL normalization and only
+    // becomes `..` here (StaticAssetMount.Open guards the decoded path).
+    var decoded = string.Join('/', path.Split('/').Select(Uri.UnescapeDataString));
+    var slash = decoded.IndexOf('/');
     if (slash <= 0) return Results.NotFound();
-    // Match BlazorHostingExtensions: collection names encode '/' as '~', and file-path segments are
-    // percent-encoded - decode both so names/files with spaces or UTF-8 resolve instead of false-404ing.
-    var collection = ContentCollectionsExtensions.DecodeCollectionName(path[..slash]);   // "~" -> "/"
-    var filePath = string.Join('/', path[(slash + 1)..].Split('/').Select(Uri.UnescapeDataString));
-    var content = app.Services.GetRequiredService<IMessageHub>().ServiceProvider.GetService<IContentService>();
-    if (content is null) return Results.NotFound();
-    // HTTP-boundary await: the read leaf runs on the collection's IIoPool; the endpoint awaits
-    // the replayed single emission only.
-    var stream = await content.GetContent(collection, filePath).Take(1);
+    var segment = decoded[..slash];
+    var filePath = decoded[(slash + 1)..];
+    var mount = mounts.FirstOrDefault(m => string.Equals(m.Segment, segment, StringComparison.OrdinalIgnoreCase));
+    var stream = mount?.Open(filePath);
     if (stream is null) return Results.NotFound();
     var contentType = filePath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "image/svg+xml"
         : filePath.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png"

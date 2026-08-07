@@ -3,7 +3,7 @@ NodeType: Markdown
 Name: FutuRe
 Category: Insurance & Reinsurance
 Description: Insurance group with three business units, local-to-group LoB mapping, and profitability analysis
-Icon: /static/storage/content/FutuRe/icon.svg
+Icon: /api/content/FutuRe/icon.svg
 ---
 
 Welcome to **FutuRe Insurance & Reinsurance** — a fictional insurance group that demonstrates how MeshWeaver turns fragmented data into a governed, composable data mesh.

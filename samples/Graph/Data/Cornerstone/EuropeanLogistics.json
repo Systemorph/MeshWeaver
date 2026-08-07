@@ -5,7 +5,7 @@
   "nodeType": "Cornerstone/Insured",
   "category": "Clients",
   "description": "UK logistics and transportation company - Insurance client",
-  "icon": "/static/storage/content/Cornerstone/icons/europeanlogistics.svg",
+  "icon": "/api/content/Cornerstone/icons/europeanlogistics.svg",
   "isPersistent": true,
   "content": {
     "$type": "Insured",

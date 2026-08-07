@@ -832,6 +832,12 @@ public static class MemexConfiguration
                             Name = "content",
                             IsEditable = true,
                             ExposeInChildren = true,
+                            // isStatic: PUBLISHED on the access-controlled content route — a Space's
+                            // images, thumbnails, PDFs and videos are fetched as
+                            // /api/content/{node}/{file} and /api/content/{Space}/content/{file}.
+                            // Publishing decides REACHABLE, never READABLE: every request is still
+                            // gated on Read of the owning node (issue #587).
+                            IsStatic = true,
                             BasePath = basePath,
                             Settings = contentStorageConfig.Settings is { } src
                                 ? new Dictionary<string, string>(src) { ["BasePath"] = basePath }
@@ -841,8 +847,11 @@ public static class MemexConfiguration
                     }
 
                     // Map "attachments" to "storage" with per-node subdirectory
-                    // (needed by FutuRe and other samples that store datacube.csv, etc.)
-                    config = config.MapContentCollection("attachments", "storage", $"attachments/{nodePath}");
+                    // (needed by FutuRe and other samples that store datacube.csv, etc.).
+                    // isStatic: the file browser's download links are
+                    // /api/content/{node}/attachments/… — access-controlled, gated on Read of the node.
+                    config = config.MapContentCollection(
+                        "attachments", "storage", $"attachments/{nodePath}", isStatic: true);
 
                     // Shared large static assets (e.g. the on-device Whisper models the native client
                     // downloads) live in a FileSystem content collection on the MeshWeaver space, backed
@@ -860,6 +869,10 @@ public static class MemexConfiguration
                             Address = config.Address,
                             IsEditable = true,
                             ExposeInChildren = true,
+                            // isStatic: the native client downloads these over
+                            // /api/content/MeshWeaver/static/Speech/… — a real publication, still
+                            // gated on Read of the MeshWeaver node.
+                            IsStatic = true,
                             Settings = new Dictionary<string, string> { ["BasePath"] = staticAssetsMount },
                         });
 

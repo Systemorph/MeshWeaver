@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Title: "EuropeRe Profitability Report"
-Icon: /static/storage/content/FutuRe/EuropeRe/LineOfBusiness/icon.svg
+Icon: /api/content/FutuRe/EuropeRe/LineOfBusiness/icon.svg
 Abstract: "Local profitability analysis for EuropeRe (EMEA, EUR), covering 8 local lines of business over an 18-month rolling window."
 Tags:
   - "Profitability"

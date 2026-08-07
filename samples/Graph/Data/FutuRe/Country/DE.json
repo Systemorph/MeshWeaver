@@ -12,5 +12,5 @@
     "region": "EMEA",
     "order": 2
   },
-  "icon": "/static/storage/content/FutuRe/icon.svg"
+  "icon": "/api/content/FutuRe/icon.svg"
 }

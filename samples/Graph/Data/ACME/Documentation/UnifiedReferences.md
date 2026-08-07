@@ -170,13 +170,13 @@ Defined in `ACME/Project/Todo/Source/Category.cs`:
 
 | Content | Path |
 |---------|------|
-| Todo icon | `/static/storage/content/ACME/Project/Todo/icon.svg` |
-| Project thumbnails | `/static/storage/content/ACME/Project/thumbnails/` |
+| Todo icon | `/api/content/ACME/Project/Todo/icon.svg` |
+| Project thumbnails | `/api/content/ACME/Project/thumbnails/` |
 
 ## Embedding Todo Icon
 
 ```markdown
-![Todo Icon](/static/storage/content/ACME/Project/Todo/icon.svg)
+![Todo Icon](/api/content/ACME/Project/Todo/icon.svg)
 ```
 
 # Layout Area References

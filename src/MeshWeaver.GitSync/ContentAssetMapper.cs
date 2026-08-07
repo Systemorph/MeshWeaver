@@ -9,7 +9,7 @@ namespace MeshWeaver.GitSync;
 /// content that was never synced from git and so "disappeared" on every sync).
 ///
 /// <para>The per-Space <c>content</c> collection is mounted on the partition ROOT (children inherit it)
-/// and served at <c>/static/storage/content/{nodePath}/{file}</c> — i.e. a <c>content:</c> reference on
+/// and served at <c>/api/content/{nodePath}/{file}</c> — i.e. a <c>content:</c> reference on
 /// node <c>{Space}/A/B</c> resolves under collection-relative path <c>A/B/{file}</c>. So a repo file
 /// (subdirectory-relative, i.e. relative to the Space) is a content asset iff it has a path segment
 /// exactly <c>content</c>; the segments BEFORE it are the owning node's Space-relative path (which is

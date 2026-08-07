@@ -53,13 +53,26 @@ public static class BlazorHostingExtensions
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
     /// <summary>
-    /// Maps the MeshWeaver HTTP endpoints onto the application: the static content endpoint
-    /// and the layout preview stub.
+    /// Maps the MeshWeaver HTTP endpoints onto the application: the public build-asset route, the
+    /// access-controlled content-file route, and the layout preview stub.
+    ///
+    /// <para>🚨 The two file routes are deliberately SEPARATE surfaces with opposite contracts
+    /// (issue #587):</para>
+    /// <list type="bullet">
+    /// <item><c>/static/{mount}/{file}</c> — application BUILD OUTPUT only (icon SVGs, shipped doc
+    ///   assets). No identity is resolved, no permission is evaluated, and the mesh is never
+    ///   touched; responses are <c>public, immutable</c>. Everything served there is public by
+    ///   construction.</item>
+    /// <item><c>/api/content/{node}/{collection}/{file}</c> — MESH CONTENT. Every request is
+    ///   evaluated by the owning node's hub via a <c>GetDataRequest</c> carrying
+    ///   <c>[RequiresPermission(Read)]</c>; responses are <c>private</c>.</item>
+    /// </list>
     /// </summary>
     /// <param name="app">The web application to map the endpoints onto.</param>
     public static void MapMeshWeaver(this WebApplication app)
     {
-        app.MapStaticContent(app.Services);
+        app.MapPublicStaticAssets(app.Services);
+        app.MapContentFiles(app.Services);
 
         // Thumbnail preview stub (returns 501 until implemented)
         app.MapGet("/layout-preview/{area}", (string area) => Results.StatusCode(StatusCodes.Status501NotImplemented));
@@ -164,180 +177,374 @@ public static class BlazorHostingExtensions
     }
 
     /// <summary>
-    /// Maps static content endpoint supporting two path patterns:
-    /// 1. /static/{collection}/{filePath} - when first segment is a known collection (e.g., content, attachments)
-    /// 2. /static/{address}/{collection}/{filePath} - when first segment is an address
+    /// 🚨 THE PUBLIC BUILD-ASSET ROUTE — <c>/static/{mount}/{file}</c> (issue #587).
     ///
-    /// The endpoint first checks if the first segment matches a registered collection name.
-    /// If yes, serves from the mesh hub's content service directly.
-    /// If no, uses address-based resolution via IMeshCatalog.ResolvePath.
+    /// <para>This endpoint performs NO access control, resolves NO identity and never touches the
+    /// mesh. It serves exactly the <see cref="StaticAssetMount"/>s registered on the mesh — files
+    /// compiled into a shipped MeshWeaver assembly (icon SVGs, the documentation package's images),
+    /// which are public by construction and needed before any identity exists (the login page, the
+    /// nav, every anonymous card). That is why the responses stay <c>public, immutable</c> and
+    /// CDN-cacheable.</para>
+    ///
+    /// <para><b>What is deliberately NOT here any more.</b> Content collections. This route used to
+    /// resolve any registered collection and stream its files with no authorization anywhere:
+    /// <c>/static/storage/content/{node}/{file}</c> read the mesh-level backing store directly, so
+    /// EVERY partition's uploads, attachments and PDFs were world-readable at a fully predictable
+    /// URL, and <c>/static/{address}/{collection}/{file}</c> served any hub's collections without
+    /// consulting that partition's policy. Content is not mounted here at all now — it is
+    /// unreachable rather than merely denied, and it is served by
+    /// <see cref="MapContentFiles"/> instead. A path whose first segment names no mount is 404,
+    /// identically for every caller: whether something is published on this route is a hosting
+    /// decision and must not vary with identity.</para>
     /// </summary>
-    private static void MapStaticContent(this IEndpointRouteBuilder app, IServiceProvider services)
+    private static void MapPublicStaticAssets(this IEndpointRouteBuilder app, IServiceProvider services)
     {
-        // Collection configuration cache: key = "prefix/collection"
-        var collectionCache = new System.Collections.Concurrent.ConcurrentDictionary<string, ContentCollectionConfig>();
+        // Lazy resolution of IMessageHub to avoid circular dependency during startup.
+        IReadOnlyDictionary<string, StaticAssetMount>? mounts = null;
+
+        app.MapMethods("/static/{**path}", ["GET", "HEAD"], (HttpContext context, string path) =>
+        {
+            mounts ??= services.GetRequiredService<IMessageHub>().ServiceProvider
+                .GetServices<StaticAssetMount>()
+                .GroupBy(m => m.Segment, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+            return ServeStaticAsset(context, mounts, path);
+        });
+    }
+
+    /// <summary>
+    /// Resolves one <c>/static</c> request against the registered build-asset mounts. Pure apart
+    /// from reading the assembly's manifest resources (an in-memory, already-mapped read — no I/O
+    /// pool, no hub, no scheduler hop).
+    /// </summary>
+    /// <param name="context">The current request (used for the download flag and response headers).</param>
+    /// <param name="mounts">The registered mounts, keyed by their first path segment.</param>
+    /// <param name="path">The catch-all route value (still percent-encoded).</param>
+    /// <returns>The file, or 404 when the mount or the file does not exist.</returns>
+    internal static IResult ServeStaticAsset(
+        HttpContext context, IReadOnlyDictionary<string, StaticAssetMount> mounts, string? path)
+    {
+        // 🚨 Decode FIRST, then validate. ASP.NET Core normalizes `..` out of the request line, but
+        // the catch-all value is still percent-encoded — `%2E%2E` survives normalization and only
+        // becomes `..` here. Validating the raw value would wave a traversal straight through.
+        var decoded = DecodeContentPath(path ?? "");
+        var slash = decoded.IndexOf('/');
+        if (slash <= 0)
+            return Results.NotFound("Expected /static/{mount}/{file}.");
+
+        var segment = decoded[..slash];
+        var filePath = decoded[(slash + 1)..];
+        if (!mounts.TryGetValue(segment, out var mount))
+            return NotMounted(segment);
+
+        using var stream = mount.Open(filePath);
+        if (stream is null)
+            return Results.NotFound("File not found");
+
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        var bytes = buffer.ToArray();
+
+        // Public by construction — a build asset carries no user data, so a shared cache may keep
+        // it. This is the ONLY route on which `public` is correct.
+        context.Response.Headers.CacheControl = PublicCacheControl;
+        context.Response.Headers.Expires = DateTime.UtcNow.Add(PublicCacheDuration).ToString("R");
+        context.Response.Headers.ETag =
+            $"\"{Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(bytes))}\"";
+        return FileResultFor(bytes, filePath, context.Request.Query.ContainsKey("download"));
+    }
+
+    /// <summary>How long a build asset stays fresh in any cache.</summary>
+    internal static readonly TimeSpan PublicCacheDuration = TimeSpan.FromDays(30);
+
+    /// <summary>
+    /// The <c>Cache-Control</c> of a build asset. <c>public</c> is correct ONLY here — see
+    /// <see cref="GatedCacheControl"/>.
+    /// </summary>
+    internal static string PublicCacheControl =>
+        $"public, max-age={(int)PublicCacheDuration.TotalSeconds}, immutable";
+
+    /// <summary>
+    /// The <c>Cache-Control</c> of an access-controlled content file.
+    ///
+    /// <para>🚨 <c>private</c>, always. A CDN, corporate proxy or any intermediary that once saw an
+    /// authorized fetch would otherwise keep replaying that partition's file to callers the owning
+    /// hub denies — the leak would survive the fix (issue #587, point 4). The old code marked every
+    /// content file <c>public, max-age=2592000, immutable</c>.</para>
+    /// </summary>
+    internal const string GatedCacheControl = "private, no-store";
+
+    /// <summary>
+    /// The response for a <c>/static</c> path whose first segment names no build-asset mount. 404,
+    /// never 403: nothing about this decision depends on who is asking.
+    /// </summary>
+    /// <param name="segment">The unmatched first path segment.</param>
+    /// <returns>The 404 result.</returns>
+    internal static IResult NotMounted(string segment) =>
+        Results.NotFound(
+            $"'{segment}' is not a static build asset. /static serves application build output only; "
+            + "mesh content is served by /api/content/{node}/{collection}/{file}.");
+
+    /// <summary>
+    /// 🚨 THE ACCESS-CONTROLLED CONTENT-FILE ROUTE —
+    /// <c>/api/content/{node}/{collection}/{file}</c> (issue #587).
+    ///
+    /// <para>Every byte a content collection holds is served here. The owning node is resolved with
+    /// <see cref="IPathResolver"/> (longest real-node prefix), and THAT node's hub is asked for the
+    /// collection with a <c>GetDataRequest</c> — which carries <c>[RequiresPermission(Read)]</c>, so
+    /// <c>AccessControlPipeline</c> makes exactly the decision an ordinary node read makes.
+    /// Partition scoping, group expansion, public-read policies and per-subject denies all apply
+    /// verbatim; there is no parallel rule set here to drift.</para>
+    ///
+    /// <para><b>Two shapes, one route.</b> When the first remainder segment names a collection on
+    /// the resolved node it is the collection and the rest is the file
+    /// (<c>/api/content/{node}/{collection}/{file}</c>); otherwise the whole remainder is a path in
+    /// the node's default <c>content</c> collection (<c>/api/content/{node}/{file…}</c>). The second
+    /// shape is the direct replacement for the old <c>/static/storage/content/{node}/{file…}</c>:
+    /// the mesh-level store lays every node's content out at <c>content/{nodePath}/…</c>, so
+    /// resolving the node and reading its own collection reaches the same bytes — with the owner's
+    /// permission check in front of them, which the store shape never had.</para>
+    ///
+    /// <para><b>No config cache.</b> The <c>GetDataRequest</c> IS the permission check, so caching
+    /// its result and short-circuiting later requests was a standing bypass: once any authorized
+    /// caller warmed the cache, every later caller — anonymous included — skipped the
+    /// permission-bearing hop and the file was read locally off the resolved BasePath.</para>
+    /// </summary>
+    private static void MapContentFiles(this IEndpointRouteBuilder app, IServiceProvider services)
+    {
         // Lazy resolution of IMessageHub to avoid circular dependency during startup
         IMessageHub? mainHub = null;
 
-        app.MapMethods("/static/{**path}", ["GET", "HEAD"],
+        app.MapMethods(ContentCollectionsExtensions.ContentFileRoutePrefix + "/{**path}", ["GET", "HEAD"],
             (HttpContext context, string path) =>
         {
-            // Resolve hub on first request
             mainHub ??= services.GetRequiredService<IMessageHub>();
 
             if (string.IsNullOrEmpty(path))
                 return Task.FromResult(Results.NotFound("Path is required"));
 
+            // 🚨 Resolve the caller SYNCHRONOUSLY, before any scheduler hop. AccessContext is an
+            // AsyncLocal that does not survive the Rx hops below, and concurrent requests carry
+            // different users — so the identity is captured here per request and threaded through
+            // explicitly, never re-read from the ambient service downstream.
+            var caller = ResolveContentCaller(context, mainHub);
+
             // Compose the entire endpoint as IObservable<IResult>; the HTTP framework
             // boundary mandates Task<IResult>, so we ToTask once at the very end.
             // No await on hub round-trips — chain via SelectMany; deadlock surface
             // (await pathResolver.ResolvePath / hub.Observe) eliminated.
-            return ResolveStatic(context, mainHub, path, collectionCache)
+            return ResolveContentFile(context, mainHub, path, caller)
                 .Catch<IResult, Exception>(ex =>
-                    Observable.Return(Results.Problem($"Error retrieving static content: {ex.Message}")))
+                    Observable.Return(Results.Problem($"Error retrieving content: {ex.Message}")))
                 .FirstAsync()
                 .ToTask(context.RequestAborted);
         });
     }
 
-    private static IObservable<IResult> ResolveStatic(
+    /// <summary>
+    /// The identity of a content-file request. NEVER null — an unauthenticated caller resolves to
+    /// the well-known Anonymous context, whose permissions are exactly the Anonymous grants.
+    ///
+    /// <para><c>UserContextMiddleware</c> runs for this route and stamps the fully-resolved identity
+    /// on the mesh-wide <c>AccessService</c>, including the Bearer-token path that a claims
+    /// principal alone cannot see. Prefer that; fall back to resolving the claims principal directly
+    /// so a host that does not run the middleware still names the caller correctly rather than
+    /// posting with no context (which the never-null PostPipeline guard refuses — invisible at one
+    /// replica, a 500 at two, #694).</para>
+    /// </summary>
+    private static AccessContext ResolveContentCaller(HttpContext context, IMessageHub mainHub)
+    {
+        var accessService = context.RequestServices.GetService<PortalApplication>()?.Hub
+                                .ServiceProvider.GetService<AccessService>()
+                            ?? mainHub.ServiceProvider.GetService<AccessService>();
+        var ambient = accessService?.Context ?? accessService?.CircuitContext;
+        return ambient is not null && !string.IsNullOrEmpty(ambient.ObjectId)
+            ? ambient
+            : UserContextMiddleware.ResolveHttpCaller(context.User, mainHub.ServiceProvider);
+    }
+
+    private static IObservable<IResult> ResolveContentFile(
         HttpContext context,
         IMessageHub mainHub,
         string path,
-        System.Collections.Concurrent.ConcurrentDictionary<string, ContentCollectionConfig> collectionCache)
+        AccessContext caller)
     {
-        var pathParts = path.Split('/');
-        if (pathParts.Length < 2)
-            return Observable.Return(Results.NotFound(
-                "Invalid path format. Expected: /static/{collection}/{filePath} or /static/{address}/{collection}/{filePath}"));
+        // 🚨 Decode FIRST, then validate — `%2E%2E` survives the server's URL normalization and only
+        // becomes `..` here. FileSystemStreamProvider resolves a collection-relative path with a
+        // bare Path.Combine, so an un-guarded `..` would read outside the collection's BasePath
+        // (i.e. another partition's files) while this route attributed the request to the node whose
+        // grant the caller does hold.
+        var decodedPath = DecodeContentPath(path);
+        if (!StaticAssetMount.IsSafeRelativePath(decodedPath))
+            return Observable.Return(Results.NotFound("Invalid content path"));
 
-        var firstSegment = pathParts[0];
-        var decodedFirstSegment = DecodeCollectionName(firstSegment);
-        var contentService = mainHub.ServiceProvider.GetService<IContentService>();
-        var knownCollection = contentService?.GetCollectionConfig(decodedFirstSegment);
-
-        if (knownCollection != null)
-        {
-            // Pattern 1: /static/{collection}/{filePath}
-            var collectionName = decodedFirstSegment;
-            var filePath = DecodeContentPath(string.Join("/", pathParts.Skip(1)));
-            return (mainHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded)
-                .Run(_ => ServeFromCollection(context, mainHub, collectionName, filePath, collectionCache));
-        }
-
-        // Pattern 2: /static/{address}/{collection}/{filePath} — observable chain.
         var pathResolver = mainHub.ServiceProvider.GetRequiredService<IPathResolver>();
-        return pathResolver.ResolvePath(path).SelectMany(resolution =>
+        return pathResolver.ResolvePath(decodedPath).Take(1).SelectMany(resolution =>
         {
-            if (resolution == null)
-                return Observable.Return(Results.NotFound("No matching address found for path"));
+            if (resolution == null || string.IsNullOrEmpty(resolution.Prefix))
+                return Observable.Return(Results.NotFound("No matching node found for path"));
             if (string.IsNullOrEmpty(resolution.Remainder))
-                return Observable.Return(Results.NotFound("Collection and file path are required"));
-
-            var remainderParts = resolution.Remainder.Split('/');
-            if (remainderParts.Length < 2)
-                return Observable.Return(Results.NotFound(
-                    "Invalid path format. Expected: /static/{address}/{collection}/{filePath}"));
-
-            var addressCollectionName = DecodeCollectionName(remainderParts[0]);
-            var addressFilePath = DecodeContentPath(string.Join("/", remainderParts.Skip(1)));
-            if (string.IsNullOrEmpty(addressFilePath))
                 return Observable.Return(Results.NotFound("File path is required"));
 
+            var remainderParts = resolution.Remainder.Split('/');
+            var explicitCollection = DecodeCollectionName(remainderParts[0]);
+            var defaultCollection = ContentCollectionsExtensions.DefaultCollectionName;
+
             var targetAddress = (Address)resolution.Prefix;
-            var qualifiedCollectionName = $"{resolution.Prefix}/{addressCollectionName}";
 
-            // 🚨 STAMP THE CALLER on the post. The user-context middleware deliberately skips
-            // /static/ (perf), so nothing has resolved an identity for this request — and a hub
-            // post with no AccessContext is refused by the never-null PostPipeline guard. That
-            // refusal is INVISIBLE at one replica (local delivery) and killed ~half of all /static
-            // requests at two: whenever the target partition's hub lived on the OTHER silo, the
-            // cross-silo post died with "AccessContext must never be null" and the file 500'd
-            // (#694 — the reason memex runs single-replica). Resolve the caller here (claims →
-            // mesh user; anonymous otherwise) and stamp the DELIVERY — per-request, never the
-            // ambient AccessService (concurrent static requests carry different users). Identity
-            // only names WHO is asking; the owning hub's RLS still decides what they may read, so
-            // anonymous gets exactly the Anonymous grants and gated files stay gated.
-            var caller = UserContextMiddleware.ResolveHttpCaller(context.User, mainHub.ServiceProvider);
+            // ONE round trip for both candidate shapes: the named collection (when there is a file
+            // path after it) and the node's default content collection.
+            var candidates = remainderParts.Length >= 2 && explicitCollection != defaultCollection
+                ? new[] { explicitCollection, defaultCollection }
+                : [defaultCollection];
 
-            // Cached collection config — short-circuit; otherwise compose hub.Observe.
-            IObservable<ContentCollectionConfig?> configObs = collectionCache.TryGetValue(qualifiedCollectionName, out var cached)
-                ? Observable.Return<ContentCollectionConfig?>(cached)
-                : mainHub.Observe(
-                        new GetDataRequest(new ContentCollectionReference([addressCollectionName])),
-                        o => o.WithTarget(targetAddress).WithAccessContext(caller))
-                    .Select<IMessageDelivery, ContentCollectionConfig?>(collectionResponse =>
+            return mainHub.Observe(
+                    new GetDataRequest(new ContentCollectionReference(candidates)),
+                    o => o.WithTarget(targetAddress).WithAccessContext(caller))
+                .Take(1)
+                .SelectMany(collectionResponse =>
+                {
+                    var configs = ReadCollectionConfigs(collectionResponse);
+
+                    // Prefer the explicitly-named collection — there the file path is relative to
+                    // the COLLECTION's own root, exactly as the file browser lists it.
+                    //
+                    // Otherwise the node's default collection, with the whole remainder as a
+                    // NODE-relative path. A Space's `content` collection is mounted on the partition
+                    // ROOT and inherited by children (ExposeInChildren), so an inherited config
+                    // carries the ROOT's BasePath — the resolved node's own path relative to the
+                    // collection's owner has to be put back in front of the file. That is the
+                    // `content/{nodePath}/{file}` layout the backing store has always had, and the
+                    // reason `/static/storage/content/{nodePath}/{file}` resolved correctly.
+                    var (sourceConfig, filePath) =
+                        remainderParts.Length >= 2
+                        && configs?.FirstOrDefault(c => c.Name == explicitCollection) is { } named
+                            ? (named, string.Join('/', remainderParts.Skip(1)))
+                            : (configs?.FirstOrDefault(c => c.Name == defaultCollection),
+                                CombineOwnerRelative(
+                                    configs?.FirstOrDefault(c => c.Name == defaultCollection)?.Address,
+                                    resolution.Prefix,
+                                    resolution.Remainder!));
+
+                    if (sourceConfig is null)
+                        return Observable.Return(Results.NotFound(
+                            $"No content collection at '{resolution.Prefix}' serves '{resolution.Remainder}'"));
+
+                    // 🚨 MOUNT CHECK, default-closed. A collection is servable by URL only when it
+                    // declares it (ContentCollectionConfig.IsStatic). The flag existed but was read
+                    // NOWHERE — set at two sites, consulted at zero — so every collection registered
+                    // anywhere on the mesh was fetchable by URL. Not declared ⇒ 404, for every
+                    // caller alike (publishing is a hosting decision, not an access one).
+                    if (!sourceConfig.IsStatic)
+                        return Observable.Return(NotServable(sourceConfig.Name));
+
+                    if (string.IsNullOrEmpty(filePath))
+                        return Observable.Return(Results.NotFound("File path is required"));
+
+                    var qualifiedCollectionName = $"{resolution.Prefix}/{sourceConfig.Name}";
+                    var collectionConfig = sourceConfig with
                     {
-                        IReadOnlyCollection<ContentCollectionConfig>? configs = collectionResponse?.Message switch
-                        {
-                            GetDataResponse { Data: JsonElement je } => je.EnumerateArray()
-                                .Select(e => new ContentCollectionConfig
-                                {
-                                    Name = e.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "",
-                                    SourceType = e.TryGetProperty("sourceType", out var typeProp) ? typeProp.GetString() ?? "" : "",
-                                    BasePath = e.TryGetProperty("basePath", out var pathProp) ? pathProp.GetString() : null
-                                })
-                                .ToArray(),
-                            GetDataResponse { Data: IReadOnlyCollection<ContentCollectionConfig> direct } => direct,
-                            _ => null
-                        };
-                        var sourceConfig = configs?.FirstOrDefault(c => c.Name == addressCollectionName);
-                        if (sourceConfig == null) return null;
-                        var built = sourceConfig with { Name = qualifiedCollectionName, Address = targetAddress };
-                        collectionCache.TryAdd(qualifiedCollectionName, built);
-                        return built;
-                    });
+                        Name = qualifiedCollectionName, Address = targetAddress
+                    };
 
-            return configObs.SelectMany(collectionConfig =>
-            {
-                if (collectionConfig == null)
-                    return Observable.Return(Results.NotFound(
-                        $"Content collection '{addressCollectionName}' not found at {resolution.Prefix}"));
+                    // The portal hub is where the resolved config is cached and the bytes are read.
+                    // Fall back to the mesh hub for hosts that do not run the Blazor portal (the
+                    // sidecar, tests) — the access decision has already been made above.
+                    var portal = mainHub.ServiceProvider.GetService<PortalApplication>()?.Hub ?? mainHub;
+                    var portalContentService = portal.ServiceProvider.GetService<IContentService>();
+                    if (portalContentService is null)
+                        return Observable.Return(Results.NotFound("Content service not configured"));
 
-                var portal = mainHub.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
-                var portalContentService = portal.ServiceProvider.GetService<IContentService>();
-                if (portalContentService is null)
-                    return Observable.Return(Results.NotFound("Content service not configured"));
-
-                portalContentService.AddConfiguration(collectionConfig);
-                // Pure composition — collection resolution and the file read both run on the
-                // collection's own IIoPool; ServeFile only shapes the (already-read) result.
-                return portalContentService.GetCollection(qualifiedCollectionName)
-                    .SelectMany(contentCollection => contentCollection == null
-                        ? Observable.Return(Results.NotFound($"Content collection '{addressCollectionName}' not found"))
-                        : ServeFile(context, contentCollection, addressFilePath));
-            });
+                    portalContentService.AddConfiguration(collectionConfig);
+                    // Pure composition — collection resolution and the file read both run on the
+                    // collection's own IIoPool; ServeFile only shapes the (already-read) result.
+                    return portalContentService.GetCollection(qualifiedCollectionName)
+                        .SelectMany(contentCollection => contentCollection == null
+                            ? Observable.Return(Results.NotFound($"Content collection '{sourceConfig.Name}' not found"))
+                            : ServeFile(context, contentCollection, filePath));
+                });
         });
     }
 
     /// <summary>
-    /// Serves a file from a known collection (pattern: /static/{collection}/{filePath}).
+    /// Puts the resolved node's OWN path back in front of a node-relative file path when the
+    /// collection is inherited from an ancestor.
+    ///
+    /// <para>A Space's <c>content</c> collection is mounted on the partition root with
+    /// <c>ExposeInChildren</c>, so a child hub reports the ancestor's config verbatim — same
+    /// <c>BasePath</c>. The file of node <c>Org/Project</c> therefore lives at
+    /// <c>Project/{file}</c> inside it. Owner == node (or an unknown owner) ⇒ no prefix.</para>
     /// </summary>
-    private static async Task<IResult> ServeFromCollection(
-        HttpContext context,
-        IMessageHub hub,
-        string collectionName,
-        string filePath,
-        System.Collections.Concurrent.ConcurrentDictionary<string, ContentCollectionConfig> _)
+    /// <param name="collectionOwner">The address the collection is registered on, if known.</param>
+    /// <param name="nodePath">The node the request resolved to.</param>
+    /// <param name="filePath">The node-relative file path.</param>
+    /// <returns>The collection-relative file path.</returns>
+    internal static string CombineOwnerRelative(Address? collectionOwner, string nodePath, string filePath)
     {
-        if (string.IsNullOrEmpty(filePath))
-        {
-            return Results.NotFound("File path is required");
-        }
-
-        var contentService = hub.ServiceProvider.GetService<IContentService>();
-        if (contentService is null)
-        {
-            return Results.NotFound("Content service not configured");
-        }
-
-        // HTTP-boundary await of the composed pipeline — every leaf runs on the collection's pool.
-        return await contentService.GetCollection(collectionName)
-            .SelectMany(contentCollection => contentCollection == null
-                ? Observable.Return(Results.NotFound($"Content collection '{collectionName}' not found"))
-                : ServeFile(context, contentCollection, filePath))
-            .Take(1);
+        var owner = collectionOwner?.ToString()?.Trim('/');
+        var node = nodePath.Trim('/');
+        if (string.IsNullOrEmpty(owner)
+            || string.Equals(owner, node, StringComparison.OrdinalIgnoreCase)
+            || !node.StartsWith(owner + "/", StringComparison.OrdinalIgnoreCase))
+            return filePath;
+        return $"{node[(owner.Length + 1)..]}/{filePath}";
     }
+
+    /// <summary>
+    /// Projects the collection configs out of the owning hub's <c>GetDataResponse</c>. The remote
+    /// form arrives as a <see cref="JsonElement"/>; <see cref="ContentCollectionConfig.IsStatic"/>
+    /// and <see cref="ContentCollectionConfig.Address"/> MUST survive that projection — without the
+    /// first, every legitimately-published remote collection fails the mount check; without the
+    /// second, an inherited collection loses its owner and a child node's file resolves against the
+    /// ancestor's folder. <c>IsStatic</c> is suppressed when false, so an absent property means
+    /// false — the safe value either way.
+    /// </summary>
+    /// <summary>
+    /// Reads a collection config's owning address off the wire. Absent, non-string or empty ⇒
+    /// <c>null</c>, which <see cref="CombineOwnerRelative"/> treats as "owner unknown" and leaves
+    /// the file path alone — the conservative reading.
+    /// </summary>
+    private static Address? ToAddress(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.String)
+            return null;
+        var value = element.GetString();
+        if (string.IsNullOrEmpty(value))
+            return null;
+        return value;
+    }
+
+    private static IReadOnlyCollection<ContentCollectionConfig>? ReadCollectionConfigs(IMessageDelivery? delivery) =>
+        delivery?.Message switch
+        {
+            GetDataResponse { Data: JsonElement je } => je.EnumerateArray()
+                .Select(e => new ContentCollectionConfig
+                {
+                    Name = e.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "",
+                    SourceType = e.TryGetProperty("sourceType", out var typeProp) ? typeProp.GetString() ?? "" : "",
+                    BasePath = e.TryGetProperty("basePath", out var pathProp) ? pathProp.GetString() : null,
+                    IsStatic = e.TryGetProperty("isStatic", out var staticProp)
+                               && staticProp.ValueKind == JsonValueKind.True,
+                    Address = e.TryGetProperty("address", out var addressProp)
+                        ? ToAddress(addressProp)
+                        : null,
+                })
+                .ToArray(),
+            GetDataResponse { Data: IReadOnlyCollection<ContentCollectionConfig> direct } => direct,
+            _ => null
+        };
+
+    /// <summary>
+    /// The response for a collection that exists but does not declare itself servable by URL
+    /// (<see cref="ContentCollectionConfig.IsStatic"/>). 404, not 403 — identical for every caller.
+    /// </summary>
+    /// <param name="collectionName">The collection that is not published.</param>
+    /// <returns>The 404 result.</returns>
+    internal static IResult NotServable(string collectionName) =>
+        Results.NotFound(
+            $"Content collection '{collectionName}' is not served over HTTP. "
+            + "Declare IsStatic on it to publish it on the content route.");
 
     /// <summary>
     /// Serves a file from a content collection with proper caching headers. Composition — every
@@ -377,9 +584,12 @@ public static class BlazorHostingExtensions
                         {
                             if (bytes is null)
                                 return Results.NotFound("File not found");
-                            var cacheDuration = TimeSpan.FromDays(30);
-                            context.Response.Headers.CacheControl = $"public, max-age={cacheDuration.TotalSeconds}, immutable";
-                            context.Response.Headers.Expires = DateTime.UtcNow.AddDays(30).ToString("R");
+                            // 🚨 private, never public (issue #587, point 4). This response is
+                            // access-controlled: a CDN, corporate proxy or any intermediary that
+                            // once stored an authorized fetch would keep replaying that partition's
+                            // file to callers the owning hub denies — the leak would survive the
+                            // fix. The old value was `public, max-age=2592000, immutable`.
+                            context.Response.Headers.CacheControl = GatedCacheControl;
                             var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(bytes));
                             context.Response.Headers.ETag = $"\"{hash}\"";
                             // Range processing on this branch too: a file under the buffering
@@ -390,6 +600,11 @@ public static class BlazorHostingExtensions
                             return FileResultFor(bytes, filePath, isDownloadRequested);
                         });
                 }
+
+                // Large files stream straight through. They previously carried NO Cache-Control at
+                // all, which lets a shared cache apply its own heuristic freshness — the same leak
+                // as an explicit `public`. Classify them too.
+                context.Response.Headers.CacheControl = GatedCacheControl;
 
                 // Return the stream directly without loading it all into memory
                 return Observable.Return(Results.Stream(

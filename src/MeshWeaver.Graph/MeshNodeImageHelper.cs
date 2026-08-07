@@ -1,3 +1,4 @@
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph;
@@ -27,7 +28,7 @@ public static class MeshNodeImageHelper
 
     /// <summary>
     /// Resolves a node's icon for rendering, handling content: references relative to the node path.
-    /// E.g., "content:icon.svg" on node "Org/Project" → "/static/storage/content/Org/Project/icon.svg".
+    /// E.g., "content:icon.svg" on node "Org/Project" → "/api/content/Org/Project/content/icon.svg".
     /// When the node carries no icon of its own, falls back to a default icon for its
     /// <see cref="MeshNode.NodeType"/> (<see cref="DefaultIconForNodeType"/>) so every node reads as
     /// its type rather than a bare letter — Markdown → document, Code → code, Agent → bot, etc.
@@ -85,6 +86,13 @@ public static class MeshNodeImageHelper
     /// <c>content:filename.ext</c> and <c>content/filename.ext</c> (both without a leading slash)
     /// as the node's content collection. Returns the original value for absolute URLs, data URIs,
     /// and inline SVG — and null for legacy Fluent icon names.
+    ///
+    /// <para>🚨 The URL is the ACCESS-CONTROLLED content route
+    /// (<see cref="ContentCollectionsExtensions.GetNodeContentFileUrl"/>), not <c>/static</c>. It
+    /// used to be <c>/static/storage/content/{nodePath}/{file}</c>, which read the mesh-level
+    /// backing store directly and consulted no partition's policy at all — so a private Space's
+    /// icon, thumbnail or logo was world-readable to anyone with (or guessing) the URL
+    /// (issue #587).</para>
     /// </summary>
     public static string? ResolveContentPath(string? value, string? nodePath)
     {
@@ -96,7 +104,7 @@ public static class MeshNodeImageHelper
         {
             var fileName = value["content:".Length..];
             if (!string.IsNullOrEmpty(fileName) && !string.IsNullOrEmpty(nodePath))
-                return $"/static/storage/content/{nodePath}/{fileName}";
+                return ContentCollectionsExtensions.GetNodeContentFileUrl(nodePath, fileName);
         }
 
         // "content/filename.ext" — natural bare form many users type after browsing the collection.
@@ -104,7 +112,7 @@ public static class MeshNodeImageHelper
         {
             var fileName = value["content/".Length..];
             if (!string.IsNullOrEmpty(fileName) && !string.IsNullOrEmpty(nodePath))
-                return $"/static/storage/content/{nodePath}/{fileName}";
+                return ContentCollectionsExtensions.GetNodeContentFileUrl(nodePath, fileName);
         }
 
         return GetIconForRendering(value);

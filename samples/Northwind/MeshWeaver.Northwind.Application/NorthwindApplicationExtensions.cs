@@ -20,7 +20,9 @@ public static class NorthwindApplicationExtensions
 
         =>
             application
-                .AddEmbeddedResourceContentCollection("Northwind", typeof(NorthwindApplicationAttribute).Assembly, "Markdown")
+                // isStatic: markdown-embedded resources are fetched as
+                // /api/content/{address}/Northwind/{file} — published, still gated on Read (issue #587).
+                .AddEmbeddedResourceContentCollection("Northwind", typeof(NorthwindApplicationAttribute).Assembly, "Markdown", isStatic: true)
                 .AddNorthwindViewModels()
                 .AddNorthwindEmployees()
                 .AddNorthwindOrders()
