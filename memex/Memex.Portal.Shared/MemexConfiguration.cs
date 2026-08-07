@@ -37,6 +37,7 @@ using MeshWeaver.GoogleMaps;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
+using MeshWeaver.Observability;
 using MeshWeaver.PluginCatalog;
 using MeshWeaver.InstanceSync;
 using MeshWeaver.Graph.Configuration;
@@ -690,6 +691,11 @@ public static class MemexConfiguration
                 // admin tab installs from PluginCatalog:RegistryUrl. The options carry the consumer's
                 // registry URL/ref (empty RegistryUrl -> the tab shows a "not configured" note).
                 .AddPluginCatalog()
+                // Red-log ticketing: the LogIncident node type plus the ingest/triage/file control
+                // plane. The DETECTOR is not here — it is a separate service in the cluster's
+                // monitoring namespace that polls Loki and POSTs to /api/log-incidents, so it keeps
+                // working when the portal is the thing throwing errors (Doc/Architecture/LogWatchTriage.md).
+                .AddLogWatch(configuration)
                 // Bind the whole section so the multi-registry list (PluginCatalog:Registries:N:*)
                 // binds alongside the legacy single RegistryUrl/RegistryRef pair.
                 .ConfigureServices(pcs => pcs.AddSingleton(
@@ -1163,6 +1169,11 @@ public static class MemexConfiguration
         // WebhookEvent node at {target}/_Inbox/{id} for allowlisted targets (WebhookInbox:Targets).
         // The consuming plugin verifies signatures itself; no integration-specific code here.
         app.MapWebhookInbox();
+
+        // Red-log ingest — POST /api/log-incidents. The in-cluster log watcher reports one
+        // fingerprinted burst per call; new fingerprints are triaged by an agent and ticketed.
+        // Token-gated, and NOT mapped at all when LogWatch:IngestToken is unset.
+        app.MapLogIncidents();
 
         // Centralized speech-to-text — POST /api/speech/transcribe (multipart audio → text),
         // behind the same Bearer policy; forwards to the Whisper container via ISpeechTranscriber.
