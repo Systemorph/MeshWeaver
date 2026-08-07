@@ -31,7 +31,29 @@ public static class AgentNodeType
     public static TBuilder AddAgentType<TBuilder>(this TBuilder builder,
         IReadOnlySet<string>? serveFromPartition = null) where TBuilder : MeshBuilder
     {
-        builder.AddMeshNodes(CreateMeshNode());
+        var dbSynced = serveFromPartition?.Contains("Agent") == true;
+
+        // 🚨 The in-memory "Agent" NodeType definition sits at path @Agent — the SAME path as the
+        // Agent partition ROOT. On the DB-synced path it must be registered DEFINITION-ONLY: it
+        // still supplies the HubConfiguration delegate BY NAME and proves the type exists, but it
+        // is NOT served as the runtime node at @Agent, because Postgres owns that root.
+        //
+        // Without this, the static type-def and the durable row BOTH claim @Agent, and the static
+        // one wins the serve seams (MeshDataSource.WithMeshNodes / MessageHubGrain.TryResolveStaticNode)
+        // — so the per-node hub is seeded from a node that is by design NEVER PERSISTED. The
+        // partition root then becomes permanently unrecoverable: unreadable (StaticNodeQueryProvider
+        // excludes a definition node from results, so `get @Agent` 404s and `namespace:Agent`
+        // returns nothing), un-creatable (the durable row is still there, so create answers "Node
+        // already exists"), and un-writable (every upsert lands on the static-served hub and its
+        // save is suppressed). That is exactly the shape the platform's agent catalog was in when
+        // it disappeared from the portal (#902): three separate routes back, all closed.
+        //
+        // Harness / LanguageModel / ModelProvider already do this; Agent and Skill were the two
+        // that were missed. See Doc/Architecture/NodeTypeCatalogs.md.
+        var typeDefinition = CreateMeshNode();
+        if (dbSynced)
+            typeDefinition = typeDefinition with { IsDefinitionOnly = true };
+        builder.AddMeshNodes(typeDefinition);
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         // When the "Agent" partition is DB-synced (static-repo import), DO NOT register the
         // read-only in-memory static surfaces — they would shadow Postgres (specific wins over
@@ -50,7 +72,6 @@ public static class AgentNodeType
         // provider (the prior state) was the gap. The "Agent" NodeType definition itself stays via
         // AddMeshNodes(CreateMeshNode()) above, so the import's NodeType-existence check still
         // resolves. See OrleansStaticRepoImportStaticBackedTest.
-        var dbSynced = serveFromPartition?.Contains("Agent") == true;
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<BuiltInAgentProvider>();

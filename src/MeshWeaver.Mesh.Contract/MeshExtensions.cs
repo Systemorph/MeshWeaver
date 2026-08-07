@@ -1242,6 +1242,20 @@ public static class MeshExtensions
     /// on a not-yet-provisioned PG schema means the node is, by definition, absent → null), then
     /// the static/config node provider — so a partition whose root is a static node is recognized
     /// as present and never re-created.
+    ///
+    /// <para>🚨 A DEFINITION-ONLY static entry is NOT a node at this path and must never answer an
+    /// existence probe — the same rule <c>HandleCreateNodeRequest</c> and the batch create already
+    /// apply. A NodeType whose discriminator equals its catalog's partition name registers its
+    /// type definition at the bare partition path (<c>@Agent</c>, <c>@Skill</c>, <c>@Harness</c>);
+    /// <see cref="MeshNode.IsDefinitionOnly"/> is what declares that entry a DEFINITION rather than
+    /// a served node, and it is the platform's only name-keyed home for the non-serialisable
+    /// <c>HubConfiguration</c> delegate. Letting it answer here made
+    /// <c>EnsurePartitionBootstrap</c> believe the partition root already existed, so
+    /// <c>ProvisionAndCreateRoot</c> never ran: no schema was provisioned and no durable root was
+    /// written, while every other seam correctly saw nothing. That is exactly the ghost partition
+    /// root of #902 — present to the existence check, absent to reads, un-creatable ("already
+    /// exists"), with no version history — and it is why the platform's agent catalog could not be
+    /// repaired by any route. See Doc/Architecture/NodeTypeCatalogs.md.</para>
     /// </summary>
     private static IObservable<MeshNode?> ReadNodeAuthoritative(
         IMessageHub hub, IStorageAdapter persistence, string path)
@@ -1249,7 +1263,14 @@ public static class MeshExtensions
             .Take(1)
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
             .DefaultIfEmpty(null)
-            .Select(n => n ?? hub.ServiceProvider.FindStaticNode(path));
+            .Select(n => n ?? StaticNodeAt(hub, path));
+
+    /// <summary>
+    /// The static/config node genuinely SERVED at <paramref name="path"/>, or <c>null</c> — a
+    /// definition-only entry is a type definition, not a node, and never counts as one.
+    /// </summary>
+    private static MeshNode? StaticNodeAt(IMessageHub hub, string path) =>
+        hub.ServiceProvider.FindStaticNode(path) is { IsDefinitionOnly: false } served ? served : null;
 
     /// <summary>
     /// Provisions every provider's backing store (PG schema + tables) then writes the partition's
@@ -2760,9 +2781,34 @@ public static class MeshExtensions
             {
                 // Apply the source-node update onto the LIVE node (the lambda parameter),
                 // not a separately-read `existing` snapshot — avoids clobbering a concurrent
-                // edit; carry the live version (the owner mints the fresh one on apply).
+                // edit.
+                //
+                // 🚨 But the VERSION and the identity stamps are floored on the DURABLE row this
+                // handler already read, not on the owner's live snapshot. Version is the node's
+                // monotonic persistence clock, and `MonotonicWriteGuardStorageAdapter` REFUSES any
+                // write that lands below the stored row. When the owner's live snapshot is BEHIND
+                // durable truth — a hub that could not hydrate the stored node and started from a
+                // blank `MeshNode.FromPath` — the mint comes out at 1, the guard refuses it, and
+                // the owner's `AdoptDurableTruth` rebase then re-adopts the stored row: the
+                // upsert's content is discarded while the request reports SUCCESS.
+                //
+                // That is not a corner case, it is how a GHOST PARTITION ROOT becomes permanent
+                // (#902/#638): a content-less root at some version can be neither read, nor
+                // created ("Node already exists"), nor upserted — every repair is silently thrown
+                // away, which is exactly how the platform's Agent catalog stayed gone with no
+                // mechanism anywhere able to restore it. Flooring on the row we JUST read makes
+                // the write forward by construction, so the repair lands on the first attempt.
+                // Content is untouched by this: it still comes from `live`.
                 hub.GetMeshNodeStream(node.Path)
-                    .Update(live => UpdateAccordingToSourceNode(live, node) with { Version = live.Version })
+                    .Update(live => UpdateAccordingToSourceNode(live, node) with
+                    {
+                        Version = Math.Max(live.Version, existing.Version),
+                        // Identity fields the merge is meant to PRESERVE — recovered from the
+                        // durable row when the live snapshot has none, so a repaired node keeps
+                        // its own lineage instead of being reborn with a default creation stamp.
+                        CreatedDate = live.CreatedDate == default ? existing.CreatedDate : live.CreatedDate,
+                        CreatedBy = live.CreatedBy ?? existing.CreatedBy,
+                    })
                     .Subscribe(
                         saved => PostOk(saved, isCreate: false, $"Updated node at '{node.Path}'"),
                         ex =>
