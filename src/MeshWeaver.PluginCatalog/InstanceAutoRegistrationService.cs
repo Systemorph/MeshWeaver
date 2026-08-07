@@ -230,7 +230,26 @@ public sealed class InstanceAutoRegistrationService(
                                 })
                                 .Finally(() => write.Dispose());
                         });
-                    });
+                    })
+                    // Concurrent replicas race this whole block: both read "no credential", one
+                    // registers first, and the loser sees 409 (the id is taken) — or, narrower, the
+                    // credential write collides. In BOTH cases the deployment as a whole is fine if
+                    // a credential now exists; converge on it instead of erroring a healthy pod.
+                    // A 409 with NO stored credential is the real misconfiguration (the id belongs
+                    // to someone else) and still propagates.
+                    .Catch((Exception ex) => Observable.Using(
+                            () => accessService.ImpersonateAsSystem(),
+                            _ => hub.GetMeshNode(credentialPath, TimeSpan.FromSeconds(10)))
+                        .Take(1)
+                        .SelectMany(stored =>
+                        {
+                            if (stored is null)
+                                return Observable.Throw<Unit>(ex);
+                            logger.LogInformation(
+                                "Another replica completed the auto-registration first; using the "
+                                + "credential stored at {Path}.", credentialPath);
+                            return Observable.Return(Unit.Default);
+                        }));
             })
             .Subscribe(
                 _ => { },
