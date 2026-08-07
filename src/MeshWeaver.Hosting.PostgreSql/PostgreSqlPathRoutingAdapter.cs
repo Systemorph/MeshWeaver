@@ -251,6 +251,17 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
                 ? a.ListChildPaths(parentPath)
                 : Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []));
 
+    /// <summary>
+    /// Routes to the per-schema adapter's native satellite-UNION descendant
+    /// enumeration (every strict descendant shares the root's first segment, so
+    /// one schema answers the whole subtree). Unroutable segment → nothing stored
+    /// here → empty.
+    /// </summary>
+    public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
+        => AdapterForRead(rootPath) is { } a
+            ? a.ListDescendantPaths(rootPath)
+            : Observable.Return<IReadOnlyCollection<string>>([]);
+
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
         => AdapterForRead(nodePath) is { } a
             ? a.ListPartitionSubPaths(nodePath)

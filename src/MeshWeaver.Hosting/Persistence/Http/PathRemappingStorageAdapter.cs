@@ -112,6 +112,10 @@ public sealed class PathRemappingStorageAdapter : IStorageAdapter
         => _inner.ListChildPaths(parentPath is null ? null : Remap(parentPath));
 
     /// <inheritdoc />
+    public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
+        => _inner.ListDescendantPaths(Remap(rootPath));
+
+    /// <inheritdoc />
     public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
         => _inner.GetPartitionObjects(Remap(nodePath), subPath, options);
 
