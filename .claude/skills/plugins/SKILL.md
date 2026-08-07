@@ -37,9 +37,15 @@ A registry is also a consumer of itself — `memex-cloud` sets both.
 
 ## Consumer wiring
 
+Zero-touch (preferred for new installs) — the install registers ITSELF on first boot with an
+admin-minted `mwr_` registration key (Instance grants ▸ Registration keys on the registry; one
+key serves a whole scaffold, revocable), receives its `mwi_` instance key and stores it
+(`Admin/PluginRegistryCredential/…`, master-key-encrypted). No token copying:
+
 ```yaml
 pluginCatalog:
   registryUrl: "https://memex.meshweaver.cloud"
+  instanceId: "<this install's logical App ID>"   # REQUIRED with a bootstrap key; never derived
 config:
   memex_portal:
     # Systemorph-operated deployments track their plugin repos continuously: a fresh install
@@ -48,7 +54,15 @@ config:
     PluginCatalog__AutoUpdateByDefault: "true"
 secrets:
   memex_portal:
-    PluginCatalog__RegistryToken: "<the token this install was issued>"
+    PluginCatalog__BootstrapKey: "<an mwr_ registration key>"
+```
+
+Manual (unchanged, and always wins when both are set):
+
+```yaml
+secrets:
+  memex_portal:
+    PluginCatalog__RegistryToken: "<the mwi_ key this install was issued in Settings ▸ Instances>"
 ```
 
 Several registries instead of one:
