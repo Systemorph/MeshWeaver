@@ -55,11 +55,12 @@ public class BootstrapController(
 
         // Idempotent step runner: "already exists" is success (a pre-existing static/seed node
         // is fine — we still want the Admin grants). Any other error is a real failure.
+        // The request token rides along so a disconnected client does not leave the write running.
         async Task<bool> Step(IObservable<MeshWeaver.Mesh.MeshNode> obs, string step)
         {
             try
             {
-                await obs.FirstAsync().ToTask();
+                await obs.FirstAsync().ToTask(HttpContext.RequestAborted);
                 logger.LogInformation("Bootstrap: {Step} OK for '{User}'", step, user);
                 return true;
             }
@@ -117,6 +118,13 @@ public class BootstrapController(
         var keys = hub.ServiceProvider.GetRequiredService<RegistrationKeyService>();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
 
+        // 🚨 The response body IS a one-time secret. Forbid caching anywhere on the path — a proxy
+        // or browser cache (or a prefetch of the GET form) would hand the raw key to whoever asks
+        // next. GET is kept because scripted scaffolds and `curl` in a k8s one-shot pod use it, so
+        // the no-store header is what makes that shape safe rather than the verb.
+        Response.Headers.CacheControl = "no-store, no-cache, must-revalidate, max-age=0";
+        Response.Headers.Pragma = "no-cache";
+
         logger.LogInformation("Bootstrap: minting registration key owned by '{Owner}'", owner);
 
         try
@@ -124,6 +132,8 @@ public class BootstrapController(
             // Mint under the OWNER's identity — the key node lands in their partition, the same
             // write the tab performs for a signed-in admin. The Bootstrap secret is the authority
             // here, exactly as it is for first-admin.
+            // The request's cancellation token rides along: a disconnected client must not leave
+            // the mint running in the background.
             var result = await Observable.Using(
                     () => accessService.SwitchAccessContext(new AccessContext
                     {
@@ -133,7 +143,7 @@ public class BootstrapController(
                     }),
                     _ => keys.Mint(owner, name?.Trim() ?? owner, email?.Trim() ?? "",
                         description?.Trim() ?? "bootstrap-minted"))
-                .FirstAsync().ToTask();
+                .FirstAsync().ToTask(HttpContext.RequestAborted);
 
             // The raw key IS the response body — shown once, never stored, same contract as the tab.
             return Ok(result.RawKey);
