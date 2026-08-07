@@ -95,6 +95,68 @@ public static class CodeNodeType
     private static bool IsForeignLanguage(string? language) =>
         language?.ToLowerInvariant() is "python" or "javascript" or "typescript";
 
+    /// <summary>Log channel for every dispatch-side diagnostic emitted by this type.</summary>
+    private const string LoggerCategory = "MeshWeaver.Graph.CodeNodeType";
+
+    /// <summary>
+    /// Wall-clock budget for the <see cref="PartitionDefinition"/> lookup that decides where a
+    /// run's Activity node is written. The lookup is a LIVE workspace query
+    /// (<see cref="PartitionRegistry.GetPartition"/>) and a live query that never converges
+    /// simply never emits — before #841 the dispatch chain sat on that non-emission forever:
+    /// no Activity node, no response, no log line, nothing at Warning+. The budget converts
+    /// that silent stop into a <see cref="TimeoutException"/> that reaches the caller AND the
+    /// logger. It is a diagnosability boundary, not a retry: nothing is re-attempted.
+    /// </summary>
+    private static readonly TimeSpan ActivityParentLookupTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Resolves the namespace a script run's <c>Activity</c> node is written under. Three
+    /// layers, in order: the Code node's own <see cref="CodeConfiguration.ActivityParentPath"/>,
+    /// the partition's <see cref="PartitionDefinition.DefaultActivityParentPath"/>, then the
+    /// partition root. The <c>{viewer}</c> sentinel at either configured layer expands to
+    /// <paramref name="viewerHome"/> (falling back to <paramref name="partitionRoot"/> when no
+    /// viewer identity is available).
+    ///
+    /// <para>Extracted so the ONE way this can stop without producing an answer — a partition
+    /// lookup that never emits — is pinned by a test rather than discovered in production. The
+    /// stream is bounded by <paramref name="lookupBudget"/> and an empty completion resolves to
+    /// "no definition" instead of completing without an emission; either way exactly one of
+    /// <c>OnNext</c> / <c>OnError</c> always reaches the subscriber.</para>
+    /// </summary>
+    /// <param name="partitionDefinitions">Live stream of the partition's definition (null when none).</param>
+    /// <param name="codeActivityParentPath">The Code node's configured override, if any.</param>
+    /// <param name="viewerHome">The calling user's home partition, used to expand <c>{viewer}</c>.</param>
+    /// <param name="partitionRoot">The Code node's own partition — the default and the fallback.</param>
+    /// <param name="lookupBudget">Wall-clock budget for the partition lookup.</param>
+    public static IObservable<string> ResolveActivityParent(
+        IObservable<PartitionDefinition?> partitionDefinitions,
+        string? codeActivityParentPath,
+        string? viewerHome,
+        string partitionRoot,
+        TimeSpan lookupBudget) =>
+        partitionDefinitions
+            .Take(1)
+            // A source that COMPLETES without emitting means "no partition definition", which
+            // is the default case — not a reason to end the dispatch chain in silence.
+            .DefaultIfEmpty()
+            .Timeout(lookupBudget, Observable.Throw<PartitionDefinition?>(
+                new TimeoutException(
+                    $"Activity-parent resolution stalled: the PartitionDefinition lookup for "
+                    + $"partition '{partitionRoot}' produced no answer within "
+                    + $"{lookupBudget.TotalSeconds:F0}s. The script was NOT started and no Activity "
+                    + "node was created.")))
+            .Select(partition =>
+            {
+                var unresolved = codeActivityParentPath ?? partition?.DefaultActivityParentPath;
+                return unresolved switch
+                {
+                    null => partitionRoot,
+                    "{viewer}" when !string.IsNullOrEmpty(viewerHome) => viewerHome!,
+                    "{viewer}" => partitionRoot,
+                    var p => p
+                };
+            });
+
     /// <summary>
     /// Runs the Code node's own script. Reads the local workspace for the node's
     /// <see cref="CodeConfiguration"/>, validates <c>IsExecutable</c>, dispatches
@@ -106,6 +168,40 @@ public static class CodeNodeType
     private static IMessageDelivery HandleExecuteScript(
         IMessageHub hub, IMessageDelivery<ExecuteScriptRequest> request)
     {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(LoggerCategory);
+
+        // 🚨 #841 — THE dispatch sink. Every branch that ends this dispatch without an
+        // Activity node goes through one of these two, and both do BOTH things: answer
+        // the caller AND leave a Warning+ trace. Before the fix the branches only posted
+        // a response, and the canonical caller (MCP execute_script) never observed it —
+        // a dispatch that produced no Activity node produced no evidence anywhere, which
+        // is exactly what made this issue undiagnosable in production.
+        void RefuseDispatch(string error)
+        {
+            logger?.LogWarning(
+                "ExecuteScript refused on {Hub}: {Error} No Activity node was created.",
+                hub.Address, error);
+            hub.Post(new ExecuteScriptResponse { Success = false, Error = error },
+                o => o.ResponseFor(request));
+        }
+
+        // Same sink for a FAULT rather than a refusal: the exception TYPE and full STACK
+        // go to the logger, and the wire error keeps the type name. Reducing an abort to
+        // `.Message` is what made the sibling compile NRE (#890) undiagnosable — see #892.
+        void FaultDispatch(Exception exception, string context)
+        {
+            logger?.LogError(exception,
+                "ExecuteScript faulted on {Hub}: {Context}. No Activity node was created.",
+                hub.Address, context);
+            hub.Post(
+                new ExecuteScriptResponse
+                {
+                    Success = false,
+                    Error = $"{context}: {exception.GetType().Name}: {exception.Message}"
+                },
+                o => o.ResponseFor(request));
+        }
+
         // One-shot read of this hub's own MeshNode via GetDataRequest (posted to self) â€”
         // true request/response, no SubscribeRequest+immediate-unsubscribe. Handler
         // itself returns Processed() immediately; the callback below fires when the
@@ -118,15 +214,29 @@ public static class CodeNodeType
         hub.GetMeshNode(hub.Address.ToString())
             .Subscribe(node =>
             {
-                if (node?.Content is not CodeConfiguration code || !code.IsExecutable)
+                // Three distinct facts, three distinct verdicts. Folding them into one
+                // "Not executable" line told a caller whose node had merely become
+                // unreadable that their script was misconfigured.
+                if (node is null)
                 {
-                    hub.Post(
-                        new ExecuteScriptResponse
-                        {
-                            Success = false,
-                            Error = "Not executable (IsExecutable=false or content is not a CodeConfiguration)"
-                        },
-                        o => o.ResponseFor(request));
+                    RefuseDispatch(
+                        $"No readable node at '{hub.Address}': it does not exist, or the caller "
+                        + "may not read it.");
+                    return;
+                }
+
+                if (node.Content is not CodeConfiguration code)
+                {
+                    RefuseDispatch(
+                        $"Node '{hub.Address}' carries {node.Content?.GetType().Name ?? "no content"}, "
+                        + "not a CodeConfiguration — there is nothing to execute.");
+                    return;
+                }
+
+                if (!code.IsExecutable)
+                {
+                    RefuseDispatch(
+                        $"Not executable: '{hub.Address}' has CodeConfiguration.IsExecutable = false.");
                     return;
                 }
 
@@ -169,19 +279,12 @@ public static class CodeNodeType
                     ?? Observable.Return<PartitionDefinition?>(null);
 
                 var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-                partitionDefaultStream
-                    .Take(1)
-                    .Select(partition =>
-                    {
-                        var unresolved = code.ActivityParentPath ?? partition?.DefaultActivityParentPath;
-                        return unresolved switch
-                        {
-                            null => partitionRoot,
-                            "{viewer}" when !string.IsNullOrEmpty(viewerHome) => viewerHome!,
-                            "{viewer}" => partitionRoot,
-                            var p => p
-                        };
-                    })
+                ResolveActivityParent(
+                        partitionDefaultStream,
+                        code.ActivityParentPath,
+                        viewerHome,
+                        partitionRoot,
+                        ActivityParentLookupTimeout)
                     .SelectMany(activityParentPath =>
                     {
                         var activityId = submissionId;
@@ -259,7 +362,8 @@ public static class CodeNodeType
                                             // The delivery faulted (target unreachable / disconnected)
                                             // before any terminal write — reconcile so the run ends.
                                             ex => FailActivity(hub, activityPath,
-                                                $"{submit.Language} run failed: {ex.Message}"));
+                                                $"{submit.Language} run failed: "
+                                                + $"{ex.GetType().Name}: {ex.Message}", ex));
                                 }
                             }
                             else
@@ -277,8 +381,7 @@ public static class CodeNodeType
                             try
                             {
                                 var workspace = hub.GetWorkspace();
-                                var stampLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
-                                    ?.CreateLogger("MeshWeaver.Graph.CodeNodeType");
+                                var stampLogger = logger;
                                 // .Subscribe is mandatory: Update is Observable.Create â€”
                                 // the partition write only runs on Subscribe. Discarding
                                 // the observable silently drops the stamp.
@@ -307,11 +410,15 @@ public static class CodeNodeType
                                             "CodeNodeType: stamp UpdateMeshNode failed for {Hub}",
                                             hub.Address));
                             }
-                            catch
+                            catch (Exception stampEx)
                             {
-                                // Workspace might not be ready (cold-start race)
-                                // â€” missing fields are a UI nicety, not a
-                                // correctness invariant. Activity log still written.
+                                // The workspace might not be ready (cold-start race) — the
+                                // missing stamp is a UI nicety, not a correctness invariant,
+                                // and the Activity log IS written. But a bare `catch {}` here
+                                // hid whatever went wrong; name it, with type + stack.
+                                logger?.LogWarning(stampEx,
+                                    "CodeNodeType: could not stamp last-execution fields on {Hub} "
+                                    + "(run {Activity} is unaffected)", hub.Address, activityPath);
                             }
 
                             hub.Post(
@@ -324,29 +431,18 @@ public static class CodeNodeType
                                 },
                                 o => o.ResponseFor(request));
                         },
-                        err =>
-                        {
-                            hub.Post(
-                                new ExecuteScriptResponse
-                                {
-                                    Success = false,
-                                    Error = $"Failed to create ActivityLog node: {err.Message}"
-                                },
-                                o => o.ResponseFor(request));
-                        });
+                        // Covers BOTH pre-create stages: a stalled activity-parent resolution
+                        // (TimeoutException from ResolveActivityParent) and a refused/failed
+                        // CreateNode (UnauthorizedAccessException / InvalidOperationException
+                        // from IMeshService). Previously this sink posted a `.Message`-only
+                        // response that nobody observed and logged NOTHING — the exact shape
+                        // of #841's "no Activity node, nothing at Warning+".
+                        err => FaultDispatch(err, "Could not start the script run"));
             },
-            readError =>
-            {
-                // The self-read failed (timeout / access denial). Answer the caller with what
-                // actually happened instead of the misleading "Not executable" verdict above.
-                hub.Post(
-                    new ExecuteScriptResponse
-                    {
-                        Success = false,
-                        Error = $"Could not read the code node to execute: {readError.Message}"
-                    },
-                    o => o.ResponseFor(request));
-            });
+            // The self-read failed (timeout / access denial). Answer the caller with what
+            // actually happened instead of the misleading "Not executable" verdict above,
+            // and log it — a stalled mesh read is an infrastructure fault, not a config error.
+            readError => FaultDispatch(readError, "Could not read the Code node to execute"));
         return request.Processed();
     }
 
@@ -357,10 +453,23 @@ public static class CodeNodeType
     /// carries the caller's AccessContext across the Subscribe boundary); <see cref="ActivityLog.Fail"/>
     /// appends the error and stamps <c>End</c>, so the Output pane leaves "Running…" with the reason.
     /// </summary>
-    private static void FailActivity(IMessageHub hub, string activityPath, string error)
+    private static void FailActivity(IMessageHub hub, string activityPath, string error,
+        Exception? exception = null)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger("MeshWeaver.Graph.CodeNodeType");
+            ?.CreateLogger(LoggerCategory);
+        // Log the REASON, not only a failure to record it: the activity content is visible
+        // to whoever opens that node, but an operator grepping stdout for a run that never
+        // produced output had nothing to find (#841). When a delivery fault drove us here,
+        // the exception object carries type + stack to the logger — never just `.Message`.
+        if (exception is null)
+            logger?.LogWarning(
+                "CodeNodeType: failing run {Activity} dispatched from {Hub}: {Error}",
+                activityPath, hub.Address, error);
+        else
+            logger?.LogWarning(exception,
+                "CodeNodeType: failing run {Activity} dispatched from {Hub}: {Error}",
+                activityPath, hub.Address, error);
         hub.GetWorkspace().GetMeshNodeStream(activityPath).Update(curr =>
             curr.Content is ActivityLog log
                 ? curr with { Content = log.Fail(error) }
