@@ -164,6 +164,10 @@ public static class GitHubActivityExtensions
                     // append an Error line here and flip the terminal status to Failed.
                     return pr.UpdateToLatest(spacePath, userId, sourceId, ctx.Log, force).Select(r =>
                     {
+                        // 🚨 NAME every pruned node on the user-facing activity (issue #604): a prune
+                        // deletes user-visible data, and "pruned N" alone left no record of WHAT.
+                        if (r.PrunedPaths.Count > 0)
+                            ctx.Log($"Pruned {r.PrunedPaths.Count} node(s) absent from the repo: {string.Join(", ", r.PrunedPaths)}");
                         ctx.Log($"Imported {r.Outcome} ({r.Count} node(s)).");
                         return Unit.Default;
                     });
@@ -185,6 +189,10 @@ public static class GitHubActivityExtensions
                 // append an Error line here and flip the terminal status to Failed.
                 return sync.ReimportAtCommit(spacePath, commitish, userId, sourceId, ctx.Log, force).Select(r =>
                 {
+                    // 🚨 NAME every pruned node on the user-facing activity (issue #604): a prune
+                    // deletes user-visible data, and "pruned N" alone left no record of WHAT.
+                    if (r.PrunedPaths.Count > 0)
+                        ctx.Log($"Pruned {r.PrunedPaths.Count} node(s) absent from the repo: {string.Join(", ", r.PrunedPaths)}");
                     ctx.Log($"Re-imported {r.Outcome} ({r.Count} node(s)) at {commitish}.");
                     return Unit.Default;
                 });

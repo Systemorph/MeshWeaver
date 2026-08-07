@@ -366,8 +366,13 @@ public sealed class GitHubSyncService
                     "Change the source's Sync direction to Bidirectional or Import-only to re-import."));
             // Two-way (config.TwoWay): don't overwrite/prune nodes changed on the server since the last
             // recorded sync (config.LastSyncedAt) — they are carried back on the next commit. `force`
-            // overrides. Git-first when TwoWay is off (unchanged legacy behavior).
-            var policy = new ImportConflictPolicy(config.TwoWay, config.LastSyncedAt, force);
+            // overrides. Overwrites stay git-first when TwoWay is off (unchanged legacy behavior) —
+            // but a BIDIRECTIONAL source additionally protects server-side ADDITIONS from the prune
+            // (issue #604): the mesh is an editing surface too, so a node created/changed on the
+            // server since the last sync and not yet committed to the branch is NOT a stale extra to
+            // mirror away. One-directional import (repo → mesh mirror) keeps FullReplace semantics.
+            var policy = new ImportConflictPolicy(config.TwoWay, config.LastSyncedAt, force,
+                PreserveServerAdditions: config.Direction == SyncDirection.Bidirectional);
             return ResolveAuth(userId).SelectMany(auth =>
             {
                 var token = auth.Token;
@@ -403,13 +408,22 @@ public sealed class GitHubSyncService
                     // baseline past them, so the NEXT update would no longer see them as "newer on the
                     // server" and would overwrite them — losing the very edits two-way just protected.
                     // A FAILED import must ALSO not advance the baseline — otherwise the next diff would
-                    // start past the commit whose nodes never landed, permanently skipping them. Leave
-                    // the baseline until an import cleanly reaches the head. A clean import (nothing
-                    // preserved — always the case git-first) records normally.
+                    // start past the commit whose nodes never landed, permanently skipping them.
+                    // 🚨 A NO-OP update ("Skipped": the content fingerprint matched a prior import, so
+                    // NOTHING was verified against the live partition) must not advance the conflict
+                    // horizon either — it would move it past pending uncommitted server changes and
+                    // disarm the very protection above, so a LATER push would prune a server-side
+                    // addition (the second route to the #675 data loss — issue #677). It DOES record
+                    // the commit as SEEN (LastSyncCommitSha only): the repo content at this commit is
+                    // what the mesh already imported, so the up-to-date display and the git-diff base
+                    // stay correct — a repo commit touching no node files must not leave the Space
+                    // forever "behind". A clean RECONCILING import (nothing preserved) records both.
                     .SelectMany(x => x.Result.Preserved > 0
                             || string.Equals(x.Result.Outcome, "Failed", StringComparison.OrdinalIgnoreCase)
                         ? Observable.Return(x.Result)
-                        : RecordLastSync(spacePath, x.CommitSha, sourceId).Select(_ => x.Result));
+                        : string.Equals(x.Result.Outcome, "Skipped", StringComparison.OrdinalIgnoreCase)
+                            ? RecordSeenCommit(spacePath, x.CommitSha, sourceId).Select(_ => x.Result)
+                            : RecordLastSync(spacePath, x.CommitSha, sourceId).Select(_ => x.Result));
             });
         });
     }
@@ -791,6 +805,22 @@ public sealed class GitHubSyncService
             return node with { Content = cur with { LastSyncedAt = now, LastSyncCommitSha = commitSha } };
         });
     }
+
+    /// <summary>
+    /// Records that this source has SEEN <paramref name="commitSha"/> WITHOUT having reconciled any
+    /// node against the live partition (a no-op update at an unchanged content fingerprint): merges
+    /// ONLY <see cref="GitHubSyncConfig.LastSyncCommitSha"/> — the up-to-date display and the
+    /// git-diff base — and leaves <see cref="GitHubSyncConfig.LastSyncedAt"/> (the two-way conflict
+    /// horizon) untouched, so pending uncommitted server changes stay protected (issue #677: a no-op
+    /// "Update to latest" that advanced the horizon disarmed the protection and let a later push
+    /// prune a server-side addition). Same read-modify-write shape as <see cref="RecordLastSync"/>.
+    /// </summary>
+    private IObservable<MeshNode> RecordSeenCommit(string spacePath, string commitSha, string? sourceId = null) =>
+        hub.GetWorkspace().GetMeshNodeStream(ConfigPath(spacePath, sourceId)).Update(node =>
+        {
+            var cur = Extract<GitHubSyncConfig>(node) ?? new GitHubSyncConfig();
+            return node with { Content = cur with { LastSyncCommitSha = commitSha } };
+        });
 
     /// <summary>Writes the FULL config (no read) — used by <see cref="SaveConfig"/> (a programmatic
     /// / test API). The GUI does NOT use this: it edits the node through the standard
