@@ -1,4 +1,7 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -52,15 +55,32 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
         response.Message.Error.Should().BeNullOrEmpty();
     }
 
+    /// <summary>
+    /// Waits until <paramref name="events"/> contains a match. 🚨 The change feed dispatches on
+    /// its OWN serial loop, never on the publishing hub's thread (issue #899 — a synchronous
+    /// fan-out deadlocked two concurrently-deleting hubs), so a subscriber's list is NOT
+    /// guaranteed to be populated the instant the create/delete request returns. Wait on the
+    /// condition, never read straight after the await.
+    /// </summary>
+    private static Task<MeshChangeEvent[]> Delivered(
+        ConcurrentQueue<MeshChangeEvent> events,
+        Func<MeshChangeEvent, bool> predicate,
+        string because)
+        => Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Select(_ => events.ToArray())
+            .Should().Within(TimeSpan.FromSeconds(15))
+            .Match(snapshot => snapshot.Any(predicate), because);
+
     [Fact]
     public async Task CreateNode_PublishesCreatedEvent()
     {
-        var events = new List<MeshChangeEvent>();
-        using var sub = ChangeFeed.Subscribe(e => events.Add(e));
+        var events = new ConcurrentQueue<MeshChangeEvent>();
+        using var sub = ChangeFeed.Subscribe(events.Enqueue);
 
         await CreateTestNode("feed-create-1");
 
-        events.Should().Contain(e => e.Kind == MeshChangeKind.Created && e.Id == "feed-create-1");
+        await Delivered(events, e => e.Kind == MeshChangeKind.Created && e.Id == "feed-create-1",
+            "creating a node must publish a Created event");
     }
 
     [Fact]
@@ -68,28 +88,48 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         var created = await CreateTestNode("feed-del-1");
 
-        var events = new List<MeshChangeEvent>();
-        using var sub = ChangeFeed.Subscribe(e => events.Add(e));
+        var events = new ConcurrentQueue<MeshChangeEvent>();
+        using var sub = ChangeFeed.Subscribe(events.Enqueue);
 
         await DeleteTestNode(created.Path);
 
-        events.Should().Contain(e => e.Kind == MeshChangeKind.Deleted && e.Path.Contains("feed-del-1"));
+        await Delivered(events, e => e.Kind == MeshChangeKind.Deleted && e.Path.Contains("feed-del-1"),
+            "deleting a node must publish a Deleted event");
     }
 
     [Fact]
     public async Task FilteredSubscription_OnlyReceivesMatchingEvents()
     {
-        var createEvents = new List<MeshChangeEvent>();
-        var deleteEvents = new List<MeshChangeEvent>();
-        using var createSub = ChangeFeed.Subscribe(e => createEvents.Add(e), MeshChangeKind.Created);
-        using var deleteSub = ChangeFeed.Subscribe(e => deleteEvents.Add(e), MeshChangeKind.Deleted);
+        var createEvents = new ConcurrentQueue<MeshChangeEvent>();
+        var deleteEvents = new ConcurrentQueue<MeshChangeEvent>();
+        using var createSub = ChangeFeed.Subscribe(createEvents.Enqueue, MeshChangeKind.Created);
+        using var deleteSub = ChangeFeed.Subscribe(deleteEvents.Enqueue, MeshChangeKind.Deleted);
 
         var created = await CreateTestNode("feed-filter-1");
         await DeleteTestNode(created.Path);
 
+        // Wait for BOTH kinds to have been delivered before asserting the filtering —
+        // otherwise "only creates in createEvents" would pass vacuously on an empty queue.
+        await Delivered(createEvents, e => e.Id == "feed-filter-1", "the Created event must arrive");
+        await Delivered(deleteEvents, e => e.Path.Contains("feed-filter-1"), "the Deleted event must arrive");
+
         createEvents.Should().OnlyContain(e => e.Kind == MeshChangeKind.Created);
         deleteEvents.Should().OnlyContain(e => e.Kind == MeshChangeKind.Deleted);
     }
+
+    /// <summary>
+    /// Re-resolves <paramref name="path"/> until it satisfies <paramref name="predicate"/>. The
+    /// resolution cache is invalidated by the change feed, which delivers on its own dispatch
+    /// loop (#899) — and on a distributed deployment that invalidation has always been
+    /// asynchronous (the Orleans cross-silo broadcast). Resolution after a write is therefore
+    /// eventually consistent: wait for it rather than reading once.
+    /// </summary>
+    private Task<AddressResolution?> Resolves(
+        string path, Func<AddressResolution?, bool> predicate, string because)
+        => Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .SelectMany(_ => PathResolver.ResolvePath(path).Take(1))
+            .Should().Within(TimeSpan.FromSeconds(15))
+            .Match(predicate, because);
 
     [Fact]
     public async Task CreateNode_PathResolverFindsIt()
@@ -100,10 +140,10 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
         await CreateTestNode("feed-resolve-1");
 
         // After create Ã¢â‚¬â€ cache was invalidated/pre-warmed by change event
-        var after = await PathResolver.ResolvePath("feed-resolve-1").Should().Emit();
+        var after = await Resolves("feed-resolve-1",
+            r => r is not null && r.Prefix.Contains("feed-resolve-1") && string.IsNullOrEmpty(r.Remainder),
+            "a created node must become resolvable at its exact path");
         after.Should().NotBeNull();
-        after!.Prefix.Should().Contain("feed-resolve-1");
-        after.Remainder.Should().BeNullOrEmpty();
     }
 
     [Fact]
@@ -118,8 +158,8 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
         await DeleteTestNode(created.Path);
 
         // After delete Ã¢â‚¬â€ cache evicted, resolver should not find it at that exact path
-        var gone = await PathResolver.ResolvePath(created.Path).Should().Emit();
-        (gone == null || gone.Prefix != created.Path).Should().BeTrue(
+        await Resolves(created.Path,
+            r => r == null || r.Prefix != created.Path,
             "deleted node should not resolve to its exact path");
     }
 
@@ -136,10 +176,9 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
         await CreateTestNode("nest-child-1", parent.Path);
 
         // Now nested path should resolve to child (stale cache evicted by Created event)
-        var afterChild = await PathResolver.ResolvePath($"{parent.Path}/nest-child-1").Should().Emit();
-        afterChild.Should().NotBeNull();
-        afterChild!.Prefix.Should().Be($"{parent.Path}/nest-child-1");
-        afterChild.Remainder.Should().BeNullOrEmpty();
+        await Resolves($"{parent.Path}/nest-child-1",
+            r => r is not null && r.Prefix == $"{parent.Path}/nest-child-1" && string.IsNullOrEmpty(r.Remainder),
+            "the stale parent partial match must be evicted once the child exists");
     }
 }
 
