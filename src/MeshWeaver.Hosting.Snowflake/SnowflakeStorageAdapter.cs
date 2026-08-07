@@ -984,6 +984,69 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         return (paths, Enumerable.Empty<string>());
     }
 
+    /// <summary>
+    /// Native authoritative descendant enumeration — the Snowflake twin of the PG
+    /// implementation: ONE round-trip UNION across the partition's primary
+    /// <c>mesh_nodes</c> table AND every satellite table in
+    /// <see cref="PartitionDefinition.TableMappings"/>, matching every row whose
+    /// namespace equals the root or is prefixed by it. The interface default's
+    /// <see cref="ListChildPaths"/> walk cannot work here — the child listing is a
+    /// flat namespace-equality scan with no directory levels. Absent schema → empty.
+    /// </summary>
+    public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
+        => _readPool.Invoke(ct => ListDescendantPathsAsyncCore(rootPath, ct))
+            .Catch<IReadOnlyCollection<string>, Exception>(ex => IsUndefinedObject(ex)
+                ? Observable.Return<IReadOnlyCollection<string>>([])
+                : Observable.Throw<IReadOnlyCollection<string>>(ex));
+
+    private async Task<IReadOnlyCollection<string>> ListDescendantPathsAsyncCore(
+        string rootPath, CancellationToken ct)
+    {
+        var normalizedRoot = NormalizePath(rootPath);
+
+        var tables = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "mesh_nodes" };
+        if (_partitionDefinition?.TableMappings is { } mappings)
+            foreach (var t in mappings.Values)
+                if (!string.IsNullOrEmpty(t))
+                    tables.Add(t);
+
+        // 🚨 LIKE prefix with explicit ESCAPE + escaped pattern: mesh paths routinely
+        // contain `_` (`X/_Thread`), a single-char LIKE wildcard — unescaped it would
+        // match sibling subtrees into the deletion plan. In a Snowflake string literal
+        // the backslash itself is written escaped ('\\').
+        var branches = tables.Select(t =>
+        {
+            var qualified = QualifyTable(t);
+            return string.IsNullOrEmpty(normalizedRoot)
+                ? $"SELECT \"namespace\", \"id\" FROM {qualified}"
+                : $"SELECT \"namespace\", \"id\" FROM {qualified} WHERE \"namespace\" = :ns OR \"namespace\" LIKE :pat ESCAPE '\\\\'";
+        });
+        var sql = string.Join("\n UNION ALL\n", branches);
+
+        await using var connection = await _source.OpenAsync(ct).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = sql;
+        if (!string.IsNullOrEmpty(normalizedRoot))
+        {
+            SnowflakeConnectionSource.AddParam(cmd, "ns", normalizedRoot, DbType.String);
+            SnowflakeConnectionSource.AddParam(
+                cmd, "pat",
+                normalizedRoot.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "/%",
+                DbType.String);
+        }
+
+        var paths = new List<string>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            var ns = reader.GetString(0);
+            var id = reader.GetString(1);
+            paths.Add(ComputePath(ns, id));
+        }
+
+        return paths;
+    }
+
     /// <inheritdoc />
     public IObservable<bool> Exists(string path)
         => _ioPool.Invoke(ct => ExistsAsyncCore(path, ct))

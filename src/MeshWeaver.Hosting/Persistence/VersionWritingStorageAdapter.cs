@@ -63,6 +63,14 @@ internal class VersionWritingStorageAdapter(
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => inner.ListChildPaths(parentPath);
 
+    /// <summary>
+    /// Explicit forward — the interface default would walk <c>this.ListChildPaths</c>
+    /// and strip the backend's native prefix enumeration (same reason as
+    /// <see cref="ResolvePath"/> below).
+    /// </summary>
+    public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
+        => inner.ListDescendantPaths(rootPath);
+
     public IObservable<bool> Exists(string path) => inner.Exists(path);
 
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
