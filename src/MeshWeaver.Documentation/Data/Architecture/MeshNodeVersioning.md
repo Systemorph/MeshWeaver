@@ -91,6 +91,41 @@ The gate comes first at **every** place a write can land; the bump is what happe
 
 **`LastModified` is stamped only on a real change.** The audit stamp is applied *after* the diff, never before — otherwise the stamp is the only thing in the patch and every save looks like an edit.
 
+## 🚨 Never Author `Version` in a Source File — Use SemVer
+
+`Version` is the OWNER's persistence clock. It is `[Editable(false)]`, it means "revision N of this
+node", and it belongs to the hub that owns the node. **A node file in a source repo must never carry
+it.**
+
+A committed `Version` is a snapshot of some *other* mesh's clock. On a fresh mesh it collides with
+the durable row and the store correctly refuses the write:
+
+```
+[MonotonicWriteGuard] REFUSED a backward write to Store: incoming Version=1 is BELOW the
+    stored Version=249 … forked lineage: stale activation seed or a second writer
+MeshWeaver.PluginCatalog.Catalog: Install of Store failed.
+```
+
+**What that costs is out of all proportion to the symptom, and the symptom names the wrong thing.**
+The refused write fails the INSTALL; the partition then has no readable root, so every subscribe is
+denied (799 of them in one observed run); its NodeTypes never compile because nothing readable
+reaches them; and the harness finally reports *"Store/Plugin never reached compilationStatus Ok"* —
+a compile error, five minutes and four causal steps from the actual failure. It reads as a flaky
+compile for as long as you let it.
+
+Found 2026-08-06 across **every** node repo — 13 modules carrying counters as high as 4489, each a
+fork waiting for a fresh mesh.
+
+**The rule:** a module's authored version is **SemVer** — `manifest.lock`'s `version` (and
+`content.version` for the series), published as the git tag `<Module>/vMAJOR.MINOR.PATCH`. The
+persistence counter is never authored, only minted. Two different things that happened to share a
+field name, which is exactly how this went unnoticed.
+
+🚨 **Do not "fix" a fork by relaxing the guard.** Its own message says it: *"Find the writer that
+adopted a stale own-node snapshot; do not relax this guard."* A regressing write is a stale snapshot
+about to destroy acknowledged data. When a fork appears, find the writer — and check first whether
+the writer is a checked-in file.
+
 ## Only the Owner Mints
 
 A client/subscriber writing a node it does not own (a cross-hub `GetMeshNodeStream(path).Update(...)`) **carries the base version it last observed** and lets the owner assign the fresh value on apply. It never increments client-side. A pre-incremented client version (the old `Math.Max(existing, …) + 1`) ships a frame whose base is already out of date by the time it lands, and the owner's version-guarded merge mishandles it. See [DataSyncAndCrdt](/Doc/Architecture/DataSyncAndCrdt) §2 ("a subscriber never mints a version").
