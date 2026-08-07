@@ -77,17 +77,21 @@ deploy/aks/envs/{{ns}}/deploy.sh
 **5. DNS + sign-in:** point `{{host}}` at the ingress IP (zone `{{o.DnsZone}}`), then add the OAuth
 redirect URIs (`https://{{host}}/signin-microsoft`, `/signin-google`, …) and invitation/email config.
 
-**6. Plugins:** on the **registry** portal, Settings ▸ Instances → register `{{ns}}` and copy the
-issued `mwi_` key (shown once). Sources in the registry's `PluginCatalog:DefaultGrants` — the
-platform `Plugins/*` repo — are granted automatically at registration; anything else stays a
-per-instance admin grant (Settings ▸ Administration ▸ Instance grants). Wire the consumer side in
-`values.{{ns}}.yaml` + the Key Vault CSI secret, then install from Settings ▸ Administration ▸
-Plugin Catalog:
+**6. Plugins (zero-touch):** wire the consumer side in `values.{{ns}}.yaml` + the Key Vault CSI
+secret — on first boot the portal **registers itself** at the registry (`mwr_` bootstrap key from
+Settings ▸ Administration ▸ Instance grants ▸ Registration keys; one key serves the whole
+scaffold), stores its issued `mwi_` key, and sources in the registry's
+`PluginCatalog:DefaultGrants` — the platform `Plugins/*` repo — are granted automatically. Then
+install from Settings ▸ Administration ▸ Plugin Catalog:
 ```yaml
 pluginCatalog:
   registryUrl: https://<registry-host>
-# secret (never in values): PluginCatalog__RegistryToken = the mwi_ key
+  instanceId: {{ns}}
+# secret (never in values): PluginCatalog__BootstrapKey = an mwr_ registration key
 ```
+Manual fallback: register `{{ns}}` by hand in Settings ▸ Instances on the registry and set the
+issued key as the `PluginCatalog__RegistryToken` secret instead. Anything beyond the defaults
+stays a per-instance admin grant (Settings ▸ Administration ▸ Instance grants).
 
 **7. Verify:**
 ```bash

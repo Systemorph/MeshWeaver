@@ -39,6 +39,12 @@ public static class MeshWeaverInstanceNodeType
     /// <summary>Path of the grant node for <paramref name="instanceId"/>.</summary>
     public static string GrantPath(string instanceId) => $"{GrantNamespace}/{instanceId}";
 
+    /// <summary>The node-type identifier for registration bootstrap keys
+    /// (<see cref="RegistrationKey"/>) and their index nodes. The key node lives in the minting
+    /// admin's partition (<c>{userId}/RegistrationKey/{id}</c>); the index shares
+    /// <see cref="IndexNamespace"/> with instance-key indexes — content type tells them apart.</summary>
+    public const string RegistrationKeyNodeType = "RegistrationKey";
+
     /// <summary>
     /// Registers both node types on the mesh builder and puts their content types in the hub's
     /// type registry so they serialize across silos (without this, a cross-silo create fails with
@@ -47,15 +53,17 @@ public static class MeshWeaverInstanceNodeType
     public static TBuilder AddMeshWeaverInstanceType<TBuilder>(this TBuilder builder)
         where TBuilder : MeshBuilder
     {
-        builder.AddMeshNodes(CreateMeshNode(), CreateGrantMeshNode());
-        // An instance is infrastructure identity, not content — keep both out of autocomplete so
-        // they never surface as pickable nodes in the composer.
-        builder.AddAutocompleteExcludedTypes(NodeType, GrantNodeType);
+        builder.AddMeshNodes(CreateMeshNode(), CreateGrantMeshNode(), CreateRegistrationKeyMeshNode());
+        // An instance is infrastructure identity, not content — keep all of these out of
+        // autocomplete so they never surface as pickable nodes in the composer.
+        builder.AddAutocompleteExcludedTypes(NodeType, GrantNodeType, RegistrationKeyNodeType);
         builder.ConfigureHub(config => config
             .WithType<MeshWeaverInstance>(nameof(MeshWeaverInstance))
             .WithType<MeshWeaverInstanceIndex>(nameof(MeshWeaverInstanceIndex))
             .WithType<PluginGrant>(nameof(PluginGrant))
-            .WithType<PluginGrantEntry>(nameof(PluginGrantEntry)));
+            .WithType<PluginGrantEntry>(nameof(PluginGrantEntry))
+            .WithType<RegistrationKey>(nameof(RegistrationKey))
+            .WithType<RegistrationKeyIndex>(nameof(RegistrationKeyIndex)));
         return builder;
     }
 
@@ -71,6 +79,19 @@ public static class MeshWeaverInstanceNodeType
             .AddMeshDataSource(source => source
                 .WithContentType<MeshWeaverInstance>()
                 .WithContentType<MeshWeaverInstanceIndex>())
+    };
+
+    /// <summary>The <see cref="RegistrationKey"/> node definition (keys + their index rows). Same
+    /// shape as the instance node type: owner-partition nodes plus a System-written index.</summary>
+    public static MeshNode CreateRegistrationKeyMeshNode() => new(RegistrationKeyNodeType)
+    {
+        Name = "Registration Key",
+        IsSatelliteType = false,
+        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        HubConfiguration = config => config
+            .AddMeshDataSource(source => source
+                .WithContentType<RegistrationKey>()
+                .WithContentType<RegistrationKeyIndex>())
     };
 
     /// <summary>The <see cref="PluginGrant"/> node definition. Lives under the Admin partition, so

@@ -59,6 +59,26 @@ public sealed class PluginCatalogOptions
     public bool AutoUpdateByDefault { get; set; }
 
     /// <summary>
+    /// A registration bootstrap key (<c>mwr_…</c>) for first-startup auto-registration: when set —
+    /// and no <see cref="RegistryToken"/> is configured and no instance key is stored yet — the
+    /// installation registers itself at the configured registry on startup as
+    /// <see cref="InstanceId"/> and persists the issued instance key
+    /// (<see cref="InstanceAutoRegistrationService"/>). A secret; deliver it like the tokens.
+    /// </summary>
+    public string BootstrapKey { get; set; } = "";
+
+    /// <summary>The logical App ID this installation registers itself under (lowercase slug —
+    /// see the instance-id rules). REQUIRED when <see cref="BootstrapKey"/> is set: the id is a
+    /// stable global identity, so it is never guessed from a machine or pod name.</summary>
+    public string InstanceId { get; set; } = "";
+
+    /// <summary>Display name for the auto-registered instance. Empty → the instance id.</summary>
+    public string InstanceName { get; set; } = "";
+
+    /// <summary>This installation's public base URL, recorded on the instance node (advisory).</summary>
+    public string HomeUrl { get; set; } = "";
+
+    /// <summary>
     /// The registries to actually consume: <see cref="Registries"/> (entries with a URL), or the
     /// legacy <see cref="RegistryUrl"/> as a single unnamed entry, or empty when nothing is
     /// configured (the admin tab shows a "not configured" note).

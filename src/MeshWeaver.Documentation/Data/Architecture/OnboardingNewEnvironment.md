@@ -149,6 +149,15 @@ admin on the registry — except sources the registry opted into `PluginCatalog:
 So with defaults configured, a fresh environment needs no admin grant step to see the platform
 plugins — install them from the Plugin Catalog tab once the consumer wiring lands.
 
+**Zero-touch alternative — auto-registration on first boot.** Skip the register-and-copy step
+entirely: set `pluginCatalog.instanceId` in the values file and the `PluginCatalog__BootstrapKey`
+secret (an admin-minted `mwr_` registration key from the registry's Instance grants ▸ Registration
+keys section — one key serves the whole scaffold and is revocable). On first startup the portal
+registers itself at the registry, receives its `mwi_` key and stores it
+(`Admin/PluginRegistryCredential/…`, encrypted with the master key); `DefaultGrants` then fill the
+catalog with no admin involved. An explicitly configured `PluginCatalog__RegistryToken` always
+wins over the stored credential.
+
 Registry (only when this environment *is* the registry):
 
 ```yaml

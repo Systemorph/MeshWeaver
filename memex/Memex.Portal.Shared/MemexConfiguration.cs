@@ -1136,6 +1136,11 @@ public static class MemexConfiguration
         // (only curated packages, addressed by plugin id, are exposed; the registry's credential stays here).
         app.MapPluginRegistry();
 
+        // First-startup auto-registration — POST /api/instances/register. A new deployment presents
+        // an admin-minted bootstrap key (mwr_) and receives its own instance key (mwi_) once;
+        // PluginCatalog:DefaultGrants seeding applies. The bootstrap key in the body IS the auth.
+        app.MapInstanceRegistration();
+
         // Crawler plumbing — a real /robots.txt + /sitemap.xml (the Blazor catch-all otherwise
         // serves the SPA shell on both). The sitemap lists exactly the anonymous surface: every
         // top-level node passing the AnonymousGate plus store plugins' public segments.

@@ -54,6 +54,19 @@ with no admin step). Registration then *seeds* those entries into the grant node
 the single authority, so an admin can still revoke or extend per instance — and private/paid
 sources are never listed there. With no defaults configured, registering grants exactly nothing.
 
+**First-startup auto-registration** removes the remaining hand-off. A platform admin mints a
+*registration key* (`mwr_…` — Settings ▸ Administration ▸ Instance grants ▸ Registration keys;
+reusable, revocable, optionally expiring) and puts it in the deployment scaffold. A new install
+configured with `PluginCatalog:BootstrapKey` + `PluginCatalog:InstanceId` then registers **itself**
+on first boot via `POST /api/instances/register`: the bootstrap key resolves to its minting admin,
+the instance is created under that identity (exactly as if that admin had registered it by hand,
+`DefaultGrants` seed included), and the response carries the instance's own `mwi_` key **once** —
+the install persists it (`Admin/PluginRegistryCredential/…`, `enc:`-protected at rest when a master
+key is configured) and presents it on every catalog call from then on. Nobody copies a token.
+Revoking the bootstrap key stops further registrations without touching the instances it already
+created; a bootstrap key is never accepted on the catalog surface, and an instance key is never
+accepted for registration (`mwr_` vs `mwi_` — disjoint by shape).
+
 What a registered instance can then read is **curated plugins** only:
 by default the node-native repos the [`MeshWeaver.Plugins`](/Doc/Architecture/Plugins) repo ships —
 `<Plugin>/index.json` **Store/Plugin** roots carrying a `PluginContent`, node-per-file — via a

@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -75,8 +76,8 @@ public sealed class MeshWeaverInstanceService(
         return IsIdAvailable(instanceId).SelectMany(available =>
         {
             if (!available)
-                return Observable.Throw<InstanceRegistrationResult>(new InvalidOperationException(
-                    $"Instance id '{instanceId}' is already registered."));
+                return Observable.Throw<InstanceRegistrationResult>(
+                    new InstanceIdTakenException(instanceId));
 
             var instance = new MeshWeaverInstance
             {
@@ -101,7 +102,18 @@ public sealed class MeshWeaverInstanceService(
                 Content = instance,
             };
 
+            // The IsIdAvailable pre-check reads the eventually-consistent query index, so a
+            // just-registered id can still look available — the CREATE is the real serialization
+            // point. When it fails and an authoritative read shows a node at the claimed path,
+            // surface the same typed conflict the pre-check would have raised, not a raw storage
+            // error (the endpoint's 409 depends on the type).
             return nodeFactory.CreateNode(instanceNode)
+                .Catch((Exception ex) => Observable.Using(
+                        () => hub.ServiceProvider.GetRequiredService<AccessService>().ImpersonateAsSystem(),
+                        _ => hub.GetMeshNode(instanceNode.Path, TimeSpan.FromSeconds(10)))
+                    .Take(1)
+                    .SelectMany(existing => Observable.Throw<MeshNode>(
+                        existing is not null ? new InstanceIdTakenException(instanceId) : ex)))
                 .SelectMany(created => WriteIndex(hash, created.Path, instanceId)
                     .SelectMany(_ => SeedDefaultGrants(instanceId))
                     .Select(_ =>
@@ -112,6 +124,54 @@ public sealed class MeshWeaverInstanceService(
                         return new InstanceRegistrationResult(rawKey, created, instance);
                     }));
         });
+    }
+
+    /// <summary>
+    /// Registers an installation presenting a registration bootstrap key (<c>mwr_…</c>) — the
+    /// first-startup auto-registration flow behind <c>POST /api/instances/register</c>. The
+    /// bootstrap key IS the authentication: it resolves to its minting admin
+    /// (<see cref="RegistrationKeyService.Resolve"/>, revocation + expiry enforced) and the
+    /// registration runs under THAT identity, so the instance lands in the minter's partition
+    /// exactly like a hand registration — including the <see cref="DefaultGrantsConfigKey"/> seed.
+    /// Errors are typed: <see cref="InvalidBootstrapKeyException"/> (→ 401) and
+    /// <see cref="InstanceIdTakenException"/> (→ 409).
+    /// </summary>
+    public IObservable<InstanceRegistrationResult> RegisterWithBootstrapKey(
+        string rawBootstrapKey, string instanceId,
+        string displayName = "", string description = "", string homeUrl = "")
+    {
+        var keys = hub.ServiceProvider.GetRequiredService<RegistrationKeyService>();
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+
+        return keys.Resolve(rawBootstrapKey)
+            .SelectMany(resolved =>
+            {
+                if (resolved is null)
+                    return Observable.Throw<InstanceRegistrationResult>(new InvalidBootstrapKeyException());
+
+                return Observable.Defer(() =>
+                    {
+                        var disposable = accessService.SwitchAccessContext(new AccessContext
+                        {
+                            ObjectId = resolved.Key.OwnerUserId,
+                            Name = resolved.Key.OwnerUserName,
+                            Email = resolved.Key.OwnerUserEmail,
+                        });
+                        return Register(
+                                resolved.Key.OwnerUserId, resolved.Key.OwnerUserName,
+                                resolved.Key.OwnerUserEmail, instanceId,
+                                displayName, description, homeUrl)
+                            .Finally(() => disposable.Dispose());
+                    })
+                    .SelectMany(registration => keys.StampUse(resolved.KeyPath)
+                        .Select(_ =>
+                        {
+                            logger.LogInformation(
+                                "Instance '{InstanceId}' auto-registered via bootstrap key of {Owner}",
+                                registration.Instance.InstanceId, resolved.Key.OwnerUserId);
+                            return registration;
+                        }));
+            });
     }
 
     /// <summary>The default grant entries the operator configured, parsed and de-blanked.
@@ -327,3 +387,17 @@ public sealed class MeshWeaverInstanceService(
 /// available in the clear — only its hash is stored, so it must be shown to the user now or lost.
 /// </summary>
 public sealed record InstanceRegistrationResult(string RawKey, MeshNode Node, MeshWeaverInstance Instance);
+
+/// <summary>The requested instance id is already claimed. Typed so callers (the registration
+/// endpoint's 409) can branch on it without matching message text.</summary>
+public sealed class InstanceIdTakenException(string instanceId)
+    : InvalidOperationException($"Instance id '{instanceId}' is already registered.")
+{
+    /// <summary>The id that was requested.</summary>
+    public string InstanceId { get; } = instanceId;
+}
+
+/// <summary>The presented registration bootstrap key is unknown, revoked or expired — the
+/// registration endpoint's 401. The message deliberately does not say which.</summary>
+public sealed class InvalidBootstrapKeyException()
+    : InvalidOperationException("A valid registration bootstrap key is required (mwr_…).");

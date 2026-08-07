@@ -31,6 +31,9 @@ public static class PluginCatalogConfigurationExtensions
             .AddMeshNodes(CreatePackageNodeType())
             .AddMeshNodes(CreateCatalogNodeType())
             .AddMeshNodes(CreateInstalledPartitionPolicy())
+            .AddMeshNodes(CreateRegistryCredentialNodeType())
+            // Infrastructure credential, never pickable content.
+            .AddAutocompleteExcludedTypes(PluginRegistryCredentials.NodeType)
             // The build-completion subscriber. A mesh-scoped SINGLETON, so its subscriptions live
             // and die with the mesh rather than surviving disposal into the next test
             // (Doc/Architecture/NoStaticState). The IHostedService registration is what STARTS it —
@@ -45,6 +48,20 @@ public static class PluginCatalogConfigurationExtensions
                 // surface. Mesh-scoped singleton so its short-lived cache dies with the mesh
                 // (Doc/Architecture/NoStaticState) — a revoked grant must not outlive a test either.
                 .AddSingleton<InstanceRegistryAuthenticator>()
+                // Registration bootstrap keys (mwr_) — minted on the admin surface, validated by
+                // the /api/instances/register endpoint. Mesh-scoped like everything above.
+                .AddSingleton<RegistrationKeyService>()
+                .AddSingleton<InstanceRegistrationClient>()
+                // First-startup auto-registration: when PluginCatalog:BootstrapKey is configured
+                // and no instance key is stored yet, register this installation at the configured
+                // registry and persist the issued key. Same two-registration idiom as the watcher —
+                // the IHostedService forward is what STARTS it.
+                .AddSingleton<InstanceAutoRegistrationService>()
+                .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
+                    sp => sp.GetRequiredService<InstanceAutoRegistrationService>())
+                // Resolves the effective registry token: configured token, else the stored
+                // auto-registration credential (decrypted), else empty.
+                .AddSingleton<RegistryTokenResolver>()
                 // Re-runs the install hooks for ALREADY-installed packages once at startup. Packages
                 // installed before hooks existed never registered their agent/skill sources, so on a
                 // live instance every user's picker is missing them — and nothing else would fix it
@@ -77,7 +94,8 @@ public static class PluginCatalogConfigurationExtensions
         => typeRegistry
             .WithType(typeof(PackageManifest), nameof(PackageManifest))
             .WithType(typeof(PluginCatalogContent), nameof(PluginCatalogContent))
-            .WithType(typeof(PluginManifest), nameof(PluginManifest));
+            .WithType(typeof(PluginManifest), nameof(PluginManifest))
+            .WithType(typeof(PluginRegistryCredential), nameof(PluginRegistryCredential));
 
     private static MeshNode CreatePackageNodeType() => new(PackageInstaller.PackageNodeType)
     {
@@ -93,6 +111,18 @@ public static class PluginCatalogConfigurationExtensions
         Name = "Plugin Catalog",
         Icon = "/static/NodeTypeIcons/box.svg",
         HubConfiguration = config => config.AddPluginCatalogViews(),
+    };
+
+    // The auto-registration credential (the instance key this installation received when it
+    // registered itself at a registry). Admin-partition nodes; the partition's access control is
+    // the gate, and the key itself is enc:-protected at rest when a master key is configured.
+    private static MeshNode CreateRegistryCredentialNodeType() => new(PluginRegistryCredentials.NodeType)
+    {
+        Name = "Plugin Registry Credential",
+        IsSatelliteType = false,
+        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        HubConfiguration = config => config
+            .AddMeshDataSource(s => s.WithContentType<PluginRegistryCredential>()),
     };
 
     // Read-only, world-readable policy for the install-records partition — the same shape every
