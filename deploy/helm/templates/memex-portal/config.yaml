@@ -239,6 +239,9 @@ data:
   PluginCatalog__Sources__{{ $i }}__Ref: "{{ $s.ref | default "main" }}"
   PluginCatalog__Sources__{{ $i }}__Format: "{{ $s.format | default "node-repo" }}"
   {{- end }}
+  {{- range $i, $g := .Values.pluginCatalog.defaultGrants }}
+  PluginCatalog__DefaultGrants__{{ $i }}: "{{ $g }}"
+  {{- end }}
   # ---- System email (Microsoft Graph) — BIDIRECTIONAL. Outbound invitations + notifications
   # (/sendMail, Mail.Send app permission) AND optional inbound email→agent channel (inbox
   # change-notification subscription, Mail.ReadWrite app permission). Non-secret here;
