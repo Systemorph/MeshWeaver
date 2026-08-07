@@ -189,9 +189,13 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
 
 # 2. Where tickets go. Without at least one route the control plane idles by design —
 #    it will not spend agent rounds on incidents it could never file.
-#      LogWatch__DefaultRepository = Systemorph/MeshWeaver
-#      LogWatch__Routes__0__Prefix = MeshWeaver.     Routes__0__Repository = Systemorph/MeshWeaver
-#      LogWatch__Routes__1__Prefix = Memex.          Routes__1__Repository = Systemorph/Memex
+#      LogWatch__DefaultRepository    = Systemorph/MeshWeaver
+#      LogWatch__Routes__0__Prefix    = MeshWeaver.
+#      LogWatch__Routes__0__Repository = Systemorph/MeshWeaver
+#      LogWatch__Routes__1__Prefix    = Memex.
+#      LogWatch__Routes__1__Repository = Systemorph/Memex
+#    Every key carries the LogWatch__ prefix — a bare Routes__0__Repository does not bind, and an
+#    unbound route reads exactly like "no route configured": incidents pile up at New, silently.
 #    Issues are opened as the GitHub App (GitHub:App), never a user's OAuth token.
 
 # 3. Build + push the watcher image.
@@ -216,7 +220,8 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
 |---|---|
 | `Loki: N red line(s) …` then `Reported <fp> … — 200` | Working end to end. |
 | `Log watcher is not configured` | Step 1 missed — `PortalUrl`/`IngestToken` unset. |
-| `401` from the portal | The two tokens differ, or the portal's is unset (which un-maps the route entirely → also 404). |
+| `Portal REJECTED report … with 401` | The two tokens differ — the watcher's secret and the portal's `LogWatch__IngestToken` must be the same string. |
+| `Portal REJECTED report … with 404` | The portal's `LogWatch__IngestToken` is unset, so `/api/log-incidents` is not mapped at all — step 1 was done on the watcher side only. |
 | `Loki: 0 red line(s)` forever | Nothing red in the watched namespaces, or `Namespaces` names the wrong ones. |
 | Incidents appear but stay `New` | Step 2 missed — no repository routed, so the control plane idles. |
 
