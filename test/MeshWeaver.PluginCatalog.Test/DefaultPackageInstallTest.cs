@@ -75,6 +75,14 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
             new NodeRepoPackageSource(fetch, "https://github.com/acme/plugins"));
     }
 
+    /// <summary>
+    /// THE default-install service — the single path that decides what installs at boot. The test
+    /// drives the very same method the boot pass does, differing only in where the source list
+    /// comes from.
+    /// </summary>
+    private InstanceAutoRegistrationService Installer() =>
+        Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>();
+
     private IObservable<IReadOnlyList<MeshNode>> InstalledRecords()
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -93,8 +101,9 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
     {
         var wanted = new[] { PluginGrantEntry.TryParse("Plugins/*")! };
 
-        await InstanceAutoRegistrationService
-            .InstallSelected(Mesh, Catalog(), "HEAD", wanted, NullLogger.Instance)
+        await Installer()
+            .InstallFrom([new ConfiguredPackageSource(Catalog(), "HEAD", "test")],
+                baseline: false, wanted)
             .Should().Within(120.Seconds()).Emit();
 
         var records = (await InstalledRecords().Should().Emit())
@@ -116,8 +125,9 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
     {
         var wanted = new[] { PluginGrantEntry.TryParse("Plugins/Store")! };
 
-        await InstanceAutoRegistrationService
-            .InstallSelected(Mesh, Catalog(), "HEAD", wanted, NullLogger.Instance)
+        await Installer()
+            .InstallFrom([new ConfiguredPackageSource(Catalog(), "HEAD", "test")],
+                baseline: false, wanted)
             .Should().Within(120.Seconds()).Emit();
 
         var records = (await InstalledRecords().Should().Emit()).Select(n => n.Id).ToList();
@@ -193,9 +203,9 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
             (_, _, _, _) => Observable.Return(new RepoSnapshot("commit-default", Repo));
         var unstamped = new NodeRepoPackageSource(fetch, "https://github.com/acme/plugins");
 
-        await InstanceAutoRegistrationService
-            .InstallSelected(Mesh, unstamped, "HEAD",
-                [PluginGrantEntry.TryParse("Plugins/*")!], NullLogger.Instance)
+        await Installer()
+            .InstallFrom([new ConfiguredPackageSource(unstamped, "HEAD", "test")],
+                baseline: false, [PluginGrantEntry.TryParse("Plugins/*")!])
             .Should().Within(60.Seconds()).Emit();
 
         (await InstalledRecords().Should().Emit()).Should().BeEmpty();
