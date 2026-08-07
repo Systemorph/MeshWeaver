@@ -242,6 +242,15 @@ data:
   {{- range $i, $g := .Values.pluginCatalog.defaultGrants }}
   PluginCatalog__DefaultGrants__{{ $i }}: "{{ $g }}"
   {{- end }}
+  {{- if .Values.pluginCatalog.instanceId }}
+  # First-startup auto-registration identity (pairs with the PluginCatalog__BootstrapKey secret).
+  PluginCatalog__InstanceId: "{{ .Values.pluginCatalog.instanceId }}"
+  {{- if .Values.pluginCatalog.homeUrl }}
+  PluginCatalog__HomeUrl: "{{ .Values.pluginCatalog.homeUrl }}"
+  {{- else if .Values.ingress.host }}
+  PluginCatalog__HomeUrl: "https://{{ .Values.ingress.host }}"
+  {{- end }}
+  {{- end }}
   # ---- System email (Microsoft Graph) — BIDIRECTIONAL. Outbound invitations + notifications
   # (/sendMail, Mail.Send app permission) AND optional inbound email→agent channel (inbox
   # change-notification subscription, Mail.ReadWrite app permission). Non-secret here;

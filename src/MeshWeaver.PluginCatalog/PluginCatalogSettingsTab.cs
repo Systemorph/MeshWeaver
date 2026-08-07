@@ -91,14 +91,19 @@ public static class PluginCatalogSettingsTab
         // One catalog section per configured registry (e.g. the platform plugin registry plus an
         // education registry), each reusing the shared rendering: live package list joined with this
         // instance's install registry into Install / Update / Installed cards.
+        var resolver = host.Hub.ServiceProvider.GetRequiredService<RegistryTokenResolver>();
         foreach (var registry in registries)
         {
             var label = string.IsNullOrWhiteSpace(registry.Name) ? registry.Url : registry.Name;
             if (registries.Count > 1)
                 stack = stack.WithView(Controls.Title(label, 2));
-            var source = new RegistryPackageSource(host.Hub, registry.Url, registry.Token);
-            stack = stack.WithView((h, _) => CatalogLayoutAreas.RenderFromSource(
-                h, source, registry.Ref, description: null, sourceLabel: registry.Url));
+            // The token is resolved reactively: an explicitly configured token wins, else the
+            // credential stored by first-startup auto-registration (decrypted), else empty.
+            var captured = registry;
+            stack = stack.WithView((h, _) => resolver.ResolveToken(captured)
+                .SelectMany(token => CatalogLayoutAreas.RenderFromSource(
+                    h, new RegistryPackageSource(h.Hub, captured.Url, token), captured.Ref,
+                    description: null, sourceLabel: captured.Url)));
         }
         return stack;
     }
