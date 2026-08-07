@@ -68,6 +68,17 @@ public record PackageManifest
     public string? SourceFolder { get; init; }
 
     /// <summary>
+    /// The registry SOURCE this package came from (<c>PluginCatalog:Sources:N:Name</c> — e.g.
+    /// <c>Plugins</c>, <c>Education</c>). Stamped by the registry as it merges its sources; never
+    /// authored in a repo. It is what lets a consumer scope an action to a source it trusts —
+    /// specifically <c>PluginCatalog:InstallByDefault</c>, which must be able to say "install the
+    /// platform repo" WITHOUT sweeping in paid course content the same instance may also be
+    /// granted. Null when the registry predates this field: a source-scoped default then matches
+    /// nothing, which fails closed (installs nothing) rather than installing the wrong thing.
+    /// </summary>
+    public string? Source { get; init; }
+
+    /// <summary>
     /// For <see cref="PackageKind.Code"/> packages only: the NodeType configuration lambda source
     /// (e.g. <c>"config =&gt; config.WithContentType&lt;Widget&gt;().AddLayout(...)"</c>). The installer
     /// synthesizes a <c>NodeType</c> node with this configuration and imports the package's
@@ -81,7 +92,7 @@ public record PackageManifest
 
     /// <summary>
     /// The package is part of the platform's DEFAULT INSTALL: every instance that can see it in a
-    /// catalog installs it automatically at startup (<see cref="PreInstalledPackageService"/>),
+    /// catalog installs it automatically at startup (<see cref="InstanceAutoRegistrationService"/>),
     /// with public read established by the installer
     /// (<c>{TargetPartition}/_Policy · PublicRead = true</c>) so its content is reachable by every
     /// user — signed in or not — without a per-user or per-instance install step.
