@@ -169,6 +169,68 @@ kubectl -n monitoring port-forward svc/loki-grafana 3000:80    # http://localhos
 In Grafana → Explore → Loki, the portal logs are `{namespace="memex"}` (e.g. add
 `|= "error"` or `|~ "signin-microsoft"`).
 
+### 6b. Red-log ticketing (optional) — every `fail:`/`crit:` opens exactly one issue
+
+Once Loki is up, `mw-log-watcher` can turn production errors into GitHub issues: it reads red lines
+from a persisted cursor, groups them by fault, and reports each distinct fingerprint to the portal,
+which triages it with an agent and opens one ticket. A burst of ten thousand identical errors is one
+issue; recurrences comment on it. **It is off until all four steps below are done** — the ingest
+endpoint is not even mapped without a token.
+
+It runs in `monitoring`, NOT in the portal's namespace, on purpose: the thing that notices the portal
+is throwing errors must not be hosted by the portal.
+
+```bash
+# 1. ONE shared secret, both sides. The watcher presents it; the portal requires it.
+TOKEN=$(openssl rand -hex 32)
+az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+  "kubectl -n monitoring create secret generic mw-log-watcher --from-literal=ingest-token=$TOKEN"
+#    …then set LogWatch__IngestToken to the SAME value on the portal (KeyVault → its secret store).
+
+# 2. Where tickets go. Without at least one route the control plane idles by design —
+#    it will not spend agent rounds on incidents it could never file.
+#      LogWatch__DefaultRepository = Systemorph/MeshWeaver
+#      LogWatch__Routes__0__Prefix = MeshWeaver.     Routes__0__Repository = Systemorph/MeshWeaver
+#      LogWatch__Routes__1__Prefix = Memex.          Routes__1__Repository = Systemorph/Memex
+#    Issues are opened as the GitHub App (GitHub:App), never a user's OAuth token.
+
+# 3. Build + push the watcher image.
+dotnet publish tools/MeshWeaver.LogWatcher/MeshWeaver.LogWatcher.csproj -c Release \
+  -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
+  -p:ContainerRepository=memex-log-watcher -p:ContainerImageTag=<tag>
+
+# 4. Apply the Deployment + PVC (edit the image tag + watched namespaces in the manifest first).
+az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+  --command "kubectl apply -f log-watcher.yaml" \
+  --file manifests/observability/log-watcher.yaml
+```
+
+**Verify — and know what each failure looks like:**
+
+```bash
+az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+  "kubectl -n monitoring logs deploy/mw-log-watcher --tail=50"
+```
+
+| What the log says | Meaning |
+|---|---|
+| `Loki: N red line(s) …` then `Reported <fp> … — 200` | Working end to end. |
+| `Log watcher is not configured` | Step 1 missed — `PortalUrl`/`IngestToken` unset. |
+| `401` from the portal | The two tokens differ, or the portal's is unset (which un-maps the route entirely → also 404). |
+| `Loki: 0 red line(s)` forever | Nothing red in the watched namespaces, or `Namespaces` names the wrong ones. |
+| Incidents appear but stay `New` | Step 2 missed — no repository routed, so the control plane idles. |
+
+Then browse `Admin/_LogIncident` in the portal: every incident links to the ticket it opened and to
+the triage thread that wrote it.
+
+**🚨 The state directory must be a real volume.** On an `emptyDir` a pod restart replays the lookback
+window and re-reports. The manifest ships a PVC for this reason.
+
+**To turn it off**: `kubectl -n monitoring scale deploy/mw-log-watcher --replicas=0`. Clearing the
+portal's `LogWatch__IngestToken` also closes the ingest endpoint. Neither deletes existing incidents.
+
+Full reference: [LogWatchTriage.md](../../src/MeshWeaver.Documentation/Data/Architecture/LogWatchTriage.md)
+
 ## 7. Rolling a new image — and the traps
 
 ```bash
