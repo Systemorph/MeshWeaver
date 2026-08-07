@@ -710,6 +710,195 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     /// <summary>
+    /// 🚨 Deterministic pin for issue #612 (CI run 30004790036 shard 1, "sub-case b"):
+    /// the compile's point-in-time source snapshot (<c>MeshNodeCompilationService.SnapshotSources</c>)
+    /// races the authoritative DIRECT mesh read against the cached synced source query. The cached
+    /// query replays its latest set SYNCHRONOUSLY on subscribe, while the direct probe can never
+    /// answer before its ~1s chunk quiet window — so a cached query that latched EMPTY (a missed
+    /// source-create update under CI load; the known stale-synced-query class) wins the race with
+    /// an empty set EVERY time, and the compile deterministically consumes ZERO sources: the
+    /// configuration lambda's <c>CS0103</c> parks the type, and every retry — including the
+    /// explicit <c>RequestedReleaseAt</c>+Force re-trigger, which correctly un-parks and
+    /// dispatches a fresh compile — re-fails identically ("RE-TRIGGER: STILL STUCK … persistent
+    /// clobber"). An EMPTY answer from the lagged cache is not authoritative: it may only settle
+    /// the snapshot once the direct probe has ALSO completed without finding sources.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task SourceSnapshot_StaleEmptyCachedAnswer_MustNotOutraceDirectProbe()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var source = new MeshNode("code", "TestData/SnapshotRaceType/Source")
+        {
+            Name = "Code",
+            NodeType = "Code",
+        };
+        // The latched-empty cached query replays [] synchronously on subscribe …
+        var cachedFirst = Observable.Return<IEnumerable<MeshNode>>(Array.Empty<MeshNode>());
+        // … while the authoritative direct probe needs its chunk quiet window before it can answer.
+        var probe = Observable.Timer(TimeSpan.FromMilliseconds(200))
+            .Select(_ => (IEnumerable<MeshNode>)new[] { source });
+
+        var snapshot = await MeshNodeCompilationService.RaceSourceSnapshot(probe, cachedFirst)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+
+        snapshot.Should().NotBeEmpty(
+            "a stale EMPTY cached answer must never beat the authoritative direct read — "
+            + "compiling a NodeType against zero sources produces a deterministic CS0103, parks the "
+            + "type, and wedges every subsequent release trigger (issue #612 sub-case b)");
+    }
+
+    /// <summary>
+    /// Companion contract to <see cref="SourceSnapshot_StaleEmptyCachedAnswer_MustNotOutraceDirectProbe"/>:
+    /// when the direct probe finds nothing either (it completes silent) and the cached query says
+    /// empty, EMPTY is the honest consensus snapshot — the race must settle (a source-less,
+    /// configuration-only NodeType must still compile), never stall to the outer timeout.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task SourceSnapshot_ProbeSilentAndCachedEmpty_SettlesEmptyConsensus()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Probe completes SILENT after its quiet window (found nothing → stays quiet by contract).
+        var probe = Observable.Timer(TimeSpan.FromMilliseconds(100))
+            .SelectMany(_ => Observable.Empty<IEnumerable<MeshNode>>());
+        var cachedFirst = Observable.Return<IEnumerable<MeshNode>>(Array.Empty<MeshNode>());
+
+        var snapshot = await MeshNodeCompilationService.RaceSourceSnapshot(probe, cachedFirst)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+
+        snapshot.Should().BeEmpty(
+            "probe and cached query AGREE there are no sources — empty is the honest snapshot "
+            + "and the compile of a configuration-only NodeType must proceed");
+    }
+
+    /// <summary>
+    /// Companion contract: a healthy cached query answering NON-EMPTY wins immediately — the fix
+    /// must not make every compile wait out the probe's quiet window (the #690 13× regression).
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task SourceSnapshot_HealthyCachedNonEmpty_WinsWithoutWaitingForProbe()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var source = new MeshNode("code", "TestData/SnapshotRaceType2/Source")
+        {
+            Name = "Code",
+            NodeType = "Code",
+        };
+        var probe = Observable.Never<IEnumerable<MeshNode>>();
+        var cachedFirst = Observable.Return<IEnumerable<MeshNode>>(new[] { source });
+
+        var snapshot = await MeshNodeCompilationService.RaceSourceSnapshot(probe, cachedFirst)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(5)).ToTask(ct);
+
+        snapshot.Should().ContainSingle(
+            "a healthy cached query's non-empty first answer settles the snapshot immediately — "
+            + "the probe's quiet-window latency must never land on the healthy compile path");
+    }
+
+    /// <summary>
+    /// 🚨 End-to-end deterministic repro of the #612 wedge (first-compile-Error → fresh trigger →
+    /// must-recompile). Reproduces the EXACT terminal picture of CI run 30004790036 shard 1:
+    /// <c>MIRROR: Status=Error, Latest=(null), ReqAt=, Handled=, INDEX Release children: [(none)],
+    /// RE-TRIGGER: STILL STUCK</c>.
+    ///
+    /// <para>The trigger environment is the known stale-synced-query state: the shared cached
+    /// source query for the NodeType (one <c>NodeSources.CacheId</c> entry, process-wide,
+    /// first-caller-wins) has LATCHED EMPTY — in CI because the source-create update was lost
+    /// under load; here made deterministic by pre-registering the cache id with a query that
+    /// matches nothing, ever. The mesh index HAS the source (the diagnostic INDEX read proved
+    /// that in CI), so the direct probe can see it — only the cached leg is blind.</para>
+    ///
+    /// <para>Sequence: (1) first-build kickoff compiles the type before any source exists →
+    /// deterministic CS0103 (configuration lambda references the source's class) → Status=Error +
+    /// parked. (2) The real source is created; the latched cached query never emits it, so the
+    /// sources-watcher auto-heal can never fire (same as CI: no heal during the 50s primary wait).
+    /// (3) A fresh <c>RequestedReleaseAt</c>+Force re-trigger — the exact re-trigger
+    /// WaitForLatestRelease's diagnostic sends — un-parks and dispatches a REAL fresh compile,
+    /// whose snapshot MUST consume the direct read's source set and settle Ok with a release.
+    /// Without the snapshot-race fix the compile re-consumes the latched empty set and re-parks —
+    /// "STILL STUCK after re-trigger (sub-case b)" forever.</para>
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task FirstCompileError_LatchedEmptySourceQuery_FreshTriggerMustRecompileFromDirectRead()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var typePath = $"{TestPartition}/EmptyRaceType";
+        var parkRegistry = Mesh.ServiceProvider.GetRequiredService<NodeTypeCompileParkRegistry>();
+
+        // 1. Deterministically latch the SHARED synced source query for this NodeType at EMPTY.
+        //    workspace.GetQuery is get-or-create, first-caller-wins per cache id — registering a
+        //    never-matching query under the type's canonical NodeSources.CacheId reproduces the
+        //    CI state where the cached query's snapshot is empty and never updates.
+        _ = Mesh.GetWorkspace().GetQuery(
+            NodeSources.CacheId(typePath),
+            $"path:{TestPartition}/__no_such_source__ nodeType:Code");
+
+        // 2. NodeType whose Configuration references the (not-yet-existing) source class. The
+        //    first-build kickoff compiles against zero sources → deterministic Error + park —
+        //    the same first-compile-Error terminal picture the CI wedge showed.
+        await NodeFactory.CreateNode(new MeshNode("EmptyRaceType", TestPartition)
+        {
+            Name = "Empty Race Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Deterministic repro for issue #612 (latched-empty source query).",
+                Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", EmptyRaceLayoutAreas.Overview))",
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(50.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Error);
+        parkRegistry.IsParked(typePath).Should().BeTrue(
+            "the zero-source compile fails deterministically (CS0103) and parks the type");
+
+        // 3. Create the REAL source. The mesh index sees it (the direct probe reads the index);
+        //    the latched cached query never will, so no sources-watcher auto-heal can fire.
+        await NodeFactory.CreateNode(new MeshNode("code", $"{typePath}/Source")
+        {
+            Name = "Code",
+            NodeType = "Code",
+            Content = new CodeConfiguration
+            {
+                Code = """
+                    using MeshWeaver.Layout.Composition;
+                    public static class EmptyRaceLayoutAreas
+                    {
+                        public static UiControl Overview(LayoutAreaHost host, RenderingContext _)
+                            => Controls.Html("<div id='marker'>EMPTYRACE_V1</div>");
+                    }
+                    """,
+                Language = "csharp"
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        // Wait for the index (the direct probe's data source) to see the source — the query path
+        // is request/response, so poll it bounded (WritingTests.md → polling around QueryAsync).
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await Observable.Interval(TimeSpan.FromMilliseconds(200)).StartWith(0L)
+            .SelectMany(_ => meshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"namespace:{typePath}/Source scope:subtree nodeType:Code"))
+                .Take(1))
+            .Where(r => r.Items.Count > 0)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask(ct);
+
+        // 4. The fresh re-trigger (RequestedReleaseAt + Force — exactly what WaitForLatestRelease's
+        //    diagnostic sends). It un-parks, dispatches a REAL fresh compile, and that compile's
+        //    snapshot must come from the authoritative direct read — NOT the latched-empty cache.
+        await TriggerRecompile(typePath, DateTimeOffset.UtcNow);
+
+        await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(60.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LatestReleasePath));
+        parkRegistry.IsParked(typePath).Should().BeFalse(
+            "the successful recompile clears the park");
+    }
+
+    /// <summary>
     /// Compile-button contract: the Overview-side panel
     /// (<c>NodeTypeLayoutAreas.BuildCompileStatusPanel</c>) renders a button
     /// whose click handler stamps
@@ -894,9 +1083,9 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             // a one-time missed/lost emission). If it stays stuck, the watcher/state is persistently
             // clobbered or the subscription is dead (sub-case b). Decisive + repro-cheap.
             string retrigger;
+            var t2 = DateTimeOffset.UtcNow.AddMilliseconds(1);
             try
             {
-                var t2 = DateTimeOffset.UtcNow.AddMilliseconds(1);
                 await workspace.GetMeshNodeStream(nodeTypePath).Update(curr =>
                     curr?.Content is NodeTypeDefinition cd
                         ? curr with { Content = cd with { RequestedReleaseAt = t2, RequestedReleaseForce = true } }
@@ -911,13 +1100,37 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             }
             catch (Exception rx) { retrigger = $"STILL STUCK after re-trigger ({rx.GetType().Name}) (sub-case b: persistent clobber / dead subscription)"; }
 
+            // 🚨 POST-trigger mirror probe — discriminates sub-case b's two shapes. The MIRROR
+            // line above is a PRE-trigger snapshot, so on its own "ReqAt=(null)" says nothing
+            // about the re-trigger (issue #612 triage went down that dead end twice). Here:
+            //   • ReqAt >= t2 + Handled >= t2 + a fresh CompilationError ⇒ the trigger WAS
+            //     handled and a fresh compile re-FAILED deterministically (persistent clobber —
+            //     read Err for the cause; e.g. the PR-884 run's process-wide NRE).
+            //   • ReqAt still below t2 ⇒ the cross-hub mirror write/receive path is dead.
+            //   • ReqAt >= t2 but Handled below t2 ⇒ the owner-side release watcher is dead.
+            string postMirror;
+            try
+            {
+                var post = await workspace.GetMeshNodeStream(nodeTypePath)
+                    .Where(n => n is not null).Take(1).Timeout(5.Seconds());
+                var pd = post?.Content as NodeTypeDefinition;
+                postMirror = pd is null
+                    ? "(content not NodeTypeDefinition)"
+                    : $"Status={pd.CompilationStatus}, ReqAt={pd.RequestedReleaseAt:O} (t2={t2:O}), " +
+                      $"Handled={pd.LastReleaseRequestHandledAt:O}, Started={pd.LastCompileStartedAt:O}, " +
+                      $"Err={pd.CompilationError?.Replace("\n", " | ") ?? "(null)"}";
+            }
+            catch (Exception px) { postMirror = $"(probe failed: {px.GetType().Name} — mirror read path dead)"; }
+
             throw new Exception(
                 $"WaitForLatestRelease stuck for {nodeTypePath}: known={knownRelease ?? "(null)"}\n" +
-                $"  MIRROR: Status={m?.CompilationStatus}, Latest={m?.LatestReleasePath ?? "(null)"}, " +
-                $"ReqAt={m?.RequestedReleaseAt:O}, Handled={m?.LastReleaseRequestHandledAt:O}, Force={m?.RequestedReleaseForce}\n" +
+                $"  MIRROR (pre-trigger): Status={m?.CompilationStatus}, Latest={m?.LatestReleasePath ?? "(null)"}, " +
+                $"ReqAt={m?.RequestedReleaseAt:O}, Handled={m?.LastReleaseRequestHandledAt:O}, Force={m?.RequestedReleaseForce}, " +
+                $"Err={(m?.CompilationError is { Length: > 0 } me ? me.Replace("\n", " | ") : "(null)")}\n" +
                 $"  INDEX node: {indexNode}\n" +
                 $"  INDEX Release children: [{releases}]\n" +
-                $"  RE-TRIGGER: {retrigger}", ex);
+                $"  RE-TRIGGER: {retrigger}\n" +
+                $"  MIRROR (post-trigger): {postMirror}", ex);
         }
     }
 
