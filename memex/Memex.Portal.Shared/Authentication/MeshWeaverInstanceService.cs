@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -17,13 +18,23 @@ namespace Memex.Portal.Shared.Authentication;
 /// <c>ApiTokenService</c>, built on the same mechanism (mint → hash → write the node → write a
 /// routing index under System identity) and deliberately NOT on the same node type.
 ///
-/// <para>Registering grants nothing. A new instance authenticates and is entitled to nothing until
-/// a platform admin writes it a <see cref="PluginGrant"/> in the Admin partition, which the
-/// registering user cannot reach.</para>
+/// <para>Registering grants nothing — unless the registry operator has opted specific sources into
+/// every new registration via <c>PluginCatalog:DefaultGrants</c> (a list of <c>Source/Package</c>
+/// entries, e.g. <c>Plugins/*</c>). Registration then seeds those entries into the instance's
+/// <see cref="PluginGrant"/> node in the Admin partition — the grant node stays the single
+/// authority, so a platform admin can still revoke or extend per instance, and anything NOT in the
+/// default list (private/paid sources) remains admin-granted as before. The registering user still
+/// cannot reach the grant node either way.</para>
 /// </summary>
 public sealed class MeshWeaverInstanceService(
-    IMeshService nodeFactory, IMessageHub hub, ILogger<MeshWeaverInstanceService> logger)
+    IMeshService nodeFactory, IMessageHub hub, ILogger<MeshWeaverInstanceService> logger,
+    IConfiguration? configuration = null)
 {
+    /// <summary>Config key listing the <c>Source/Package</c> entries every new registration is
+    /// seeded with (<c>PluginCatalog:DefaultGrants:0</c>, …). Absent/empty → registration grants
+    /// nothing, the strict default.</summary>
+    public const string DefaultGrantsConfigKey = "PluginCatalog:DefaultGrants";
+
     /// <summary>Namespace holding a user's registered instances, inside their own partition.</summary>
     public const string InstanceNamespace = "MeshWeaverInstance";
 
@@ -92,6 +103,7 @@ public sealed class MeshWeaverInstanceService(
 
             return nodeFactory.CreateNode(instanceNode)
                 .SelectMany(created => WriteIndex(hash, created.Path, instanceId)
+                    .SelectMany(_ => SeedDefaultGrants(instanceId))
                     .Select(_ =>
                     {
                         logger.LogInformation(
@@ -100,6 +112,82 @@ public sealed class MeshWeaverInstanceService(
                         return new InstanceRegistrationResult(rawKey, created, instance);
                     }));
         });
+    }
+
+    /// <summary>The default grant entries the operator configured, parsed and de-blanked.
+    /// Empty when no <see cref="DefaultGrantsConfigKey"/> list is set — the strict default.</summary>
+    private IReadOnlyList<PluginGrantEntry> DefaultGrantEntries() =>
+        configuration is null
+            ? []
+            : configuration.GetSection(DefaultGrantsConfigKey).GetChildren()
+                .Select(c => PluginGrantEntry.TryParse(c.Value))
+                .Where(e => e is not null)
+                .Select(e => e!)
+                .ToList();
+
+    /// <summary>
+    /// Seeds the operator-configured default grant entries into
+    /// <c>Admin/_PluginGrant/{instanceId}</c> as part of registration. No defaults configured →
+    /// no write at all, preserving "registering is identity, not entitlement" exactly.
+    ///
+    /// <para>Runs as System on BOTH the read and the write: the grant lives in the Admin partition,
+    /// which the registering user cannot reach — that unreachability is the security model, and the
+    /// seed is registry policy, not a user action. Read-then-<c>CreateOrUpdateNode</c>, never
+    /// <c>stream.Update</c>: the node does not exist yet for a fresh id, and Update aborts on a
+    /// missing node (the first-grant failure observed live 2026-08-06). Existing entries — e.g. an
+    /// admin re-seeding after an orphan cleanup — are preserved; defaults merge in idempotently.</para>
+    /// </summary>
+    private IObservable<Unit> SeedDefaultGrants(string instanceId)
+    {
+        var defaults = DefaultGrantEntries();
+        if (defaults.Count == 0)
+            return Observable.Return(Unit.Default);
+
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var path = MeshWeaverInstanceNodeType.GrantPath(instanceId);
+
+        return Observable.Using(
+                () => accessService.ImpersonateAsSystem(),
+                _ => hub.GetMeshNode(path, TimeSpan.FromSeconds(10)))
+            .Take(1)
+            .SelectMany(existing => Observable.Defer(() =>
+            {
+                var grant = existing?.ContentAs<PluginGrant>(hub.JsonSerializerOptions)
+                            ?? new PluginGrant { InstanceId = instanceId };
+                var entries = grant.Entries.Concat(defaults
+                        .Where(d => !grant.Entries.Any(e =>
+                            string.Equals(e.Source, d.Source, StringComparison.OrdinalIgnoreCase)
+                            && string.Equals(e.PackageId, d.PackageId, StringComparison.Ordinal))))
+                    .ToList();
+
+                var node = new MeshNode(instanceId, MeshWeaverInstanceNodeType.GrantNamespace)
+                {
+                    Name = $"Plugin grant: {instanceId}",
+                    NodeType = MeshWeaverInstanceNodeType.GrantNodeType,
+                    State = MeshNodeState.Active,
+                    Content = grant with
+                    {
+                        InstanceId = instanceId,
+                        Entries = entries,
+                        GrantedByUserId = WellKnownUsers.System,
+                        UpdatedAt = DateTimeOffset.UtcNow,
+                    },
+                };
+
+                // Same Defer/Finally discipline as WriteIndex: the System context must be active
+                // when CreateOrUpdateNode captures it, and the SelectMany continuation may land on
+                // a thread the earlier Using scope never touched.
+                var disposable = accessService.ImpersonateAsSystem();
+                return nodeFactory.CreateOrUpdateNode(node)
+                    .Select(_ =>
+                    {
+                        logger.LogInformation(
+                            "Seeded default plugin grants [{Entries}] for instance {InstanceId}",
+                            string.Join(", ", defaults), instanceId);
+                        return Unit.Default;
+                    })
+                    .Finally(() => disposable.Dispose());
+            }));
     }
 
     /// <summary>
