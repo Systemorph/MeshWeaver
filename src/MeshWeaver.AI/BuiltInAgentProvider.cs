@@ -7,6 +7,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -70,7 +71,9 @@ public class BuiltInAgentProvider : IStaticNodeProvider
             yield return node;
     }
 
-    private static MeshNode[] LoadAllNodes()
+    /// <summary>All built-in nodes. <c>internal</c> so the content guard test can assert that every
+    /// shipped agent file actually loaded (BuiltInAgentContentTest).</summary>
+    internal static MeshNode[] LoadAllNodes()
     {
         return ImmutableList.Create(CreateThreadNamerNode())
             .AddRange(LoadEmbeddedNodes())
@@ -161,7 +164,10 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         }
     }
 
-    private static MeshNode? ParseEmbeddedNode(string content, string relativePath)
+    /// <summary>Parses one embedded/on-disk content file into a node, or null when it cannot be
+    /// parsed. <c>internal</c> so the content guard test can prove malformed front matter is SKIPPED
+    /// rather than thrown on — an exception here fails mesh startup (BuiltInAgentContentTest).</summary>
+    internal static MeshNode? ParseEmbeddedNode(string content, string relativePath)
     {
         var document = Markdig.Markdown.Parse(content, Pipeline);
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
@@ -170,11 +176,34 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         var yamlContent = yamlBlock.Lines.ToString();
         var markdownBody = content[(yamlBlock.Span.End + 1)..].TrimStart('\r', '\n');
 
-        // Check if this is an agent file (nodeType: Agent in frontmatter)
-        if (IsAgentFrontmatter(yamlContent))
-            return ParseAgentNode(yamlContent, markdownBody, relativePath);
-
-        return ParseMarkdownNode(yamlContent, markdownBody, relativePath);
+        // 🚨 One malformed file must NEVER take the host down. These nodes load during mesh startup,
+        // so an uncaught YamlException propagates out of GetStaticNodes and the host fails to start.
+        // That is exactly what an unquoted ':' in ONE agent's description did on 2026-08-07: every
+        // full-mesh suite (Orleans, Monolith, Query) went red at once and reported it as ~400
+        // unrelated test failures, with nothing naming the actual file.
+        //
+        // The old failure was sneaky in a way worth spelling out: IsAgentFrontmatter catches its own
+        // YAML error and answers "not an agent", so a broken AGENT file fell through to the markdown
+        // path — and neither path was guarded. Guarding HERE, at the one dispatch point, covers both
+        // and any future parse path. Skip the node and say which file, exactly as SkillMarkdown.Parse
+        // does (it was hardened after the identical incident).
+        try
+        {
+            // Check if this is an agent file (nodeType: Agent in frontmatter)
+            return IsAgentFrontmatter(yamlContent)
+                ? ParseAgentNode(yamlContent, markdownBody, relativePath)
+                : ParseMarkdownNode(yamlContent, markdownBody, relativePath);
+        }
+        catch (YamlException ex)
+        {
+            // No logger is reachable from this static startup path; stderr is the sink that reaches
+            // pod logs. Naming the file is the whole point — the next broken front matter should be
+            // one obvious line, not an unexplained startup crash.
+            Console.Error.WriteLine(
+                $"[BuiltInAgentProvider] Skipping '{relativePath}': invalid YAML front matter. "
+                + $"An unquoted ':' inside a value is the usual cause — quote the value. {ex.Message}");
+            return null;
+        }
     }
 
     private static bool IsAgentFrontmatter(string yamlContent)
@@ -234,6 +263,7 @@ public class BuiltInAgentProvider : IStaticNodeProvider
     private static MeshNode ParseMarkdownNode(string yamlContent, string markdownBody, string relativePath)
     {
         var (id, ns) = DeriveIdAndNamespace(relativePath);
+
         var frontMatter = MarkdownYamlDeserializer.Deserialize<MarkdownFrontMatter>(yamlContent);
 
         var markdownDocument = MarkdownContent.Parse(markdownBody, ns);
