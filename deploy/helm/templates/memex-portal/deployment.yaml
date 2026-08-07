@@ -106,6 +106,14 @@ spec:
               mountPath: "/data"
             - name: "memex-users"
               mountPath: "/mnt/users"
+{{- /* Local plugin-repo checkouts (dev only): lets pluginCatalog.sources point at a path INSIDE
+       the container, so a local registry serves the node-native plugin repos with no GitHub
+       credential. Read-only — the registry reads a checkout, it never writes one. */}}
+{{- range $i, $m := .Values.pluginCatalog.localRepoMounts }}
+            - name: "plugin-repo-{{ $i }}"
+              mountPath: "{{ $m.mountPath }}"
+              readOnly: true
+{{- end }}
 {{- /* Extra persistent mounts (content, attachments, workspace, …) declared under
        .Values.persistence. data + users are mounted above at fixed paths — their
        persistence entries only supply the claim for the volumes below. */}}
@@ -181,6 +189,15 @@ spec:
 {{- end }}
 {{- end }}
       volumes:
+{{- /* hostPath is deliberate and dev-only: the "host" must be the developer's own machine
+       (Colima/k3s/minikube run the node there), which is exactly where the plugin checkout
+       lives. Empty on a real cluster — there, sources are URLs served via the GitHub App. */}}
+{{- range $i, $m := .Values.pluginCatalog.localRepoMounts }}
+        - name: "plugin-repo-{{ $i }}"
+          hostPath:
+            path: "{{ $m.hostPath }}"
+            type: Directory
+{{- end }}
         # 💾 /data holds the framework caches that MUST survive restarts and be SHARED across
         # replicas (DataProtection keys, the NodeType assembly cache, the NuGet package cache).
         # Priority: persistence.data.claimName (a pre-created RWX PVC — the production path,

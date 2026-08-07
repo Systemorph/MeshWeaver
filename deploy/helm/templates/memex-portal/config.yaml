@@ -242,6 +242,9 @@ data:
   {{- range $i, $g := .Values.pluginCatalog.defaultGrants }}
   PluginCatalog__DefaultGrants__{{ $i }}: "{{ $g }}"
   {{- end }}
+  {{- range $i, $p := .Values.pluginCatalog.installByDefault }}
+  PluginCatalog__InstallByDefault__{{ $i }}: "{{ $p }}"
+  {{- end }}
   {{- if .Values.pluginCatalog.instanceId }}
   # First-startup auto-registration identity (pairs with the PluginCatalog__BootstrapKey secret).
   PluginCatalog__InstanceId: "{{ .Values.pluginCatalog.instanceId }}"

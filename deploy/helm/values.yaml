@@ -55,7 +55,17 @@ pluginCatalog:
   registries: []
   # REGISTRY: the git repos whose plugins this install serves — [{name, repoPath, ref, format}].
   # format: node-repo (default, <Folder>/index.json Space root) | package-json.
+  # A repoPath may be a URL (needs the GitHub App identity) OR an absolute LOCAL path that exists
+  # INSIDE the container — see localRepoMounts below, which is how a local-dev registry serves
+  # plugins with no GitHub credential at all.
   sources: []
+  # REGISTRY (local/dev): host directories to mount so `sources` can point at a local checkout —
+  # [{name, hostPath, mountPath}]. Only meaningful where the node's filesystem is the developer's
+  # (Colima/k3s/minikube); leave empty on a real cluster, where sources are URLs served through the
+  # GitHub App. Example:
+  #   localRepoMounts: [{name: plugins, hostPath: /Users/me/code/MeshWeaver.Plugins, mountPath: /plugin-repos/plugins}]
+  #   sources: [{name: Plugins, repoPath: /plugin-repos/plugins, format: node-repo}]
+  localRepoMounts: []
   # REGISTRY: Source/Package entries every NEW instance registration is seeded with, e.g.
   # ["Plugins/*"] so a fresh install gets the platform plugin repo without an admin grant step.
   # Registration writes them into the instance's Admin/_PluginGrant node, so admins can still
@@ -69,6 +79,12 @@ pluginCatalog:
   instanceId: ""
   # CONSUMER: this install's public URL recorded on the instance node; defaults to the ingress host.
   homeUrl: ""
+  # CONSUMER: what a FRESH install installs by itself on first startup, in the same Source/Package
+  # notation as the grants. "Plugins/*" = the whole platform plugin repo (which carries the Store),
+  # so a new deployment comes up usable instead of with an empty-but-authorized catalog. Deliberately
+  # source-scoped: an install also granted paid course content must NOT auto-install it. Empty =
+  # install nothing (the platform default; an admin installs by hand).
+  installByDefault: ["Plugins/*"]
 # ---- Platform-admin Instances overview -------------------------------------
 # The admin "Instances" tab lists every portal on the cluster by querying the k8s API. Reading
 # deployments/ingresses ACROSS namespaces needs a cluster-scoped read grant — enable it ONLY on the

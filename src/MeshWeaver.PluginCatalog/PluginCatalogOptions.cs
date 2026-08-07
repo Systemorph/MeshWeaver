@@ -75,6 +75,26 @@ public sealed class PluginCatalogOptions
     /// <summary>Display name for the auto-registered instance. Empty → the instance id.</summary>
     public string InstanceName { get; set; } = "";
 
+    /// <summary>
+    /// Packages a FRESH installation installs by itself on first startup, in the same
+    /// <c>Source/Package</c> notation as the registry's grants — e.g. <c>["Plugins/*"]</c> for the
+    /// whole platform plugin repo (which is what carries the Store), or
+    /// <c>["Plugins/Store", "Plugins/Essentials"]</c> to be selective. Empty (the platform default)
+    /// = install nothing; the catalog is merely populated and an admin installs by hand.
+    ///
+    /// <para>🚨 SOURCE-SCOPED on purpose. An instance may be granted paid content (course repos)
+    /// as well as the platform repo, and "install everything I'm entitled to" would sweep that in.
+    /// Matching goes through <c>PluginGrantEntry</c> against the catalog entry's
+    /// <see cref="PackageManifest.Source"/>, so a registry that does not stamp the source matches
+    /// nothing and installs nothing — failing closed.</para>
+    ///
+    /// <para>Runs ONCE, on an installation with no install records yet: this seeds a new
+    /// deployment, it is not a policy that re-asserts itself. (An installation whose packages are
+    /// ALL later uninstalled looks fresh again and would re-seed on the next restart — deliberate,
+    /// so a wiped instance recovers, and harmless because installs are additive.)</para>
+    /// </summary>
+    public List<string> InstallByDefault { get; set; } = [];
+
     /// <summary>This installation's public base URL, recorded on the instance node (advisory).</summary>
     public string HomeUrl { get; set; } = "";
 
