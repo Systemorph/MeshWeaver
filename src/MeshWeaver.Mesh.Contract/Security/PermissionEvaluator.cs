@@ -765,16 +765,7 @@ internal static class PermissionEvaluator
     }
 
     private static GroupMembership? DeserializeMembership(MeshNode node, JsonSerializerOptions options)
-    {
-        if (node.Content is GroupMembership gm)
-            return gm;
-        if (node.Content is JsonElement je)
-        {
-            try { return JsonSerializer.Deserialize<GroupMembership>(je.GetRawText(), options); }
-            catch { return null; }
-        }
-        return null;
-    }
+        => DeserializeContent<GroupMembership>(node, options);
 
     private static IEnumerable<MeshNode> UnionByPath(
         IEnumerable<MeshNode> first, IEnumerable<MeshNode> second)
@@ -860,59 +851,44 @@ internal static class PermissionEvaluator
         public int GetHashCode(IEnumerable<MeshNode> obj) => obj.Count();
     }
 
-    private static AccessAssignment? DeserializeAssignment(MeshNode node, JsonSerializerOptions options)
+    /// <summary>
+    /// Deserializes a node's content into <typeparamref name="TContent"/>, accepting every content
+    /// shape a mesh emission can legally carry: an already-typed instance, a <see cref="JsonElement"/>
+    /// (storage read), or a <see cref="JsonNode"/> (the AS-WRITTEN shape — application code builds
+    /// content as <c>JsonObject</c>, and the change-notification entity supplement forwards it
+    /// verbatim). 🚨 The <see cref="JsonNode"/> arm is load-bearing: without it, a raw-entity
+    /// emission (issue #889 — the buyer's grant delivered via the pedestrian's notification
+    /// supplement) silently deserialized to <c>null</c>, the grant folded to nothing, and
+    /// permissions evaluated <see cref="Permission.None"/> even though the assignment was present
+    /// and content-complete. <see cref="MeshNodeListPathEquality"/> already treats JsonNode as a
+    /// first-class content shape — the deserializers must agree.
+    /// </summary>
+    private static TContent? DeserializeContent<TContent>(MeshNode node, JsonSerializerOptions options)
+        where TContent : class
     {
-        if (node.Content is AccessAssignment aa)
-            return aa;
-        if (node.Content is JsonElement je)
+        switch (node.Content)
         {
-            try
-            {
-                return JsonSerializer.Deserialize<AccessAssignment>(je.GetRawText(), options);
-            }
-            catch
-            {
+            case TContent typed:
+                return typed;
+            case JsonElement je:
+                try { return JsonSerializer.Deserialize<TContent>(je.GetRawText(), options); }
+                catch { return null; }
+            case JsonNode jn:
+                try { return JsonSerializer.Deserialize<TContent>(jn.ToJsonString(), options); }
+                catch { return null; }
+            default:
                 return null;
-            }
         }
-        return null;
     }
+
+    private static AccessAssignment? DeserializeAssignment(MeshNode node, JsonSerializerOptions options)
+        => DeserializeContent<AccessAssignment>(node, options);
 
     private static PartitionAccessPolicy? DeserializePolicy(MeshNode node, JsonSerializerOptions options)
-    {
-        if (node.Content is PartitionAccessPolicy policy)
-            return policy;
-        if (node.Content is JsonElement je)
-        {
-            try
-            {
-                return JsonSerializer.Deserialize<PartitionAccessPolicy>(je.GetRawText(), options);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-        return null;
-    }
+        => DeserializeContent<PartitionAccessPolicy>(node, options);
 
     private static Role? DeserializeRole(MeshNode node, JsonSerializerOptions options)
-    {
-        if (node.Content is Role r)
-            return r;
-        if (node.Content is JsonElement je)
-        {
-            try
-            {
-                return JsonSerializer.Deserialize<Role>(je.GetRawText(), options);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-        return null;
-    }
+        => DeserializeContent<Role>(node, options);
 
     #endregion
 }

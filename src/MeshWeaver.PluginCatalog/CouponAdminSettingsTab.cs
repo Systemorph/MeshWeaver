@@ -69,7 +69,7 @@ public static class CouponAdminSettingsTab
                 "entitlement", "unlock", "voucher", "promo"]);
 
         // Wait for the POSITIVE admin confirmation with a bounded timeout; StartWith(none) so the
-        // menu renders immediately (mirrors PluginCatalogSettingsTab / the Global Administration tab).
+        // menu renders immediately (mirrors the Global Administration tab).
         return host.Hub.IsGlobalAdmin(viewerId)
             .Where(isAdmin => isAdmin)
             .Take(1)
