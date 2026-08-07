@@ -1108,13 +1108,32 @@ internal static class ThreadExecution
                 // that doesn't carry the latest text (because the caller built
                 // its `text` from a stale snapshot of the streamed-so-far buffer
                 // BEFORE more tokens arrived) would shrink the field — visible
-                // to UI subscribers as a flicker / regression. While Status is
-                // terminal-locked above, Text is otherwise free to shrink. Cap:
-                // while Status is Streaming, only allow grow OR same length.
-                // Once terminal, the final text from the streaming loop's
-                // completion is the source of truth — let it through.
-                var nextText = nextStatus == ThreadMessageStatus.Streaming
-                               && text.Length < current.Text.Length
+                // to UI subscribers as a flicker / regression. Cap: while Status
+                // is Streaming, only allow grow OR same length. The push that
+                // CARRIES the terminal status is the source of truth — let it
+                // through.
+                //
+                // 🚨 …and Text is terminal-locked too, for exactly the reason
+                // Status/ToolCalls/UpdatedNodes are (see the merges above and
+                // below): a STREAMING push can still land AFTER the terminal one.
+                // The trailing Sample(100ms) emission flushes on
+                // snapshots.OnCompleted, and the framework's own
+                // "Generating response..." placeholder is pushed from a SelectMany
+                // continuation on the history/context read, which a slow or
+                // Catch-recovered read can delay past the end of a round that
+                // faulted early (an unresolvable agent selection ends the round in
+                // milliseconds). `terminalLocked` is precisely the case the Status
+                // guard already caught — a Streaming request arriving at an
+                // already-terminal cell — so this costs nothing on the normal
+                // path. Without it that late push writes its own stale `text`
+                // verbatim and the user is left staring at "Generating
+                // response..." on a cell that is Completed/Error and whose Summary
+                // already carries the real answer (the CI signature of
+                // OrleansAutoExecuteTest / RoundFaultTerminalStateTest).
+                var terminalLocked = nextStatus != requestedStatus;
+                var nextText = terminalLocked
+                               || (nextStatus == ThreadMessageStatus.Streaming
+                                   && text.Length < current.Text.Length)
                     ? current.Text
                     : text;
                 // 🚨 UpdatedNodes accumulate — never replace. Like ToolCalls (merged

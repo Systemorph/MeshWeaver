@@ -49,12 +49,23 @@ public class CreateNodesRequestTest(ITestOutputHelper output)
         var paths = Enumerable.Range(0, 5).Select(i => $"{stem}-{i}").ToArray();
 
         // Collect the change feed's Created events for OUR paths, subscribed before the post.
+        // 🚨 The feed fans out on its OWN serial dispatch loop, never the publisher's thread
+        // (issue #899), so the events are ORDERED but not yet delivered when the bulk-create
+        // response returns. Signal on the last one and await it — the contract under test is
+        // the ORDER of the publishes, never that they land on the caller's stack.
         var feed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
         var seen = new List<string>();
+        var allPublished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var sub = feed.Subscribe(change =>
         {
-            if (paths.Contains(change.Path))
-                lock (seen) seen.Add(change.Path);
+            if (!paths.Contains(change.Path))
+                return;
+            lock (seen)
+            {
+                seen.Add(change.Path);
+                if (seen.Count >= paths.Length)
+                    allPublished.TrySetResult();
+            }
         }, MeshChangeKind.Created);
 
         var response = await NodeFactory
@@ -69,6 +80,7 @@ public class CreateNodesRequestTest(ITestOutputHelper output)
         response.Created.Should().OnlyContain(n => n.State == MeshNodeState.Active && n.Version >= 1,
             "bulk-created nodes get the same stamps as singular creates");
 
+        await allPublished.Task.WaitAsync(TimeSpan.FromSeconds(15));
         lock (seen)
             seen.Should().ContainInOrder(paths,
                 "the change feed publishes Created per node post-commit, in caller order");

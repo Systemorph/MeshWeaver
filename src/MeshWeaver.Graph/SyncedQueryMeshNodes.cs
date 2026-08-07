@@ -316,10 +316,12 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         // Hub-level change-feed deletion fast-path: when ANY hub publishes a
         // delete via IMeshChangeFeed (the canonical post-delete dispatch in
         // <c>HandleDeleteNodeRequest</c>), translate it into a synthetic
-        // Removed event for the path-set Scan. Synchronous reliability path
-        // on top of the upstream IMeshQueryProvider.Query's Removed
-        // event, which can be debounced/stalled by the persistence layer's
-        // change-notifier and security-filter chain.
+        // Removed event for the path-set Scan. Reliability path on top of the
+        // upstream IMeshQueryProvider.Query's Removed event, which can be
+        // debounced/stalled by the persistence layer's change-notifier and
+        // security-filter chain. 🚨 Ordered but ASYNCHRONOUS since issue #899 —
+        // the feed fans out on its own dispatch loop, never the publisher's
+        // thread — so this arrives promptly, not on the deleting hub's turn.
         var changeFeed = workspace.Hub.ServiceProvider.GetService<IMeshChangeFeed>();
         var feedRemovals = changeFeed is null
             ? Observable.Empty<QueryResultChange<MeshNode>>()

@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -34,8 +35,8 @@ public class GrainActivationFailureRegistryTest
             Timestamp: DateTimeOffset.UtcNow);
     }
 
-    [Fact]
-    public void ChangeFeedBroadcast_ClearsStoredActivationError_ForExactlyThatPath()
+    [Fact(Timeout = 30_000)]
+    public async Task ChangeFeedBroadcast_ClearsStoredActivationError_ForExactlyThatPath()
     {
         using var feed = new InProcessMeshChangeFeed();
         using var registry = new GrainActivationFailureRegistry(feed);
@@ -44,7 +45,23 @@ public class GrainActivationFailureRegistryTest
         registry.Record(OtherPath, "Compilation failed for 'Edu/Other': CS1501 …");
         registry.TryGet(RecycledPath).Should().NotBeNull("precondition: the error is stored");
 
+        // 🚨 The feed fans out on its OWN serial dispatch loop, never the publisher's
+        // thread (issue #899), so "cleared by the time Publish returns" was never the
+        // contract — in Orleans this same invalidation already arrived asynchronously,
+        // relayed cross-silo by PathCacheInvalidatorGrain, and its only consumer
+        // (RoutingGrain's NACK fallback) reads the registry on a LATER message delivery.
+        // This probe subscribes AFTER the registry did, and the one FIFO loop notifies
+        // observers in subscription order — so the probe firing PROVES the registry has
+        // already handled the same event. Deterministic, no sleep, no polling.
+        var handledByRegistry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var probe = feed.Subscribe(e =>
+        {
+            if (e.Path == RecycledPath)
+                handledByRegistry.TrySetResult();
+        });
+
         feed.Publish(RecycleBroadcast(RecycledPath));
+        await handledByRegistry.Task.WaitAsync(TimeSpan.FromSeconds(15));
 
         registry.TryGet(RecycledPath).Should().BeNull(
             "the recycle broadcast must clear the stale activation error so it is never " +

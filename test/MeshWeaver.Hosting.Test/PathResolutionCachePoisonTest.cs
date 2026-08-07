@@ -29,8 +29,21 @@ namespace MeshWeaver.Hosting.Test;
 /// operation. This pins the fix deterministically: a hung first query must NOT
 /// poison the path.</para>
 /// </summary>
-public class PathResolutionCachePoisonTest
+public class PathResolutionCachePoisonTest : IDisposable
 {
+    // 🚨 InProcessMeshChangeFeed owns a dedicated dispatch THREAD since issue #899 — an
+    // undisposed instance leaks it for the process lifetime. Instance list (never static),
+    // drained when the test class is torn down.
+    private readonly List<IDisposable> feeds = [];
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        foreach (var feed in feeds)
+            feed.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
     /// <summary>
     /// Minimal <see cref="IMeshQueryCore"/> whose Nth <c>Query</c> subscription is
     /// driven by an injected behaviour — lets a test make the FIRST resolution query
@@ -50,7 +63,7 @@ public class PathResolutionCachePoisonTest
             => (IObservable<QueryResultChange<T>>)(object)_behaviour(Interlocked.Increment(ref _calls));
     }
 
-    private static (PathResolutionService Svc, SequencedQueryCore Query) BuildService(
+    private (PathResolutionService Svc, SequencedQueryCore Query) BuildService(
         Func<int, IObservable<QueryResultChange<MeshNode>>> behaviour)
     {
         var hub = Substitute.For<IMessageHub>();
@@ -59,7 +72,9 @@ public class PathResolutionCachePoisonTest
         hub.JsonSerializerOptions.Returns(new JsonSerializerOptions());
         // A registered change feed is what ENABLES caching (without it the service
         // resolves uncached). Real InProcessMeshChangeFeed — no writes fire in this test.
-        sp.GetService(typeof(IMeshChangeFeed)).Returns(new InProcessMeshChangeFeed());
+        var changeFeed = new InProcessMeshChangeFeed();
+        feeds.Add(changeFeed);
+        sp.GetService(typeof(IMeshChangeFeed)).Returns(changeFeed);
         // No AccessService → ImpersonateAsSystem() is a no-op (Disposable.Empty).
 
         var query = new SequencedQueryCore(behaviour);

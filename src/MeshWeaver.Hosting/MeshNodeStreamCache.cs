@@ -516,8 +516,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// Change-feed handler: a published change event for a path is authoritative
     /// proof of a real write / recycle on that path, so any cached FAILURE state
     /// for it is stale by definition — reset it (see <see cref="ResetFailureState"/>).
-    /// Runs synchronously on the publisher's thread; pure dictionary ops plus
-    /// disposing an already-terminated Rx subscription — no I/O, no hub post.
+    /// Runs on the feed's single <c>mesh-change-feed</c> dispatch loop (issue #899 —
+    /// fan-out NEVER runs on the publisher's thread), so it must stay what it is:
+    /// pure dictionary ops plus disposing an already-terminated Rx subscription —
+    /// no I/O, no hub post, nothing that blocks. A blocking handler here stalls
+    /// change-feed delivery for the whole mesh, not just one publisher.
     /// </summary>
     private void OnMeshChange(MeshChangeEvent change)
     {
@@ -531,11 +534,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         }
         catch (Exception ex)
         {
-            // The feed's Subject.OnNext runs handlers synchronously on the
-            // PUBLISHER's thread (a post-commit storage write / the recycle
-            // operation) and an unhandled throw here would fault that pipeline
-            // and starve the feed's remaining subscribers. The reset is state
-            // hygiene — surface the fault loudly, never break the writer.
+            // An unhandled throw here would reach the feed's dispatch loop and,
+            // although the loop catches and logs, it would still skip the
+            // remaining subscribers for THIS event. The reset is state hygiene —
+            // surface the fault loudly, never break delivery.
             logger.LogError(ex,
                 "MeshNodeStreamCache: failure-state reset faulted for {Path}", change.Path);
         }

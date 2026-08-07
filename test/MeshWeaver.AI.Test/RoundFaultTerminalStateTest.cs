@@ -80,14 +80,22 @@ public class RoundFaultTerminalStateTest : AITestBase
         terminal.ActiveMessageId.Should().BeNull("the faulted round must release its active cell");
 
         // The response cell carries the error.
+        // 🚨 Both facts go in ONE predicate. The cell has several writers whose emissions
+        // interleave on the shared per-path handle (the streaming Sample(100ms) push, the
+        // terminal push, the optimistic locally-computed snapshot and the owner's reconciled
+        // state), and since #899 the change-feed hop that drives mirror freshness is ordered
+        // but asynchronous — so "the FIRST emission that is Error also carries the text" was
+        // never the contract. The contract is that the fault's message REACHES the error cell;
+        // asserting the pair in the Match waits for exactly that and nothing weaker.
         terminal.Messages.Should().HaveCountGreaterThanOrEqualTo(2, "user cell + error response cell");
         var responseCellPath = $"{threadPath}/{terminal.Messages[^1]}";
         var cell = await Mesh.GetWorkspace().GetMeshNodeStream(responseCellPath)
             .Select(n => n?.Content as ThreadMessage)
             .Should().Within(TimeSpan.FromSeconds(10))
-            .Match(m => m is { Status: ThreadMessageStatus.Error });
-        cell!.Text.Should().Contain("boom mid-stream",
-            "the fault's message must surface on the error cell so the user sees why the round died");
+            .Match(m => m is { Status: ThreadMessageStatus.Error }
+                        && m.Text.Contains("boom mid-stream"),
+                "the fault's message must surface on the error cell so the user sees why the round died");
+        cell!.Status.Should().Be(ThreadMessageStatus.Error);
     }
 
     // ─── Chat client that throws mid-stream ───
