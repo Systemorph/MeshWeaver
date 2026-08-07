@@ -77,7 +77,19 @@ deploy/aks/envs/{{ns}}/deploy.sh
 **5. DNS + sign-in:** point `{{host}}` at the ingress IP (zone `{{o.DnsZone}}`), then add the OAuth
 redirect URIs (`https://{{host}}/signin-microsoft`, `/signin-google`, …) and invitation/email config.
 
-**6. Verify:**
+**6. Plugins:** on the **registry** portal, Settings ▸ Instances → register `{{ns}}` and copy the
+issued `mwi_` key (shown once). Sources in the registry's `PluginCatalog:DefaultGrants` — the
+platform `Plugins/*` repo — are granted automatically at registration; anything else stays a
+per-instance admin grant (Settings ▸ Administration ▸ Instance grants). Wire the consumer side in
+`values.{{ns}}.yaml` + the Key Vault CSI secret, then install from Settings ▸ Administration ▸
+Plugin Catalog:
+```yaml
+pluginCatalog:
+  registryUrl: https://<registry-host>
+# secret (never in values): PluginCatalog__RegistryToken = the mwi_ key
+```
+
+**7. Verify:**
 ```bash
 az aks command invoke -g {{o.ResourceGroup}} -n {{o.ClusterName}} --command \
   "kubectl -n {{ns}} rollout status deployment/memex-portal-deployment --timeout=300s"
