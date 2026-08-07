@@ -619,7 +619,7 @@ public static class SettingsLayoutArea
         section = section.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Icon)))
         {
             Label = "Icon Path",
-            Placeholder = "content:logo.png, /static/…, data:image/svg+xml;… or an absolute URL",
+            Placeholder = "content:logo.png, data:image/svg+xml;… or an absolute URL",
             Immediate = true,
             DataContext = nodeContext
         }.WithWidth("100%"));
@@ -694,7 +694,7 @@ public static class SettingsLayoutArea
     /// Click handler for the quick-pick "Use as Icon" button: reads the filename the user
     /// typed (transient form state), then writes <c>content:&lt;filename&gt;</c> straight to the
     /// node's <see cref="MeshNode.Icon"/> via the node stream. The icon resolver turns that into
-    /// <c>/static/storage/content/{nodePath}/{filename}</c> at render time.
+    /// <c>/api/content/{nodePath}/{filename}</c> at render time.
     /// </summary>
     private static void UseFileAsIcon(UiActionContext actx, string nodePath, string quickPickDataId)
     {

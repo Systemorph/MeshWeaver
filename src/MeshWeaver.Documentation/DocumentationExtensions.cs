@@ -2,6 +2,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Documentation;
 
@@ -68,6 +69,18 @@ public static class DocumentationExtensions
             }
         });
 
+        // 🚨 The shipped platform documentation's assets are a BUILD ASSET, not mesh content
+        // (issue #587): they are embedded in this assembly, published on nuget.org, identical in
+        // every deployment, and carry no user or partition data. So `/static/DocContent/{file}`
+        // stays a public build-asset mount — read straight out of the assembly manifest, with no
+        // hub, no content service and no permission check — which is what lets /static remain
+        // entirely free of access control. Every existing /static/DocContent/… link keeps working.
+        builder.ConfigureServices(services => services.AddSingleton(
+            new StaticAssetMount("DocContent",
+                typeof(DocumentationExtensions).Assembly, "MeshWeaver.Documentation.Content")));
+
+        // The same assets as an in-mesh collection (listings, content reads). Deliberately NOT
+        // declared IsStatic — their HTTP surface is the build-asset mount above.
         builder.ConfigureHub(config => config
             .AddEmbeddedResourceContentCollection(
                 "DocContent",
@@ -101,10 +114,15 @@ public static class DocumentationExtensions
             var subPath = address[prefix.Length..].Replace('/', '.');
             return config
                 .AddContentCollections()
+                // isStatic: a doc page's @@content/ diagrams and images are fetched over HTTP as
+                // /api/content/{Doc/Page}/content/{file}. Publication only — the request is still
+                // gated on Read of the doc node, and the Doc partition's own Anonymous/Public
+                // grants are what make it render for a signed-out visitor. ONE decision, not two.
                 .AddEmbeddedResourceContentCollection(
                     ContentCollectionsExtensions.DefaultCollectionName,
                     typeof(DocumentationExtensions).Assembly,
-                    $"Content.{subPath}");
+                    $"Content.{subPath}",
+                    isStatic: true);
         });
 
         // Doc namespace caps: read-only docs (no Create/Update/Delete) but

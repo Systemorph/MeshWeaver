@@ -1,3 +1,4 @@
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -150,7 +151,9 @@ public record MeshNodeThumbnailControl(
                 return thumbnail;
             var ns = node.Namespace;
             if (!string.IsNullOrEmpty(ns))
-                return $"/static/storage/content/{ns}/{thumbnail}";
+                // Access-controlled content route — NEVER /static (issue #587): a private
+                // Space's thumbnail must not be world-readable by URL.
+                return ContentCollectionsExtensions.GetNodeContentFileUrl(ns, thumbnail);
         }
 
         // Fall back to node.Icon — resolves content: references, URLs, inline SVG, emojis

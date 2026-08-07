@@ -124,7 +124,7 @@ public static class CreateLayoutArea
 
     /// <summary>
     /// Renders an icon value as a 48x48 preview. Supports three forms:
-    /// inline SVG markup, an http(s) or /static URL, and a FluentIcon name.
+    /// inline SVG markup, an http(s) or /api/content URL, and a FluentIcon name.
     /// </summary>
     internal static UiControl BuildIconPreview(string icon)
     {

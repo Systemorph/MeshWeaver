@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Title: "Line of Business Mapping"
-Icon: /static/storage/content/FutuRe/icon.svg
+Icon: /api/content/FutuRe/icon.svg
 Tags:
   - "FutuRe"
   - "LoB Mapping"

@@ -38,6 +38,90 @@ public class ContentReferenceIntegrityTest
         "truck.svg"
     };
 
+    /// <summary>The ACCESS-CONTROLLED route every mesh-content URL must use (issue #587).</summary>
+    private const string ContentRoutePrefix = "/api/content/";
+
+    /// <summary>
+    /// The ONLY <c>/static</c> prefixes that may survive: build assets shipped inside a MeshWeaver
+    /// assembly (icon SVGs, the documentation package's images). Everything else on that route is
+    /// mesh content and must move — <c>/static</c> performs no permission check at all.
+    /// </summary>
+    private static readonly string[] BuildAssetPrefixes =
+        ["/static/NodeTypeIcons/", "/static/DocContent/"];
+
+    /// <summary>
+    /// What makes a <c>/static/…</c> occurrence a REFERENCE rather than prose: it is the value of a
+    /// JSON property, a markdown link/image target, or an HTML attribute.
+    /// </summary>
+    private static readonly string[] UrlOpeners = ["\"", "](", "'", "=\""];
+
+    /// <summary>
+    /// Maps a content URL back to its path under <c>samples/Graph/content</c>, or <c>null</c> when
+    /// it is not a content URL at all. Only the access-controlled route is accepted.
+    /// </summary>
+    private static string? TryMapToDisk(string url) =>
+        url.StartsWith(ContentRoutePrefix, StringComparison.OrdinalIgnoreCase)
+            ? url[ContentRoutePrefix.Length..]
+            : null;
+
+    #region The /static contract (issue #587)
+
+    /// <summary>
+    /// 🚨 THE DURABLE GUARD. <c>/static</c> serves application BUILD OUTPUT and nothing else: it
+    /// resolves no identity and evaluates no permission, so anything reachable there is public to
+    /// the entire internet. Mesh content — a Space's images, a partition's uploads, a node's
+    /// thumbnail — must therefore be addressed through <c>/api/content/…</c>, where the owning
+    /// node's hub gates the read.
+    ///
+    /// <para>This scans the sample data the product ships. It fails the moment a
+    /// <c>/static/storage/content/…</c> (or any other non-build-asset <c>/static</c>) URL reappears
+    /// in an icon, thumbnail or image field — which is exactly how the hole was introduced: the URL
+    /// scheme was predictable, the route was unauthenticated, and nothing objected.</para>
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public void MeshContentUrls_AreNeverAddressedThroughTheStaticRoute()
+    {
+        var offenders = new List<string>();
+        foreach (var root in new[] { TestPaths.SamplesGraphData, TestPaths.SamplesGraphContent })
+        {
+            foreach (var filePath in Directory.GetFiles(root, "*.*", SearchOption.AllDirectories))
+            {
+                if (Path.GetExtension(filePath) is not (".json" or ".md"))
+                    continue;
+                var relativePath = Path.GetRelativePath(root, filePath).Replace('\\', '/');
+                // Generated satellites (compile releases, activity logs) are runtime artifacts.
+                if (relativePath.Contains("/Release/", StringComparison.Ordinal)
+                    || relativePath.StartsWith("Release/", StringComparison.Ordinal))
+                    continue;
+
+                foreach (var line in File.ReadLines(filePath))
+                {
+                    // URL-VALUED occurrences only: a JSON string value, a markdown link/image
+                    // target, or an html src/href. Prose that merely mentions the route (a doc
+                    // explaining this very rule) is not a reference and must not fail the build.
+                    foreach (var opener in UrlOpeners)
+                    {
+                        var at = line.IndexOf(opener + "/static/", StringComparison.OrdinalIgnoreCase);
+                        if (at < 0)
+                            continue;
+                        var url = line[(at + opener.Length)..];
+                        if (BuildAssetPrefixes.Any(p => url.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+                            continue;
+                        offenders.Add($"{relativePath}: {line.Trim()}");
+                    }
+                }
+            }
+        }
+
+        offenders.Should().BeEmpty(
+            "/static applies NO access control, so mesh content addressed through it is world-readable "
+            + "(issue #587). Use /api/content/{node}/{file} — the same bytes, gated on Read of the "
+            + "owning node. Only build assets shipped in an assembly may stay on /static:\n"
+            + string.Join("\n", offenders));
+    }
+
+    #endregion
+
     #region Markdown Thumbnails
 
     [Fact(Timeout = 20000)]
@@ -100,7 +184,7 @@ public class ContentReferenceIntegrityTest
                 continue;
 
             // Simulate the runtime resolution:
-            // /static/storage/content/{namespace}/{thumbnail}
+            // /api/content/{namespace}/{thumbnail}  (MeshNodeThumbnailControl)
             // Map back to disk: content/{namespace}/{thumbnail}
             var ns = node!.Namespace;
             if (string.IsNullOrEmpty(ns))
@@ -109,7 +193,7 @@ public class ContentReferenceIntegrityTest
             var diskPath = Path.GetFullPath(Path.Combine(contentDir, ns, thumbnail));
             if (!File.Exists(diskPath))
             {
-                broken.Add($"{relativePath} → Thumbnail: \"{thumbnail}\"\n  Runtime URL: /static/storage/content/{ns}/{thumbnail}\n  (expected on disk at: {Path.GetRelativePath(contentDir, diskPath)})");
+                broken.Add($"{relativePath} → Thumbnail: \"{thumbnail}\"\n  Runtime URL: /api/content/{ns}/{thumbnail}\n  (expected on disk at: {Path.GetRelativePath(contentDir, diskPath)})");
             }
         }
 
@@ -155,7 +239,8 @@ public class ContentReferenceIntegrityTest
                 continue;
 
             // Relative path — resolve using node namespace (same as GetImageUrlForNode at runtime)
-            if (!icon.StartsWith("/static/", StringComparison.OrdinalIgnoreCase))
+            if (!icon.StartsWith(ContentRoutePrefix, StringComparison.OrdinalIgnoreCase)
+                && !icon.StartsWith("/static/", StringComparison.OrdinalIgnoreCase))
             {
                 var ns = node!.Namespace;
                 if (!string.IsNullOrEmpty(ns))
@@ -178,13 +263,9 @@ public class ContentReferenceIntegrityTest
                 continue;
             }
 
-            // Resolve /static/storage/content/X or /static/content/X → content/X
-            string? subPath = null;
-            if (icon.StartsWith("/static/storage/content/", StringComparison.OrdinalIgnoreCase))
-                subPath = icon["/static/storage/content/".Length..];
-            else if (icon.StartsWith("/static/content/", StringComparison.OrdinalIgnoreCase))
-                subPath = icon["/static/content/".Length..];
-
+            // 🚨 Mesh content must be addressed through the ACCESS-CONTROLLED route, never
+            // /static (issue #587) — see Icons_AreNeverAddressedThroughTheStaticRoute.
+            var subPath = TryMapToDisk(icon);
             if (subPath != null)
             {
                 var resolvedPath = Path.GetFullPath(Path.Combine(contentDir, subPath));
@@ -242,17 +323,9 @@ public class ContentReferenceIntegrityTest
 
                 string resolvedPath;
 
-                if (url.StartsWith("/static/storage/content/", StringComparison.OrdinalIgnoreCase))
+                if (TryMapToDisk(url) is { } contentSubPath)
                 {
-                    // Map /static/storage/content/X → content/X
-                    var subPath = url["/static/storage/content/".Length..];
-                    resolvedPath = Path.GetFullPath(Path.Combine(contentDir, subPath));
-                }
-                else if (url.StartsWith("/static/content/", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Map /static/content/X → content/X
-                    var subPath = url["/static/content/".Length..];
-                    resolvedPath = Path.GetFullPath(Path.Combine(contentDir, subPath));
+                    resolvedPath = Path.GetFullPath(Path.Combine(contentDir, contentSubPath));
                 }
                 else
                 {
@@ -315,7 +388,8 @@ public class ContentReferenceIntegrityTest
             foreach (var (property, image) in images)
             {
                 // Skip non-path values (Fluent UI icon names like "Organization")
-                if (!image.StartsWith("/static/", StringComparison.OrdinalIgnoreCase))
+                if (!image.StartsWith("/static/", StringComparison.OrdinalIgnoreCase)
+                    && !image.StartsWith(ContentRoutePrefix, StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 // Skip embedded NodeTypeIcons — validate against known set
@@ -329,17 +403,10 @@ public class ContentReferenceIntegrityTest
                     continue;
                 }
 
-                // Map /static/storage/content/X or /static/content/X → content/X
-                string? subPath = null;
-                if (image.StartsWith("/static/storage/content/", StringComparison.OrdinalIgnoreCase))
-                    subPath = image["/static/storage/content/".Length..];
-                else if (image.StartsWith("/static/content/", StringComparison.OrdinalIgnoreCase))
-                    subPath = image["/static/content/".Length..];
-
+                var subPath = TryMapToDisk(image);
                 if (subPath == null)
                 {
-                    // Unknown /static/ prefix
-                    broken.Add($"{relativePath} → {property}: \"{image}\"\n  (unrecognized /static/ path)");
+                    broken.Add($"{relativePath} → {property}: \"{image}\"\n  (unrecognized content path)");
                     continue;
                 }
 
