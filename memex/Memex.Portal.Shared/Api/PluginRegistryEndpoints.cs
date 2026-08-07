@@ -176,7 +176,13 @@ public static class PluginRegistryEndpoints
         => Observable.CombineLatest(sources.Select(s =>
                 ListFrom(s, sources.Count == 1, logger).Select(list => (Source: s, Packages: list))))
             .Select(perSource => (IReadOnlyList<PackageManifest>)perSource
-                .SelectMany(x => x.Packages.Where(p => IsGranted(caller, x.Source, p)))
+                // Stamp the source each package came from BEFORE the merge — afterwards the
+                // provenance is gone. Consumers scope source-specific actions on it (notably
+                // PluginCatalog:InstallByDefault, which must distinguish the platform repo from
+                // paid content the same instance may also be granted).
+                .SelectMany(x => x.Packages
+                    .Where(p => IsGranted(caller, x.Source, p))
+                    .Select(p => p with { Source = x.Source.Name }))
                 .DistinctBy(p => p.Id, StringComparer.Ordinal)
                 .ToList());
 
