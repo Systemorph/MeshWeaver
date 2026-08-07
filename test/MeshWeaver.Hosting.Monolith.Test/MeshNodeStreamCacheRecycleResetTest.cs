@@ -56,12 +56,29 @@ public class MeshNodeStreamCacheRecycleResetTest(ITestOutputHelper output) : Mon
         return path;
     }
 
-    /// <summary>The exact broadcast <c>MeshOperations.RecycleCore</c> publishes for a
-    /// recycled path (Updated kind, NodeType-path marker, version 0).</summary>
-    private void PublishRecycleBroadcast(string path)
+    /// <summary>
+    /// The exact broadcast <c>MeshOperations.RecycleCore</c> publishes for a recycled path
+    /// (Updated kind, NodeType-path marker, version 0), and returns only once the cache has
+    /// SEEN it.
+    ///
+    /// <para>🚨 The feed dispatches on its own serial loop, never on the publisher's thread
+    /// (issue #899 — a synchronous fan-out deadlocked two concurrently-deleting hubs). The probe
+    /// below subscribes AFTER <c>MeshNodeStreamCache</c> did (it subscribes when the mesh is
+    /// built), and one FIFO loop notifies observers in subscription order — so the probe firing
+    /// proves the cache already reset this path. That keeps "the VERY NEXT read heals" exact
+    /// instead of degrading it into a retry loop.</para>
+    /// </summary>
+    private async Task PublishRecycleBroadcast(string path)
     {
         var segments = path.Split('/');
-        Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>().Publish(new MeshChangeEvent(
+        var feed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
+        var seenByCache = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var probe = feed.Subscribe(e =>
+        {
+            if (e.Path == path)
+                seenByCache.TrySetResult();
+        });
+        feed.Publish(new MeshChangeEvent(
             Namespace: segments.Length > 1 ? string.Join("/", segments[..^1]) : "",
             Id: segments.Length > 0 ? segments[^1] : path,
             Path: path,
@@ -69,6 +86,7 @@ public class MeshNodeStreamCacheRecycleResetTest(ITestOutputHelper output) : Mon
             NodeType: MeshNode.NodeTypePath,
             Version: 0,
             Timestamp: DateTimeOffset.UtcNow));
+        await seenByCache.Task.WaitAsync(TimeSpan.FromSeconds(15));
     }
 
     /// <summary>
@@ -120,7 +138,7 @@ public class MeshNodeStreamCacheRecycleResetTest(ITestOutputHelper output) : Mon
         writeFail.Exception!.Message.Should().Contain("activation failed");
 
         // The recycle: the SAME broadcast RecycleCore publishes.
-        PublishRecycleBroadcast(path);
+        await PublishRecycleBroadcast(path);
 
         // Fresh resolution attempt IMMEDIATELY — no waiting out the 5-minute
         // window. This is the exact step that never healed on memex-cloud.

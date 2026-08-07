@@ -31,6 +31,15 @@ namespace MeshWeaver.Mesh.Services;
 /// the operation's response message, version-history writes,
 /// in-process change-feed notifications, etc., knowing the
 /// mesh-change-feed publish already happened.</para>
+///
+/// <para>🚨 "Published" means <b>handed to the feed</b>, not "every subscriber has
+/// finished". <c>InProcessMeshChangeFeed</c> fans out on its own serial dispatch loop —
+/// it MUST NOT run subscriber chains on the publishing hub's thread, because that thread
+/// is typically already inside another operator's gate (see issue #899: a synchronous
+/// fan-out from inside <c>PermissionEvaluator</c>'s <c>CombineLatest</c> lock deadlocked
+/// two concurrently-deleting hubs). The guarantee these helpers provide is the
+/// commit-then-publish ORDER; delivery to subscribers is ordered but asynchronous, exactly
+/// as the cross-silo Orleans broadcast has always been.</para>
 /// </summary>
 public static class StorageAdapterChangeFeedExtensions
 {

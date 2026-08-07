@@ -33,9 +33,12 @@ namespace MeshWeaver.Query.Test;
 /// <para><b>Determinism:</b> the subscribe→Initial race is made deterministic by a
 /// delaying DECORATOR over the REAL <see cref="IMeshQueryCore"/> (no mock): it defers
 /// the inner <c>Query</c> subscription for exactly the gated query string until the
-/// test fires <see cref="initialGate"/>. Both side-channels deliver synchronously
-/// (Rx <c>Subject</c> / in-process change feed), so "fire the side-channel while
-/// Initial is held" is exact, not timing-dependent.</para>
+/// test fires <see cref="initialGate"/>. <see cref="SyncedQueryMeshNodes.NotifyDeleted"/>
+/// delivers synchronously (a plain Rx <c>Subject</c>); the change feed dispatches on its
+/// own serial loop (issue #899 — a synchronous fan-out deadlocked concurrent deletes), so
+/// the feed test WAITS for the event to have been delivered before releasing the gate.
+/// Either way "fire the side-channel while Initial is held" is exact, not
+/// timing-dependent.</para>
 /// </summary>
 public class SyncedQueryInitialGateTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
@@ -205,9 +208,22 @@ public class SyncedQueryInitialGateTest(ITestOutputHelper output)
         using (recorder)
         {
             // While Initial is HELD, publish a Deleted change-feed event for an
-            // unrelated path — the in-process feed delivers synchronously.
+            // unrelated path. The feed dispatches on its own serial loop (#899), so wait
+            // for the event to be DELIVERED before releasing the gate — our probe
+            // subscribes AFTER the synced query, and one FIFO loop notifies observers in
+            // subscription order, so seeing it here proves the synced query already
+            // folded it in the subscribe→Initial window.
             var changeFeed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
-            changeFeed.Publish(MeshChangeEvent.Deleted("Unrelated/FeedPath"));
+            var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (changeFeed.Subscribe(e =>
+                   {
+                       if (e.Path == "Unrelated/FeedPath")
+                           delivered.TrySetResult();
+                   }))
+            {
+                changeFeed.Publish(MeshChangeEvent.Deleted("Unrelated/FeedPath"));
+                await delivered.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            }
 
             initialGate.OnNext(Unit.Default);
 
