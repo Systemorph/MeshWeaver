@@ -50,6 +50,9 @@ public class DocExamplesRenderTest(PortalFixture fixture)
     private const string DataGrid = ".layout-area fluent-data-grid, .layout-area .fluent-data-grid, .layout-area table";
     private const string Table = ".layout-area table";
     private const string MarkdownBody = ".layout-area .markdown-body";
+    /// <summary>The <c>Edit</c> macro renders a generated form (<c>&lt;dl class="form-group"&gt;</c>),
+    /// NOT a Stack — asserting Stack here only ever passed by accident of an older example.</summary>
+    private const string EditorForm = ".layout-area .form-group";
 
     /// <summary>
     /// Every doc page with embedded interactive examples (enumerated from
@@ -72,7 +75,11 @@ public class DocExamplesRenderTest(PortalFixture fixture)
         { "Doc/GUI/ContainerControl/Toolbar", 5, Toolbar, null },
         { "Doc/GUI/ContainerControl/Splitter", 8, Splitter, "Left Panel" },
         { "Doc/GUI/Observables", 3, Stack, "This text never changes" },
-        { "Doc/GUI/Editor", 1, Stack, "Date/time picker" },
+        // Mesh.Edit(new Person(), …) renders the generated form. "Full name" is the example's
+        // [DisplayName] — asserting it proves the attribute is HONORED (it was ignored until
+        // EditorExtensions.GetEditorLabel). The previous marker ("Date/time picker") appears only in
+        // the page PROSE, never inside .layout-area, so that row could not pass under any build.
+        { "Doc/GUI/Editor", 1, EditorForm, "Full name" },
         { "Doc/GUI/DataBinding", 1, Table, "NumberFieldControl" },
         { "Doc/GUI/DataBinding/ItemTemplate", 1, Stack, "Alice" },
         { "Doc/GUI/Attributes", 1, Stack, "Attribute Quick Reference" },
