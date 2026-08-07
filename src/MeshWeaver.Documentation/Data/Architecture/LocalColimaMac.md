@@ -438,6 +438,12 @@ The result: every device trusts the cert out of the box (no mkcert CA install), 
 | Local model errors `exceed_context_size_error` / `exceeds the available context size (4096 tokens)` | Ollama loads at a 4096-token default context, smaller than the agent prompt. Restart `ollama serve` with `OLLAMA_CONTEXT_LENGTH=16384` (macOS app: `launchctl setenv OLLAMA_CONTEXT_LENGTH 16384` + restart). The `/v1` endpoint can't set `num_ctx` per request — it's a host setting. See §10. |
 | Local model errors HTTP 400 `does not support tools` | The selected model is a completion-only/roleplay GGUF. The portal auto-stamps `SupportsTools=false` (round then omits tools), but for agent work pick a model whose Ollama `capabilities` include `tools` (e.g. qwen3.6). See §10. |
 | Uploaded documents aren't searchable / `nodeType:Document` returns 0 / an agent can't find its input | Content **indexing** needs an embedding provider, which is separate from the chat model and off by default. Set `Embedding__Provider`/`Embedding__Endpoint`/`Embedding__Model` (§10.1) and **re-upload** — indexing fires on the upload event, so pre-existing files aren't retro-indexed. |
+| `memex-local` targets the **wrong cluster** — `helm` fails `kubernetes cluster unreachable: …privatelink…azmk8s.io`, or (worse) a reachable cloud cluster gets rolled | 🚨 `memex-local` uses the **ambient `kubectl` context**, not a pinned one. If your current context is an AKS cluster, `up`/`update` deploy *there*. Check with `kubectl config current-context` and switch: `kubectl config use-context colima`. It failed loudly here only because that cluster is private and unroutable — a reachable one would have been rolled silently. |
+| `https://memex.localhost:8443` refuses the connection although the pods are healthy | Same root cause as above: the launchd port-forward agent runs `kubectl port-forward` with **no context**, so an AKS current-context breaks it. Fix the context, then `memex-local port-forward`. |
+| Plugin Catalog is empty / a new instance installs nothing | The local portal is the **registry** and serves plugins from your **checkout** (§16). No checkout found ⇒ nothing to serve. Confirm the config landed: `kubectl -n memex get cm memex-portal-config -o json \| grep PluginCatalog__Sources` and that the mount exists: `kubectl -n memex exec deploy/memex-portal-deployment -- ls /plugin-repos/Plugins`. Point it explicitly with `MEMEX_PLUGIN_REPOS=/path/to/MeshWeaver.Plugins`. |
+| `instance up` fails `409 — Instance id '<id>' is already registered` | An instance id is claimed **globally** on the registry, and dropping the instance's database does not release it. Use `memex-local instance down --id <id>` (which releases the claim and restarts the registry) before re-running, or pick a new id. |
+| A plugin install fails with `NodeType(s) not registered: <Other>/<Type>` | The package depends on another that is not installed yet. The default install orders by the manifest's `requires`; a package that depends on something **outside** the granted set cannot be ordered against and will fail. Grant the dependency too (§16). |
+| Instance pod OOMs mid-install (`OutOfMemoryException`, often surfacing inside Npgsql) and the remaining packages never install | A first boot compiles every default-installed plugin's node types back to back, and each compile **retains** its collectible ALC. `memex-local` sizes the instance pod 3cpu/6Gi for this; a smaller pod dies partway. Installing fewer packages by default (a narrower `InstallByDefault`) is the other lever. |
 
 **Verify end-to-end** that TLS + routing + the app are all working:
 
@@ -475,8 +481,84 @@ What `e2e up` does, and why:
 
 ---
 
+## 16. Plugin registry + provisioning a new instance (`memex-local instance`)
+
+This stack is also a **plugin registry**, and it can ramp a **second portal that registers itself
+with it and installs its plugins unattended** — the local rehearsal of provisioning a real
+deployment, with nothing copied by hand.
+
+### The local portal serves plugins from your CHECKOUT
+
+A registry normally reads its plugin repos from GitHub through the App identity. A local stack has
+no such credential, so it reads them straight off disk: `helm_deploy` mounts each checkout
+**read-only** (`pluginCatalog.localRepoMounts` → a `hostPath`; Colima runs the node on this very
+machine) and points a source at the in-container path.
+
+Discovery is by convention — a `MeshWeaver.Plugins` checkout **beside** your `MEMEX_REPO`. Override
+or add repos with `MEMEX_PLUGIN_REPOS` (colon-separated absolute paths):
+
+```bash
+# One extra repo alongside the platform one. Each folder's basename (minus a "MeshWeaver." prefix)
+# becomes the SOURCE NAME, and every new instance is granted that source.
+MEMEX_PLUGIN_REPOS=/Users/me/code/MeshWeaver.Plugins:/Users/me/code/education \
+  memex-local update --build
+```
+
+Verify what actually landed — the values file is not the evidence, the pod is:
+
+```bash
+kubectl -n memex get cm memex-portal-config -o json | tr ',' '\n' | grep PluginCatalog
+kubectl -n memex exec deploy/memex-portal-deployment -- ls /plugin-repos/Plugins   # the mount
+```
+
+> 🚨 **Local/dev only.** `hostPath` means *this machine*. On a real cluster the sources are URLs and
+> the registry holds the GitHub App identity — see [PluginRegistry](/Doc/Architecture/PluginRegistry).
+
+### Ramp an instance
+
+```bash
+memex-local instance up --id acme        # mint key → own DB → migrate → deploy → verify
+memex-local instance status --id acme    # what it REGISTERED and what it INSTALLED
+memex-local instance down --id acme      # delete objects, drop DB, release the id on the registry
+```
+
+What `instance up` does, and why:
+
+| Step | Why |
+|---|---|
+| Mint an `mwr_` registration key on the registry (`/bootstrap/registration-key`, secret-gated) | A scripted ramp-up has no UI to click. The key is owned by `MEMEX_INSTANCE_OWNER`, so instances land in that user's partition — never more than that user could self-register. |
+| `CREATE DATABASE memex_<id>` + migration `Job` | Its own data; the portal's `DbVersionGate` refuses an un-migrated DB. |
+| Deploy the instance portal with `PluginCatalog__BootstrapKey` + `__InstanceId` and **no** registry token | This is the thing under test: it presents the bootstrap key **once**, receives its own `mwi_` key, and stores it encrypted (`Admin/PluginRegistryCredential/…`). |
+| Wait for the installed set to **stop growing** | Packages install sequentially; the first lands in seconds and the rest take minutes. Reporting after the first one announces "installed: Agent" for a run that installs twenty. |
+| Report from the **databases** | A `Running` pod proves neither registration nor installation. |
+
+Expected on a healthy run — the instance registers, is granted `Plugins/*` by
+`pluginCatalog.defaultGrants`, and installs them all in dependency order:
+
+```
+ ok  registered as instance 'acme'
+ ok  installed packages: Agent, BusinessRules, Chess, ClaudeCode, Collaboration, Copilot,
+     DataModelling, DoublePendulum, Edu, Essentials, Feedback, FractalStars, Manufacturing,
+     Publish, RolePlay, Skill, Store, ThreeBody, Training, Video
+```
+
+### Adding another plugin repo
+
+1. Clone it next to your checkout (or anywhere) and list it in `MEMEX_PLUGIN_REPOS`.
+2. `memex-local update --build` — the chart mounts it and adds it as a source **and** grants it to
+   every new instance (`defaultGrants: <name>/*`).
+3. Whether new instances **install** it as well is separate: `pluginCatalog.installByDefault`
+   (default `["Plugins/*"]`) is deliberately **source-scoped**, so a repo you are merely *granted*
+   is browsable but not auto-installed. Add `<name>/*` there to auto-install it too.
+
+> 🚨 The grant/install split is the security property, not a formality: an instance is routinely
+> entitled to paid course content, and "install everything I'm entitled to" would auto-install it.
+
+---
+
 ## Related
 
+- [PluginRegistry.md](/Doc/Architecture/PluginRegistry) — the registry model this stack implements locally: instance keys, grants, default installs.
 - [Deployment.md](/Doc/Architecture/Deployment) — the deploy-route index (AKS vs Container Apps) and shared Azure AD / secrets setup.
 - [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) — the cloud counterpart that uses the same `deploy/helm` chart shape.
 - [LocalDevWorkflow.md](/Doc/Architecture/LocalDevWorkflow) — the faster Aspire/Monolith inner loop for everyday code iteration.

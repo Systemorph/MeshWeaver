@@ -62,9 +62,16 @@ memex-local autoroll status    # show the watcher + last-rolled portal/migration
 memex-local autoroll down      # stop auto-rolling
 memex-local observability      # Grafana/Loki/Promtail/Prometheus (§11)
 memex-local doctor             # preflight: tools, chart/assets, cluster
+memex-local instance up        # ramp a NEW portal that self-registers + installs plugins (§16)
+memex-local instance status    # what it registered / installed
+memex-local instance down      # remove it and RELEASE its instance id on the registry
 memex-local down               # uninstall release (KEEPS the Postgres PVC)
 memex-local down --purge       # also delete namespace + PVC (data loss) + ingress-nginx
 ```
+
+> 🚨 **`memex-local` uses your ambient `kubectl` context.** With a cloud context selected, `up` /
+> `update` deploy *there*, and the port-forward breaks. Run `kubectl config use-context colima`
+> first — see LocalColimaMac §14.
 
 Open **https://memex.localhost:8443** once `up` finishes.
 
@@ -146,6 +153,8 @@ rolled in place; the **migration** is re-run as a Job (it has no Deployment).
 | §12 Instance identity | `Portal__InstanceName/Color` | overlay `config.memex_portal` |
 | §14 Verify | `curl --cacert …/rootCA.pem https://memex.localhost:8443/` | `verify_endpoint()` |
 | §14 Troubleshoot (stale forward) | restart the port-forward after a rollout | `cmd_port_forward()`; `update` auto-refreshes it |
+| §16 Plugin registry | mount the plugin checkouts + configure them as sources/grants | `plugin_repo_paths()` + the `pluginCatalog.*` `--set`s in `helm_deploy()` |
+| §16 New instance | mint an `mwr_` key → own DB → deploy a self-registering portal → verify | `cmd_instance()` (`inst_mint_key`, `inst_registered_id`, `inst_installed_packages`) |
 | Self-update (ReleaseStrategy) | in-pod patch per `Admin/UpdatePolicy` (Continuous default) — can't see local-built images | `cmd_update()` = manual roll; `cmd_autoroll()` = host-side auto-roll on a new local build (the local stand-in for the in-pod poll; see "Auto-update" above) |
 
 `down` reverses §7 (launchd) and §4 (Helm release) while **retaining the Postgres
