@@ -14,7 +14,7 @@ namespace MeshWeaver.Portal.E2E;
 /// <para>Two identities, because the regression was about who could see them: the installing
 /// admin, and a SECOND signed-in person who installed nothing and holds no grant anywhere. The
 /// platform's agents are published read-only to everyone BY THE INSTALLER
-/// (<c>PackageInstaller.EnsurePreInstalledPublicRead</c>), so the second person must see exactly
+/// (<c>PackageInstaller.EnsureDeclaredAccess</c>), so the second person must see exactly
 /// the same catalog. If the partition's <c>_Policy</c> is missing or unreadable, that user's
 /// picker is the one that comes up empty.</para>
 ///
