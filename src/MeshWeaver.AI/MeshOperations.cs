@@ -3692,12 +3692,31 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Runs an executable Code node's C# through the kernel (Microsoft.DotNet.Interactive)
-    /// and returns status JSON. The target node must have
-    /// <c>CodeConfiguration.IsExecutable == true</c>. Emits once when the kernel signals
-    /// completion (the kernel hub posts a response to <see cref="SubmitCodeRequest"/>
-    /// after the code finishes) or on timeout.
+    /// Dispatches an executable Code node's script to its per-node hub and emits dispatch
+    /// status JSON. The target node must have <c>CodeConfiguration.IsExecutable == true</c>.
+    ///
+    /// <para>The emission is the <b>dispatch acknowledgement</b>, not run completion: on
+    /// success it carries the <c>activityPath</c> the owning hub ACTUALLY created, which the
+    /// caller then polls / subscribes for live messages and the terminal status.</para>
+    ///
+    /// <para>🚨 #841 — every failure mode in the chain surfaces here as
+    /// <c>status: "Error"</c>. This method used to <c>hub.Post</c> the request
+    /// fire-and-forget and return a <c>Dispatched</c> envelope carrying a
+    /// <i>locally guessed</i> activity path, so three whole classes of failure were
+    /// invisible to the caller: (a) the request never routed (the Code node's per-node hub
+    /// did not activate, the path does not exist) — a <c>DeliveryFailure</c> nobody observed;
+    /// (b) the owning hub answered <c>Success = false</c> (not executable, unreadable node,
+    /// activity creation refused) — a response nobody observed; (c) the guessed path was
+    /// simply wrong, because the owning hub resolves the activity parent through
+    /// <c>CodeConfiguration.ActivityParentPath</c> / the partition default / the
+    /// <c>{viewer}</c> sentinel, none of which the caller can see. In case (c) a fully
+    /// SUCCESSFUL run still left the caller polling a path that would never exist.</para>
     /// </summary>
+    /// <param name="path">Path of the executable Code node (a leading <c>@</c> is stripped).</param>
+    /// <param name="timeoutSeconds">
+    /// Wall-clock budget for the dispatch acknowledgement (not for the script run). Elapsing
+    /// is reported as an error, never as a silent success.
+    /// </param>
     public IObservable<string> ExecuteScript(string path, int timeoutSeconds = 120)
     {
         logger.LogInformation("ExecuteScript called with path={Path}", path);
@@ -3707,22 +3726,7 @@ public class MeshOperations
                 hub.JsonSerializerOptions));
 
         var resolvedPath = ResolvePath(path);
-
-        // Fire-and-forget dispatch. The Code hub creates an Activity at
-        // `{partition}/_Activity/{submissionId}` (the kernel runs inside the
-        // Activity hub) and writes ActivityLog.Messages + Status as the script
-        // executes. We pre-generate the SubmissionId here so we can return the
-        // Activity path immediately — callers poll `get @{activityPath}` to
-        // observe progress and final status without waiting for an ack.
-        //
-        // Why no wait? The ack `ExecuteScriptResponse` from the Code hub is a
-        // throw-away "got it, here's the activity path" — but routing it back
-        // to a hosted MCP session hub is fragile (we lost ~half a day chasing
-        // it). The Activity itself is the source of truth: live messages,
-        // terminal Status, error details — everything's there. So just return
-        // the activity path and let the caller observe.
-        var partition = resolvedPath.Split('/', 2)[0];
-        if (string.IsNullOrEmpty(partition))
+        if (string.IsNullOrEmpty(resolvedPath.Split('/', 2)[0]))
             return Observable.Return(JsonSerializer.Serialize(
                 new
                 {
@@ -3732,33 +3736,86 @@ public class MeshOperations
                 },
                 hub.JsonSerializerOptions));
 
-        var submissionId = Guid.NewGuid().ToString("N");
-        var activityPath = $"{partition}/_Activity/{submissionId}";
-
-        try
+        // Defer so the post happens on Subscribe — MeshOperations' documented cold-observable
+        // contract (hub.Observe posts eagerly when called).
+        return Observable.Defer(() =>
         {
-            hub.Post(
-                new ExecuteScriptRequest { SubmissionId = submissionId },
-                o => o.WithTarget(new Address(resolvedPath)));
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "ExecuteScript failed to dispatch for {Path}", resolvedPath);
-            return Observable.Return(JsonSerializer.Serialize(
-                new { status = "Error", path = resolvedPath, message = ex.Message },
-                hub.JsonSerializerOptions));
-        }
+            var submissionId = Guid.NewGuid().ToString("N");
+            return hub
+                .Observe<ExecuteScriptResponse>(
+                    new ExecuteScriptRequest { SubmissionId = submissionId },
+                    o => o.WithTarget(new Address(resolvedPath)))
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(Math.Max(1, timeoutSeconds)))
+                .Select(delivery =>
+                {
+                    var response = delivery.Message;
+                    if (!response.Success)
+                    {
+                        // The owning hub refused or faulted. It has already logged the WHY
+                        // (with exception type + stack where there was one); relay the
+                        // verdict verbatim so the caller is never told "Dispatched" for a
+                        // run that will never exist.
+                        logger.LogWarning(
+                            "ExecuteScript dispatch refused for {Path}: {Error}",
+                            resolvedPath, response.Error);
+                        return JsonSerializer.Serialize(
+                            new
+                            {
+                                status = "Error",
+                                path = resolvedPath,
+                                submissionId,
+                                message = response.Error
+                                    ?? "The Code node's hub refused the dispatch without a reason."
+                            },
+                            hub.JsonSerializerOptions);
+                    }
 
-        return Observable.Return(JsonSerializer.Serialize(
-            new
-            {
-                status = "Dispatched",
-                path = resolvedPath,
-                submissionId,
-                activityPath,
-                message = $"Script dispatched. Poll `get @{activityPath}` for live messages " +
-                          "and final status (Running → Succeeded/Failed)."
-            },
-            hub.JsonSerializerOptions));
+                    // AUTHORITATIVE path — where the owning hub actually created the
+                    // Activity, never a locally reconstructed guess.
+                    var activityPath = response.ActivityLog;
+                    if (string.IsNullOrEmpty(activityPath))
+                        return JsonSerializer.Serialize(
+                            new
+                            {
+                                status = "Error",
+                                path = resolvedPath,
+                                submissionId,
+                                message = "The dispatch succeeded but the Code node's hub "
+                                    + "returned no activity path, so the run cannot be observed."
+                            },
+                            hub.JsonSerializerOptions);
+
+                    return JsonSerializer.Serialize(
+                        new
+                        {
+                            status = "Dispatched",
+                            path = resolvedPath,
+                            submissionId = response.SubmissionId ?? submissionId,
+                            activityPath,
+                            message = $"Script dispatched. Poll `get @{activityPath}` for live "
+                                + "messages and final status (Running → Succeeded/Failed)."
+                        },
+                        hub.JsonSerializerOptions);
+                })
+                .Catch<string, Exception>(ex =>
+                {
+                    // Undeliverable (no such node / the per-node hub never activated), the
+                    // budget elapsed, or the hub is shutting down. Exception TYPE + full
+                    // STACK to the logger, TYPE + message + detail to the caller — a caller
+                    // that cannot tell "pending" from "dropped" is the defect this fixes.
+                    logger.LogError(ex, "ExecuteScript dispatch failed for {Path}", resolvedPath);
+                    return Observable.Return(JsonSerializer.Serialize(
+                        new
+                        {
+                            status = "Error",
+                            path = resolvedPath,
+                            errorType = ex.GetType().FullName,
+                            message = ex.Message,
+                            detail = ex.ToString()
+                        },
+                        hub.JsonSerializerOptions));
+                });
+        });
     }
 }

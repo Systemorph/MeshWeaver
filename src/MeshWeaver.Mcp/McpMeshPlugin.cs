@@ -769,17 +769,19 @@ Returns `{ok: true|false, diagnostics: [...]}` — same shape as `lsp_check_node
     }
 
     /// <summary>
-    /// Runs an executable Code node's C# through the kernel and returns stdout /
-    /// return value / errors, blocking until the kernel signals completion.
+    /// Dispatches an executable Code node's script to its per-node hub and returns the
+    /// dispatch verdict as JSON: <c>status: "Dispatched"</c> with the activity path the
+    /// owning hub actually created, or <c>status: "Error"</c> with the reason. The script
+    /// keeps running after this returns; the activity node is the source of truth.
     /// </summary>
     /// <param name="path">Path to an executable Code node (must be <c>IsExecutable=true</c>).</param>
-    /// <param name="timeoutSeconds">Execution timeout in seconds (default 120).</param>
-    /// <returns>The script output as a string.</returns>
+    /// <param name="timeoutSeconds">Budget for the dispatch acknowledgement (default 120).</param>
+    /// <returns>Dispatch-status JSON.</returns>
     [McpServerTool(Title = "Execute a Code node", Destructive = true, Idempotent = false, OpenWorld = false)]
-    [Description("Runs an executable Code node's C# through the kernel (Microsoft.DotNet.Interactive) and returns stdout / return value / errors. The target node must have `CodeConfiguration.IsExecutable == true`. Blocks until the kernel signals completion (side-effects — e.g. mesh.CreateNode calls inside the script — have happened by the time this returns). Use to run import/test scripts from MCP without needing a UI click.")]
+    [Description("Runs an executable Code node's C# on the mesh kernel. The target node must have `CodeConfiguration.IsExecutable == true`. Returns as soon as the run has been ACCEPTED, not when it finishes: `{status:'Dispatched', activityPath}` — poll `get @{activityPath}` for the live log messages and the terminal status (Running → Succeeded/Failed), which is also where a script's own exception surfaces. Any dispatch failure (node missing or unreadable, not executable, activity could not be created, request undeliverable) comes back as `{status:'Error', message}` — a 'Dispatched' reply always means a real activity exists. Use to run import/test scripts from MCP without needing a UI click.")]
     public Task<string> ExecuteScript(
         [Description("Path to an executable Code node (e.g., @Systemorph/FutuRe/EuropeRe/AcmeSubmission2025/Script/ImportLargeClaims). Must be `IsExecutable=true`.")] string path,
-        [Description("Timeout in seconds. Default 120.")] int timeoutSeconds = 120)
+        [Description("Seconds to wait for the dispatch acknowledgement (NOT for the script to finish). Default 120.")] int timeoutSeconds = 120)
         => ops.ExecuteScript(path, timeoutSeconds).FirstAsync().ToTask();
 
     /// <summary>
