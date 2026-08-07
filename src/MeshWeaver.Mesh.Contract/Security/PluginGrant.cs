@@ -10,7 +10,11 @@ namespace MeshWeaver.Mesh.Security;
 /// (<c>hub.IsGlobalAdmin()</c>) writes these.</para>
 ///
 /// <para>An instance with no grant node, or an empty <see cref="Entries"/> list, gets <b>nothing</b>.
-/// Registering is identity, not entitlement.</para>
+/// Registering is identity, not entitlement. The one qualification: a registry operator may opt
+/// specific sources into every new registration via <c>PluginCatalog:DefaultGrants</c> (e.g. the
+/// platform's own <c>Plugins/*</c>) — registration then SEEDS those entries into this node, so the
+/// grant node stays the single authority and an admin can still revoke per instance. Private/paid
+/// sources are never defaulted; they remain admin-granted.</para>
 /// </summary>
 public record PluginGrant
 {
@@ -65,4 +69,24 @@ public record PluginGrantEntry
     /// <summary>Renders the entry the way it is written in docs and the admin UI —
     /// <c>Plugins/*</c>, <c>Reinsurance/UWDeepfield</c>.</summary>
     public override string ToString() => $"{Source}/{PackageId}";
+
+    /// <summary>
+    /// Parses the <c>Source/Package</c> notation used in config and docs — <c>Plugins/*</c>,
+    /// <c>Reinsurance/UWDeepfield</c>, or a bare <c>Plugins</c> meaning the whole source.
+    /// Returns <c>null</c> for a blank or malformed value (no source, or nothing after the
+    /// separator) instead of throwing: these are operator-typed config values, and one bad list
+    /// entry must not take the registration surface down with it.
+    /// </summary>
+    public static PluginGrantEntry? TryParse(string? text)
+    {
+        var trimmed = text?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+            return null;
+        var slash = trimmed.IndexOf('/');
+        var source = (slash < 0 ? trimmed : trimmed[..slash]).Trim();
+        var packageId = slash < 0 ? AllPackages : trimmed[(slash + 1)..].Trim();
+        if (source.Length == 0 || packageId.Length == 0)
+            return null;
+        return new PluginGrantEntry { Source = source, PackageId = packageId };
+    }
 }

@@ -1523,30 +1523,25 @@ internal class MeshNodeCompilationService(
     }
 
     /// <summary>
-    /// Runs the in-process Roslyn source generators over a dynamic-node
-    /// compilation before Emit — currently the MeshWeaver.BusinessRules
-    /// <c>ScopeCodeGenerator</c>, which emits the concrete implementations for
-    /// <c>IScope&lt;TIdentity, TState&gt;</c> interfaces declared in node Source.
-    /// A compilation that doesn't reference <c>IScope</c> passes through
-    /// unchanged (the generator no-ops), so this costs nothing for ordinary
-    /// node types. This is what lets Source code nodes use the business-rules
-    /// scopes framework: declare the interface, the compiler generates the
-    /// proxy, and <c>services.AddBusinessRules(assembly)</c> discovers it.
+    /// Paths of source-generator assemblies fed to EVERY dynamic-node compilation, resolved once
+    /// per process. 🚨 The platform does NOT ship any — business rules / scopes moved OUT of the
+    /// platform (see the comment blocks in <c>MeshWeaver.Graph.csproj</c> and
+    /// <c>Memex.Portal.Distributed.csproj</c>): the scope runtime is a shared-source library node
+    /// in the <c>MeshWeaver.Plugins/BusinessRules</c> plugin, pulled into a consumer's compilation
+    /// via <c>shared=@BusinessRules/Scope/Source</c>, and the plugin carries the
+    /// <c>ScopeCodeGenerator</c> SOURCE for the generator-injection seam. So on a deployed image
+    /// this list is EMPTY. It only fills when a <c>MeshWeaver.BusinessRules.Generator.dll</c> is
+    /// physically present next to the app (a dev/self-host tree that placed one there) — kept as
+    /// graceful degradation for such trees, and because the legacy-<c>#r</c> strip below keys off it.
     /// </summary>
-    // The BusinessRules scope generator ships WITH the platform — its DLL is copied into the Graph
-    // runtime output (see MeshWeaver.Graph.csproj) and always fed to the compile. So an IScope<,>
-    // node compiles with NO `#r "nuget:MeshWeaver.BusinessRules.Generator"` and NO NuGet round-trip
-    // (no mesh-local feed, no BakeMeshLocalFeed). It runs as a build TOOL only — never a project
-    // analyzer, so it does NOT propagate to downstream builds. A node may still `#r` a DIFFERENT
-    // generator; those add to this built-in one. Resolved once (the file is stable per process).
     private static readonly IReadOnlyList<string> BuiltInGeneratorPaths = ResolveBuiltInGenerators();
 
     /// <summary>
     /// NuGet package id (and, with <c>.dll</c>, assembly file name) of the BusinessRules scope
-    /// source generator. It ships BUILT-IN with the platform, so a legacy
-    /// <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> is redundant and is filtered out of
-    /// BOTH the generator list (avoid a double-run → CS0101, see <see cref="RunSourceGenerators"/>)
-    /// and the NuGet resolve set (avoid a round-trip to the removed mesh-local feed, see
+    /// source generator. When a copy is present in the app base (<see cref="BuiltInGeneratorPaths"/>
+    /// non-empty), a legacy <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> is redundant and is
+    /// filtered out of BOTH the generator list (avoid a double-run → CS0101, see
+    /// <see cref="RunSourceGenerators"/>) and the NuGet resolve set (avoid a dead round-trip, see
     /// <see cref="AssembleCompilationInputs"/>).
     /// </summary>
     private const string BuiltInScopeGeneratorId = "MeshWeaver.BusinessRules.Generator";

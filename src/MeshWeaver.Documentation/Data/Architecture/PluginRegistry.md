@@ -42,8 +42,19 @@ issuing it a token and adding that token to the registry's `PluginCatalog:Regist
 `PluginCatalog:RegistryToken`, or per-registry `Registries:N:Token`), and a request without a valid
 token is 401 (validated fixed-time by `PluginRegistryTokens`, the shared producer/consumer contract).
 Only when **no** tokens are configured — the local-dev / e2e-stub mode — does the registry answer
-anonymously; a production registry always configures tokens. What a registered instance can then
-read is **curated plugins** only:
+anonymously; a production registry always configures tokens.
+
+Registration itself is self-service (Settings ▸ Instances issues an `mwi_` instance key), but it is
+**identity, not entitlement**: what an instance may pull is decided per `(source, package)` by a
+platform admin in `Admin/_PluginGrant/{instanceId}` nodes the instance's owner cannot write
+(Settings ▸ Administration ▸ Instance grants). The one qualification: the registry operator may opt
+specific sources into every **new** registration via `PluginCatalog:DefaultGrants` (a list of
+`Source/Package` entries, e.g. `["Plugins/*"]` so a fresh install gets the platform plugin repo
+with no admin step). Registration then *seeds* those entries into the grant node — the node stays
+the single authority, so an admin can still revoke or extend per instance — and private/paid
+sources are never listed there. With no defaults configured, registering grants exactly nothing.
+
+What a registered instance can then read is **curated plugins** only:
 by default the node-native repos the [`MeshWeaver.Plugins`](/Doc/Architecture/Plugins) repo ships —
 `<Plugin>/index.json` **Store/Plugin** roots carrying a `PluginContent`, node-per-file — via a
 `NodeRepoPackageSource` (`PluginCatalog:SourceFormat=node-repo`, the default). A `package.json`-manifest

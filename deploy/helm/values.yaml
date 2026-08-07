@@ -56,6 +56,12 @@ pluginCatalog:
   # REGISTRY: the git repos whose plugins this install serves — [{name, repoPath, ref, format}].
   # format: node-repo (default, <Folder>/index.json Space root) | package-json.
   sources: []
+  # REGISTRY: Source/Package entries every NEW instance registration is seeded with, e.g.
+  # ["Plugins/*"] so a fresh install gets the platform plugin repo without an admin grant step.
+  # Registration writes them into the instance's Admin/_PluginGrant node, so admins can still
+  # revoke per instance. Empty = strict default: registering grants nothing. Never list
+  # private/paid sources here.
+  defaultGrants: []
 # ---- Platform-admin Instances overview -------------------------------------
 # The admin "Instances" tab lists every portal on the cluster by querying the k8s API. Reading
 # deployments/ingresses ACROSS namespaces needs a cluster-scoped read grant — enable it ONLY on the

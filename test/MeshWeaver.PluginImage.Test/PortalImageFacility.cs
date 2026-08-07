@@ -186,30 +186,35 @@ public sealed class PortalImageFacility : IAsyncLifetime
     }
 
     /// <summary>
-    /// The image ships <c>MeshWeaver.BusinessRules.dll</c> (the <c>IScope&lt;,&gt;</c> runtime surface)
-    /// AND lists it in the app's <c>.deps.json</c> — i.e. it is part of the runtime reference set the
-    /// host turns into TRUSTED_PLATFORM_ASSEMBLIES (TPA), which IS the mesh compiler's scope-compile
-    /// reference set. That's why the mesh-local <c>#r</c> feed (BakeMeshLocalFeed) could be removed: a
-    /// live-compiled scope node resolves those types from TPA, not from a baked feed. This guards that
-    /// safety net — if a future change drops the runtime lib from the portal's published deps, scope
-    /// nodes would silently fail to compile in prod, and this fails first. File presence alone would
-    /// not prove the assembly is a resolvable reference; deps.json membership does.
+    /// The image ships NO <c>MeshWeaver.BusinessRules</c> assembly — the platform starts with zero
+    /// business-rules dependency, deliberately (f7a8c086c, and the comment blocks in
+    /// <c>MeshWeaver.Graph.csproj</c> / <c>Memex.Portal.Distributed.csproj</c>). Scopes ship as the
+    /// <c>MeshWeaver.Plugins/BusinessRules</c> PLUGIN, whose runtime (<c>IScope&lt;,&gt;</c>,
+    /// <c>ScopeBase</c>, <c>ScopeRegistry</c>) is a shared-source library node type consumers pull
+    /// into their own compilation via <c>shared=@BusinessRules/Scope/Source</c> — no DLL in the
+    /// image, no TPA reliance, no <c>#r</c>/feed. This test used to assert the OPPOSITE (the
+    /// withdrawn ships-in-TPA design) and failed on every post-removal image; now it pins the
+    /// removal, so an accidental re-introduction — which would put scope types back on the platform
+    /// startup path that once wedged silos — fails here first.
     /// </summary>
     [Fact]
-    public async Task InjectedImage_ShipsBusinessRulesRuntime_ForFeedlessScopeCompile()
+    public async Task InjectedImage_ShipsNoBusinessRulesAssembly_ScopesComeFromThePlugin()
     {
         SkipIfUnavailable();
 
-        // (a) the runtime DLL is physically present in the image.
-        var file = await _portal!.ExecAsync(new[] { "test", "-f", "/app/MeshWeaver.BusinessRules.dll" });
+        // Assert the condition POSITIVELY (probe exits 0, count is 0) rather than off a non-zero
+        // `ls` exit — a broken probe (wrong path, missing shell) would also exit non-zero and make
+        // an absence assertion pass vacuously. The `ls /app/MeshWeaver.*.dll` guard proves the
+        // probe is looking at a real app directory full of platform assemblies.
+        var file = await _portal!.ExecAsync(new[] { "sh", "-c",
+            "ls /app/MeshWeaver.*.dll >/dev/null && ls /app/MeshWeaver.BusinessRules*.dll 2>/dev/null | wc -l" });
         Assert.Equal(0L, file.ExitCode);
+        Assert.Equal("0", file.Stdout.Trim());
 
-        // (b) it is listed in the published .deps.json — the runtime-assembly list the host resolves
-        //     into TPA, and thus the mesh compiler's scope-compile reference set. This is the assertion
-        //     that actually backs the "resolves from TPA, no #r feed needed" claim above.
-        var deps = await _portal!.ExecAsync(new[]
-            { "sh", "-c", "grep -q '\"MeshWeaver.BusinessRules.dll\"' /app/*.deps.json" });
+        var deps = await _portal!.ExecAsync(new[] { "sh", "-c",
+            "ls /app/*.deps.json >/dev/null && grep -l 'MeshWeaver.BusinessRules' /app/*.deps.json | wc -l" });
         Assert.Equal(0L, deps.ExitCode);
+        Assert.Equal("0", deps.Stdout.Trim());
     }
 
     public async ValueTask DisposeAsync() => await SafeDisposeAsync();

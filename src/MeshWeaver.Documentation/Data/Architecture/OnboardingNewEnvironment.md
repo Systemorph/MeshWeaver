@@ -141,12 +141,21 @@ secrets:
     PluginCatalog__RegistryToken: "<token issued to this installation>"
 ```
 
+The consumer's token is the `mwi_` instance key issued when the new installation is **registered**
+on the registry portal (Settings ▸ Instances — self-service, shown once). Registration grants
+nothing by itself; what the instance may pull is decided per `(source, package)` by a platform
+admin on the registry — except sources the registry opted into `PluginCatalog:DefaultGrants`
+(typically the platform `Plugins/*` repo), which every new registration is granted automatically.
+So with defaults configured, a fresh environment needs no admin grant step to see the platform
+plugins — install them from the Plugin Catalog tab once the consumer wiring lands.
+
 Registry (only when this environment *is* the registry):
 
 ```yaml
 pluginCatalog:
   sources:
     - {name: Plugins, repoPath: "https://github.com/<org>/<plugins-repo>", ref: main}
+  defaultGrants: ["Plugins/*"]   # granted to every NEW registration; never private/paid sources
 secrets:
   memex_portal:
     PluginCatalog__RegistryTokens: ["<token-per-registered-installation>"]

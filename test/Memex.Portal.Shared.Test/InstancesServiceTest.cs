@@ -145,6 +145,10 @@ public class InstancesServiceTest
         Assert.Contains("-d acme", plan);
         Assert.Contains("portalNamespaces", plan);
         Assert.Contains("deploy/aks/envs/acme/deploy.sh", plan);
+        // A new instance is wired to the plugin registry as part of provisioning — register for an
+        // mwi_ key (DefaultGrants sources land automatically), then consume via registryUrl + token.
+        Assert.Contains("PluginCatalog:DefaultGrants", plan);
+        Assert.Contains("PluginCatalog__RegistryToken", plan);
     }
 
     [Fact]
