@@ -39,10 +39,31 @@ public class DataChangeLogTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithInitialData(_ => Observable.Return<IEnumerable<ChangeLogRecord>>(
                         [new ChangeLogRecord("1", "First")])))));
 
+    /// <summary>
+    /// Returns the workspace only once its data source's stream hub has actually STARTED.
+    ///
+    /// <para>🚨 <c>WorkspaceOperations.UpdateStream</c> hard-throws
+    /// <c>"Data source … is not initialized."</c> when a change arrives before
+    /// <c>stream.Hub.Started</c> has completed. Writing straight after
+    /// <c>GetHost().GetWorkspace()</c> is therefore a race against hub startup: it wins on a
+    /// developer machine (the whole class runs in ~370 ms) and loses on a loaded CI runner,
+    /// where it surfaced as a one-test failure that looked like an unrelated flake.</para>
+    ///
+    /// <para>The seeded record <c>"1"</c> is the readiness signal — observing it proves the
+    /// source is up. We wait on that ACTUAL condition rather than sleeping (WritingTests.md).</para>
+    /// </summary>
+    private async Task<IWorkspace> GetStartedWorkspace()
+    {
+        var workspace = GetHost().GetWorkspace();
+        await workspace.GetObservable<ChangeLogRecord>()
+            .Should().Within(10.Seconds()).Match(x => x.Any(r => r.Id == "1"));
+        return workspace;
+    }
+
     [Fact]
     public async Task Change_ReportsOnce_ThenCompletes()
     {
-        var workspace = GetHost().GetWorkspace();
+        var workspace = await GetStartedWorkspace();
 
         var notifications = await workspace
             .RequestChange(DataChangeRequest.Update([new ChangeLogRecord("2", "Second")]))
@@ -66,7 +87,7 @@ public class DataChangeLogTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task Change_WhenValidationFails_ReportsTheFailure_AndDoesNotWrite()
     {
-        var workspace = GetHost().GetWorkspace();
+        var workspace = await GetStartedWorkspace();
 
         var log = await workspace
             .RequestChange(DataChangeRequest.Update([new ChangeLogRecord("3", null)]))
@@ -86,6 +107,9 @@ public class DataChangeLogTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task DataChangeRequest_DoesNotHostAnActivityHub()
     {
         var host = GetHost();
+        // Same startup race as above: the change below reaches the very same UpdateStream guard,
+        // just via the client hub instead of directly.
+        await GetStartedWorkspace();
         var hostedHubs = host.ServiceProvider.GetRequiredService<HostedHubsCollection>();
         int ActivityHubCount() => hostedHubs.Hubs.Count(h => h.Address.Type == AddressExtensions.ActivityType);
 
