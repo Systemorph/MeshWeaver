@@ -2013,7 +2013,10 @@ public static class MeshExtensions
                 // whatever hub-self identity is ambient (`sync/<id>`).
                 logger.LogDebug("[DeleteNode] post leaf delete {Path}", path);
                 return meshHub.Observe(
-                        baseRequest with { Path = path, Recursive = false },
+                        // CascadeRootPath rides to the leaf's handler so per-leaf validators
+                        // exempt space-teardown invariants (last-admin) exactly like the
+                        // pre-flight ValidateDeleteRequest(p, rootPath) already does.
+                        baseRequest with { Path = path, Recursive = false, CascadeRootPath = rootPath },
                         o => callerAccessContext is null
                             ? o.WithTarget(new Address(path))
                             : o.WithTarget(new Address(path)).WithAccessContext(callerAccessContext))
@@ -2481,9 +2484,11 @@ public static class MeshExtensions
             Node = node,
             Request = request,
             AccessContext = accessService?.Context ?? accessService?.CircuitContext,
-            // This runner validates the ROOT node of the delete, so the cascade root is the
-            // request path itself.
-            DeleteCascadeRootPath = request.Path
+            // This runner validates the ROOT node of the delete. For a standalone delete the
+            // cascade root is the request path itself; a leaf delete issued by the subtree
+            // fan-out carries the ORIGINAL root so validators exempt space-teardown invariants
+            // (see DeleteNodeRequest.CascadeRootPath).
+            DeleteCascadeRootPath = request.CascadeRootPath ?? request.Path
         };
 
         var validators = hub.ServiceProvider.GetServices<INodeValidator>()
