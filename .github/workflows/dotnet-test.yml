@@ -377,8 +377,66 @@ jobs:
         tar -I 'zstd --long=27' -xf "build-output-${{ matrix.shard }}.tar.zst"
         rm -f "build-output-${{ matrix.shard }}.tar.zst"
         df -h / | tail -1 | awk '{print "disk after extract: " $4 " free of " $2}'
+    # ── Acquire the Testcontainers images BEFORE the tests, as infrastructure ──
+    # 🚨 This step exists so a Docker Hub outage can never again masquerade as a
+    # mass TEST failure. Every PostgreSql fixture is a COLLECTION fixture, so when
+    # the image cannot be pulled, `InitializeAsync` throws and xUnit reports the
+    # failure against every test in the collection: run 31137723323 shard 5 logged
+    # 412 [FAIL]s, all of them the identical
+    #   DockerApiException: Get "https://registry-1.docker.io/v2/": context deadline exceeded
+    # and NOT ONE a real defect. That shape is actively harmful — it reds the merge
+    # gate with a plausible-looking access-control failure list that cannot be
+    # reproduced locally (where the image is already in the local store), and it
+    # cost a full debugging session chasing tests that were never broken.
+    #
+    # Pulling here instead makes the dependency explicit and the diagnosis instant:
+    # the registry is a THIRD-PARTY fetch, so it gets bounded retries with backoff
+    # (a transient blip is not a code defect and must not be reported as one), and
+    # if it still cannot be fetched the shard fails HERE with an unambiguous infra
+    # error instead of 412 phantom test results.
+    #
+    # Testcontainers then finds the image in the local store and starts it without
+    # touching the network. Keep this list in sync with the fixtures — grep for
+    # `new PostgreSqlBuilder(` / `.WithImage(`.
+    - name: "Pre-pull Testcontainers images (infra, not a test)"
+      run: |
+        set -uo pipefail
+        # Only the images the fixtures name explicitly. Testcontainers' OTHER
+        # implicit Docker Hub pull — the ryuk resource reaper — is not listed
+        # because it is DISABLED for CI instead (see TESTCONTAINERS_RYUK_DISABLED
+        # on the next step): the runner VM is discarded wholesale after the job,
+        # so there is nothing for a reaper to reap, and not pulling it removes a
+        # second registry dependency rather than adding a second thing to retry.
+        # Its tag is also a function of the Testcontainers package version, so
+        # pinning it here would silently rot.
+        images="pgvector/pgvector:pg17"
+        rc=0
+        for img in $images; do
+          ok=0
+          for attempt in 1 2 3 4 5; do
+            if docker image inspect "$img" >/dev/null 2>&1; then
+              echo "$img: already in the local store"; ok=1; break
+            fi
+            if docker pull --quiet "$img"; then
+              echo "$img: pulled on attempt $attempt"; ok=1; break
+            fi
+            # Backoff: 5s, 10s, 20s, 40s. Docker Hub blips are seconds-to-minutes.
+            delay=$((5 * 2 ** (attempt - 1)))
+            echo "$img: pull attempt $attempt failed; retrying in ${delay}s" >&2
+            sleep $delay
+          done
+          if [ $ok -eq 0 ]; then
+            echo "::error::could not pull $img after 5 attempts — this is a REGISTRY/INFRA failure, not a test failure. Do not chase the tests that would have reported it."
+            rc=1
+          fi
+        done
+        exit $rc
     - name: Run Tests
       env:
+        # The runner VM is destroyed after the job, so Testcontainers' resource
+        # reaper has nothing to reap — disabling it removes an implicit Docker Hub
+        # pull (one more thing that can fail the shard from outside our code).
+        TESTCONTAINERS_RYUK_DISABLED: true
         DOTNET_ENVIRONMENT: Development
         Logging__LogLevel__Default: Warning
         SHARD_INDEX: ${{ matrix.shard }}

@@ -179,4 +179,48 @@ public class AssertionTests
         await Assert.ThrowsAnyAsync<AssertionException>(
             async () => await subject.Should().Within(50.Milliseconds()).Emit());
     }
+
+    /// <summary>
+    /// A timeout must say WHICH failure it was. "Emitted nothing" and "emitted, but never
+    /// matched" need opposite fixes — the first is an upstream wedge, the second a wrong
+    /// expectation — and a bare "it did not" cannot tell them apart. That ambiguity is what
+    /// made MenuAccessControlTest's CI-only failure undiagnosable.
+    /// </summary>
+    [Fact]
+    public async Task TimedOutMatch_ReportsWhatTheStreamActuallyEmitted()
+    {
+        var ex = await Assert.ThrowsAnyAsync<ObservableAssertionException>(
+            async () => await Observable.Range(1, 3).Concat(Observable.Never<int>())
+                .Should().Within(50.Milliseconds()).Match(x => x == 99));
+
+        Assert.Contains("Last of 3 emission(s) was: 3", ex.Message);
+    }
+
+    [Fact]
+    public async Task TimedOutMatch_OnASilentStream_SaysNothingWasEmitted()
+    {
+        var ex = await Assert.ThrowsAnyAsync<ObservableAssertionException>(
+            async () => await Observable.Never<int>()
+                .Should().Within(50.Milliseconds()).Match(x => x == 99));
+
+        Assert.Contains("emitted nothing at all", ex.Message);
+    }
+
+    /// <summary>
+    /// The reported value must be the collection's CONTENTS. ToString() on a list yields
+    /// "System.Collections.Generic.List`1[System.String]", which is worthless precisely when a
+    /// set-equality predicate never matched and the contents are the whole question.
+    /// </summary>
+    [Fact]
+    public async Task TimedOutMatch_RendersCollectionContents_NotTheTypeName()
+    {
+        var emitted = new List<string> { "Edit", "Create", "Resume synchronization" };
+        var ex = await Assert.ThrowsAnyAsync<ObservableAssertionException>(
+            async () => await Observable.Return(emitted).Concat(Observable.Never<List<string>>())
+                .Should().Within(50.Milliseconds()).Match(items => items.Count == 99));
+
+        Assert.Contains("Edit, Create, Resume synchronization", ex.Message);
+        Assert.Contains("3 item(s)", ex.Message);
+        Assert.DoesNotContain("System.Collections.Generic.List", ex.Message);
+    }
 }
