@@ -36,6 +36,11 @@ public static class IoPoolServiceCollectionExtensions
         // The async half of mesh teardown — resources enqueue async cleanup here from
         // their sync Dispose(); the mesh's DisposeAsync drains it before the scope dies.
         services.TryAddSingleton<AsyncDisposeQueue>();
+        // The terminal "all is done" signal — completed exactly once by the teardown
+        // orchestrator (MeshTeardownExtensions) after EVERY drain phase, carrying the
+        // TeardownReport. Subscribe to this (never to DisposalCompleted alone) before
+        // disposing the scope / unloading node ALCs / starting the next mesh.
+        services.TryAddSingleton<MeshTeardownSignal>();
         // Mesh-scoped, so in-flight activity runs are counted per mesh and the counter dies with
         // it (NoStaticState). Teardown quiesces on this — see ActivityTracker.
         services.TryAddSingleton<ActivityTracker>();
