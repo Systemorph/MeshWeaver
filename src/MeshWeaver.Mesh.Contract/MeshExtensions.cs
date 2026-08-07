@@ -1242,6 +1242,20 @@ public static class MeshExtensions
     /// on a not-yet-provisioned PG schema means the node is, by definition, absent → null), then
     /// the static/config node provider — so a partition whose root is a static node is recognized
     /// as present and never re-created.
+    ///
+    /// <para>🚨 A DEFINITION-ONLY static entry is NOT a node at this path and must never answer an
+    /// existence probe — the same rule <c>HandleCreateNodeRequest</c> and the batch create already
+    /// apply. A NodeType whose discriminator equals its catalog's partition name registers its
+    /// type definition at the bare partition path (<c>@Agent</c>, <c>@Skill</c>, <c>@Harness</c>);
+    /// <see cref="MeshNode.IsDefinitionOnly"/> is what declares that entry a DEFINITION rather than
+    /// a served node, and it is the platform's only name-keyed home for the non-serialisable
+    /// <c>HubConfiguration</c> delegate. Letting it answer here made
+    /// <c>EnsurePartitionBootstrap</c> believe the partition root already existed, so
+    /// <c>ProvisionAndCreateRoot</c> never ran: no schema was provisioned and no durable root was
+    /// written, while every other seam correctly saw nothing. That is exactly the ghost partition
+    /// root of #902 — present to the existence check, absent to reads, un-creatable ("already
+    /// exists"), with no version history — and it is why the platform's agent catalog could not be
+    /// repaired by any route. See Doc/Architecture/NodeTypeCatalogs.md.</para>
     /// </summary>
     private static IObservable<MeshNode?> ReadNodeAuthoritative(
         IMessageHub hub, IStorageAdapter persistence, string path)
@@ -1249,7 +1263,14 @@ public static class MeshExtensions
             .Take(1)
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
             .DefaultIfEmpty(null)
-            .Select(n => n ?? hub.ServiceProvider.FindStaticNode(path));
+            .Select(n => n ?? StaticNodeAt(hub, path));
+
+    /// <summary>
+    /// The static/config node genuinely SERVED at <paramref name="path"/>, or <c>null</c> — a
+    /// definition-only entry is a type definition, not a node, and never counts as one.
+    /// </summary>
+    private static MeshNode? StaticNodeAt(IMessageHub hub, string path) =>
+        hub.ServiceProvider.FindStaticNode(path) is { IsDefinitionOnly: false } served ? served : null;
 
     /// <summary>
     /// Provisions every provider's backing store (PG schema + tables) then writes the partition's

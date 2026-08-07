@@ -112,7 +112,7 @@ public static class PluginRegistryEndpoints
         http.Items.TryGetValue(CallerItemKey, out var v) ? v as AuthenticatedInstance : null;
 
     // The registry's git sources, read from PluginCatalog config by the SHARED reader
-    // (PackageSources.FromConfiguration) — the same list PreInstalledPackageService installs the
+    // (PackageSources.FromConfiguration) — the same list the default install (InstanceAutoRegistrationService) installs the
     // default packages out of on this very instance. One reading, so serving and pre-installing
     // can never disagree about what this registry carries.
     private static IReadOnlyList<ConfiguredPackageSource> Sources(IMessageHub hub, IConfiguration config)
@@ -145,7 +145,13 @@ public static class PluginRegistryEndpoints
         => Observable.CombineLatest(sources.Select(s =>
                 ListFrom(s, sources.Count == 1, logger).Select(list => (Source: s, Packages: list))))
             .Select(perSource => (IReadOnlyList<PackageManifest>)perSource
-                .SelectMany(x => x.Packages.Where(p => IsGranted(caller, x.Source, p)))
+                // Stamp the source each package came from BEFORE the merge — afterwards the
+                // provenance is gone. Consumers scope source-specific actions on it (notably
+                // PluginCatalog:InstallByDefault, which must distinguish the platform repo from
+                // paid content the same instance may also be granted).
+                .SelectMany(x => x.Packages
+                    .Where(p => IsGranted(caller, x.Source, p))
+                    .Select(p => p with { Source = x.Source.Name }))
                 .DistinctBy(p => p.Id, StringComparer.Ordinal)
                 .ToList());
 

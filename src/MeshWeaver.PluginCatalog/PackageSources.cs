@@ -12,7 +12,7 @@ namespace MeshWeaver.PluginCatalog;
 /// One package source this instance has configured, with the git ref it serves and a display name
 /// for logs. Produced by <see cref="PackageSources.FromConfiguration"/> — the single reading of the
 /// <c>PluginCatalog:Sources</c> config, shared by the registry endpoints (which SERVE these
-/// sources) and by <see cref="PreInstalledPackageService"/> (which INSTALLS the default packages
+/// sources) and by <see cref="InstanceAutoRegistrationService"/> (which INSTALLS the default packages
 /// out of them). The registry is authoritative on each source's ref; a consumer's ref is advisory.
 /// </summary>
 /// <param name="Source">The package source itself.</param>
@@ -62,6 +62,14 @@ public static class PackageSources
                 ? new NodeRepoPackageSource(client.Fetch, src, tokenProvider, logger)
                 : new GitHubPackageSource(client.Fetch, src, tokenProvider, subdir, logger);
         }
+        // A LOCAL path in node-repo format: read the checkout straight off disk. This is what lets
+        // a registry serve plugins with NO GitHub credential at all — the local-dev / air-gapped
+        // equivalent of the App identity, and the only way a local stack can serve the node-native
+        // repo MeshWeaver.Plugins actually ships (before this, a local path silently fell through
+        // to the package.json source below and listed nothing).
+        if (nodeRepo)
+            return new NodeRepoPackageSource(LocalDirectoryFetch(hub, logger), src, "", logger);
+
         var git = new GitCli(hub.ServiceProvider.GetRequiredService<IoPoolRegistry>());
         return new GitPackageSource(git, src, subdir, logger);
     }
@@ -75,7 +83,7 @@ public static class PackageSources
     ///
     /// <para>Lives here rather than in the registry endpoints because BOTH consumers of the config
     /// must read it identically: the registry serves these sources over <c>/api/plugins</c>, and
-    /// <see cref="PreInstalledPackageService"/> installs the default packages out of the very same
+    /// <see cref="InstanceAutoRegistrationService"/> installs the default packages out of the very same
     /// list on the registry instance itself (which is not a consumer of its own HTTP surface).</para>
     /// </summary>
     /// <param name="hub">Hub supplying the git client / IO pool the sources are built on.</param>
@@ -109,6 +117,59 @@ public static class PackageSources
             name: "registry");
         return legacy is null ? [] : [legacy];
     }
+
+    /// <summary>
+    /// A fetch delegate that snapshots a local directory as if it were a repo checkout — the
+    /// filesystem counterpart of <c>IGitHubRepoClient.Fetch</c>. Blocking file IO, so it runs on
+    /// the FileSystem <see cref="IIoPool"/>: never inline on the caller's (hub) thread.
+    ///
+    /// <para><c>.git</c> and other dot-directories are skipped — a working checkout carries a large
+    /// object store that is not repo CONTENT, and walking it would dwarf the actual files. The
+    /// snapshot's "commit sha" is a content hash of the file set, so an unchanged directory yields
+    /// a stable ref and the installer's checksum gate correctly reports "nothing to do".</para>
+    /// </summary>
+    private static Func<string, string, string?, string, IObservable<RepoSnapshot>> LocalDirectoryFetch(
+        IMessageHub hub, ILogger? logger)
+    {
+        var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                   ?? IoPool.Unbounded;
+        return (root, _, _, _) => pool.InvokeBlocking(_ =>
+        {
+            if (!Directory.Exists(root))
+            {
+                logger?.LogWarning("Local plugin source '{Root}' does not exist — serving nothing.", root);
+                return new RepoSnapshot("local-missing", []);
+            }
+
+            var files = new List<RepoFile>();
+            var hash = new System.Text.StringBuilder();
+            foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                         .OrderBy(p => p, StringComparer.Ordinal))
+            {
+                var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
+                // Skip dot-directories (.git, .github, …) — infrastructure, not repo content.
+                if (relative.Split('/').Any(seg => seg.StartsWith('.')))
+                    continue;
+                var info = new FileInfo(path);
+                hash.Append(relative).Append(':').Append(info.Length).Append(';');
+                files.Add(IsProbablyText(relative)
+                    ? new RepoFile(relative, File.ReadAllText(path))
+                    : new RepoFile(relative, "", File.ReadAllBytes(path)));
+            }
+
+            var sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(hash.ToString())))[..12].ToLowerInvariant();
+            logger?.LogInformation(
+                "Local plugin source '{Root}': {Count} file(s), content ref {Sha}", root, files.Count, sha);
+            return new RepoSnapshot($"local-{sha}", files);
+        });
+    }
+
+    // Binary files (icons, images) must travel as bytes; reading them as text corrupts them.
+    private static bool IsProbablyText(string relativePath) =>
+        Path.GetExtension(relativePath).ToLowerInvariant() is
+            ".json" or ".md" or ".cs" or ".csx" or ".txt" or ".yml" or ".yaml" or ".xml"
+            or ".js" or ".ts" or ".css" or ".html" or ".svg" or ".sql" or ".py" or ".lock" or "";
 
     /// <summary>
     /// A token provider that yields the GitHub App INSTALLATION token when the App identity is

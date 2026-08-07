@@ -52,10 +52,15 @@ public static class PluginCatalogConfigurationExtensions
                 // the /api/instances/register endpoint. Mesh-scoped like everything above.
                 .AddSingleton<RegistrationKeyService>()
                 .AddSingleton<InstanceRegistrationClient>()
-                // First-startup auto-registration: when PluginCatalog:BootstrapKey is configured
-                // and no instance key is stored yet, register this installation at the configured
-                // registry and persist the issued key. Same two-registration idiom as the watcher —
-                // the IHostedService forward is what STARTS it.
+                // 🚨 THE ONE DEFAULT-INSTALL PATH. Two phases in one service, deliberately: phase 1
+                // auto-registers this installation at the configured registry when
+                // PluginCatalog:BootstrapKey is set and no instance key is stored yet, and phase 2
+                // installs what this deployment comes up with — the packages declaring
+                // `preInstalled` (the platform baseline, every boot) plus the operator's
+                // InstallByDefault seed (a fresh installation only), in dependency order.
+                // They are ONE service because phase 2 needs the key phase 1 mints; two hosted
+                // services would race each other over the same partitions. Same two-registration
+                // idiom as the watcher — the IHostedService forward is what STARTS it.
                 .AddSingleton<InstanceAutoRegistrationService>()
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
                     sp => sp.GetRequiredService<InstanceAutoRegistrationService>())
@@ -68,14 +73,7 @@ public static class PluginCatalogConfigurationExtensions
                 // until the next package update. Idempotent: on a repaired instance it writes nothing.
                 .AddSingleton<InstalledPackageRepairService>()
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
-                    sp => sp.GetRequiredService<InstalledPackageRepairService>())
-                // THE DEFAULT INSTALL: every package declaring `preInstalled` in its manifest is
-                // installed (and re-published) on this instance at startup. Mesh-scoped singleton +
-                // the IHostedService forward that actually STARTS it — the same two-registration
-                // idiom as the watcher above; the bare singleton alone would never run.
-                .AddSingleton<PreInstalledPackageService>()
-                .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
-                    sp => sp.GetRequiredService<PreInstalledPackageService>()))
+                    sp => sp.GetRequiredService<InstalledPackageRepairService>()))
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();

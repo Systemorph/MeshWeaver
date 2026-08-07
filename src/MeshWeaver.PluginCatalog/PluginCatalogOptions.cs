@@ -75,6 +75,49 @@ public sealed class PluginCatalogOptions
     /// <summary>Display name for the auto-registered instance. Empty → the instance id.</summary>
     public string InstanceName { get; set; } = "";
 
+    /// <summary>
+    /// Packages a FRESH installation installs by itself on first startup, in the same
+    /// <c>Source/Package</c> notation as the registry's grants — e.g. <c>["Plugins/*"]</c> for the
+    /// whole platform plugin repo (which is what carries the Store), or
+    /// <c>["Plugins/Store", "Plugins/Essentials"]</c> to be selective. Empty (the platform default)
+    /// = install nothing; the catalog is merely populated and an admin installs by hand.
+    ///
+    /// <para>🚨 SOURCE-SCOPED on purpose. An instance may be granted paid content (course repos)
+    /// as well as the platform repo, and "install everything I'm entitled to" would sweep that in.
+    /// Matching goes through <c>PluginGrantEntry</c> against the catalog entry's
+    /// <see cref="PackageManifest.Source"/>, so a registry that does not stamp the source matches
+    /// nothing and installs nothing — failing closed.</para>
+    ///
+    /// <para>Runs ONCE, on an installation with no install records yet: this seeds a new
+    /// deployment, it is not a policy that re-asserts itself. (An installation whose packages are
+    /// ALL later uninstalled looks fresh again and would re-seed on the next restart — deliberate,
+    /// so a wiped instance recovers, and harmless because installs are additive.)</para>
+    /// </summary>
+    public List<string> InstallByDefault { get; set; } = [];
+
+    /// <summary>
+    /// Whether this installation installs the packages whose manifest declares
+    /// <see cref="PackageManifest.PreInstalled"/> — the platform's own baseline catalogs (the
+    /// Agents and Skills libraries, Essentials, …). <b>Defaults to <c>true</c></b>: the platform
+    /// only works when its baseline is present, so an operator opts OUT deliberately rather than
+    /// having to know to opt in. Set <c>PluginCatalog:InstallPreInstalledPackages=false</c> to
+    /// suppress it entirely (an air-gapped or hand-curated instance that manages its own content).
+    ///
+    /// <para>Unlike <see cref="InstallByDefault"/> — which SEEDS a fresh deployment once — the
+    /// pre-installed baseline is reconciled on EVERY boot, because it is what the platform itself
+    /// requires to function and what must survive a self-update. That reconcile is free on an
+    /// up-to-date instance: the content-identity gate in <c>CatalogLayoutAreas.InstallOrUpdate</c>
+    /// turns it into one catalog listing and no writes. It is also the only mechanism that can heal
+    /// an instance whose baseline partition was lost (#902 — the platform's agent catalog vanished
+    /// from the production portal and nothing could bring it back).</para>
+    ///
+    /// <para>🚨 Narrowing rather than suppressing: leave this <c>true</c> and set
+    /// <see cref="InstallByDefault"/> to restrict what a fresh instance seeds beyond the baseline.
+    /// The two knobs are independent — this one governs the platform's own baseline, that one the
+    /// operator's chosen extras.</para>
+    /// </summary>
+    public bool InstallPreInstalledPackages { get; set; } = true;
+
     /// <summary>This installation's public base URL, recorded on the instance node (advisory).</summary>
     public string HomeUrl { get; set; } = "";
 

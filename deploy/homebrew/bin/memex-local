@@ -391,10 +391,36 @@ helm_deploy() {
     info "portal-next image not present → Blazor-only (build it with 'up'/'update' to enable /next)"
   fi
 
+  # ── The local portal doubles as the PLUGIN REGISTRY (§16). It has no GitHub App identity, so it
+  #    serves the node-native plugin repos straight off the developer's CHECKOUT: the chart mounts
+  #    them read-only (hostPath — Colima runs the node on this very machine) and points a source at
+  #    the in-container path. Without this a local registry can serve nothing at all, and a new
+  #    instance comes up with an empty catalog.
+  #    Add more repos by listing them in MEMEX_PLUGIN_REPOS (colon-separated paths); each folder's
+  #    basename becomes the SOURCE NAME an instance is granted (e.g. …/education → "education").
+  local plugin_args=() idx=0 repo_path repo_name
+  for repo_path in $(plugin_repo_paths); do
+    repo_name="$(basename "$repo_path" | sed 's/^MeshWeaver\.//')"
+    plugin_args+=(
+      --set "pluginCatalog.localRepoMounts[$idx].name=$repo_name"
+      --set "pluginCatalog.localRepoMounts[$idx].hostPath=$repo_path"
+      --set "pluginCatalog.localRepoMounts[$idx].mountPath=/plugin-repos/$repo_name"
+      --set "pluginCatalog.sources[$idx].name=$repo_name"
+      --set "pluginCatalog.sources[$idx].repoPath=/plugin-repos/$repo_name"
+      --set "pluginCatalog.sources[$idx].format=node-repo"
+      --set "pluginCatalog.defaultGrants[$idx]=$repo_name/*"
+    )
+    info "serving plugin repo '$repo_name' from $repo_path (granted to every new instance)"
+    idx=$((idx + 1))
+  done
+  [ "$idx" -eq 0 ] && info "no local plugin repo found — the catalog will be empty (set MEMEX_PLUGIN_REPOS)"
+
   helm upgrade --install "$RELEASE" "$chart" \
     -f "$chart/values.yaml" \
     -f "$OVERLAY" \
     --set persistDataVolume=true \
+    --set "config.memex_portal.Bootstrap__Secret=$LOCAL_BOOTSTRAP_SECRET" \
+    "${plugin_args[@]}" \
     "${next_args[@]}" \
     -n "$NAMESPACE" --create-namespace \
     --force-conflicts
@@ -505,6 +531,35 @@ verify_endpoint() {
 # https://e2e.memex.localhost:8444. Additive: it never touches the `memex`
 # release/DB/config; `e2e down` deletes only the e2e objects + drops the e2e DB.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# instance — a NEW portal that registers itself with the local one (§16)
+#
+# The local memex portal doubles as the plugin REGISTRY (helm_deploy wires its
+# sources from the developer's plugin checkouts). `instance up` ramps a SECOND
+# portal that, on first boot, registers itself there with an admin-minted
+# bootstrap key and installs the granted plugins by itself — the local rehearsal
+# of provisioning a real deployment, with nothing copied by hand.
+# ---------------------------------------------------------------------------
+readonly LOCAL_BOOTSTRAP_SECRET="${MEMEX_BOOTSTRAP_SECRET:-memex-local-bootstrap}"
+
+# The plugin repos this local registry serves. Defaults to a MeshWeaver.Plugins checkout beside
+# MEMEX_REPO; override/extend with MEMEX_PLUGIN_REPOS (colon-separated absolute paths). Each
+# folder's basename (minus a "MeshWeaver." prefix) becomes the source name.
+plugin_repo_paths() {
+  if [ -n "${MEMEX_PLUGIN_REPOS:-}" ]; then
+    printf '%s\n' "$MEMEX_PLUGIN_REPOS" | tr ':' '\n' | while read -r p; do
+      [ -n "$p" ] || continue
+      if [ -d "$p" ]; then printf '%s\n' "$p"; else warn "plugin repo '$p' not found — skipping"; fi
+    done
+    return 0
+  fi
+  local repo sibling
+  repo="$(resolve_repo 2>/dev/null)" || return 0
+  sibling="$(dirname "$repo")/MeshWeaver.Plugins"
+  [ -d "$sibling" ] && printf '%s\n' "$sibling"
+  return 0
+}
+
 readonly E2E_DB="memex_e2e"
 readonly E2E_APP="memex-e2e-portal"
 readonly E2E_NEXT_APP="memex-e2e-portal-next"
@@ -802,6 +857,292 @@ e2e_verify() {
     "https://$E2E_HOST:$E2E_PORT/" 2>/dev/null || echo 000)"
   [ "$code" = "200" ] && ok "e2e portal reachable at https://$E2E_HOST:$E2E_PORT (HTTP $code)" \
     || warn "e2e portal not 200 yet (HTTP $code) — give pods a moment, then 'memex-local e2e status'"
+}
+
+# ---------------------------------------------------------------------------
+# instance helpers
+# ---------------------------------------------------------------------------
+inst_db()   { printf 'memex_%s' "$(printf '%s' "$1" | tr -d -c 'a-z0-9')"; }
+inst_app()  { printf 'memex-%s-portal' "$1"; }
+inst_host() { printf '%s.%s' "$1" "$HOSTNAME_LOCAL"; }
+
+inst_pg_password() {
+  kubectl -n "$NAMESPACE" get secret memex-postgres-secrets \
+    -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d
+}
+inst_psql() { kubectl -n "$NAMESPACE" exec -i memex-postgres-statefulset-0 -- \
+  env PGPASSWORD="$(inst_pg_password)" psql -U postgres "$@"; }
+inst_conn() {
+  printf 'Host=memex-postgres-service;Port=5432;Username=postgres;Password=%s;Database=%s' \
+    "$(inst_pg_password)" "$(inst_db "$1")"
+}
+
+# Run a one-shot curl INSIDE the cluster (the registry is only reachable there by service name).
+inst_curl() { kubectl -n "$NAMESPACE" run "memex-curl-$RANDOM" --rm -i --restart=Never --quiet \
+  --image=curlimages/curl:latest -- "$@" 2>/dev/null; }
+
+# Mint a registration bootstrap key on the LOCAL registry, headlessly. Secret-gated (the same gate
+# as first-admin) because there is no drivable UI in a scripted ramp-up.
+inst_mint_key() {
+  local owner="${1:-$E2E_USER}" key
+  key="$(inst_curl -sS -X POST \
+    "http://memex-portal-service:8080/bootstrap/registration-key?secret=${LOCAL_BOOTSTRAP_SECRET}&username=${owner}&description=memex-local%20instance" \
+    | tr -d '\r')"
+  case "$key" in
+    mwr_*) printf '%s' "$key" ;;
+    *) return 1 ;;
+  esac
+}
+
+# What the instance ACTUALLY registered / installed — read from its own database, because a
+# Running pod proves neither. Both tolerate "table not there yet" (a fresh instance has no
+# plugins schema until its first install) and print nothing in that case.
+inst_registered_id() {
+  inst_psql -d "$(inst_db "$1")" -tAc \
+    "SELECT content->>'instanceId' FROM admin.mesh_nodes WHERE node_type='PluginRegistryCredential' LIMIT 1" \
+    2>/dev/null | tr -d ' \r'
+}
+inst_installed_packages() {
+  inst_psql -d "$(inst_db "$1")" -tAc \
+    "SELECT string_agg(id, ', ' ORDER BY id) FROM plugins.mesh_nodes WHERE node_type='Package'" \
+    2>/dev/null | tr -d '\r' | sed 's/^ *//'
+}
+
+cmd_instance() {
+  local sub="${1:-help}"; shift || true
+  local id="acme"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --id) shift; id="${1:?--id needs a value}" ;;
+      *) die "instance: unknown flag '$1'" ;;
+    esac
+    shift
+  done
+  local app db host; app="$(inst_app "$id")"; db="$(inst_db "$id")"; host="$(inst_host "$id")"
+
+  case "$sub" in
+    up)
+      preflight
+      e2e_require_stack
+      # The registry must be able to MINT — that means the local portal is on an image with the
+      # bootstrap endpoint AND has the secret. helm_deploy sets it; a stale portal predates it.
+      step "Minting a registration bootstrap key on the local registry"
+      local boot_key
+      boot_key="$(inst_mint_key "${MEMEX_INSTANCE_OWNER:-$E2E_USER}")" || die \
+        "could not mint a bootstrap key — is the local portal on a current image with Bootstrap__Secret set? (memex-local update --build)"
+      ok "bootstrap key minted (${boot_key:0:12}…)"
+
+      step "Ensuring database '$db'"
+      inst_psql -tAc "SELECT 1 FROM pg_database WHERE datname='$db'" 2>/dev/null | grep -q 1 \
+        || inst_psql -c "CREATE DATABASE $db"
+
+      step "Migrating '$db'"
+      kubectl -n "$NAMESPACE" delete job "memex-$id-migration" --ignore-not-found >/dev/null 2>&1 || true
+      kubectl -n "$NAMESPACE" apply -f - <<YAML
+apiVersion: batch/v1
+kind: Job
+metadata: { name: memex-$id-migration }
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migration
+          image: $MIGRATION_IMAGE
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: memex-portal-config }
+            - secretRef:    { name: memex-portal-secrets }
+          env:
+            - { name: ConnectionStrings__memex, value: "$(inst_conn "$id")" }
+YAML
+      kubectl -n "$NAMESPACE" wait --for=condition=complete "job/memex-$id-migration" --timeout=900s \
+        || { kubectl -n "$NAMESPACE" logs "job/memex-$id-migration" --tail=40 2>/dev/null || true
+             die "instance migration failed"; }
+
+      local existed="no"
+      kubectl -n "$NAMESPACE" get deploy "$app" >/dev/null 2>&1 && existed="yes"
+
+      step "Deploying $app — it registers itself and installs its plugins on first boot"
+      kubectl -n "$NAMESPACE" apply -f - <<YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: $app, labels: { app: $app } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: $app } }
+  template:
+    metadata: { labels: { app: $app } }
+    spec:
+      containers:
+        - name: portal
+          image: $PORTAL_IMAGE
+          imagePullPolicy: IfNotPresent
+          # 3cpu/6Gi, the same sizing the e2e portal needed for the same reason: FIRST BOOT compiles
+          # the node types of every default-installed plugin (~20 Roslyn compiles back to back). At
+          # 4Gi that OOM'd mid-install — observed as `OutOfMemoryException` inside Npgsql while
+          # installing 'Publish', which stopped the remaining installs.
+          # 🚨 This is HEADROOM, not a fix: each compile retains its collectible AssemblyLoadContext
+          # (the known NodeType-recompile accumulation, Doc/Architecture — the memex-cloud OOM RCA),
+          # so the pod sits near 3.6Gi even when idle afterwards. Raising the ceiling lets a first
+          # boot finish; it does not make the retention go away.
+          resources:
+            requests: { cpu: "500m", memory: "2Gi" }
+            limits:   { cpu: "3",    memory: "6Gi" }
+          ports: [ { containerPort: 8080 } ]
+          envFrom:
+            - configMapRef: { name: memex-portal-config }
+            - secretRef:    { name: memex-portal-secrets }
+          env:
+            - { name: ConnectionStrings__memex, value: "$(inst_conn "$id")" }
+            - { name: Authentication__EnableDevLogin, value: "true" }
+            - { name: Portal__InstanceName, value: "$id" }
+            # A CONSUMER: it serves no sources of its own and holds no registry credential —
+            # it presents the bootstrap key once and stores the key it is issued.
+            - { name: PluginCatalog__RegistryUrl,  value: "http://memex-portal-service:8080" }
+            - { name: PluginCatalog__InstanceId,   value: "$id" }
+            - { name: PluginCatalog__BootstrapKey, value: "$boot_key" }
+            - { name: PluginCatalog__HomeUrl,      value: "https://$host:$HOST_PORT" }
+            - { name: PluginCatalog__RegistryToken, value: "" }
+            - { name: PluginCatalog__Sources__0__RepoPath, value: "" }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - { name: data, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: $app }
+spec:
+  selector: { app: $app }
+  ports: [ { port: 8080, targetPort: 8080 } ]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: $app
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [ "$host" ]
+      secretName: $TLS_SECRET
+  rules:
+    - host: $host
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: $app, port: { number: 8080 } } }
+YAML
+      # Restart ONLY an already-existing deployment (to pick up a rebuilt same-tag image). On a
+      # FRESH one the apply above already started a pod, and restarting immediately runs a second
+      # pod concurrently — both then race first-startup registration, one takes the instance id and
+      # the other gets a 409. Costly to debug, trivial to avoid: don't create the race.
+      [ "$existed" = "yes" ] && { kubectl -n "$NAMESPACE" rollout restart "deploy/$app" >/dev/null 2>&1 || true; }
+      kubectl -n "$NAMESPACE" rollout status "deploy/$app" --timeout=420s \
+        || { kubectl -n "$NAMESPACE" logs "deploy/$app" --tail=60 2>/dev/null || true
+             die "instance portal did not become ready"; }
+      # The install runs just after readiness (the pod serves /healthz before provisioning ends),
+      # so wait before reporting — otherwise `status` reports "nothing installed" for a deployment
+      # that is merely mid-install.
+      #
+      # 🚨 Wait for the set to STOP GROWING, not for the first package to appear. Packages install
+      # SEQUENTIALLY (each writes a partition and may compile node types), so the first one lands
+      # within seconds while the rest take minutes — stopping at the first made `up` cheerfully
+      # report "installed packages: Agent" for a run that went on to install several more.
+      step "Waiting for first-startup provisioning to settle"
+      local waited=0 prev="" cur="" stable=0
+      until [ "$stable" -ge 3 ] || [ "$waited" -ge 600 ]; do
+        cur="$(inst_installed_packages "$id" || true)"
+        if [ "$cur" = "$prev" ] && [ -n "$cur" ]; then stable=$((stable + 1)); else stable=0; fi
+        prev="$cur"; sleep 10; waited=$((waited + 10))
+      done
+      cmd_instance status --id "$id"
+      echo
+      ok "instance '$id' up: https://$host:$HOST_PORT (add it to /etc/hosts or use the forward)"
+      ;;
+    status)
+      step "Instance '$id'"
+      kubectl -n "$NAMESPACE" get deploy "$app" -o wide 2>/dev/null || info "not deployed"
+      # Did it register, and did it install? Both are visible in the databases, which is the
+      # honest check — a running pod proves neither.
+      # 🚨 `|| true` is REQUIRED: this script runs under `set -o pipefail`, and the packages probe
+      # legitimately fails ("relation plugins.mesh_nodes does not exist") on an instance that has
+      # installed nothing yet. Without it the assignment aborts the whole command mid-report, which
+      # looks exactly like the status hanging rather than a clean "nothing installed yet".
+      local reg inst
+      reg="$(inst_registered_id "$id" || true)"
+      inst="$(inst_installed_packages "$id" || true)"
+      [ -n "$reg" ] && ok "registered as instance '$reg'" || warn "no registry credential stored yet"
+      [ -n "$inst" ] && ok "installed packages: $inst" || warn "no packages installed yet"
+      ;;
+    down)
+      local keep_db="no"
+      [ "${1:-}" = "--keep-db" ] && keep_db="yes"
+      step "Removing instance '$id'"
+      kubectl -n "$NAMESPACE" delete deploy,svc,ingress "$app" --ignore-not-found >/dev/null 2>&1 || true
+      kubectl -n "$NAMESPACE" delete job "memex-$id-migration" --ignore-not-found >/dev/null 2>&1 || true
+      if [ "$keep_db" = "no" ]; then
+        inst_psql -c "DROP DATABASE IF EXISTS $db WITH (FORCE)" >/dev/null 2>&1 \
+          && ok "dropped database $db" || warn "could not drop $db"
+      fi
+
+      # 🚨 RELEASE THE INSTANCE ID on the registry. An instance id is claimed GLOBALLY (grants are
+      # keyed on it), so dropping only the instance's own database leaves the registry still
+      # holding the claim — and the next `instance up --id <same>` dies with
+      # "409 Instance id '<id>' is already registered", which is a genuinely confusing failure for
+      # a command whose whole point is to be re-runnable. Deleting the claim is what makes the
+      # dev loop repeatable.
+      #
+      # This is the sanctioned "must SQL-edit → restart the portal" path (AGENTS.md): there is no
+      # unregister API, and the registry caches the claim (its availability check reads the lagged
+      # query index), so the rows must go AND the portal must be restarted for the caches to drop.
+      # Local-dev only — never do this against a shared registry.
+      step "Releasing the instance id '$id' on the local registry"
+      local owner="${MEMEX_INSTANCE_OWNER:-$E2E_USER}" released="no"
+      if inst_psql -d memex -c \
+           "DELETE FROM \"$owner\".mesh_nodes WHERE node_type='MeshWeaverInstance' AND id='$id';
+            DELETE FROM admin.mesh_nodes WHERE node_type='PluginGrant' AND id='$id';" >/dev/null 2>&1
+      then released="yes"; fi
+      # The key-hash → instance index lives in its own top-level partition; drop the rows pointing
+      # at this instance so a stale key cannot resolve to a deleted registration.
+      inst_psql -d memex -c \
+        "DELETE FROM meshweaverinstance.mesh_nodes WHERE content->>'instanceId' = '$id';" >/dev/null 2>&1 || true
+      if [ "$released" = "yes" ]; then
+        ok "released '$id' — restarting the registry portal so its caches drop the claim"
+        kubectl -n "$NAMESPACE" rollout restart deploy/memex-portal-deployment >/dev/null 2>&1 || true
+        kubectl -n "$NAMESPACE" rollout status deploy/memex-portal-deployment --timeout=300s >/dev/null 2>&1 \
+          || warn "registry portal restart did not complete — 'instance up --id $id' may still 409"
+      else
+        warn "could not release '$id' on the registry — a re-run with the same id will 409"
+      fi
+      ok "instance '$id' removed"
+      ;;
+    *)
+      cat <<EOF
+memex-local instance <up|status|down> [--id NAME]
+
+  up      Ramp a NEW portal that registers itself with the local registry and
+          installs the plugins it is granted — own DB, own host.
+  status  Show the deployment plus what it actually registered/installed.
+  down    Delete its objects and drop its DB (--keep-db to keep).
+
+  --id NAME              instance id (default: acme)
+  MEMEX_INSTANCE_OWNER   user the minted bootstrap key belongs to (default: $E2E_USER)
+  MEMEX_PLUGIN_REPOS     colon-separated plugin checkouts the registry serves
+EOF
+      ;;
+  esac
 }
 
 cmd_e2e() {
@@ -1146,6 +1487,14 @@ COMMANDS:
                     e2e up [--skip-build]   build working tree → migrate → deploy → forward
                     e2e test [Filter]       run the Playwright E2E against it (DevLogin)
                     e2e down [--keep-db]    delete e2e objects + drop the e2e DB
+  instance <up|status|down> [--id NAME]
+                  Ramp a NEW portal that REGISTERS ITSELF with the local one (which
+                  acts as the plugin registry) and installs the plugins it is
+                  granted — own DB, own host NAME.\${HOSTNAME_LOCAL}. The local
+                  rehearsal of provisioning a real deployment: nothing copied by hand.
+                    instance up [--id acme]      mint key → migrate → deploy → verify
+                    instance status [--id acme]  what it registered + installed
+                    instance down [--id acme] [--keep-db]
   status          colima / pods / ingress / port-forward / health.
   logs [--migration|--postgres] [--tail N] [--no-follow]
                   Tail logs (portal by default). Log level: $LOG_LEVEL.
@@ -1338,6 +1687,7 @@ main() {
   case "$cmd" in
     up)            cmd_up "$@" ;;
     e2e)           cmd_e2e "$@" ;;
+    instance)      cmd_instance "$@" ;;
     down)          cmd_down "$@" ;;
     status)        cmd_status "$@" ;;
     logs)          cmd_logs "$@" ;;

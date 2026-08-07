@@ -193,6 +193,32 @@ public class PreInstalledPackageInstallTest(ITestOutputHelper output) : Monolith
                     $"'{identity}' must see the platform's shipped skills");
     }
 
+    /// <summary>
+    /// THE COMBOBOX ITSELF, not the query behind it. <see cref="AgentPickerProjection.ObserveAgents"/>
+    /// is documented as "the EXACT pipeline the chat agent combobox is bound to — the view
+    /// subscribes to this; tests subscribe to this", so this asserts what the picker RENDERS
+    /// (projected <c>AgentDisplayInfo</c> rows, by NAME) rather than what the raw query returns.
+    ///
+    /// <para>The distinction is the whole point of #902: the reported symptom was a picker that
+    /// came up empty. A test that stops at the query can stay green while the projection drops the
+    /// rows — so the assertion is on the name a user reads in the dropdown.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task PreInstalledAgents_PopulateTheAgentCombobox_ByName()
+    {
+        await BootPass();
+
+        var agents = await AgentPickerProjection
+            .ObserveAgents(Mesh)
+            .Should().Within(TimeSpan.FromSeconds(30))
+            .Match(list => list.Any(a => a.Name == "Helper"));
+
+        agents.Select(a => a.Name).Should().Contain("Helper",
+            "ObserveAgents is the pipe the chat agent combobox binds to — the platform's shipped "
+            + "agent must be a RENDERED row in it, not merely a row the query could return. An "
+            + "empty combobox here is the #902 outage exactly as the user reported it.");
+    }
+
     [Fact(Timeout = 180_000)]
     public async Task SecondPass_WritesNothing()
     {
@@ -201,8 +227,8 @@ public class PreInstalledPackageInstallTest(ITestOutputHelper output) : Monolith
         // The self-update shape: every boot re-runs the default install. An instance already
         // carrying the packages must do a catalog listing and NOTHING else — no rewrite, no version
         // bump, no recompile.
-        var second = await Mesh.ServiceProvider.GetRequiredService<PreInstalledPackageService>()
-            .EnsureDefaults().FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
+        var second = await Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>()
+            .RunDefaultInstall().FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
 
         second.Installed.Should().Be(0, "a re-reconcile of unchanged packages must write nothing");
         second.UpToDate.Should().Be(2);
@@ -213,8 +239,8 @@ public class PreInstalledPackageInstallTest(ITestOutputHelper output) : Monolith
     /// The startup default install's own completion signal — no polling, no sleep: the hosted
     /// service publishes its outcome on an <c>AsyncSubject</c>, so this is the boot pass itself.
     /// </summary>
-    private Task<PreInstallSummary> BootPass() =>
-        Mesh.ServiceProvider.GetRequiredService<PreInstalledPackageService>()
+    private Task<DefaultInstallSummary> BootPass() =>
+        Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>()
             .Completed.FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
 
     /// <summary>Authoritative single-node read straight off storage (never the lagging index).</summary>
