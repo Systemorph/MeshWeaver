@@ -154,11 +154,18 @@ public sealed class MeshWeaverInstanceService(
             {
                 var grant = existing?.ContentAs<PluginGrant>(hub.JsonSerializerOptions)
                             ?? new PluginGrant { InstanceId = instanceId };
-                var entries = grant.Entries.Concat(defaults
-                        .Where(d => !grant.Entries.Any(e =>
-                            string.Equals(e.Source, d.Source, StringComparison.OrdinalIgnoreCase)
-                            && string.Equals(e.PackageId, d.PackageId, StringComparison.Ordinal))))
+                var missing = defaults
+                    .Where(d => !grant.Entries.Any(e =>
+                        string.Equals(e.Source, d.Source, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(e.PackageId, d.PackageId, StringComparison.Ordinal)))
                     .ToList();
+                // Nothing to add → no write at all. Writing a no-op would still re-stamp
+                // GrantedByUserId/UpdatedAt to System/now, silently erasing WHO last decided an
+                // existing admin-written grant — and a grant is an access decision, so the
+                // attribution is part of the record.
+                if (missing.Count == 0)
+                    return Observable.Return(Unit.Default);
+                var entries = grant.Entries.Concat(missing).ToList();
 
                 var node = new MeshNode(instanceId, MeshWeaverInstanceNodeType.GrantNamespace)
                 {
@@ -183,7 +190,7 @@ public sealed class MeshWeaverInstanceService(
                     {
                         logger.LogInformation(
                             "Seeded default plugin grants [{Entries}] for instance {InstanceId}",
-                            string.Join(", ", defaults), instanceId);
+                            string.Join(", ", missing), instanceId);
                         return Unit.Default;
                     })
                     .Finally(() => disposable.Dispose());
