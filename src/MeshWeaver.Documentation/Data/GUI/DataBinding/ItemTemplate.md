@@ -155,13 +155,14 @@ var rows = new[]
     new UserRow("Charlie", "Viewer"),
 };
 
+// The property is passed DIRECTLY as a control argument — Controls.Label(u.Name). BindMany
+// rewrites the expression tree, replacing each property getter with a BINDING; a property read
+// inside an interpolated string ($"{u.Name}") is consumed by string.Format before the rewriter
+// can see it, so the item would render empty. Label, not Text: Controls.Text is an editable
+// TextFieldControl whose value lives in an input, not as visible text.
 MeshWeaver.Layout.Controls.Stack
-    .WithView(MeshWeaver.Layout.Controls.Html("<b>Users</b>"))
-    .WithView(
-        rows.BindMany(u =>
-            MeshWeaver.Layout.Controls.Html($"<div>{u.Name} — <em>{u.Role}</em></div>")
-        )
-    )
+    .WithView(MeshWeaver.Layout.Controls.Title("Users", 4))
+    .WithView(rows.BindMany(u => MeshWeaver.Layout.Controls.Label(u.Name)))
 ```
 
 # Reference

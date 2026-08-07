@@ -1,4 +1,5 @@
 ﻿using System.Linq.Expressions;
+using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.DataBinding;
@@ -27,19 +28,27 @@ public static class Template
     /// <summary>
     /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
     /// </summary>
+    /// <remarks>
+    /// 🚨 Delegates to the stream overload — it does NOT embed the collection in the control.
+    ///
+    /// <para>
+    /// It used to return <c>new ItemTemplateControl(view, data)</c>, carrying the collection
+    /// inline. Nothing ever published that collection into the layout area's data store
+    /// (<c>LayoutAreaHost</c> only INHERITS a DataContext, it never creates one), so each item's
+    /// binding had nothing to resolve against and every item rendered EMPTY — silently, with no
+    /// error. It happened to work only where the surrounding area already published the same
+    /// collection under its own name; standalone (a markdown <c>--render</c> cell, say) it never
+    /// did. Publishing under a generated id makes the overload self-sufficient, so the simple
+    /// <c>items.BindMany(x =&gt; …)</c> form works wherever it is written.
+    /// </para>
+    /// </remarks>
     [ReplaceBindMethod]
     public static UiControl BindMany<T, TView>(
         this IEnumerable<T> data,
         Expression<Func<T, TView>> dataTemplate
     )
         where TView : UiControl
-    {
-        var view = dataTemplate.Build("", out var _);
-        if (view == null)
-            throw new ArgumentException("Data template was not specified.");
-
-        return new ItemTemplateControl(view, data!);
-    }
+        => Observable.Return(data).BindMany(Guid.NewGuid().AsString()!, dataTemplate);
 
     /// <summary>
     /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property

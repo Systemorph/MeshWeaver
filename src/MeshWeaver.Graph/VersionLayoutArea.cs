@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Linq;
 using System.Reactive.Linq;
@@ -368,14 +368,33 @@ public static class VersionLayoutArea
                     return;
                 }
 
-                // Post the historical node as an update (version 0 forces a new save), then answer
-                // the caller — without a success response an Observe on RollbackNodeRequest waited
-                // forever even though the rollback landed.
-                hub.Post(
-                    new DataChangeRequest { ChangedBy = "rollback" }.WithUpdates(historicalNode with { Version = 0 }),
-                    o => o.WithTarget(hub.Address));
-                hub.Post(new DataChangeResponse(hub.Version, new ActivityLog("Rollback")),
-                    o => o.ResponseFor(request));
+                // 🚨 Restore through GetMeshNodeStream(path).Update — the ONE mutation API — NOT a
+                // raw DataChangeRequest post.
+                //
+                // The old shape posted the historical node with `Version = 0` ("forces a new save")
+                // straight at the hub, bypassing the owner's version mint. That raw node reached
+                // MonotonicWriteGuardStorageAdapter, which REFUSES a backward write — and rightly
+                // so: it cannot tell a rollback from the stale-snapshot corruption it exists to
+                // stop ("do not relax this guard"). The refusal returns the STORED node rather than
+                // an error, and the post was fire-and-forget, so the rollback silently did nothing:
+                // the node never reverted, and any caller polling for the restored content waited
+                // until its harness killed it (VersionHistoryTest.RollbackNode_RestoresHistoricalState,
+                // a CI-only hang — the guard's fast path lets the write through while its
+                // high-water mark is cold, so it only bites once earlier writes have warmed it).
+                //
+                // Update stamps Version = NextVersion(Math.Max(current.Version, updated.Version)),
+                // so restoring HISTORICAL CONTENT becomes an ordinary FORWARD write: the node's
+                // content goes back, its revision counter keeps climbing, and the guard is
+                // untouched. A rollback is a new revision that happens to carry old content — it
+                // was never a backward write.
+                hub.GetMeshNodeStream(msg.Path)
+                    .Update(_ => historicalNode with { Version = 0 })
+                    .Subscribe(
+                        _ => hub.Post(new DataChangeResponse(hub.Version, new ActivityLog("Rollback")),
+                            o => o.ResponseFor(request)),
+                        updateEx => hub.Post(new DataChangeResponse(hub.Version,
+                            new ActivityLog("Rollback").Fail($"Rollback write failed: {updateEx.Message}")),
+                            o => o.ResponseFor(request)));
             },
             ex => hub.Post(new DataChangeResponse(hub.Version,
                 new ActivityLog("Rollback").Fail($"Rollback error: {ex.Message}")),
