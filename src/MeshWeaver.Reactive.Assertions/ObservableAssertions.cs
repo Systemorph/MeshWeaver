@@ -164,7 +164,18 @@ public class ObservableAssertions<T>
 
     private async Task<T> WaitForFirst(Func<T, bool>? predicate, string expectation, string because)
     {
-        var source = predicate is null ? _subject : _subject.Where(predicate);
+        // 🚨 Record what the stream ACTUALLY emitted, so a timeout can say why it failed.
+        // `.Where(predicate)` discards every non-matching value, so without this tap the
+        // message is only "it did not" — which cannot distinguish the two failures that
+        // need opposite fixes:
+        //   * emitted NOTHING            → something upstream is wedged / never subscribed;
+        //   * emitted, never MATCHED     → the expectation is wrong (or state converged
+        //                                  somewhere else), and the fix is in the predicate.
+        // MenuAccessControlTest burned a CI triage on exactly that ambiguity: green in 2 s
+        // locally, a bare 20 s "did not" on the runner, and no way to tell which shape it was.
+        var seen = new LastSeen();
+        var tapped = _subject.Do(v => seen.Record(v));
+        var source = predicate is null ? tapped : tapped.Where(predicate);
         try
         {
             // 🚨 The assertion's OWN timeout throws the private sentinel below, so it is
@@ -183,14 +194,14 @@ public class ObservableAssertions<T>
         catch (AssertionWaitTimeoutException)
         {
             throw new ObservableAssertionException(
-                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it did not.");
+                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it did not. {seen.Describe()}");
         }
         catch (InvalidOperationException)
         {
             // Source completed without producing a (matching) value — Take(1).ToTask() throws
             // InvalidOperationException("Sequence contains no elements"). Same "did not" outcome.
             throw new ObservableAssertionException(
-                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it completed without one.");
+                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it completed without one. {seen.Describe()}");
         }
         catch (Exception ex)
         {
@@ -210,7 +221,61 @@ public class ObservableAssertions<T>
     private static string Describe(TimeSpan t)
         => t.TotalSeconds >= 1 ? $"{t.TotalSeconds:0.##}s" : $"{t.TotalMilliseconds:0}ms";
 
-    private static string Format(T actual) => actual?.ToString() ?? "<null>";
+    /// <summary>
+    /// Renders a value for a failure message. Collections are enumerated rather than
+    /// <c>ToString()</c>'d — the default would print "System.Collections.Generic.List`1[…]",
+    /// which is exactly the value you need to see when a set-equality predicate never matched.
+    /// Capped so a large stream payload cannot swamp the test log.
+    /// </summary>
+    private static string Format(T actual) => Render(actual);
+
+    private const int MaxRenderedItems = 40;
+
+    private static string Render(object? value) => value switch
+    {
+        null => "<null>",
+        string s => s,
+        System.Collections.IEnumerable seq => RenderSequence(seq),
+        _ => value.ToString() ?? "<null>"
+    };
+
+    private static string RenderSequence(System.Collections.IEnumerable seq)
+    {
+        var items = new List<string>();
+        var truncated = false;
+        foreach (var item in seq)
+        {
+            if (items.Count == MaxRenderedItems) { truncated = true; break; }
+            items.Add(item?.ToString() ?? "<null>");
+        }
+        return $"[{string.Join(", ", items)}{(truncated ? ", …" : "")}] ({items.Count}{(truncated ? "+" : "")} item(s))";
+    }
+
+    /// <summary>
+    /// Thread-safe holder for the most recent value the subject emitted. Written on whatever
+    /// scheduler the source runs on and read from the asserting thread, so both go under a lock.
+    /// </summary>
+    private sealed class LastSeen
+    {
+        private readonly Lock gate = new();
+        private object? last;
+        private int count;
+
+        public void Record(T value)
+        {
+            lock (gate) { last = value; count++; }
+        }
+
+        public string Describe()
+        {
+            lock (gate)
+            {
+                return count == 0
+                    ? "The observable emitted nothing at all."
+                    : $"Last of {count} emission(s) was: {Render(last)}.";
+            }
+        }
+    }
 
     private static string Reason(string because)
     {
