@@ -92,18 +92,29 @@ public sealed class AsyncDisposeQueue
     /// use-after-unload SIGSEGV). Only a cleanup that ignores its token can still wedge, and that
     /// is a separate bug in that resource; teardown proceeds rather than hanging.
     /// </summary>
-    public async Task DrainAsync(TimeSpan quiesce)
+    /// <returns>
+    /// <c>true</c> when every posted cleanup ran to completion (possibly cancelled-and-unwound)
+    /// within the budget — the join is real. <c>false</c> when a cleanup ignored its cancellation
+    /// token and is STILL RUNNING as this returns: the caller is about to tear down the scope over
+    /// live work and must surface that, never swallow it.
+    /// </returns>
+    public async Task<bool> DrainAsync(TimeSpan quiesce)
     {
         _block.Complete();
         try
         {
             await _block.Completion.WaitAsync(quiesce).ConfigureAwait(false);
-            return; // clean quiesce within budget
+            return true; // clean quiesce within budget
         }
         catch (TimeoutException) { /* budget exceeded — cancel + join below */ }
 
         _cts.Cancel();
-        try { await _block.Completion.WaitAsync(quiesce).ConfigureAwait(false); }
+        try
+        {
+            await _block.Completion.WaitAsync(quiesce).ConfigureAwait(false);
+            return true; // cancelled cleanups unwound — nothing is still running
+        }
         catch (TimeoutException) { /* a cleanup that ignores cancellation is genuinely wedged */ }
+        return false;
     }
 }

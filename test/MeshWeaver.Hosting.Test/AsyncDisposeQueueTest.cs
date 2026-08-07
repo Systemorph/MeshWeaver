@@ -29,11 +29,12 @@ public class AsyncDisposeQueueTest
         for (var i = 0; i < items; i++)
             queue.Enqueue(async _ => { await Task.Yield(); Interlocked.Increment(ref ran); });
 
-        await queue.DrainAsync(Quiesce);
+        var clean = await queue.DrainAsync(Quiesce);
 
         // "putting versions in and checking against own version: old version + N"
         queue.DrainedVersion.Should().Be(before + items);
         ran.Should().Be(items);
+        clean.Should().BeTrue("every cleanup ran within the budget — the join is real");
     }
 
     // The teardown-SIGSEGV fix: a cleanup that overruns the quiesce budget must be CANCELLED
@@ -58,10 +59,33 @@ public class AsyncDisposeQueueTest
         await entered.Task.WaitAsync(Quiesce, TestContext.Current.CancellationToken);
 
         // Budget expires with the cleanup still running → DrainAsync cancels it, then joins.
-        await queue.DrainAsync(TimeSpan.FromMilliseconds(200));
+        var clean = await queue.DrainAsync(TimeSpan.FromMilliseconds(200));
 
         cancelled.Should().BeTrue("DrainAsync cancels a cleanup that overran the quiesce budget");
         queue.DrainedVersion.Should().Be(before + 1, "the cancelled cleanup is JOINED, not abandoned");
+        clean.Should().BeTrue("the cancelled cleanup UNWOUND — nothing is still running, so the drain is clean");
+    }
+
+    // The report half of the teardown-SIGSEGV fix: a cleanup that IGNORES its cancellation
+    // token is still running when DrainAsync gives up — and the caller must be able to see
+    // that, because it is about to dispose the scope (and unload node ALCs) over live code.
+    // The old void DrainAsync swallowed both timeouts and "teardown complete" became a lie.
+    [Fact]
+    public async Task DrainAsync_reports_dirty_when_a_cleanup_ignores_cancellation()
+    {
+        var queue = new AsyncDisposeQueue();
+        var entered = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+
+        // A cleanup that ignores ct entirely — the defect class the report exists to name.
+        queue.Enqueue(async _ => { entered.TrySetResult(); await release.Task; });
+
+        await entered.Task.WaitAsync(Quiesce, TestContext.Current.CancellationToken);
+
+        var clean = await queue.DrainAsync(TimeSpan.FromMilliseconds(200));
+
+        clean.Should().BeFalse("the cleanup ignored cancellation and is STILL RUNNING — the caller must surface it");
+        release.SetResult(); // let the leaked cleanup finish so it cannot outlive the test
     }
 
     [Fact]

@@ -51,9 +51,21 @@ public sealed class MeshTeardownHostedService(
         try
         {
             // TeardownAsync captures the mesh-scoped IoPoolRegistry + AsyncDisposeQueue while the
-            // scope is still alive, disposes the hub, then awaits all three drain phases.
-            await mesh.TeardownAsync(TeardownTimeout);
-            logger.LogInformation("MeshTeardownHostedService: mesh {Address} drained cleanly", mesh.Address);
+            // scope is still alive, disposes the hub, awaits all drain phases, and fires the
+            // MeshTeardownSignal with the terminal report — the "all is done" notification.
+            var report = await mesh.TeardownAsync(TeardownTimeout);
+            if (report.Clean)
+                logger.LogInformation("MeshTeardownHostedService: mesh {Address} drained cleanly", mesh.Address);
+            else
+                // A dirty report means live work survives into scope disposal — the
+                // use-after-unload class. The host still exits (shutdown must not hang), but
+                // this is an ERROR: the leaked leaf is a real defect in whatever ignored its
+                // cancellation token, and this line is the only attribution the crash will get.
+                logger.LogError(
+                    "MeshTeardownHostedService: mesh {Address} teardown DIRTY — {Report}. " +
+                    "A pooled I/O leaf or async cleanup ignored cancellation and is still running; " +
+                    "the scope is about to dispose over it.",
+                    mesh.Address, report);
         }
         catch (Exception ex)
         {

@@ -1,6 +1,8 @@
 ﻿using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
@@ -155,12 +157,17 @@ public class HubTestBase : TestBase
         {
             // Simple timeout - just enough to detect hangs without aggressive intervention
             var timeoutSeconds = 10;
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
 
             // Log which hubs exist before disposal
             var hostedHubsProperty = Mesh.GetType().GetProperty("HostedHubs");
             var hostedHubsValue = hostedHubsProperty?.GetValue(Mesh)?.ToString() ?? "unknown";
             Logger.LogInformation("[{DisposalId}] Mesh has {HubCount} hosted hubs", disposalId, hostedHubsValue);
+
+            // Capture the mesh-scoped teardown services BEFORE disposal begins — resolving DI
+            // once the scope is tearing down races its own disposal.
+            var ioPools = Mesh.ServiceProvider.GetService<IoPoolRegistry>();
+            var asyncDisposeQueue = Mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
+            var teardownSignal = Mesh.ServiceProvider.GetService<MeshTeardownSignal>();
 
             if (!Mesh.IsDisposing)
             {
@@ -176,17 +183,23 @@ public class HubTestBase : TestBase
             }
 
             Logger.LogInformation("[{DisposalId}] Mesh is disposing, waiting for completion", disposalId);
-            // Bridge the reactive completion to a Task once, at this test-teardown edge.
-            // Catch folds a disposal fault into completion (teardown waits for "done", not why).
-            // DisposalCompleted replays to late subscribers, so this is race-free.
-            await Mesh.DisposalCompleted
-                .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
-                .FirstOrDefaultAsync()
-                .ToTask()
-                .WaitAsync(timeout.Token);
-            Logger.LogInformation("[{DisposalId}] Mesh disposal completed", disposalId);
+            // The SAME terminal drain every scenario uses (MeshTeardownExtensions): action blocks
+            // + round-trips (DisposalCompleted), then cancel+join the offloaded IIoPool leaves,
+            // then quiesce the AsyncDisposeQueue — and fire the MeshTeardownSignal with the
+            // report. Waiting on DisposalCompleted ALONE let pooled work outlive the test (the
+            // straggler class this base previously shared with the pre-fix MonolithMeshTestBase).
+            var report = await Mesh.WaitForDisposalAndIoDrainAsync(
+                ioPools, asyncDisposeQueue, TimeSpan.FromSeconds(timeoutSeconds), teardownSignal);
+            Logger.LogInformation("[{DisposalId}] Mesh disposal completed — {Report}", disposalId, report);
+            if (!report.Clean)
+                throw new InvalidOperationException(
+                    $"Teardown left work RUNNING: {report}. A pooled I/O leaf or async cleanup " +
+                    "ignored its cancellation token — fix the leaf; do not widen the drain budget.");
         }
-        catch (OperationCanceledException)
+        // WaitAsync(TimeSpan) inside WaitForDisposalAndIoDrainAsync surfaces a hang as
+        // TimeoutException (the old inline CancellationTokenSource surfaced it as
+        // OperationCanceledException) — keep both arms so the hang diagnostics never regress.
+        catch (Exception timeoutEx) when (timeoutEx is OperationCanceledException or TimeoutException)
         {
             Logger.LogError("[{DisposalId}] HANG DETECTED: Mesh disposal timed out after {TimeoutSeconds}s", disposalId, 10);
             Logger.LogError("[{DisposalId}] Mesh address: {Address}", disposalId, Mesh.Address);

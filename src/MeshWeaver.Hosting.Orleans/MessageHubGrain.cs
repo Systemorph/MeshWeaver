@@ -604,6 +604,13 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 logger.LogError(ex, "Grain {GrainId}: hub disposal failed", grainId);
             }
         }
+        // 🚨 KNOWN GAP (per-ALC accounting): this Unload orders only on the HUB's
+        // DisposalCompleted above — pooled I/O leaves are mesh-shared, so this grain cannot
+        // drain them (DrainAll here would cancel every OTHER grain's work). A pooled leaf
+        // started by this grain's hub that still references this ALC when Unload begins is
+        // the use-after-unload class. Silo SHUTDOWN is safe (MeshTeardownHostedService drains
+        // the whole mesh and fires MeshTeardownSignal before the scope dies); a single grain
+        // deactivating on a LIVE silo needs per-ALC in-flight tracking to close fully.
         if (loadContext != null)
             loadContext.Unload();
         loadContext = null;
