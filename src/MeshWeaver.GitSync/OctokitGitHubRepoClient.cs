@@ -381,6 +381,22 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
             .Select(ToComment);
     }
 
+    /// <inheritdoc />
+    public IObservable<GitHubIssue> SetIssueState(
+        string repositoryUrl, int number, GitHubIssueState state, string accessToken)
+    {
+        var (owner, repo) = ParseRepoUrl(repositoryUrl);
+        var client = Client(accessToken);
+        var update = new IssueUpdate
+        {
+            State = state == GitHubIssueState.Open ? ItemState.Open : ItemState.Closed
+        };
+        logger?.LogInformation("Setting issue #{Number} in {Owner}/{Repo} to {State}.",
+            number, owner, repo, state);
+        return Http.InvokeObservable(ct => client.Issue.Update(owner, repo, number, update))
+            .Select(ToIssue);
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
     //  Pull requests (richer: list / detail / comment / merge)
     // ══════════════════════════════════════════════════════════════════════════

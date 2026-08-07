@@ -128,6 +128,14 @@ public interface IGitHubRepoClient
     IObservable<GitHubIssueComment> CommentIssue(
         string repositoryUrl, int number, string body, string accessToken);
 
+    /// <summary>
+    /// Opens or closes issue <paramref name="number"/> and emits the updated issue. Used to
+    /// <b>reopen</b> a closed issue when its cause recurs, so a regression re-surfaces on the
+    /// original ticket instead of quietly recurring underneath a closed one.
+    /// </summary>
+    IObservable<GitHubIssue> SetIssueState(
+        string repositoryUrl, int number, GitHubIssueState state, string accessToken);
+
     // ── Pull requests (richer) ────────────────────────────────────────────────
 
     /// <summary>

@@ -165,6 +165,11 @@ public sealed class GitProtocolRepoClient(
         => octokit.CommentIssue(repositoryUrl, number, body, accessToken);
 
     /// <inheritdoc />
+    public IObservable<GitHubIssue> SetIssueState(
+        string repositoryUrl, int number, GitHubIssueState state, string accessToken)
+        => octokit.SetIssueState(repositoryUrl, number, state, accessToken);
+
+    /// <inheritdoc />
     public IObservable<IReadOnlyList<GitHubPullRequestSummary>> ListPullRequests(
         string repositoryUrl, PullRequestStatus? state, string accessToken)
         => octokit.ListPullRequests(repositoryUrl, state, accessToken);

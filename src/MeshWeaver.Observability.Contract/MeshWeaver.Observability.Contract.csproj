@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{3b9e05c7-14da-4f62-9a88-cd2e7f610b93}</ProjectGuid>
+  </PropertyGroup>
+
+  <!-- Deliberately tiny. The in-cluster log watcher references THIS and nothing else from the
+       framework, so its image stays small and its startup stays fast — while still sharing the
+       one definition of "the same error" (LogLineParser) with the portal that tickets it. -->
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Messaging.Contract\MeshWeaver.Messaging.Contract.csproj" />
+  </ItemGroup>
+
+</Project>

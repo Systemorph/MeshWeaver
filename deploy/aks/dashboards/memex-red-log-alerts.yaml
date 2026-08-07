@@ -1,0 +1,82 @@
+# Grafana provisioned alert rule: red logs in a watched namespace.
+#
+# This is the HUMAN-facing half of red-log watching. It does NOT open tickets — mw-log-watcher
+# does that, from its own Loki cursor. The two are deliberately separate:
+#
+#   • The watcher's cursor CANNOT miss a burst. It reads a half-open window and only advances once
+#     the reports are safely queued, so a restart or an unreachable portal costs a redelivery, not
+#     a dropped error. That is why ticketing hangs off the cursor and not off this alert.
+#   • An alert notification is fire-and-forget. Whatever fires while the receiver is down is simply
+#     gone. That is fine for "tell a human something is happening" and unacceptable for "make sure
+#     every distinct error gets a ticket".
+#
+# So: this rule exists so a person watching Grafana sees red logs immediately and in aggregate,
+# with a link to the incident list. Ticketing is the watcher's job.
+#
+# Apply by mounting into Grafana's provisioning directory, or import via the API:
+#   kubectl -n monitoring create configmap grafana-alerting-red-logs \
+#     --from-file=red-logs.yaml=memex-red-log-alerts.yaml
+#   # then add it to the grafana deployment's provisioning/alerting mount and restart.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: memex-red-logs
+    folder: Memex
+    interval: 1m
+    rules:
+      - uid: memex-red-logs-firing
+        title: Red logs in a Memex namespace
+        condition: threshold
+        for: 5m
+        annotations:
+          summary: >-
+            {{ $labels.namespace }} logged {{ $value }} error/critical line(s) in the last 5 minutes.
+          description: >-
+            fail:/crit: lines are being emitted. mw-log-watcher is separately grouping these by
+            fingerprint and opening a GitHub issue per NEW fingerprint — check the incident list at
+            /Admin/_LogIncident before opening one by hand. If incidents are NOT appearing there,
+            the watcher or its ingest path is the thing to look at:
+            kubectl -n monitoring logs deploy/mw-log-watcher
+        labels:
+          severity: warning
+        data:
+          - refId: red
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: P8E80F9AEF21F6940
+            model:
+              refId: red
+              editorMode: code
+              queryType: range
+              expr: >-
+                sum by (namespace) (
+                  count_over_time({namespace=~"memex|memex-cloud"} |~ `^(fail|crit):` [5m])
+                )
+          - refId: latest
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: latest
+              type: reduce
+              reducer: last
+              expression: red
+          - refId: threshold
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: threshold
+              type: threshold
+              expression: latest
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        # No notification is silenced into nothing: with no contact point configured this still
+        # shows in Grafana's alert list. Wire a contact point for the channel your team reads.
+        noDataState: OK
+        execErrState: Alerting

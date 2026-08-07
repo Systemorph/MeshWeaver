@@ -149,6 +149,7 @@ internal static class PackageSourcesTokenFakes
         public IObservable<GitHubIssue> GetIssue(string repositoryUrl, int number, string accessToken) => throw new NotSupportedException();
         public IObservable<GitHubIssue> CreateIssue(GitHubCreateIssueRequest request) => throw new NotSupportedException();
         public IObservable<GitHubIssueComment> CommentIssue(string repositoryUrl, int number, string body, string accessToken) => throw new NotSupportedException();
+        public IObservable<GitHubIssue> SetIssueState(string repositoryUrl, int number, GitHubIssueState state, string accessToken) => throw new NotSupportedException();
         public IObservable<IReadOnlyList<GitHubPullRequestSummary>> ListPullRequests(string repositoryUrl, PullRequestStatus? state, string accessToken) => throw new NotSupportedException();
         public IObservable<GitHubPullRequestDetail> GetPullRequestDetail(string repositoryUrl, int number, string accessToken) => throw new NotSupportedException();
         public IObservable<GitHubIssueComment> CommentPullRequest(string repositoryUrl, int number, string body, string accessToken) => throw new NotSupportedException();

@@ -1,0 +1,101 @@
+# mw-log-watcher — the red-log detector.
+#
+# Polls Loki for fail:/crit: lines in the watched namespaces, groups them into fingerprinted
+# bursts, and POSTs each to the portal's /api/log-incidents endpoint. The portal triages new
+# fingerprints with the LogTriage agent and opens the GitHub issue.
+#
+# 🚨 It lives in `monitoring`, NOT in the portal's namespace, and it is a separate process from the
+# portal on purpose: the thing that notices "the portal is throwing errors" must not be hosted by
+# the portal. A wedged portal only delays delivery — the watcher keeps reading Loki and queues to
+# its PVC until the portal answers again.
+#
+# Apply:
+#   az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+#     --command "kubectl apply -f log-watcher.yaml" --file log-watcher.yaml
+#
+# The ingest token must match the portal's LogWatch:IngestToken. Create it FIRST:
+#   TOKEN=$(openssl rand -hex 32)
+#   kubectl -n monitoring create secret generic mw-log-watcher \
+#     --from-literal=ingest-token="$TOKEN"
+#   # …and set the same value as LogWatch__IngestToken on the portal (via its KeyVault secret).
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mw-log-watcher-state
+  namespace: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # Only the read cursor + any undelivered reports. Tiny, but it MUST be persistent:
+      # on an emptyDir a pod restart replays the lookback window and redelivers.
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mw-log-watcher
+  namespace: monitoring
+  labels:
+    app: mw-log-watcher
+spec:
+  # Exactly one. Two replicas would share nothing and each hold its own cursor, so every burst
+  # would be reported twice — harmless for ticketing (the fingerprint dedups) but it doubles the
+  # occurrence counts, which is the number triage judges impact by.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mw-log-watcher
+  template:
+    metadata:
+      labels:
+        app: mw-log-watcher
+    spec:
+      containers:
+        - name: mw-log-watcher
+          image: meshweaver.azurecr.io/memex-log-watcher:latest
+          imagePullPolicy: Always
+          env:
+            - name: LogWatcher__LokiUrl
+              value: "http://loki.monitoring.svc.cluster.local:3100"
+            # The namespaces to watch — one entry per portal deployment.
+            - name: LogWatcher__Namespaces__0
+              value: "memex"
+            - name: LogWatcher__Namespaces__1
+              value: "memex-cloud"
+            # In-cluster service URL: no ingress hop, no TLS cert to trust, and the ingest
+            # endpoint never has to be reachable from outside the cluster.
+            - name: LogWatcher__PortalUrl
+              value: "http://memex-portal-service.memex.svc.cluster.local:8080"
+            - name: LogWatcher__IngestToken
+              valueFrom:
+                secretKeyRef:
+                  name: mw-log-watcher
+                  key: ingest-token
+            - name: LogWatcher__PollInterval
+              value: "00:01:00"
+            - name: LogWatcher__StateDirectory
+              value: "/var/lib/mw-log-watcher"
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/mw-log-watcher
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: mw-log-watcher-state
