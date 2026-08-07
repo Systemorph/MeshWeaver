@@ -109,11 +109,20 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
         // which clears once the process resumes). We do NOT hold a strong ref to the
         // survivor during analysis (that would add our own stack root); ClrMD reads the
         // live process heap directly.
-        var (staticRooted, report) = AnalyzeMeshHubRoots();
+        var (outcome, report) = AnalyzeMeshHubRoots();
         Output.WriteLine("=== MESH HUB SURVIVED DISPOSAL — ClrMD GC-root analysis ===");
         Output.WriteLine(report);
 
-        staticRooted.Should().BeFalse(
+        // A guard that could not LOOK must not report "no leak" (#674): on macOS the
+        // snapshot-attach throws PlatformNotSupportedException, and folding that into
+        // false let this assertion pass while the hub was demonstrably alive.
+        // Inconclusive is a SKIP, never a pass — Linux (CI) runs the real analysis.
+        Assert.SkipWhen(outcome == ClrMdRootAnalysisOutcome.Unavailable,
+            "the mesh hub SURVIVED disposal but the ClrMD root analysis could not run on this " +
+            "platform/process — the verdict is inconclusive here, not green (#674); run on Linux " +
+            "for the GC-root chain. " + report);
+
+        (outcome == ClrMdRootAnalysisOutcome.Detected).Should().BeFalse(
             "the mesh hub is pinned by a NON-stack root (static field / TimerQueue timer / GC handle) " +
             "— a real leak that accumulates across disposed meshes; the chain above names it. A hub " +
             "held ONLY by a transient stack root (snapshot artifact) is acceptable and not failed on.");
@@ -124,10 +133,9 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
     /// first <c>MessageHub</c> on the heap, printing the root kind + the type chain
     /// from the root down to the hub. The top of the chain is the pin.
     /// </summary>
-    private static (bool StaticRooted, string Report) AnalyzeMeshHubRoots()
+    private static (ClrMdRootAnalysisOutcome Outcome, string Report) AnalyzeMeshHubRoots()
     {
         var sb = new StringBuilder();
-        var staticRooted = false;
         try
         {
             // 🚨 Pin the DAC for process lifetime BEFORE ClrMD loads it: DataTarget.Dispose
@@ -136,7 +144,8 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
             // (the endemic exit=139). See ClrMdDacPin / ClrMdDacUnloadCrashTest.
             ClrMdDacPin.EnsurePinned();
             using var dt = DataTarget.CreateSnapshotAndAttach(Environment.ProcessId);
-            if (dt.ClrVersions.Length == 0) return (false, "[clrmd] no CLR runtime found in snapshot");
+            if (dt.ClrVersions.Length == 0)
+                return (ClrMdRootAnalysisOutcome.Unavailable, "[clrmd] no CLR runtime found in snapshot");
             using var runtime = dt.ClrVersions[0].CreateRuntime();
             var heap = runtime.Heap;
 
@@ -185,7 +194,6 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
             }
 
             sb.AppendLine($"[clrmd] visited={visited} hubFound={found != 0}");
-            staticRooted = found != 0;
             if (found != 0)
             {
                 var chain = new List<string>();
@@ -252,12 +260,16 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
                 sb.AppendLine("[clrmd] no MessageHub reached from non-stack roots within budget.");
                 sb.AppendLine("[clrmd] non-stack root kinds seen: " + string.Join(", ", kinds));
             }
+            return (found != 0 ? ClrMdRootAnalysisOutcome.Detected : ClrMdRootAnalysisOutcome.NotDetected,
+                sb.ToString());
         }
         catch (Exception ex)
         {
+            // Snapshot-attach unsupported (macOS PlatformNotSupportedException) or any other
+            // analysis fault: the probe DID NOT LOOK — that is Unavailable, never NotDetected.
             sb.AppendLine($"[clrmd] analysis failed: {ex.GetType().Name}: {ex.Message}");
+            return (ClrMdRootAnalysisOutcome.Unavailable, sb.ToString());
         }
-        return (staticRooted, sb.ToString());
     }
 
     public override async ValueTask DisposeAsync()

@@ -653,6 +653,16 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     // past the deadline and xUnit eventually reports Passed with the actual
     // (multi-minute) duration. The watchdog below catches that uniformly.
     private DateTimeOffset _testMethodStartedAt;
+    // Monotonic twin of the wall-clock stamp above (#679): wall-clock keeps counting
+    // through host suspension (laptop sleep, frozen runner) — a window in which the
+    // test could not have made progress — and the sweep of 2026-07 recorded "hangs" of
+    // 5523 s and 7288 s against a 720 s cap that all passed under caffeinate. Stopwatch
+    // does not advance across suspension on Linux (CLOCK_MONOTONIC) and Intel macOS
+    // (mach_absolute_time), so deadlines are enforced on it; on Apple-Silicon macOS the
+    // OS monotonic clock may tick through sleep, making the divergence report below
+    // best-effort there — but enforcement can never be WORSE than the wall clock it
+    // replaces.
+    private Stopwatch? _testMethodStopwatch;
     /// <summary>Soft cap — anything above this gets a warning in the test log.</summary>
     protected virtual TimeSpan TestSoftDeadline => TimeSpan.FromSeconds(30);
     /// <summary>
@@ -793,6 +803,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // compute actual test-method duration and apply the soft/hard
             // deadlines (see TestSoftDeadline / TestHardDeadline).
             _testMethodStartedAt = DateTimeOffset.UtcNow;
+            _testMethodStopwatch = Stopwatch.StartNew();
         }
         catch (Exception ex)
         {
@@ -1186,9 +1197,24 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         // [Fact(Timeout=N)] is cooperative — a test that ignores the ct
         // happily blocks past its declared timeout and gets reported as
         // Passed. We catch every such silent deadlock here, uniformly.
-        TimeSpan? testMethodElapsed = _testMethodStartedAt == default
+        TimeSpan? wallElapsed = _testMethodStartedAt == default
             ? null
             : DateTimeOffset.UtcNow - _testMethodStartedAt;
+        var monotonicElapsed = _testMethodStopwatch?.Elapsed;
+        // Enforce on the monotonic clock (#679): the wall clock includes host-suspension
+        // windows in which the test could not have made progress — failing it for that
+        // time misattributes a sleep/stall to the test's CancellationToken handling.
+        var testMethodElapsed = monotonicElapsed ?? wallElapsed;
+        if (wallElapsed is { } wall && monotonicElapsed is { } mono &&
+            wall - mono > TimeSpan.FromSeconds(10))
+        {
+            FileOutput.WriteLine(
+                $"[WATCHDOG-SUSPEND] {testName}: wall-clock elapsed {wall.TotalSeconds:F1}s vs " +
+                $"monotonic {mono.TotalSeconds:F1}s — the host was suspended ~" +
+                $"{(wall - mono).TotalSeconds:F0}s during this test (laptop sleep / runner stall). " +
+                "Deadlines are enforced on the monotonic clock, so the suspension window alone " +
+                "cannot fail the test.");
+        }
         if (testMethodElapsed is { } elapsed)
         {
             var hardDeadline = EffectiveHardDeadline;
@@ -1283,6 +1309,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // enqueued. See MeshTeardownExtensions.
             var ioPools = Mesh.ServiceProvider.GetService<IoPoolRegistry>();
             var asyncDisposeQueue = Mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
+            var teardownSignal = Mesh.ServiceProvider.GetService<MeshTeardownSignal>();
             Mesh.Dispose();
             TestPhaseTrace(testName, "DISPOSE_INVOKED", sw.ElapsedMilliseconds);
 
@@ -1296,19 +1323,35 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // unload (the teardown use-after-unload SIGSEGV). A live change-feed leaf never
             // completes on its own, so a WAIT-only drain would time out and let the scope
             // dispose under it; DrainAll() cancels the leaf so it stops, then joins.
-            if (ioPools is not null)
-            {
-                ioPools.DrainAll();
-                if (ioPools.TotalInFlight > 0)
-                    FileOutput.WriteLine(
-                        $"[DISPOSE] {testName}: I/O pools still report {ioPools.TotalInFlight} in-flight after drain");
-            }
+            var leakedIoLeaves = ioPools?.DrainAll() ?? 0;
             // After all the sync stuff is disposed (and everyone has enqueued their async
             // cleanup), quiesce the async dispose queue before the scope closes below.
-            if (asyncDisposeQueue is not null)
-                await asyncDisposeQueue.DrainAsync(DisposeTimeout);
-            FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Disposal completed in {sw.ElapsedMilliseconds}ms");
-            TestPhaseTrace(testName, "DISPOSE_DONE", sw.ElapsedMilliseconds);
+            var asyncDisposeClean = asyncDisposeQueue is null
+                || await asyncDisposeQueue.DrainAsync(DisposeTimeout);
+
+            // The terminal signal — DISPOSE_DONE is only true when this report is CLEAN. Fire it
+            // before the scope disposes below so any subscriber ordering on "all is done" (ALC
+            // unload hooks, diagnostics) observes the truthful terminal state, dirty or not.
+            var teardownReport = new TeardownReport(leakedIoLeaves, asyncDisposeClean);
+            teardownSignal?.SignalCompleted(teardownReport);
+            FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Disposal completed in {sw.ElapsedMilliseconds}ms — {teardownReport}");
+            TestPhaseTrace(testName, "DISPOSE_DONE", sw.ElapsedMilliseconds, teardownReport.ToString());
+
+            // 🚨 A dirty teardown FAILS the class, exactly like the quiesce-leak below. The old
+            // code logged "I/O pools still report N in-flight" to a per-machine file and carried
+            // on — and the surviving leaf then dereferenced an unloading node ALC 8 ms into the
+            // NEXT test's INIT, killing the whole test host with a SIGSEGV that nothing could
+            // attribute (FutuRe.Test, dump dotnet-3029). Failing HERE names the class that
+            // leaked, while the evidence still exists.
+            if (!teardownReport.Clean)
+            {
+                TestPhaseTrace(testName, "DISPOSE_DIRTY_TEARDOWN", sw.ElapsedMilliseconds, teardownReport.ToString());
+                disposeException = new InvalidOperationException(
+                    $"{testName} teardown left work RUNNING: {teardownReport}. " +
+                    "A pooled I/O leaf or async cleanup ignored its cancellation token; the service " +
+                    "scope (and any collectible node ALC) is about to be torn down over live code — " +
+                    "the use-after-unload SIGSEGV. Fix the leaf that will not cancel; do not widen the drain budget.");
+            }
 
             // Fail the test class' dispose if any hub hit Quiescing timeout. A leaked
             // Observe subscription that never received its reply is a real bug —
@@ -1319,10 +1362,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             {
                 var summary = Mesh.GetQuiescingTimeoutSummary();
                 TestPhaseTrace(testName, "DISPOSE_QUIESCE_LEAK", sw.ElapsedMilliseconds, summary);
-                disposeException = new InvalidOperationException(
+                var quiesceLeak = new InvalidOperationException(
                     $"{testName} left Observe subscriptions pending past the Quiescing budget. " +
                     $"This is a leaked callback — the test posted a request and never received " +
                     $"(or never awaited) its reply. Pending callbacks at dispose:{Environment.NewLine}{summary}");
+                // Never clobber a dirty-teardown failure recorded above — both findings matter.
+                disposeException = disposeException is null
+                    ? quiesceLeak
+                    : new AggregateException(disposeException, quiesceLeak);
             }
         }
         catch (OperationCanceledException)
