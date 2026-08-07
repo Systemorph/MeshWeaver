@@ -3,7 +3,7 @@
   "name": "ACME",
   "nodeType": "Space",
   "description": "Project and task management demo showcasing MeshWeaver's collaborative workflows and AI agent integration",
-  "icon": "/static/storage/content/ACME/icon.svg",
+  "icon": "/api/content/ACME/icon.svg",
   "addressSegments": 0,
   "isPersistent": true,
   "content": {

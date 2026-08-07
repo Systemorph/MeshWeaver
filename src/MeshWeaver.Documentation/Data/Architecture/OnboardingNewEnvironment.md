@@ -258,7 +258,7 @@ See [Memex Cloud Deployment](/Doc/Architecture/MemexCloudDeployment) for the pro
 ## Verifying a rollout (and what "normal turbulence" looks like)
 
 A new image means **fresh pods**, and every dynamic NodeType's cached assembly is ABI-stale against
-the new framework build — so they all recompile. Expect a window where pages and `/static/…` return
+the new framework build — so they all recompile. Expect a window where pages and `/api/content/…` return
 errors like *"No response received … for request `GetDataRequest`/`SubscribeRequest` → target X"*.
 That is cold-compile, not a bad image.
 
@@ -273,7 +273,7 @@ kubectl set image deploy/memex-portal-deployment memex-portal=<registry>/memex-p
 kubectl rollout status deploy/memex-portal-deployment -n <env> --timeout=600s
 
 # 3. Verify with real signals, in a LOOP (one probe can hit a warm pod and lie).
-for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " https://<host>/static/<space>/content/<file>; done
+for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " https://<host>/api/content/<space>/content/<file>; done
 ```
 
 - **Do not cycle pods while it warms.** Deleting or scaling pods restarts the compile work from

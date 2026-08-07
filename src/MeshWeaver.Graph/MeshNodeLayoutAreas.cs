@@ -1396,9 +1396,12 @@ public static class MeshNodeLayoutAreas
 
     private static IObservable<UiControl?> RenderImageAsync(LayoutAreaHost host, string contentPath, string _)
     {
-        // Build static content URL: /static/{address}/{defaultCollection}/{filePath}
+        // Access-controlled content URL: /api/content/{address}/{defaultCollection}/{filePath}.
+        // NEVER /static (issue #587) — that route carries build assets only and applies no
+        // permission check, so an image in a private Space would be world-readable there.
         var address = host.Hub.Address.ToString();
-        var staticUrl = $"/static/{address}/{ContentCollectionsExtensions.DefaultCollectionName}/{contentPath}";
+        var staticUrl = ContentCollectionsExtensions.GetContentFileUrl(
+            address, ContentCollectionsExtensions.DefaultCollectionName, contentPath);
 
         return Observable.Return<UiControl?>(
             Controls.Html($"<img src='{staticUrl}' alt='{Path.GetFileName(contentPath)}' style='max-width: 100%;' />"));

@@ -5,7 +5,7 @@
   "nodeType": "FutuRe/LineOfBusiness",
   "category": "Lines of Business",
   "description": "Specialty insurance covering political risk, trade credit, surety, and niche exposures",
-  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "icon": "/api/content/FutuRe/LineOfBusiness/icon.svg",
   "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",

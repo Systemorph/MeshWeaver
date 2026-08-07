@@ -250,7 +250,7 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
    && kubectl rollout status deploy/memex-portal-deployment -n <env> --timeout=600s"
 
 # c) Verify with REAL signals, looped. HTTP 200 is the Blazor shell and proves nothing.
-for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " https://<host>/static/<space>/content/<file>; done
+for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " https://<host>/api/content/<space>/content/<file>; done
 ```
 
 ### 🧱 NodeType bake — the deploy MUST compile every dynamic NodeType

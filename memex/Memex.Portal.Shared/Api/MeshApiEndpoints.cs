@@ -127,7 +127,7 @@ public static class MeshApiEndpoints
             RunString(http, rootHub, ct, ops => ops.Resolve(body.Path)));
 
         // Content-collection directory listing — the read half of the React FileBrowser. Path is
-        // "{node}/{collection}[/{dir}]"; download uses the existing /content|/static URLs, add uses
+        // "{node}/{collection}[/{dir}]"; download uses the existing /content|/api/content URLs, add uses
         // /upload. Returns { collection, path, editable, items:[…] } (or "Error: …").
         group.MapPost("/content/list", (HttpContext http, IMessageHub rootHub, PathBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.ContentList(body.Path)));
