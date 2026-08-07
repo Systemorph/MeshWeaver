@@ -204,6 +204,26 @@ public class AssertionTests
                 .Should().Within(50.Milliseconds()).Match(x => x == 99));
 
         Assert.Contains("emitted nothing at all", ex.Message);
+        // Match OWNS the predicate, so the count is honest and needs no caveat.
+        Assert.DoesNotContain("filtered upstream", ex.Message);
+    }
+
+    /// <summary>
+    /// `src.Where(p).Should().Emit()` hands the assertion an ALREADY-filtered stream, so a source
+    /// emitting a steady stream of non-matching values looks identical to a wedged one. The message
+    /// must say so — assuming a wedge sends the reader hunting a race that isn't there.
+    /// </summary>
+    [Fact]
+    public async Task TimedOutEmit_WarnsThatAnUpstreamFilterHidesTheSourcesValues()
+    {
+        var ex = await Assert.ThrowsAnyAsync<ObservableAssertionException>(
+            async () => await Observable.Range(1, 3).Concat(Observable.Never<int>())
+                .Where(x => x == 99)                      // the trap: filtered BEFORE Should()
+                .Should().Within(50.Milliseconds()).Emit());
+
+        Assert.Contains("emitted nothing at all", ex.Message);
+        Assert.Contains("filtered upstream", ex.Message);
+        Assert.Contains(".Should().Match(predicate)", ex.Message);
     }
 
     /// <summary>
