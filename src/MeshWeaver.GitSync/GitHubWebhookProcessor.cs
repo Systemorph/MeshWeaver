@@ -343,6 +343,23 @@ public sealed class GitHubWebhookProcessor
             return Observable.Return(0);
         if (!string.Equals(GetString(run, "conclusion"), "success", StringComparison.OrdinalIgnoreCase))
             return Observable.Return(0);
+
+        // 🚨 The run must have been triggered BY A PUSH. `workflow_run` fires for far more than the
+        // repo's content CI: measured on the education hook, GitHub's own Copilot reviewer arrives as
+        // action=completed / conclusion=success with event="dynamic", and every `pull_request` run of
+        // the content workflow arrives green too. Those are green builds of code the default branch
+        // has not accepted; importing on one would publish a feature branch. The branch check below
+        // catches most of them, but only because a PR's head_branch is its source branch — filtering
+        // on the trigger states the actual requirement instead of relying on that coincidence.
+        var runEvent = GetString(run, "event") ?? "";
+        if (!string.Equals(runEvent, "push", StringComparison.OrdinalIgnoreCase))
+        {
+            logger?.LogDebug(
+                "workflow_run webhook: green '{Workflow}' run was triggered by '{Event}', not a push — "
+                + "not a publish signal.", GetString(run, "name"), runEvent);
+            return Observable.Return(0);
+        }
+
         if (!TryGetRepoUrl(payload, out var repoUrl))
             return Observable.Return(0);
 
