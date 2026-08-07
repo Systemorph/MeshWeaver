@@ -247,7 +247,7 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
               "repository": { "full_name": "test/push-auto", "default_branch": "main" },
               "workflow_run": { "conclusion": "failure", "head_branch": "main",
                                 "head_sha": "deadbeef", "id": 1, "run_number": 1,
-                                "name": "CI", "updated_at": "2026-08-07T10:00:00Z" } }
+                                "name": "CI", "event": "push", "updated_at": "2026-08-07T10:00:00Z" } }
             """).RootElement;
             Assert.Equal(0, await Webhooks.Process("workflow_run", redBuild).Timeout(60.Seconds()).ToTask());
 
@@ -257,7 +257,7 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
               "repository": { "full_name": "test/push-auto", "default_branch": "main" },
               "workflow_run": { "conclusion": "success", "head_branch": "main",
                                 "head_sha": "cafebabe", "id": 2, "run_number": 2,
-                                "name": "CI", "updated_at": "2026-08-07T10:05:00Z" } }
+                                "name": "CI", "event": "push", "updated_at": "2026-08-07T10:05:00Z" } }
             """).RootElement;
             recorded = await Webhooks.Process("workflow_run", greenBuild).Timeout(60.Seconds()).ToTask();
         }
@@ -275,19 +275,21 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
     }
 
     /// <summary>
-    /// 🚨 Only the DEFAULT branch's green builds become <c>BuildCompletion</c> records. A PR-branch
-    /// run is green UNMERGED code — recording it would make the plugin-update watcher offer (or,
-    /// for an opted-in record, unattended-install) content the default branch never accepted, at
-    /// that branch's sha. Fail-closed: a payload whose branch cannot be read records nothing either.
+    /// 🚨 Only the DEFAULT branch's PUSH-triggered green builds become <c>BuildCompletion</c> records
+    /// (and, since the import is CI-gated, only those import). A PR-branch run is green UNMERGED code
+    /// — recording it would make the plugin-update watcher offer (or, for an opted-in record,
+    /// unattended-install) content the default branch never accepted, at that branch's sha.
+    /// Fail-closed: a payload whose branch cannot be read records nothing either.
     /// </summary>
     [Fact(Timeout = 120000)]
-    public async Task Process_WorkflowRun_RecordsOnlyDefaultBranchGreenBuilds()
+    public async Task Process_WorkflowRun_RecordsOnlyDefaultBranchPushTriggeredGreenBuilds()
     {
-        static JsonElement Run(string branchJson) => JsonDocument.Parse($$"""
+        static JsonElement Run(string branchJson, string runEvent = "push", string name = "ci")
+            => JsonDocument.Parse($$"""
             { "action": "completed",
               "repository": { "full_name": "test/plugins-repo", "default_branch": "main" },
               "workflow_run": { "conclusion": "success", "head_sha": "abc1234def", {{branchJson}}
-                                "name": "ci", "id": 7, "run_number": 42,
+                                "name": "{{name}}", "id": 7, "run_number": 42, "event": "{{runEvent}}",
                                 "updated_at": "2026-08-05T12:00:00Z" } }
             """).RootElement;
 
@@ -298,7 +300,18 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         Assert.Equal(0, await Webhooks.Process("workflow_run", Run(""))
             .Timeout(60.Seconds()).ToTask());
 
-        // The default branch's green run IS the publish signal — recorded at the stable path.
+        // 🚨 GitHub's Copilot reviewer completes green on the DEFAULT branch with event="dynamic"
+        // (observed on the education hook). It is not a build of the branch's content and must not
+        // publish anything — the trigger check is what rejects it.
+        Assert.Equal(0, await Webhooks.Process("workflow_run",
+                Run("\"head_branch\": \"main\",", runEvent: "dynamic", name: "Running Copilot Code Review"))
+            .Timeout(60.Seconds()).ToTask());
+        // A pull_request run of the CONTENT workflow can also report head_branch=main; still not a push.
+        Assert.Equal(0, await Webhooks.Process("workflow_run",
+                Run("\"head_branch\": \"main\",", runEvent: "pull_request"))
+            .Timeout(60.Seconds()).ToTask());
+
+        // The default branch's push-triggered green run IS the publish signal.
         Assert.Equal(1, await Webhooks.Process("workflow_run", Run("\"head_branch\": \"main\","))
             .Timeout(60.Seconds()).ToTask());
         var record = await WaitForNode("Admin/_Build/test.plugins-repo");
