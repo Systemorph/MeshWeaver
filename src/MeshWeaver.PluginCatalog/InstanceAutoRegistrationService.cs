@@ -552,10 +552,11 @@ public sealed class InstanceAutoRegistrationService(
                     .Do(result => logger.LogInformation(
                         "[DefaultInstall] {Id} → {Partition}: {Written} written, {Unchanged} unchanged",
                         package.Id, partition, result.Written, result.Unchanged))
-                    // Publication is re-asserted even when nothing installed — that is what heals an
-                    // instance whose partition was left unreadable, and it is free once in place.
+                    // The declared access is re-asserted even when nothing installed — that is what
+                    // heals an instance whose partition was left unreadable, and it is free once in
+                    // place.
                     .SelectMany(result => PackageInstaller
-                        .EnsurePreInstalledPublicRead(hub, package, partition, logger)
+                        .EnsureDeclaredAccess(hub, package, partition, logger)
                         .Select(_ => result)))
             .Select(result => new DefaultInstallSummary(
                 Installed: result.Written > 0 ? 1 : 0,
