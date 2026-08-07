@@ -259,6 +259,11 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
                                 "head_sha": "cafebabe", "id": 2, "run_number": 2,
                                 "name": "CI", "event": "push", "updated_at": "2026-08-07T10:05:00Z" } }
             """).RootElement;
+            // 🚨 The return codes above say "nothing was TRIGGERED"; this says "nothing was
+            // IMPORTED". Without it, a regression that imports on push while still returning 0
+            // would sail through — the assertion below would find the node already there and pass.
+            Assert.Null(await ReadNode($"{b}/Welcome").Timeout(30.Seconds()).ToTask());
+
             recorded = await Webhooks.Process("workflow_run", greenBuild).Timeout(60.Seconds()).ToTask();
         }
         finally
