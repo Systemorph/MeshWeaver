@@ -653,6 +653,16 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     // past the deadline and xUnit eventually reports Passed with the actual
     // (multi-minute) duration. The watchdog below catches that uniformly.
     private DateTimeOffset _testMethodStartedAt;
+    // Monotonic twin of the wall-clock stamp above (#679): wall-clock keeps counting
+    // through host suspension (laptop sleep, frozen runner) — a window in which the
+    // test could not have made progress — and the sweep of 2026-07 recorded "hangs" of
+    // 5523 s and 7288 s against a 720 s cap that all passed under caffeinate. Stopwatch
+    // does not advance across suspension on Linux (CLOCK_MONOTONIC) and Intel macOS
+    // (mach_absolute_time), so deadlines are enforced on it; on Apple-Silicon macOS the
+    // OS monotonic clock may tick through sleep, making the divergence report below
+    // best-effort there — but enforcement can never be WORSE than the wall clock it
+    // replaces.
+    private Stopwatch? _testMethodStopwatch;
     /// <summary>Soft cap — anything above this gets a warning in the test log.</summary>
     protected virtual TimeSpan TestSoftDeadline => TimeSpan.FromSeconds(30);
     /// <summary>
@@ -793,6 +803,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // compute actual test-method duration and apply the soft/hard
             // deadlines (see TestSoftDeadline / TestHardDeadline).
             _testMethodStartedAt = DateTimeOffset.UtcNow;
+            _testMethodStopwatch = Stopwatch.StartNew();
         }
         catch (Exception ex)
         {
@@ -1186,9 +1197,24 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         // [Fact(Timeout=N)] is cooperative — a test that ignores the ct
         // happily blocks past its declared timeout and gets reported as
         // Passed. We catch every such silent deadlock here, uniformly.
-        TimeSpan? testMethodElapsed = _testMethodStartedAt == default
+        TimeSpan? wallElapsed = _testMethodStartedAt == default
             ? null
             : DateTimeOffset.UtcNow - _testMethodStartedAt;
+        var monotonicElapsed = _testMethodStopwatch?.Elapsed;
+        // Enforce on the monotonic clock (#679): the wall clock includes host-suspension
+        // windows in which the test could not have made progress — failing it for that
+        // time misattributes a sleep/stall to the test's CancellationToken handling.
+        var testMethodElapsed = monotonicElapsed ?? wallElapsed;
+        if (wallElapsed is { } wall && monotonicElapsed is { } mono &&
+            wall - mono > TimeSpan.FromSeconds(10))
+        {
+            FileOutput.WriteLine(
+                $"[WATCHDOG-SUSPEND] {testName}: wall-clock elapsed {wall.TotalSeconds:F1}s vs " +
+                $"monotonic {mono.TotalSeconds:F1}s — the host was suspended ~" +
+                $"{(wall - mono).TotalSeconds:F0}s during this test (laptop sleep / runner stall). " +
+                "Deadlines are enforced on the monotonic clock, so the suspension window alone " +
+                "cannot fail the test.");
+        }
         if (testMethodElapsed is { } elapsed)
         {
             var hardDeadline = EffectiveHardDeadline;
