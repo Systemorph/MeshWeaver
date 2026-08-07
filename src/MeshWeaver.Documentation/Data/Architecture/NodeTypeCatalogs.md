@@ -52,6 +52,59 @@ There are two concrete ways to dissociate the in-memory type-def, and a catalog 
 - **`nodeType:NodeType` root** — when the discriminator *equals* the partition name (`Harness`, `Agent`, `Skill`), the persisted root and the type-def must be **the same** node, so the root is a `nodeType:NodeType` node that links to the static C# type for its `HubConfiguration`. This is what removes the path collision.
 - **`IsDefinitionOnly = true`** — when the discriminator *differs* from the partition name (the `Provider` catalog's `ModelProvider` / `LanguageModel` / `ModelProviderSelection`), there is no root collision, but the type-def must still be dropped from runtime serving/persistence so the sampler doesn't write it to a phantom schema. `AddModelProviderType` / `AddLanguageModelType` register these defs with `IsDefinitionOnly = true` when `dbSynced` (exactly as `HarnessNodeType` does): the def still supplies its `HubConfiguration` **by name** (the catalog's instances enrich through it) and proves the type exists, but it is NOT served or persisted at its bare discriminator path (`@ModelProvider` / `@LanguageModel`). Postgres owns the real catalog under the top-level `Provider` partition.
 
+## A definition is not a node — and every existence probe must agree
+
+`IsDefinitionOnly` is not a decoration: it is the declaration that an entry in the static-node
+registry is a **type definition**, not a node at that path. The platform has exactly one name-keyed,
+delegate-carrying registry — `IStaticNodeProvider` fanned in through
+`serviceProvider.FindStaticNode(typeName)` — and `HubConfiguration` is a C# delegate, so a
+platform-defined NodeType *must* have an entry keyed by its own name. Registering it through a
+bespoke `IStaticNodeProvider` instead of `AddMeshNodes` changes nothing: it lands in the same
+enumeration under the same key. **`IsDefinitionOnly` is therefore the mechanism that makes a type
+platform-defined without materialising a node at the type's path** — and it only works if *every*
+seam honours it.
+
+The seams that do:
+
+| Seam | Effect |
+|---|---|
+| `StaticNodeQueryProvider` | a definition never becomes a query result |
+| `MessageHubGrain.TryResolveStaticNode` | never activates a per-node hub from a definition |
+| `MeshDataSource.FindServedStaticNode` | never served as `WithInitialData`, never auto-persisted |
+| `HandleCreateNodeRequest` / batch create | never counts as an "already exists" |
+
+**The one that did not — and the deepest cause of #902.** `EnsurePartitionBootstrap`'s root-existence
+probe (`ReadNodeAuthoritative`) fell back to `FindStaticNode(path)` with no guard. For a catalog
+whose discriminator equals its partition name, the definition at `@Agent` therefore answered *"the
+root exists"*, so `ProvisionAndCreateRoot` never ran: **no schema was provisioned and no durable root
+was written**, while every other seam correctly saw nothing. That is the ghost precisely — present to
+the existence check, absent to reads, un-creatable ("already exists"), no version history, and no
+route back. The probe now skips definition-only entries, so the bare partition path is free to be an
+ordinary root.
+
+The lesson generalises: when you add a seam that asks *"is there a node at this path?"*, a
+definition-only entry must answer **no**. Only the seams asking *"does this TYPE exist?"* (NodeType
+resolution, `StaticTypeName` linking, creatable-type lists) may see it.
+
+### "Can't we just drop the definition, since the platform knows Agent anyway?"
+
+Reasonable question — the platform *does* reference `Agent` and `Skill` intrinsically
+(`AgentPickerProjection`, the AI settings skill sources, the harness). Those references are all
+**query-side**: they filter by the `nodeType` *string*. None of them supplies the type's
+`HubConfiguration` delegate, and none registers the type as *existing*.
+
+Measured, not assumed — dropping `AddMeshNodes(typeDefinition)` for `Agent` on the DB-synced path
+fails **5 of 5** `PreInstalledPackageInstallTest` cases:
+
+- `PackageInstaller`'s required-node-type gate (`FindStaticNode(t) is null`) rejects the package, so
+  the `Agent` catalog **does not install at all**;
+- `AgentPickerProjection.ObserveAgents` — the pipeline the chat combobox binds to — emits `[]`.
+
+So the definition entry is load-bearing, and `IsDefinitionOnly` is what lets it be load-bearing
+*without* occupying the partition-root path. With the existence-probe guard above in place, the bare
+path is owned by the durable row: on a real portal the `Agent` partition root reads back as
+`Agent | Store/Plugin | v2` from Postgres, next to the installer-written `Agent/_Policy`.
+
 ## Collecting across namespaces (the registry)
 
 A catalog's **effective set at runtime is never one partition** — it is collected from a **collection of namespaces**: the user's own, the active space, and the platform tier. The default tiers, in precedence order:
