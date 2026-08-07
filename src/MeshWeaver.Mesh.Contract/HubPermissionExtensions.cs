@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -112,6 +113,68 @@ public static class HubPermissionExtensions
         return hub.GetEffectivePermissions(PermissionEvaluator.AdminScope, userId)
             .Select(p => p.HasFlag(Permission.All));
     }
+
+    /// <summary>
+    /// Takes ONE permission answer and <b>leaves the evaluator's Rx gate</b> before the
+    /// caller's pipeline runs. Use this — never a bare <c>.Take(1)</c> — whenever the
+    /// continuation does REAL WORK (storage I/O, a hub write, a change-feed publish, invoking
+    /// a downstream handler) rather than just projecting to a value or a UI control.
+    ///
+    /// <para><b>Why (issue #899).</b>
+    /// <see cref="PermissionEvaluator.GetEffectivePermissions(IMessageHub,string,string)"/>
+    /// is an <c>Observable.CombineLatest</c> fold over cached <c>Replay(1)</c> queries, so on
+    /// a warm cache it emits <b>synchronously during <c>Subscribe</c>, while holding the
+    /// CombineLatest gate</b> (one gate per ancestor scope, nested). A bare
+    /// <c>.Take(1).SelectMany(&lt;whole handler&gt;)</c> therefore executes the ENTIRE handler
+    /// body inside that lock. If the body then publishes a change, the fan-out walks shared
+    /// gates (<c>PersistenceService.Changes</c>'s <c>Merge</c>, the process-wide
+    /// <c>Replay(1)</c> in <c>IMeshNodeStreamCache</c>) and on into ANOTHER hub's fold — two
+    /// hubs doing that concurrently take {own fold gate, shared gate} in opposite orders and
+    /// deadlock, with neither a success nor a failure response ever posted.</para>
+    ///
+    /// <para>The decision is still TAKEN inside the fold (the evaluation is unchanged and the
+    /// answer is the same); only the continuation is moved off the gate, onto
+    /// <see cref="System.Reactive.Concurrency.Scheduler.Default"/>. This is what a pipeline
+    /// that already hops through <c>IIoPool</c> gets for free — which is exactly why the
+    /// Postgres-backed paths never reproduced the wedge and the fully-synchronous in-memory
+    /// path did.</para>
+    ///
+    /// <para>🚨 Not needed for pure projections (a <c>CombineLatest</c> source feeding a
+    /// layout area, <c>.Select(p =&gt; control)</c>): those finish inside the gate and touch
+    /// nothing shared. Adding a hop there would only cost a scheduler round-trip.</para>
+    /// </summary>
+    public static IObservable<Permission> TakeDecisionOutsideGate(this IObservable<Permission> permissions)
+    {
+        ArgumentNullException.ThrowIfNull(permissions);
+        return permissions.Take(1).SelectMany(HopOffGate);
+    }
+
+    /// <summary>
+    /// <c>bool</c> overload of
+    /// <see cref="TakeDecisionOutsideGate(IObservable{Permission})"/> — for
+    /// <see cref="CheckPermission(IMessageHub,string,Permission)"/> /
+    /// <see cref="IsGlobalAdmin(IMessageHub)"/> chains whose continuation does real work.
+    /// </summary>
+    public static IObservable<bool> TakeDecisionOutsideGate(this IObservable<bool> decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        return decision.Take(1).SelectMany(HopOffGate);
+    }
+
+    /// <summary>
+    /// Re-emits <paramref name="value"/> on <see cref="Scheduler.Default"/>, so the
+    /// subscriber's continuation runs on a pool thread instead of on the emitting (gate-
+    /// holding) thread.
+    ///
+    /// <para>🚨 <c>Observable.Return(value, scheduler)</c> inside <c>SelectMany</c>, NOT
+    /// <c>ObserveOn(scheduler)</c>. Both leave the gate, but Rx's <c>ObserveOn</c> prefers
+    /// <c>ISchedulerLongRunning</c> and parks a DEDICATED thread for the life of the
+    /// subscription — measured at 64 extra threads for 64 concurrent subscriptions. A
+    /// permission check is subscribed per call, so that shape would cost a thread per check.
+    /// A single scheduled work item costs none.</para>
+    /// </summary>
+    private static IObservable<T> HopOffGate<T>(T value)
+        => Observable.Return(value, Scheduler.Default);
 
     /// <summary>
     /// Resolve a role definition (built-in or custom) by id.

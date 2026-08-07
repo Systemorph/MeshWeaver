@@ -2109,11 +2109,23 @@ public static class MeshExtensions
     {
         var pathToCheck = node.MainNode ?? node.Path;
 
-        // Take(1) closes the inner observable — GetEffectivePermissions rides
-        // the live AccessAssignment synced query and is hot, so without Take(1)
-        // the .Select chain never completes and the handler hangs.
+        // 🚨 TakeDecisionOutsideGate, NOT a bare Take(1) — issue #899.
+        //
+        // Take(1) is still required (GetEffectivePermissions rides the live AccessAssignment
+        // synced query and is hot, so without it the chain never completes and the handler
+        // hangs), but it is NOT sufficient. The caller chains
+        // `.SelectMany(denied => <the entire delete pipeline>)` onto this, and on a warm
+        // permission cache the fold emits synchronously during Subscribe while holding its
+        // Observable.CombineLatest gate — so storage delete, cache invalidation and the
+        // change-feed publish all ran INSIDE that lock. Two per-node hubs deleting
+        // concurrently then acquired {own fold gate, shared synced-query gate} in opposite
+        // orders and deadlocked: both action blocks parked forever and the recursive delete
+        // posted neither a DeleteNodeResponse nor a failure.
+        //
+        // The decision is unchanged — it is still taken inside the fold; only the pipeline
+        // that follows is moved off the gate.
         return hub.GetEffectivePermissions(pathToCheck, userId)
-            .Take(1)
+            .TakeDecisionOutsideGate()
             .Select(perms =>
             {
                 var denied = !perms.HasFlag(Permission.Delete);

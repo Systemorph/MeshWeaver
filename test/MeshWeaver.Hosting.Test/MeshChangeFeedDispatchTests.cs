@@ -77,60 +77,44 @@ public class MeshChangeFeedDispatchTests
     }
 
     /// <summary>
-    /// The actual #899 deadlock, deterministically. Two publishers each hold their OWN
-    /// gate (the per-call permission fold) while publishing; the subscriber chain walks
-    /// through a SHARED gate (the cached synced query both folds sit behind) into the
-    /// OTHER publisher's gate. With a synchronous fan-out that is a guaranteed
-    /// lock-order inversion — this test hangs and fails on the pre-fix feed. With the
-    /// dispatch loop, both publishes return immediately and the loop takes the gates
-    /// serially, so no cycle can form.
+    /// The actual #899 deadlock, deterministically — driven by the shared
+    /// <see cref="RxFanOutInversionHarness"/> so the SAME probe pins every fan-out point in
+    /// the mesh (see <c>StorageAdapterDispatchTests</c>, <c>PermissionFoldGateTests</c>).
+    /// With a synchronous fan-out this hangs and fails; with enqueue-and-dispatch both
+    /// publishes return immediately and the dispatch chain takes the gates serially.
     /// </summary>
     [Fact(Timeout = 30000)]
     public async Task Concurrent_publishers_holding_their_own_gates_cannot_deadlock()
     {
         using var feed = new InProcessMeshChangeFeed();
 
-        var ownGateOfPublisher1 = new object();   // publisher 1's CombineLatest fold gate
-        var ownGateOfPublisher2 = new object();   // publisher 2's CombineLatest fold gate
-        var sharedQueryGate = new object();       // the shared synced-query Merge gate
+        await RxFanOutInversionHarness.AssertCannotDeadlock(
+            subscribe: handler => feed.Subscribe(e => handler(e.Path)),
+            publish: tag => feed.Publish(MeshChangeEvent.Deleted(tag)),
+            because:
+                "Publish must not run the subscriber graph on the publisher's thread — doing so "
+                + "takes foreign gates while the publisher still holds its own, which is the "
+                + "#899 deadlock between two concurrent per-node-hub deletes");
+    }
 
-        // The subscriber graph: every event walks the shared query gate and, from there,
-        // into the OTHER publisher's fold — exactly the shape the real graph has, because
-        // both folds subscribe to the same cached query.
-        using var subscription = feed.Subscribe(e =>
-        {
-            var otherFoldGate = e.Path == "p1" ? ownGateOfPublisher2 : ownGateOfPublisher1;
-            lock (sharedQueryGate)
-                lock (otherFoldGate) { }
-        });
+    /// <summary>
+    /// A subscriber that throws must not starve the OTHERS (the #889 half of the contract,
+    /// now inherited from <c>DispatchedChangeFeed</c>). The pre-#899 feed delivered through a
+    /// plain <c>Subject</c>, where the first throwing observer aborted delivery to every
+    /// observer subscribed after it — and the publisher's <c>catch</c> turned that into
+    /// silence.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task A_throwing_subscriber_does_not_starve_the_others()
+    {
+        using var feed = new InProcessMeshChangeFeed();
 
-        // Both publishers must be inside their own gate at the same time — otherwise the
-        // inversion cannot form and the test would pass vacuously.
-        using var bothInsideTheirGate = new Barrier(2);
+        using var faulty = feed.Subscribe(_ => throw new InvalidOperationException("boom"));
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var healthy = feed.Subscribe(_ => reached.TrySetResult());
 
-        Task PublishHolding(object ownGate, string path) => Task.Run(() =>
-        {
-            lock (ownGate)
-            {
-                bothInsideTheirGate.SignalAndWait(TimeSpan.FromSeconds(10));
-                feed.Publish(MeshChangeEvent.Deleted(path));
-            }
-        });
+        feed.Publish(MeshChangeEvent.Deleted("space/Overview"));
 
-        var publishers = new[]
-        {
-            PublishHolding(ownGateOfPublisher1, "p1"),
-            PublishHolding(ownGateOfPublisher2, "p2")
-        };
-
-        // Task.Delay is the DEADLOCK bound here, not a wait-for-propagation sleep: the
-        // only way both publishers fail to finish is a genuine cycle.
-        var bothPublished = Task.WhenAll(publishers);
-        var finished = await Task.WhenAny(bothPublished, Task.Delay(TimeSpan.FromSeconds(10)));
-
-        finished.Should().BeSameAs(bothPublished,
-            "Publish must not run the subscriber graph on the publisher's thread — doing so "
-            + "takes foreign gates while the publisher still holds its own, which is the "
-            + "#899 deadlock between two concurrent per-node-hub deletes");
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
     }
 }

@@ -1,6 +1,5 @@
+using System.Reactive;
 using System.Reactive.Concurrency;
-using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
 
@@ -50,28 +49,22 @@ namespace MeshWeaver.Hosting;
 public class InProcessMeshChangeFeed : IMeshChangeFeed, IDisposable
 {
     /// <summary>
-    /// Publisher-facing inbox. <see cref="Subject.Synchronize{T}(ISubject{T})"/> because ANY
-    /// hub action block may publish concurrently (two per-node hubs deleting at the same
-    /// time is the normal case in a recursive delete) and a bare <see cref="Subject{T}"/>
-    /// is not safe under concurrent <c>OnNext</c>.
+    /// The bus itself: enqueue-and-dispatch fan-out with per-subscriber isolation. Safe under
+    /// concurrent publish from ANY hub action block (two per-node hubs deleting at the same
+    /// time is the normal case in a recursive delete).
     /// </summary>
-    private readonly Subject<MeshChangeEvent> _inboxCore = new();
-
-    private readonly ISubject<MeshChangeEvent> _inbox;
-
-    /// <summary>Subscriber-facing fan-out, pumped exclusively by <see cref="_dispatcher"/>.</summary>
-    private readonly Subject<MeshChangeEvent> _outbox = new();
+    private readonly DispatchedChangeFeed<MeshChangeEvent> _feed;
 
     /// <summary>
     /// The single dispatch thread. A dedicated <see cref="EventLoopScheduler"/> rather than
     /// the thread pool: change-feed delivery drives cache invalidation and synced-query
-    /// folds, and must not queue behind (or be starved by) unrelated pool work.
+    /// folds, and must not queue behind (or be starved by) unrelated pool work. There is
+    /// exactly ONE of these per mesh, so the dedicated thread is affordable here — storage
+    /// adapters (one feed per partition schema) use the pool-backed default instead.
     /// </summary>
     private readonly EventLoopScheduler _dispatcher =
         new(start => new Thread(start) { IsBackground = true, Name = "mesh-change-feed" });
 
-    private readonly IDisposable _pump;
-    private readonly ILogger<InProcessMeshChangeFeed>? _logger;
     private bool _disposed;
 
     /// <summary>
@@ -80,29 +73,10 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IDisposable
     /// <param name="logger">Optional logger; a subscriber that throws is reported here.</param>
     public InProcessMeshChangeFeed(ILogger<InProcessMeshChangeFeed>? logger = null)
     {
-        _logger = logger;
-        _inbox = Subject.Synchronize(_inboxCore);
-        _pump = _inboxCore
-            .ObserveOn(_dispatcher)
-            .Subscribe(
-                change =>
-                {
-                    try
-                    {
-                        _outbox.OnNext(change);
-                    }
-                    catch (Exception ex)
-                    {
-                        // A faulting subscriber must not tear the bus down for everyone
-                        // else — but it is never swallowed silently: it is reported at
-                        // Error so the defect is visible in logs and CI.
-                        _logger?.LogError(ex,
-                            "Mesh change-feed subscriber threw for {Path} {Kind}",
-                            change.Path, change.Kind);
-                    }
-                },
-                ex => _logger?.LogError(ex,
-                    "Mesh change-feed dispatch loop faulted — change events stopped"));
+        // 🚨 The dispatch + isolation semantics live in DispatchedChangeFeed — the ONE
+        // fan-out primitive shared with every storage adapter, so "publishers only enqueue"
+        // is a property of the mesh, not a property of this one class.
+        _feed = new DispatchedChangeFeed<MeshChangeEvent>(logger, "mesh-change-feed", _dispatcher);
     }
 
     /// <summary>
@@ -114,7 +88,7 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IDisposable
     public void Publish(MeshChangeEvent change)
     {
         if (!_disposed)
-            _inbox.OnNext(change);
+            _feed.OnNext(change);
     }
 
     /// <summary>
@@ -125,7 +99,7 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IDisposable
     public void PublishLocal(MeshChangeEvent change)
     {
         if (!_disposed)
-            _inbox.OnNext(change);
+            _feed.OnNext(change);
     }
 
     /// <summary>
@@ -138,14 +112,14 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IDisposable
     public IDisposable Subscribe(Action<MeshChangeEvent> handler, MeshChangeKind? filter = null)
     {
         if (filter == null)
-            return _outbox.Subscribe(handler);
+            return _feed.Subscribe(Observer.Create(handler));
 
         var kind = filter.Value;
-        return _outbox.Subscribe(e =>
+        return _feed.Subscribe(Observer.Create<MeshChangeEvent>(e =>
         {
             if (e.Kind == kind)
                 handler(e);
-        });
+        }));
     }
 
     /// <inheritdoc />
@@ -153,12 +127,9 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        // Stop the pump BEFORE completing the outbox so the loop cannot push into a
-        // completed subject, then release the dispatch thread.
-        _pump.Dispose();
-        _outbox.OnCompleted();
-        _outbox.Dispose();
-        _inboxCore.Dispose();
+        // Stop the feed BEFORE releasing the dispatch thread so the loop cannot schedule
+        // onto a disposed scheduler.
+        _feed.Dispose();
         _dispatcher.Dispose();
         GC.SuppressFinalize(this);
     }

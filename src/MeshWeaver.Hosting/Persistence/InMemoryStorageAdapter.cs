@@ -22,10 +22,31 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
     private readonly ConcurrentDictionary<string, MeshNode> _nodes;
     private readonly ConcurrentDictionary<string, List<object>> _partitionObjects;
     private readonly ILogger? _logger;
-    private readonly Subject<DataChangeNotification> _changes = new();
+
+    /// <summary>
+    /// 🚨 A <see cref="DispatchedChangeFeed{T}"/>, NEVER a plain <c>Subject&lt;T&gt;</c>
+    /// (issue #899). This adapter is the ONE storage backend whose whole pipeline is
+    /// synchronous — every other backend publishes from inside <c>IIoPool</c>, i.e. already
+    /// off the calling hub's thread. A bare <c>Subject.OnNext</c> here therefore ran the
+    /// ENTIRE subscriber graph on the writer's thread: <c>PersistenceService.Changes</c>'s
+    /// shared <c>Merge</c> gate → each synced query's <c>Concat</c> gate → the process-wide
+    /// <c>Replay(1)</c> in <c>IMeshNodeStreamCache</c> → other hubs'
+    /// <c>PermissionEvaluator</c> <c>CombineLatest</c> folds → for per-node hubs,
+    /// <c>MeshDataSource</c>'s <c>GetMeshNodeStream().Update(...)</c> into a FOREIGN hub.
+    /// Since a permission-gated handler body itself runs inside its own fold's
+    /// <c>CombineLatest</c> gate, two concurrent writers took {own fold gate, shared gate} in
+    /// opposite orders and deadlocked — both action blocks parked forever and the operation
+    /// posted neither success nor failure.
+    ///
+    /// <para>The feed enqueues and returns, so a writer can never acquire a foreign Rx gate
+    /// while holding its own. It also replaces the <c>catch { /* never throw */ }</c> that
+    /// used to wrap each publish: a throwing subscriber is now isolated AND logged instead of
+    /// silently aborting delivery to every later subscriber (issue #889).</para>
+    /// </summary>
+    private readonly DispatchedChangeFeed<DataChangeNotification> _changes;
 
     /// <inheritdoc />
-    public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
+    public IObservable<DataChangeNotification> Changes => _changes;
 
     /// <summary>
     /// Creates an adapter with its own fresh, case-insensitive backing
@@ -56,6 +77,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         _nodes = nodes;
         _partitionObjects = partitionObjects;
         _logger = logger;
+        _changes = new DispatchedChangeFeed<DataChangeNotification>(logger, "in-memory");
     }
 
     private static string Norm(string? path) => path?.Trim('/') ?? "";
@@ -79,7 +101,9 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
                 _nodes[Norm(node.Path)] = node;
                 _logger?.LogDebug("[InMemoryAdapter#{Id:X}] Write {Path} (count={Count})",
                     GetHashCode(), Norm(node.Path), _nodes.Count);
-                try { _changes.OnNext(DataChangeNotification.Updated(Norm(node.Path), node)); } catch { /* never throw */ }
+                // No try/catch: the feed enqueues (it cannot throw on the writer's behalf) and
+                // isolates + LOGS a faulty subscriber. The old swallow hid exactly that.
+                _changes.OnNext(DataChangeNotification.Updated(Norm(node.Path), node));
             }
             return Observable.Return(node);
         });
@@ -89,7 +113,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         => Observable.Defer(() =>
         {
             _nodes.TryRemove(Norm(path), out var removed);
-            try { _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed)); } catch { /* never throw */ }
+            _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed));
             return Observable.Return(path);
         });
 
@@ -104,9 +128,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         {
             var won = _nodes.TryRemove(Norm(path), out var removed);
             if (won)
-            {
-                try { _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed)); } catch { /* never throw */ }
-            }
+                _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed));
             return Observable.Return(won);
         });
 
