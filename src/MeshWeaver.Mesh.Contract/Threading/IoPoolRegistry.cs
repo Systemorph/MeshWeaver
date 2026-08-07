@@ -74,10 +74,17 @@ public sealed class IoPoolRegistry : IDisposable
     /// and service-scope disposal so no pooled I/O thread is still executing a collectible node ALC's
     /// compiled types when that scope disposes and unloads them (the teardown use-after-unload SIGSEGV).
     /// </summary>
-    public void DrainAll()
+    /// <returns>
+    /// The total number of leaves across all pools that did NOT unwind within the drain budget
+    /// (see <see cref="IoPool.Drain"/>). <c>0</c> means the join is real and the caller may proceed
+    /// to scope disposal / ALC unload. Non-zero means live work survives teardown — surface it.
+    /// </returns>
+    public int DrainAll()
     {
+        var leaked = 0;
         foreach (var pool in _pools.Values)
-            pool.Drain();
+            leaked += pool.Drain();
+        return leaked;
     }
 
     /// <summary>Disposes every created pool and clears the registry; called when the mesh is torn down.</summary>
