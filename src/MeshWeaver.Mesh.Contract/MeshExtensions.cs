@@ -1199,8 +1199,14 @@ public static class MeshExtensions
                 // System short-circuits to Permission.All; an unauthorized creator gets no heal,
                 // so the requested child is denied by the validators exactly as before.
                 var effectiveUser = string.IsNullOrEmpty(creator) ? WellKnownUsers.Anonymous : creator;
+                // 🚨 TakeDecisionOutsideGate, not a bare Take(1) — #899. The continuation
+                // below CREATES the partition root and mints the creator grant, i.e. it
+                // writes and publishes to the change feed. Running that inside the
+                // permission fold's CombineLatest gate makes every shared gate the
+                // (synchronous, by contract) fan-out touches half of a lock-order inversion.
+                // See HubPermissionExtensions.TakeDecisionOutsideGate.
                 return hub.CheckPermission(partition, effectiveUser, Permission.Create)
-                    .Take(1)
+                    .TakeDecisionOutsideGate()
                     .Timeout(TimeSpan.FromSeconds(15))
                     .Catch<bool, Exception>(ex =>
                     {
@@ -1560,7 +1566,7 @@ public static class MeshExtensions
                                 return Observable.Using(
                                     () => recentlyDeleted?.BeginSubtreeDeletion(path)
                                           ?? System.Reactive.Disposables.Disposable.Empty,
-                                    _ => CollectPathsForDelete(hub, path, capturedRequest.Recursive, opts.Timeout, logger)
+                                    subtreeScope => CollectPathsForDelete(hub, path, capturedRequest.Recursive, opts.Timeout, logger)
                                     .SelectMany(collected =>
                                     {
                                         if (!capturedRequest.Recursive && collected.HasUnlistedChildren)
@@ -1677,6 +1683,40 @@ public static class MeshExtensions
                                                 // DeleteNodeRequest > 30000ms" → the delete wedges).
                                                 // PostFailed already uses ResponseFor, so failure
                                                 // responses were fine — only success wedged.
+                                                // 🚨 RELEASE THE SUBTREE-DELETION GUARD BEFORE THE SUCCESS
+                                                // RESPONSE — the response IS the "torn down" signal, so a
+                                                // caller that recreates the same path the moment it lands
+                                                // (delete → recreate is ordinary usage; see
+                                                // WorkspaceCacheEvictionTest.NewSubscriber_AfterRecreate_
+                                                // GetsFreshSnapshot) must not be refused by the guard.
+                                                //
+                                                // Observable.Using alone CANNOT give that ordering: Rx
+                                                // disposes the resource only when the subscription is torn
+                                                // down, which happens AFTER OnCompleted has propagated
+                                                // downstream — so the scope outlived the response by ~5 ms
+                                                // (measured), and every write in that window was refused
+                                                // with "the subtree '…' is currently being deleted".
+                                                //
+                                                // That window was always there; it was MASKED because the
+                                                // whole delete used to run inline on the per-node hub's
+                                                // TURN, so the caller's follow-up create was queued behind
+                                                // it and could never interleave. The moment the permission
+                                                // decision hops off the fold's gate (#899,
+                                                // TakeDecisionOutsideGate) the pipeline leaves the turn and
+                                                // the race is real and near-certain — the accidental
+                                                // serialisation is gone. Fixing the ORDERING is the root
+                                                // cause; keeping the pipeline pinned to the turn would only
+                                                // restore the accident.
+                                                //
+                                                // Everything the guard protects (plan, commit, drain,
+                                                // post-deletion handlers) has completed above. The
+                                                // enclosing Observable.Using stays as the safety net for
+                                                // the error / timeout / unsubscribe paths, and
+                                                // SubtreeDeletionScope.Dispose is Interlocked-idempotent,
+                                                // so this early release plus the Using's release is one
+                                                // decrement, never two.
+                                                subtreeScope.Dispose();
+
                                                 meshHub.Post(
                                                     DeleteNodeResponse.Ok() with { Log = okLog },
                                                     o => o.ResponseFor(request));
@@ -2130,11 +2170,24 @@ public static class MeshExtensions
     {
         var pathToCheck = node.MainNode ?? node.Path;
 
-        // Take(1) closes the inner observable — GetEffectivePermissions rides
-        // the live AccessAssignment synced query and is hot, so without Take(1)
-        // the .Select chain never completes and the handler hangs.
+        // 🚨 TakeDecisionOutsideGate, NOT a bare Take(1) — issue #899.
+        //
+        // Take(1) is still required (GetEffectivePermissions rides the live AccessAssignment
+        // synced query and is hot, so without it the chain never completes and the handler
+        // hangs), but it is NOT sufficient. HandleDeleteNodeRequest chains
+        // `.SelectMany(denied => <the entire delete pipeline>)` onto this, and on a warm
+        // permission cache the fold emits synchronously during Subscribe while holding its
+        // CombineLatest gate — so the validator run, the storage delete, the cache
+        // invalidation and the change-feed publish ALL ran inside that lock. Two per-node
+        // hubs deleting concurrently (a recursive space delete fans one DeleteNodeRequest per
+        // leaf) then acquired {own fold gate, shared synced-query gate} in opposite orders and
+        // deadlocked: both action blocks parked forever and the delete posted neither a
+        // DeleteNodeResponse nor a failure.
+        //
+        // The decision is unchanged — still taken inside the fold; only the pipeline that
+        // follows is moved off the gate.
         return hub.GetEffectivePermissions(pathToCheck, userId)
-            .Take(1)
+            .TakeDecisionOutsideGate()
             .Select(perms =>
             {
                 var denied = !perms.HasFlag(Permission.Delete);
@@ -2728,8 +2781,12 @@ public static class MeshExtensions
         {
             (string.IsNullOrEmpty(requestedBy)
                     ? Observable.Return(false)
+                    // 🚨 TakeDecisionOutsideGate, not a bare Take(1) — #899. Both branches of
+                    // the Subscribe below do real work (PostOk, or ApplyUpdateViaStream — a
+                    // cross-hub stream write that publishes). See
+                    // HubPermissionExtensions.TakeDecisionOutsideGate.
                     : hub.GetEffectivePermissions(node.Path, requestedBy!)
-                        .Take(1)
+                        .TakeDecisionOutsideGate()
                         .Timeout(NodeOpForwardTimeout)
                         .Select(p => p.HasFlag(Permission.Update) || p.HasFlag(Permission.Sync))
                         .Catch((Exception _) => Observable.Return(false)))
