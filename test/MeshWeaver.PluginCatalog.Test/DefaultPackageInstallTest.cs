@@ -125,6 +125,65 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
         records.Should().NotContain("Essentials", "only the named package is a default");
     }
 
+    /// <summary>
+    /// A dependency installs BEFORE its dependents. The shape is the real one that broke the first
+    /// live run: Chess declares <c>Store@^1.0.0</c> and <c>Training@^1.0.0</c>, and catalog order is
+    /// alphabetical — so without ordering Chess installs first and dies with
+    /// "NodeType(s) not registered: Training/Tour".
+    /// </summary>
+    [Fact]
+    public void DependenciesInstallBeforeTheirDependents()
+    {
+        var catalogOrder = new[]
+        {
+            new PackageManifest { Id = "Chess", Requires = ["Store@^1.0.0", "Training@^1.0.0"] },
+            new PackageManifest { Id = "Essentials" },
+            new PackageManifest { Id = "Store" },
+            new PackageManifest { Id = "Training", Requires = ["Store@^1.0.0"] },
+        };
+
+        var ordered = InstanceAutoRegistrationService
+            .InDependencyOrder(catalogOrder, NullLogger.Instance)
+            .Select(p => p.Id).ToList();
+
+        ordered.Should().HaveCount(4, "ordering must not drop or duplicate a package");
+        ordered.IndexOf("Store").Should().BeLessThan(ordered.IndexOf("Training"));
+        ordered.IndexOf("Store").Should().BeLessThan(ordered.IndexOf("Chess"));
+        ordered.IndexOf("Training").Should().BeLessThan(ordered.IndexOf("Chess"));
+    }
+
+    [Fact]
+    public void DependencyCycle_StillInstallsEveryPackageOnce()
+    {
+        // A cycle is a repo authoring error, but it must degrade to catalog order rather than
+        // hang, drop packages, or recurse forever.
+        var cyclic = new[]
+        {
+            new PackageManifest { Id = "A", Requires = ["B"] },
+            new PackageManifest { Id = "B", Requires = ["A"] },
+        };
+
+        var ordered = InstanceAutoRegistrationService
+            .InDependencyOrder(cyclic, NullLogger.Instance).Select(p => p.Id).OrderBy(x => x).ToList();
+
+        ordered.Should().HaveCount(2);
+        ordered.Should().Contain("A");
+        ordered.Should().Contain("B");
+    }
+
+    [Fact]
+    public void UngrantedDependency_IsIgnoredRatherThanBlocking()
+    {
+        // Depending on something this instance was not granted must not drop the dependent — it
+        // may well install fine, and there is nothing to order against.
+        var packages = new[] { new PackageManifest { Id = "Store", Requires = ["PaidCourse@^1.0.0"] } };
+
+        var ordered = InstanceAutoRegistrationService
+            .InDependencyOrder(packages, NullLogger.Instance).Select(p => p.Id).ToList();
+        ordered.Should().HaveCount(1);
+        ordered.Should().Contain("Store");
+    }
+
     [Fact(Timeout = 180_000)]
     public async Task UnstampedCatalog_InstallsNothing_FailsClosed()
     {
