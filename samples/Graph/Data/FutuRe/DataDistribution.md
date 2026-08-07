@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Title: "Data Where It Belongs"
-Icon: /static/storage/content/FutuRe/icon.svg
+Icon: /api/content/FutuRe/icon.svg
 Tags:
   - "FutuRe"
   - "Data Mesh"

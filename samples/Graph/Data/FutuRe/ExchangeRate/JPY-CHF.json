@@ -13,5 +13,5 @@
     "planRate": 0.006,
     "actualRate": 0.0055
   },
-  "icon": "/static/storage/content/FutuRe/icon.svg"
+  "icon": "/api/content/FutuRe/icon.svg"
 }

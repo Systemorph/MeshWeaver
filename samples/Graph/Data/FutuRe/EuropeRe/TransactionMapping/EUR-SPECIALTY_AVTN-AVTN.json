@@ -14,5 +14,5 @@
     "groupLineOfBusinessName": "Aviation",
     "percentage": 0.3
   },
-  "icon": "/static/storage/content/FutuRe/icon.svg"
+  "icon": "/api/content/FutuRe/icon.svg"
 }

@@ -14,5 +14,5 @@
     "groupLineOfBusinessName": "Cyber",
     "percentage": 0.6
   },
-  "icon": "/static/storage/content/FutuRe/icon.svg"
+  "icon": "/api/content/FutuRe/icon.svg"
 }

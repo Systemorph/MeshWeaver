@@ -3,7 +3,7 @@
   "name": "Systemorph",
   "nodeType": "Space",
   "description": "The company behind MeshWeaver",
-  "icon": "/static/storage/content/Systemorph/logo_t.png",
+  "icon": "/api/content/Systemorph/logo_t.png",
   "addressSegments": 0,
   "isPersistent": true,
   "content": {
@@ -11,7 +11,7 @@
     "name": "Systemorph",
     "description": "Systemorph Cloud",
     "website": "https://systemorph.cloud",
-    "logo": "/static/storage/content/Systemorph/logo_t.png",
+    "logo": "/api/content/Systemorph/logo_t.png",
     "location": "Switzerland",
     "email": "cloud@systemorph.com",
     "isVerified": true

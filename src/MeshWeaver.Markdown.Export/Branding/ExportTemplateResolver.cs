@@ -123,12 +123,7 @@ public class ExportTemplateResolver(IMessageHub hub, ILogger<ExportTemplateResol
 
     private IObservable<byte[]?> LoadBytes(string path)
     {
-        const string staticPrefix = "/static/storage/content/";
-        var rel = path.StartsWith("content:", StringComparison.OrdinalIgnoreCase)
-            ? path["content:".Length..]
-            : path.StartsWith(staticPrefix, StringComparison.OrdinalIgnoreCase)
-                ? path[staticPrefix.Length..]
-                : null;
+        var rel = ContentPathReference.TryGetRelativePath(path);
         if (rel is null)
         {
             logger.LogInformation("Template path '{Path}' is not a content path; skipping", path);

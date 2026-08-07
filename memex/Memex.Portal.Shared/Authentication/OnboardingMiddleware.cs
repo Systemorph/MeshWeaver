@@ -78,6 +78,10 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         "/_content",
         "/_blazor",
         "/static/",
+        // Asset fetches must never be bounced to onboarding — a redirect renders as a broken
+        // image, not a page. /static covers build assets; /api/content is the access-controlled
+        // content route mesh images/PDFs/downloads use (issue #587).
+        "/api/content",
         "/favicon.ico",
         "/mcp",
         "/signin-",

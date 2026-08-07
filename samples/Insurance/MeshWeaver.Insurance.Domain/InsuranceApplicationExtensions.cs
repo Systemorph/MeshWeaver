@@ -39,7 +39,9 @@ public static class InsuranceApplicationExtensions
         /// </summary>
         public MessageHubConfiguration ConfigureInsuranceApplication()
             => configuration
-                .AddEmbeddedResourceContentCollection("Insurance", typeof(InsuranceApplicationExtensions).Assembly, "Content")
+                // isStatic: markdown-embedded resources are fetched as
+                // /api/content/{address}/Insurance/{file} — published, still gated on Read (issue #587).
+                .AddEmbeddedResourceContentCollection("Insurance", typeof(InsuranceApplicationExtensions).Assembly, "Content", isStatic: true)
                 .WithTypes(typeof(ImportConfiguration), typeof(ExcelImportConfiguration), typeof(ReinsuranceAcceptance), typeof(ReinsuranceSection), typeof(ImportRequest), typeof(CollectionSource), typeof(GeocodingRequest), typeof(GeocodingResponse))
                 .WithServices(services => services.AddScoped<IAutocompleteProvider, PricingAutocompleteProvider>())
                 .AddData(data =>
@@ -108,7 +110,11 @@ public static class InsuranceApplicationExtensions
                     return globalConfig with
                     {
                         Name = localizedName,
-                        BasePath = fullPath
+                        BasePath = fullPath,
+                        // isStatic: submission files are downloaded / PDF-rendered through
+                        // /api/content/{pricing/company/year}/{Submissions@…}/{file} — published,
+                        // still gated on Read of the pricing node (issue #587).
+                        IsStatic = true,
                     };
                 })
                 .AddData(data =>

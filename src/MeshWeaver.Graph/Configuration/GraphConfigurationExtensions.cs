@@ -201,9 +201,24 @@ public static class GraphConfigurationExtensions
             // Node types are compiled on-demand via IMeshNodeCompilationService.
             // MeshCatalog loads NodeTypeConfiguration from compiled assemblies when nodes are accessed.
             // Content collections should be configured by the caller (e.g., MemexConfiguration.ConfigureMemexMesh).
+            // 🚨 The node-type icons are a BUILD ASSET, not mesh content (issue #587). They are SVGs
+            // compiled into this assembly: identical in every deployment, carrying no user or
+            // partition data, and needed before any identity exists — the login page, the nav and
+            // every anonymous card render them. So they are published on the public /static route
+            // as a StaticAssetMount, read straight out of the assembly manifest with no hub, no
+            // content service and no permission check, which is what lets /static stay entirely
+            // free of access control. Every /static/NodeTypeIcons/*.svg URL in the product (and in
+            // the icons persisted on nodes) keeps resolving, unchanged.
+            builder.ConfigureServices(services => services.AddSingleton(
+                new StaticAssetMount("NodeTypeIcons",
+                    typeof(GraphConfigurationExtensions).Assembly, "MeshWeaver.Graph.Icons")));
+
             builder.ConfigureHub(config => config
                 .AddDefaultLayoutAreas()
                 .AddContentCollections()
+                // The same icons as an in-mesh collection: it backs listings (the icon picker) and
+                // content reads. It is deliberately NOT declared IsStatic — the HTTP surface for
+                // these files is the build-asset mount above, not the content route.
                 .AddEmbeddedResourceContentCollection("NodeTypeIcons",
                     typeof(GraphConfigurationExtensions).Assembly, "Icons")
                 // High-level subtree-copy operation. Relays NodeCopyDispatchRequest

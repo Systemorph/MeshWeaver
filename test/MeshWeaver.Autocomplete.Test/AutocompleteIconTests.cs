@@ -54,7 +54,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task Autocomplete_ReturnsIconForNodesWithIcon()
     {
-        // Arrange - Systemorph has icon: "/static/storage/content/Systemorph/logo_t.png"
+        // Arrange - Systemorph has icon: "/api/content/Systemorph/logo_t.png"
         var suggestions = await MeshQuery
             .AutocompleteAsync("", "Systemorph", AutocompleteMode.RelevanceFirst, 10)
             .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
@@ -74,7 +74,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task Autocomplete_ReturnsIconForACME()
     {
-        // Arrange - ACME has icon: "/static/storage/content/Software/logo.svg"
+        // Arrange - ACME has icon: "/api/content/Software/logo.svg"
         var suggestions = await MeshQuery
             .AutocompleteAsync("", "ACME", AutocompleteMode.RelevanceFirst, 10)
             .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();

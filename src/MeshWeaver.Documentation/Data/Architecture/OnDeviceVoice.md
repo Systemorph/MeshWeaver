@@ -194,7 +194,7 @@ The GGML model is a **runtime artifact, NOT committed to git** (too large). It l
 |---|---|---|
 | **Device (this dev box)** | `%LOCALAPPDATA%\User Name\com.companyname.memex.client\Data\models\ggml-swiss-german-turbo-q5_0.bin` | what the running Windows app loads |
 | **AKS file share** | storage account `memexaksfiles57ymot2ons3`, share `static-assets`, path `Speech/ggml-swiss-german-turbo-q5_0.bin` (the 1.5 GB `…-f16.bin` is there too) | the source other machines/iOS download from |
-| **Content URL (catalog target)** | `https://memex.meshweaver.cloud/MeshWeaver/static/Speech/ggml-swiss-german-turbo-q5_0.bin` | the `VoiceModelCatalog.SwissGerman` download URL |
+| **Content URL (catalog target)** | `https://memex.meshweaver.cloud/api/content/MeshWeaver/static/Speech/ggml-swiss-german-turbo-q5_0.bin` | the `VoiceModelCatalog.SwissGerman` download URL |
 
 🩹 **Serving caveat:** the content URL only returns the model once the `static-assets` share is **mounted
 read-only** on the **memex-cloud** portal pod with `StaticAssets:Path` set — that mount/deploy is still

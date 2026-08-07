@@ -2,6 +2,7 @@ using System.Text;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -264,7 +265,7 @@ public partial class MarkdownFileParser : IFileFormatParser
             NodeType = node.NodeType != "Markdown" ? node.NodeType : null,
             Name = node.Name != node.Id ? node.Name : null,
             Category = node.Category,
-            Icon = node.Icon != null && node.Icon != DefaultMarkdownIcon && !node.Icon.StartsWith("/static/storage/content/") ? node.Icon : null,
+            Icon = node.Icon != null && node.Icon != DefaultMarkdownIcon && !IsResolvedContentIcon(node.Icon) ? node.Icon : null,
             State = node.State != MeshNodeState.Active ? node.State.ToString() : null,
             Authors = mdContent?.Authors?.ToList(),
             Tags = mdContent?.Tags?.ToList(),
@@ -409,10 +410,33 @@ public partial class MarkdownFileParser : IFileFormatParser
             return iconValue;
         // Relative file path (contains /) — resolve to content URL
         if (iconValue.Contains('/') && !string.IsNullOrEmpty(ns))
-            return $"/static/storage/content/{ns}/{iconValue}";
+            return ContentCollectionsExtensions.GetNodeContentFileUrl(ns, iconValue);
         // Fluent icon name or no namespace — use as-is
         return iconValue;
     }
+
+    /// <summary>
+    /// Whether an icon value is one this parser RESOLVED from a relative path rather than one the
+    /// author wrote. Such a value must not be written back to front matter — the relative form is
+    /// what round-trips (<c>MarkdownFileParserTest.Serialize_*</c>).
+    ///
+    /// <para>Both prefixes are recognised: the current access-controlled content route, and the
+    /// legacy <c>/static/storage/content/</c> shape that is still persisted on nodes parsed before
+    /// issue #587. Dropping the legacy case would start writing those stale URLs back into
+    /// front matter and pin them permanently.</para>
+    /// </summary>
+    /// <param name="icon">The node's resolved icon value.</param>
+    /// <returns><c>true</c> when the value was machine-resolved and must not be serialized.</returns>
+    private static bool IsResolvedContentIcon(string icon)
+        => icon.StartsWith(ContentCollectionsExtensions.ContentFileRoutePrefix + "/", StringComparison.Ordinal)
+           || icon.StartsWith(LegacyStaticContentPrefix, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The pre-#587 shape of a resolved content icon: the mesh-level backing store served
+    /// unauthenticated under <c>/static</c>. No longer produced; still recognised on read, because
+    /// nodes persisted before the fix carry it.
+    /// </summary>
+    internal const string LegacyStaticContentPrefix = "/static/storage/content/";
 
     private static (string Id, string? Namespace) DeriveIdAndNamespace(string relativePath, string filePath)
     {

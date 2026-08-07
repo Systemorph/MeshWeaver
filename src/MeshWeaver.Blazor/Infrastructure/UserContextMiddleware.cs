@@ -22,19 +22,24 @@ namespace MeshWeaver.Blazor.Infrastructure;
 /// <param name="logger">Logger for user resolution warnings and errors.</param>
 public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMiddleware> logger)
 {
-    // Blazor framework files and favicon — no user context needed. NOTE: /static/ is intentionally
-    // NOT excluded (issue #666): the address-based /static/{address}/… content route posts a
-    // GetDataRequest into the mesh, which the never-null PostPipeline guard fail-closes to 500
-    // without an AccessContext. Unauthenticated requests resolve to AnonymousContext below, so public
-    // assets still serve; RLS filters the rest.
+    // Framework/build assets — no user context needed, and for /static none may EXIST.
+    //
+    // 🚨 /static is excluded again (issue #587). It was un-excluded for #666, when the route still
+    // served content collections and its address-based shape posted a GetDataRequest that the
+    // never-null PostPipeline guard fail-closed to 500 without an AccessContext. That route is gone:
+    // /static now serves nothing but build assets straight out of an assembly manifest — no hub
+    // post, no permission evaluation, no identity to resolve. Skipping it here is not an
+    // optimisation but the contract: /static must not perform an access check, so it must not have
+    // a caller to check. Mesh content moved to /api/content, which is NOT excluded and where the
+    // owning hub's Read check runs.
     private static readonly string[] ExcludedPrefixes =
-        ["/_framework", "/_content", "/_blazor", "/favicon.ico"];
+        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico"];
 
     /// <summary>
     /// Resolves the user identity from OAuth claims or a Bearer token and sets the
     /// <c>AccessService</c> context for the current request before passing to the next middleware.
-    /// Blazor framework paths are bypassed without any identity work; /static/ content assets are
-    /// resolved (issue #666).
+    /// Framework and /static build-asset paths are bypassed without any identity work; every other
+    /// path — including the access-controlled /api/content route — resolves a caller.
     /// </summary>
     /// <param name="context">The current HTTP context.</param>
     public async Task InvokeAsync(HttpContext context)
@@ -42,7 +47,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         // Skip user resolution for Blazor framework resources and the favicon.
         // These requests never need an AccessContext and resolving it adds unnecessary
         // overhead (hub lookup, mesh query) on every JS/CSS/SignalR resource download.
-        // (/static/ content assets ARE resolved now — see ExcludedPrefixes, issue #666.)
+        // (/static serves build assets only and applies no access check — see ExcludedPrefixes.)
         var path = context.Request.Path.Value ?? "";
         if (ExcludedPrefixes.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
         {
