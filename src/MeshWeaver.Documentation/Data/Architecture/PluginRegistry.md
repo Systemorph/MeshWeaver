@@ -67,6 +67,21 @@ Revoking the bootstrap key stops further registrations without touching the inst
 created; a bootstrap key is never accepted on the catalog surface, and an instance key is never
 accepted for registration (`mwr_` vs `mwi_` — disjoint by shape).
 
+**And it installs.** A grant is entitlement, not content — so a registered instance would still show
+an empty (if authorized) catalog until an admin clicked Install on each package. `PluginCatalog:InstallByDefault`
+closes that: on first startup an installation with **no install records yet** installs every catalog
+entry matching its `Source/Package` patterns, through the same path the Install button uses. Our
+deployments set `["Plugins/*"]`, so a new portal comes up with the platform plugins — the Store
+included — already present and (per `AutoUpdateByDefault`) tracking their repo.
+
+> 🚨 The selection is **source-scoped, and that is a security property, not a convenience**. An
+> instance is routinely granted the platform repo *and* paid course content; "install everything I'm
+> entitled to" would auto-install the paid content. Matching is against the catalog entry's
+> `Source` — stamped by the registry as it merges its sources — so `Plugins/*` can never reach an
+> `Education` package. A registry too old to stamp `Source` matches nothing and installs nothing,
+> failing closed. The default install runs only while the installation has no packages at all, so it
+> seeds a new deployment rather than re-asserting itself against an admin who uninstalled something.
+
 What a registered instance can then read is **curated plugins** only:
 by default the node-native repos the [`MeshWeaver.Plugins`](/Doc/Architecture/Plugins) repo ships —
 `<Plugin>/index.json` **Store/Plugin** roots carrying a `PluginContent`, node-per-file — via a
