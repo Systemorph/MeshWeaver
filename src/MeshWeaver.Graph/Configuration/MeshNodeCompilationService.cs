@@ -542,9 +542,9 @@ internal class MeshNodeCompilationService(
         // nothing stays SILENT and completes, so it can never beat the cached query with an empty
         // set (compiling against no sources is worse than the stall this exists to dodge). That
         // filter is also the likeliest reason #682's probe "never fired" — not the delay alone.
-        return DirectSourceProbe(ntDef, selfPath, TimeSpan.Zero)
-            .Merge(Observable.Defer(() => ResolveSources(ntDef, selfPath, null).Take(1)))
-            .FirstAsync()
+        return RaceSourceSnapshot(
+                DirectSourceProbe(ntDef, selfPath, TimeSpan.Zero),
+                Observable.Defer(() => ResolveSources(ntDef, selfPath, null).Take(1)))
             .Timeout(bound)
             .Catch<IEnumerable<MeshNode>, TimeoutException>(ex =>
                 Observable.Throw<IEnumerable<MeshNode>>(new TimeoutException(
@@ -554,6 +554,41 @@ internal class MeshNodeCompilationService(
                     + "terminally instead of parking at Compiling forever; retry via the Compile "
                     + "button / a fresh RequestedReleaseAt.", ex)));
     }
+
+    /// <summary>
+    /// The snapshot race between the authoritative direct mesh read (<paramref name="directProbe"/> —
+    /// emits at most one NON-EMPTY source set, stays silent and completes when it finds nothing) and
+    /// the cached synced query's first emission (<paramref name="cachedFirst"/>). Extracted as a pure
+    /// combinator so the race's correctness semantics are deterministically unit-testable
+    /// (CodeEditRecompileTest.SourceSnapshot_*).
+    ///
+    /// <para>🚨 An EMPTY cached answer must never WIN the race (issue #612, CI run 30004790036
+    /// "sub-case b"). The cached synced query replays its latest set SYNCHRONOUSLY on subscribe,
+    /// while the probe cannot answer before its chunk quiet window — so under the old
+    /// <c>Merge(...).FirstAsync()</c> shape a cached query that had latched EMPTY (a missed
+    /// source-create update under load — the stale-synced-query class) ALWAYS beat the probe, the
+    /// compile consumed ZERO sources, the configuration lambda's CS0103 parked the type, and every
+    /// retry — including the explicit un-parking RequestedReleaseAt re-trigger — re-failed
+    /// identically: a permanent wedge at Status=Error with no release. The probe leg already
+    /// refuses to emit empty for exactly this reason ("compiling the type against NOTHING [is]
+    /// strictly worse than the stall"); this applies the same rule to the cached leg.</para>
+    ///
+    /// <para>Semantics: the first NON-EMPTY answer from either side wins immediately (a healthy
+    /// cached query still settles the snapshot with zero probe latency — the #690 regression
+    /// guard). EMPTY settles only by CONSENSUS: both legs completed without producing a source —
+    /// then a source-less, configuration-only NodeType still compiles. A cached leg that never
+    /// emits at all leaves the race to the probe / the caller's outer <c>Timeout</c>, unchanged.</para>
+    /// </summary>
+    internal static IObservable<IEnumerable<MeshNode>> RaceSourceSnapshot(
+        IObservable<IEnumerable<MeshNode>> directProbe,
+        IObservable<IEnumerable<MeshNode>> cachedFirst)
+        => directProbe
+            .Merge(cachedFirst
+                .Select(static s => (IReadOnlyCollection<MeshNode>)(s as IReadOnlyCollection<MeshNode> ?? s.ToList()))
+                .Where(static s => s.Count > 0)
+                .Select(static s => (IEnumerable<MeshNode>)s))
+            .Take(1)
+            .DefaultIfEmpty(Enumerable.Empty<MeshNode>());
 
     /// <summary>
     /// How long the cached synced source query gets before the uncached probe is even subscribed.
