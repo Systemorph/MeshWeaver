@@ -227,9 +227,17 @@ public sealed class IoPool : IIoPool, IDisposable
     /// Re-acquiring all <see cref="_maxConcurrency"/> permits therefore blocks precisely until the
     /// last running leaf has released, then we release them back so the pool stays usable/idempotent.
     /// </remarks>
-    public void Drain()
+    /// <returns>
+    /// The number of leaves that did NOT unwind within the drain budget — permits that could not be
+    /// re-acquired because a leaf ignored its cancellation token. <c>0</c> means the join is REAL:
+    /// no pool thread is still running when this returns. Anything else means teardown is about to
+    /// proceed over live work (the use-after-unload SIGSEGV precondition) — the caller must surface
+    /// it, never swallow it: a drain that silently gives up is how "disposal completed" becomes a
+    /// lie and the crash moves 8&#160;ms into the next test's INIT where nothing can attribute it.
+    /// </returns>
+    public int Drain()
     {
-        if (_disposed) return; // gate + cts already gone; nothing in flight to join
+        if (_disposed) return 0; // gate + cts already gone; nothing in flight to join
         _poolCts.Cancel();
         var acquired = 0;
         for (var i = 0; i < _maxConcurrency; i++)
@@ -239,6 +247,7 @@ public sealed class IoPool : IIoPool, IDisposable
         }
         if (acquired > 0)
             _gate.Release(acquired);
+        return _maxConcurrency - acquired;
     }
 
     /// <summary>
