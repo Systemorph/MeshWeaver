@@ -62,4 +62,63 @@ public class ImportConflictPolicyTest
         var policy = new ImportConflictPolicy(PreserveServerNewer: true, Since: LastSync);
         policy.PreservesServerCopyOf(null).Should().BeFalse();
     }
+
+    // ── PreservesFromPruneOf — the PRUNE-protection decision (issues #604/#677) ──────────────
+
+    [Fact]
+    public void GitFirst_NeverPreservesFromPrune()
+    {
+        // A one-directional mirror keeps FullReplace semantics: extras are pruned regardless of age.
+        ImportConflictPolicy.GitFirst.PreservesFromPruneOf(NodeModifiedAt(LastSync.AddHours(1)))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void TwoWay_PreservesServerNewerFromPrune()
+    {
+        // Full two-way protection covers the prune exactly like the overwrite (#675).
+        var policy = new ImportConflictPolicy(PreserveServerNewer: true, Since: LastSync);
+        policy.PreservesFromPruneOf(NodeModifiedAt(LastSync.AddSeconds(1))).Should().BeTrue();
+    }
+
+    [Fact]
+    public void BidirectionalAdditions_PreservesFromPrune_ButNotFromOverwrite()
+    {
+        // The #604 shape: a bidirectional Space with two-way OFF. A server-side addition made since
+        // the last sync must survive the prune (the mesh is an editing surface, not a mirror) —
+        // while overwrite conflicts stay git-first (the repo still wins on a changed file).
+        var policy = new ImportConflictPolicy(
+            PreserveServerNewer: false, Since: LastSync, PreserveServerAdditions: true);
+        var serverAddition = NodeModifiedAt(LastSync.AddSeconds(1));
+        policy.PreservesFromPruneOf(serverAddition).Should().BeTrue();
+        policy.PreservesServerCopyOf(serverAddition).Should().BeFalse();
+    }
+
+    [Fact]
+    public void BidirectionalAdditions_NodeUnchangedSinceLastSync_IsPruned()
+    {
+        // A node the last sync already reconciled (older than the horizon) whose repo file is gone
+        // is a genuine repo-side deletion — the mirror prune applies.
+        var policy = new ImportConflictPolicy(
+            PreserveServerNewer: false, Since: LastSync, PreserveServerAdditions: true);
+        policy.PreservesFromPruneOf(NodeModifiedAt(LastSync.AddSeconds(-1))).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Force_OverridesPruneProtection()
+    {
+        // The deliberate-discard escape hatch prunes regardless of protection.
+        var policy = new ImportConflictPolicy(
+            PreserveServerNewer: true, Since: LastSync, Force: true, PreserveServerAdditions: true);
+        policy.PreservesFromPruneOf(NodeModifiedAt(LastSync.AddHours(1))).Should().BeFalse();
+    }
+
+    [Fact]
+    public void PruneProtection_WithNoSyncBaseline_DoesNotPreserve()
+    {
+        // No recorded horizon (first sync) → nothing to protect; the mirror prune applies.
+        var policy = new ImportConflictPolicy(
+            PreserveServerNewer: false, Since: null, PreserveServerAdditions: true);
+        policy.PreservesFromPruneOf(NodeModifiedAt(LastSync.AddHours(1))).Should().BeFalse();
+    }
 }

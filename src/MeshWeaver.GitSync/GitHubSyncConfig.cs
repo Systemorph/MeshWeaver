@@ -86,11 +86,28 @@ public record GitHubSyncConfig
     [Translation("de", "Ignorier-Muster (gitignore-Stil, relativ zur Space-Wurzel; leer = Standard: Release/)")]
     public string[]? Ignore { get; init; }
 
-    /// <summary>When the last successful export completed. Set by the sync operation; not user-editable.</summary>
+    /// <summary>
+    /// The two-way CONFLICT HORIZON: when a sync operation last actually RECONCILED mesh and repo —
+    /// a commit/export, or an import that landed cleanly with nothing preserved. A node whose
+    /// <c>LastModified</c> is newer than this counts as a pending server-side change and is
+    /// protected from overwrite (<see cref="TwoWay"/>) and from the prune
+    /// (<see cref="SyncDirection.Bidirectional"/>). 🚨 Deliberately NOT advanced by a no-op update
+    /// (unchanged content fingerprint) nor by an import that preserved server-newer nodes — either
+    /// would move the horizon past pending uncommitted changes and disarm the protection, so a later
+    /// push would prune them (issues #675/#677). "Have we seen the commit?" is
+    /// <see cref="LastSyncCommitSha"/>, not this field. Set by the sync operation; not user-editable.
+    /// </summary>
     [Browsable(false)]
     public DateTimeOffset? LastSyncedAt { get; init; }
 
-    /// <summary>The commit SHA produced by the last successful export. Set by the sync operation; not user-editable.</summary>
+    /// <summary>
+    /// The last commit this source has seen/synced — the "up to date?" comparison
+    /// (<see cref="GitHubSyncService.AskBranchState"/>) and the base for the git-diff import scope.
+    /// Unlike <see cref="LastSyncedAt"/> it is safe to advance on a NO-OP update: it records "the
+    /// repo content at this commit is what the mesh already imported", not "we reconciled at this
+    /// moment" — so a repo commit touching no node files does not leave the Space forever "behind"
+    /// (issue #677). Set by the sync operation; not user-editable.
+    /// </summary>
     [Browsable(false)]
     public string? LastSyncCommitSha { get; init; }
 }
