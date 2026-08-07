@@ -9,7 +9,7 @@ namespace MeshWeaver.Portal.E2E;
 /// node's <c>Body</c>, defaulting to a welcome template. This pins what that default renders end-to-end:
 /// <list type="bullet">
 ///   <item>the <b>welcome banner</b> with the small "it's configurable" note linking to the guide;</item>
-///   <item>the <b>catalog tabs</b> (embedded via <c>@@("area/Catalog")</c>) filling the width — the
+///   <item>the <b>catalog</b> (a MeshSearch embedded via <c>@@("area/Catalog")</c>) filling the width — the
 ///     <c>TabsControl</c> 100%-width fix.</item>
 /// </list>
 /// </summary>
@@ -36,25 +36,32 @@ public class HomePageRegionsTest(PortalFixture fixture)
         (await page.Locator("a[href*='ConfigurablePages']").CountAsync()).Should().BeGreaterThan(0,
             "the welcome note must link to Doc/GUI/ConfigurablePages");
 
-        // (b) The catalog — a fluent-tabs embedded via @@("area/Catalog") — must fill the home width.
-        var tabs = page.Locator("fluent-tabs").First;
-        await tabs.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
+        // (b) The catalog — embedded via @@("area/Catalog") — must fill the home width.
+        //
+        // 🚨 The catalog is a MeshSearch, NOT tabs. UserActivityLayoutAreas.BuildCatalog returns
+        // Controls.MeshSearch (a second one is added only for the "Shared with me" band), which
+        // renders <div class="mesh-search-container"> — it emits no <fluent-tabs> on any path. The
+        // previous selector was left over from when the catalog WAS a tab set, so this assertion
+        // could not pass under any build; it timed out for 60s and reported a rendering failure
+        // that did not exist.
+        var catalog = page.Locator(".mesh-search-container").First;
+        await catalog.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/home-regions.png", FullPage = true });
 
         var measure = await page.EvaluateAsync<string>("""
             () => {
               const w = el => el ? Math.round(el.getBoundingClientRect().width) : -1;
-              const tabs = document.querySelector('fluent-tabs');
+              const catalog = document.querySelector('.mesh-search-container');
               const pageEl = document.querySelector('.body-content, main, body');
-              return JSON.stringify({ tabs: w(tabs), page: w(pageEl) });
+              return JSON.stringify({ catalog: w(catalog), page: w(pageEl) });
             }
             """);
         System.IO.File.WriteAllText("/tmp/home-catalog-widths.txt", measure);
 
         var doc = JsonDocument.Parse(measure).RootElement;
-        float tabsW = doc.GetProperty("tabs").GetSingle();
+        float catalogW = doc.GetProperty("catalog").GetSingle();
         float pageW = doc.GetProperty("page").GetSingle();
-        (tabsW / pageW).Should().BeGreaterThan(0.8f,
-            $"the catalog tabs should fill the home width, not shrink to content (tabs={tabsW:F0}px of {pageW:F0}px)");
+        (catalogW / pageW).Should().BeGreaterThan(0.8f,
+            $"the catalog should fill the home width, not shrink to content (catalog={catalogW:F0}px of {pageW:F0}px)");
     }
 }

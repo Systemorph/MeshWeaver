@@ -1,4 +1,5 @@
 using System;
+using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -101,6 +102,37 @@ public class GroupMembershipRecomputeTests
             $"WHERE user_id = '{user}' AND permission = 'Read' AND is_allow = true", ct)
             .Should().Within(30.Seconds()).Emit();
 
+    /// <summary>
+    /// Waits until this partition's Read-grant count for <paramref name="user"/> satisfies
+    /// <paramref name="predicate"/>, then returns it.
+    ///
+    /// <para>
+    /// 🚨 A single <see cref="PartitionReadGrants"/> read is NOT a valid assertion here, and that is
+    /// what made this class order-dependent. The recompute is ASYNCHRONOUS by construction: a
+    /// membership written into a partition first mirrors into the global <c>auth.mesh_nodes</c>, and
+    /// only then does <c>trg_group_changed()</c> — which is installed on the AUTH MIRROR, not on the
+    /// partition — fan out and rebuild <c>user_effective_permissions</c> for every schema holding a
+    /// group grant. Reading once, immediately after the write, samples a race: it passed when the
+    /// preceding statements happened to give the mirror enough time (the first assertion in the
+    /// cross-partition test always did) and failed when they didn't, so the OUTCOME DEPENDED ON WHAT
+    /// RAN BEFORE. Polling the real condition removes the timing dependence entirely — the test now
+    /// converges or fails loudly, never "passes because the machine was slow enough".
+    /// </para>
+    ///
+    /// <para>
+    /// This is the sanctioned shape for a request/response source (WritingTests.md → "Polling loops
+    /// around QueryAsync"): re-query on an interval and filter on the PREDICATE, bounded by a
+    /// timeout. Not a sleep — a sleep would re-introduce exactly the timing dependence being removed.
+    /// </para>
+    /// </summary>
+    private Task<long> GrantsUntil(
+        string schema, string user, Func<long, bool> predicate, string because, CancellationToken ct)
+        => Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => PartitionReadGrants(schema, user, ct)))
+            .Where(predicate)
+            .Should().Within(30.Seconds()).Emit(because);
+
     // ── Tests ────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -130,15 +162,15 @@ public class GroupMembershipRecomputeTests
             AssignmentNodeFactory.UserRole(groupPath, "Viewer", space), _options, ct);
 
         // No members yet → alice has nothing.
-        (await PartitionReadGrants(schema, alice, ct)).Should().Be(0,
-            "alice is not in the group yet");
+        await GrantsUntil(schema, alice, g => g == 0,
+            "alice is not in the group yet", ct);
 
         // The whole point: adding the membership recomputes alice's access from the group grant.
         await WriteMembershipAsync(adapter, groupPath, alice, ct);
 
-        (await PartitionReadGrants(schema, alice, ct)).Should().BeGreaterThan(0,
+        await GrantsUntil(schema, alice, g => g > 0,
             "writing the GroupMembership must retrigger the recompute so the group's Viewer grant " +
-            "reaches its new member — with no manual rebuild");
+            "reaches its new member — with no manual rebuild", ct);
 
         // Schema-qualified: the partition's table was rebuilt, not public's (2026-07-13 landmine).
         var publicRows = await _fixture.DataSource.ScalarLong(
@@ -177,14 +209,14 @@ public class GroupMembershipRecomputeTests
             AssignmentNodeFactory.UserRole(groupPath, "Viewer", space), _options, ct);
         await WriteMembershipAsync(adapter, groupPath, bob, ct);
 
-        (await PartitionReadGrants(schema, bob, ct)).Should().BeGreaterThan(0,
-            "precondition: bob is a member and inherits the group's Viewer grant");
+        await GrantsUntil(schema, bob, g => g > 0,
+            "precondition: bob is a member and inherits the group's Viewer grant", ct);
 
         // Remove bob from the group (hard delete of the GroupMembership node).
         await adapter.DeleteAsync(membershipPath, ct);
 
-        (await PartitionReadGrants(schema, bob, ct)).Should().Be(0,
-            "removing the membership must retrigger the recompute and revoke the group-granted access");
+        await GrantsUntil(schema, bob, g => g == 0,
+            "removing the membership must retrigger the recompute and revoke the group-granted access", ct);
 
         var bobAccess = await _fixture.DataSource.ScalarLong(
             $"SELECT count(*) FROM public.partition_access WHERE user_id = '{bob}' AND partition = '{schema}'", ct)
@@ -217,15 +249,15 @@ public class GroupMembershipRecomputeTests
 
         // Members first, no grant yet → carol has nothing.
         await WriteMembershipAsync(adapter, groupPath, carol, ct);
-        (await PartitionReadGrants(schema, carol, ct)).Should().Be(0,
-            "the group is not licensed yet");
+        await GrantsUntil(schema, carol, g => g == 0,
+            "the group is not licensed yet", ct);
 
         // Now license the group. The grant's subject is the group; existing members must materialize.
         await adapter.WriteAsync(
             AssignmentNodeFactory.UserRole(groupPath, "Viewer", space), _options, ct);
 
-        (await PartitionReadGrants(schema, carol, ct)).Should().BeGreaterThan(0,
-            "granting a group must recompute its existing members, regardless of add/grant order");
+        await GrantsUntil(schema, carol, g => g > 0,
+            "granting a group must recompute its existing members, regardless of add/grant order", ct);
     }
 
     /// <summary>
@@ -256,14 +288,14 @@ public class GroupMembershipRecomputeTests
             AssignmentNodeFactory.UserRole(outer, "Viewer", space), _options, ct);
         await WriteMembershipAsync(adapter, outer, inner, ct); // member = the Inner group path
 
-        (await PartitionReadGrants(schema, dave, ct)).Should().Be(0, "dave is not in Inner yet");
+        await GrantsUntil(schema, dave, g => g == 0, "dave is not in Inner yet", ct);
 
         // Add dave to the INNER group → he is a transitive leaf member of Outer.
         await WriteMembershipAsync(adapter, inner, dave, ct);
 
-        (await PartitionReadGrants(schema, dave, ct)).Should().BeGreaterThan(0,
+        await GrantsUntil(schema, dave, g => g > 0,
             "a member of a nested inner group inherits the outer group's grant once the membership " +
-            "change retriggers the (nesting-aware) recompute");
+            "change retriggers the (nesting-aware) recompute", ct);
     }
 
     /// <summary>
@@ -301,8 +333,8 @@ public class GroupMembershipRecomputeTests
             // The membership still MIRRORS to auth, but with the recompute triggers gone nothing
             // rebuilds → erin stays stale.
             await WriteMembershipAsync(adapter, groupPath, erin, ct);
-            (await PartitionReadGrants(schema, erin, ct)).Should().Be(0,
-                "with the auth recompute triggers dropped, a membership write never recomputes");
+            await GrantsUntil(schema, erin, g => g == 0,
+                "with the auth recompute triggers dropped, a membership write never recomputes", ct);
         }
         finally
         {
@@ -313,13 +345,13 @@ public class GroupMembershipRecomputeTests
                 .Should().Within(60.Seconds()).Emit();
         }
 
-        (await PartitionReadGrants(schema, erin, ct)).Should().BeGreaterThan(0,
-            "the self-heal reinstalls the auth recompute trigger and backfills the stale member");
+        await GrantsUntil(schema, erin, g => g > 0,
+            "the self-heal reinstalls the auth recompute trigger and backfills the stale member", ct);
 
         // Healed going forward: a fresh membership recomputes with no further heal.
         await WriteMembershipAsync(adapter, groupPath, "gh_frank", ct);
-        (await PartitionReadGrants(schema, "gh_frank", ct)).Should().BeGreaterThan(0,
-            "after the heal the reinstalled auth trigger recomputes membership changes directly");
+        await GrantsUntil(schema, "gh_frank", g => g > 0,
+            "after the heal the reinstalled auth trigger recomputes membership changes directly", ct);
     }
 
     /// <summary>
@@ -356,20 +388,20 @@ public class GroupMembershipRecomputeTests
             AssignmentNodeFactory.UserRole(groupPath, "Viewer", spaceB), _options, ct);
 
         // The A-group's member has Read in the B partition — resolved via global auth memberships.
-        (await PartitionReadGrants(schemaB, user1, ct)).Should().BeGreaterThan(0,
-            "a group defined in partition A, licensed on partition B, reaches its members in B");
+        await GrantsUntil(schemaB, user1, g => g > 0,
+            "a group defined in partition A, licensed on partition B, reaches its members in B", ct);
         // …and NOT accidentally in A (no grant there).
-        (await PartitionReadGrants(schemaA, user1, ct)).Should().Be(0,
-            "the grant lives in B only; A grants nothing");
+        await GrantsUntil(schemaA, user1, g => g == 0,
+            "the grant lives in B only; A grants nothing", ct);
 
         // Adding a member in A must fan out and recompute the granting partition B.
         await WriteMembershipAsync(adapterA, groupPath, user2, ct);
-        (await PartitionReadGrants(schemaB, user2, ct)).Should().BeGreaterThan(0,
-            "a membership added in partition A recomputes the granting partition B (cross-partition fan-out)");
+        await GrantsUntil(schemaB, user2, g => g > 0,
+            "a membership added in partition A recomputes the granting partition B (cross-partition fan-out)", ct);
 
         // Removing that member in A must recompute B and revoke.
         await adapterA.DeleteAsync($"{groupPath}/{user2}_Membership", ct);
-        (await PartitionReadGrants(schemaB, user2, ct)).Should().Be(0,
-            "removing the member in A recomputes B and revokes the group-granted access");
+        await GrantsUntil(schemaB, user2, g => g == 0,
+            "removing the member in A recomputes B and revokes the group-granted access", ct);
     }
 }
