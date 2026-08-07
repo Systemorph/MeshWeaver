@@ -59,9 +59,24 @@
         }
     }
 
+    /// <summary>
+    /// The item's DataContext = the collection's pointer + the item index.
+    ///
+    /// <para>
+    /// 🚨 ViewModel.Data is only part of the PATH when it IS a pointer. Template.BindMany has two
+    /// overloads: the IObservable one sets Data = JsonPointerReference("") (whose ToString is the
+    /// empty pointer, so it contributes nothing), while the IEnumerable one puts the COLLECTION
+    /// there. Interpolating the latter straight into the string yielded its ToString() —
+    /// "UserRow[]/0" — a garbage pointer against which every item binding resolved to nothing, so
+    /// the items rendered EMPTY. The collection is already published under the area's own data
+    /// pointer (ViewModel.DataContext), so for the inline overload the index alone is the path.
+    /// </para>
+    /// </summary>
     private UiControl GetViewWithPath(int i) => (RenderedView ?? ViewModel.View) with
     {
-        DataContext = $"{ViewModel.DataContext}{ViewModel.Data}/{i}"
+        DataContext = ViewModel.Data is JsonPointerReference pointer
+            ? $"{ViewModel.DataContext}{pointer.Pointer}/{i}"
+            : $"{ViewModel.DataContext}/{i}"
     };
 
 }
