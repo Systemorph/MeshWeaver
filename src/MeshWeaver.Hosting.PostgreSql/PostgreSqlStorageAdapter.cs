@@ -92,7 +92,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         NpgsqlDataSource dataSource,
         IEmbeddingProvider? embeddingProvider = null,
         PartitionDefinition? partitionDefinition = null,
-        Microsoft.Extensions.Logging.ILogger<PostgreSqlStorageAdapter>? logger = null,
+        Microsoft.Extensions.Logging.ILogger? logger = null,
         IIoPool? readPool = null,
         IIoPool? ioPool = null)
     {

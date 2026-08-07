@@ -33,10 +33,15 @@ permissions:
   # MeshWeaver.Plugins CI can pull it with a GitHub token instead of ACR credentials.
   packages: write
 
-# Never let two main merges deploy concurrently — a later merge waits for the in-flight
-# rollout rather than racing it. cancel-in-progress:false so we don't abort a half-done deploy.
+# Every green main merge ships its OWN image increment — CD runs never supersede each
+# other. The previous shared `main-cd` group dated from when this workflow also ROLLED
+# OUT deployments; delivery is pull-based now (installs self-update by comparing the
+# monotonic 3.0.0-ci.<n> version tag), so parallel image builds are safe: every tag is
+# distinct and nothing here mutates a live environment. Under the shared group GitHub's
+# one-pending-slot rule CANCELLED queued CD runs during merge bursts (6 cancelled runs
+# on 2026-08-07 alone), silently dropping release increments.
 concurrency:
-  group: main-cd
+  group: main-cd-${{ github.run_id }}
   cancel-in-progress: false
 
 env:

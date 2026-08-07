@@ -850,10 +850,27 @@ public class MeshQuery : IMeshQueryCore
     }
 
     /// <summary>
-    /// Strips items from a non-Initial change that are duplicates against the
-    /// live dedup set (overlapping provider emitted the same change again, or
-    /// a Removed arrived for a path we never Added). Returns false when the
-    /// change has no usable items left, so the caller can drop the emission.
+    /// Maintains the live dedup set for a merged query's non-Initial changes and decides what
+    /// flows through. Returns false when the change has no usable items left, so the caller can
+    /// drop the emission.
+    ///
+    /// <para>🚨 An <c>Added</c> for a path that is ALREADY live is NOT dropped — it flows through
+    /// exactly like an <c>Updated</c>. Dropping it was the terminal dropped-update of issue #889:
+    /// two providers legitimately race the same write (the pedestrian
+    /// <c>StorageAdapterMeshQueryProvider</c> supplements its re-query with the change
+    /// notification's raw entity and usually emits FIRST; the per-schema PostgreSQL delegate
+    /// re-queries storage and emits the authoritative row a beat LATER — both as <c>Added</c>).
+    /// The old dedup forwarded whichever arrived first and DISCARDED the second — discarding the
+    /// authoritative content correction. When the raced write was the LAST write touching the
+    /// query (PaywallRealGateShapeTests' buyer grant), no later change ever healed the snapshot:
+    /// the <c>$security-access</c> fold kept the raw-entity node forever and permissions evaluated
+    /// stale, with the barrier reporting one fold of <c>None</c> and 45 s of silence. Duplicate
+    /// delivery is safe by contract — every live consumer folds by path
+    /// (<c>SyncedQueryMeshNodes</c>' Scan does <c>SetItem</c>) — so over-delivering costs an
+    /// idempotent overwrite while under-delivering loses content.</para>
+    ///
+    /// <para>A <c>Removed</c> for a path that was never live is still dropped — that dedup is
+    /// semantic (nothing to remove), not content-bearing.</para>
     /// </summary>
     private static bool TryFilterDuplicateLiveChange<T>(
         QueryResultChange<T> change,
@@ -871,10 +888,10 @@ public class MeshQuery : IMeshQueryCore
             switch (change.ChangeType)
             {
                 case QueryChangeType.Added or QueryChangeType.Updated:
-                    if (liveItems.Add(node.Path))
-                        kept.Add(item);
-                    else if (change.ChangeType == QueryChangeType.Updated)
-                        kept.Add(item); // updates flow through even if path already known
+                    // Track liveness; ALWAYS forward — a re-announced path carries the newest
+                    // snapshot of a racing provider and must never be discarded (see doc above).
+                    liveItems.Add(node.Path);
+                    kept.Add(item);
                     break;
                 case QueryChangeType.Removed:
                     if (liveItems.Remove(node.Path))

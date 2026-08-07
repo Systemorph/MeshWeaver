@@ -1264,12 +1264,21 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
                         DataChangeNotification[] backlog;
                         var changeBuffer = new Subject<DataChangeNotification>();
-                        disposables.Add(changeBuffer);
+                        // 🚨 ORDER MATTERS (mirror of PostgreSqlMeshQuery's live pipeline).
+                        // CompositeDisposable disposes in INSERTION order, so the feeding
+                        // subscription must be registered BEFORE the buffer it writes into.
+                        // The other way round, teardown disposes changeBuffer first while the
+                        // subscription is still live, and a write landing in that window calls
+                        // OnNext on a disposed Subject → ObjectDisposedException thrown back
+                        // into the adapter's change-feed fan-out — where a plain-Subject merge
+                        // aborts delivery to every later subscriber, and IsolatedChangeFeed's
+                        // disposed-observer branch can misattribute the throw (issue #889).
                         disposables.Add(
                             persistence.Changes
                                 .Where(n => scopeFilters.Any(sf =>
                                     PathMatcher.ShouldNotify(n.Path, sf.BasePath, sf.Scope)))
                                 .Subscribe(changeBuffer));
+                        disposables.Add(changeBuffer);
                         // 🚨 Strict unit-of-work + zero debounce: every change
                         // triggers its own RunQuery, serialised via Concat so
                         // the shared currentItems dictionary is never raced.

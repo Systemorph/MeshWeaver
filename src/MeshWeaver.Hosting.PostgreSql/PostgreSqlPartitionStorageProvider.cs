@@ -101,6 +101,15 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     internal IIoPool ReadPool => _readPool;
 
     /// <summary>
+    /// The provider's logger, shared with every per-schema adapter the router creates. Without
+    /// it the per-schema <see cref="IsolatedChangeFeed"/>s were constructed with a null logger,
+    /// so a dropped / faulting change-feed observer — the exact event that silences the
+    /// <c>$security-access</c> fold — was logged NOWHERE (the PaywallRealGateShapeTests flake
+    /// produced zero diagnostic output for four investigations running).
+    /// </summary>
+    internal ILogger? Logger => _logger;
+
+    /// <summary>
     /// Synchronous lookup of a registered <see cref="PartitionDefinition"/> by
     /// namespace (first segment). Used by <see cref="PostgreSqlPathRoutingAdapter"/>
     /// to resolve <c>_</c>-prefix global-satellite namespaces to their real schema

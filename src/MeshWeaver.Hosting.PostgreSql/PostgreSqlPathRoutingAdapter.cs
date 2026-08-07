@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -57,12 +56,31 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
     // Without this, the default interface Changes = Observable.Empty drops every
     // change event silently (the same bug pattern VersionWritingStorageAdapter
     // had — f28449035).
-    private readonly Subject<DataChangeNotification> _changes = new();
-    public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
+    //
+    // 🚨 An IsolatedChangeFeed, NEVER a plain Subject<T>. This merge point fans out to every
+    // live query pipeline in the process (each scoped PostgreSqlMeshQuery via MergedChanges +
+    // every pedestrian StorageAdapterMeshQueryProvider via IStorageAdapter.Changes), and
+    // Subject.OnNext delivers synchronously in subscription order — abort-on-throw. A Subject
+    // here defeated the per-schema IsolatedChangeFeed twice over (issue #889,
+    // MergedFeedFanoutIsolationTests pins both):
+    //   1. One subscriber throwing (a torn-down query's disposed changeBuffer) aborted delivery
+    //      to every subscriber after it — a silently dropped change with no reconcile (the
+    //      pg_notify LISTEN fallback is disabled for partitioned PG).
+    //   2. The throw propagated INTO the publishing schema's IsolatedChangeFeed.OnNext, whose
+    //      ObjectDisposedException branch removed its direct observer — this MERGE — as
+    //      "provably dead". The merge is not dead; a subscriber OF it was. From then on the
+    //      whole schema was permanently disconnected from the merged feed: every later write
+    //      published to nobody.
+    // As an IsolatedChangeFeed the merge (a) isolates each subscriber so a throw can neither
+    // starve siblings nor escape upward, and (b) being an IObserver whose OnNext never throws,
+    // it can never be mistaken for dead by the per-schema feed.
+    private readonly IsolatedChangeFeed _changes;
+    public IObservable<DataChangeNotification> Changes => _changes;
 
     public PostgreSqlPathRoutingAdapter(PostgreSqlPartitionStorageProvider provider)
     {
         _provider = provider;
+        _changes = new IsolatedChangeFeed(provider.Logger, "path-router");
     }
 
     /// <summary>
@@ -144,7 +162,13 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
         var schema = !string.IsNullOrEmpty(def.Schema) ? def.Schema : def.Namespace;
         return _adaptersBySchema.GetOrAdd(schema!, _ =>
         {
-            var adapter = new PostgreSqlStorageAdapter(_provider.BaseDataSource, embeddingProvider: null, def, readPool: _provider.ReadPool);
+            var adapter = new PostgreSqlStorageAdapter(
+                _provider.BaseDataSource, embeddingProvider: null, def,
+                // The provider's logger, NOT null: it feeds the adapter's IsolatedChangeFeed,
+                // whose dropped/faulting-observer warnings are the only trace when a change
+                // notification is lost on the fan-out (the frozen-$security-access class).
+                logger: _provider.Logger,
+                readPool: _provider.ReadPool);
             // Wire the new per-schema adapter's Changes into the routing
             // adapter's merged feed. Once-per-schema cost — the inner adapter
             // is itself cached in _adaptersBySchema.
