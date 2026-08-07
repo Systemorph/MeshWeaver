@@ -139,10 +139,19 @@ public class KernelScriptMemoryLeakTest(ITestOutputHelper output) : MonolithMesh
             "ServiceProvider are disposed — a surviving context means the per-cell script " +
             "assemblies leak for the process lifetime (the memory-fatigue wall)");
 
-        var (pinned, report) = AnalyzeScriptRoots();
+        var (outcome, report) = AnalyzeScriptRoots();
         Output.WriteLine(report);
 
-        pinned.Should().BeFalse(
+        // The ALC-unload assertion above already ran and needs no ClrMD. The script-object
+        // pin check below does — where the analysis cannot run (macOS snapshot-attach) the
+        // verdict is INCONCLUSIVE (#674) and must skip loudly instead of passing vacuously;
+        // Linux (CI) runs the real analysis.
+        Assert.SkipWhen(outcome == ClrMdRootAnalysisOutcome.Unavailable,
+            "kernel ScriptSession load-context unload WAS verified above, but the ClrMD root " +
+            "analysis could not run on this platform/process — the script-object pin check is " +
+            "inconclusive here, not green (#674). " + report);
+
+        (outcome == ClrMdRootAnalysisOutcome.Detected).Should().BeFalse(
             "no per-session Roslyn script object (ScriptState / submission CSharpCompilation) may stay " +
             "reachable from a non-stack GC root after the mesh and its ServiceProvider are disposed — a " +
             "pinned session graph retains its compilation and submission state (~tens of MiB/run); the " +
@@ -154,10 +163,9 @@ public class KernelScriptMemoryLeakTest(ITestOutputHelper output) : MonolithMesh
     /// BFS from non-stack GC roots to the first instance of each Roslyn script
     /// object kind, printing root kind + type chain per surviving kind.
     /// </summary>
-    private static (bool Pinned, string Report) AnalyzeScriptRoots()
+    private static (ClrMdRootAnalysisOutcome Outcome, string Report) AnalyzeScriptRoots()
     {
         var sb = new StringBuilder();
-        var pinned = false;
         try
         {
             // 🚨 Pin the DAC for process lifetime BEFORE ClrMD loads it: DataTarget.Dispose
@@ -166,7 +174,8 @@ public class KernelScriptMemoryLeakTest(ITestOutputHelper output) : MonolithMesh
             // (the endemic exit=139). See ClrMdDacPin / ClrMdDacUnloadCrashTest.
             ClrMdDacPin.EnsurePinned();
             using var dt = DataTarget.CreateSnapshotAndAttach(Environment.ProcessId);
-            if (dt.ClrVersions.Length == 0) return (false, "[clrmd] no CLR runtime found in snapshot");
+            if (dt.ClrVersions.Length == 0)
+                return (ClrMdRootAnalysisOutcome.Unavailable, "[clrmd] no CLR runtime found in snapshot");
             using var runtime = dt.ClrVersions[0].CreateRuntime();
             var heap = runtime.Heap;
 
@@ -240,7 +249,7 @@ public class KernelScriptMemoryLeakTest(ITestOutputHelper output) : MonolithMesh
             // memo is BY DESIGN (one materialization per assembly per process — the fix
             // for the ~200 MiB-per-session leak). The leak signature this probe guards
             // is the SESSION graph surviving: ScriptState / submission compilation.
-            pinned = found.ContainsKey("ScriptState") || found.ContainsKey("CSharpCompilation");
+            var pinned = found.ContainsKey("ScriptState") || found.ContainsKey("CSharpCompilation");
 
             var liveBytes = byType.Values.Sum(v => v.Bytes);
             sb.AppendLine($"[clrmd] live-from-non-stack-roots total={liveBytes / 1024 / 1024}MiB; top types by retained size:");
@@ -294,12 +303,16 @@ public class KernelScriptMemoryLeakTest(ITestOutputHelper output) : MonolithMesh
                 chain.Reverse();
                 foreach (var line in chain) sb.AppendLine("   " + line);
             }
+            return (pinned ? ClrMdRootAnalysisOutcome.Detected : ClrMdRootAnalysisOutcome.NotDetected,
+                sb.ToString());
         }
         catch (Exception ex)
         {
+            // Snapshot-attach unsupported (macOS PlatformNotSupportedException) or any other
+            // analysis fault: the probe DID NOT LOOK — that is Unavailable, never NotDetected.
             sb.AppendLine($"[clrmd] analysis failed: {ex.GetType().Name}: {ex.Message}");
+            return (ClrMdRootAnalysisOutcome.Unavailable, sb.ToString());
         }
-        return (pinned, sb.ToString());
     }
 
     public override async ValueTask DisposeAsync()
