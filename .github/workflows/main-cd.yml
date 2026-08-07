@@ -387,7 +387,12 @@ jobs:
       - name: Generate gRPC-web client (buf)
         run: |
           set -euo pipefail
-          npm --prefix clients/grpc-web ci --no-audit --no-fund
+          # npm INSTALL, not `npm ci`: clients/grpc-web/package-lock.json is deliberately
+          # GITIGNORED (clients/grpc-web/.gitignore), and `npm ci` hard-fails without a lockfile
+          # ("can only install with an existing package-lock.json"). Every leg in clients.yml uses
+          # `npm install` for exactly this reason. This is why the first portal-next CD run failed
+          # while the other three image legs went green.
+          npm --prefix clients/grpc-web install --no-audit --no-fund
           npm --prefix clients/grpc-web run gen
           test -f clients/grpc-web/src/gen/mesh_pb.ts
       # Same tag triple as the other legs, computed the same way, so a given main commit's
