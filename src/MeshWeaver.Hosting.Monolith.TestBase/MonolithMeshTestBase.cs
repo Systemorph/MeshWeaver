@@ -1283,6 +1283,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // enqueued. See MeshTeardownExtensions.
             var ioPools = Mesh.ServiceProvider.GetService<IoPoolRegistry>();
             var asyncDisposeQueue = Mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
+            var teardownSignal = Mesh.ServiceProvider.GetService<MeshTeardownSignal>();
             Mesh.Dispose();
             TestPhaseTrace(testName, "DISPOSE_INVOKED", sw.ElapsedMilliseconds);
 
@@ -1296,19 +1297,35 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // unload (the teardown use-after-unload SIGSEGV). A live change-feed leaf never
             // completes on its own, so a WAIT-only drain would time out and let the scope
             // dispose under it; DrainAll() cancels the leaf so it stops, then joins.
-            if (ioPools is not null)
-            {
-                ioPools.DrainAll();
-                if (ioPools.TotalInFlight > 0)
-                    FileOutput.WriteLine(
-                        $"[DISPOSE] {testName}: I/O pools still report {ioPools.TotalInFlight} in-flight after drain");
-            }
+            var leakedIoLeaves = ioPools?.DrainAll() ?? 0;
             // After all the sync stuff is disposed (and everyone has enqueued their async
             // cleanup), quiesce the async dispose queue before the scope closes below.
-            if (asyncDisposeQueue is not null)
-                await asyncDisposeQueue.DrainAsync(DisposeTimeout);
-            FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Disposal completed in {sw.ElapsedMilliseconds}ms");
-            TestPhaseTrace(testName, "DISPOSE_DONE", sw.ElapsedMilliseconds);
+            var asyncDisposeClean = asyncDisposeQueue is null
+                || await asyncDisposeQueue.DrainAsync(DisposeTimeout);
+
+            // The terminal signal — DISPOSE_DONE is only true when this report is CLEAN. Fire it
+            // before the scope disposes below so any subscriber ordering on "all is done" (ALC
+            // unload hooks, diagnostics) observes the truthful terminal state, dirty or not.
+            var teardownReport = new TeardownReport(leakedIoLeaves, asyncDisposeClean);
+            teardownSignal?.SignalCompleted(teardownReport);
+            FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Disposal completed in {sw.ElapsedMilliseconds}ms — {teardownReport}");
+            TestPhaseTrace(testName, "DISPOSE_DONE", sw.ElapsedMilliseconds, teardownReport.ToString());
+
+            // 🚨 A dirty teardown FAILS the class, exactly like the quiesce-leak below. The old
+            // code logged "I/O pools still report N in-flight" to a per-machine file and carried
+            // on — and the surviving leaf then dereferenced an unloading node ALC 8 ms into the
+            // NEXT test's INIT, killing the whole test host with a SIGSEGV that nothing could
+            // attribute (FutuRe.Test, dump dotnet-3029). Failing HERE names the class that
+            // leaked, while the evidence still exists.
+            if (!teardownReport.Clean)
+            {
+                TestPhaseTrace(testName, "DISPOSE_DIRTY_TEARDOWN", sw.ElapsedMilliseconds, teardownReport.ToString());
+                disposeException = new InvalidOperationException(
+                    $"{testName} teardown left work RUNNING: {teardownReport}. " +
+                    "A pooled I/O leaf or async cleanup ignored its cancellation token; the service " +
+                    "scope (and any collectible node ALC) is about to be torn down over live code — " +
+                    "the use-after-unload SIGSEGV. Fix the leaf that will not cancel; do not widen the drain budget.");
+            }
 
             // Fail the test class' dispose if any hub hit Quiescing timeout. A leaked
             // Observe subscription that never received its reply is a real bug —
@@ -1319,10 +1336,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             {
                 var summary = Mesh.GetQuiescingTimeoutSummary();
                 TestPhaseTrace(testName, "DISPOSE_QUIESCE_LEAK", sw.ElapsedMilliseconds, summary);
-                disposeException = new InvalidOperationException(
+                var quiesceLeak = new InvalidOperationException(
                     $"{testName} left Observe subscriptions pending past the Quiescing budget. " +
                     $"This is a leaked callback — the test posted a request and never received " +
                     $"(or never awaited) its reply. Pending callbacks at dispose:{Environment.NewLine}{summary}");
+                // Never clobber a dirty-teardown failure recorded above — both findings matter.
+                disposeException = disposeException is null
+                    ? quiesceLeak
+                    : new AggregateException(disposeException, quiesceLeak);
             }
         }
         catch (OperationCanceledException)
