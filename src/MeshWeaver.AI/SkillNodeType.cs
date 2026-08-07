@@ -35,11 +35,20 @@ public static class SkillNodeType
     public static TBuilder AddSkillType<TBuilder>(this TBuilder builder,
         IReadOnlySet<string>? serveFromPartition = null) where TBuilder : MeshBuilder
     {
-        builder.AddMeshNodes(CreateMeshNode());
+        var dbSynced = serveFromPartition?.Contains(RootNamespace) == true;
+
+        // 🚨 DEFINITION-ONLY on the DB-synced path — the same rule Harness / LanguageModel /
+        // ModelProvider follow, and the one Skill (like Agent) was missing. The type-def node sits
+        // at path @Skill, the SAME path as the Skill partition root; leaving it servable makes the
+        // per-node hub serve a node that is never persisted, so the durable root can be neither
+        // read, nor re-created, nor written — a permanently unrecoverable partition root (#902).
+        // See AddAgentType for the full failure chain and Doc/Architecture/NodeTypeCatalogs.md.
+        var typeDefinition = CreateMeshNode();
+        if (dbSynced)
+            typeDefinition = typeDefinition with { IsDefinitionOnly = true };
+        builder.AddMeshNodes(typeDefinition);
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         builder.ConfigureHub(config => config.WithType<SkillDefinition>(nameof(SkillDefinition)));
-
-        var dbSynced = serveFromPartition?.Contains(RootNamespace) == true;
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<BuiltInSkillProvider>();

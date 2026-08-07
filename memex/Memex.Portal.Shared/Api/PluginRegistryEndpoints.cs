@@ -111,50 +111,19 @@ public static class PluginRegistryEndpoints
     private static AuthenticatedInstance? Caller(HttpContext http) =>
         http.Items.TryGetValue(CallerItemKey, out var v) ? v as AuthenticatedInstance : null;
 
-    /// <summary>One configured registry source: the git package source, the ref it serves, and a
-    /// display name (for logs). The registry is authoritative on each source's ref (its configured
-    /// <c>Ref</c>/<c>SourceRef</c>); a consumer's ref is advisory and ignored.</summary>
-    private sealed record RegistrySource(IPackageSource Source, string GitRef, string Name);
-
-    // Builds the registry's git sources from PluginCatalog config. Multi-source form:
-    //   PluginCatalog:Sources:N:{RepoPath,Subdir,Ref,Format,Name}
-    // (e.g. the plugins repo AND an education repo). When no Sources list is configured, the legacy
-    // single-source keys (PluginCatalog:SourceRepoPath/SourceSubdir/SourceRef/SourceFormat) apply.
-    private static IReadOnlyList<RegistrySource> Sources(IMessageHub hub, IConfiguration config)
-    {
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(PluginRegistryEndpoints));
-
-        RegistrySource? Build(string? repo, string? subdir, string? gitRef, string? format, string? name)
-        {
-            // Default to the node-native repo format (what MeshWeaver.Plugins ships); a package.json
-            // repo can opt in with Format=package-json.
-            var nodeRepo = !string.Equals(format ?? "node-repo", "package-json", StringComparison.OrdinalIgnoreCase);
-            var source = PackageSources.FromRepo(hub, repo, subdir, logger, nodeRepo);
-            return source is null ? null : new RegistrySource(source, gitRef ?? "HEAD", name ?? repo ?? "");
-        }
-
-        var configured = config.GetSection("PluginCatalog:Sources").GetChildren()
-            .Select(s => Build(s["RepoPath"], s["Subdir"] ?? "", s["Ref"], s["Format"], s["Name"]))
-            .Where(s => s is not null)
-            .Select(s => s!)
-            .ToList();
-        if (configured.Count > 0)
-            return configured;
-
-        var legacy = Build(
-            config["PluginCatalog:SourceRepoPath"],
-            config["PluginCatalog:SourceSubdir"] ?? "catalog",
-            config["PluginCatalog:SourceRef"],
-            config["PluginCatalog:SourceFormat"],
-            name: "registry");
-        return legacy is null ? [] : [legacy];
-    }
+    // The registry's git sources, read from PluginCatalog config by the SHARED reader
+    // (PackageSources.FromConfiguration) — the same list the default install (InstanceAutoRegistrationService) installs the
+    // default packages out of on this very instance. One reading, so serving and pre-installing
+    // can never disagree about what this registry carries.
+    private static IReadOnlyList<ConfiguredPackageSource> Sources(IMessageHub hub, IConfiguration config)
+        => PackageSources.FromConfiguration(hub, config,
+            hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(PluginRegistryEndpoints)));
 
     // Lists one source's packages. With SEVERAL sources a single failing repo must not take the whole
     // catalog down (degrade to empty + log); with exactly ONE source the failure propagates so List
     // can surface it as a 502 (the historical single-source behavior — the consumer sees the cause).
     private static IObservable<IReadOnlyList<PackageManifest>> ListFrom(
-        RegistrySource s, bool soleSource, ILogger? logger)
+        ConfiguredPackageSource s, bool soleSource, ILogger? logger)
         => soleSource
             ? s.Source.ListPackages(s.GitRef)
             : s.Source.ListPackages(s.GitRef).Catch((Exception ex) =>
@@ -172,7 +141,7 @@ public static class PluginRegistryEndpoints
     // the filter runs BEFORE the merge, while each package still knows which source it came from.
     // A caller therefore cannot even learn that an ungranted package exists.
     private static IObservable<IReadOnlyList<PackageManifest>> ListAll(
-        IReadOnlyList<RegistrySource> sources, AuthenticatedInstance? caller, ILogger? logger)
+        IReadOnlyList<ConfiguredPackageSource> sources, AuthenticatedInstance? caller, ILogger? logger)
         => Observable.CombineLatest(sources.Select(s =>
                 ListFrom(s, sources.Count == 1, logger).Select(list => (Source: s, Packages: list))))
             .Select(perSource => (IReadOnlyList<PackageManifest>)perSource
@@ -188,7 +157,7 @@ public static class PluginRegistryEndpoints
 
     // Legacy anonymous mode has no instance to scope to and sees everything — that mode is gated
     // by PluginCatalog:RequireInstanceKey and warns on every request.
-    private static bool IsGranted(AuthenticatedInstance? caller, RegistrySource source, PackageManifest package)
+    private static bool IsGranted(AuthenticatedInstance? caller, ConfiguredPackageSource source, PackageManifest package)
         => caller is null || caller.Allows(source.Name, package.Id);
 
     private static Task<IResult> List(
