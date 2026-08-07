@@ -160,24 +160,39 @@ public class PaywallRealGateShapeTests(PostgreSqlFixture fixture, ITestOutputHel
     /// the second wait was silently truncated by the Fact timeout instead of reporting — the
     /// mirror image of the halved compile budget fixed in 459b4403c.</para>
     /// </summary>
+    /// <remarks>
+    /// 🚨 Every wait uses <c>.Match(pred)</c>, NEVER <c>.Where(pred).Emit()</c>. The two are
+    /// equivalent when they pass and worlds apart when they fail: <c>Where</c> filters BEFORE the
+    /// assertion sees the stream, so the assertion can only report "the observable emitted nothing
+    /// at all" — true of the filtered stream whether the fold was wedged or simply folded to the
+    /// wrong permission. <c>Match</c> hands the predicate to the assertion, which taps the
+    /// UNFILTERED source and names the last permission actually observed.
+    ///
+    /// <para>That distinction is the whole diagnosis here. This barrier has flaked repeatedly on
+    /// CI shard 5 (#825/#849/#853) and every report was the same contentless timeout, so each
+    /// investigation had to start from zero. The permissions this fold DID produce are the
+    /// evidence: <c>Permission.None</c> means the scope walk never folded, while a non-None value
+    /// missing <c>Read</c> means it folded but the grant under test was absent — a stale query
+    /// snapshot, a different root cause with a different fix.</para>
+    /// </remarks>
     private async Task AwaitGateFolded()
     {
         var budget = 45.Seconds();
 
         // 1) The root grants folded: Public can read the cover.
         await Mesh.GetEffectivePermissions(Plugin, WellKnownUsers.Public)
-            .Where(p => p.HasFlag(Permission.Read))
-            .Should().Within(budget).Emit();
+            .Should().Within(budget).Match(p => p.HasFlag(Permission.Read),
+                $"Public must inherit Read on the cover {Plugin}");
 
         // 2) The child deny folded and beats the inherited root grant.
         await Mesh.GetEffectivePermissions(Gated, WellKnownUsers.Public)
-            .Where(p => !p.HasFlag(Permission.Read))
-            .Should().Within(budget).Emit();
+            .Should().Within(budget).Match(p => !p.HasFlag(Permission.Read),
+                $"the child DENY on {Gated} must strip Public's inherited Read");
 
         // 3) The buyer's root grant folded and SURVIVED the child deny.
         await Mesh.GetEffectivePermissions(Gated, Buyer)
-            .Where(p => p.HasFlag(Permission.Read))
-            .Should().Within(budget).Emit();
+            .Should().Within(budget).Match(p => p.HasFlag(Permission.Read),
+                $"the buyer's root grant must survive the child deny on {Gated}");
     }
 
     /// <summary>Reads through the same entry point the MCP `get` tool uses.</summary>

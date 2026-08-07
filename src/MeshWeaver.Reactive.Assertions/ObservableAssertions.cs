@@ -194,14 +194,14 @@ public class ObservableAssertions<T>
         catch (AssertionWaitTimeoutException)
         {
             throw new ObservableAssertionException(
-                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it did not. {seen.Describe()}");
+                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it did not. {seen.Describe(predicate is not null)}");
         }
         catch (InvalidOperationException)
         {
             // Source completed without producing a (matching) value — Take(1).ToTask() throws
             // InvalidOperationException("Sequence contains no elements"). Same "did not" outcome.
             throw new ObservableAssertionException(
-                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it completed without one. {seen.Describe()}");
+                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it completed without one. {seen.Describe(predicate is not null)}");
         }
         catch (Exception ex)
         {
@@ -266,13 +266,30 @@ public class ObservableAssertions<T>
             lock (gate) { last = value; count++; }
         }
 
-        public string Describe()
+        /// <param name="hasPredicate">
+        /// Whether the assertion itself was given the predicate (<c>Match</c>) or is just waiting
+        /// for any value (<c>Emit</c>). It changes what "nothing was emitted" can mean, and so what
+        /// the reader should do next.
+        /// </param>
+        public string Describe(bool hasPredicate)
         {
             lock (gate)
             {
-                return count == 0
+                if (count > 0)
+                    return $"Last of {count} emission(s) was: {Render(last)}.";
+
+                // 🚨 With no predicate here, "nothing emitted" is ambiguous, because the caller may
+                // have filtered UPSTREAM: `src.Where(p).Should().Emit()` hands us the already-
+                // filtered stream, so a source emitting a steady stream of non-matching values is
+                // indistinguishable from one that is wedged. Those have completely different causes
+                // and fixes, so say so rather than let the reader assume a wedge — that ambiguity
+                // sent several CI investigations (PaywallRealGateShapeTests) back to zero.
+                return hasPredicate
                     ? "The observable emitted nothing at all."
-                    : $"Last of {count} emission(s) was: {Render(last)}.";
+                    : "The observable emitted nothing at all. NOTE: if you filtered upstream "
+                      + "(.Where(...).Should().Emit()), this counts only values that PASSED the "
+                      + "filter — switch to .Should().Match(predicate) to report what the source "
+                      + "actually produced.";
             }
         }
     }
