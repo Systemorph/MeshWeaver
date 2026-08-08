@@ -109,12 +109,22 @@ public class CrossHubPatchAtomicityTest(ITestOutputHelper output) : AITestBase(o
             // went BACKWARD (a stale snapshot re-applied over newer state — the #945 defect),
             // stopped advancing (never converged), or merely arrived LATE (converged past the settle
             // bound — a slow box, not a loss). No logging pipeline involved.
+            // 🚨 `using` + an explicit OnError, both load-bearing on the FAILURE path — the one
+            // path this instrument exists for. Without `using`, Assert.Fail below unwinds past a
+            // plain Dispose() and leaves the subscription pending into teardown (the "left Observe
+            // subscriptions pending past the Quiescing budget" class). Without an OnError handler,
+            // a stream fault would be rethrown on the producer's thread as an unhandled exception,
+            // replacing the very diagnostics the failure message is built from; instead the fault
+            // is captured and REPORTED alongside the sequence recorded so far.
             var clock = System.Diagnostics.Stopwatch.StartNew();
             var observed = new System.Collections.Concurrent.ConcurrentQueue<(long Version, int Keys, long Ms)>();
-            var watch = Mesh.GetWorkspace().GetMeshNodeStream(path)
-                .Subscribe(n => observed.Enqueue(
-                    (n.Version, (n.Content as MeshThread)?.PendingUserMessages.Count ?? 0,
-                     clock.ElapsedMilliseconds)));
+            Exception? watchError = null;
+            using var watch = Mesh.GetWorkspace().GetMeshNodeStream(path)
+                .Subscribe(
+                    n => observed.Enqueue(
+                        (n.Version, (n.Content as MeshThread)?.PendingUserMessages.Count ?? 0,
+                         clock.ElapsedMilliseconds)),
+                    ex => watchError = ex);
 
             var allKeys = new List<string>(total);
             var writes = new List<IObservable<MeshNode>>(total);
@@ -197,6 +207,10 @@ public class CrossHubPatchAtomicityTest(ITestOutputHelper output) : AITestBase(o
                     + $"WRITE ERRORS ({errs.Length}): [{string.Join(" | ", errs)}]. "
                     + $"OWNER-TRUTH probe: version={ownerNode.Version} present={ownerKeys.Count} "
                     + $"missing=[{string.Join(",", ownerMissing)}]. "
+                    + (watchError is null
+                        ? ""
+                        : $"MIRROR STREAM FAULTED: {watchError.GetType().Name}: {watchError.Message} "
+                          + "(the sequence below stops there). ")
                     + $"MIRROR SEQUENCE ({seq.Length} emissions), REGRESSIONS ({regressions.Length}): "
                     + $"[{string.Join(",", regressions)}]; converged="
                     + (converged.Keys >= total ? $"YES at t{converged.Ms}ms" : "NEVER")
@@ -210,7 +224,6 @@ public class CrossHubPatchAtomicityTest(ITestOutputHelper output) : AITestBase(o
                     + "converged=YES with no regression means the mirror got everything but only after "
                     + "the settle bound — a slow box, not a lost write.");
             }
-            watch.Dispose();
 
             finalKeys.Count.Should().BeGreaterThanOrEqualTo(total,
                 $"round {round}: every concurrent cross-hub add must survive");
