@@ -187,21 +187,47 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
                     .Select(p => p.HasFlag(requiredPermission) || p.HasFlag(Permission.Sync))
                 : _hub.CheckPermission(pathToCheck, effectiveUserId, requiredPermission);
 
-        return hasPermissionObs.Select(hasPermission =>
+        // 🚨 TakeDecisionOutsideGate BEFORE the projection, not only at the end of Validate — the
+        // denial branch below does REAL WORK (a storage probe for the ownerless-partition
+        // diagnosis), and the permission fold emits synchronously while holding its CombineLatest
+        // gate on a warm cache (#899). Taking the decision off the gate here keeps that I/O out of
+        // the lock; the outer TakeDecisionOutsideGate in Validate stays for the other branches.
+        return hasPermissionObs.TakeDecisionOutsideGate().SelectMany(hasPermission =>
         {
-            if (!hasPermission)
+            if (hasPermission)
             {
-                _logger.LogDebug(
-                    "RLS: Access denied for user {UserId} - {Operation} on {Path} requires {Permission}",
-                    userId ?? "(anonymous)", context.Operation, context.Node.Path, requiredPermission);
-                return NodeValidationResult.Unauthorized(
-                    $"Access denied: {context.Operation} permission required for node '{context.Node.Path}'");
+                _logger.LogTrace(
+                    "RLS: Access granted for user {UserId} - {Operation} on {Path}",
+                    userId ?? "(anonymous)", context.Operation, context.Node.Path);
+                return Observable.Return(NodeValidationResult.Valid());
             }
 
-            _logger.LogTrace(
-                "RLS: Access granted for user {UserId} - {Operation} on {Path}",
-                userId ?? "(anonymous)", context.Operation, context.Node.Path);
-            return NodeValidationResult.Valid();
+            _logger.LogDebug(
+                "RLS: Access denied for user {UserId} - {Operation} on {Path} requires {Permission}",
+                userId ?? "(anonymous)", context.Operation, context.Node.Path, requiredPermission);
+            var denial = $"Access denied: {context.Operation} permission required for node '{context.Node.Path}'";
+
+            // A write refused by a partition that carries NO grants at all is not an ordinary
+            // permission decision — it is the #638 residue (a create that provisioned the
+            // partition and never recorded its ownership), and "Access denied" tells nobody that.
+            // Diagnose it HERE because this is where the generic message is minted; the probe runs
+            // only on a denial, so the granted path is untouched.
+            if (context.Operation is not (NodeOperation.Create or NodeOperation.Update))
+                return Observable.Return(NodeValidationResult.Unauthorized(denial));
+
+            return PartitionWriteGuardValidator.DescribeOwnerlessPartition(_hub, context.Node.Path)
+                .Take(1)
+                .Select(diagnosis => NodeValidationResult.Unauthorized(
+                    diagnosis is null ? denial : $"{denial}. {diagnosis}"))
+                .Catch<NodeValidationResult, Exception>(ex =>
+                {
+                    // The diagnosis is a courtesy on top of a decision already taken — a failing
+                    // probe must never change the verdict, but it IS logged.
+                    _logger.LogDebug(ex,
+                        "RLS: ownerless-partition diagnosis failed for {Path} — reporting the plain denial",
+                        context.Node.Path);
+                    return Observable.Return(NodeValidationResult.Unauthorized(denial));
+                });
         });
     }
 
