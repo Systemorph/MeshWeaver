@@ -73,7 +73,16 @@ public static class McpExtensions
             // and clients poll with `get`.
             .WithHttpTransport(options => options.Stateless = true)
             .WithToolsFromAssembly(typeof(McpMeshPlugin).Assembly)
-            .WithResourcesFromAssembly(typeof(McpResources).Assembly);
+            .WithResourcesFromAssembly(typeof(McpResources).Assembly)
+            // 🚨 One shared seam for argument validation (#639). Without it a call in an older
+            // schema dialect (create `nodes` before it became `node`, delete `path` before
+            // `paths`) either has the stale argument SILENTLY DROPPED — the binder's
+            // unmapped-member check is off, so a renamed parameter with a default runs with that
+            // default and reports success — or dies as the SDK's fixed
+            // "An error occurred invoking 'create'.", which names nothing. The filter runs before
+            // the binder and answers with the offending argument name; see
+            // McpArgumentValidation for the full mechanism.
+            .WithRequestFilters(filters => filters.AddCallToolFilter(McpArgumentValidation.CallToolFilter));
 
         // BindConfiguration resolves IConfiguration from DI at options
         // construction — works wherever the standard ASP.NET host is running,
