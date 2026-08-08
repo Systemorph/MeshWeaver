@@ -268,38 +268,14 @@ public static class AiSettingsNodeType
             .Select(settings => ResolveAgentQueries(settings, contextPath, user));
     }
 
-    /// <summary>
-    /// Installs a SKILL PACKAGE for <paramref name="user"/>: appends the package's skill folder (e.g.
-    /// <c>Office/Skill</c>) to the user's <see cref="AiSettings.SkillQueries"/> sources — idempotent,
-    /// fire-and-forget, same keyed-query read discipline as <see cref="EnsureExists"/> (never a
-    /// point-read of a possibly-absent node).
-    /// </summary>
-    public static void AddSkillSource(
-        IMessageHub hub, IServiceProvider services, string user, string sourceNamespace)
-    {
-        var meshService = services.GetService<IMeshService>();
-        if (meshService is null || string.IsNullOrEmpty(user) || string.IsNullOrEmpty(sourceNamespace))
-            return;
-        var path = PathFor(user);
-        hub.GetWorkspace()
-            .GetQuery($"{NodeType}|{user}", $"path:{path} nodeType:{NodeType} select:path,id,name,nodeType,content")
-            .Take(1)
-            .SelectMany(nodes =>
-            {
-                var node = nodes.FirstOrDefault(n =>
-                    string.Equals(n.NodeType, NodeType, StringComparison.OrdinalIgnoreCase));
-                var current = Effective(node, BuildDefaults(services), hub.JsonSerializerOptions);
-                var merged = MergeSkillSource(current, sourceNamespace);
-                var target = node ?? MeshNode.FromPath(path) with { NodeType = NodeType, Name = "AI Settings" };
-                return meshService.CreateOrUpdateNode(target with { Content = merged });
-            })
-            .Subscribe(
-                _ => { },
-                ex => services.GetService<ILoggerFactory>()
-                    ?.CreateLogger(typeof(AiSettingsNodeType))
-                    .LogWarning(ex, "AddSkillSource: appending {Source} for {Path} failed",
-                        sourceNamespace, path));
-    }
+    // AddSkillSource (the void, fire-and-forget skill-source installer) was DELETED here (#683):
+    // it subscribed to its own write internally, so an install plan could report success before
+    // the settings write landed — a prompt uninstall then raced it and the late write resurrected
+    // a source for a package whose nodes were gone. It had no callers left: install-time source
+    // registration goes through IPartitionInstallHook.OnPartitionInstalled (AiSourcesInstallHook),
+    // which returns IObservable<Unit> and is Concat-chained by PackageInstaller.RunInstallHooks,
+    // so the install result is not produced until the settings write has landed. Any future
+    // registration path must compose that hook chain — never a void method that self-subscribes.
 
     /// <summary>
     /// The LIVE resolved skill queries for a user + context — the reactive form the skill surfaces
