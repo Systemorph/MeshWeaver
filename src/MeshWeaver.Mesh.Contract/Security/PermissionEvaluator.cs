@@ -80,6 +80,10 @@ internal static class PermissionEvaluator
     private const string GroupMembershipNodeType = "GroupMembership";
     private const string MembershipQueryId = "$security-memberships";
 
+    // Per-gated-type cached query key prefix — one shared upstream subscription per gated node
+    // type, process-wide, like every other $security-* query.
+    private const string GatedQueryPrefix = "$security-gated:";
+
     #region Public surface
 
     public static IObservable<bool> HasPermission(IMessageHub hub, string nodePath, Permission permission)
@@ -126,6 +130,12 @@ internal static class PermissionEvaluator
         var staticNodes = CollectStaticAccessAssignments(hub);
         var staticPolicies = CollectStaticPolicies(hub);
 
+        // Type-declared subtree gates (issue #701). EMPTY on every mesh that declares none, and
+        // every branch below short-circuits on that — a deployment without gates runs the exact
+        // fold it ran before, subscribes no extra query and pays nothing.
+        var gates = CollectGates(hub);
+        var staticGatedNodes = CollectStaticGatedNodes(hub, gates);
+
         // 🚨 Capture AccessContext on the CALLER'S thread before any Rx
         // scheduler hop. AsyncLocal does NOT flow through SubscribeOn/
         // ObserveOn — when the .Select lambdas below land on TaskPool
@@ -156,12 +166,18 @@ internal static class PermissionEvaluator
         var staticOnlyScopeRoles = ComputeStaticOnlyScopeRoles(staticNodes, userId, hub.JsonSerializerOptions);
         var staticOnlyDeniedScopeRoles = ComputeStaticOnlyDeniedScopeRoles(staticNodes, userId, hub.JsonSerializerOptions);
         var fast = ComputeRoleState(staticOnlyScopeRoles, nodePath, userId, capturedContext, capturedCircuitContext, staticPolicies, staticOnlyDeniedScopeRoles);
+        // A gate declared over a STATIC node resolves synchronously — the declared public surface
+        // is readable on the first emission, with no wait on the synced queries (same reasoning as
+        // the static PublicRead policy seeded below).
+        fast = (fast.RoleIds, fast.PermissionCap,
+            fast.PublicGrant | GateGrant(gates, staticGatedNodes, nodePath));
 
         var enriched = Observable.CombineLatest(
                 ObserveEffectiveAssignments(hub, cache, nodePath, staticNodes),
                 ObserveScopePolicies(hub, cache, nodePath, staticPolicies),
                 ObserveAllMembershipNodes(hub),
-                (nodes, policies, memberships) =>
+                ObserveGatedNodes(hub, cache, gates, staticGatedNodes),
+                (nodes, policies, memberships, gatedNodes) =>
                 {
                     // Match grants to the viewer OR any group they belong to (transitively). A group
                     // grant's subject is the group path, and memberships live UNDER the group node —
@@ -170,9 +186,17 @@ internal static class PermissionEvaluator
                     // matches on. Consistent with the Postgres rebuild's global group expansion.
                     var subjects = ResolveUserGroups(userId, memberships, hub.JsonSerializerOptions).Add(userId);
                     var (granted, denied) = ComputeScopeRoles(subjects, nodes, staticNodes, hub.JsonSerializerOptions);
-                    return (Granted: granted, Denied: denied, RuntimePolicies: policies);
+                    return (Granted: granted, Denied: denied, RuntimePolicies: policies, GatedNodes: gatedNodes);
                 })
-            .Select(snap => ComputeRoleState(snap.Granted, nodePath, userId, capturedContext, capturedCircuitContext, staticPolicies, snap.Denied, snap.RuntimePolicies));
+            .Select(snap =>
+            {
+                var state = ComputeRoleState(snap.Granted, nodePath, userId, capturedContext, capturedCircuitContext, staticPolicies, snap.Denied, snap.RuntimePolicies);
+                // The gate contributes to the PUBLIC grant — ORed in after (roles ∩ cap), exactly
+                // like PartitionAccessPolicy.PublicRead — so a declared public surface needs no
+                // role and no AccessAssignment row of any kind. It only ever ADDS Read.
+                return (state.RoleIds, state.PermissionCap,
+                    state.PublicGrant | GateGrant(gates, snap.GatedNodes, nodePath));
+            });
 
         // Emit the synchronous static snapshot whenever it carries ANY signal —
         // roles OR a static public-read grant. The public grant is computed from
@@ -307,7 +331,7 @@ internal static class PermissionEvaluator
         var ns = targetNamespace ?? "";
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var staticPolicies = CollectStaticPolicies(hub);
-        return ObserveScopePolicies(hub, cache, ns, staticPolicies)
+        var fromPolicy = ObserveScopePolicies(hub, cache, ns, staticPolicies)
             .Select(policies =>
             {
                 // Nearest scope (self first) with a RedirectOnDenied wins; walk to root.
@@ -318,7 +342,22 @@ internal static class PermissionEvaluator
                     if (string.IsNullOrEmpty(s)) break;
                 }
                 return (string?)null;
-            })
+            });
+
+        // Type-declared fallback (issue #701): a NodeTypeGate supplies the redirect its instances
+        // would otherwise each have to materialise into a `_Policy` node. An actual `_Policy` STILL
+        // WINS — a deployment mid-migration keeps every hand-tuned policy it already carries, and
+        // this only fills the gap where none exists.
+        var gates = CollectGates(hub);
+        if (gates.Count == 0)
+            return fromPolicy.DistinctUntilChanged();
+
+        var staticGatedNodes = CollectStaticGatedNodes(hub, gates);
+        return Observable.CombineLatest(
+                fromPolicy,
+                ObserveGatedNodes(hub, cache, gates, staticGatedNodes),
+                (policyRedirect, gatedNodes) => policyRedirect
+                    ?? NodeTypeGateEvaluator.ResolveRedirect(gates, gatedNodes, ns))
             .DistinctUntilChanged();
     }
 
@@ -340,6 +379,55 @@ internal static class PermissionEvaluator
         }
         return result;
     }
+
+    /// <summary>
+    /// The mesh's type-declared subtree gates (<see cref="NodeTypeGate"/>), or an empty list when
+    /// none is configured — which is the default and the fast path everywhere it is consulted.
+    /// </summary>
+    private static IReadOnlyList<NodeTypeGate> CollectGates(IMessageHub hub)
+        => hub.ServiceProvider.GetService<MeshConfiguration>()?.NodeTypeGates ?? [];
+
+    /// <summary>
+    /// The STATIC nodes whose type carries a gate, as <c>path → nodeType</c>. Static providers are
+    /// read synchronously, so a gate anchored on a statically declared node applies on the very
+    /// first emission with no synced-query cold start.
+    /// </summary>
+    private static ImmutableDictionary<string, string> CollectStaticGatedNodes(
+        IMessageHub hub, IReadOnlyList<NodeTypeGate> gates)
+    {
+        if (gates.Count == 0)
+            return ImmutableDictionary<string, string>.Empty;
+
+        var gatedTypes = new HashSet<string>(
+            gates.Select(g => g.NodeType), StringComparer.OrdinalIgnoreCase);
+        var result = ImmutableDictionary<string, string>.Empty;
+        foreach (var provider in hub.ServiceProvider.GetServices<IStaticNodeProvider>())
+        {
+            foreach (var node in provider.GetStaticNodes())
+            {
+                if (string.IsNullOrEmpty(node.NodeType) || string.IsNullOrEmpty(node.Path))
+                    continue;
+                if (gatedTypes.Contains(node.NodeType))
+                    result = result.SetItem(node.Path, node.NodeType);
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// <see cref="Permission.Read"/> when <paramref name="nodePath"/> sits on a declared public
+    /// surface of its nearest gated ancestor-or-self; otherwise <see cref="Permission.None"/>.
+    /// A gate NEVER subtracts — "everything else is closed" is the framework's pre-existing
+    /// deny-by-default, not something the gate asserts.
+    /// </summary>
+    private static Permission GateGrant(
+        IReadOnlyList<NodeTypeGate> gates,
+        IReadOnlyDictionary<string, string> gatedNodes,
+        string nodePath)
+        => gates.Count > 0
+           && NodeTypeGateEvaluator.IsAnonymouslyReadable(gates, gatedNodes, nodePath)
+            ? Permission.Read
+            : Permission.None;
 
     private static IReadOnlyDictionary<string, PartitionAccessPolicy> CollectStaticPolicies(IMessageHub hub)
     {
@@ -681,6 +769,50 @@ internal static class PermissionEvaluator
                 return dict;
             })
             .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// The instances of every gated node type, as <c>path → nodeType</c> — the set a target path is
+    /// matched against to find its nearest gated ancestor. One process-wide cached query PER GATED
+    /// TYPE (there is normally one), the same global shape <see cref="ObserveAllMembershipNodes"/>
+    /// already uses, and bounded by the number of gated nodes rather than by their children.
+    ///
+    /// <para>🚨 Each per-type query is <c>StartWith</c>-seeded with the statics. This observable
+    /// feeds a <c>CombineLatest</c> that gates EVERY permission check, and CombineLatest emits
+    /// nothing until every source has: a gated-type query that is slow (or that never matches
+    /// because no such node exists yet) would otherwise stall the whole fold and hang every read.
+    /// Seeding also starts STRICTER — no gated nodes known ⇒ no public surface ⇒ deny — so the
+    /// pre-load window can only be more restrictive, never a bypass.</para>
+    /// </summary>
+    private static IObservable<ImmutableDictionary<string, string>> ObserveGatedNodes(
+        IMessageHub hub, IMeshNodeStreamCache cache, IReadOnlyList<NodeTypeGate> gates,
+        ImmutableDictionary<string, string> staticGatedNodes)
+    {
+        if (gates.Count == 0)
+            return Observable.Return(staticGatedNodes);
+
+        var options = hub.JsonSerializerOptions;
+        var perType = gates
+            .Select(gate => cache
+                .GetQuery($"{GatedQueryPrefix}{gate.NodeType}", options,
+                    $"nodeType:{gate.NodeType} scope:subtree select:path,id,namespace,name,nodeType")
+                .StartWith(Array.Empty<MeshNode>()))
+            .ToArray();
+
+        return Observable.CombineLatest(perType)
+            .Select(lists =>
+            {
+                var map = staticGatedNodes;
+                foreach (var list in lists)
+                {
+                    foreach (var node in list)
+                    {
+                        if (!string.IsNullOrEmpty(node.Path) && !string.IsNullOrEmpty(node.NodeType))
+                            map = map.SetItem(node.Path, node.NodeType);
+                    }
+                }
+                return map;
+            });
     }
 
     private static IObservable<MeshNode[]> ObserveAllRoleNodes(IMessageHub hub)
