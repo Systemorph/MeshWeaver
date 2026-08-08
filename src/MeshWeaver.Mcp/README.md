@@ -13,6 +13,18 @@ This is the transport-layer MCP module — **independent of Blazor** (it was pre
 - API-token authentication via `RequireAuthorization("McpAuth")`
 - Configurable base URL for generating NavigateTo links to the MeshWeaver UI
 
+## Argument validation
+
+Tool schemas change between releases (`create nodes` became `create node`, `delete path` became `delete paths`). A caller still speaking the older dialect used to get nothing useful: the SDK leaves `UnmappedMemberHandling` at `Skip`, so an unknown argument was **silently dropped** — and when the renamed parameter had a default, the call *ran* with that default and reported success. Anything the binder did throw on was flattened by the SDK into the fixed text `An error occurred invoking 'create'.`, which names nothing.
+
+`McpArgumentValidation` closes that. It registers **one** `CallToolFilter` in `AddMeshMcp`, so every tool — present and future — is checked against its own published `InputSchema` before the binder runs, and the call is answered with the offending argument named:
+
+- `Error: unknown argument 'nodes' for tool 'create' — expected one of: node. Did you mean 'node'? (Tool schemas change between releases — call tools/list for the current shape.)`
+- `Error: missing required argument 'node' for tool 'create' — required: node.`
+- `Error: argument 'limit' for tool 'search' expects integer, got string ("twenty").`
+
+The check is deliberately conservative — it must never reject a call the binder would have accepted: JSON `null` passes through, numeric strings bind to `integer`/`number` (`NumberHandling = AllowReadingFromString`), and a parameter whose schema declares no `type` is not judged. The messages are model-facing and stay English by design (AGENTS.md: LLM-facing tool text is not localized).
+
 ## The `GitHubSync` tool
 
 `github_sync` triggers a Space's GitHub sync headlessly — the same one-click Commit / Update / Check the browser's `GitHubAction` layout area runs. Each op runs as a mesh **Activity** (progress / cancel / persisted log) via `MeshWeaver.GitSync.GitHubActivityExtensions`; the tool fires the activity under the caller's identity and returns the activity handle immediately (it never blocks the MCP handler on the long-running GitHub I/O). Requires the Space's `_GitSync` config to exist.

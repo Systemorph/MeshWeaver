@@ -117,6 +117,36 @@ Which model a conversation actually runs on resolves in this order (see `ChatCli
 
 ---
 
+## When a Selected Model Is Unusable — the Fallback Is Honest, Never Silent
+
+A pinned model can stop resolving (its provider node lost its key, the catalog was refactored,
+the model was deleted). `AgentChatClient.ApplyStaleModelFallback` then swaps it for a working
+model so the thread keeps running. Three rules make that swap honest:
+
+- **The substitute is health-checked.** The fallback ranks the catalog through
+  `ChatClientCredentialResolver.HasUsableCredential` — a NON-EMPTY ApiKey, not merely a
+  non-`Missing` resolution — the same predicate `AgentPickerProjection` uses for the composer
+  default. A keyless, endpoint-only entry is skipped even when it sorts first by `Order`, so the
+  round never lands on a model every factory refuses with "ApiKey is missing".
+- **The round records what ACTUALLY answered.** `ThreadMessage.ModelName` carries the effective
+  model on every terminal path (Completed, Cancelled **and** Error), and the per-model
+  `TokenUsage` satellite is keyed by it — so cost is attributed to the model that ran. When the
+  effective model differs from the pick, `ThreadMessage.RequestedModelName` carries the requested
+  id alongside it. That pair is the substitution marker: an automation detects "I did not get the
+  model I asked for" from the node, without reading the chat text. An operator additionally gets a
+  `MODEL_SUBSTITUTED` warning naming both models. There is deliberately no user-facing chat notice
+  — an unusable pin is a configuration problem the user cannot act on mid-round.
+- **Nothing usable ⇒ the round FAILS.** If the selection is unusable and the catalog offers no
+  usable replacement *and* no agent could be built, the round terminates with
+  `ThreadMessageStatus.Error` and a localized message naming the situation (`chat.noUsableModel`,
+  resolved off the round's own `AccessContext.Locale`); the raw factory error stays in the log. It
+  does not proceed to produce a raw provider error under a `Completed` status, which any automation
+  would read as success.
+  (Exhausted-fallback alone is not fatal: a deployment whose keys live in factory config is
+  invisible to the credential resolver yet builds agents and runs normally.)
+
+---
+
 ## How the Model Picker Is Populated
 
 The picker is **node-based**, not factory-based. `AgentPickerProjection` runs `nodeType:LanguageModel|ModelProvider` queries over the platform `Provider` catalog, the context's `{path}/Provider` subtrees, and the user's own `{user}/_Memex` namespace, and shows the resulting `LanguageModel` nodes, grouped by provider. Those nodes come from two places: the system catalog `BuiltInLanguageModelProvider` materialises from each `{Section}:Models` config list (imported into the `Provider` partition on boot and served from the DB), and space/user `ModelProvider` nodes authored in the mesh.
