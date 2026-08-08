@@ -1958,9 +1958,13 @@ public static class NodeTypeLayoutAreas
 
         if (!string.IsNullOrEmpty(def.LastCompilationActivityPath))
         {
-            var activityHref = "/" + def.LastCompilationActivityPath;
-            panel = panel.WithView(Controls.Html(
-                $"<a href=\"{System.Net.WebUtility.HtmlEncode(activityHref)}\" style=\"font-size: 12px; color: var(--neutral-foreground-hint);\">{System.Net.WebUtility.HtmlEncode(LocalizationCatalog.Get("ui.viewCompileLog", locale))}</a>"));
+            // 🚨 A LINK is a control, not a string of HTML. Hand-built markup is banned
+            // (AGENTS.md: never emit HTML strings — use the framework's controls), and it also
+            // forced manual HtmlEncode of both the href and the label. Markdown renders the same
+            // anchor, escapes for us, and keeps the styling on the control.
+            panel = panel.WithView(Controls
+                .Markdown($"[{LocalizationCatalog.Get("ui.viewCompileLog", locale)}](/{def.LastCompilationActivityPath})")
+                .WithStyle("font-size: 12px; color: var(--neutral-foreground-hint);"));
         }
 
         return panel;
