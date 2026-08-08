@@ -20,7 +20,6 @@ public static class NodeTypeNodeType
     public static TBuilder AddNodeTypeType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead("NodeType"));
         return builder;
     }
 
