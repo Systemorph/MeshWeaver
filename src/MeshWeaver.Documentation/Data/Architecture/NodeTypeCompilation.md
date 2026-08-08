@@ -183,6 +183,33 @@ outcome: `Compiling` while in flight, then `Ok` or `Error` (with
 
 ---
 
+## Every stage is bounded — a compile can never park at `Compiling`
+
+`CompilationStatus` is also the **single-flight lock**: the compile watcher fires only on a
+transition *into* `Pending`, and the `Pending → Compiling` flip inside the owning hub's
+serialized `Update` elects exactly one dispatcher. Two concurrent triggers therefore produce
+one run — but the corollary is that a trigger arriving while the type is `Compiling` is
+**absorbed** by design. So a compile stage that never answers does not merely run late: it
+strands the NodeType at `Compiling` for the life of the activation, with nothing able to
+restart it.
+
+Every stage consequently has a wall clock, and the compile subscription is guaranteed to
+produce exactly one terminal status — an *empty* completion is caught by a totality guard, and
+**no** completion by these bounds. All four are tunable on `CompilationCacheOptions`:
+
+| Stage | Option (default) | On expiry |
+|---|---|---|
+| Source snapshot — the one-shot read of the source set | `SourceSnapshotTimeout` (30 s) | `Error`, naming the source query that never emitted |
+| `roslyn-compile` — NuGet restore, source generators, `Emit`, disk write | `RoslynCompileTimeout` (5 min) | `Error` naming the leg; the stage is **cancelled**, so an unreachable package feed stops instead of pinning a compile thread |
+| `assembly-load` — assembly load, `GetTypes`, provider reflection, config instantiation | `AssemblyLoadTimeout` (2 min) | `Error` naming the leg (a running type initializer cannot be interrupted, so the stage is abandoned, not cancelled) |
+| `assembly-store-upload` — publishing the bytes to the `IAssemblyStore` | `AssemblyStoreUploadTimeout` (2 min) | **Not** an error: an upload failure has never failed a compile, so the compile settles `Ok` with a warning naming the leg on its ActivityLog — the assembly is usable locally but cross-silo activation will not find it |
+
+A tripped bound is never something to raise: it means a stage genuinely stopped answering, and
+the message names which one. Fix that stage, then retry with **Create Release** / the Compile
+button — the terminal status is settled, so the next trigger dispatches normally.
+
+---
+
 ## Cancelling a compile
 
 Compilation is an Activity, so it cancels through the **Activity Control Plane**
@@ -295,3 +322,4 @@ loaded on it keep running until they cycle.
 | Find the current release | `NodeTypeDefinition.LatestReleasePath` |
 | Pin instances to a fixed release | Set `NodeTypeDefinition.RequestedReleasePath` |
 | Understand why it recompiled | `HasUsableBuild` failed rule 2 (assembly gone) or rule 3 (framework changed) |
+| Understand a "Compile leg '…' did not complete within Ns" error | That stage stopped answering — see [Every stage is bounded](#every-stage-is-bounded--a-compile-can-never-park-at-compiling) |
