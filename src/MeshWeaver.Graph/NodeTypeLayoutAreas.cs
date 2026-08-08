@@ -182,6 +182,16 @@ public static class NodeTypeLayoutAreas
                             return Task.CompletedTask;
                         }));
                 }
+                else if (def.CompilationStatus == CompilationStatus.Unavailable)
+                {
+                    // The state could not be DETERMINED — no Roslyn diagnostics exist to
+                    // mark up, and no code fix is implied. Offer the one thing that helps:
+                    // a LINK (never an embedded area — the activity is history and may be
+                    // unaddressable) to whatever the last compile did manage to log.
+                    if (!string.IsNullOrEmpty(def.LastCompilationActivityPath))
+                        stack = stack.WithView(Controls.Markdown(
+                            $"[{host.Localize("ui.viewCompileLog")}](/{def.LastCompilationActivityPath})"));
+                }
                 else if (!string.IsNullOrEmpty(def.LastCompilationActivityPath))
                 {
                     // Live activity log = the "show details" of an IN-FLIGHT compile
@@ -304,6 +314,13 @@ public static class NodeTypeLayoutAreas
                 string.IsNullOrEmpty(def.CompilationError)
                     ? "The last compile failed — no diagnostic captured. Click **Recycle** on the parent NodeType to retry."
                     : $"```text\n{def.CompilationError}\n```"),
+            // 🚨 NOT a failure: the last attempt could not DETERMINE the state (a settle
+            // or lookup timeout). Never phrase this as broken code.
+            CompilationStatus.Unavailable => ("❔", "Compile state unknown",
+                (string.IsNullOrEmpty(def.CompilationError)
+                    ? "The last attempt to determine this type's build state did not complete."
+                    : $"```text\n{def.CompilationError}\n```")
+                + "\n\nNothing is known to be wrong with the code — click **Recompile** to try again."),
             // null / Unknown — split on whether there's anything to compile at all.
             _ => hasSource
                 ? ("…", "Waiting for compile to start",
@@ -1032,6 +1049,7 @@ public static class NodeTypeLayoutAreas
                 CompilationStatus.Pending => "Compiling…",
                 CompilationStatus.Compiling => "Compiling…",
                 CompilationStatus.Error => "Last compile: Error",
+                CompilationStatus.Unavailable => host.Localize("ui.compileStateUnknown"),
                 _ => ""
             }).WithStyle("color: var(--neutral-foreground-hint); font-size: 13px;"));
 
@@ -1248,6 +1266,7 @@ public static class NodeTypeLayoutAreas
                 CompilationStatus.Compiling => "Compiling…",
                 CompilationStatus.Ok => "Last compile: Ok",
                 CompilationStatus.Error => "Last compile: Error",
+                CompilationStatus.Unavailable => host.Localize("ui.compileStateUnknown"),
                 _ => ""
             }).WithStyle("color: var(--neutral-foreground-hint); font-size: 13px;"));
 
@@ -1762,7 +1781,10 @@ public static class NodeTypeLayoutAreas
             && !string.IsNullOrEmpty(def.LatestAssemblyPath);
         var neverCompiled = !hasBuild
             && status != CompilationStatus.Compiling
-            && status != CompilationStatus.Error;
+            && status != CompilationStatus.Error
+            // "Could not determine" is not "never compiled" — claiming the latter
+            // hides the real (retryable) cause behind a wrong first build.
+            && status != CompilationStatus.Unavailable;
 
         var panel = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -1785,6 +1807,15 @@ public static class NodeTypeLayoutAreas
             chip = Controls.Body(host.Localize("ui.compilationFailed")).WithStyle("font-weight: 600; color: var(--error-foreground);");
             compileButtonLabel = "Retry compile";
             panelStyleSuffix = "background: var(--error-fill-rest); border-color: var(--error-stroke-rest);";
+        }
+        else if (status == CompilationStatus.Unavailable)
+        {
+            // Undetermined, not failed: warning tint (something needs attention) rather
+            // than the error tint that reads as "your code is broken".
+            chip = Controls.Body(host.Localize("ui.compileStateUnknown"))
+                .WithStyle("font-weight: 600; color: var(--warning-foreground);");
+            compileButtonLabel = "Retry compile";
+            panelStyleSuffix = "background: var(--warning-fill-rest); border-color: var(--warning-stroke-rest);";
         }
         else if (neverCompiled)
         {
@@ -1903,6 +1934,17 @@ public static class NodeTypeLayoutAreas
                 .WithView(Controls.Html(
                     $"<pre style=\"white-space: pre-wrap; font-family: monospace; font-size: 12px; color: var(--error); margin: 0;\">{System.Net.WebUtility.HtmlEncode(def.CompilationError)}</pre>"));
         }
+        else if (def.CompilationStatus == CompilationStatus.Unavailable)
+        {
+            // Availability problem, not a compile failure — hint colour, and the text is
+            // the "could not determine" message, never Roslyn diagnostics.
+            panel = panel
+                .WithView(Controls.Body(LocalizationCatalog.Get("ui.compileStateUnknown", locale))
+                    .WithStyle("color: var(--warning-foreground); font-weight: 600;"));
+            if (!string.IsNullOrEmpty(def.CompilationError))
+                panel = panel.WithView(Controls.Body(def.CompilationError!)
+                    .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px;"));
+        }
         else if (def.CompilationStatus == CompilationStatus.Ok
                  && !string.IsNullOrEmpty(def.LatestReleasePath))
         {
@@ -1916,9 +1958,13 @@ public static class NodeTypeLayoutAreas
 
         if (!string.IsNullOrEmpty(def.LastCompilationActivityPath))
         {
-            var activityHref = "/" + def.LastCompilationActivityPath;
-            panel = panel.WithView(Controls.Html(
-                $"<a href=\"{System.Net.WebUtility.HtmlEncode(activityHref)}\" style=\"font-size: 12px; color: var(--neutral-foreground-hint);\">View full compile log →</a>"));
+            // 🚨 A LINK is a control, not a string of HTML. Hand-built markup is banned
+            // (AGENTS.md: never emit HTML strings — use the framework's controls), and it also
+            // forced manual HtmlEncode of both the href and the label. Markdown renders the same
+            // anchor, escapes for us, and keeps the styling on the control.
+            panel = panel.WithView(Controls
+                .Markdown($"[{LocalizationCatalog.Get("ui.viewCompileLog", locale)}](/{def.LastCompilationActivityPath})")
+                .WithStyle("font-size: 12px; color: var(--neutral-foreground-hint);"));
         }
 
         return panel;

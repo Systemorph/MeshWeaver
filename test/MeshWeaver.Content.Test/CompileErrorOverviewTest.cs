@@ -124,6 +124,124 @@ public class CompileErrorOverviewTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact(Timeout = 120_000)]
+    public async Task TimedOutNodeType_InstanceOverview_ReadsAsRetry_AndLinksTheCompileLog()
+    {
+        // 🚨 #641: a LOOKUP/SETTLE TIMEOUT is not a compile failure. A NodeType whose state
+        // could not be determined persists CompilationStatus.Unavailable (written by
+        // NodeTypeContractHandler when its settle wait elapses), and every instance of it
+        // must render the retry copy — never "There was a compilation error… Please correct
+        // the code" for source that was never even read. It must also LINK the compile log:
+        // on a timeout that log is the only evidence of how far the build actually got.
+        const string typeId = "TimedOutOverviewType";
+        const string typePath = $"{Partition}/{typeId}";
+        const string activityPath = $"{typePath}/_Activity/compile-timeout";
+        const string instanceId = "timed-out-overview-instance";
+
+        var workspace = Mesh.GetWorkspace();
+
+        await NodeFactory.CreateNode(new MeshNode(typeId, Partition)
+        {
+            Name = "Timed Out Overview Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "A type whose compile state could not be determined.",
+                // No Configuration / Sources: nothing here is broken, and nothing will
+                // recompile it — the state is simply UNDETERMINED.
+                CompilationStatus = CompilationStatus.Unavailable,
+                CompilationError =
+                    "The compile state of 'TimedOutOverviewType' could not be determined: "
+                    + "it did not settle within 60s. This is a TIMEOUT, not a compilation error.",
+                LastCompilationActivityPath = activityPath
+            }
+        }).Should().Emit();
+
+        // The seeded state must survive as written — no watcher may reinterpret an
+        // undetermined state as a compile (the kickoff gates on CompilationStatus == null).
+        await workspace.GetMeshNodeStream(typePath)
+            .Should().Within(30.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Unavailable);
+        Output.WriteLine("NodeType is parked at Unavailable.");
+
+        await NodeFactory.CreateNode(new MeshNode(instanceId, Partition)
+        {
+            Name = "Timed Out Overview Instance",
+            NodeType = typePath,
+            State = MeshNodeState.Active
+        }).Should().Emit();
+
+        var client = GetClient();
+        var overviewRef = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
+        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address($"{Partition}/{instanceId}"), overviewRef);
+
+        // Same non-hang contract as the broken-type test: the overlay hub activates and the
+        // Overview comes back — but with the RETRY story, not the code-fix one.
+        await stream.GetControlStream($"{overviewRef.Area}/1")
+            .Should().Within(60.Seconds())
+            .Match(c => c is MarkdownControl md
+                && (md.Markdown?.ToString() ?? string.Empty) is var t
+                && t.Contains("No code change is needed", StringComparison.OrdinalIgnoreCase)
+                && !t.Contains("Please correct the code", StringComparison.OrdinalIgnoreCase)
+                && t.Contains($"](/{activityPath})", StringComparison.Ordinal));
+        Output.WriteLine("Instance Overview reads as a timeout, links the compile log, and never says 'correct the code'.");
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task BrokenNodeType_InstanceOverview_StillAsksForACodeFix_AndLinksTheCompileLog()
+    {
+        // The counterpart guarantee: distinguishing timeouts must not soften a REAL compile
+        // failure. A genuine Roslyn error still shows the diagnostics AND asks for a code fix
+        // — and now also links the compile activity from the INSTANCE page.
+        const string typeId = "BrokenLinkedType";
+        const string typePath = $"{Partition}/{typeId}";
+        const string instanceId = "broken-linked-instance";
+
+        var workspace = Mesh.GetWorkspace();
+
+        await NodeFactory.CreateNode(new MeshNode(typeId, Partition)
+        {
+            Name = "Broken Linked Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Deliberately non-compiling — the genuine-failure counterpart.",
+                Configuration = "config => still not valid C# (((["
+            }
+        }).Should().Emit();
+
+        // Wait for the REAL compile to fail AND stamp the activity it wrote its log to.
+        var failed = await workspace.GetMeshNodeStream(typePath)
+            .Should().Within(90.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Error
+                && !string.IsNullOrEmpty(d.LastCompilationActivityPath));
+        var activityPath = ((NodeTypeDefinition)failed.Content!).LastCompilationActivityPath!;
+        Output.WriteLine($"Compile settled at Error with activity {activityPath}.");
+
+        await NodeFactory.CreateNode(new MeshNode(instanceId, Partition)
+        {
+            Name = "Broken Linked Instance",
+            NodeType = typePath,
+            State = MeshNodeState.Active
+        }).Should().Emit();
+
+        var client = GetClient();
+        var overviewRef = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
+        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address($"{Partition}/{instanceId}"), overviewRef);
+
+        await stream.GetControlStream($"{overviewRef.Area}/1")
+            .Should().Within(60.Seconds())
+            .Match(c => c is MarkdownControl md
+                && (md.Markdown?.ToString() ?? string.Empty) is var t
+                && t.Contains("Please correct the code", StringComparison.OrdinalIgnoreCase)
+                && t.Contains($"](/{activityPath})", StringComparison.Ordinal));
+        Output.WriteLine("Genuine failure still asks for a code fix — and now links its compile log.");
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task OneBrokenNodeType_DoesNotBreak_OtherNodes()
     {
         // 🚨 Isolation contract: a single non-compiling NodeType must NOT take down the rest of the
