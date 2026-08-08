@@ -1,4 +1,6 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Immutable;
+using System.Reactive.Concurrency;
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
@@ -49,9 +51,13 @@ namespace MeshWeaver.Hosting.PostgreSql;
 ///     only ship <c>mesh_nodes</c>.</item>
 /// </list>
 ///
-/// <para>The Initial emission is a one-shot snapshot. Live deltas across
-/// partitions are out of scope; a cross-partition feed (Activity, Latest
-/// Threads, Recently Viewed) is an explicit re-query, not a live cursor.</para>
+/// <para>Both shapes are LIVE — one Initial, then Added / Updated / Removed as writes land.
+/// The cross-partition fan-out used to be a one-shot snapshot ("live deltas across partitions
+/// are out of scope"), which silently made every PATH-LESS query permanently stale in a running
+/// process: nothing else in the chain holds a change subscription for that query shape. The
+/// permission evaluator's global <c>nodeType:GroupMembership</c> query is one of those, so group
+/// membership could not be revoked without a restart (issue #697). See
+/// <see cref="FanOutQuery{T}"/> for the relevance gate that keeps the re-query bounded.</para>
 ///
 /// <para><b>Multi-query requests route PER QUERY.</b> A
 /// <see cref="MeshQueryRequest.Queries"/> bundle can mix queries owned by
@@ -77,6 +83,10 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     // (which EXCLUDES auth/admin) — see the hint fallback in EnumerateFanOutAsync.
     private readonly MeshConfiguration? _meshConfiguration;
     private readonly QueryParser _parser = new();
+    // In-memory query matcher — used ONLY by the fan-out's live relevance gate to decide whether a
+    // change notification's payload could enter this query's result set (see FanOutQuery). Never
+    // used to produce results: the authoritative rows always come from the cross-schema re-query.
+    private readonly QueryEvaluator _evaluator = new();
     private long _version;
 
     // Per-schema scoped-query delegates, keyed by the CACHED adapter instance (so each shares
@@ -242,9 +252,46 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
 
     /// <summary>
     /// The cross-schema fan-out for the queries of a request that do NOT pin to a
-    /// concrete partition. One-shot: emits a single Initial snapshot (the union of
-    /// every fan-out query's rows, deduped by path) and completes — live deltas
-    /// across partitions are out of scope (see the class doc).
+    /// concrete partition: one Initial snapshot (the union of every fan-out query's
+    /// rows, deduped by path) followed by LIVE <c>Added</c> / <c>Updated</c> /
+    /// <c>Removed</c> deltas — the same Initial-then-changes contract every other
+    /// <see cref="IMeshQueryProvider"/> honours.
+    ///
+    /// <para>🚨 This used to be ONE-SHOT (Initial, then complete) and that was issue #697 —
+    /// a fail-OPEN revocation hole, not a cosmetic gap. <c>PermissionEvaluator</c> resolves a
+    /// user's groups from a PATH-LESS synced query (<c>$security-memberships</c> —
+    /// <c>nodeType:GroupMembership scope:subtree</c>, path-less because a group and its members
+    /// may live in a different partition than the grant). Path-less ⇒
+    /// <see cref="GetDelegateForPath"/> returns null ⇒ the whole request lands HERE; meanwhile
+    /// <c>StorageAdapterMeshQueryProvider.DefersToNativeProvider</c> returns true for an empty
+    /// path so the pedestrian contributes an empty Initial and opens NO change subscription, and
+    /// <c>StaticNodeQueryProvider</c> is one-shot by nature. With this method one-shot too, NO
+    /// provider held a live subscription: the process-wide snapshot behind
+    /// <c>IMeshNodeStreamCache.GetQuery</c> (<c>Replay(1).AutoConnect(1)</c>, never rebuilt) froze
+    /// at its Initial for the lifetime of the process. Removing a user from a group therefore
+    /// never reached the node-open path — the removed user kept reading protected records until
+    /// the portal was restarted — and re-adding them was equally invisible, in both directions.
+    /// (Deletes only ever "worked" by accident, through <c>SyncedQueryMeshNodes</c>' un-gated
+    /// <c>IMeshChangeFeed</c> Deleted fast-path, which several delete routes bypass and which has
+    /// no Created/Updated counterpart.) Every path-less query had the same hole —
+    /// <c>$security-roles</c> included.</para>
+    ///
+    /// <para><b>Cost is bounded by an EXACT relevance gate, not by a debounce.</b> A path-less
+    /// query's path/scope predicate (<c>PathMatcher.ShouldNotify</c> with an empty base) matches
+    /// EVERY notification, so re-querying on it would run a cross-schema UNION on every write in
+    /// the process. Instead <c>IsRelevant</c> decides from the notification itself: a change to a
+    /// path already in the result set can alter or remove a row, so it is relevant; otherwise only
+    /// a write whose payload actually satisfies the query's own filter
+    /// (<see cref="QueryEvaluator.Matches"/> — the same matcher the pedestrian provider uses) can
+    /// bring a NEW row in. A delete carries no payload (<c>Entity == null</c>), but a delete can
+    /// only ever REMOVE, so "not in the current result set" is a complete answer for it. Anything
+    /// we cannot classify (a notification with no entity that is not a delete) re-queries — under-
+    /// notifying is a security hole, over-notifying only costs a query.</para>
+    ///
+    /// <para>Not completing is the norm, not a change in kind: the per-schema
+    /// <see cref="PostgreSqlMeshQuery"/> that serves every SCOPED query never completes either, so
+    /// no consumer can already be relying on a query stream terminating. Consumers take the
+    /// snapshot with <c>.Where(c =&gt; c.ChangeType == Initial).Take(1)</c>.</para>
     /// </summary>
     private IObservable<QueryResultChange<T>> FanOutQuery<T>(
         MeshQueryRequest request, IReadOnlyList<ParsedQuery> parsedQueries, JsonSerializerOptions options)
@@ -256,6 +303,8 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
                     "[FanOut] Query decision: NeedsFanOut={NeedsFanOut} Path='{Path}' Source={Source} Query='{Q}'",
                     NeedsFanOut(parsed), parsed.Path ?? "(null)", parsed.Source, request.Query);
         }
+
+        var firstParsed = parsedQueries.Count > 0 ? parsedQueries[0] : ParsedQuery.Empty;
 
         // MergeProviderObservables in MeshQuery gates the merged Initial on
         // every provider emitting Initial. If we return Observable.Empty when
@@ -271,10 +320,11 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         // time — running the cross-schema SQL on the calling hub/grain's turn
         // even when the consumer never subscribed, and keeping it running after
         // the consumer unsubscribed. EnumerateFanOutAsync is the private async
-        // leaf and is pumped exclusively inside this pool slot.
-        return _ioPool.Invoke(async ct =>
+        // leaf and is pumped exclusively inside this pool slot. Re-invoked (never
+        // replayed) for each relevant change below.
+        IObservable<List<(string? Path, T Item)>> RunQuery() => _ioPool.Invoke(async ct =>
         {
-            var items = new List<T>();
+            var items = new List<(string? Path, T Item)>();
             // Path-dedupe across the fan-out queries of one request — two branches
             // (e.g. `path:X` + `namespace:X scope:subtree`) can match the same row.
             var seenPaths = parsedQueries.Count > 1
@@ -292,18 +342,182 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
                         && !string.IsNullOrEmpty(node.Path)
                         && !seenPaths.Add(node.Path))
                         continue;
-                    items.Add(typed);
+                    items.Add((node.Path, typed));
                 }
             }
-            return new QueryResultChange<T>
-            {
-                ChangeType = QueryChangeType.Initial,
-                Version = Interlocked.Increment(ref _version),
-                Query = parsedQueries[0],
-                Items = items,
-                Timestamp = DateTimeOffset.UtcNow,
-            };
+            return items;
         });
+
+        QueryResultChange<T> Change(QueryChangeType type, IReadOnlyList<T> items) => new()
+        {
+            ChangeType = type,
+            Version = Interlocked.Increment(ref _version),
+            Query = firstParsed,
+            Items = items,
+            Timestamp = DateTimeOffset.UtcNow,
+        };
+
+        var feed = _partitionProvider?.MergedChanges;
+        if (feed is null)
+            // No merged change feed to watch (no partition provider wired) — there is nothing to
+            // subscribe to, so keep the historical one-shot rather than pay for a live loop that
+            // could never fire.
+            return RunQuery().Select(results => Change(
+                QueryChangeType.Initial, results.Select(r => r.Item).ToList()));
+
+        return Observable.Create<QueryResultChange<T>>(observer =>
+        {
+            var disposables = new System.Reactive.Disposables.CompositeDisposable();
+            // Mutated ONLY inside ApplySnapshot, which the Concat below serialises.
+            var currentItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+            // Lock-free view of the paths currently in the result set: read by IsRelevant on the
+            // change-feed's thread, REPLACED wholesale (never mutated) by ApplySnapshot. An
+            // immutable set + Volatile keeps the hot filter off any lock.
+            var livePaths = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
+
+            bool IsRelevant(DataChangeNotification n)
+            {
+                if (!string.IsNullOrEmpty(n.Path) && Volatile.Read(ref livePaths).Contains(n.Path))
+                    return true;                      // in the result set — may be updated or removed
+                if (n.Kind == DataChangeKind.Deleted)
+                    return false;                     // a delete can only remove, and we don't hold it
+                if (n.Entity is not MeshNode node)
+                    return true;                      // unclassifiable — re-query rather than miss it
+                foreach (var parsed in parsedQueries)
+                    if (NeedsFanOut(parsed) && _evaluator.Matches(node, parsed))
+                        return true;                  // a NEW row could enter the result set
+                return false;
+            }
+
+            void ApplySnapshot(List<(string? Path, T Item)> newResults)
+            {
+                var newItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+                foreach (var (path, item) in newResults)
+                    if (!string.IsNullOrEmpty(path))
+                        newItems[path] = item;
+
+                var added = new List<T>();
+                var updated = new List<T>();
+                var removed = new List<T>();
+                foreach (var (path, item) in newItems)
+                {
+                    if (currentItems.TryGetValue(path, out var existing))
+                    {
+                        if (!ItemEquals(existing, item))
+                            updated.Add(item);
+                    }
+                    else
+                    {
+                        added.Add(item);
+                    }
+                }
+                foreach (var (path, item) in currentItems)
+                    if (!newItems.ContainsKey(path))
+                        removed.Add(item);
+
+                currentItems.Clear();
+                foreach (var (p, v) in newItems)
+                    currentItems[p] = v;
+                Volatile.Write(ref livePaths,
+                    newItems.Keys.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
+
+                if (added.Count > 0) observer.OnNext(Change(QueryChangeType.Added, added));
+                if (updated.Count > 0) observer.OnNext(Change(QueryChangeType.Updated, updated));
+                if (removed.Count > 0) observer.OnNext(Change(QueryChangeType.Removed, removed));
+            }
+
+            // Subscribe to the feed BEFORE the initial query so a write landing during the
+            // fan-out's I/O window is captured rather than dropped (the merged feed is a plain
+            // Subject with no buffering) — same race-fix as PostgreSqlMeshQuery / the pedestrian.
+            var earlyBacklog = new List<DataChangeNotification>();
+            var earlyLock = new object();
+            var initialDone = false;
+            var earlySubscription = feed.Where(IsRelevant).Subscribe(n =>
+            {
+                lock (earlyLock)
+                {
+                    if (!initialDone)
+                        earlyBacklog.Add(n);
+                }
+            });
+            disposables.Add(earlySubscription);
+
+            disposables.Add(RunQuery().Subscribe(
+                initialResults =>
+                {
+                    var initialItems = new List<T>(initialResults.Count);
+                    foreach (var (path, item) in initialResults)
+                    {
+                        initialItems.Add(item);
+                        if (!string.IsNullOrEmpty(path))
+                            currentItems[path] = item;
+                    }
+                    Volatile.Write(ref livePaths,
+                        currentItems.Keys.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
+
+                    var changeBuffer = new System.Reactive.Subjects.Subject<DataChangeNotification>();
+                    // 🚨 ORDER MATTERS. CompositeDisposable disposes in INSERTION order, so the
+                    // feeding subscription must be registered BEFORE the buffer it writes into —
+                    // the other way round, teardown disposes changeBuffer while the subscription
+                    // is still live and a write in that window calls OnNext on a disposed Subject
+                    // (the ObjectDisposedException that starved the $security-access fold, #889).
+                    disposables.Add(feed.Where(IsRelevant).Subscribe(changeBuffer));
+                    disposables.Add(changeBuffer);
+                    // One re-query per relevant change, serialised via Concat so currentItems is
+                    // never raced. No debounce: a batching window is exactly the gap in which a
+                    // subscriber attaching mid-flush sees the pre-write snapshot.
+                    disposables.Add(changeBuffer
+                        .Select(_ => RunQuery())
+                        .Concat()
+                        .Subscribe(ApplySnapshot, ex => observer.OnError(ex)));
+
+                    DataChangeNotification[] backlog;
+                    lock (earlyLock)
+                    {
+                        backlog = earlyBacklog.ToArray();
+                        earlyBacklog.Clear();
+                        initialDone = true;
+                    }
+                    earlySubscription.Dispose();
+
+                    observer.OnNext(Change(QueryChangeType.Initial, initialItems));
+
+                    // Drain the backlog through the same serialised pipeline rather than a
+                    // parallel re-query that would race the first live batch.
+                    if (backlog.Length > 0)
+                    {
+                        Scheduler.Default.Schedule(() =>
+                        {
+                            foreach (var n in backlog)
+                            {
+                                if (disposables.IsDisposed) return;
+                                try { changeBuffer.OnNext(n); }
+                                catch (ObjectDisposedException) { return; }
+                            }
+                        });
+                    }
+                },
+                ex => observer.OnError(ex)));
+
+            return disposables;
+        });
+    }
+
+    /// <summary>
+    /// Equality for the live diff above. For a <see cref="MeshNode"/> the volatile / non-
+    /// serializable fields are stripped first — <c>HubConfiguration</c> and
+    /// <c>GlobalServiceConfigurations</c> hold <c>Func&lt;&gt;</c>s that never compare equal, and
+    /// <c>LastModified</c>/<c>Version</c> change on every write — so a re-query that returned the
+    /// same content does not masquerade as an Updated. Mirrors
+    /// <c>StorageAdapterMeshQueryProvider.ItemEquals</c> and its <see cref="PostgreSqlMeshQuery"/>
+    /// twin; the three diff loops are candidates for a shared helper.
+    /// </summary>
+    private static bool ItemEquals<T>(T a, T b)
+    {
+        if (a is MeshNode nodeA && b is MeshNode nodeB)
+            return nodeA with { HubConfiguration = null, GlobalServiceConfigurations = [], LastModified = default, Version = 0 }
+                == nodeB with { HubConfiguration = null, GlobalServiceConfigurations = [], LastModified = default, Version = 0 };
+        return Equals(a, b);
     }
 
     /// <summary>
