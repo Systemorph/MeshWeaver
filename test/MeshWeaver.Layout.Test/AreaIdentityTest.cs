@@ -108,6 +108,23 @@ public class AreaIdentityTest
             + "rather than hot-swap the live stream under the retained component (#733)");
     }
 
+    [Theory]
+    // Separator forging: with a "|"-joined identity, Area "a|b" + no Id produced the SAME string as
+    // Area "a" + Id "b". As a Blazor @key that retains the WRONG component — the very defect this
+    // identity exists to end — so the parts are length-prefixed and cannot be confused.
+    [InlineData("a|b", null, "a", "b")]
+    [InlineData("x", "y|z", "x|y", "z")]
+    // Null vs empty must also stay distinct: both collapse to "" under interpolation.
+    [InlineData("Area", null, "Area", "")]
+    public void PartsCannotForgeAnotherIdentity(string areaA, string? idA, string areaB, string? idB)
+    {
+        var address = new Address("host", "MTPL2027");
+        var a = new LayoutAreaControl(address, new LayoutAreaReference(areaA) { Id = idA });
+        var b = new LayoutAreaControl(address, new LayoutAreaReference(areaB) { Id = idB });
+
+        a.GetStreamIdentity().Should().NotBe(b.GetStreamIdentity());
+    }
+
     [Fact]
     public void ChangingOnlyTheReferenceId_ChangesTheStreamIdentity()
     {

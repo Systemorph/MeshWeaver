@@ -317,5 +317,18 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     /// </summary>
     /// <returns>A stable string identity for this reference.</returns>
     public string GetIdentity()
-        => $"{Layout}|{Area}|{NormalizeScalar(Id)}";
+        // 🚨 UNAMBIGUOUS by construction — this string is a Blazor @key, so a collision retains the
+        // WRONG component (exactly the #732/#733 class this identity exists to end). Plain
+        // interpolation is not safe here: it collapses null and "" to the same text, and any part
+        // containing the separator can forge another identity's key (Area "a|b" + Id null vs Area
+        // "a" + Id "b"). So each part is length-prefixed and null is distinct from empty.
+        => $"{IdentityPart(Layout)}{IdentityPart(Area)}{IdentityPart(NormalizeScalar(Id))}";
+
+    /// <summary>
+    /// One length-prefixed identity segment: <c>-:</c> for null, else <c>{length}:{value}</c>. The
+    /// length prefix makes concatenation injective, so no combination of part values can produce
+    /// the same identity as a different combination.
+    /// </summary>
+    public static string IdentityPart(string? value)
+        => value is null ? "-:" : $"{value.Length}:{value}";
 }
