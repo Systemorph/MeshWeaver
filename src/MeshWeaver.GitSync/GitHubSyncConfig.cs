@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json.Serialization;
 
 using MeshWeaver.Messaging;
 
@@ -65,14 +66,27 @@ public record GitHubSyncConfig
     [Translation("de", "Zweiweg (Nodes, die seit der letzten Synchronisierung auf dem Server geändert wurden, nicht überschreiben — stattdessen zurück committen)")]
     public bool TwoWay { get; init; }
 
-    /// <summary>Create <see cref="Branch"/> if it does not exist yet. Default true.</summary>
+    /// <summary>Create <see cref="Branch"/> if it does not exist yet. Default true.
+    ///
+    /// <para>🚨 <see cref="JsonIgnoreCondition.Never"/> is REQUIRED, not decoration. The hub
+    /// serializer runs <c>DefaultIgnoreCondition = WhenWritingDefault</c>, which compares against
+    /// <c>default(bool)</c> — i.e. <c>false</c>. A property whose initializer is <c>true</c>
+    /// therefore has its <c>false</c> OMITTED on write, and the initializer puts <c>true</c> back on
+    /// read: unticking this in the settings tab silently re-ticked itself, and an unattended
+    /// provisioning could not express "never create anything in this repo" at all.</para>
+    /// </summary>
     [Description("Create the branch if it doesn't exist")]
     [Translation("de", "Branch anlegen, falls er nicht existiert")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool CreateBranchIfMissing { get; init; } = true;
 
-    /// <summary>Create the repository (private) if it does not exist yet. Default true.</summary>
+    /// <summary>Create the repository (private) if it does not exist yet. Default true.
+    /// <see cref="JsonIgnoreCondition.Never"/> for the same reason as
+    /// <see cref="CreateBranchIfMissing"/> — a <c>= true</c> bool cannot otherwise persist a
+    /// <c>false</c>.</summary>
     [Description("Create the repository (private) if it doesn't exist")]
     [Translation("de", "Repository (privat) anlegen, falls es nicht existiert")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool CreateRepoIfMissing { get; init; } = true;
 
     /// <summary>
