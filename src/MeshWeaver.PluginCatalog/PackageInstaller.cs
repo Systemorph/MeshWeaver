@@ -1618,15 +1618,25 @@ public static class PackageInstaller
             return Observable.Throw<bool>(new InvalidOperationException(
                 "No IMeshService is registered — cannot remove an install record."));
 
+        // 🚨 System identity is REQUIRED, never best-effort. Plugins/_Policy caps delete for every
+        // caller (install records are written only under scoped impersonation), so falling back to
+        // Disposable.Empty would run this delete under whatever ambient principal happens to be on
+        // the thread — denied, and reported as a puzzling access error instead of a wiring fault.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        if (accessService is null)
+            return Observable.Throw<bool>(new InvalidOperationException(
+                "No AccessService is registered — cannot remove an install record: the delete must "
+                + "run as System because Plugins/_Policy denies it to every ordinary caller."));
+
         var recordPath = $"{InstalledPartition}/{packageId}";
         return Observable.Using(
-                () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
-                      ?? Disposable.Empty,
+                () => accessService.ImpersonateAsSystem(),
                 _ => meshService.DeleteNode(recordPath))
             .Take(1)
-            .Do(deleted => logger?.LogInformation(
-                "[PackageInstaller] removing install record {Path}: {Result}",
-                recordPath, deleted ? "removed" : "not found"));
+            // DeleteNode faults on a missing node rather than answering false, so a value here IS a
+            // removal — the caller's error path reports the absent-record case.
+            .Do(_ => logger?.LogInformation(
+                "[PackageInstaller] removed install record {Path}", recordPath));
     }
 }
 
