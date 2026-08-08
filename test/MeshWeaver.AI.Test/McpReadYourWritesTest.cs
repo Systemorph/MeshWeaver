@@ -241,38 +241,23 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
     // ---- ExecuteScript --------------------------------------------------------
 
     /// <summary>
-    /// 🐛 CHARACTERIZATION TEST for a data-loss defect this class's mesh exposes — read the
-    /// whole comment before "fixing" the assertion.
+    /// End-to-end guard for the #912 fix on the FILE-SYSTEM backend: an <c>IsExecutable</c> Code
+    /// node must survive the persistence round-trip and dispatch.
     ///
-    /// <para>This class persists to the FILE SYSTEM (<c>AddFileSystemPersistence</c>). A node whose
-    /// Content is a <c>CodeConfiguration</c> is serialized by
-    /// <c>CSharpFileParser.Serialize</c> → <c>SerializeCodeConfiguration</c>
-    /// (<c>src/MeshWeaver.Hosting/Persistence/Parsers/CSharpFileParser.cs:100</c>), which writes
-    /// <b>only <c>config.Code</c></b> — no <c>&lt;meshweaver&gt;</c> header. The read side
-    /// (<c>ParseNode</c>, same file) therefore rebuilds <c>CodeConfiguration { Code, Language }</c>
-    /// and every other field is silently lost: <c>IsExecutable</c>, <c>ActivityParentPath</c>, the
-    /// <c>Last*</c> execution stamps. So a Code node created here with
-    /// <c>IsExecutable = true</c> reads back <b>false</b>, and the run is legitimately refused.</para>
+    /// <para>This class persists via <c>AddFileSystemPersistence</c>, and
+    /// <c>CSharpFileParser</c> used to claim EVERY <c>CodeConfiguration</c> and write only the
+    /// bare code — the node read back <c>IsExecutable = false</c> and the run was (truthfully)
+    /// refused; this test was the labelled characterization of that loss. <c>CanSerialize</c> now
+    /// declines configurations a bare <c>.cs</c> file cannot represent, so this node falls
+    /// through to the lossless whole-node JSON form and the flag survives.</para>
     ///
-    /// <para>That is a genuine bug, and it is NOT this test's or #841's to fix: repairing it means
-    /// emitting a header block from <c>SerializeCodeConfiguration</c>, and that same serializer is
-    /// what <c>GitSync</c> uses to write <c>.cs</c> files into users' git repositories
-    /// (<c>GitHubSyncService</c>, <c>NodeFileMapper</c>) — a cross-repo format change that needs its
-    /// own decision. Track it separately.</para>
-    ///
-    /// <para>What #841 changed, and what this test now pins: the refusal <b>reaches the caller</b>.
-    /// Before, <c>ExecuteScript</c> was fire-and-forget and answered <c>Dispatched</c> plus a guessed
-    /// activity path for this very node — so this exact data-loss bug had been live and completely
-    /// invisible, and the old assertion (<c>NotContain("status":"Error")</c>) passed vacuously
-    /// because the old code could not produce an Error verdict at all.</para>
-    ///
-    /// <para><b>When the serializer is fixed, this test SHOULD fail</b> — flip it back to asserting
-    /// <c>status: "Dispatched"</c> with a real activity path. The happy path itself is covered on an
-    /// in-memory mesh by
-    /// <c>ExecuteScriptDispatchDiagnosticsTest.Dispatch_Succeeds_NamesAnActivityThatReachesATerminalStatus</c>.</para>
+    /// <para>The in-memory happy path (activity reaches a terminal status) is
+    /// <c>ExecuteScriptDispatchDiagnosticsTest.Dispatch_Succeeds_NamesAnActivityThatReachesATerminalStatus</c>;
+    /// this test pins the persistence-backend half: dispatch is ACCEPTED after a file-system
+    /// round-trip, with a real activity path.</para>
     /// </summary>
     [Fact]
-    public async Task ExecuteScript_ForIsExecutableCodeNode_SurfacesTheFileSystemRoundTripLoss()
+    public async Task ExecuteScript_ForIsExecutableCodeNode_DispatchesAfterFileSystemRoundTrip()
     {
         // Seed the script directly via IMeshService (the "created through
         // IMeshService" path per our testing rule â€” script nodes skip the MCP
@@ -298,13 +283,10 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
         var verdict = JsonDocument.Parse(result).RootElement;
 
         // The routing worked (we got a real verdict from the owning hub, not a timeout or a
-        // "not found"), and the verdict is TRUTHFUL about what the hub actually saw.
-        verdict.GetProperty("status").GetString().Should().Be("Error", result);
-        verdict.GetProperty("message").GetString().Should().Contain("IsExecutable = false",
-            "the file-system round-trip drops IsExecutable, and the caller must be TOLD that "
-            + "rather than handed a 'Dispatched' for a run that never starts");
-        verdict.TryGetProperty("activityPath", out _).Should().BeFalse(
-            "no activity exists, so no path may be offered to poll");
+        // "not found"), and the round-trip preserved IsExecutable — the hub accepts the run.
+        verdict.GetProperty("status").GetString().Should().Be("Dispatched", result);
+        verdict.GetProperty("activityPath").GetString().Should().Contain("/_Activity/",
+            "a dispatched run names the real activity node the caller can poll");
     }
 
     // NOTE: There used to be an `ExecuteScript_ForBrokenScript_ReportsErrorStatus`

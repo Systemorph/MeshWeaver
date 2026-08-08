@@ -90,6 +90,13 @@ public partial class CSharpFileParser : IFileFormatParser
     {
         if (node.Content is not CodeConfiguration codeConfig)
             throw new InvalidOperationException("Cannot serialize node without CodeConfiguration content");
+        if (!IsPureCSharpSource(codeConfig))
+            throw new InvalidOperationException(
+                $"CodeConfiguration for '{node.Path}' carries state a .cs file cannot represent " +
+                "(IsExecutable / ActivityParentPath / Last* stamps / non-C# language / unknown members); " +
+                "serializing it here would silently drop that state on the next read (#912). " +
+                "Select the serializer via FileFormatParserRegistry.GetSerializerFor so the node " +
+                "falls through to the lossless JSON form.");
 
         return SerializeCodeConfiguration(codeConfig);
     }
@@ -114,10 +121,38 @@ public partial class CSharpFileParser : IFileFormatParser
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Claims only configurations a bare <c>.cs</c> file can represent WITHOUT loss. A
+    /// <c>.cs</c> file carries nothing but the code (the <c>&lt;meshweaver&gt;</c> header is
+    /// Id/DisplayName/NodeType only), so a config with <c>IsExecutable</c>,
+    /// <c>ActivityParentPath</c>, <c>Last*</c> execution stamps, a non-C# language or unknown
+    /// members must fall through to the universal JSON serializer — the <c>.cs</c> round-trip
+    /// used to silently strip those fields, turning every executable Code node non-executable
+    /// on FS/blob/GitSync-backed meshes (#912). This mirrors the authoring contract: executable
+    /// code cells are <c>.json</c>, pure source stays <c>.cs</c>.
+    /// </remarks>
     public bool CanSerialize(MeshNode node)
     {
-        return node.Content is CodeConfiguration;
+        return node.Content is CodeConfiguration config && IsPureCSharpSource(config);
     }
+
+    /// <summary>
+    /// True when <paramref name="config"/> carries nothing beyond what a bare <c>.cs</c> source
+    /// file represents: C# code only — no execution flags, no execution history, no members
+    /// from a newer schema.
+    /// </summary>
+    internal static bool IsPureCSharpSource(CodeConfiguration config) =>
+        config is
+        {
+            IsExecutable: false,
+            ActivityParentPath: null,
+            LastExecutedAt: null,
+            LastExecutedBy: null,
+            LastExecutedCodeHash: null,
+            LastActivityPath: null,
+        }
+        && string.Equals(config.Language, "csharp", StringComparison.OrdinalIgnoreCase)
+        && config.UnknownMembers is not { Count: > 0 };
 
     private static Dictionary<string, string> ExtractMetadata(string content)
     {
