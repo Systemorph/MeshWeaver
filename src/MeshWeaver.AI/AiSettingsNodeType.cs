@@ -199,6 +199,75 @@ public static class AiSettingsNodeType
             MergeAgentSource(settings, partition),
             $"{partition}/{AgentPickerProjection.SkillSubNamespace}");
 
+    /// <summary>
+    /// Resolves the user's AGENT sources for a context — the read side of
+    /// <see cref="MergeAgentSource"/>, whose absence was #901: packages dutifully wrote their
+    /// <c>{partition}/Agent</c> rows into <see cref="AiSettings.AgentQueries"/> and nothing ever
+    /// read them, so plugin-shipped agents stayed invisible in every picker.
+    ///
+    /// <para>The canonical base query (<see cref="AgentPickerProjection.BuildAgentQuery"/> —
+    /// platform + user + space namespaces) is ALWAYS first: it is the only row guaranteed to
+    /// resolve, mirroring the skills rule that the platform row leads. The settings rows follow
+    /// (token-substituted; the fused default template dedupes against the base when its tokens
+    /// resolve, and drops harmlessly when the context is empty — the base already covers those
+    /// layers). Reserved/rogue partitions are nulled so a poisoned context can't break the query.</para>
+    /// </summary>
+    public static string[] ResolveAgentQueries(
+        AiSettings? settings, string? contextPath, string? userPath)
+    {
+        string? Partition(string? path)
+            => AgentPickerProjection.IsReservedPartition(path) ? null : AgentPickerProjection.PartitionOf(path);
+        var spacePartition = Partition(contextPath);
+        var baseQuery = AgentPickerProjection.BuildAgentQuery(userPath, spacePartition);
+        var templates = settings is { AgentQueries.IsDefaultOrEmpty: false }
+            ? settings.AgentQueries.AsEnumerable()
+            : DefaultAgentQueryTemplates;
+        return new[] { baseQuery }
+            .Concat(ResolveQueries(templates, spacePartition, null, userPath))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// The LIVE resolved agent queries for a user + context — the reactive form
+    /// <see cref="AgentPickerProjection.ObserveAgents"/> consumes (mirrors
+    /// <see cref="ObserveSkillQueries"/>): observes the user's <see cref="AiSettings"/>
+    /// (defaults when there is no signed-in user) and re-resolves the source rows on change.
+    /// </summary>
+    public static IObservable<string[]> ObserveAgentQueries(
+        IWorkspace workspace, IMessageHub hub, IServiceProvider services,
+        string? user, string? contextPath)
+        => string.IsNullOrEmpty(user)
+            ? Observable.Return(ResolveAgentQueries(null, contextPath, user))
+            : Observe(workspace, hub, services, user!)
+                .Select(settings => ResolveAgentQueries(settings, contextPath, user))
+                .DistinctUntilChanged(qs => string.Join("\n", qs));
+
+    /// <summary>
+    /// One-shot form of <see cref="ObserveAgentQueries"/> for click-time surfaces (the
+    /// <c>/agent</c> picker dialog): resolves against the FIRST live settings snapshot — not
+    /// <see cref="Observe"/>'s immediate defaults emission, which would miss package rows — and
+    /// degrades to the defaults-resolved base after <paramref name="timeout"/> so the picker can
+    /// never hang on a slow settings read.
+    /// </summary>
+    public static IObservable<string[]> ResolveAgentQueriesOnce(
+        IWorkspace workspace, IMessageHub hub, IServiceProvider services,
+        string? user, string? contextPath, TimeSpan? timeout = null)
+    {
+        if (string.IsNullOrEmpty(user))
+            return Observable.Return(ResolveAgentQueries(null, contextPath, user));
+        var defaults = BuildDefaults(services);
+        return workspace
+            .GetQuery($"{NodeType}|{user}", $"path:{PathFor(user!)} nodeType:{NodeType} select:path,id,name,nodeType,content")
+            .Take(1)
+            .Select(nodes => Effective(
+                nodes.FirstOrDefault(n => string.Equals(n.NodeType, NodeType, StringComparison.OrdinalIgnoreCase)),
+                defaults, hub.JsonSerializerOptions))
+            .Timeout(timeout ?? TimeSpan.FromSeconds(2))
+            .Catch<AiSettings, Exception>(_ => Observable.Return(defaults))
+            .Select(settings => ResolveAgentQueries(settings, contextPath, user));
+    }
+
     // AddSkillSource (the void, fire-and-forget skill-source installer) was DELETED here (#683):
     // it subscribed to its own write internally, so an install plan could report success before
     // the settings write landed — a prompt uninstall then raced it and the late write resurrected

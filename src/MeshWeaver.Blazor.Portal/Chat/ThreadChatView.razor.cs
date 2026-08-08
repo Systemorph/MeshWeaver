@@ -2195,14 +2195,23 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             .Catch<AgentPickerProjection.PickerContext, Exception>(_ =>
                 System.Reactive.Linq.Observable.Return(
                     AgentPickerProjection.DerivePickerContext(null, initialContext)))
-            .Subscribe(pc => InvokeAsync(() =>
+            // #901: the agent picker resolves the user's AiSettings.AgentQueries (package-installed
+            // agent sources) on top of the canonical base union — the same settings-aware set
+            // ObserveAgents feeds the combobox and AgentChatClient, so /agent offers exactly what
+            // execution resolves. One-shot with a bounded settings read (degrades to the base
+            // union, never hangs the picker).
+            .SelectMany(pc => (isAgent
+                    ? AiSettingsNodeType.ResolveAgentQueriesOnce(
+                        workspace, Hub, Hub.ServiceProvider, _userHome,
+                        AgentPickerProjection.PartitionOf(pc.ContextPath))
+                    : System.Reactive.Linq.Observable.Return(
+                        AgentPickerProjection.BuildModelQueries(pc.ContextPath, pc.NodeTypePath, userPath: _userHome)))
+                .Select(queries => (Context: pc, Queries: queries)))
+            .Subscribe(t => InvokeAsync(() =>
             {
                 if (_isDisposed) return;
-                var queries = isAgent
-                    ? AgentPickerProjection.BuildAgentQueries(_userHome, AgentPickerProjection.PartitionOf(pc.ContextPath))
-                    : AgentPickerProjection.BuildModelQueries(pc.ContextPath, pc.NodeTypePath, userPath: _userHome);
-                var cacheKey = $"picker|{field}|{pc.ContextPath}|{pc.NodeTypePath}|{string.Join("|", queries)}";
-                RunPicker(workspace, picker, queries, cacheKey, accessService, pickerUser);
+                var cacheKey = $"picker|{field}|{t.Context.ContextPath}|{t.Context.NodeTypePath}|{string.Join("|", t.Queries)}";
+                RunPicker(workspace, picker, t.Queries, cacheKey, accessService, pickerUser);
             }));
     }
 
