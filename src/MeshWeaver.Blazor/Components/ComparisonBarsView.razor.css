@@ -1,0 +1,68 @@
+.cmp {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.cmp-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.cmp-measure {
+    flex: 0 0 auto;
+    min-width: 110px;
+    font-size: 12px;
+    color: var(--neutral-foreground-rest, #242424);
+}
+
+.cmp-bars {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.cmp-side {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 14px;
+}
+
+.cmp-bar {
+    display: block;
+    height: 14px;
+    border-radius: 3px;
+    flex: 0 0 auto;
+}
+
+/* Two weights of ONE hue — the pair is the same measure seen twice, not two unrelated series, so a
+   second colour would invite the eye to read a category that isn't there. */
+.cmp-left {
+    background-color: color-mix(in srgb, var(--accent-fill-rest, #0ea5e9) 95%, transparent);
+}
+
+.cmp-right {
+    background-color: color-mix(in srgb, var(--accent-fill-rest, #0ea5e9) 45%, transparent);
+}
+
+.cmp-value {
+    font-size: 11px;
+    color: var(--neutral-foreground-hint, #757575);
+    white-space: nowrap;
+}
+
+.cmp-absent {
+    font-size: 11px;
+    font-style: italic;
+    color: var(--neutral-foreground-hint, #757575);
+}
+
+.cmp-empty {
+    margin: 0;
+    font-style: italic;
+    color: var(--neutral-foreground-hint, #757575);
+}

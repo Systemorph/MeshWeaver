@@ -150,6 +150,9 @@ public static class BlazorViewRegistry
                 DocumentSourceControl docSource => StandardView<DocumentSourceControl, DocumentSourceView>(docSource, stream, area),
                 AppearanceControl appearance => StandardView<AppearanceControl, AppearanceView>(appearance, stream, area),
                 ThreadMessageBubbleControl bubble => StandardView<ThreadMessageBubbleControl, ThreadMessageBubbleView>(bubble, stream, area),
+                KpiStripControl kpiStrip => StandardView<KpiStripControl, KpiStripView>(kpiStrip, stream, area),
+                TowerControl tower => StandardView<TowerControl, TowerView>(tower, stream, area),
+                ComparisonBarsControl comparisonBars => StandardView<ComparisonBarsControl, ComparisonBarsView>(comparisonBars, stream, area),
                 _ => FallbackHtml(instance, stream, area),
             };
         }
