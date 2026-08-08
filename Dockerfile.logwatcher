@@ -5,8 +5,12 @@
 #   az acr build --registry meshweaver --image memex-log-watcher:1.0.0 \
 #     --file Dockerfile.logwatcher .
 #
-# Untracked on purpose: the sanctioned build path is `dotnet publish -t:PublishContainer`
-# (deploy/aks/DEPLOY-RUNBOOK.md § 6b). Keep this only if the ACR-side build becomes the norm.
+# NOT the sanctioned build path — that stays `dotnet publish -t:PublishContainer`
+# (deploy/aks/DEPLOY-RUNBOOK.md § 6b), which is what CI and the runbook use. This is tracked only
+# so the escape hatch exists when the local link to ACR cannot carry image layers: on 2026-08-08 the
+# SDK push wedged on repeated "Broken pipe" retries, and the deploy completed only by building
+# ACR-side from a source-only context. Build the context deliberately — a bare `.` from the repo
+# root sweeps in `.claude/worktrees/` (dozens of full checkouts) and the upload never finishes.
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
