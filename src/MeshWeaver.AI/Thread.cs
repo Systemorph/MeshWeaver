@@ -497,9 +497,25 @@ public record ThreadMessage
     public string? AgentName { get; init; }
 
     /// <summary>
-    /// The model used to generate this response (for AgentResponse messages).
+    /// The model that ACTUALLY generated this response (for AgentResponse messages) — the
+    /// effective model after the stale-model fallback, never merely the one that was asked for.
+    /// Pair it with <see cref="RequestedModelName"/> to see a substitution.
     /// </summary>
     public string? ModelName { get; init; }
+
+    /// <summary>
+    /// The model the caller ASKED for, stamped ONLY when it differs from <see cref="ModelName"/>
+    /// — i.e. the round was moved onto a different model because the requested one had no usable
+    /// credentials (<c>AgentChatClient.ApplyStaleModelFallback</c>).
+    ///
+    /// <para>This is the durable, machine-readable substitution marker (#476). The swap used to be
+    /// visible only as an assistant chat message, so a NON-INTERACTIVE round — a delegation
+    /// sub-thread, a generator agent, a scheduled automation — recorded the requested model while a
+    /// different one answered, and nothing on the node said so. A background job can now detect
+    /// "I did not get the model I asked for" as <c>RequestedModelName is not null</c>, without
+    /// parsing prose. Null on the normal path (no substitution).</para>
+    /// </summary>
+    public string? RequestedModelName { get; init; }
 
     /// <summary>
     /// The harness (<see cref="Harnesses"/>) this round ran under. Stamped onto
