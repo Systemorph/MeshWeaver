@@ -83,9 +83,39 @@ public static class CatalogLayoutAreas
     {
         var installed = ObserveInstalled(host);
         return ObserveAvailable(host, source, sourceRef)
-            .CombineLatest(installed, (available, inst) =>
-                (UiControl?)BuildCatalog(host, source, sourceRef, description, sourceLabel, available, inst))
+            .CombineLatest(installed, ObserveViewerIsGlobalAdmin(host),
+                (available, inst, isAdmin) => (UiControl?)BuildCatalog(
+                    host, source, sourceRef, description, sourceLabel, available, inst, isAdmin))
             .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingCatalog")));
+    }
+
+    /// <summary>
+    /// The viewer's global-admin status as a LIVE flag for the catalog view: false until the
+    /// permission evaluator positively confirms admin, then tracking it — the stream stays live and
+    /// <c>DistinctUntilChanged</c>, so a later revocation (or a faulted-and-caught emission) flips
+    /// it back to false and the view re-renders in the non-admin shape. That is the point: the flag
+    /// follows the grant rather than latching. Never <c>Take(1)</c> on the first emission — the
+    /// evaluator seeds a premature <c>false</c> before its <c>AccessAssignment</c> query lands,
+    /// which would freeze an admin's view into the non-admin shape; and never <c>Take(1)</c> at
+    /// all, because this feeds a live data-bound view.
+    /// </summary>
+    private static IObservable<bool> ObserveViewerIsGlobalAdmin(LayoutAreaHost host)
+    {
+        var viewerId = ResolveViewerId(host);
+        if (string.IsNullOrEmpty(viewerId))
+            return Observable.Return(false);
+        return host.Hub.IsGlobalAdmin(viewerId!)
+            .Catch<bool, Exception>(_ => Observable.Return(false))
+            .StartWith(false)
+            // After StartWith, so the evaluator's own seeded false does not re-render the view.
+            .DistinctUntilChanged();
+    }
+
+    /// <summary>The signed-in viewer's id, or null when nobody is signed in.</summary>
+    internal static string? ResolveViewerId(LayoutAreaHost host)
+    {
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        return accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
     }
 
     // Live list of installable packages from the given source at its ref.
@@ -150,7 +180,7 @@ public static class CatalogLayoutAreas
 
     private static UiControl BuildCatalog(
         LayoutAreaHost host, IPackageSource? source, string sourceRef, string? description, string? sourceLabel,
-        IReadOnlyList<PackageManifest> available, IReadOnlyList<MeshNode> installed)
+        IReadOnlyList<PackageManifest> available, IReadOnlyList<MeshNode> installed, bool viewerIsGlobalAdmin)
     {
         var installedById = installed
             .Select(n => n.ContentAs<PackageManifest>(host.Hub.JsonSerializerOptions))
@@ -181,14 +211,105 @@ public static class CatalogLayoutAreas
         {
             n++;
             installedById.TryGetValue(pkg.Id, out var inst);
-            container = container.WithView(BuildCard(host, source, sourceRef, pkg, inst), $"pkg-{n}");
+            container = container.WithView(
+                BuildCard(host, source, sourceRef, pkg, inst, viewerIsGlobalAdmin), $"pkg-{n}");
+        }
+
+        var orphans = Orphaned(available, installed, host.Hub.JsonSerializerOptions);
+        if (orphans.Count > 0)
+        {
+            container = container.WithView(Controls.H2(host.Localize("ui.orphanedInstallRecords"))
+                .WithStyle("margin: 24px 0 4px 0;"));
+            container = container.WithView(Controls.Markdown(host.Localize("ui.mdOrphanedInstallRecords"))
+                .WithStyle("margin-bottom: 8px;"));
+            var o = 0;
+            foreach (var orphan in orphans)
+            {
+                o++;
+                container = container.WithView(
+                    BuildOrphanCard(host, orphan, viewerIsGlobalAdmin), $"orphan-{o}");
+            }
         }
 
         return container;
     }
 
+    /// <summary>
+    /// The install records this source no longer offers — a record whose package left the registry
+    /// (#840). These have no catalog card, so before this list existed nothing could remove them:
+    /// the <c>Plugins/_Policy</c> caps delete for every user identity, and the only system-identity
+    /// removal was the (card-driven) Uninstall.
+    ///
+    /// <para>Deliberately computed ONLY against a NON-EMPTY available list. An empty list means
+    /// either "the registry offers nothing" or "listing it failed" (<see cref="ObserveAvailable"/>
+    /// catches a failure to an empty list, and the stream starts empty) — and those are
+    /// indistinguishable here. Offering to remove EVERY install record because a registry was
+    /// briefly unreachable is exactly the kind of destructive guess this must never make.</para>
+    /// </summary>
+    internal static IReadOnlyList<PackageManifest> Orphaned(
+        IReadOnlyList<PackageManifest> available, IReadOnlyList<MeshNode> installed,
+        System.Text.Json.JsonSerializerOptions options)
+    {
+        if (available.Count == 0)
+            return [];
+        var availableIds = available.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
+        return installed
+            .Select(n => n.ContentAs<PackageManifest>(options))
+            .Where(m => m is not null && !string.IsNullOrEmpty(m!.Id) && !availableIds.Contains(m.Id))
+            .Select(m => m!)
+            .OrderBy(m => m.Name ?? m.Id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    // An orphaned install record: what it says it is, and — for a global admin — the Remove action
+    // that runs the installer's system-impersonated removal (the same identity that wrote it).
+    private static UiControl BuildOrphanCard(
+        LayoutAreaHost host, PackageManifest orphan, bool viewerIsGlobalAdmin)
+    {
+        var card = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("border: 1px dashed var(--neutral-stroke-rest); border-radius: 8px; " +
+                       "padding: 14px 16px; margin-bottom: 12px;");
+
+        card = card.WithView(Controls.Body(orphan.Name ?? orphan.Id)
+            .WithStyle("font-weight: 600; font-size: 16px; display: block; margin-bottom: 4px;"));
+
+        card = card.WithView(Controls.Body(
+                $"{orphan.Id}  ·  v{orphan.Version}  ·  → {orphan.TargetPartition ?? orphan.Id}")
+            .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; display: block; margin-bottom: 10px;"));
+
+        if (!viewerIsGlobalAdmin)
+            return card.WithView(Controls.Body(host.Localize("ui.requiresGlobalAdmin"))
+                .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; display: block;"));
+
+        return card.WithView(Controls.Button(host.Localize("ui.removeInstallRecord"))
+            .WithClickAction(ctx =>
+            {
+                RemoveInstallRecord(host, orphan.Id);
+                return Task.CompletedTask;
+            }));
+    }
+
+    /// <summary>
+    /// Removes an orphaned install record through the installer's sanctioned system-impersonated
+    /// primitive. The AUTHORIZATION is the global-admin gate on the surface that offered the action
+    /// (<see cref="BuildOrphanCard"/>) — the same "the click authorizes, the SYSTEM executes"
+    /// division the install path uses; the removal itself must run as System because the
+    /// <c>Plugins</c> partition policy denies delete to every user identity by design.
+    /// </summary>
+    internal static void RemoveInstallRecord(LayoutAreaHost host, string packageId)
+    {
+        var logger = Logger(host);
+        PackageInstaller.RemoveInstalledRecord(host.Hub, packageId, logger)
+            .Subscribe(
+                removed => logger?.LogInformation(
+                    "Orphaned install record {Id}: {Result}.", packageId, removed ? "removed" : "not found"),
+                ex => logger?.LogWarning(ex, "Removing orphaned install record {Id} failed.", packageId));
+    }
+
     private static UiControl BuildCard(
-        LayoutAreaHost host, IPackageSource? source, string sourceRef, PackageManifest pkg, PackageManifest? installed)
+        LayoutAreaHost host, IPackageSource? source, string sourceRef, PackageManifest pkg,
+        PackageManifest? installed, bool viewerIsGlobalAdmin)
     {
         var card = Controls.Stack
             .WithWidth("100%")
@@ -216,6 +337,14 @@ public static class CatalogLayoutAreas
         {
             card = card.WithView(Controls.Body($"✓ Installed v{installed!.Version}")
                 .WithStyle("color: var(--success-foreground, #107c10); font-weight: 600;"));
+        }
+        else if (pkg.IsCommercial() && !viewerIsGlobalAdmin)
+        {
+            // A commercial package needs Global Admin to install or sync (#830). The real
+            // enforcement is on the ACTION (PackageEntitlement, inside the installer); this is only
+            // so a viewer is not offered a button whose click would be refused.
+            card = card.WithView(Controls.Body(host.Localize("ui.requiresGlobalAdmin"))
+                .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; display: block;"));
         }
         else if (source is not null)
         {
@@ -255,7 +384,13 @@ public static class CatalogLayoutAreas
         // PluginUpdateWatcher already gives it.
         var accessService = host.Hub.ServiceProvider.GetRequiredService<AccessService>();
 
-        var install = InstallOrUpdate(host.Hub, source, sourceRef, pkg, logger);
+        // WHO authorized the install — captured HERE, while the ambient identity is still the
+        // clicking user's, because the install below runs entirely as System. A commercial package
+        // requires this principal to be a global admin (#830); a free one ignores it. The check
+        // itself lives in the installer, so the machine paths cannot bypass it.
+        var authorizingUserId = ResolveViewerId(host);
+
+        var install = InstallOrUpdate(host.Hub, source, sourceRef, pkg, logger, authorizingUserId);
         Observable.Using(() => accessService.ImpersonateAsSystem(), _ => install)
             .Subscribe(
                 result => logger?.LogInformation("Installed {Id}: {Written} written, {Unchanged} unchanged.",
@@ -274,11 +409,26 @@ public static class CatalogLayoutAreas
     /// install, which is always correct.
     /// </summary>
     internal static IObservable<InstallResult> InstallOrUpdate(
-        IMessageHub hub, IPackageSource source, string sourceRef, PackageManifest pkg, ILogger? logger)
+        IMessageHub hub, IPackageSource source, string sourceRef, PackageManifest pkg, ILogger? logger,
+        string? authorizingUserId = null)
+    {
+        // The entitlement gate runs FIRST, before a single file travels: a commercial package needs
+        // a global admin (#830), and fetching a package that may not be installed is work nobody
+        // asked for. The installer carries the same gate — that one is the enforcement (no caller
+        // can bypass it), this one is where the refusal is cheapest.
+        return PackageEntitlement.Authorize(hub, pkg, authorizingUserId, logger)
+            .SelectMany(_ => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId));
+    }
+
+    private static IObservable<InstallResult> InstallOrUpdateCore(
+        IMessageHub hub, IPackageSource source, string sourceRef, PackageManifest pkg, ILogger? logger,
+        string? authorizingUserId)
     {
         IObservable<InstallResult> Full() =>
             source.FetchPackageFiles(pkg, sourceRef)
-                .SelectMany(files => PackageInstaller.Install(hub, pkg, files, sourceRef, logger));
+                .SelectMany(files => PackageInstaller.Install(
+                    hub, pkg, files, sourceRef, logger,
+                    authorizingUserId: authorizingUserId));
 
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (pkg.Kind != PackageKind.NodeRepo || string.IsNullOrEmpty(pkg.ModuleVersion) || persistence is null)
@@ -301,9 +451,14 @@ public static class CatalogLayoutAreas
                 }
                 if (record?.InstalledFiles is not { Count: > 0 })
                     return Full();
-                return IncrementalUpdate(hub, source, sourceRef, pkg, record, logger)
+                return IncrementalUpdate(hub, source, sourceRef, pkg, record, logger, authorizingUserId)
                     .Catch<InstallResult, Exception>(ex =>
                     {
+                        // A REFUSAL is not a failure to fall back from — the full install would be
+                        // refused identically, and retrying it would bury the reason under a
+                        // second, misleading log line.
+                        if (ex is PackageAuthorizationException)
+                            return Observable.Throw<InstallResult>(ex);
                         logger?.LogWarning(ex,
                             "Incremental update of {Id} failed; falling back to full install.", pkg.Id);
                         return Full();
@@ -314,7 +469,7 @@ public static class CatalogLayoutAreas
     // The manifest-diff fast path: fetch only manifest.lock, diff, fetch only the changed files.
     private static IObservable<InstallResult> IncrementalUpdate(
         IMessageHub hub, IPackageSource source, string sourceRef, PackageManifest pkg,
-        PackageManifest record, ILogger? logger)
+        PackageManifest record, ILogger? logger, string? authorizingUserId)
     {
         var manifestPath = $"{pkg.Id}/{ModuleManifest.FileName}";
         return source.FetchPackageFiles(pkg, sourceRef, [manifestPath])
@@ -359,7 +514,8 @@ public static class CatalogLayoutAreas
                         ? Observable.Return((IReadOnlyList<PackageFile>)[])
                         : source.FetchPackageFiles(pkg, sourceRef, delta.AddedOrChangedFiles))
                     .SelectMany(changedFiles => PackageInstaller.InstallNodeRepoDelta(
-                        hub, pkg, newManifest, changedFiles, removedNodePaths, sourceRef, logger));
+                        hub, pkg, newManifest, changedFiles, removedNodePaths, sourceRef, logger,
+                        authorizingUserId));
             });
     }
 
