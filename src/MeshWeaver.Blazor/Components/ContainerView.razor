@@ -1,7 +1,11 @@
 @inherits BlazorView<IContainerControl, ContainerView>
 
-@foreach (var area in ViewModel.Areas)
+@foreach (var child in ViewModel.ResolveChildren(Area))
 {
-    var resolvedArea = string.IsNullOrEmpty(area.GetArea()) ? $"{Area}/{area.Id}" : area.GetArea();
-    <DispatchView ViewModel="@(area with { Area = resolvedArea })" Stream="@Stream" Area="@resolvedArea" />
+    @* 🚨 @key — a container child is identified by its AREA NAME, never by its position; see
+       ViewModelExtensions.ResolveChildren for why (issue #732). *@
+    <DispatchView @key="child.Key"
+                  ViewModel="@(child.Area with { Area = child.ResolvedArea })"
+                  Stream="@Stream"
+                  Area="@child.ResolvedArea" />
 }
