@@ -29,7 +29,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// </summary>
 internal static class PgTestReactiveExtensions
 {
-    /// <summary>Project an arbitrary low-level PG <see cref="Task"/> (e.g. SyncNodeTypePermissionsAsync) to an observable.</summary>
+    /// <summary>Project an arbitrary low-level PG <see cref="Task"/> (e.g. a schema-init leaf) to an observable.</summary>
     public static IObservable<Unit> Run(this Task task)
         => IoPool.Unbounded.Invoke(async _ => { await task; return Unit.Default; });
 

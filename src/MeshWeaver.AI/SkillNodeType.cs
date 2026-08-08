@@ -47,7 +47,6 @@ public static class SkillNodeType
         if (dbSynced)
             typeDefinition = typeDefinition with { IsDefinitionOnly = true };
         builder.AddMeshNodes(typeDefinition);
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         builder.ConfigureHub(config => config.WithType<SkillDefinition>(nameof(SkillDefinition)));
         builder.ConfigureServices(services =>
         {

@@ -40,7 +40,6 @@ public static class PartitionNodeType
                 new PartitionAccessRule(sp.GetRequiredService<IMessageHub>()));
             return services;
         });
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         return builder;
     }
 
