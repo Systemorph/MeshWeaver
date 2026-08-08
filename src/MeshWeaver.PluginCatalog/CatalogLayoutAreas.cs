@@ -91,10 +91,13 @@ public static class CatalogLayoutAreas
 
     /// <summary>
     /// The viewer's global-admin status as a LIVE flag for the catalog view: false until the
-    /// permission evaluator positively confirms admin, true from then on. Never <c>Take(1)</c> on
-    /// the first emission — the evaluator seeds a premature <c>false</c> before its
-    /// <c>AccessAssignment</c> query lands, which would freeze an admin's view into the non-admin
-    /// shape; and never <c>Take(1)</c> at all, because this feeds a live data-bound view.
+    /// permission evaluator positively confirms admin, then tracking it — the stream stays live and
+    /// <c>DistinctUntilChanged</c>, so a later revocation (or a faulted-and-caught emission) flips
+    /// it back to false and the view re-renders in the non-admin shape. That is the point: the flag
+    /// follows the grant rather than latching. Never <c>Take(1)</c> on the first emission — the
+    /// evaluator seeds a premature <c>false</c> before its <c>AccessAssignment</c> query lands,
+    /// which would freeze an admin's view into the non-admin shape; and never <c>Take(1)</c> at
+    /// all, because this feeds a live data-bound view.
     /// </summary>
     private static IObservable<bool> ObserveViewerIsGlobalAdmin(LayoutAreaHost host)
     {
