@@ -185,11 +185,12 @@ public class FirstUserOnboardingTests
                 Content = new Space()
             }, _options).Should().Within(30.Seconds()).Emit();
 
-            // Register Organization as public_read in each org schema
+            // 🔒 #953 — the org root is readable through a Read grant to the well-known `Public`
+            // subject (what a PartitionAccessPolicy { PublicRead = true } `_Policy` projects, #603),
+            // not through a node-type flag. The partition gate below is unaffected.
             var ac = new PostgreSqlAccessControl(ds);
-            await ac.SyncNodeTypePermissionsAsync(
-                [new NodeTypePermission(SpaceNodeType.NodeType, PublicRead: true)], ct)
-                .Run().Should().Within(30.Seconds()).Emit();
+            await ac.Grant(org, "Public", "Read", isAllow: true, ct)
+                .Should().Within(30.Seconds()).Emit();
         }
 
         // Populate searchable_schemas

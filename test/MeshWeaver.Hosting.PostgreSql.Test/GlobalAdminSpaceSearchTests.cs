@@ -70,10 +70,13 @@ public class GlobalAdminSpaceSearchTests
                 State = MeshNodeState.Active
             }, _options, ct);
 
-            // Register Organization as public_read in each schema
+            // 🔒 #953 — the org root is world-readable through a Read grant to the well-known
+            // `Public` subject, i.e. what a PartitionAccessPolicy { PublicRead = true } `_Policy`
+            // projects into user_effective_permissions (#603). Node-type public read is gone: it
+            // read a table nothing wrote, and it OR'd past the DENY fold. The partition gate is
+            // unchanged and is what the tests below exercise.
             var ac = new PostgreSqlAccessControl(ds);
-            await ac.SyncNodeTypePermissionsAsync(
-                [new NodeTypePermission(SpaceNodeType.NodeType, PublicRead: true)], ct);
+            await ac.GrantAsync(org, "Public", "Read", isAllow: true, ct);
         }
 
         // Populate searchable_schemas
@@ -118,12 +121,12 @@ public class GlobalAdminSpaceSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task PublicRead_StillRequiresPartitionAccess()
+    public async Task PublicGrant_StillRequiresPartitionAccess()
     {
         var ct = TestContext.Current.CancellationToken;
         await SetupOrganizations(ct);
 
-        // Regular user with NO partition_access — even public_read must not bypass partition check
+        // Regular user with NO partition_access — even a Public Read grant must not bypass the partition gate
         await _fixture.DataSource.ExecuteNonQuery("DELETE FROM public.partition_access", ct)
             .Should().Within(30.Seconds()).Emit();
 
@@ -132,11 +135,11 @@ public class GlobalAdminSpaceSearchTests
             nodeTypeFilter, "regularuser", "last_modified DESC", 50, ct);
 
         results.Should().BeEmpty(
-            "public_read must NOT bypass partition_access — user without partition access sees nothing");
+            "a Public Read grant must NOT bypass partition_access — user without partition access sees nothing");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task PublicRead_SkipsNodeLevelChecks_WithinAccessiblePartition()
+    public async Task PublicGrant_AppliesOnlyWithinAccessiblePartition()
     {
         var ct = TestContext.Current.CancellationToken;
         await SetupOrganizations(ct);
@@ -147,13 +150,13 @@ public class GlobalAdminSpaceSearchTests
             "INSERT INTO public.partition_access (user_id, partition) VALUES ('regularuser', 'alphaorg')", ct)
             .Should().Within(30.Seconds()).Emit();
 
-        // Search for all nodes — public_read types visible without node-level perms, but only in alphaorg
+        // Search for all nodes — the Public grant applies, but only inside the accessible partition
         var results = await CallSearchAcrossSchemas(
             "", "regularuser", "last_modified DESC", 50, ct);
 
-        // Should see Organization nodes from AlphaOrg (public_read + partition_access)
+        // Should see Organization nodes from AlphaOrg (Public Read grant + partition_access)
         results.Should().Contain(n => n.Id == "AlphaOrg",
-            "AlphaOrg Organization should be visible (public_read + partition_access)");
+            "AlphaOrg Organization should be visible (Public Read grant + partition_access)");
         // Should NOT see BetaOrg or GammaOrg (no partition_access)
         results.Should().NotContain(n => n.Id == "BetaOrg",
             "BetaOrg should be hidden — no partition_access");

@@ -60,7 +60,6 @@ public static class UserNodeType
                     sp.GetService<ILoggerFactory>()?.CreateLogger<PartitionDropPostDeletionHandler>()));
             return services;
         });
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         // nodeType:User without a path constraint → restrict to the "Auth"
         // partition (no fan-out needed). The "Auth" partition (formerly "User",
         // renamed in V27 / DefaultPartitionProvider) mirrors User / Group /
