@@ -315,7 +315,16 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
             // Fail CLOSED on an indeterminate probe: no diagnosis rather than a wrong one.
             .Catch<bool, Exception>(_ => Observable.Return(true));
 
-        var hasPolicy = ReadOrNull($"{partition}/{PartitionPolicySegment}").Select(policy => policy is not null);
+        // 🚨 Same rule as the grants probe above: a `_Policy` can be shipped as a STATIC node by a
+        // built-in catalog (Agent, Doc, … via IStaticNodeProvider) and never appear in the store, so
+        // a durable-only probe would call a properly policy-governed partition ownerless. Checked
+        // first because it is a pure in-memory lookup — a static hit skips the storage read entirely.
+        var policyIsStatic = hub.ServiceProvider.EnumerateStaticNodes()
+            .Any(n => string.Equals(n.Path, $"{partition}/{PartitionPolicySegment}",
+                StringComparison.OrdinalIgnoreCase));
+        var hasPolicy = policyIsStatic
+            ? Observable.Return(true)
+            : ReadOrNull($"{partition}/{PartitionPolicySegment}").Select(policy => policy is not null);
 
         var diagnosis =
             $"'{partition}' exists but carries NO access grants at all — its partition was provisioned while its "
