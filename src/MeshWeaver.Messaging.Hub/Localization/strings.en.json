@@ -307,6 +307,7 @@
   "files.includeSatellites": "Include satellite data:",
   "form.validationFailed": "Validation failed",
   "grid.itemsPerPage": "Items per page:",
+  "comments.label": "Comments",
   "comments.add": "Add comment",
   "comments.placeholder": "Write your comment...",
   "ui.icon": "Icon",
