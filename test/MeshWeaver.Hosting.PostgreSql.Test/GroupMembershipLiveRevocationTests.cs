@@ -128,6 +128,31 @@ public class GroupMembershipLiveRevocationTests(PostgreSqlFixture fixture, ITest
             + $"groupMembershipRowsInSchema={rowCount} registeredInSearchableSchemas="
             + $"{registered.Contains(schema)} searchable=[{string.Join(",", registered)}]");
 
+        // The access gate the cross-schema UNION applies per schema: a partition_access row for the
+        // caller, then a Read fold over the partition's user_effective_permissions.
+        var pa = new System.Collections.Generic.List<string>();
+        await using (var cmd = fixture.DataSource.CreateCommand(
+            "SELECT user_id FROM public.partition_access WHERE partition = @s ORDER BY user_id"))
+        {
+            cmd.Parameters.AddWithValue("s", schema);
+            await using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync()) pa.Add(r.GetString(0));
+        }
+        var uep = new System.Collections.Generic.List<string>();
+        if (schemaExists)
+        {
+            await using var cmd = fixture.DataSource.CreateCommand(
+                $"SELECT user_id, node_path_prefix, permission, is_allow FROM "
+                + $"\"{schema.Replace("\"", "\"\"")}\".user_effective_permissions ORDER BY user_id LIMIT 25");
+            await using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                uep.Add($"{r.GetString(0)}|{r.GetString(1)}|{r.GetString(2)}|{r.GetBoolean(3)}");
+        }
+        var access = Mesh.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
+        Output.WriteLine($"[FANOUT-DIAG] {label}: callerObjectId={access?.Context?.ObjectId ?? "(none)"} "
+            + $"circuit={access?.CircuitContext?.ObjectId ?? "(none)"} "
+            + $"partition_access=[{string.Join(",", pa)}] uep=[{string.Join(" ;; ", uep)}]");
+
         // The discriminator: a FRESH path-less query, issued right now. If ITS Initial carries the
         // membership, the cross-schema SQL + access filter are fine and only the live change
         // notification failed to arrive; if it does not, the re-query itself cannot see the row and
@@ -266,13 +291,24 @@ public class GroupMembershipLiveRevocationTests(PostgreSqlFixture fixture, ITest
 
         await DumpFanOutStateAsync("after-membership-create");
 
-        await hot.Should().Within(60.Seconds()).Match(
-            c => c.ChangeType == QueryChangeType.Added
-                 && c.Items.Any(n => n.Path == MembershipPath),
-            "a path-less nodeType query must deliver the new node live — a one-shot fan-out "
-            + "freezes every consumer's snapshot for the life of the process (#697), and a "
-            + "partition missing from public.searchable_schemas when the re-query runs is not "
-            + "seen late, it is never seen at all");
+        try
+        {
+            await hot.Should().Within(60.Seconds()).Match(
+                c => c.ChangeType == QueryChangeType.Added
+                     && c.Items.Any(n => n.Path == MembershipPath),
+                "a path-less nodeType query must deliver the new node live — a one-shot fan-out "
+                + "freezes every consumer's snapshot for the life of the process (#697), and a "
+                + "partition missing from public.searchable_schemas when the re-query runs is not "
+                + "seen late, it is never seen at all");
+        }
+        catch
+        {
+            // TEMPORARY (PR #905): re-dump AFTER the wait. If the access projection is present now
+            // but was absent above, the row became visible LATE and nothing re-queried; if it is
+            // still absent, the caller simply never gains Read on the new partition.
+            await DumpFanOutStateAsync("after-failed-wait");
+            throw;
+        }
 
         await MeshService.DeleteNode(MembershipPath).Should().Within(90.Seconds()).Emit();
 
