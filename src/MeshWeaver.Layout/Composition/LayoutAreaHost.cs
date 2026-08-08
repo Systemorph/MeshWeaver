@@ -415,7 +415,11 @@ public record LayoutAreaHost : IDisposable
     /// </para>
     /// </summary>
     private void PushRenderResult(EntityStoreAndUpdates result)
-        => Stream.Update(current =>
+    {
+        // Materialise once: Updates is a lazily-composed Concat chain (DisposeChildAreas
+        // removals ++ render additions) and is read twice below.
+        var updates = result.Updates as IReadOnlyCollection<EntityUpdate> ?? result.Updates.ToArray();
+        Stream.Update(current =>
         {
             var store = current ?? new EntityStore();
 
@@ -423,6 +427,16 @@ public record LayoutAreaHost : IDisposable
             // UpdateData writes, the default-area NamedAreaControl seeded in the base
             // frame, and any sub-area controls delivered separately).
             var resultStore = store.Merge(result.Store);
+
+            // 🚨 A merge is a UNION (InstanceCollection.Merge == Instances.SetItems) — it can
+            // add and replace, but it can NEVER express a REMOVAL. A re-render whose child set
+            // shrank or changed reports its deletions ONLY in result.Updates (Value == null,
+            // produced by DisposeChildAreas → RemoveViews); dropping them left the previous
+            // emission's child areas in the published store FOREVER. That is #732: replacing a
+            // named child ("Prose") with a different sibling set ("Step"/"Rail"/"Stage") kept
+            // "Prose" alive in /areas, so a client view still bound to it kept rendering the old
+            // content while the rest of the page moved on. Apply the deletions explicitly.
+            resultStore = ApplyRemovals(resultStore, updates);
 
             // Clear progress now content has been rendered.
             resultStore = resultStore.Update(LayoutAreaReference.Data,
@@ -432,6 +446,31 @@ public record LayoutAreaHost : IDisposable
             // re-evaluate wholesale, delivering nested sub-areas reliably.
             return new ChangeItem<EntityStore>(resultStore, Stream.StreamId, Stream.Hub.Version);
         }, ex => logger.LogWarning(ex, "Cannot apply render for {Area}", Reference.Area));
+    }
+
+    /// <summary>
+    /// Applies the DELETIONS carried by a render emission's <see cref="EntityStoreAndUpdates.Updates"/>
+    /// to <paramref name="store"/>. Folded per (collection, id) and keyed on the LAST update for that
+    /// entity, because a re-render legitimately emits <c>remove {area}</c> immediately followed by
+    /// <c>add {area}</c> for the area it re-renders (and, when several renderers compose onto the same
+    /// area, one renderer's clear precedes the next renderer's write). Only an entity whose final state
+    /// in the batch is <c>null</c> is removed.
+    /// </summary>
+    private static EntityStore ApplyRemovals(EntityStore store, IReadOnlyCollection<EntityUpdate> updates)
+    {
+        foreach (var entity in updates
+                     .Where(u => u.Id is not null)
+                     .GroupBy(u => (u.Collection, u.Id))
+                     .Where(g => g.Last().Value is null))
+        {
+            var collection = store.GetCollection(entity.Key.Collection);
+            if (collection is null)
+                continue;
+            store = store.WithCollection(entity.Key.Collection, collection.Remove(entity.Key.Id!));
+        }
+
+        return store;
+    }
 
 
 
@@ -963,10 +1002,24 @@ public record LayoutAreaHost : IDisposable
             return Task.CompletedTask;
         }, exceptionCallback);
 
+    /// <summary>
+    /// True when <paramref name="areaKey"/> IS <paramref name="contextArea"/> or is a DESCENDANT of it.
+    /// 🚨 Segment-aware on purpose: a bare <c>StartsWith</c> also matches a SIBLING whose name merely
+    /// shares the prefix ("Overview" would match "OverviewDetails", "Step/1" would match "Step/10"), so
+    /// re-rendering one area would dispose and delete an unrelated one. That mis-scoping used to be
+    /// invisible because the deletions were dropped before publication (see <see cref="PushRenderResult"/>);
+    /// now that they are applied, the scope has to be exactly "this area and its children".
+    /// An empty context area keeps its established meaning of "the whole area tree".
+    /// </summary>
+    private static bool IsAreaOrDescendant(string areaKey, string contextArea)
+        => string.IsNullOrEmpty(contextArea)
+           || areaKey.Equals(contextArea, StringComparison.Ordinal)
+           || areaKey.StartsWith(contextArea + "/", StringComparison.Ordinal);
+
     private EntityStoreAndUpdates DisposeExistingAreas(EntityStore store, RenderingContext context)
     {
         var contextArea = context.Area;
-        foreach (var area in disposablesByArea.Where(x => x.Key.StartsWith(contextArea)).ToArray())
+        foreach (var area in disposablesByArea.Where(x => IsAreaOrDescendant(x.Key, contextArea)).ToArray())
             if (disposablesByArea.TryRemove(area.Key, out var disposables))
                 disposables.ForEach(d => d.Dispose());
 
@@ -981,7 +1034,7 @@ public record LayoutAreaHost : IDisposable
     private EntityStoreAndUpdates DisposeChildAreas(EntityStore store, RenderingContext context)
     {
         var contextArea = context.Area;
-        foreach (var area in disposablesByArea.Where(x => x.Key.StartsWith(contextArea) && x.Key != contextArea).ToArray())
+        foreach (var area in disposablesByArea.Where(x => IsAreaOrDescendant(x.Key, contextArea) && x.Key != contextArea).ToArray())
             if (disposablesByArea.TryRemove(area.Key, out var disposables))
                 disposables.ForEach(d => d.Dispose());
 
@@ -994,7 +1047,7 @@ public record LayoutAreaHost : IDisposable
             store.Collections
                 .GetValueOrDefault(LayoutAreaReference.Areas)
                 ?.Instances
-                .Where(x => ((string)x.Key).StartsWith(contextArea))
+                .Where(x => IsAreaOrDescendant((string)x.Key, contextArea))
                 .ToArray();
 
         if (existing == null)

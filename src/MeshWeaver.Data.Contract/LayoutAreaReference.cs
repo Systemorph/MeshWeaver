@@ -275,7 +275,7 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     {
         return HashCode.Combine(
             Area ?? string.Empty,
-            NormalizeId(Id) ?? string.Empty,
+            NormalizeScalar(Id) ?? string.Empty,
             Layout ?? string.Empty
         );
     }
@@ -290,14 +290,32 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     // saturated the circuit. Normalize both sides to their scalar string form before comparing.
     private static bool IdEquals(object? a, object? b)
         => ReferenceEquals(a, b)
-           || string.Equals(NormalizeId(a), NormalizeId(b), StringComparison.Ordinal);
+           || string.Equals(NormalizeScalar(a), NormalizeScalar(b), StringComparison.Ordinal);
 
-    private static string? NormalizeId(object? id) => id switch
+    /// <summary>
+    /// Reduces a value that ROUND-TRIPS THROUGH JSON (an <c>object</c> that arrives as a
+    /// <see cref="JsonElement"/> after deserialization) to its scalar string form, so a
+    /// freshly-built value and a deserialized one compare equal. See the note on
+    /// <see cref="Id"/>'s equality above for why the raw <c>Equals</c> never does.
+    /// </summary>
+    /// <param name="value">The possibly JSON-round-tripped value.</param>
+    /// <returns>The scalar string form, or <see langword="null"/>.</returns>
+    public static string? NormalizeScalar(object? value) => value switch
     {
         null => null,
         JsonElement { ValueKind: JsonValueKind.Null } => null,
         JsonElement { ValueKind: JsonValueKind.String } je => je.GetString(),
         JsonElement je => je.GetRawText(),
-        _ => id.ToString()
+        _ => value.ToString()
     };
+
+    /// <summary>
+    /// The identity this reference compares by — <see cref="Layout"/>, <see cref="Area"/> and
+    /// <see cref="Id"/>, with the JSON-round-tripped <see cref="Id"/> normalized so the identity of
+    /// a freshly-built reference matches that of a deserialized one (a flapping identity would
+    /// remount the view it keys on every render).
+    /// </summary>
+    /// <returns>A stable string identity for this reference.</returns>
+    public string GetIdentity()
+        => $"{Layout}|{Area}|{NormalizeScalar(Id)}";
 }
