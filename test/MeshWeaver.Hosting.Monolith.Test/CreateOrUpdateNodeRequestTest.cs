@@ -1,10 +1,12 @@
 using System;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -246,6 +248,96 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
         after.Name.Should().Be("After");
         after.LastModified.Should().BeAfter(before.LastModified,
             "a real change takes the write path and re-stamps");
+    }
+
+    /// <summary>
+    /// 🚨 Issue #748 — mesh-owned compile state survives EVERY upsert, whatever the writer's copy
+    /// says. The incoming node carries a genuine AUTHORED change (Configuration) next to a STALE
+    /// compile verdict: an older <c>LastCompiledVersion</c>, a dangling assembly pointer, and a
+    /// failure status the live node long since moved past. That is the exact shape every upsert
+    /// writer produces — a repo file embeds the verdict it was exported with, an installer ships the
+    /// package author's, and a syncing client's snapshot comes from the eventually-consistent query
+    /// index, which lags the compile pipeline because the compile does not run under the writer's
+    /// lock. Letting it land is how a healthy type reverted to its previous state with a dangling
+    /// release pointer on memex (2026-08-02), and how a weeks-old "Ok" parks a type on a cold cache.
+    ///
+    /// <para>The rule is enforced by the OWNER, inside the upsert's merge, so it holds for every
+    /// writer rather than for the one that remembered to patch it up client-side. Deliberate compile
+    /// writes are unaffected — they all go through <c>GetMeshNodeStream(path).Update</c>, never
+    /// through an upsert.</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Upsert_WithStaleCompileState_TakesAuthoredChange_AndKeepsLiveCompileState()
+    {
+        var id = $"upsert-nodetype-{Guid.NewGuid():N}";
+        var path = $"{TestPartition}/{id}";
+
+        // The LIVE node: an authored definition plus the compile state the mesh currently owns.
+        // CompiledFrameworkVersion stays null on purpose — a non-null MISMATCHING value would make
+        // the framework-stale kickoff flip this type to Pending and race the assertion, and a
+        // non-null status keeps the first-build kickoff out too. Empty source maps keep the sources
+        // watcher idempotent from its first emission.
+        await NodeFactory.CreateNode(new MeshNode(id, TestPartition)
+        {
+            Name = "Widget",
+            NodeType = MeshNode.NodeTypePath,
+            State = MeshNodeState.Active,
+            Content = new NodeTypeDefinition
+            {
+                Configuration = "config => config",
+                Sources = [],
+                CompilationStatus = CompilationStatus.Ok,
+                LastCompiledVersion = 1082,
+                LatestAssemblyCollection = "nodetype-cache",
+                LatestAssemblyPath = "Widget/v1082.dll",
+                CompiledSources = ImmutableDictionary<string, long>.Empty,
+                CurrentSourceVersions = ImmutableDictionary<string, long>.Empty,
+            },
+        }).Should().Emit();
+
+        // The upsert: authored change + a stale verdict the writer happened to be holding.
+        var resp = await Mesh
+            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(
+                new MeshNode(id, TestPartition)
+                {
+                    Name = "Widget",
+                    NodeType = MeshNode.NodeTypePath,
+                    State = MeshNodeState.Active,
+                    Content = new NodeTypeDefinition
+                    {
+                        Configuration = "config => CHANGED",
+                        Sources = [],
+                        CompilationStatus = CompilationStatus.Error,
+                        CompilationError = "stale failure from the writer's copy",
+                        LastCompiledVersion = 202,
+                        LatestAssemblyCollection = "nodetype-cache",
+                        LatestAssemblyPath = "Widget/v202.dll",
+                    },
+                }))
+            .Select(d => d.Message)
+            .Should().Emit();
+        resp.Success.Should().BeTrue(resp.Error ?? "");
+
+        var workspace = GetClient(c => c.AddData()).GetWorkspace();
+        var converged = await workspace.GetMeshNodeStream(path)
+            .Should().Within(30.Seconds())
+            .Match(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.Configuration
+                == "config => CHANGED");
+
+        var def = converged.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions);
+        def.Should().NotBeNull();
+        def!.Configuration.Should().Be("config => CHANGED",
+            "the repo/installer owns the AUTHORED definition — that change must land");
+        // 1082L, not 1082 — LastCompiledVersion is long?, and the boxed compare would fail on the
+        // int literal even when the value is right ("Expected 1082 … but found 1082").
+        def.LastCompiledVersion.Should().Be(1082L,
+            "the mesh owns the compile verdict — the writer's stale copy must not regress it");
+        def.LatestAssemblyPath.Should().Be("Widget/v1082.dll",
+            "a stale assembly pointer would send activation at bytes that no longer exist");
+        def.CompilationStatus.Should().Be(CompilationStatus.Ok,
+            "a healthy type must not be reverted to the writer's stale failure status");
+        def.CompilationError.Should().BeNull(
+            "an operational member ABSENT on the live node stays absent — the writer's value never seeds it");
     }
 
     // Reads until the persisted node satisfies the predicate AND its Version is unchanged across

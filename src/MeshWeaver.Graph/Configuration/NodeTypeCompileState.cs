@@ -31,6 +31,26 @@ namespace MeshWeaver.Graph.Configuration;
 /// state change onto the satellite. Phase 2 flips readers to the satellite; phase 3 stops writing
 /// the node members entirely and retires the mirror.</para>
 ///
+/// <para>🚨 <b>Constraint phases 2/3 must design around: <see cref="NodeTypeDefinition.CompilationStatus"/>
+/// IS the compile lock, and the lock cannot simply follow the state onto the satellite.</b> Compile
+/// single-flight is a compare-and-swap — <c>HandleDispatchCompile</c> transitions Pending →
+/// Compiling inside the per-NodeType hub's OWN <c>Update</c> and dispatches Roslyn only when THAT
+/// lambda made the transition — and it is atomic solely because the NodeType hub owns the node it
+/// swaps on, so its action block serialises every contender. The satellite is a DIFFERENT node at a
+/// DIFFERENT path, therefore a different owner: <c>MeshNodeStreamHandle.IsOwn</c> is plain path
+/// equality with the hub address, so from the NodeType hub the satellite is a REMOTE handle. A
+/// remote <c>Update</c> evaluates its lambda against the local mirror and ships the diff, so the
+/// guard would be read off a snapshot that is not the owner's state at apply time: two contenders
+/// can both conclude "I transitioned" and both dispatch Roslyn, and the merge refusing one write
+/// afterwards does not un-dispatch the compile it already started. The trigger pair
+/// (<see cref="NodeTypeDefinition.RequestedReleaseAt"/> /
+/// <see cref="NodeTypeDefinition.LastReleaseRequestHandledAt"/>) has the same shape.
+/// So the control plane moves only ONE of two ways — both single-owner, never a split:
+/// (a) the compile watchers move WITH it, onto the satellite's own hub, which then owns the CAS; or
+/// (b) the control-plane members stay on the node and only the RESULT members move. Splitting the
+/// CAS across two owners is the one design that must not be shipped; the double-compile it admits
+/// is precisely the "hub unresponsive after the second compile" wedge class.</para>
+///
 /// <para>The member set is pinned to <see cref="NodeTypeOperationalContent.MemberNames"/> by test —
 /// the satellite carries exactly what the sync seams mask, so the two mechanisms cannot drift.</para>
 /// </summary>
