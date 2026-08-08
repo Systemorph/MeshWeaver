@@ -28,29 +28,60 @@ namespace Memex.Portal.Shared.Authentication;
 internal static class UserRoleResolver
 {
     /// <summary>
-    /// Resolves the user's AccessAssignment-derived role names. Returns an
-    /// empty list when no resolution is possible (services missing, workspace
-    /// unavailable, query layer faulted) — auth flows must keep working even
-    /// when role enrichment can't.
+    /// Resolves the user's AccessAssignment-derived role names, keeping "there are no extra
+    /// roles" apart from "the role store could not be read" (issue #637).
+    ///
+    /// <list type="bullet">
+    ///   <item><description><c>Resolved(roles)</c> — the read completed; an empty set means the
+    ///     user genuinely has no AccessAssignment grants.</description></item>
+    ///   <item><description><c>Unavailable(reason)</c> — the read stalled or faulted. The caller
+    ///     must answer retryable rather than authenticate a silently under-privileged principal,
+    ///     whose every later request would be denied with a misleading "Access denied".</description></item>
+    /// </list>
+    ///
+    /// <para>No role SOURCE at all (no hub / no workspace / no user id) is <c>Resolved(empty)</c>,
+    /// not Unavailable: that is a static configuration fact — there is nothing to enrich from —
+    /// not a transient outage, and it must not turn every request into a 503.</para>
     ///
     /// <para>The single Task bridge here lives at the ASP.NET
     /// <c>AuthenticationHandler.HandleAuthenticateAsync</c> boundary —
     /// callers expect a Task-returning helper, but everything below
     /// stays observable.</para>
     /// </summary>
-    public static async Task<IReadOnlyCollection<string>> LoadDbRolesAsync(
-        IServiceProvider services, string userId)
+    /// <param name="services">Scope to resolve the hub (and through it the workspace) from.</param>
+    /// <param name="userId">The mesh user id whose grants to read.</param>
+    /// <param name="budget">
+    /// Optional override of the role-read budget. Production passes nothing and gets
+    /// <c>OnboardingMiddleware</c>'s cold-start-sized default; tests pass a short window to reach
+    /// the unavailable branch deterministically, the same way <c>ApiTokenService</c> exposes
+    /// <c>ValidationReadTimeout</c>.
+    /// </param>
+    public static async Task<IdentityReadOutcome<IReadOnlyCollection<string>>> LoadDbRolesAsync(
+        IServiceProvider services, string userId, TimeSpan? budget = null)
     {
-        var hub = services.GetService<IMessageHub>();
-        if (hub is null || string.IsNullOrEmpty(userId))
-            return Array.Empty<string>();
+        if (string.IsNullOrEmpty(userId))
+            return IdentityReadOutcome<IReadOnlyCollection<string>>.Resolved(Array.Empty<string>());
 
-        var workspace = hub.GetWorkspace();
-        if (workspace is null)
-            return Array.Empty<string>();
-
-        return await OnboardingMiddleware
-            .LoadUserRoles(workspace, userId)
+        // 🚨 Resolving the hub and its workspace happens INSIDE the chain, not before it. A hub
+        // mid-disposal (portal restart) throws from GetWorkspace(), and that throw used to be
+        // absorbed by the caller's bare `catch { }`. With the swallow gone it would escape as a
+        // 500 — an availability failure reported as a server error, i.e. this issue's own defect
+        // reappearing inside its fix. Deferring puts it on the same classified path as any other
+        // read fault: Unavailable, retryable, 503.
+        return await Observable.Defer(() =>
+                {
+                    var workspace = services.GetService<IMessageHub>()?.GetWorkspace();
+                    // No role SOURCE at all is a static configuration fact — there is nothing to
+                    // enrich from — NOT a transient outage. Resolved(empty), never Unavailable:
+                    // otherwise a deployment without a mesh would 503 every request forever.
+                    return workspace is null
+                        ? Observable.Return(
+                            IdentityReadOutcome<IReadOnlyCollection<string>>.Resolved(Array.Empty<string>()))
+                        : OnboardingMiddleware.LoadUserRoles(workspace, userId, logger: null, budget);
+                })
+            .Catch<IdentityReadOutcome<IReadOnlyCollection<string>>, Exception>(ex =>
+                Observable.Return(IdentityReadOutcome<IReadOnlyCollection<string>>.Unavailable(
+                    $"LoadDbRoles({userId}) faulted resolving the role source: {ex.GetType().Name}")))
             .FirstAsync()
             .ToTask();
     }
