@@ -152,6 +152,19 @@ public record PackageManifest
     public int? InstalledNodeCount { get; init; }
 
     /// <summary>
+    /// The principal that AUTHORIZED this install — the global admin who clicked Install on a
+    /// commercial package (<see cref="PackageEntitlement.IsCommercial"/>). Null on a free package
+    /// and on anything installed unattended (boot-time provisioning has no principal).
+    ///
+    /// <para>It exists so an UNATTENDED update can be authorized the same way the install was
+    /// (#830): <see cref="PluginUpdateWatcher"/> re-verifies this principal is STILL a global admin
+    /// before applying a commercial package's delta, so revoking the admin stops the syncing too. A
+    /// re-stamp carries the existing value forward (<c>PackageInstaller.SeedAuthorizedBy</c>) — the
+    /// record built on an update starts from the catalog manifest, which never carries it.</para>
+    /// </summary>
+    public string? AuthorizedBy { get; init; }
+
+    /// <summary>
     /// The module manifest's per-file hash map at install time (<see cref="ModuleManifest.Files"/>)
     /// — the baseline the NEXT update diffs against to touch only what really changed. Null until
     /// installed from a manifest-carrying package (a null baseline falls back to the legacy full
