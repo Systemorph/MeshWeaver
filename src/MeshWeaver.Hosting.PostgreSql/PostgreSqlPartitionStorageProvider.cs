@@ -249,7 +249,11 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         // naming the offender, instead of provisioning junk the router can never route to.
         // (Explicit schemas of the `_`-prefix globals — `system_access` etc. — are ordinary
         // identifiers and pass; the rule constrains shape, not the registered names.)
-        if (!PartitionDefinition.IsValidPartitionSegment(schema))
+        // Framework `_`-prefixed system containers (root `_Access` and kin) are minted by the
+        // framework, never by a request path — not the junk-id vector this guards. The segment
+        // rule refuses a leading `_` because a USER partition may not start with one, so exempt
+        // them here or the root access container cannot be provisioned at all.
+        if (!schema.StartsWith('_') && !PartitionDefinition.IsValidPartitionSegment(schema))
             throw new ArgumentException(
                 $"Cannot provision partition '{def.Namespace}' (schema '{schema}'): "
                 + $"{PartitionDefinition.PartitionSegmentRequirement}.");
@@ -350,7 +354,8 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         // `login?returnurl=…`: the junk schemas that filled the memex/memexcloud DBs).
         // Fail BEFORE the promise-cache so the rejection is loud (OnError naming the
         // offending id), never a cached silent no-op the caller mistakes for success.
-        if (!PartitionDefinition.IsValidPartitionSegment(@namespace))
+        // Same framework-container exemption as EnsureSchemaAsync above.
+        if (!@namespace.StartsWith('_') && !PartitionDefinition.IsValidPartitionSegment(@namespace))
             return Observable.Throw<Unit>(new ArgumentException(
                 $"Cannot provision partition '{@namespace}': "
                 + $"{PartitionDefinition.PartitionSegmentRequirement}.",

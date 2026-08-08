@@ -106,7 +106,14 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
         // PartitionDefinition.IsValidPartitionSegment rule), so a partition created with
         // one would be permanently unreachable anyway — reject the create with a speaking
         // error naming the offending id instead of provisioning junk.
-        if (!PartitionDefinition.IsValidPartitionSegment(partitionName))
+        // 🚨 EXEMPT framework system containers (`_`-prefixed: `_Access` at root, and its kin).
+        // These are minted by the framework, never by a request path, so they are not the junk-id
+        // vector #714 is about — and the segment rule deliberately refuses a leading `_` because a
+        // USER partition may not start with one. Applying it here rejected the root `_Access`
+        // container that every access-rights setup creates, taking whole test classes down with a
+        // partition-name error (DeleteNodeBehaviorTest, CommentDeletePermissionTest).
+        if (!partitionName.StartsWith('_')
+            && !PartitionDefinition.IsValidPartitionSegment(partitionName))
             return Observable.Return(NodeValidationResult.Invalid(
                 $"Cannot create '{context.Node.NodeType}' with id '{partitionName}': "
                 + $"{PartitionDefinition.PartitionSegmentRequirement}.",
