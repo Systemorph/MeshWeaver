@@ -182,9 +182,10 @@ public class PluginDependencyOrderTest(ITestOutputHelper output) : MonolithMeshT
     /// A cycle is REFUSED with the loop spelled out — never silently installed in an arbitrary
     /// order (which fails later naming a NodeType from neither package) and never walked forever.
     ///
-    /// <para>Deliberately the opposite policy from the unattended boot pass, which degrades to
-    /// catalog order (<c>DefaultPackageInstallTest.DependencyCycle_StillInstallsEveryPackageOnce</c>):
-    /// there is nobody at boot to tell, and one malformed package must not strand an instance.</para>
+    /// <para>Deliberately the opposite policy from the unattended boot pass, which warns and
+    /// installs every package anyway
+    /// (<c>DefaultPackageInstallTest.DependencyCycle_StillInstallsEveryPackageOnce</c>): there is
+    /// nobody at boot to tell, and one malformed package must not strand an instance.</para>
     /// </summary>
     [Fact]
     public void ADependencyCycle_IsRefusedWithTheLoopNamed()
@@ -197,6 +198,36 @@ public class PluginDependencyOrderTest(ITestOutputHelper output) : MonolithMeshT
 
         act.Should().Throw<InvalidOperationException>()
             .Which.Message.Should().Contain("A → B → A");
+    }
+
+    /// <summary>
+    /// What the tolerant sort ACTUALLY guarantees inside a cycle — pinned because the comments used
+    /// to promise "degrades to catalog order", which the depth-first walk never did (for
+    /// <c>A→B, B→A</c> it yields <c>[B, A]</c>, the reverse of catalog order).
+    ///
+    /// <para>The real guarantee is better than the one that was promised: only the BACK EDGE
+    /// closing the loop is dropped, so a dependency that both cycle members need is still installed
+    /// before either of them. A literal catalog-order fallback would have violated exactly that —
+    /// here it would put <c>Lib</c> last, after the two packages that require it.</para>
+    /// </summary>
+    [Fact]
+    public void ACycle_DropsOnlyTheBackEdge_AndKeepsEveryOtherConstraint()
+    {
+        // A ↔ B is a cycle; BOTH also depend on Lib, which is outside it. Catalog order is
+        // [A, B, Lib] — the order a "fall back to catalog order" policy would have produced.
+        var a = new PackageManifest { Id = "A", Requires = ["B@^1.0.0", "Lib@^1.0.0"] };
+        var b = new PackageManifest { Id = "B", Requires = ["A@^1.0.0", "Lib@^1.0.0"] };
+        var lib = new PackageManifest { Id = "Lib" };
+
+        var ordered = PackageDependencyGraph
+            .InDependencyOrder([a, b, lib], NullLogger.Instance)
+            .Select(p => p.Id).ToList();
+
+        ordered.Should().HaveCount(3, "a cycle must never drop or duplicate a package");
+        ordered.IndexOf("Lib").Should().BeLessThan(ordered.IndexOf("A"),
+            "the satisfiable edge out of the cycle still has to be honoured");
+        ordered.IndexOf("Lib").Should().BeLessThan(ordered.IndexOf("B"),
+            "the satisfiable edge out of the cycle still has to be honoured");
     }
 
     /// <summary>

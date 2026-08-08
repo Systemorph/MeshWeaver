@@ -385,6 +385,10 @@ public static class CatalogLayoutAreas
     /// before.</param>
     /// <param name="installedIds">Package ids already in the install registry; those dependencies
     /// are skipped rather than re-installed.</param>
+    /// <exception cref="InvalidOperationException">The package's declared dependencies form a
+    /// cycle. Thrown, not swallowed: it propagates out of the click action to
+    /// <c>LayoutAreaHost.OnClick</c> → <c>FailRequest</c>, so the action fails visibly instead of
+    /// leaving the clicker with a button that silently did nothing.</exception>
     internal static void InstallPackage(
         LayoutAreaHost host, IPackageSource source, string sourceRef, PackageManifest pkg,
         IReadOnlyList<PackageManifest>? catalog = null, IReadOnlySet<string>? installedIds = null)
@@ -427,8 +431,12 @@ public static class CatalogLayoutAreas
             // later with a NodeType path naming neither package. Refuse with the named loop —
             // the boot pass deliberately keeps the tolerant behaviour instead (it must not strand
             // a whole instance over one malformed package).
+            // 🚨 Logged AND RETHROWN, never swallowed. Returning here would leave the clicker with
+            // a button that did nothing and no feedback at all; the throw propagates out of the
+            // click action into LayoutAreaHost.OnClick, which routes it through FailRequest so the
+            // action visibly fails. The message already names the loop ("A → B → A").
             logger?.LogWarning(ex, "Install of {Id} refused: {Reason}", pkg.Id, ex.Message);
-            return;
+            throw;
         }
 
         if (closure.Count > 1)
@@ -442,14 +450,30 @@ public static class CatalogLayoutAreas
             .Select(p => InstallOrUpdate(host.Hub, source, sourceRef, p, logger, authorizingUserId)
                 .Do(result => logger?.LogInformation(
                     "Installed {Id}: {Written} written, {Unchanged} unchanged.",
-                    p.Id, result.Written, result.Unchanged)))
+                    p.Id, result.Written, result.Unchanged))
+                // 🚨 Name the package that ACTUALLY failed. On a closure install the failing step
+                // is frequently a DEPENDENCY, and reporting only the clicked package misleads
+                // exactly when someone is troubleshooting ("Install of Chess failed" when it was
+                // Training that broke). Logged HERE, where the step's own id is in scope, then
+                // rethrown so the Concat aborts — a dependent must never install after its
+                // dependency failed.
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex,
+                        "Install of {Id} failed (while installing {Target} and its dependencies).",
+                        p.Id, pkg.Id);
+                    return Observable.Throw<InstallResult>(ex);
+                }))
             .ToObservable()
             .Concat();
 
         Observable.Using(() => accessService.ImpersonateAsSystem(), _ => install)
             .Subscribe(
                 _ => { },
-                ex => logger?.LogWarning(ex, "Install of {Id} failed.", pkg.Id));
+                // The failing package is already named above; this records that the CLICK did not
+                // complete, which is the different fact a reader of this line needs.
+                ex => logger?.LogWarning(ex,
+                    "Installing {Id} and its dependencies did not complete.", pkg.Id));
     }
 
     /// <summary>

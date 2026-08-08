@@ -501,10 +501,12 @@ public sealed class InstanceAutoRegistrationService(
                         + "registry predates source-stamped catalog entries, a Source/* pattern "
                         + "cannot match — it fails closed rather than guessing.",
                         string.Join(", ", wanted));
-                // The TOLERANT sort: a cycle degrades to catalog order and warns rather than
-                // refusing, because nobody is present at boot to fix a malformed repo and one bad
-                // package must not strand the whole instance. The Install CLICK uses the same graph
-                // with the strict policy (PackageDependencyGraph.InstallClosure).
+                // The TOLERANT sort: a cycle warns and still yields every package exactly once
+                // (the requirement closing the loop is ignored; order within the cycle is
+                // arbitrary — see InDependencyOrder's remarks) rather than refusing, because
+                // nobody is present at boot to fix a malformed repo and one bad package must not
+                // strand the whole instance. The Install CLICK uses the same graph with the strict
+                // policy (PackageDependencyGraph.InstallClosure).
                 var ordered = PackageDependencyGraph.InDependencyOrder(
                     deduped.Select(c => c.Package).ToList(), logger);
                 var bySource = deduped.ToDictionary(c => c.Package.Id, StringComparer.Ordinal);
