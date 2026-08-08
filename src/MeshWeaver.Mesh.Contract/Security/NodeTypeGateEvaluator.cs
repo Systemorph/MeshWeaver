@@ -76,11 +76,22 @@ public static class NodeTypeGateEvaluator
         if (string.IsNullOrWhiteSpace(gate.RedirectOnDenied) || string.IsNullOrEmpty(gatedPath))
             return null;
 
-        var declared = gate.RedirectOnDenied!;
+        var declared = gate.RedirectOnDenied!.Trim();
         if (declared.StartsWith('/'))
         {
-            var absolute = declared.TrimStart('/');
-            return absolute.Length == 0 ? null : absolute;
+            // 🚨 An ABSOLUTE redirect gets the same scrutiny as a relative one. It skipped both the
+            // trim and the `..` refusal, so a declaration with stray whitespace produced a path
+            // nothing resolves, and one containing a traversal segment was handed back verbatim —
+            // a redirect target is a PATH we send a denied caller to, so it must never be able to
+            // climb out of what was declared. (NormalizeSurface maps ""/"." to Self, which is
+            // meaningless for an absolute target: an empty absolute redirect stays null.)
+            var absolute = declared.TrimStart('/').Trim();
+            if (absolute.Length == 0)
+                return null;
+            foreach (var segment in absolute.Split('/', StringSplitOptions.RemoveEmptyEntries))
+                if (segment == "..")
+                    return null;
+            return absolute;
         }
 
         var relative = NormalizeSurface(declared);
