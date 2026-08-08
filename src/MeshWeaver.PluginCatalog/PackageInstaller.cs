@@ -594,12 +594,12 @@ public static class PackageInstaller
         if (string.IsNullOrWhiteSpace(rootPath))
             return Observable.Return(0);
 
-        // Cheap path-only precheck first, so the (majority) node files never materialize bytes —
-        // the same two-step GitHubSyncService.ParseSnapshot uses.
+        // TryClassify is itself the path-only precheck: it invokes the bytes factory ONLY once it
+        // has classified the path as content, so node files never materialize bytes. A separate
+        // IsContentPath filter in front just repeated its TrySplit work.
         var assets = files
-            .Select(file => (File: file, Relative: FolderRelative(file.RelativePath, sourceFolder)))
-            .Where(x => ContentAssetMapper.IsContentPath(x.Relative))
-            .Select(x => ContentAssetMapper.TryClassify(x.Relative, () => x.File.Bytes))
+            .Select(file => ContentAssetMapper.TryClassify(
+                FolderRelative(file.RelativePath, sourceFolder), () => file.Bytes))
             .Where(asset => asset is not null).Select(asset => asset!)
             .ToArray();
         if (assets.Length == 0)
