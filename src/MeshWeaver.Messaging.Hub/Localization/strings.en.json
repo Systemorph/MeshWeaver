@@ -54,6 +54,8 @@
   "error.checkUrl": "Please double-check the url you have entered.",
   "error.accessDenied": "Access denied",
   "error.accessDeniedHint": "If you believe you should have access, ask the partition owner to grant it.",
+  "error.identityUnavailable": "We could not check your account just now.",
+  "error.identityUnavailableHint": "This is a temporary problem on our side, not a problem with your account. You are still signed in — please wait a moment and reload the page. Signing in again will not help.",
   "error.viewFailed": "This view failed to render.",
   "error.areaFailed": "This area failed to render.",
   "error.dialogFailed": "This dialog failed to render.",

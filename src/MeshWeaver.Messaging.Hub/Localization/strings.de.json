@@ -54,6 +54,8 @@
   "error.checkUrl": "Bitte die eingegebene URL prüfen.",
   "error.accessDenied": "Zugriff verweigert",
   "error.accessDeniedHint": "Falls ein Zugriff bestehen sollte, bitte den Besitzer der Partition um Freigabe bitten.",
+  "error.identityUnavailable": "Ihr Konto konnte gerade nicht geprüft werden.",
+  "error.identityUnavailableHint": "Das ist ein vorübergehendes Problem auf unserer Seite und liegt nicht an Ihrem Konto. Sie sind weiterhin angemeldet — bitte einen Moment warten und die Seite neu laden. Eine erneute Anmeldung hilft nicht.",
   "error.viewFailed": "Diese Ansicht konnte nicht dargestellt werden.",
   "error.areaFailed": "Dieser Bereich konnte nicht dargestellt werden.",
   "error.dialogFailed": "Dieser Dialog konnte nicht dargestellt werden.",
