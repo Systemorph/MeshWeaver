@@ -259,7 +259,6 @@ public static class ThreadNodeType
         // surfacing as "Access denied: user '<thread-instance-path>' lacks
         // Read permission on 'Thread'" and the chat view never loads. Matches
         // Agent, User, Code, Markdown, etc.
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         // Per-instance access: Thread is a satellite — Read requires Read on
         // the conversation's MainNode, Create/Update/Delete require Update
         // on the MainNode. Matches Comment / Activity / TrackedChange.

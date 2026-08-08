@@ -38,10 +38,9 @@ public class UserPartitionVisibilityTests
         var adapter = _fixture.StorageAdapter;
         var ac = _fixture.AccessControl;
 
-        // Register User as a public-read node type (profile visible, content private)
-        await ac.SyncNodeTypePermissionsAsync([
-            new NodeTypePermission("User", PublicRead: true)
-        ], ct).Run().Should().Within(30.Seconds()).Emit();
+        // 🔒 #953 — no node-type public read any more. Every assertion below is about CONTENT
+        // nodes (the User rows are filtered out), so the profile nodes simply stay unlisted for
+        // readers without a grant, which is what production always did.
 
         // Create user nodes
         await adapter.Write(new MeshNode("Alice", "User")
@@ -148,7 +147,7 @@ public class UserPartitionVisibilityTests
         var request = MeshQueryRequest.FromQuery("path:User scope:descendants", "Charlie");
         var results = await Query(query, request);
 
-        // Charlie should only see User nodes (public-read), not any partition content
+        // Charlie has no grants, so he sees no partition content at all.
         results.Where(n => n.NodeType != "User")
             .Should().BeEmpty("Unknown user must not see any partition content");
     }

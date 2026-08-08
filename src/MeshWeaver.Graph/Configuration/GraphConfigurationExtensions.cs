@@ -118,12 +118,11 @@ public static class GraphConfigurationExtensions
 
             // Register Graph content types in the type registry for polymorphic
             // JSON serialization — on the mesh hub AND on every per-node hub.
-            // The per-node overlay is essential: a NodeType definition hub posts
-            // RunCompileRequest to its compile-activity hub and must deserialise
-            // the RunCompileResponse that routes back; both hubs are per-node
-            // hubs, so without the ConfigureDefaultNodeHub overlay the compile
-            // round-trip fails with "type 'RunCompileResponse' is not registered
-            // in this hub's TypeRegistry" and the compile never settles.
+            // The per-node overlay is essential: per-node hubs exchange Graph
+            // content types (Code sources, NodeTypeDefinition, activity logs)
+            // across hub boundaries, so without the ConfigureDefaultNodeHub
+            // overlay those round-trips fail with "type 'X' is not registered in
+            // this hub's TypeRegistry".
             builder.ConfigureHub(config => config.WithGraphTypes());
             // Every per-node hub gets MeshDataSource + Overview/Thumbnail/Settings/Search
             // as a baseline. Compiled NodeType HubConfigurations layer on top

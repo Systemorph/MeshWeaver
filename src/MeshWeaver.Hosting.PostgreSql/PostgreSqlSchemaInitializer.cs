@@ -68,8 +68,8 @@ public static class PostgreSqlSchemaInitializer
                     -- Add access control per schema — ONLY for schemas that actually
                     -- carry the per-partition permission tables. Public content schemas
                     -- (e.g. `doc`, the mirrored documentation) ship `mesh_nodes` WITHOUT
-                    -- `user_effective_permissions` / `node_type_permissions`; referencing
-                    -- those missing relations made the ENTIRE union fail to plan (42P01)
+                    -- `user_effective_permissions`; referencing that
+                    -- missing relation made the ENTIRE union fail to plan (42P01)
                     -- for every authenticated user → empty search / empty catalog. Such
                     -- schemas are PUBLIC content (no per-user filter); access-controlled
                     -- partitions still get the full partition_access + node check.
@@ -81,14 +81,23 @@ public static class PostgreSqlSchemaInitializer
                     -- a user's ROOT allow (memex-cloud 2026-07-19: store gating darkened
                     -- children for Public; entitled users' searches lost their content).
                     -- Empty set -> NULL -> '= true' fails closed.
+                    --
+                    -- 🔒 #953 — the `node_type_permissions.public_read OR …` term that used to sit
+                    -- between the partition gate and this fold is GONE. Nothing in the product ever
+                    -- wrote that table (its only writer hung off the zero-caller
+                    -- InitializePostgreSqlSchemaAsync), so the term was a constant `false` in every
+                    -- deployment and removing it is a no-op. It must not return in that shape: it
+                    -- OR'd past this longest-prefix fold, which is where store/course paywall DENY
+                    -- rows live, and it had no counterpart in PermissionEvaluator. Public read is
+                    -- PartitionAccessPolicy._Policy (#603 — projected as allow-Read uep rows that
+                    -- take part in the fold below) or NodeTypeGate (#701).
                     IF user_list IS NOT NULL
                        AND to_regclass(format('%I.user_effective_permissions', schema_rec.schema_name)) IS NOT NULL THEN
                         union_sql := union_sql || format(
                             ' AND ('
                             || 'EXISTS (SELECT 1 FROM public.partition_access pa WHERE pa.user_id IN (%s) AND pa.partition = %L)'
                             || ' AND ('
-                            || 'EXISTS (SELECT 1 FROM %I.node_type_permissions ntp WHERE ntp.node_type = n.node_type AND ntp.public_read = true)'
-                            || ' OR (SELECT bool_or(closest.is_allow) FROM ('
+                            || '(SELECT bool_or(closest.is_allow) FROM ('
                             || '  SELECT DISTINCT ON (uep.user_id) uep.is_allow'
                             || '  FROM %I.user_effective_permissions uep'
                             || '  WHERE uep.user_id IN (%s) AND uep.permission = ''Read'''
@@ -97,7 +106,6 @@ public static class PostgreSqlSchemaInitializer
                             || '  ) closest) = true'
                             || '))',
                             user_list, schema_rec.schema_name,
-                            schema_rec.schema_name,
                             schema_rec.schema_name,
                             user_list);
                     END IF;
@@ -1372,7 +1380,13 @@ public static class PostgreSqlSchemaInitializer
                 PRIMARY KEY (group_name, member_id)
             );
 
-            -- Node type permission flags (populated from DI-registered NodeTypePermission records)
+            -- 🔒 #953 — LEGACY, always empty, referenced by NOTHING. The `public_read` RLS term that
+            -- read this table was removed (no product code ever wrote a row, so it was a constant
+            -- false; and it OR-ed past the longest-prefix DENY fold that paywall gating relies on).
+            -- The CREATE is deliberately KEPT for one release: during a rolling deploy an OLD replica
+            -- can still install the previous search_across_schemas body, which names this table per
+            -- schema and would 42P01 against a schema provisioned without it.
+            -- Drop it in a follow-up migration once every replica runs code that never names it.
             CREATE TABLE IF NOT EXISTS node_type_permissions (
                 node_type   TEXT    NOT NULL PRIMARY KEY,
                 public_read BOOLEAN NOT NULL DEFAULT false
@@ -2229,7 +2243,13 @@ public static class PostgreSqlSchemaInitializer
                 PRIMARY KEY (group_name, member_id)
             );
 
-            -- Node type permission flags (populated from DI-registered NodeTypePermission records)
+            -- 🔒 #953 — LEGACY, always empty, referenced by NOTHING. The `public_read` RLS term that
+            -- read this table was removed (no product code ever wrote a row, so it was a constant
+            -- false; and it OR-ed past the longest-prefix DENY fold that paywall gating relies on).
+            -- The CREATE is deliberately KEPT for one release: during a rolling deploy an OLD replica
+            -- can still install the previous search_across_schemas body, which names this table per
+            -- schema and would 42P01 against a schema provisioned without it.
+            -- Drop it in a follow-up migration once every replica runs code that never names it.
             CREATE TABLE IF NOT EXISTS node_type_permissions (
                 node_type   TEXT    NOT NULL PRIMARY KEY,
                 public_read BOOLEAN NOT NULL DEFAULT false
@@ -2522,7 +2542,13 @@ public static class PostgreSqlSchemaInitializer
                 PRIMARY KEY (group_name, member_id)
             );
 
-            -- Node type permission flags (populated from DI-registered NodeTypePermission records)
+            -- 🔒 #953 — LEGACY, always empty, referenced by NOTHING. The `public_read` RLS term that
+            -- read this table was removed (no product code ever wrote a row, so it was a constant
+            -- false; and it OR-ed past the longest-prefix DENY fold that paywall gating relies on).
+            -- The CREATE is deliberately KEPT for one release: during a rolling deploy an OLD replica
+            -- can still install the previous search_across_schemas body, which names this table per
+            -- schema and would 42P01 against a schema provisioned without it.
+            -- Drop it in a follow-up migration once every replica runs code that never names it.
             CREATE TABLE IF NOT EXISTS node_type_permissions (
                 node_type   TEXT    NOT NULL PRIMARY KEY,
                 public_read BOOLEAN NOT NULL DEFAULT false
