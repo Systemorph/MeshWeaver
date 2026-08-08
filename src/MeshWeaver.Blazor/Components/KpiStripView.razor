@@ -1,0 +1,23 @@
+@inherits BlazorView<KpiStripControl, KpiStripView>
+@inject AccessService Access
+
+<div class="@($"kpi-strip {Class}".TrimEnd())" style="@Style" id="@Id">
+    @if (Items.Count == 0)
+    {
+        <p class="kpi-empty">@Access.Localize("analysis.kpi.empty")</p>
+    }
+    else
+    {
+        @foreach (var item in Items)
+        {
+            <div class="kpi-tile" style="@($"min-width:{MinTileWidth}")">
+                <div class="kpi-label">@item.Label</div>
+                <div class="kpi-value">@item.Value</div>
+                @if (!string.IsNullOrWhiteSpace(item.Hint))
+                {
+                    <div class="kpi-hint">@item.Hint</div>
+                }
+            </div>
+        }
+    }
+</div>
