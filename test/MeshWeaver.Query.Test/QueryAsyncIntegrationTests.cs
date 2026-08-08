@@ -19,8 +19,16 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder).AddAI();
 
-    // Use unique prefixes per test to avoid cross-test contamination (shared mesh instance)
-    private static string P([CallerMemberName] string name = "") => name;
+    // Use unique prefixes per test to avoid cross-test contamination (shared mesh instance).
+    // 🚨 Bounded to 40 chars, leaving room for the suffixes callers append (e.g. "other"): a
+    // partition id becomes a Postgres SCHEMA name, and PG truncates identifiers at 63 bytes — so
+    // two long names sharing a 63-char prefix would silently land in the SAME schema. Provisioning
+    // now rejects an over-long id rather than colliding (#714), and several method names here are
+    // long enough to trip it. The prefix stays unique because the truncation keeps the leading,
+    // most-distinctive part of each method name.
+    private const int MaxPartitionPrefix = 40;
+    private static string P([CallerMemberName] string name = "") =>
+        name.Length <= MaxPartitionPrefix ? name : name[..MaxPartitionPrefix];
 
     /// <summary>
     /// Reactive replacement for <c>QueryAsync(...).ToListAsync()</c>: the first

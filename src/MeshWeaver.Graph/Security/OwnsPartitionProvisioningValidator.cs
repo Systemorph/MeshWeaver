@@ -99,6 +99,26 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
         if (string.IsNullOrEmpty(partitionName))
             return Observable.Return(NodeValidationResult.Valid());
 
+        // 🚨 Defense-in-depth (#714): the partition id becomes the backing schema name.
+        // A malformed id (URL/query-string shaped — '?', '%', ':', '=', '&', whitespace;
+        // >63 chars; not starting with a letter/digit) must NEVER provision a schema. The
+        // storage routers refuse to ROUTE such segments (the same shared
+        // PartitionDefinition.IsValidPartitionSegment rule), so a partition created with
+        // one would be permanently unreachable anyway — reject the create with a speaking
+        // error naming the offending id instead of provisioning junk.
+        // 🚨 EXEMPT framework system containers (`_`-prefixed: `_Access` at root, and its kin).
+        // These are minted by the framework, never by a request path, so they are not the junk-id
+        // vector #714 is about — and the segment rule deliberately refuses a leading `_` because a
+        // USER partition may not start with one. Applying it here rejected the root `_Access`
+        // container that every access-rights setup creates, taking whole test classes down with a
+        // partition-name error (DeleteNodeBehaviorTest, CommentDeletePermissionTest).
+        if (!partitionName.StartsWith('_')
+            && !PartitionDefinition.IsValidPartitionSegment(partitionName))
+            return Observable.Return(NodeValidationResult.Invalid(
+                $"Cannot create '{context.Node.NodeType}' with id '{partitionName}': "
+                + $"{PartitionDefinition.PartitionSegmentRequirement}.",
+                NodeRejectionReason.InvalidPath));
+
         var providers = _hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToList();
         if (providers.Count == 0)
             return Observable.Return(NodeValidationResult.Valid());
