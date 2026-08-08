@@ -653,6 +653,76 @@ securityService.HasPermission("Anonymous", Permission.Read)
 
 ---
 
+# Type-declared subtree gates (`NodeTypeGate`)
+
+A node type that owns an entitlement-gated subtree — a storefront plugin, a paid course —
+declares its access shape **once, on the type**, instead of materialising it per instance:
+
+```csharp
+builder.ConfigureNodeTypeAccess(access => access.WithGate(new NodeTypeGate("Store/Plugin")
+{
+    PublicSurfaces = [NodeTypeGate.Self, "Overview", "Subscribe"],
+    RedirectOnDenied = "Subscribe",
+}));
+```
+
+Read as: *every* node of type `Store/Plugin` keeps its cover (`Self`), its marketing page and its
+checkout surface readable by everyone — anonymous visitors included — and a reader denied anywhere
+beneath it is sent to `{plugin}/Subscribe`. Nothing else is written. No `_Policy` node, no
+per-child deny, no root grant.
+
+**The rest of the model falls out of what the framework already does:**
+
+| Requirement | Mechanism |
+|---|---|
+| Everything except the declared surfaces is closed | The framework's deny-by-default — no grant, no Read |
+| Purchase / coupon opens the whole subtree | ONE `Viewer` `AccessAssignment` at the plugin root; grants inherit downward |
+| Denied reader is redirected | `NodeTypeGate.RedirectOnDenied`, resolved relative to the gated node |
+
+## Two properties worth relying on
+
+**A gate only ever GRANTS.** It never denies, never caps, and never removes a permission a role or
+an entitlement confers. A declaration that can only widen a short, explicitly listed set of paths
+cannot lock anyone out and cannot regress an existing deployment — which is why an actual `_Policy`
+node still wins over the type-declared redirect, and why the older allow-then-deny gate keeps
+working unchanged next to it.
+
+**`Self` opens the node and nothing beneath it.** That asymmetry is the reason the gate must live
+on the type at all: an `AccessAssignment` at the plugin root inherits strictly downward, so opening
+the cover that way opens the whole subtree — which is exactly why the materialised shape had to
+write a deny for every non-public child to claw it back.
+
+## Why not materialise it per instance
+
+Measured on memex, 2026-07-28 (issue #701), the per-instance shape failed three separate ways:
+
+- **Churn.** The reconcile pass rewrote `_Policy` until its version counter reached six figures
+  (`AgenticEngineering` 254,760), every write by `system-security`, as pure bookkeeping.
+- **Writer/reader drift.** The written policies carried only `redirectOnDenied`, while the reader
+  additionally required `publicRead: false` — the gate read as *not gated* in production.
+- **Silent non-application.** Gating keyed off a `price` field, so two plugins that shipped
+  `price: null` were completely ungated: every page anonymously readable.
+
+A declaration on the type has no version counter to churn, no second condition to drift from, and
+cannot be "not run" for an instance. A plugin that declares no price is gated for the same reason
+every other one is — its type.
+
+## Cost, and the evaluators
+
+`PermissionEvaluator` resolves a target path's **nearest gated ancestor-or-self** from one
+process-wide cached query per gated node type (`$security-gated:{type}`) — bounded by the number of
+gated *nodes*, not their children, and seeded with the static providers so a statically declared
+plugin resolves on the first emission. A mesh that declares no gate subscribes nothing and runs the
+exact fold it ran before.
+
+> ⚠️ **The SQL fold does not yet know about gates.** Postgres RLS decides *query listing*; the
+> evaluator above decides *exact reads and every UI gate*. Until the gate lands in the SQL
+> predicate, a declared public surface is readable by path but will not appear in an anonymous
+> `search`. The asymmetry is strictly in the safe direction — SQL is stricter, never looser, so it
+> cannot become a bypass — but it is a real gap, not a design choice.
+
+---
+
 # Hierarchical access pattern
 
 ```mermaid
