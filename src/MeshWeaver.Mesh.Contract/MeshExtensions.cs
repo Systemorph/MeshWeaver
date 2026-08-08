@@ -2902,7 +2902,7 @@ public static class MeshExtensions
     /// <item><b>Missing target</b> → forward as <see cref="CreateNodeRequest"/>.
     /// The per-node hub spins up and persists its own initial state.</item>
     /// <item><b>Existing target</b> → call
-    /// <c>workspace.GetMeshNodeStream(path).Update(state =&gt; UpdateAccordingToSourceNode(state, sourceNode))</c>.
+    /// <c>workspace.GetMeshNodeStream(path).Update(state =&gt; UpdateAccordingToSourceNode(state, sourceNode, options))</c>.
     /// The Update routes to the owning per-node hub via the data-sync
     /// protocol; the hub applies the change to its own MeshNode through its
     /// own workspace's <c>MeshNodeReference</c> reducer; <c>MeshNodeTypeSource</c>
@@ -3154,7 +3154,7 @@ public static class MeshExtensions
                 // the write forward by construction, so the repair lands on the first attempt.
                 // Content is untouched by this: it still comes from `live`.
                 hub.GetMeshNodeStream(node.Path)
-                    .Update(live => UpdateAccordingToSourceNode(live, node) with
+                    .Update(live => UpdateAccordingToSourceNode(live, node, hub.JsonSerializerOptions) with
                     {
                         Version = Math.Max(live.Version, existing.Version),
                         // Identity fields the merge is meant to PRESERVE — recovered from the
@@ -3253,6 +3253,13 @@ public static class MeshExtensions
     /// </summary>
     private static bool IsNoOpUpsert(MeshNode existing, MeshNode sourceNode, JsonSerializerOptions options)
     {
+        // Mirror the merge's operational-ownership rule (PreserveMeshOwnedOperational) BEFORE
+        // comparing, or the skip could never fire for a NodeType node: the incoming copy's stale
+        // bookkeeping would read as a content difference on every re-import, take the write path,
+        // and bump Version + LastModified for nothing. That churn is what marks the node
+        // "server-modified" and makes the two-way sync start preserving a server copy nobody
+        // edited — issue #748's stated harm, at its cheapest seam.
+        sourceNode = PreserveMeshOwnedOperational(existing, sourceNode, options);
         if ((sourceNode.Name ?? existing.Name) != existing.Name
             || (sourceNode.NodeType ?? existing.NodeType) != existing.NodeType
             || (sourceNode.Icon ?? existing.Icon) != existing.Icon
@@ -3294,9 +3301,11 @@ public static class MeshExtensions
     /// dispatches CreateNodeRequest before reaching this lambda, so state
     /// should always be non-null here).
     /// </summary>
-    private static MeshNode UpdateAccordingToSourceNode(MeshNode state, MeshNode sourceNode)
+    private static MeshNode UpdateAccordingToSourceNode(
+        MeshNode state, MeshNode sourceNode, JsonSerializerOptions options)
     {
         if (state is null) return sourceNode;
+        sourceNode = PreserveMeshOwnedOperational(state, sourceNode, options);
         return state with
         {
             Name = sourceNode.Name ?? state.Name,
@@ -3317,6 +3326,51 @@ public static class MeshExtensions
             LastModified = DateTimeOffset.UtcNow,
         };
     }
+
+    /// <summary>
+    /// 🚨 The MESH-OWNED compile bookkeeping on a NodeType node
+    /// (<see cref="NodeTypeOperationalContent.MemberNames"/>) is never taken from an UPSERT's
+    /// incoming copy — it comes from <paramref name="state"/>, the node as its owner currently
+    /// holds it. Issue #748.
+    ///
+    /// <para><b>Why this belongs HERE and nowhere else.</b> Every upsert writer holds a copy of the
+    /// node that is stale by construction: a repo file embeds whatever verdict it carried when it was
+    /// exported, an installer ships the package author's, and a sync's <c>existing</c> snapshot comes
+    /// from the eventually-consistent query index — which lags the compile pipeline, because the
+    /// compile does not run under the importer's lock. Letting any of those land REGRESSES live
+    /// compile state to a stale verdict: a healthy type reverts to the previous <c>Pending</c> with a
+    /// dangling <c>latestReleasePath</c> (memex 2026-08-02, four SocialMedia types), or a
+    /// weeks-old "Ok" claims an assembly that no longer exists and the type parks on a cold cache
+    /// (the stale-green class). <c>StaticRepoImporter</c> used to patch this up client-side against
+    /// exactly that lagged snapshot — which is the CQRS rule's forbidden shape ("never read a single
+    /// node's content from the query") and could only ever be as fresh as the index.</para>
+    ///
+    /// <para>The owner's merge is the one place where the question has an authoritative answer, and
+    /// answering it here covers EVERY upsert writer (GitSync import, plugin install, webhook,
+    /// instance sync, MCP) instead of one. Cross-hub, the effect is stronger than "read fresher":
+    /// the members end up equal to the value this handle already holds, so they DROP OUT of the RFC
+    /// 7396 patch entirely and the owner keeps its own — a stale mirror cannot even express the
+    /// regression. Deliberate writes are unaffected: every compile-state writer (the watchers,
+    /// <c>RequestNodeTypeRelease</c>, the MCP compile tool) goes through
+    /// <c>GetMeshNodeStream(path).Update</c>, never through an upsert.</para>
+    ///
+    /// <para>Absent-in-live means absent in the result: a compile verdict baked into a repo file can
+    /// never seed a node that has none. Non-NodeType nodes and content carrying no operational
+    /// member return the SAME instance — no reshaping, no cost.</para>
+    /// </summary>
+    private static MeshNode PreserveMeshOwnedOperational(
+        MeshNode state, MeshNode sourceNode, JsonSerializerOptions options) =>
+        NodeTypeOperationalContent.PreserveLiveOperational(
+            // The upsert convention is null-keeps-state, so an incoming node that omits NodeType is
+            // still an update OF a NodeType node. Probe on the EFFECTIVE type or the rule would be
+            // silently skipped for exactly those writers that ship the sparsest node — but only
+            // reshape when the LIVE node actually is a NodeType, so a non-NodeType upsert (the
+            // overwhelming majority) returns the same instance, exactly as the doc above promises.
+            sourceNode.NodeType is null && state.NodeType is not null
+                ? sourceNode with { NodeType = state.NodeType }
+                : sourceNode,
+            state,
+            options);
 
     /// <summary>
     /// Sync handler for MoveNodeRequest — Copy subtree to target, then reactively delete
