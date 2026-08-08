@@ -19,7 +19,8 @@ namespace MeshWeaver.AI;
 /// <c>AiSettings.AgentQueries</c>, which is written ONCE and never revisited. A user whose settings
 /// predate the install therefore asks for <c>namespace:{user}/Agent|{space}/Agent|Agent</c> forever —
 /// none of which match — and gets an empty picker with no error in any log. Skills had the identical
-/// latent hole: <c>AddSkillSource</c> existed but nothing ever called it.</para>
+/// latent hole: a fire-and-forget <c>AddSkillSource</c> existed but nothing ever called it
+/// (deleted with #683 — this hook's sequenced chain is the only registration path).</para>
 ///
 /// <para><b>Every user, not just the installer.</b> A package is installed once, by an admin, for the
 /// whole instance — so the sources belong on every account, including accounts created before the
