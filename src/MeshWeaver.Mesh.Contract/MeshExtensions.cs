@@ -3066,8 +3066,12 @@ public static class MeshExtensions
         NodeTypeOperationalContent.PreserveLiveOperational(
             // The upsert convention is null-keeps-state, so an incoming node that omits NodeType is
             // still an update OF a NodeType node. Probe on the EFFECTIVE type or the rule would be
-            // silently skipped for exactly those writers that ship the sparsest node.
-            sourceNode.NodeType is null ? sourceNode with { NodeType = state.NodeType } : sourceNode,
+            // silently skipped for exactly those writers that ship the sparsest node — but only
+            // reshape when the LIVE node actually is a NodeType, so a non-NodeType upsert (the
+            // overwhelming majority) returns the same instance, exactly as the doc above promises.
+            sourceNode.NodeType is null && state.NodeType is not null
+                ? sourceNode with { NodeType = state.NodeType }
+                : sourceNode,
             state,
             options);
 
