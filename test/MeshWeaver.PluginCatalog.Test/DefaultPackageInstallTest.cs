@@ -152,7 +152,7 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
             new PackageManifest { Id = "Training", Requires = ["Store@^1.0.0"] },
         };
 
-        var ordered = InstanceAutoRegistrationService
+        var ordered = PackageDependencyGraph
             .InDependencyOrder(catalogOrder, NullLogger.Instance)
             .Select(p => p.Id).ToList();
 
@@ -173,7 +173,7 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
             new PackageManifest { Id = "B", Requires = ["A"] },
         };
 
-        var ordered = InstanceAutoRegistrationService
+        var ordered = PackageDependencyGraph
             .InDependencyOrder(cyclic, NullLogger.Instance).Select(p => p.Id).OrderBy(x => x).ToList();
 
         ordered.Should().HaveCount(2);
@@ -188,7 +188,7 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
         // may well install fine, and there is nothing to order against.
         var packages = new[] { new PackageManifest { Id = "Store", Requires = ["PaidCourse@^1.0.0"] } };
 
-        var ordered = InstanceAutoRegistrationService
+        var ordered = PackageDependencyGraph
             .InDependencyOrder(packages, NullLogger.Instance).Select(p => p.Id).ToList();
         ordered.Should().HaveCount(1);
         ordered.Should().Contain("Store");
