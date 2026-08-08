@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Data;
+﻿using System.Collections.Immutable;
+using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.DataGrid;
 
@@ -348,4 +349,60 @@ public static class Controls
     /// <param name="data">The bound node path value or data-binding expression.</param>
     /// <returns>A new <see cref="MeshNodePickerControl"/>.</returns>
     public static MeshNodePickerControl MeshNodePicker(object data) => new(data);
+
+    #region Analysis views
+
+    /// <summary>
+    /// Creates a KPI strip — a wrapping row of tiles carrying a view's headline figures.
+    /// A plain leaf control: compose it inside a <see cref="Stack"/> or <see cref="LayoutGrid"/>.
+    /// </summary>
+    /// <param name="items">The <see cref="KpiItem"/> tiles.</param>
+    /// <returns>A new <see cref="KpiStripControl"/>.</returns>
+    public static KpiStripControl KpiStrip(params KpiItem[] items) =>
+        new(items.ToImmutableList());
+
+    /// <summary>
+    /// Creates a KPI strip over <paramref name="items"/> — a concrete
+    /// <c>IEnumerable&lt;KpiItem&gt;</c>, or a data-binding reference resolving to one.
+    /// </summary>
+    /// <param name="items">The tiles, or a data-binding reference resolving to them.</param>
+    /// <returns>A new <see cref="KpiStripControl"/>.</returns>
+    public static KpiStripControl KpiStrip(object items) => new(items);
+
+    /// <summary>
+    /// Creates the vertical excess-of-loss tower over <paramref name="bands"/>: the axis is the
+    /// amount, consecutive bands touch, and the retention is the base the tower stands on.
+    /// </summary>
+    /// <param name="bands">The <see cref="TowerBand"/> bands, or a data-binding reference resolving to them.</param>
+    /// <returns>A new <see cref="TowerControl"/>.</returns>
+    public static TowerControl Tower(object bands) => new(bands);
+
+    /// <summary>
+    /// Creates the vertical excess-of-loss tower over <paramref name="bands"/>, denominated in
+    /// <paramref name="currency"/>.
+    /// </summary>
+    /// <param name="bands">The <see cref="TowerBand"/> bands, or a data-binding reference resolving to them.</param>
+    /// <param name="currency">The unit the axis is denominated in.</param>
+    /// <returns>A new <see cref="TowerControl"/>.</returns>
+    public static TowerControl Tower(object bands, object currency) =>
+        new(bands) { Currency = currency };
+
+    /// <summary>
+    /// Creates paired comparison bars — two series per measure on one shared scale, with an absent
+    /// side rendered as words rather than as a zero-length bar.
+    /// </summary>
+    /// <param name="pairs">The <see cref="ComparisonPair"/> measures.</param>
+    /// <returns>A new <see cref="ComparisonBarsControl"/>.</returns>
+    public static ComparisonBarsControl ComparisonBars(params ComparisonPair[] pairs) =>
+        new(pairs.ToImmutableList());
+
+    /// <summary>
+    /// Creates paired comparison bars over <paramref name="pairs"/> — a concrete
+    /// <c>IEnumerable&lt;ComparisonPair&gt;</c>, or a data-binding reference resolving to one.
+    /// </summary>
+    /// <param name="pairs">The measures, or a data-binding reference resolving to them.</param>
+    /// <returns>A new <see cref="ComparisonBarsControl"/>.</returns>
+    public static ComparisonBarsControl ComparisonBars(object pairs) => new(pairs);
+
+    #endregion
 }

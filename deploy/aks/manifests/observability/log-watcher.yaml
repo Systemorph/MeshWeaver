@@ -55,6 +55,18 @@ spec:
       labels:
         app: mw-log-watcher
     spec:
+      # 🚨 POD-level securityContext, and it is what makes the state volume usable. The container
+      # runs non-root (below), but a freshly provisioned PVC mounts root-owned — so without fsGroup
+      # the watcher starts, reads Loki, delivers reports, and then fails EVERY state write with
+      # "Access to the path '/var/lib/mw-log-watcher/pending.json.tmp' is denied". It looks healthy;
+      # only the durability guarantee is gone (the cursor stops persisting, so a restart replays the
+      # lookback window and redelivers). Observed on the first deploy, 2026-08-08.
+      # 1654 is the .NET images' APP_UID and the uid the cluster's non-root workloads already use.
+      securityContext:
+        runAsUser: 1654
+        runAsGroup: 1654
+        fsGroup: 1654
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: mw-log-watcher
           image: meshweaver.azurecr.io/memex-log-watcher:latest
