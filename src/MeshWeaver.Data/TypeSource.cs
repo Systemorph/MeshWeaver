@@ -46,6 +46,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     /// <param name="changeItem">The store change to apply; its value must not be null.</param>
     public virtual void Update(ChangeItem<EntityStore> changeItem)
     {
+        ArgumentNullException.ThrowIfNull(changeItem);
         if(changeItem.Value is null)
             throw new ArgumentNullException(nameof(changeItem), "Change item value cannot be null.");
 
