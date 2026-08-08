@@ -34,11 +34,10 @@ public record TypeSourceWithTypeWithDataStorage<T>
 
     /// <summary>
     /// Diffs the incoming collection against the last saved snapshot and persists the resulting
-    /// adds, updates, and deletes to storage.
+    /// adds, updates, and deletes to storage; the collection becomes the new snapshot.
     /// </summary>
     /// <param name="instances">The current collection to persist.</param>
-    /// <returns>The same collection, now recorded as the last saved snapshot.</returns>
-    protected override InstanceCollection UpdateImpl(InstanceCollection instances)
+    protected override void UpdateImpl(InstanceCollection instances)
     {
         var adds = instances
             .Instances.Where(x => !LastSaved.Instances.ContainsKey(x.Key))
@@ -52,7 +51,7 @@ public record TypeSourceWithTypeWithDataStorage<T>
             .Select(x => x.Value)
             .ToArray();
         var deletes = LastSaved
-            .Instances.Where(x => instances.Instances.ContainsKey(x))
+            .Instances.Where(x => !instances.Instances.ContainsKey(x.Key))
             .Select(x => x.Value)
             .ToArray();
 
@@ -61,7 +60,6 @@ public record TypeSourceWithTypeWithDataStorage<T>
         Storage.Delete(deletes);
 
         LastSaved = instances;
-        return instances;
     }
 
     /// <summary>

@@ -40,30 +40,31 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     protected TTypeSource This => (TTypeSource)this;
 
     /// <summary>
-    /// Extracts this type's collection from the incoming store change and applies the source's update logic.
+    /// Extracts this type's collection from the incoming store change and applies the source's
+    /// update side effects (see <see cref="ITypeSource.Update"/> — side-effect-only by contract).
     /// </summary>
     /// <param name="changeItem">The store change to apply; its value must not be null.</param>
-    /// <returns>The updated instance collection for this type.</returns>
-    public virtual InstanceCollection Update(ChangeItem<EntityStore> changeItem)
+    public virtual void Update(ChangeItem<EntityStore> changeItem)
     {
+        ArgumentNullException.ThrowIfNull(changeItem);
         if(changeItem.Value is null)
             throw new ArgumentNullException(nameof(changeItem), "Change item value cannot be null.");
 
         var myCollection = changeItem.Value.Reduce(new CollectionReference(TypeDefinition.CollectionName));
 
-        return UpdateImpl(myCollection);
+        UpdateImpl(myCollection);
     }
 
     private IDisposable? workspaceSubscription;
 
     /// <summary>
-    /// Override hook applied to this type's collection during update; the base implementation
-    /// returns the collection unchanged.
+    /// Override hook invoked with this type's collection on every update — for side effects only
+    /// (persist, forward, snapshot); the base implementation does nothing.
     /// </summary>
     /// <param name="myCollection">The collection extracted for this type.</param>
-    /// <returns>The transformed collection.</returns>
-    protected virtual InstanceCollection UpdateImpl(InstanceCollection myCollection) =>
-        myCollection;
+    protected virtual void UpdateImpl(InstanceCollection myCollection)
+    {
+    }
 
     ITypeSource ITypeSource.WithInitialData(
         Func<

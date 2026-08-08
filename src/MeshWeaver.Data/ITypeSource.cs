@@ -67,11 +67,15 @@ public interface ITypeSource
     );
 
     /// <summary>
-    /// Applies a store change to this type's collection and returns the resulting collection.
+    /// Applies a store change to this type's collection. Side-effect-only by contract: the
+    /// implementation reacts to the change (persists it, forwards it to a backend, records a
+    /// snapshot) — it cannot transform what gets stored. The store content is already fixed by
+    /// the time this is called; every caller (<c>Synchronize</c> in the data sources) invokes it
+    /// per registered type source purely for its effects. This used to return the collection,
+    /// which read as a transform hook while every call site discarded it (#886).
     /// </summary>
     /// <param name="changeItem">The store change to apply.</param>
-    /// <returns>The updated instance collection for this type.</returns>
-    InstanceCollection Update(ChangeItem<EntityStore> changeItem);
+    void Update(ChangeItem<EntityStore> changeItem);
 
     /// <summary>
     /// The collection name under which instances of this type are stored.
