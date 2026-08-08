@@ -683,7 +683,8 @@ When the sync source has two-way enabled, `update` never overwrites a node chang
 Returns a structured result:
   • `{status:'Ok', path, activityPath, message:'Compile SUCCEEDED.'}` — assembly cached, ready to use.
   • `{status:'Error', path, error, activityPath, message:'Compile FAILED ...'}` — `error` carries the Roslyn diagnostics inline.
-  • `{status:'Pending', path, message:'... did not settle within deadline'}` — fallback only on timeout; `get @nodeTypePath` to poll.
+  • `{status:'Compiling', path, activityPath, elapsedMs, message:'... ALREADY IN FLIGHT ...'}` — returned IMMEDIATELY when a compile is already running. No second run is started (compilationStatus is the single-flight lock); watch `activityPath`, then call again once it settles.
+  • `{status:'Compiling'|'Pending'|..., path, activityPath, startedAt, message:'... did not settle within the deadline'}` — the settle-timeout fallback, reporting the NodeType's CURRENT status so a long-running compile is distinguishable from an undispatched trigger; `get @nodeTypePath` to poll.
 
 For the full source-discovery + matched-Code-paths + Roslyn trace, `get @<activityPath>` after the call returns.")]
     public Task<string> Compile(
