@@ -2,7 +2,7 @@
 @inherits SkinnedView<NavMenuControl, NavMenuSkin, NavMenuView>
 @inject AccessService Access
 
-<div class="navmenu">
+<div class="navmenu @Class" style="@Style">
     @if (Collapsible)
     {
         <div class="navmenu-toggle-container">

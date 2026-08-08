@@ -3,7 +3,7 @@
 @using System.Text.Json
 
 @typeparam TValue
-<FluentRadioGroup Name="@Name" @bind-Value="@Value" Label="@Label" >
+<FluentRadioGroup Name="@Name" @bind-Value="@Value" Label="@Label" Class="@Class" Style="@ComputedStyle" >
     @foreach (var option in Options)
     {
         <FluentRadio Value="@option.Item">@option.Text</FluentRadio>
