@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Title: "AmericasIns Profitability Report"
-Icon: /static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg
+Icon: /api/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg
 Abstract: "Local profitability analysis for AmericasIns (Americas, USD), covering 8 local lines of business over an 18-month rolling window."
 Tags:
   - "Profitability"

@@ -74,6 +74,17 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
     public override IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {
+            // 🚨 A durable store cannot hold an in-process delegate. FileSystem/Postgres strip
+            // MeshNode.HubConfiguration naturally at the serialization boundary; this adapter
+            // stores the INSTANCE, so without this strip a workspace node that carries the
+            // routing-grafted enrichment (or a compilation-error overlay wrapper) would be
+            // retained in the store-of-record, later served back by reads/path-resolution, and
+            // latch EnrichWithNodeType's "already enriched" short-circuit onto a STALE config —
+            // an instance then re-binds an obsolete overlay on every re-activation instead of
+            // re-enriching (the OverlaySelfHealInstanceRecycleTest probe loop). Stripping here
+            // makes the in-memory adapter behave exactly like every serializing backend.
+            if (node.HubConfiguration is not null)
+                node = node with { HubConfiguration = null };
             if (!string.IsNullOrEmpty(node.Path))
             {
                 _nodes[Norm(node.Path)] = node;

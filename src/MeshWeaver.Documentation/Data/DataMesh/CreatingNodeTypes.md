@@ -244,7 +244,7 @@ The JSON file in the parent namespace wires everything together. The `configurat
   "nodeType": "NodeType",
   "category": "Types",
   "description": "A project containing tasks and deliverables",
-  "icon": "/static/storage/content/ACME/Project/icon.svg",
+  "icon": "/api/content/ACME/Project/icon.svg",
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",

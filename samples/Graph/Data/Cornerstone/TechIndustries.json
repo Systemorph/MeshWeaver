@@ -5,7 +5,7 @@
   "nodeType": "Cornerstone/Insured",
   "category": "Clients",
   "description": "German technology manufacturing company - Insurance client",
-  "icon": "/static/storage/content/Cornerstone/icons/techindustries.svg",
+  "icon": "/api/content/Cornerstone/icons/techindustries.svg",
   "isPersistent": true,
   "content": {
     "$type": "Insured",

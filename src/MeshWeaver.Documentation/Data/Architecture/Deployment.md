@@ -28,6 +28,7 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 | Run a **prod-like memex locally on a Mac** (Colima k3s, arm64) | [LocalColimaMac.md](/Doc/Architecture/LocalColimaMac) |
 | Instance-specific configuration options (`memex.systemorph.com`) | [DeploymentOptions.md](/Doc/Architecture/DeploymentOptions) |
 | Reclaim space — delete old ACR images / prune local Docker, safely | [ImageCleanup.md](/Doc/Architecture/ImageCleanup) |
+| Turn production errors into tickets automatically — deploy the red-log watcher, route incidents to repositories, or work out why nothing is being reported | [LogWatchTriage.md](/Doc/Architecture/LogWatchTriage) |
 
 The two routes provision and run on different platforms (raw AKS deployments + Helm vs. ACA via Aspire), with different update mechanics; they are not interchangeable. The sections below (local run, Azure AD, secrets, project layout) are **shared** across both routes.
 

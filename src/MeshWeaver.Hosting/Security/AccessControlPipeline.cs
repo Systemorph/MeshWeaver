@@ -121,11 +121,6 @@ public static class AccessControlPipeline
                 var effectiveUserId = userId ?? WellKnownUsers.Anonymous;
                 pendingChecks.ToObservable()
                     .Select(check => hub.CheckPermission(check.Path, effectiveUserId, check.Permission)
-                        // HasPermission rides the live AccessAssignment synced
-                        // stream — a hot, never-completing observable. Take(1)
-                        // closes each inner so Concat below actually advances
-                        // through the check list and OnCompleted fires.
-                        //
                         // No Timeout here: the access cache must always be a
                         // reactive Subscribe over the hierarchical union
                         // (self + ancestors) of AccessAssignment streams,
@@ -135,7 +130,6 @@ public static class AccessControlPipeline
                         // fix the cache, don't ceiling-block here. If the
                         // cache genuinely never emits, that's a framework
                         // bug to surface, not paper over with a deny.
-                        .Take(1)
                         .Catch<bool, Exception>(ex =>
                         {
                             logger?.LogWarning(ex,
@@ -144,6 +138,24 @@ public static class AccessControlPipeline
                                 check.Path, check.Permission, hub.Address, delivery.Message.GetType().Name);
                             return Observable.Return(false);
                         })
+                        // 🚨 TakeDecisionOutsideGate, NOT a bare Take(1) — issue #899. This is
+                        // the BROADEST generator of the Rx lock-order inversion in the repo:
+                        // the onCompleted branch below invokes `next`, i.e. the ENTIRE
+                        // downstream handler for EVERY [RequiresPermission] message. On a warm
+                        // permission cache the fold emits synchronously during Subscribe while
+                        // holding its CombineLatest gate, so with a bare Take(1) that whole
+                        // handler body — storage writes, cache invalidation, the (synchronous,
+                        // by contract) change-feed fan-out — ran inside the lock, and two hubs
+                        // doing it at once deadlock on {own fold gate, shared synced-query
+                        // gate}. The Take(1) is still needed (CheckPermission rides the live
+                        // AccessAssignment synced stream and never completes, so Concat below
+                        // would never advance); TakeDecisionOutsideGate keeps it and adds the
+                        // hop. Placed AFTER the Catch so the fail-closed path leaves the gate
+                        // too. Identity is unaffected: the inner UserServiceDeliveryPipeline
+                        // re-stamps AccessService.Context from delivery.AccessContext before
+                        // the handler body runs, and the pool hop flows ExecutionContext
+                        // anyway. See HubPermissionExtensions.TakeDecisionOutsideGate.
+                        .TakeDecisionOutsideGate()
                         .Select(ok => (Check: check, Ok: ok)))
                     .Concat()
                     .Subscribe(

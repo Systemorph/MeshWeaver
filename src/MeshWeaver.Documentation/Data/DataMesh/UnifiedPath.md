@@ -163,7 +163,7 @@ contentService.AddConfiguration(cfg with { Name = "MySpace/content", Address = (
 var collection = await contentService.GetCollectionAsync("MySpace/content", ct);
 ```
 
-Files are also served over HTTP at `/static/{address}/{collection}/{filePath}` (browser session auth) — useful for download links inside markdown, not for agent tooling.
+Files are also served over HTTP at `/api/content/{address}/{collection}/{filePath}` — the access-controlled content route: the owning node's hub gates every request on Read, and the response is never shared-cacheable. Useful for download links inside markdown, not for agent tooling. (`/static` carries application build assets only and applies no access check — never point it at content.)
 
 ---
 

@@ -9,6 +9,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -41,6 +42,9 @@ public static class PackageInstaller
 
     /// <summary>Bounded concurrency for the per-node upsert fan-out (mirrors <c>NodeCopyHelper</c>).</summary>
     public const int DefaultBatchSize = 8;
+
+    /// <summary>The well-known id of a partition's access policy satellite (<c>{partition}/_Policy</c>).</summary>
+    public const string PartitionPolicyId = "_Policy";
 
     /// <summary>
     /// Installs <paramref name="manifest"/>'s content <paramref name="files"/> into its target
@@ -111,7 +115,12 @@ public static class PackageInstaller
                 logger?.LogInformation(
                     "Installed package {Id} v{Version}: {Written} written, {Unchanged} unchanged into {Partition} @ {Ref}",
                     manifest.Id, manifest.Version, result.Written, result.Unchanged, partition, installedFromRef);
-                return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length)
+                // The declared-access shape lands BEFORE the roots are warmed: warming ACTIVATES
+                // each root hub, whose gating pass seeds the partition's access table — it must see
+                // the shape this package declares, not a partition nobody can read.
+                return EnsureDeclaredAccess(hub, manifest, partition, logger,
+                        nodes.Select(n => n.Path))
+                    .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
                     .SelectMany(_ => RunInstallHooks(hub, partition!, logger))
                     .Select(_ => result);
@@ -211,6 +220,271 @@ public static class PackageInstaller
             .DefaultIfEmpty(Unit.Default)
             .LastAsync();
     }
+
+    /// <summary>The read-only role the declared-access grants and denies carry.</summary>
+    private const string ViewerRole = "Viewer";
+
+    /// <summary>
+    /// The well-known PUBLIC child segment of a partition: <c>{partition}/Public/…</c> is always a
+    /// public surface on a scoped-public package — the same convention the Store's
+    /// <c>PluginGate</c> keys on, so the installer's denies and the plugin machinery's reconcile
+    /// never fight over it.
+    /// </summary>
+    private const string WellKnownPublicSegment = "Public";
+
+    /// <summary>
+    /// Establishes the access a package's MANIFEST declares — the ONE access-establishment step of
+    /// an install, applied on every install path (content, node-repo full, node-repo delta) and
+    /// re-asserted on boot so a lost policy self-heals. "Public pages public, protected pages
+    /// protected, without any grants needed — just by getting the catalog" (#920):
+    ///
+    /// <list type="bullet">
+    ///   <item><b>Pre-installed</b> (<see cref="PackageManifest.PreInstalled"/>) — platform
+    ///     baseline, fully public: <c>PartitionAccessPolicy { PublicRead = true }</c> at
+    ///     <c>{partition}/_Policy</c> (#902). Declared segments are irrelevant — everything is
+    ///     readable.</item>
+    ///   <item><b>Free</b> (<see cref="PackageManifest.Price"/> 0 or absent) with no declared
+    ///     <see cref="PackageManifest.PublicSegments"/> — the same fully-public policy: a free
+    ///     package that a catalog hands out must be readable by everyone, signed in or not.</item>
+    ///   <item><b>Free with declared <see cref="PackageManifest.PublicSegments"/></b> — public read
+    ///     SCOPED to the declaration: Public+Anonymous Viewer grants at the partition root (the
+    ///     cover and, by downward inheritance, the declared segments) plus Public+Anonymous Viewer
+    ///     DENIES on every other child segment — the exact root-grant + per-child-deny shape the
+    ///     Store's <c>CatalogGate</c> seeds for <c>/Store</c> (#200/#204). Underscore satellites
+    ///     and the well-known <c>Public</c> segment follow the <c>PluginGate</c> conventions so the
+    ///     two mechanisms converge instead of fighting.</item>
+    ///   <item><b>Priced</b> (any non-zero <see cref="PackageManifest.Price"/> — positive =
+    ///     purchasable, negative = coupon-only) — the installer writes NOTHING: the partition lands
+    ///     gated, readable only via the entitlement machinery (PluginGate / purchase), which is
+    ///     exactly the point of a price.</item>
+    /// </list>
+    ///
+    /// <para><b>Why the installer owns it.</b> An installed package is written entirely under
+    /// SYSTEM (so no creator grant is ever minted) into a partition no user holds a role on, and a
+    /// platform admin's grant is scoped to the <c>Admin</c> partition. Without this step NOBODY can
+    /// read what was just installed — which is exactly how the <c>Skill</c> catalog came to depend
+    /// on a hand-placed <c>_Policy</c> node while <c>Agent</c> was simply unreachable (#902), and
+    /// how every free plugin the unattended installer landed came up admin-only (#920: "Access
+    /// denied … lacks Read permission on 'DoublePendulum/Live'"). The manifest is the package's
+    /// whole statement of intent; the shape that makes it true must come from the install, not from
+    /// an operator remembering to place nodes.</para>
+    ///
+    /// <para>Every node is CREATE-ONLY — an existing policy / grant / deny (shipped by the package
+    /// itself, or tuned by an operator) is left completely alone, so this can never silently widen
+    /// or narrow a deliberate choice, and a steady-state re-run writes nothing. Failure PROPAGATES:
+    /// an install that could not establish its declared access has not installed properly, and
+    /// swallowing that is the defect class this closes.</para>
+    /// </summary>
+    /// <param name="hub">The installing hub.</param>
+    /// <param name="manifest">The package manifest whose declarations drive the shape.</param>
+    /// <param name="partition">The installed partition (null/blank no-ops).</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="installedPaths">The node paths THIS install just wrote, when the caller has
+    /// them. The scoped shape derives its child-segment walk from these UNIONED with a query of the
+    /// partition's current children — the query alone can lag the writes it would have to see
+    /// (CQRS), and the installer is the one component that always knows what it just wrote.</param>
+    public static IObservable<Unit> EnsureDeclaredAccess(
+        IMessageHub hub, PackageManifest manifest, string? partition, ILogger? logger,
+        IEnumerable<string>? installedPaths = null)
+    {
+        if (string.IsNullOrWhiteSpace(partition))
+            return Observable.Return(Unit.Default);
+
+        // A priced package (positive = purchasable, negative = coupon-only) installs GATED: no
+        // public read of any kind — entitlement (PluginGate / purchase / coupon) is the only way
+        // in. Pre-installed overrides a price: platform baseline is public by definition.
+        if (!manifest.PreInstalled && manifest.Price is { } price && price != 0m)
+        {
+            logger?.LogDebug(
+                "[PackageInstaller] {Id} is priced — {Partition} stays gated (entitlement only)",
+                manifest.Id, partition);
+            return Observable.Return(Unit.Default);
+        }
+
+        var declared = DeclaredPublicSegments(manifest);
+        return !manifest.PreInstalled && declared.Count > 0
+            ? EnsureScopedPublicRead(hub, manifest, partition!, declared, installedPaths, logger)
+            : EnsurePartitionPublicRead(hub, manifest, partition!, logger);
+    }
+
+    /// <summary>
+    /// The fully-public shape — <c>PartitionAccessPolicy { PublicRead = true }</c> at
+    /// <c>{partition}/_Policy</c>, create-only (the shape every built-in catalog already ships:
+    /// read-only publication, no secrets).
+    /// </summary>
+    private static IObservable<Unit> EnsurePartitionPublicRead(
+        IMessageHub hub, PackageManifest manifest, string partition, ILogger? logger)
+    {
+        var policyPath = $"{partition}/{PartitionPolicyId}";
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var existing = persistence is not null
+            ? persistence.Read(policyPath, hub.JsonSerializerOptions).Take(1)
+            : Observable.Return<MeshNode?>(null);
+
+        return existing.SelectMany(current => current is not null
+            ? Observable.Return(Unit.Default)
+            : Upsert(hub, new MeshNode(PartitionPolicyId, partition)
+                {
+                    NodeType = PartitionAccessPolicyNodeType.NodeType,
+                    Name = "Access Policy",
+                    State = MeshNodeState.Active,
+                    Content = new PartitionAccessPolicy { PublicRead = true },
+                })
+                .Do(_ => logger?.LogInformation(
+                    "[PackageInstaller] {Id} declares public content — published {Partition} "
+                    + "read-only to everyone via {Path}", manifest.Id, partition, policyPath))
+                .Select(_ => Unit.Default));
+    }
+
+    /// <summary>
+    /// The SCOPED-public shape for a free package with declared
+    /// <see cref="PackageManifest.PublicSegments"/>: Public+Anonymous Viewer GRANTS at the
+    /// partition root (grants inherit strictly downward, so the cover and the declared segments
+    /// become readable by everyone) plus Public+Anonymous Viewer DENIES on every OTHER child
+    /// segment. A deny only ever removes the role for the Public/Anonymous subjects — an admin or
+    /// an entitled viewer holds their own grant and is never touched by it, which is what keeps
+    /// "protected" meaning gated rather than blacked out.
+    ///
+    /// <para>The child walk follows the <c>PluginGate</c> conventions — underscore satellites are
+    /// never gated here (their protection is the plugin machinery's <c>ProtectedSegments</c>
+    /// concern) and the well-known <c>Public</c> segment is always public — so the installer's
+    /// shape and the Store's reconcile converge on the same nodes instead of fighting. Segments
+    /// come from the paths this install wrote UNIONED with the partition's current children (read
+    /// as System); every node is create-only and the writes run SEQUENTIALLY (the access table
+    /// deadlocks under parallel writers, 40P01).</para>
+    /// </summary>
+    private static IObservable<Unit> EnsureScopedPublicRead(
+        IMessageHub hub, PackageManifest manifest, string partition,
+        IReadOnlyCollection<string> declared, IEnumerable<string>? installedPaths, ILogger? logger)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+
+        // The partition's current immediate children, read as SYSTEM (this runs inside an install
+        // pipeline / a boot pass with no user identity; the freshly written partition has no user
+        // grants yet by definition).
+        var currentChildren = meshService is null
+            ? Observable.Return<IReadOnlyList<string>>([])
+            : Observable.Using(
+                    () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
+                    _ => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                        $"path:{partition} scope:subtree limit:{QueryLimit}")))
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Select(change => (IReadOnlyList<string>)change.Items.Select(n => n.Path).ToList());
+
+        return currentChildren.SelectMany(children =>
+        {
+            var gated = GatedChildRoots(
+                children.Concat(installedPaths ?? []), partition, declared);
+
+            var shape = new List<MeshNode>
+            {
+                ViewerAssignment(partition, WellKnownUsers.Public, denied: false),
+                ViewerAssignment(partition, WellKnownUsers.Anonymous, denied: false),
+            };
+            foreach (var child in gated)
+            {
+                shape.Add(ViewerAssignment(child, WellKnownUsers.Public, denied: true));
+                shape.Add(ViewerAssignment(child, WellKnownUsers.Anonymous, denied: true));
+            }
+
+            // Create-only, sequential; a failed write propagates (Upsert throws on !Success).
+            return shape
+                .Select(node =>
+                {
+                    var existing = persistence is not null
+                        ? persistence.Read(node.Path, hub.JsonSerializerOptions).Take(1)
+                        : Observable.Return<MeshNode?>(null);
+                    return existing.SelectMany(current => current is not null
+                        ? Observable.Return(0)
+                        : Upsert(hub, node));
+                })
+                .ToObservable()
+                .Concat()
+                .Sum()
+                .Do(written => logger?.LogInformation(
+                    "[PackageInstaller] {Id} declares public segments [{Segments}] — {Partition} "
+                    + "cover published, {Gated} other child(ren) gated ({Written} access node(s) "
+                    + "written)",
+                    manifest.Id, string.Join(", ", declared), partition, gated.Count, written))
+                .Select(_ => Unit.Default);
+        });
+    }
+
+    /// <summary>Query cap for the scoped-access child walk (mirrors the snapshot-query bound the
+    /// Store's gates use).</summary>
+    private const int QueryLimit = 10_000;
+
+    /// <summary>
+    /// The manifest's declared public segments, SANITIZED: one path segment each, inside the
+    /// partition — blank entries, traversals and anything containing a slash are dropped;
+    /// leading/trailing slashes are tolerated; duplicates collapse case-insensitively. Pure.
+    /// </summary>
+    internal static IReadOnlyCollection<string> DeclaredPublicSegments(PackageManifest manifest)
+    {
+        if (manifest.PublicSegments is not { Count: > 0 } segments)
+            return [];
+        var seen = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in segments)
+        {
+            var segment = (raw ?? string.Empty).Trim().Trim('/');
+            if (segment.Length == 0 || segment.Contains('/') || segment is "." or "..")
+                continue;
+            seen.Add(segment);
+        }
+        return seen;
+    }
+
+    /// <summary>
+    /// The GATED child roots of a scoped-public partition: the immediate child segments present in
+    /// <paramref name="paths"/> that are neither a declared public segment, nor the well-known
+    /// <see cref="WellKnownPublicSegment"/>, nor an underscore satellite. Pure.
+    /// </summary>
+    internal static IReadOnlyList<string> GatedChildRoots(
+        IEnumerable<string> paths, string partition, IReadOnlyCollection<string> declared)
+    {
+        var prefix = partition + "/";
+        var roots = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var path in paths)
+        {
+            if (path is null || !path.StartsWith(prefix, StringComparison.Ordinal))
+                continue;
+            var rel = path[prefix.Length..];
+            var firstSlash = rel.IndexOf('/');
+            var segment = firstSlash < 0 ? rel : rel[..firstSlash];
+            if (segment.Length == 0 || segment.StartsWith('_'))
+                continue;                       // internal satellite — never gated by the installer
+            if (string.Equals(segment, WellKnownPublicSegment, StringComparison.OrdinalIgnoreCase)
+                || declared.Contains(segment, StringComparer.OrdinalIgnoreCase))
+                continue;                       // a public surface — stays readable
+            roots.Add(prefix + segment);
+        }
+        return roots.ToList();
+    }
+
+    /// <summary>
+    /// A Viewer <c>AccessAssignment</c> for <paramref name="subject"/> at <paramref name="scope"/>
+    /// — GRANT when <paramref name="denied"/> is false, DENY when true. The node lands at
+    /// <c>{scope}/_Access/{subject}_Access</c> with <c>MainNode = {scope}</c> — the two placement
+    /// rules the permission evaluator keys on (a grant with <c>mainNode</c> on the container
+    /// stores cleanly and silently does nothing — the #204 trap). Pure.
+    /// </summary>
+    internal static MeshNode ViewerAssignment(string scope, string subject, bool denied) =>
+        new($"{subject}_Access", $"{scope}/_Access")
+        {
+            NodeType = AccessAssignmentNodeType.NodeType,
+            Name = denied ? $"{subject} — Viewer DENIED (gated)" : $"{subject} — Viewer",
+            State = MeshNodeState.Active,
+            MainNode = scope,
+            Content = new AccessAssignment
+            {
+                AccessObject = subject,
+                DisplayName = subject,
+                Roles = [new RoleAssignment { Role = ViewerRole, Denied = denied }],
+            },
+        };
 
     private static IObservable<Unit> WarmInstalledRoots(
         IMessageHub hub, IEnumerable<string> paths, ILogger? logger)
@@ -966,7 +1240,12 @@ public static class PackageInstaller
                             hub.RequestNodeTypeRelease(path,
                                 onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
                 }
-                return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length, moduleManifest)
+                // Same order as the content path: publish the partition BEFORE warming its roots
+                // (activation's gating pass must see the declared shape).
+                return EnsureDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id,
+                        logger, nodes.Select(n => n.Path))
+                    .SelectMany(_ => WriteInstalledRecord(
+                        hub, manifest, installedFromRef, nodes.Length, moduleManifest))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
                     .Select(_ => result);
             }));
@@ -1110,8 +1389,14 @@ public static class PackageInstaller
                             hub.RequestNodeTypeRelease(path,
                                 onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
                 }
-                return WriteInstalledRecord(hub, manifest, installedFromRef,
-                        newManifest.Files.Count, newManifest)
+                // An UPDATE re-asserts the declared access too: a package that only just flipped
+                // its declaration (or whose policy was lost) must converge on the next sync rather
+                // than wait for a full re-install. Create-only, so an existing shape is untouched
+                // and this is free on the common path.
+                return EnsureDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id,
+                        logger, nodes.Select(n => n.Path))
+                    .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
+                        newManifest.Files.Count, newManifest))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
                     .Select(_ => result);
             });

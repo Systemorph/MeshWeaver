@@ -90,6 +90,25 @@ public record PackageManifest
     /// <summary>Ids of other packages this one depends on. Advisory for now.</summary>
     public ImmutableList<string> Requires { get; init; } = [];
 
+    /// <summary>
+    /// The package is part of the platform's DEFAULT INSTALL: every instance that can see it in a
+    /// catalog installs it automatically at startup (<see cref="InstanceAutoRegistrationService"/>),
+    /// with public read established by the installer
+    /// (<c>{TargetPartition}/_Policy · PublicRead = true</c>) so its content is reachable by every
+    /// user — signed in or not — without a per-user or per-instance install step.
+    ///
+    /// <para>Authored on the package root's own content (<c>"preInstalled": true</c> inside the
+    /// node-repo <c>index.json</c>'s <c>content</c>, or on a <c>package.json</c> manifest) and read
+    /// off it while listing. It is the manifest's ONE statement of "this ships with the platform";
+    /// nothing else needs configuring, and the flag is honoured identically on a registry instance
+    /// (its own git sources) and on a consumer instance (the registries it pulls from).</para>
+    ///
+    /// <para>Default <c>false</c> — the CLR default — so it round-trips loss-free under
+    /// default-suppressing serialization (the declared-<c>true</c> bool trap, see
+    /// <see cref="AutoUpdate"/>).</para>
+    /// </summary>
+    public bool PreInstalled { get; init; }
+
     // ── storefront metadata (read off the root node when listing; all optional) ──
 
     /// <summary>The store's browse-by-category key (the root node's <c>category</c>).</summary>
@@ -106,6 +125,20 @@ public record PackageManifest
 
     /// <summary>The store-card picture URL (the root content's <c>poster</c>).</summary>
     public string? Poster { get; init; }
+
+    /// <summary>
+    /// The partition's declared PUBLIC child segments (the root content's <c>publicSegments</c>).
+    /// For a FREE package (<see cref="Price"/> 0 or absent) that declares any, the installer scopes
+    /// the public read to exactly these segments: root Public+Anonymous Viewer grants (the cover and
+    /// the declared segments become readable by everyone) plus Public+Anonymous Viewer DENIES on
+    /// every other child segment — the same shape the Store's <c>CatalogGate</c>/<c>PluginGate</c>
+    /// seed. Empty (the default) on a free package means the WHOLE partition is public
+    /// (<c>_Policy · PublicRead = true</c>); on a priced package the field is advisory to the
+    /// entitlement machinery and the installer writes nothing. Read off the root node while listing
+    /// (<see cref="NodeRepoPackageSource"/>) or straight from a <c>package.json</c>; empty default
+    /// round-trips loss-free under default-suppressing serialization.
+    /// </summary>
+    public ImmutableList<string> PublicSegments { get; init; } = [];
 
     // ── install-record metadata (null on catalog entries; set when written to the registry) ──
 

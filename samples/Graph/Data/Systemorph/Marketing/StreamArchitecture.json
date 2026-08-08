@@ -5,7 +5,7 @@
   "nodeType": "Markdown",
   "category": "MeshWeaver",
   "description": "Real-time updates via CRDT - subscribe to data changes as they happen",
-  "icon": "/static/storage/content/Systemorph/Marketing/icons/flash.svg",
+  "icon": "/api/content/Systemorph/Marketing/icons/flash.svg",
   "addressSegments": 0,
   "isPersistent": true,
   "content": {

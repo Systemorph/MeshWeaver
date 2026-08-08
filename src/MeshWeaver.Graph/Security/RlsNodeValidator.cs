@@ -102,6 +102,19 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
         // (lives on the live AccessAssignment synced query). Without Take(1)
         // the .Concat() in RunCreationValidatorsObs would wait forever on the
         // first validator and the create handler would never post a response.
+        //
+        // 🚨 …and it is TakeDecisionOutsideGate, not a bare Take(1) — issue #899. This is the
+        // single highest-leverage placement in the repo: every validated create / update /
+        // delete funnels through here, and the CALLER chains the REAL WRITE onto this
+        // verdict (RunCreationValidatorsObs → persist + WriteAndPublishCreated;
+        // RunDeletionValidatorsObs → the delete + its publish). Both remaining branches
+        // reach the permission fold — CheckCustomRule's INodeTypeAccessRule implementations
+        // (SatelliteAccessRule, Space/User/PartitionNodeType) call hub.CheckPermission just
+        // as CheckPermission does — and on a warm cache that fold emits synchronously during
+        // Subscribe while holding its CombineLatest gate. Without the hop the write and its
+        // (synchronous, by contract) change-feed fan-out run inside that lock, which is one
+        // half of the two-hub lock-order inversion. Placing it here rather than inside
+        // CheckPermission covers the custom-rule path too.
         return CheckHubRule(context, userId)
             .SelectMany(hubResult => hubResult != null
                 ? Observable.Return<NodeValidationResult?>(hubResult)
@@ -109,7 +122,7 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
             .SelectMany(customResult => customResult != null
                 ? Observable.Return(customResult)
                 : CheckPermission(context, userId, requiredPermission))
-            .Take(1);
+            .TakeDecisionOutsideGate();
     }
 
     private IObservable<NodeValidationResult?> CheckHubRule(NodeValidationContext context, string? userId)
