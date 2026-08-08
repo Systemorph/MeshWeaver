@@ -271,11 +271,20 @@ public static class AiSettingsNodeType
     // AddSkillSource (the void, fire-and-forget skill-source installer) was DELETED here (#683):
     // it subscribed to its own write internally, so an install plan could report success before
     // the settings write landed — a prompt uninstall then raced it and the late write resurrected
-    // a source for a package whose nodes were gone. It had no callers left: install-time source
-    // registration goes through IPartitionInstallHook.OnPartitionInstalled (AiSourcesInstallHook),
-    // which returns IObservable<Unit> and is Concat-chained by PackageInstaller.RunInstallHooks,
-    // so the install result is not produced until the settings write has landed. Any future
-    // registration path must compose that hook chain — never a void method that self-subscribes.
+    // a source for a package whose nodes were gone. Install-time source registration goes through
+    // IPartitionInstallHook.OnPartitionInstalled (AiSourcesInstallHook), which returns
+    // IObservable<Unit> and is Concat-chained by PackageInstaller.RunInstallHooks, so the install
+    // result is not produced until the settings write has landed. Any future registration path must
+    // compose that hook chain — never a void method that self-subscribes.
+    //
+    // 🚨 The original tombstone claimed "it had no callers left". That was WRONG, and the way it was
+    // wrong is worth keeping: MeshWeaver.Plugins' Store/Plugin/Source/Localizer.cs called it, for
+    // PER-VIEWER (not install-time) registration at course-localization time. A repo-local grep
+    // cannot see that — plugin node source is Roslyn-compiled against this assembly from a DIFFERENT
+    // REPO, so deleting a public member here can only be proven safe by grepping MeshWeaver.Plugins
+    // too. The break is silent until mw-plugin-test:latest is rebuilt, at which point every Store
+    // node type fails to compile and, since most modules depend on Store, Plugins CI goes red
+    // repo-wide. Before deleting any public API in this assembly, grep the plugins repo.
 
     /// <summary>
     /// The LIVE resolved skill queries for a user + context — the reactive form the skill surfaces

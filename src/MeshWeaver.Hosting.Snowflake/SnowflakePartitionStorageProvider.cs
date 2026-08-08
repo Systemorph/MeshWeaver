@@ -354,6 +354,15 @@ public sealed class SnowflakePartitionStorageProvider : IPartitionStorageProvide
     {
         if (string.IsNullOrEmpty(@namespace))
             return Observable.Return(Unit.Default);
+        // 🚨 Defense-in-depth (#714, PG lineage): the namespace becomes the schema name
+        // verbatim (lowercased) — a malformed top-level id (URL/query-string shaped) must
+        // never provision a schema, no matter which code path calls. Fail BEFORE the
+        // promise-cache so the rejection is loud (OnError naming the offending id).
+        if (!PartitionDefinition.IsValidPartitionSegment(@namespace))
+            return Observable.Throw<Unit>(new ArgumentException(
+                $"Cannot provision partition '{@namespace}': "
+                + $"{PartitionDefinition.PartitionSegmentRequirement}.",
+                nameof(@namespace)));
         var def = new PartitionDefinition
         {
             Namespace = @namespace,

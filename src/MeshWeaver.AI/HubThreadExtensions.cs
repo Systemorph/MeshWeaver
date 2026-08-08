@@ -4,6 +4,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -43,25 +44,47 @@ public static class HubThreadExtensions
     /// one moment the originating user's identity is reliably on the AsyncLocal
     /// (<c>AccessService.Context</c>) or the per-circuit fallback (<c>CircuitContext</c>). The
     /// captured <c>(ObjectId, Name)</c> is stamped onto the pending <see cref="ThreadMessage"/>
-    /// (<see cref="ThreadMessage.SubmitterObjectId"/> / <see cref="ThreadMessage.SubmitterName"/>)
+    /// (<see cref="ThreadMessage.SubmitterObjectId"/> / <see cref="ThreadMessage.SubmitterName"/> /
+    /// <see cref="ThreadMessage.SubmitterLocale"/>)
     /// so the round-dispatch watcher can rebuild the identity AFTER every later async boundary
     /// (its own <c>.Subscribe</c> continuation + the AI streaming continuations) has wiped the
     /// AsyncLocal. This is "capture the identity when computing the submit patch" — the data
     /// carries the truth, not the (by-then-null) AsyncLocal.
     ///
-    /// <para>Returns <c>(null, null)</c> when no real user identity is live (e.g. a hub-shaped
-    /// principal, or no context at all) — the watcher then falls back to the thread owner derived
-    /// from the node, NEVER hub-self. A hub-shaped principal is explicitly rejected here so it can
-    /// never be persisted as a fake submitter (the <c>CreatedBy=sync/…</c> class of bug).</para>
+    /// <para>🌍 The snapshot includes the submitter's <see cref="AccessContext.Locale"/>: every
+    /// user-facing string a round emits is resolved off the round's context, so a rebuilt context
+    /// without the language renders English for a German user (#948). The language is part of the
+    /// identity, and this is the one place it is reliably live.</para>
+    ///
+    /// <para><b>The first REAL USER wins, not the first non-null context.</b> The request-scoped
+    /// <c>Context</c> frequently holds a NON-user principal at the submit boundary — a hub-shaped
+    /// address, or <c>system-security</c> from an enclosing <c>ImpersonateAsSystem</c> scope
+    /// (seeding, hydration, any infrastructure step the submit is nested in). Taking it merely
+    /// because it is non-null stamps THAT as the submitter and discards the real signed-in user
+    /// sitting right there on the circuit context — which cost both the identity AND the language
+    /// (#948: a German user's round rendered English because <c>system-security</c> shadowed
+    /// <c>Roland/de</c>). This is the same <c>IsRealUser</c> predicate the round-dispatch watcher
+    /// applies at the other end of the rider; the two ends now agree.</para>
+    ///
+    /// <para>Returns all-null when no real user identity is live at all — the watcher then falls
+    /// back to the thread owner derived from the node, NEVER hub-self and never System.</para>
     /// </summary>
-    private static (string? ObjectId, string? Name) CaptureSubmitter(this IMessageHub hub)
+    private static (string? ObjectId, string? Name, string? Locale) CaptureSubmitter(this IMessageHub hub)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var ctx = accessService?.Context ?? accessService?.CircuitContext;
-        if (ctx is null || string.IsNullOrEmpty(ctx.ObjectId)
-            || AccessService.LooksLikeHubPrincipal(ctx.ObjectId))
-            return (null, null);
-        return (ctx.ObjectId, string.IsNullOrEmpty(ctx.Name) ? ctx.ObjectId : ctx.Name);
+        var ctx = IsRealUser(accessService?.Context) ? accessService!.Context
+            : IsRealUser(accessService?.CircuitContext) ? accessService!.CircuitContext
+            : null;
+        if (ctx is null)
+            return (null, null, null);
+        return (ctx.ObjectId, string.IsNullOrEmpty(ctx.Name) ? ctx.ObjectId : ctx.Name, ctx.Locale);
+
+        // A submitter is a PERSON. Hub addresses (sync/, mesh/, node/, activity/, portal/) and the
+        // well-known System identity are infrastructure credentials — never a submitter.
+        static bool IsRealUser(AccessContext? candidate) =>
+            !string.IsNullOrEmpty(candidate?.ObjectId)
+            && !AccessService.LooksLikeHubPrincipal(candidate.ObjectId)
+            && !string.Equals(candidate.ObjectId, WellKnownUsers.System, StringComparison.Ordinal);
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -138,7 +161,7 @@ public static class HubThreadExtensions
         // Capture the submitter's identity NOW — synchronous, live AsyncLocal — and persist it on the
         // pending message (below) so the round-dispatch watcher can rebuild it AFTER the async boundary
         // wipes the AsyncLocal. See ThreadMessage.SubmitterObjectId / AccessContextPropagation.md.
-        var (submitterObjectId, submitterName) = hub.CaptureSubmitter();
+        var (submitterObjectId, submitterName, submitterLocale) = hub.CaptureSubmitter();
 
         // 🎯 The thread's COMPOSER is the single source of truth for the round's sticky
         // selection (agent / model / harness / context). Seed it from the supplied composer
@@ -180,7 +203,8 @@ public static class HubThreadExtensions
                         attachments: attachments,
                         harness: harness,
                         submitterObjectId: submitterObjectId,
-                        submitterName: submitterName))
+                        submitterName: submitterName,
+                        submitterLocale: submitterLocale))
             }
             : baseThread; // empty thread — no round
         threadNode = threadNode with { Content = seededThread };
@@ -311,7 +335,7 @@ public static class HubThreadExtensions
         if (string.IsNullOrWhiteSpace(userText))
             return;
 
-        var (submitterObjectId, submitterName) = hub.CaptureSubmitter();
+        var (submitterObjectId, submitterName, submitterLocale) = hub.CaptureSubmitter();
         var userMessage = ThreadInput.CreateUserMessage(
             userText ?? string.Empty,
             createdBy: createdBy,
@@ -322,7 +346,8 @@ public static class HubThreadExtensions
             attachments: attachments,
             harness: harness,
             submitterObjectId: submitterObjectId,
-            submitterName: submitterName);
+            submitterName: submitterName,
+            submitterLocale: submitterLocale);
         try
         {
             ThreadInput.AppendUserInput(hub.GetWorkspace(), threadPath, userMessage);
@@ -375,7 +400,7 @@ public static class HubThreadExtensions
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.HubThreadExtensions");
         var msgId = Guid.NewGuid().ToString("N")[..8];
-        var (submitterObjectId, submitterName) = hub.CaptureSubmitter();
+        var (submitterObjectId, submitterName, submitterLocale) = hub.CaptureSubmitter();
 
         hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
@@ -399,7 +424,8 @@ public static class HubThreadExtensions
                 attachments: attachments ?? c.Attachments,
                 harness: c.Harness,
                 submitterObjectId: submitterObjectId,
-                submitterName: submitterName);
+                submitterName: submitterName,
+                submitterLocale: submitterLocale);
 
             return node with
             {
