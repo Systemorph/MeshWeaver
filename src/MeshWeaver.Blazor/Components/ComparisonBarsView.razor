@@ -1,0 +1,39 @@
+@inherits BlazorView<ComparisonBarsControl, ComparisonBarsView>
+@inject AccessService Access
+
+<div class="@($"cmp {Class}".TrimEnd())" style="@Style" id="@Id">
+    @if (Layout is null)
+    {
+        <p class="cmp-empty">@Access.Localize("analysis.comparison.empty")</p>
+    }
+    else
+    {
+        @foreach (var row in Layout.Rows)
+        {
+            <div class="cmp-row">
+                <div class="cmp-measure">@row.Pair.Label</div>
+                <div class="cmp-bars">
+                    @Side(row.LeftPercent, row.Pair.Left, LeftLegend, "cmp-left")
+                    @Side(row.RightPercent, row.Pair.Right, RightLegend, "cmp-right")
+                </div>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private RenderFragment Side(double? percent, double? value, string? legend, string sideClass) =>
+    @<div class="cmp-side">
+        @if (percent is null || value is null)
+        {
+            <span class="cmp-absent">@(legend is { Length: > 0 } ? $"{legend} — {AbsentText}" : AbsentText)</span>
+        }
+        else
+        {
+            <span class="cmp-bar @sideClass" style="@($"width:{Css(percent.Value)}%")"></span>
+            <span class="cmp-value">
+                @(legend is { Length: > 0 } ? $"{legend} {Formatted(value.Value)}" : Formatted(value.Value))
+            </span>
+        }
+    </div>;
+}

@@ -14,6 +14,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Services.LanguageServer;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -837,6 +838,54 @@ public static class MeshDataSourceExtensions
         return Observable.Return(Unit.Default);
     }
 
+    /// <summary>
+    /// Reclaims this node's collectible <c>NodeAssemblyLoadContext</c>(s) at the only point where no
+    /// thread can still be executing their compiled types. Which point that is depends on WHY the
+    /// node hub is disposing, so the callback picks between two:
+    ///
+    /// <list type="bullet">
+    /// <item><b>The mesh is alive</b> (prod steady state: the node was deleted, its hub evicted or
+    ///   recycled). Nothing else is going to tell us it is safe and the mesh may run for months, so
+    ///   unload NOW — deferring would leak this ALC for the process lifetime, which is exactly the
+    ///   late-project CI OOM / GC-stall this hook was added to fix. No mesh-wide teardown is in
+    ///   progress, so no <see cref="IoPoolRegistry.DrainAll"/> is pending behind us.</item>
+    /// <item><b>The mesh is tearing down.</b> This callback runs from <c>MessageHub.DisposeImpl</c>,
+    ///   i.e. STRICTLY BEFORE <see cref="IMessageHub.DisposalCompleted"/> — but the pooled
+    ///   layout-render leaves that execute this node's compiled types are cancelled and JOINED only
+    ///   by <see cref="IoPoolRegistry.DrainAll"/>, which every teardown orchestrator runs AFTER
+    ///   <c>DisposalCompleted</c> (<c>MeshTeardownExtensions.WaitForDisposalAndIoDrainAsync</c>,
+    ///   <c>MonolithMeshTestBase</c>, <c>HubTestBase</c>). Unloading here therefore frees the
+    ///   LoaderAllocator out from under a leaf still inside <c>IoPool.SubscribeThroughPool</c>, and
+    ///   its next read of a NodeType-compiled type's GC statics is an
+    ///   <c>AccessViolationException</c> → SIGABRT (issue #613). So we hand the unload to
+    ///   <see cref="MeshTeardownSignal"/>, which fires only after every drain phase — precisely the
+    ///   role its own documentation assigns it ("everything that must not run before teardown truly
+    ///   ends — disposing the service scope, unloading node ALCs — subscribes here").</item>
+    /// </list>
+    ///
+    /// <para>With no <see cref="MeshTeardownSignal"/> registered there is no terminal signal to wait
+    /// for, so we keep the immediate unload rather than leak: a never-reclaimed ALC is the
+    /// regression this hook exists to prevent.</para>
+    /// </summary>
+    private static void UnloadNodeAssemblyContexts(
+        ICompilationCacheService compilationCache,
+        string sanitizedNodeName,
+        IMessageHub meshHub,
+        MeshTeardownSignal? teardownSignal)
+    {
+        if (teardownSignal is null || !meshHub.IsDisposing)
+        {
+            compilationCache.UnloadNodeContexts(sanitizedNodeName);
+            return;
+        }
+
+        // ReplaySubject(1)-backed and completing, so this subscription releases itself as soon as
+        // the report arrives — and a subscriber that attaches after teardown already finished still
+        // gets it immediately (never a silently-skipped unload).
+        teardownSignal.Completed
+            .Subscribe(_ => compilationCache.UnloadNodeContexts(sanitizedNodeName));
+    }
+
     private static void SubscribeToOwnDeletion(IMessageHub hub)
     {
         var cache = hub.ServiceProvider.GetService<OwnNodeCache>();
@@ -876,7 +925,15 @@ public static class MeshDataSourceExtensions
             if (compilationCache != null)
             {
                 var sanitizedNodeName = compilationCache.SanitizeNodeName(hub.Address.Path);
-                hub.RegisterForDisposal(_ => compilationCache.UnloadNodeContexts(sanitizedNodeName));
+                // Captured HERE, during buildup, while the parent scope is guaranteed alive.
+                // MessageHubConfiguration.ParentHub re-resolves from ParentServiceProvider, which is
+                // routinely already torn down by the time a disposal callback runs (see the
+                // parentAddress note in MessageHub.DisposeImpl) — so the mesh hub and the terminal
+                // signal must both be resolved now, not from inside the callback.
+                var meshHub = hub.GetMeshHub();
+                var teardownSignal = hub.ServiceProvider.GetService<MeshTeardownSignal>();
+                hub.RegisterForDisposal(_ =>
+                    UnloadNodeAssemblyContexts(compilationCache, sanitizedNodeName, meshHub, teardownSignal));
             }
 
             // 🚨 Memory: same per-node reclaim for the LSP workspace cache. The language service is a
