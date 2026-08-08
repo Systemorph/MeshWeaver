@@ -212,6 +212,44 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// 🚨 #901 end-to-end: a PACKAGE-shipped agent surfaces through the settings-aware pipeline.
+    /// The install hook writes <c>namespace:{pkg}/Agent</c> into the user's
+    /// <see cref="AiSettings.AgentQueries"/> (the write side that landed with #858); this pins the
+    /// READ side — <see cref="AgentPickerProjection.ObserveAgents"/> resolves those rows, so the
+    /// package's agent appears in the picker even though the chat runs OUTSIDE the package's own
+    /// partition. Pre-fix, the pipeline issued only the fixed base union and the seeded package
+    /// agent below never surfaced.
+    /// </summary>
+    [Fact]
+    public async Task ObserveAgents_PackageSourceInSettings_SurfacesPackageAgent()
+    {
+        const string user = "rbuergi";
+        const string packageAgentPath = "PickerPkg/Agent/PackageAgent";
+
+        await SeedAgent(packageAgentPath, "Package Agent", "package-agent");
+        // The exact write AiSourcesInstallHook performs per user at install time.
+        await SeedTopLevel(MeshNode.FromPath(AiSettingsNodeType.PathFor(user)) with
+        {
+            NodeType = AiSettingsNodeType.NodeType,
+            Name = "AI Settings",
+            Content = AiSettingsNodeType.MergePackageSources(new AiSettings(), "PickerPkg"),
+        });
+
+        // Chat context is a DIFFERENT space (ACME) — pre-#901 the fixed union
+        // (rbuergi/Agent|ACME/Agent|Agent) could never see PickerPkg/Agent.
+        var agents = await AgentPickerProjection
+            .ObserveAgents(Hub, userPath: user, spacePath: "ACME")
+            .Should().Within(15.Seconds())
+            .Match(a => a.Any(x => x.Path == packageAgentPath));
+
+        agents.Select(a => a.Path).Should().Contain(packageAgentPath,
+            "the package's AgentQueries row must be RESOLVED by the picker pipeline — writing it "
+            + "into settings while never reading it is exactly #901.");
+        agents.Select(a => a.Name).Should().Contain("Assistant",
+            "the canonical base union stays first — package rows extend it, never replace it.");
+    }
+
+    /// <summary>
     /// Seeds an Agent MeshNode at <paramref name="path"/> as System (bypasses the partition
     /// write guard for the ad-hoc ACME fixture partition — same shape as
     /// <see cref="MonolithMeshTestBase.SeedTopLevel"/>, reused for nested fixtures here).
