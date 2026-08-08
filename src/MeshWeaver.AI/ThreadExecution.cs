@@ -2385,8 +2385,12 @@ internal static class ThreadExecution
                         // OperationCanceledException — so the cell + thread reflect what
                         // the round actually cost.
                         totalTokens = NormalizeTotal(totalTokens, inputTokens, outputTokens);
+                        // actualModel ?? request.ModelName — same resolution as the Completed
+                        // branch, so the cancelled cell shows the model that really ran (a
+                        // delegation sub-thread has null request.ModelName; the satellite
+                        // below is keyed the same way).
                         PushToResponseMessage(cancelText, cancelToolCalls, cancelNodeChanges,
-                            request.AgentName, request.ModelName,
+                            request.AgentName, actualModel ?? request.ModelName,
                             inputTokens: inputTokens, outputTokens: outputTokens,
                             totalTokens: totalTokens,
                             completedAt: DateTime.UtcNow,
@@ -2488,14 +2492,33 @@ internal static class ThreadExecution
                         // Record tokens consumed before the fault (same rationale as the
                         // Cancelled branch) so an errored round still reports its cost.
                         totalTokens = NormalizeTotal(totalTokens, inputTokens, outputTokens);
+                        // actualModel ?? request.ModelName — same resolution as the Completed
+                        // branch (see the Cancelled branch above).
                         var pushErrorObs = PushToResponseMessage(errorText, errorToolCalls, errorNodeChanges,
-                            request.AgentName, request.ModelName,
+                            request.AgentName, actualModel ?? request.ModelName,
                             inputTokens: inputTokens, outputTokens: outputTokens,
                             totalTokens: totalTokens,
                             completedAt: DateTime.UtcNow,
                             status: ThreadMessageStatus.Error,
                             cacheReadTokens: cacheReadTokens, cacheWriteTokens: cacheWriteTokens)
                             .Timeout(TimeSpan.FromSeconds(10));
+                        // Tokens burned before the fault — record on the satellite as an
+                        // INDEPENDENT subscribed side effect, invoked HERE in the catch body
+                        // (same shape as the Completed and Cancelled branches), NOT nested in
+                        // the cell-push completion below. Nesting it there (#595) meant a
+                        // faulted or timed-out error-cell push skipped RecordUsage entirely —
+                        // and a failing cell write is most likely under exactly the degraded
+                        // conditions that made the round error in the first place. RecordUsage
+                        // is fail-open + a logged no-op on zero tokens, so this never gates
+                        // the terminal write.
+                        TokenUsageNodeType.RecordUsage(parentHub, threadPath,
+                            AgentPickerProjection.PartitionOf(threadPath),
+                            actualModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
+                            cacheReadTokens, cacheWriteTokens)
+                        .Subscribe(
+                            _ => { },
+                            recEx => execLogger?.LogWarning(recEx,
+                                "RecordUsage(Error) failed for {ThreadPath}", threadPath));
                         var errorTextLocal = errorText;
                         var errorNodeChangesLocal = errorNodeChanges;
                         pushErrorObs.Subscribe(
@@ -2514,18 +2537,9 @@ internal static class ThreadExecution
                                 var errorSummary = string.IsNullOrEmpty(errorTextLocal)
                                     ? $"Error: {ex.Message}"
                                     : errorTextLocal;
-                                // Tokens burned before the fault — record on the satellite as an
-                                // INDEPENDENT subscribed side effect (see Completed branch: NOT chained
-                                // before the terminal Idle write; the reader WAITS for the satellite).
-                                // Fail-open + no-op on zero tokens.
-                                TokenUsageNodeType.RecordUsage(parentHub, threadPath,
-                                    AgentPickerProjection.PartitionOf(threadPath),
-                                    actualModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
-                                    cacheReadTokens, cacheWriteTokens)
-                                .Subscribe(
-                                    _ => { },
-                                    recEx => execLogger?.LogWarning(recEx,
-                                        "RecordUsage(Error) failed for {ThreadPath}", threadPath));
+                                // (RecordUsage for the errored round runs as an independent side
+                                // effect in the catch body ABOVE — not here, so a faulted cell
+                                // push can no longer lose the usage record.)
                                 // Round-end inbox reconcile (see Completed branch): fold the
                                 // consumed follow-ups into THIS terminal write so they are not
                                 // double-delivered (once inline, once as a fresh round's input).
