@@ -692,9 +692,18 @@ public static class MeshExtensions
 
                     // Run post-creation handlers and post the terminal response. On every
                     // terminal path (success/error) a response MUST go out so the caller never
-                    // waits forever. The node is already persisted — but if a post-creation
-                    // handler errored, surface that as a Fail so the caller can react (don't
-                    // silently lie with Ok).
+                    // waits forever.
+                    //
+                    // 🚨 ALL-OR-NOTHING (#638). A create is provision → write the row → run the
+                    // post-creation handlers, and a handler that declares FailsCreateOnError is
+                    // part of the create's CONTRACT, not a side effect (the Space creator-Admin
+                    // grant: a Space whose grant never landed is an ownerless, un-writable,
+                    // un-deletable partition — the ghost roots this issue is named after).
+                    // Reporting Fail while LEAVING the row was the whole defect: the caller
+                    // cannot retry (create answers "already exists") and cannot clean up (nobody
+                    // has rights on the partition). So a failed critical handler now COMPENSATES:
+                    // the row this create wrote is deleted again, and the response carries the
+                    // ORIGINAL cause plus the rollback outcome.
                     logger.LogDebug("[CreateNode] step=post-handlers-start path={Path}", resultNode.Path);
                     RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger)
                         .Subscribe(
@@ -702,13 +711,26 @@ public static class MeshExtensions
                             ex =>
                             {
                                 logger.LogError(ex,
-                                    "Post-creation handler chain errored at {Path} — node IS persisted but handler failed",
+                                    "Post-creation handler chain errored at {Path} — rolling the create back (#638)",
                                     resultNode.Path);
-                                hub.Post(
-                                    CreateNodeResponse.Fail(
-                                        $"Node persisted but post-creation handler failed: {ex.Message}",
-                                        NodeCreationRejectionReason.Unknown),
-                                    o => o.ResponseFor(request));
+                                CompensateFailedCreate(hub, resultNode, mode, logger)
+                                    .Subscribe(
+                                        outcome => hub.Post(
+                                            CreateNodeResponse.Fail(
+                                                $"Create failed in a post-creation step: {ex.Message} {outcome}",
+                                                NodeCreationRejectionReason.Unknown),
+                                            o => o.ResponseFor(request)),
+                                        // The compensation itself already converts its own faults into
+                                        // an outcome string; this branch exists so a response goes out
+                                        // even if it faults on a path we did not foresee — never a
+                                        // silent swallow, never a caller left waiting.
+                                        compensationEx => hub.Post(
+                                            CreateNodeResponse.Fail(
+                                                $"Create failed in a post-creation step: {ex.Message} "
+                                                + $"Rolling back '{resultNode.Path}' FAILED ({compensationEx.Message}) — "
+                                                + "the partially-created node is still present and must be removed manually.",
+                                                NodeCreationRejectionReason.Unknown),
+                                            o => o.ResponseFor(request)));
                             },
                             () =>
                             {
@@ -737,6 +759,98 @@ public static class MeshExtensions
                 });
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// COMPENSATING ROLLBACK for a create whose CRITICAL post-creation step failed (#638) —
+    /// the second half of "a create is all-or-nothing".
+    ///
+    /// <para>Only a handler that declares <c>INodePostCreationHandler.FailsCreateOnError</c>
+    /// reaches here (<see cref="RunPostCreationHandlersObs"/> swallows best-effort handlers), so
+    /// the create's contract is genuinely unmet: the canonical case is a top-level
+    /// <c>Space</c> whose creator-Admin grant did not land, which used to leave a partition
+    /// root nobody owns — un-writable (RLS denies everyone), un-deletable, and un-re-creatable
+    /// ("Node already exists"). Removing the row is what makes the caller's retry work.</para>
+    ///
+    /// <para><b>It deletes ONLY the row THIS create wrote.</b> Two guards, in order:
+    /// <list type="number">
+    ///   <item><c>mode == "create"</c> — the transient→Active <i>confirm</i> path targets a node
+    ///     that ALREADY existed before the request, so there is nothing of ours to remove.</item>
+    ///   <item>A lineage check against the durable row: only a row whose
+    ///     <see cref="MeshNode.CreatedDate"/> is still the stamp this create wrote is removed. A
+    ///     different stamp means the path is no longer "our" node (a concurrent recreate), and
+    ///     the rollback stands down and says so rather than destroying someone else's state.</item>
+    /// </list>
+    /// Re-running it is harmless: an already-absent row reports "nothing to roll back".</para>
+    ///
+    /// <para><b>Partition artifacts are deliberately NOT dropped.</b> A top-level create may have
+    /// provisioned the partition's backing store (schema + tables) through
+    /// <c>OwnsPartitionProvisioningValidator</c> before the row was written. Provisioning is
+    /// idempotent, so leaving it costs the retry nothing — whereas DROPping it is not reversible
+    /// and would destroy data whenever the schema was NOT introduced by this create (exactly the
+    /// case when a user retries a create over the residue of an earlier one). An empty
+    /// provisioned schema with no root is inert; the write guard's speaking error names that
+    /// state (<c>PartitionWriteGuardValidator.DescribeOwnerlessPartition</c>). The additional
+    /// nodes a handler emits (e.g. the <c>Admin/Partition/{id}</c> definition) are written only
+    /// AFTER its <c>Handle</c> succeeded (the <c>Concat</c> in the runner), so a failed critical
+    /// handler leaves none behind.</para>
+    ///
+    /// <para>Emits exactly one human-readable outcome sentence, which the caller appends to the
+    /// original failure — a rollback that could not run is REPORTED, never swallowed.</para>
+    /// </summary>
+    private static IObservable<string> CompensateFailedCreate(
+        IMessageHub hub, MeshNode created, string mode, ILogger logger)
+    {
+        if (!string.Equals(mode, "create", StringComparison.Ordinal))
+            return Observable.Return(
+                $"The node at '{created.Path}' existed before this request, so nothing was rolled back.");
+
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null)
+            return Observable.Return("Nothing was persisted (no storage adapter), so there was nothing to roll back.");
+
+        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+
+        return persistence.Read(created.Path, hub.JsonSerializerOptions)
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .SelectMany(stored =>
+            {
+                if (stored is null)
+                    return Observable.Return($"No row remains at '{created.Path}' — nothing to roll back.");
+
+                if (stored.CreatedDate != created.CreatedDate)
+                {
+                    logger.LogError(
+                        "[CreateNode] rollback STOOD DOWN at {Path}: the stored row (created {StoredCreated:O}) is not "
+                        + "the one this create wrote (created {OurCreated:O}) — refusing to delete a node we did not create",
+                        created.Path, stored.CreatedDate, created.CreatedDate);
+                    return Observable.Return(
+                        $"The node at '{created.Path}' was NOT rolled back: the stored row is no longer the one this "
+                        + "request wrote. Remove it manually before retrying.");
+                }
+
+                // The rollback is infrastructure repairing its OWN half-finished write, on a node
+                // whose ownership grant is exactly what failed — so it runs as System (the caller
+                // provably cannot authorize a delete on a partition nobody was granted).
+                return AsSystem(accessService,
+                        () => persistence.DeleteAndPublish(created.Path, changeFeed, created.NodeType).Take(1))
+                    .Do(_ => logger.LogWarning(
+                        "[CreateNode] rolled back partially-created node at {Path} — the create is all-or-nothing (#638)",
+                        created.Path))
+                    .Select(_ => $"The partially-created node at '{created.Path}' was rolled back; the create can be retried.");
+            })
+            .Catch<string, Exception>(ex =>
+            {
+                logger.LogError(ex,
+                    "[CreateNode] ROLLBACK FAILED at {Path} — the partially-created node is still present",
+                    created.Path);
+                return Observable.Return(
+                    $"Rolling back '{created.Path}' FAILED ({ex.Message}) — the partially-created node is still "
+                    + "present and must be removed manually.");
+            })
+            .Take(1);
     }
 
     /// <summary>
@@ -1118,7 +1232,13 @@ public static class MeshExtensions
     ///     <see cref="Permission.Create"/> on the partition (the same predicate RLS uses). An
     ///     unauthorized creator triggers NO heal — the requested child is then denied by the
     ///     validators exactly as before, so the bootstrap can never launder an implicit-space
-    ///     creation past <c>PartitionWriteGuardValidator</c>'s "no partition, no write" rule.</item>
+    ///     creation past <c>PartitionWriteGuardValidator</c>'s "no partition, no write" rule.
+    ///     <b>One exception, and it grants the caller nothing</b>: an OWNERLESS partition (a root
+    ///     exists, names a real creator, and <c>{partition}/_Access</c> is completely empty) has
+    ///     its ORIGINAL creator's grant restored — see
+    ///     <see cref="RepairOwnerlessPartitionGrant"/>. Gating that repair on the permission of
+    ///     the very user whose grant is missing is what made the #638 residue self-heal for
+    ///     platform admins only.</item>
     /// </list>
     ///
     /// <para><b>No recursion:</b> the root create (empty namespace) and the grant create (path
@@ -1126,7 +1246,8 @@ public static class MeshExtensions
     /// re-enter the bootstrap. <b>Idempotent + race-safe:</b> a concurrent first-writer that
     /// loses the create race sees "already exists" and treats it as success. <b>Re-heals:</b>
     /// root + grant presence are re-probed on every child create, so a partition left half-broken
-    /// (root-missing, grant-missing, or both) is repaired on the next authorized child create —
+    /// (root-missing, root GHOSTED — a row with no type and no content, grant-missing,
+    /// grant-less altogether, or any combination) is repaired on the next child create —
     /// nothing is permanently cached as "bootstrapped".</para>
     /// </summary>
     private static IObservable<System.Reactive.Unit> EnsurePartitionBootstrap(
@@ -1175,7 +1296,10 @@ public static class MeshExtensions
         var grantPath = isRealCreator ? $"{partition}/_Access/{creator}_Access" : null;
 
         // Authoritative existence probes (persistence + static/config fallback), run together.
-        var rootObs = ReadNodeAuthoritative(hub, persistence, partition);
+        // The ROOT probe keeps its SOURCE: only a DURABLE row may be repaired in place (a
+        // static/config root lives in configuration, never in the store — rewriting it into
+        // storage would materialise a config entry as data). See RepairGhostRoot.
+        var rootObs = ReadRootWithSource(hub, persistence, partition);
         var grantObs = grantPath is null
             ? Observable.Return<MeshNode?>(null)
             : ReadNodeAuthoritative(hub, persistence, grantPath);
@@ -1189,10 +1313,16 @@ public static class MeshExtensions
         return Observable.Zip(rootObs, grantObs, syncObs, (root, grant, sync) => (root, grant, sync))
             .SelectMany(t =>
             {
-                var rootExists = t.root is not null;
+                // 🚨 EXISTENCE IS NOT ENOUGH — the root must be USABLE (#638). A row that is
+                // there but carries neither a NodeType nor Content is a GHOST: the residue of a
+                // create that wrote the row and then failed. `root is not null` accepted exactly
+                // that residue as "the partition is fine", so the one seam that re-heals
+                // partitions skipped the only partitions that actually needed healing — a ghost
+                // root can be neither read, nor created ("already exists"), nor routed to.
+                var rootUsable = IsUsableRoot(t.root.Node);
                 // For a System / unattributed creator there is no per-creator grant to ensure.
                 var grantExists = !isRealCreator || t.grant is not null;
-                if (rootExists && grantExists)
+                if (rootUsable && grantExists)
                     return Observable.Return(System.Reactive.Unit.Default);
 
                 // Authorization gate — heal ONLY for a creator who could legitimately create here.
@@ -1218,11 +1348,25 @@ public static class MeshExtensions
                     .SelectMany(authorized =>
                     {
                         if (!authorized)
-                            return Observable.Return(System.Reactive.Unit.Default);
+                            // 🚨 #638 — the ONE heal that must NOT sit behind this gate. A
+                            // partition whose creator-grant never landed denies EVERYONE,
+                            // starting with the very user whose grant is missing, so gating the
+                            // repair on that user's permission makes the residue self-heal only
+                            // for a platform admin. The repair below is deliberately NOT "grant
+                            // the caller what they asked for": it restores the grant of the
+                            // partition root's ORIGINAL creator, and only when the partition
+                            // carries no grants AT ALL — the framework repairing its own failed
+                            // bookkeeping, not an authorization decision.
+                            return RepairOwnerlessPartitionGrant(
+                                hub, partition, t.root.Node, systemOwned: t.sync is not null,
+                                persistence, meshService, accessService, logger);
 
-                        var healRoot = rootExists
+                        var healRoot = rootUsable
                             ? Observable.Return(System.Reactive.Unit.Default)
-                            : ProvisionAndCreateRoot(hub, partition, meshService, accessService, logger);
+                            : ProvisionAndCreateRoot(hub, partition, meshService, accessService, logger,
+                                // A DURABLE but unusable row is repaired in place; an absent root
+                                // (or a static/config one) takes the ordinary create path.
+                                ghost: t.root.Durable ? t.root.Node : null);
                         // 🚨 A deploy is not an ownership claim. Running `git_hub_sync update` on
                         // `Skill` — a partition that had existed for weeks — wrote one activity
                         // node into it and walked away with Admin, reproducibly, on every sync.
@@ -1279,12 +1423,49 @@ public static class MeshExtensions
         hub.ServiceProvider.FindStaticNode(path) is { IsDefinitionOnly: false } served ? served : null;
 
     /// <summary>
+    /// <see cref="ReadNodeAuthoritative"/> for a partition ROOT, keeping WHERE the node came
+    /// from: <c>Durable</c> is true only for a row that really sits in the store. The bootstrap
+    /// needs that distinction because it may REPAIR an unusable root in place, and only a durable
+    /// row may be rewritten — a static/config root is configuration, and writing it into storage
+    /// would turn a config entry into data.
+    /// </summary>
+    private static IObservable<(MeshNode? Node, bool Durable)> ReadRootWithSource(
+        IMessageHub hub, IStorageAdapter persistence, string path)
+        => persistence.Read(path, hub.JsonSerializerOptions)
+            .Take(1)
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .DefaultIfEmpty(null)
+            .Select(n => n is not null ? (n, true) : (StaticNodeAt(hub, path), false));
+
+    /// <summary>
+    /// Is this partition root node USABLE, i.e. a real root rather than the GHOST residue of a
+    /// half-completed create (#638/#902)?
+    ///
+    /// <para>A root that carries NEITHER a <see cref="MeshNode.NodeType"/> NOR
+    /// <see cref="MeshNode.Content"/> is nothing anyone can use: no type means no per-node hub
+    /// configuration and no content type, so the bare partition address has no terminal node to
+    /// resolve to. It is what a create leaves behind when the row lands and everything after it
+    /// fails. Either one present is enough — the bootstrap's OWN roots are typed
+    /// (<c>Space</c>) with no content, while an imported/typed root may carry content instead —
+    /// so this test repairs the residue without ever touching a legitimately-minimal root.</para>
+    /// </summary>
+    private static bool IsUsableRoot(MeshNode? root) =>
+        root is not null
+        && (!string.IsNullOrWhiteSpace(root.NodeType) || root.Content is not null);
+
+    /// <summary>
     /// Provisions every provider's backing store (PG schema + tables) then writes the partition's
     /// <c>Space</c> root under System. Idempotent — a concurrent-create "already exists" is success.
+    ///
+    /// <para>When <paramref name="ghost"/> is supplied — a DURABLE row that exists but is not a
+    /// usable root — the root is repaired IN PLACE instead (see <see cref="RepairGhostRoot"/>).
+    /// Going through <c>CreateNode</c> there could never work: the row makes the create answer
+    /// "already exists", which this method treats as success, so the ghost survived every
+    /// bootstrap that ran over it.</para>
     /// </summary>
     private static IObservable<System.Reactive.Unit> ProvisionAndCreateRoot(
         IMessageHub hub, string partition, IMeshService meshService,
-        AccessService? accessService, ILogger logger)
+        AccessService? accessService, ILogger logger, MeshNode? ghost = null)
     {
         // Reactive + pooled + promise-cached; the InMemory / FileSystem providers no-op. Merge +
         // ToList so the chain always emits exactly once (even with no providers) before the write.
@@ -1294,6 +1475,9 @@ public static class MeshExtensions
             : Observable.Merge(providers.Select(p => p.EnsurePartitionProvisioned(partition)))
                 .ToList()
                 .Select(_ => System.Reactive.Unit.Default);
+
+        if (ghost is not null)
+            return provision.SelectMany(_ => RepairGhostRoot(hub, partition, ghost, accessService, logger));
 
         var root = new MeshNode(partition)
         {
@@ -1310,6 +1494,119 @@ public static class MeshExtensions
                     : Observable.Throw<System.Reactive.Unit>(ex))
                 .Do(_ => logger.LogInformation(
                     "[PartitionBootstrap] created missing Space root for partition '{Partition}'", partition)));
+    }
+
+    /// <summary>
+    /// Repairs a GHOST partition root — a durable row with no type and no content — IN PLACE, so
+    /// the partition becomes routable again without losing the node's lineage (#638/#902).
+    ///
+    /// <para>The write is stamped at <see cref="MeshNode.NextVersion(long)"/> of the row we just
+    /// read, i.e. forward BY CONSTRUCTION: <c>MonotonicWriteGuardStorageAdapter</c> refuses any
+    /// write landing below the stored version, and a ghost never sits at 0 (it is the residue of
+    /// a node that WAS written), so a repair minted from a blank snapshot is silently discarded —
+    /// the same flooring #909 added to the create-or-update path. Id/Namespace/CreatedDate ride
+    /// along from the ghost, so this is the SAME node repaired, not a new one shadowing it.</para>
+    ///
+    /// <para>Runs as System (a partition whose root is broken grants nobody anything) and writes
+    /// through the storage adapter + change feed rather than the node's own hub: activating a hub
+    /// on a content-less root is precisely what used to hang, and the change-feed publish is what
+    /// invalidates the resolution caches that still hold the ghost as unroutable. Errors are NOT
+    /// swallowed — they propagate and fail the create that triggered the heal, with the real cause.</para>
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> RepairGhostRoot(
+        IMessageHub hub, string partition, MeshNode ghost, AccessService? accessService, ILogger logger)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null)
+            return Observable.Return(System.Reactive.Unit.Default);
+        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+
+        var repaired = ghost with
+        {
+            NodeType = PartitionRootNodeTypeName,
+            State = MeshNodeState.Active,
+            Name = string.IsNullOrWhiteSpace(ghost.Name) ? partition : ghost.Name,
+            Version = MeshNode.NextVersion(ghost.Version),
+            LastModified = DateTimeOffset.UtcNow,
+            LastModifiedBy = WellKnownUsers.System,
+        };
+
+        return AsSystem(accessService,
+                () => persistence.WriteAndPublishUpdated(repaired, hub.JsonSerializerOptions, changeFeed).Take(1))
+            .Select(_ => System.Reactive.Unit.Default)
+            .Do(_ => logger.LogWarning(
+                "[PartitionBootstrap] repaired GHOST root of partition '{Partition}' in place (v{From} → v{To}): the row "
+                + "existed but carried no type and no content — the residue of a half-completed create (#638)",
+                partition, ghost.Version, repaired.Version));
+    }
+
+    /// <summary>
+    /// Restores the grant of a partition root's ORIGINAL creator when the partition carries NO
+    /// access grants at all (#638) — the framework repairing its own failed bookkeeping.
+    ///
+    /// <para><b>Why it must run for an UNAUTHORIZED caller.</b> A partition with zero grants
+    /// denies everyone, and the first person it denies is the user whose grant went missing. The
+    /// bootstrap's ordinary heal sits behind <c>CheckPermission(partition, creator, Create)</c>,
+    /// which that user can never pass — so the residue self-healed only for a platform admin who
+    /// happened to write into it.</para>
+    ///
+    /// <para><b>Why it is not a privilege escalation.</b> It never grants the CALLER anything.
+    /// The subject is taken from the ROOT's <see cref="MeshNode.CreatedBy"/> — the identity that
+    /// created the partition and should have been granted Admin by the create that failed — and
+    /// only when:
+    /// <list type="bullet">
+    ///   <item>a root exists and names a real (non-System, non-anonymous) creator — a
+    ///     System-created root has no owner to restore, and inventing one is not repair;</item>
+    ///   <item>the partition is not SYSTEM-OWNED (GitSynced) — those are owned by the deploy;</item>
+    ///   <item>and <c>{partition}/_Access</c> is EMPTY — in the store AND in configuration (a
+    ///     statically-seeded grant is a grant). One remaining grant means the partition's
+    ///     ownership is intact and a missing individual grant is a deliberate access decision, not
+    ///     a broken create. (An indeterminate probe counts as "has grants": no repair.)</item>
+    /// </list>
+    /// The write itself is idempotent — a lost race sees "already exists" and is success.</para>
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> RepairOwnerlessPartitionGrant(
+        IMessageHub hub, string partition, MeshNode? root, bool systemOwned, IStorageAdapter persistence,
+        IMeshService meshService, AccessService? accessService, ILogger logger)
+    {
+        if (root is null || systemOwned)
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        var owner = root.CreatedBy;
+        if (string.IsNullOrEmpty(owner)
+            || string.Equals(owner, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(owner, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase))
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        // A CONFIGURED grant is a grant: static nodes never reach the store, so the durable probe
+        // below would read a perfectly-owned partition as ownerless.
+        if (hub.ServiceProvider.EnumerateStaticNodes()
+            .Any(n => n.Path.StartsWith($"{partition}/_Access/", StringComparison.OrdinalIgnoreCase)))
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        return persistence.ListChildPaths($"{partition}/_Access")
+            .Take(1)
+            .Select(children => children.NodePaths?.Any() == true)
+            // Indeterminate (an unreadable / not-yet-provisioned store) is NOT "no grants":
+            // fail closed and repair nothing.
+            .Catch<bool, Exception>(ex =>
+            {
+                logger.LogDebug(ex,
+                    "[PartitionBootstrap] could not list '{Partition}/_Access'; skipping the ownerless-partition repair",
+                    partition);
+                return Observable.Return(true);
+            })
+            .SelectMany(hasGrants => hasGrants
+                ? Observable.Return(System.Reactive.Unit.Default)
+                : Observable.Defer(() =>
+                {
+                    logger.LogWarning(
+                        "[PartitionBootstrap] partition '{Partition}' carries NO access grants at all — restoring the "
+                        + "grant of its ORIGINAL creator '{Owner}' (root.CreatedBy). This repairs a create whose "
+                        + "creator-Admin grant never landed (#638); the caller is granted nothing.",
+                        partition, owner);
+                    return CreateCreatorGrant(partition, owner!, meshService, accessService, logger);
+                }));
     }
 
     /// <summary>

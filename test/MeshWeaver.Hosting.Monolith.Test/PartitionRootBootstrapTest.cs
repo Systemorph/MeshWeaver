@@ -244,6 +244,41 @@ public class PartitionRootBootstrapTest(ITestOutputHelper output) : MonolithMesh
             "the bare short id must never become a partition root");
     }
 
+    // ── #638: the residue of a NON-ATOMIC create is what the bootstrap must repair ──────────
+
+    /// <summary>
+    /// A GHOST root — a row that exists but carries no type and no content — is the residue of a
+    /// create that wrote the row and then failed. Existence alone used to satisfy the bootstrap
+    /// (<c>root is not null</c>), so the one seam that re-heals partitions skipped precisely the
+    /// partitions that needed healing: the ghost can be neither read, nor created ("already
+    /// exists"), nor routed to. It must be REPAIRED — in place, keeping its lineage.
+    /// </summary>
+    [Fact]
+    public async Task GhostRoot_ContentLessRow_IsRepairedInPlace_NotAcceptedAsExisting()
+    {
+        const string partition = "BootstrapGhost";
+        const long ghostVersion = 7;   // a real ghost never sits at 0 — it WAS written once
+        var ghostCreated = new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
+
+        // Planted the way a ghost really appears: straight to storage. The create path refuses a
+        // content-less, type-less node outright, which is why only a half-completed write can
+        // produce one — and why nothing on the create path could clear it.
+        await Storage.Write(
+                new MeshNode(partition) { CreatedDate = ghostCreated, Version = ghostVersion },
+                Mesh.JsonSerializerOptions)
+            .Should().Within(15.Seconds()).Emit();
+
+        await CreateChild($"{partition}/page1");
+
+        var root = await ReadStorage(RootPath(partition));
+        root.Should().NotBeNull();
+        root!.NodeType.Should().Be("Space", "a content-less row is not a usable root — it must be repaired");
+        root.State.Should().Be(MeshNodeState.Active);
+        root.CreatedDate.Should().Be(ghostCreated, "repaired IN PLACE — the same node's lineage, not a fresh one");
+        (root.Version > ghostVersion).Should().BeTrue(
+            "the repair must land ABOVE the durable row or the monotonic write guard discards it (#909)");
+    }
+
     [Fact]
     public async Task ConcurrentFirstWrites_BothSucceed_OneRootOneGrant()
     {

@@ -265,6 +265,110 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
     }
 
     /// <summary>
+    /// The speaking diagnosis for a PROVISIONED-BUT-OWNERLESS partition (#638) — the sibling of
+    /// this guard's "no partition, no write" message, for the state where the partition DOES
+    /// exist but carries no access grants at all. Emits the message, or <c>null</c> when the
+    /// partition is not in that state.
+    ///
+    /// <para><b>Why it is not a rejection rule of this validator.</b> An ownerless partition must
+    /// stay writable for the people who can repair it (a platform admin re-granting ownership),
+    /// so refusing structurally here would block exactly the repair. The state is only ever
+    /// SURFACED — on the denial that already happens (<c>RlsNodeValidator</c> calls this when it
+    /// refuses a create/update), turning a generic "Access denied" into a message that names the
+    /// situation and the way out. The knowledge lives here, with the other partition-health
+    /// rules, so the two messages stay one family.</para>
+    ///
+    /// <para><b>Probes, all on the DENIAL path only</b> (so the happy path pays nothing). The
+    /// partition ROOT must exist first — an absent partition is a different state entirely, and
+    /// the one this guard's "no partition, no write" rule already names. Then: the children of
+    /// <c>{partition}/_Access</c>, and a <c>{partition}/_Policy</c> <c>PartitionAccessPolicy</c>.
+    /// A partition governed by a policy (the installed catalogs — Agent, Doc, Store) legitimately
+    /// has no grants and is not broken; an indeterminate probe says nothing rather than crying
+    /// wolf.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose service provider resolves the storage adapter.</param>
+    /// <param name="nodePath">The path being written; its first segment is the partition.</param>
+    /// <returns>The diagnosis, or <c>null</c> when the partition is healthy / not diagnosable.</returns>
+    public static IObservable<string?> DescribeOwnerlessPartition(IMessageHub hub, string? nodePath)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        var partition = GetFirstSegment(nodePath);
+        if (string.IsNullOrEmpty(partition)
+            || partition.StartsWith('_')
+            || ReservedMirrorPartitions.Contains(partition))
+            return Observable.Return<string?>(null);
+
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null)
+            return Observable.Return<string?>(null);
+
+        // A grant can also come from CONFIGURATION (a static node seeded by the host or a test
+        // fixture). Those never appear in the store, so the durable probe below would call a
+        // perfectly-owned partition ownerless.
+        if (hub.ServiceProvider.EnumerateStaticNodes()
+            .Any(n => n.Path.StartsWith($"{partition}/{AccessSegment}/", StringComparison.OrdinalIgnoreCase)))
+            return Observable.Return<string?>(null);
+
+        var hasGrants = persistence.ListChildPaths($"{partition}/{AccessSegment}")
+            .Take(1)
+            .Select(children => children.NodePaths.Any())
+            // Fail CLOSED on an indeterminate probe: no diagnosis rather than a wrong one.
+            .Catch<bool, Exception>(_ => Observable.Return(true));
+
+        // 🚨 Same rule as the grants probe above: a `_Policy` can be shipped as a STATIC node by a
+        // built-in catalog (Agent, Doc, … via IStaticNodeProvider) and never appear in the store, so
+        // a durable-only probe would call a properly policy-governed partition ownerless. Checked
+        // first because it is a pure in-memory lookup — a static hit skips the storage read entirely.
+        var policyIsStatic = hub.ServiceProvider.EnumerateStaticNodes()
+            .Any(n => string.Equals(n.Path, $"{partition}/{PartitionPolicySegment}",
+                StringComparison.OrdinalIgnoreCase));
+        var hasPolicy = policyIsStatic
+            ? Observable.Return(true)
+            : ReadOrNull($"{partition}/{PartitionPolicySegment}").Select(policy => policy is not null);
+
+        var diagnosis =
+            $"'{partition}' exists but carries NO access grants at all — its partition was provisioned while its "
+            + "ownership was never recorded, so it denies everyone (a broken partition, not an ordinary permission "
+            + "decision). Its original creator regains access automatically on their next write into it; anyone "
+            + $"else needs a platform admin to grant access under '{partition}/{AccessSegment}'.";
+
+        // The partition must actually BE there. An ABSENT partition is a different state — the one
+        // rule 2 ("no partition, no write") names — and telling a caller it "exists but carries no
+        // grants" would be plainly false. Probed first so the other two reads are never paid for a
+        // partition that isn't there.
+        return ReadOrNull(partition)
+            .Select(root => root ?? StaticRootAt(hub, partition))
+            .SelectMany(root => root is null
+                ? Observable.Return<string?>(null)
+                : Observable.Zip(hasGrants, hasPolicy,
+                    (grants, policy) => grants || policy ? null : diagnosis));
+
+        IObservable<MeshNode?> ReadOrNull(string path) =>
+            persistence.Read(path, hub.JsonSerializerOptions)
+                .Take(1)
+                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+                .DefaultIfEmpty(null);
+    }
+
+    /// <summary>
+    /// The static/config node served at a partition path, or <c>null</c> — a definition-only entry
+    /// (a NodeType registered at its catalog's bare partition name) is a type definition, not a
+    /// partition root, and must not answer an existence probe.
+    /// </summary>
+    private static MeshNode? StaticRootAt(IMessageHub hub, string partition) =>
+        hub.ServiceProvider.FindStaticNode(partition) is { IsDefinitionOnly: false } served ? served : null;
+
+    /// <summary>The satellite folder every access grant lives under.</summary>
+    private const string AccessSegment = "_Access";
+
+    /// <summary>
+    /// The per-partition <see cref="MeshWeaver.Mesh.Security.PartitionAccessPolicy"/> node id —
+    /// mirrors <c>PackageInstaller.PartitionPolicyId</c> (which lives in a package this project
+    /// must not reference).
+    /// </summary>
+    private const string PartitionPolicySegment = "_Policy";
+
+    /// <summary>
     /// First path segment (the top-level partition). Mirrors
     /// <c>PostgreSqlPartitionStorageProvider.GetFirstSegment</c>.
     /// </summary>
