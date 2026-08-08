@@ -787,5 +787,10 @@
   "pivot.noAggregates": "Keine Pivot-Aggregate konfiguriert",
   "common.total": "Summe",
   "chat.noNamespace": "Kein Namespace, in dem ein Thread gestartet werden kann.",
-  "search.meshPlaceholder": "Mesh durchsuchen... (z. B. nodeType:Story status:Open)"
+  "search.meshPlaceholder": "Mesh durchsuchen... (z. B. nodeType:Story status:Open)",
+  "analysis.kpi.empty": "Keine Kennzahlen vorhanden.",
+  "analysis.tower.empty": "Keine Struktur zum Zeichnen.",
+  "analysis.tower.retained": "Selbstbehalt",
+  "analysis.comparison.empty": "Auf keiner Seite Beträge vorhanden.",
+  "analysis.comparison.absent": "auf dieser Seite nicht vorhanden"
 }
