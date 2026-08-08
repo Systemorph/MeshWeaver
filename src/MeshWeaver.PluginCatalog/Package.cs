@@ -218,10 +218,43 @@ public record PackageManifest
     public ImmutableSortedDictionary<string, string>? ManifestFiles { get; init; }
 }
 
-/// <summary>A single file of a package folder read from the source at a git ref.</summary>
+/// <summary>
+/// A single file of a package folder read from the source at a git ref. A TEXT file carries its
+/// UTF-8 text in <paramref name="Content"/> (and <see cref="Binary"/> is null); a BINARY file — a
+/// course video/poster committed under <c>{package}/content/**</c>, a font, any non-UTF-8 blob —
+/// carries its raw bytes in <see cref="Binary"/> and leaves <paramref name="Content"/> EMPTY,
+/// because round-tripping arbitrary bytes through a UTF-8 string corrupts them. Read
+/// <see cref="Bytes"/> for the content regardless of kind.
+///
+/// <para>This mirrors <see cref="MeshWeaver.GitSync.RepoFile"/> exactly, and that alignment is what
+/// makes "merging publishes the package COMPLETELY" true (issue #848). The git transports already
+/// classify binaries correctly and put their bytes on <c>RepoFile.Binary</c> — but the package
+/// sources DROPPED that field, so every binary reached <c>POST /api/plugins/files</c> as
+/// <c>content = ""</c> (the measured "0 chars") and the installer had nothing to write.</para>
+///
+/// <para><b>Wire form.</b> <c>System.Text.Json</c> encodes a <c>byte[]</c> as base64 in both
+/// directions, so the registry payload carries binaries with no custom converter — at ~4/3 the raw
+/// size. An OLD registry simply omits the field, leaving <see cref="Binary"/> null, and the consumer
+/// then behaves exactly as before: producer and consumer roll independently.</para>
+/// </summary>
 /// <param name="RelativePath">Repo-relative path, e.g. <c>"data-analyst-agent/DataAnalyst.md"</c>.</param>
-/// <param name="Content">UTF-8 file text.</param>
-public sealed record PackageFile(string RelativePath, string Content);
+/// <param name="Content">The file's UTF-8 text (empty for a binary file — read <see cref="Bytes"/>).</param>
+/// <param name="Binary">The file's raw bytes when it is NOT valid UTF-8 text; null for a text file.</param>
+public sealed record PackageFile(string RelativePath, string Content, byte[]? Binary = null)
+{
+    /// <summary>True when this file holds raw (non-text) bytes that must never pass through the text API.</summary>
+    /// <remarks>🚨 <see cref="JsonIgnoreAttribute"/> is load-bearing, not tidiness: this record IS the
+    /// <c>/api/plugins/files</c> wire shape, and a serialized computed property would ship a SECOND
+    /// full base64 copy of every binary (a 9 MB video twice over) in each response.</remarks>
+    [JsonIgnore]
+    public bool IsBinary => Binary is not null;
+
+    /// <summary>The file's raw bytes: <see cref="Binary"/> for a binary file, else the UTF-8 encoding of <see cref="Content"/>.</summary>
+    /// <remarks>See <see cref="IsBinary"/> — <see cref="JsonIgnoreAttribute"/> keeps the payload from
+    /// carrying the bytes twice.</remarks>
+    [JsonIgnore]
+    public byte[] Bytes => Binary ?? System.Text.Encoding.UTF8.GetBytes(Content);
+}
 
 /// <summary>
 /// A source of installable packages — a git repo at a chosen ref. Lists the packages (folders with
