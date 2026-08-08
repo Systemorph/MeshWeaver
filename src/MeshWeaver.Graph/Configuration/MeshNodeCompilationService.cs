@@ -132,9 +132,13 @@ internal class MeshNodeCompilationService(
     /// <para>🚨 The timeout also CANCELS the leg: <see cref="CancellationDisposable"/> is
     /// disposed when the bound unsubscribes, tripping the token the leaf was started with, so
     /// an abandoned NuGet restore / Roslyn emit stops instead of pinning a compile thread for
-    /// the life of the process. Legs with nothing cancellable (assembly load + reflection) pass
-    /// <see cref="CancellationToken.None"/> and merely settle the state machine — the honest
-    /// limit of what a bound can do there.</para>
+    /// the life of the process. That is more than tidiness for the Roslyn leg — the per-node
+    /// single-flight entry (<c>_inflightCompiles</c>) evicts only when its Task settles, so
+    /// without cancellation every retry would receive the SAME hung Task and re-fail
+    /// identically forever. A leg with nothing cancellable (assembly load + reflection: a
+    /// running type initializer cannot be interrupted) simply IGNORES the token it is handed
+    /// and the bound only settles the state machine — the honest limit of what it can do
+    /// there, at the cost of one abandoned load thread.</para>
     /// </summary>
     private static IObservable<T> BoundLeg<T>(
         Func<CancellationToken, IObservable<T>> leg,
