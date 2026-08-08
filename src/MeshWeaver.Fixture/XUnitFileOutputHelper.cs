@@ -480,6 +480,24 @@ public class XUnitFileLogger : ILogger
         if (!IsEnabled(logLevel))
             return;
 
+        // Formatted at most once, and only on a path that actually consumes it: a record
+        // that is neither a fault nor inside a test method is dropped without ever paying
+        // for formatting — which is the common case on the background schedulers below.
+        string? message = null;
+
+        // 🚨 A fault with a stack goes to the ONE file CI keeps, BEFORE the two filters
+        // below. Both of them are why an exception logged here reached no CI artifact:
+        // the output helper is null (or IsInTestMethod() is false) for anything logged
+        // outside a test method's window — fixture init, teardown, and every reactive
+        // continuation that lands on a background scheduler, which is precisely when a
+        // wedge faults. Note this deliberately sits AFTER IsEnabled: configured log
+        // levels are a production cost contract and are not widened here (#890).
+        if (exception is not null && logLevel >= LogLevel.Warning)
+        {
+            message = formatter(state, exception);
+            TestTraceLog.AppendFault(_categoryName, logLevel, message, exception);
+        }
+
         var outputHelper = _outputHelperFactory();
         if (outputHelper == null)
             return;
@@ -488,7 +506,7 @@ public class XUnitFileLogger : ILogger
         if (!outputHelper.IsInTestMethod())
             return;
 
-        var message = formatter(state, exception);
+        message ??= formatter(state, exception);
         var logEntry = $"[{logLevel}] [{_categoryName}] {message}";
 
         if (exception != null)
