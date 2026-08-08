@@ -72,6 +72,56 @@ public class ActivityControlPlaneResubscribeTest
     }
 
     [Fact]
+    public void PoisonedContent_DoesNotResubscribe_AndReachesTheVisibleSink()
+    {
+        // #891: a MeshNodeStreamException(Deserialization) is the per-emission typing fault the
+        // stream handle raises for undeserializable node content. The faulted stream REPLAYS the
+        // same emission, so a re-establish is a 1 Hz poison loop — the watcher must stop after
+        // exactly one subscription AND surface the fault through the visible sink (the compile
+        // watchers park the NodeType there), never die on a single log line.
+        var poison = new MeshNodeStreamException(new MeshNodeError(
+            MeshNodeErrorCode.Deserialization, "mesh/1", "cannot materialize NodeTypeDefinition"));
+        var subscriptions = 0;
+        var reEstablishes = 0;
+        Exception? sunk = null;
+        var sinkCalls = 0;
+
+        using var _ = ActivityControlPlaneExtensions.SubscribeWithReEstablish<int>(
+            () => Observable.Defer(() => { subscriptions++; return Observable.Throw<int>(poison); }),
+            _ => { },
+            new Address("mesh", "1"),
+            logger: null,
+            faultLogContext: "test",
+            scheduleReEstablish: reEstablish => { if (reEstablishes++ < 5) reEstablish(); },
+            onPoisonedContent: ex => { sinkCalls++; sunk = ex; });
+
+        subscriptions.Should().Be(1,
+            "poisoned content replays on every resubscribe — re-establishing is a poison loop");
+        sinkCalls.Should().Be(1, "the fault must land in the visible sink exactly once");
+        sunk.Should().BeSameAs(poison);
+    }
+
+    [Fact]
+    public void IsPoisonedContent_ClassifiesOnlyDeserializationFaults()
+    {
+        var poison = new MeshNodeStreamException(new MeshNodeError(
+            MeshNodeErrorCode.Deserialization, "mesh/1", "bad content"));
+        ActivityControlPlaneExtensions.IsPoisonedContent(poison).Should().BeTrue();
+
+        // Wrapped one level down — still detected.
+        ActivityControlPlaneExtensions.IsPoisonedContent(
+            new InvalidOperationException("outer", poison)).Should().BeTrue();
+
+        // Other MeshNode error codes are NOT poison — a NotFound goes through the
+        // own-node-gone classification, a Conflict is transient.
+        ActivityControlPlaneExtensions.IsPoisonedContent(
+            new MeshNodeStreamException(new MeshNodeError(
+                MeshNodeErrorCode.Conflict, "mesh/1", "version conflict"))).Should().BeFalse();
+        ActivityControlPlaneExtensions.IsPoisonedContent(
+            new InvalidOperationException("hub hiccup")).Should().BeFalse();
+    }
+
+    [Fact]
     public void IsOwnNodeGone_TypedNotFound_And_RewrappedMessage_BothDetected()
     {
         // Typed path (Failure.ErrorType == NotFound).
