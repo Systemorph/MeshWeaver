@@ -38,24 +38,26 @@ public record TypeSourceWithType<T>(IWorkspace Workspace, object DataSource)
     : TypeSourceWithType<T, TypeSourceWithType<T>>(Workspace, DataSource)
 {
     /// <summary>
-    /// Applies the configured update action to the incoming collection before it is stored.
+    /// Invokes the configured update action with the incoming collection.
     /// </summary>
-    /// <param name="instances">The collection to transform.</param>
-    /// <returns>The transformed collection.</returns>
-    protected override InstanceCollection UpdateImpl(InstanceCollection instances) =>
+    /// <param name="instances">This type's collection after the change was applied.</param>
+    protected override void UpdateImpl(InstanceCollection instances) =>
         UpdateAction.Invoke(instances);
 
     /// <summary>
-    /// Transformation applied to each incoming collection during update; defaults to the identity function.
+    /// Side effect invoked with each incoming collection during update; defaults to a no-op.
     /// </summary>
-    protected Func<InstanceCollection, InstanceCollection> UpdateAction { get; init; } = i => i;
+    protected Action<InstanceCollection> UpdateAction { get; init; } = _ => { };
 
     /// <summary>
-    /// Returns a copy of this type source with the given update transformation applied on each update.
+    /// Returns a copy of this type source that invokes the given side effect on each update —
+    /// e.g. persisting the collection to an external backend. The action observes the updated
+    /// collection; it cannot transform what gets stored (the store content is already fixed
+    /// when it runs — see <see cref="ITypeSource.Update"/>).
     /// </summary>
-    /// <param name="update">Function that transforms the instance collection.</param>
+    /// <param name="update">Side effect receiving this type's updated instance collection.</param>
     /// <returns>An updated type source.</returns>
-    public TypeSourceWithType<T> WithUpdate(Func<InstanceCollection, InstanceCollection> update) =>
+    public TypeSourceWithType<T> WithUpdate(Action<InstanceCollection> update) =>
         This with
         {
             UpdateAction = update

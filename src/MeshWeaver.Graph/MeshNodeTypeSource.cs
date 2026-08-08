@@ -238,13 +238,12 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     /// <summary>
     /// Diffs the incoming instance collection against the last-saved snapshot and
     /// dispatches the resulting persistence work: creates and deletes are queued onto
-    /// the debounce flush, updates are version-stamped and re-emitted (the workspace's
-    /// own-node persistence sampler saves them). Also opens the MeshNode init gate when
-    /// the own node becomes Active/Transient. Returns the (possibly re-stamped) collection.
+    /// the debounce flush, updates are version-stamped into the snapshot the diff
+    /// bookkeeping keeps (the workspace's own-node persistence sampler saves them).
+    /// Also opens the MeshNode init gate when the own node becomes Active/Transient.
     /// </summary>
     /// <param name="instances">The instance collection to persist/update.</param>
-    /// <returns>The instance collection to store as the new authoritative snapshot.</returns>
-    protected override InstanceCollection UpdateImpl(InstanceCollection instances)
+    protected override void UpdateImpl(InstanceCollection instances)
     {
         instances = MergePartialUpdates(instances);
 
@@ -259,7 +258,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         {
             _logger?.LogDebug("MeshNodeTypeSource.UpdateImpl: no-op empty change for {HubPath} (preserving {Count} loaded entries)",
                 _hubPath, _lastSaved.Instances.Count);
-            return _lastSaved;
+            return;
         }
 
         // Open MeshNode init gate when node becomes Active or Transient
@@ -368,13 +367,14 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         foreach (var node in stampedAdds)
             _pendingSaves[node.Path] = node;
 
-        // 🚨 The stamped version goes into the LIVE collection too, not just the save queue.
-        // Otherwise the in-RAM node and the durable row disagree: a created node persists at
-        // Version 1 while the owner's collection keeps the incoming 0, and the next write —
-        // which counts from the LIVE node — mints 1 again, landing a second, different payload
-        // on the version-history row {Id}_1 and silently overwriting the create snapshot
-        // (VersionHistoryTest). Same for a re-added durable node lifted to _ownNodeVersionFloor:
-        // the live node must carry the version the store is about to hold.
+        // 🚨 The stamped version goes into the SNAPSHOT this diff bookkeeping keeps
+        // (_lastSaved, below), not just the save queue. Otherwise the snapshot and the durable
+        // row disagree: a created node persists at Version 1 while the snapshot keeps the
+        // incoming 0, and the next diff — which compares against the snapshot — mints 1 again,
+        // landing a second, different payload on the version-history row {Id}_1 and silently
+        // overwriting the create snapshot (VersionHistoryTest). Same for a re-added durable node
+        // lifted to _ownNodeVersionFloor: the snapshot must carry the version the store is about
+        // to hold.
         if (stampedAdds.Length > 0)
             instances = instances with
             {
@@ -460,7 +460,6 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             }
 
         _lastSaved = instances;
-        return instances;
     }
 
     /// <summary>Records that this hub now holds own-node state at <paramref name="version"/>:
