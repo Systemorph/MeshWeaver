@@ -752,14 +752,30 @@ internal static class ThreadSubmissionServer
         // — the authoritative identity that survives every async boundary. Prefer it over the
         // wrapping-node CreatedBy fallback so the round's cross-hub cell/state writes carry the real
         // user and never post a null context → fail closed → stuck cell / wedge. See AccessContextPropagation.md.
-        if (userCtx is null)
-        {
-            var submitter = dispatch.UserMessageIds
-                .Select(mid => thread.PendingUserMessages.TryGetValue(mid, out var m) ? m : null)
-                .LastOrDefault(m => !string.IsNullOrEmpty(m?.SubmitterObjectId));
-            if (submitter?.SubmitterObjectId is { } sid)
-                userCtx = new AccessContext { ObjectId = sid, Name = submitter.SubmitterName ?? sid };
-        }
+        var submitter = dispatch.UserMessageIds
+            .Select(mid => thread.PendingUserMessages.TryGetValue(mid, out var m) ? m : null)
+            .LastOrDefault(m => !string.IsNullOrEmpty(m?.SubmitterObjectId));
+        if (userCtx is null && submitter?.SubmitterObjectId is { } sid)
+            userCtx = new AccessContext
+            {
+                ObjectId = sid,
+                Name = submitter.SubmitterName ?? sid,
+                // 🌍 The submitter's LANGUAGE rides on the same rider as their identity. Every
+                // user-facing string this round emits is resolved off AccessContext.Locale, so a
+                // context rebuilt without it renders English for every viewer (#948).
+                Locale = submitter.SubmitterLocale
+            };
+        // 🌍 …and when the identity came from an AMBIENT context above, that context is
+        // locale-less BY CONSTRUCTION: the thread hub's OWNER-INJECTION (ThreadExecution) stamps
+        // the owner as {ObjectId, Name} only — no presentation preferences — onto the shared
+        // AccessService, and it is that injected context the watcher usually observes here. The
+        // per-round rider is the only carrier of the submitter's language, so take it from there
+        // whichever branch supplied the identity. Without this the round speaks English to a
+        // German submitter even though the rider knew better (#948).
+        else if (userCtx is not null
+                 && string.IsNullOrEmpty(userCtx.Locale)
+                 && !string.IsNullOrEmpty(submitter?.SubmitterLocale))
+            userCtx = userCtx with { Locale = submitter.SubmitterLocale };
 
         var fellBackToCreatedBy = false;
         // Resolution: thread content's CreatedBy → wrapping node's CreatedBy → null.
@@ -768,6 +784,11 @@ internal static class ThreadSubmissionServer
             : threadNode.CreatedBy;
         if (userCtx is null && !string.IsNullOrEmpty(resolvedCreatedBy))
         {
+            // 🌍 No Locale on this path, deliberately: CreatedBy is a bare user id stamped on the
+            // node — it carries no presentation preferences, and this branch runs when there is no
+            // submitter rider at all (a resumed / orphaned round). The round therefore speaks the
+            // DEFAULT language, which is the honest answer when nothing on the data says otherwise;
+            // inventing one (e.g. reading the ambient culture) would be worse (#948).
             userCtx = new AccessContext { ObjectId = resolvedCreatedBy, Name = resolvedCreatedBy };
             fellBackToCreatedBy = true;
         }
@@ -779,7 +800,8 @@ internal static class ThreadSubmissionServer
         logger?.LogInformation(
             "[ThreadSubmission] DispatchRound identity thread={ThreadPath} responseId={ResponseId} " +
             "asyncLocal={AsyncLocal} hubAsUserMatch={HubAsUser} circuit={Circuit} threadCreatedBy={ThreadCreatedBy} " +
-            "nodeCreatedBy={NodeCreatedBy} fallbackToCreatedBy={FallbackToCreatedBy} effective={Effective}",
+            "nodeCreatedBy={NodeCreatedBy} fallbackToCreatedBy={FallbackToCreatedBy} effective={Effective} "
+            + "locale={Locale}",
             threadPath, responseMsgId,
             asyncLocalCtx?.ObjectId ?? "(null)",
             hubAsUserMatch,
@@ -787,7 +809,10 @@ internal static class ThreadSubmissionServer
             thread.CreatedBy ?? "(null)",
             threadNode.CreatedBy ?? "(null)",
             fellBackToCreatedBy,
-            userCtx?.ObjectId ?? "(null)");
+            userCtx?.ObjectId ?? "(null)",
+            // 🌍 The language the round will speak — the one thing that makes a "renders English
+            // for a German user" report diagnosable from the log alone (#948).
+            userCtx?.Locale ?? "(default)");
 
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 

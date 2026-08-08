@@ -34,6 +34,10 @@ public static class ThreadInput
     /// <see cref="ThreadMessage.SubmitterObjectId"/>.</param>
     /// <param name="submitterName">The submitter's <see cref="AccessContext.Name"/>, captured
     /// alongside <paramref name="submitterObjectId"/>.</param>
+    /// <param name="submitterLocale">The submitter's <see cref="AccessContext.Locale"/>, captured
+    /// alongside <paramref name="submitterObjectId"/> so the rebuilt round context can render
+    /// user-facing text in the submitter's language. See
+    /// <see cref="ThreadMessage.SubmitterLocale"/>.</param>
     public static ThreadMessage CreateUserMessage(
         string text,
         string? createdBy = null,
@@ -44,7 +48,8 @@ public static class ThreadInput
         IReadOnlyList<string>? attachments = null,
         string? harness = null,
         string? submitterObjectId = null,
-        string? submitterName = null) =>
+        string? submitterName = null,
+        string? submitterLocale = null) =>
         new()
         {
             Role = "user",
@@ -58,6 +63,7 @@ public static class ThreadInput
             Attachments = attachments,
             SubmitterObjectId = submitterObjectId,
             SubmitterName = submitterName,
+            SubmitterLocale = submitterLocale,
             Timestamp = DateTime.UtcNow,
             Type = ThreadMessageType.ExecutedInput,
             // User cells don't have a streaming lifecycle — Submitted on creation.
