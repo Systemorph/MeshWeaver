@@ -276,9 +276,27 @@ internal class ApiTokenService(
     /// </para>
     /// </summary>
     public IObservable<ApiToken?> ValidateToken(string rawToken)
+        // Compat projection: both definitive-Invalid and Unavailable collapse to null,
+        // matching the pre-tri-state surface. Callers that must tell "cannot validate
+        // right now (retryable)" apart from "invalid (401)" — the auth handler above
+        // all — use Validate(...) and branch on TokenValidationStatus (issue #637).
+        => Validate(rawToken).Select(result => result.Token);
+
+    /// <summary>
+    /// Tri-state validation seam (issue #637):
+    /// <see cref="TokenValidationStatus.Valid"/> carries the token record;
+    /// <see cref="TokenValidationStatus.Invalid"/> is a DEFINITIVE negative (row absent,
+    /// hash mismatch, revoked, expired) and may be answered 401;
+    /// <see cref="TokenValidationStatus.Unavailable"/> means the authoritative store
+    /// could not be read within <see cref="ValidationReadTimeout"/> (storage fault /
+    /// timeout) — validation reached NO verdict, so the caller must answer retryable
+    /// (503 + Retry-After), NEVER 401. A timeout maps to Unavailable by construction;
+    /// definitive absence stays Invalid.
+    /// </summary>
+    public IObservable<TokenValidationResult> Validate(string rawToken)
     {
         if (string.IsNullOrEmpty(rawToken) || !rawToken.StartsWith(TokenPrefix))
-            return Observable.Return<ApiToken?>(null);
+            return Observable.Return(TokenValidationResult.Invalid("Invalid token format"));
 
         var hash = HashToken(rawToken);
         var hashPrefix = hash[..12];
@@ -288,26 +306,34 @@ internal class ApiTokenService(
         {
             var elapsed = Stopwatch.StartNew();
             return ReadValidationNode(indexPath, node => IndexHashVerdict(node, hash), "index", hashPrefix, elapsed)
-                .SelectMany(indexNode =>
+                .SelectMany(indexOutcome =>
                 {
+                    if (indexOutcome.UnavailableReason is { } indexReason)
+                        return Observable.Return(TokenValidationResult.Unavailable(indexReason));
+
+                    var indexNode = indexOutcome.Node;
                     if (indexNode == null)
-                        return Observable.Return<(MeshNode? node, ApiToken? token)>((null, null));
+                        // Definitive absence/mismatch — already logged with its stage.
+                        return Observable.Return(FinalizeToken(null, null, hash, hashPrefix, elapsed));
 
                     var index = indexNode.Content as ApiTokenIndex ?? ExtractApiTokenIndex(indexNode);
                     if (index != null)
                         return ReadValidationNode(
                                 index.TokenPath, node => TokenHashVerdict(node, hash), "token", hashPrefix, elapsed)
-                            .Select(tn => (
-                                node: tn,
-                                token: (tn?.Content as ApiToken) ?? ExtractApiToken(tn)));
+                            .Select(tokenOutcome => tokenOutcome.UnavailableReason is { } tokenReason
+                                ? TokenValidationResult.Unavailable(tokenReason)
+                                : FinalizeToken(
+                                    tokenOutcome.Node,
+                                    (tokenOutcome.Node?.Content as ApiToken) ?? ExtractApiToken(tokenOutcome.Node),
+                                    hash, hashPrefix, elapsed));
 
                     // Legacy format: full ApiToken at the index path (its hash already
                     // matched in the verdict — a mismatch would have terminated above).
-                    return Observable.Return((
-                        node: (MeshNode?)indexNode,
-                        token: (indexNode.Content as ApiToken) ?? ExtractApiToken(indexNode)));
-                })
-                .Select(t => FinalizeToken(t.node, t.token, hash, hashPrefix, elapsed));
+                    return Observable.Return(FinalizeToken(
+                        indexNode,
+                        (indexNode.Content as ApiToken) ?? ExtractApiToken(indexNode),
+                        hash, hashPrefix, elapsed));
+                });
         });
     }
 
@@ -359,7 +385,19 @@ internal class ApiTokenService(
     /// storage adapter enforces no ACL — the hash compare IS the
     /// authentication step.
     /// </summary>
-    private IObservable<MeshNode?> ReadValidationNode(
+    /// <summary>
+    /// Outcome of one bounded validation-side read. Exactly one of three shapes:
+    /// <c>Node != null</c> — the row was read and its hash MATCHES;
+    /// <c>Node == null &amp;&amp; UnavailableReason == null</c> — a DEFINITIVE negative
+    /// (row absent, or present with a different hash);
+    /// <c>UnavailableReason != null</c> — the store could not be read within
+    /// <see cref="ValidationReadTimeout"/> (storage fault / timeout): NO verdict was
+    /// reached, and the caller must map this to
+    /// <see cref="TokenValidationStatus.Unavailable"/>, never to Invalid (issue #637).
+    /// </summary>
+    private sealed record ValidationReadOutcome(MeshNode? Node, string? UnavailableReason);
+
+    private IObservable<ValidationReadOutcome> ReadValidationNode(
         string path, Func<MeshNode, bool?> hashVerdict, string stage, string hashPrefix, Stopwatch elapsed)
     {
         // 🚨 An ABSENT row is a TERMINAL negative, never a reason to poll.
@@ -372,13 +410,13 @@ internal class ApiTokenService(
         // storage-direct cutover) — a leftover from the cross-silo mesh read whose
         // lag no longer exists. Only a THROWN storage error (connection blip)
         // re-polls, bounded by ValidationReadTimeout.
-        IObservable<MeshNode?> Attempt() =>
+        IObservable<ValidationReadOutcome> Attempt() =>
             storage.Read(path, hub.JsonSerializerOptions)
                 .Select(node =>
                 {
                     var verdict = node is null ? null : hashVerdict(node);
                     if (verdict == true)
-                        return (MeshNode?)node;
+                        return new ValidationReadOutcome(node, null);
                     if (verdict == false)
                         logger.LogWarning(
                             "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms: node at {Path} exists but carries a different token hash",
@@ -387,22 +425,29 @@ internal class ApiTokenService(
                         logger.LogWarning(
                             "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms: no row at {Path} (unknown or deleted token)",
                             stage + "-not-found", hashPrefix, elapsed.ElapsedMilliseconds, path);
-                    return (MeshNode?)null;
+                    return new ValidationReadOutcome(null, null);
                 })
                 // A transient storage ERROR (not absence) re-polls — the outer
                 // Timeout bounds the whole chain.
-                .Catch<MeshNode?, Exception>(_ => Observable.Empty<MeshNode?>())
+                .Catch<ValidationReadOutcome, Exception>(_ => Observable.Empty<ValidationReadOutcome>())
                 .Concat(Observable.Defer(Attempt).DelaySubscription(ValidationRetryDelay));
 
         return Observable.Defer(Attempt)
             .Take(1)
             .Timeout(ValidationReadTimeout)
-            .Catch<MeshNode?, Exception>(ex =>
+            .Catch<ValidationReadOutcome, Exception>(ex =>
             {
+                // 🚨 UNAVAILABLE, not Invalid: the only way to get here is that every
+                // storage attempt within the window THREW (or a single read stalled) —
+                // validation reached no verdict about the token. Surfacing this as the
+                // same null as a definitive miss made a silo degradation answer 401
+                // "Invalid or expired API token" for perfectly valid tokens (issue #637).
                 logger.LogWarning(ex,
-                    "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms: node at {Path} not readable within {Timeout}",
+                    "API token validation UNAVAILABLE at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms: node at {Path} not readable within {Timeout} — retryable infrastructure fault, NOT an invalid token",
                     stage + "-read-timeout", hashPrefix, elapsed.ElapsedMilliseconds, path, ValidationReadTimeout);
-                return Observable.Return<MeshNode?>(null);
+                return Observable.Return(new ValidationReadOutcome(
+                    null,
+                    $"{stage} read for token validation did not complete within {ValidationReadTimeout.TotalSeconds:0.#} s ({ex.GetType().Name})"));
             });
     }
 
@@ -438,10 +483,12 @@ internal class ApiTokenService(
             });
     }
 
-    private ApiToken? FinalizeToken(MeshNode? tokenNode, ApiToken? apiToken, string hash, string hashPrefix, Stopwatch elapsed)
+    private TokenValidationResult FinalizeToken(MeshNode? tokenNode, ApiToken? apiToken, string hash, string hashPrefix, Stopwatch elapsed)
     {
         if (apiToken == null)
-            return null; // read failure/mismatch — already logged by ReadValidationNode with its stage
+            // Definitive negative: absence/mismatch — already logged by ReadValidationNode
+            // with its stage. (The unavailable branch never reaches FinalizeToken.)
+            return TokenValidationResult.Invalid("Unknown or unreadable token");
         if (!string.Equals(apiToken.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
         {
             // Defense in depth — the verdict in ReadValidationNode already terminates
@@ -449,7 +496,7 @@ internal class ApiTokenService(
             logger.LogWarning(
                 "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms",
                 "token-hash-mismatch", hashPrefix, elapsed.ElapsedMilliseconds);
-            return null;
+            return TokenValidationResult.Invalid("Token hash mismatch");
         }
         // Warning, not Debug: a rejected token surfaces as a bare 401 to the client —
         // without a server-side line naming the stage, prod triage is blind (the
@@ -459,14 +506,14 @@ internal class ApiTokenService(
             logger.LogWarning(
                 "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms",
                 "revoked", hashPrefix, elapsed.ElapsedMilliseconds);
-            return null;
+            return TokenValidationResult.Invalid("Token revoked");
         }
         if (apiToken.ExpiresAt.HasValue && apiToken.ExpiresAt.Value < DateTimeOffset.UtcNow)
         {
             logger.LogWarning(
                 "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms (expired {ExpiresAt})",
                 "expired", hashPrefix, elapsed.ElapsedMilliseconds, apiToken.ExpiresAt.Value);
-            return null;
+            return TokenValidationResult.Invalid("Token expired");
         }
 
         // Update LastUsedAt via the canonical workspace remote stream —
@@ -516,7 +563,7 @@ internal class ApiTokenService(
                 .Subscribe(_ => { }, _ => { });
         }
 
-        return apiToken;
+        return TokenValidationResult.Valid(apiToken);
     }
 
     /// <summary>
@@ -803,6 +850,61 @@ internal class ApiTokenService(
 /// once both the user-scoped token node and the index pointer have been created.
 /// </summary>
 public record TokenCreationResult(string RawToken, MeshNode Node);
+
+/// <summary>
+/// Tri-state outcome of an API-token validation (issue #637). The whole point of the
+/// three-way split is that "cannot validate right now" is NOT "invalid": an HTTP
+/// caller must see 503 + Retry-After for <see cref="Unavailable"/> and 401 only for
+/// <see cref="Invalid"/> — otherwise a platform hiccup is indistinguishable from a
+/// forged token and clients discard perfectly valid credentials.
+/// </summary>
+public enum TokenValidationStatus
+{
+    /// <summary>The token is valid; <see cref="TokenValidationResult.Token"/> carries the record.</summary>
+    Valid,
+
+    /// <summary>
+    /// DEFINITIVE negative verdict: the row is absent, carries a different hash,
+    /// is revoked, or is expired. Answering 401 is correct.
+    /// </summary>
+    Invalid,
+
+    /// <summary>
+    /// Validation could not be carried out (storage read timeout / fault): NO verdict
+    /// was reached. Retryable — answer 503 + Retry-After, never 401.
+    /// </summary>
+    Unavailable,
+}
+
+/// <summary>
+/// Result of <see cref="ApiTokenService.Validate"/>: the <see cref="Status"/> verdict,
+/// the validated <see cref="Token"/> (only for <see cref="TokenValidationStatus.Valid"/>),
+/// and a speaking <see cref="Reason"/> for the two negative shapes (log/diagnostics —
+/// never echo it verbatim as an auth error to untrusted clients).
+/// </summary>
+public record TokenValidationResult
+{
+    /// <summary>The tri-state verdict.</summary>
+    public required TokenValidationStatus Status { get; init; }
+
+    /// <summary>The validated token record; non-null exactly when <see cref="Status"/> is Valid.</summary>
+    public ApiToken? Token { get; init; }
+
+    /// <summary>Why validation did not produce a valid token (Invalid/Unavailable shapes).</summary>
+    public string? Reason { get; init; }
+
+    /// <summary>Creates the Valid outcome carrying the token record.</summary>
+    public static TokenValidationResult Valid(ApiToken token)
+        => new() { Status = TokenValidationStatus.Valid, Token = token };
+
+    /// <summary>Creates the definitive-negative outcome (may be answered 401).</summary>
+    public static TokenValidationResult Invalid(string reason)
+        => new() { Status = TokenValidationStatus.Invalid, Reason = reason };
+
+    /// <summary>Creates the retryable no-verdict outcome (must be answered 503, never 401).</summary>
+    public static TokenValidationResult Unavailable(string reason)
+        => new() { Status = TokenValidationStatus.Unavailable, Reason = reason };
+}
 
 /// <summary>
 /// Safe DTO for listing tokens — never exposes the full hash or raw token.

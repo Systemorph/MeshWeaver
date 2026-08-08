@@ -61,15 +61,40 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         // Try OAuth first (browser sessions), then Bearer token (MCP / API clients).
         // The bearer-token bridge to Task happens once at the ASP.NET middleware boundary —
         // production surface is IObservable end-to-end (see ExtractFromBearerToken).
-        // FirstOrDefaultAsync, NOT FirstAsync: the bearer stream COMPLETES WITHOUT EMITTING when the
-        // ValidateTokenRequest can't reach the ApiToken/{hashPrefix} hub (its Orleans grain
-        // deactivated on idle → "invalid activation, rejecting now"). FirstAsync would then throw
-        // "Sequence contains no elements" — an UNCAUGHT exception that rejects a VALID token
-        // (chronic MCP/API "rejected on reconnect"). Empty ⇒ null ⇒ the request resolves anonymous
-        // (fail-closed), never a 500.
-        var userContext = ExtractUserContext(context.User)
-                          ?? await ExtractFromBearerToken(context.Request, hub)
-                              .FirstOrDefaultAsync().ToTask(context.RequestAborted);
+        var userContext = ExtractUserContext(context.User);
+        if (userContext is null)
+        {
+            // FirstOrDefaultAsync, NOT FirstAsync: the bearer stream COMPLETES WITHOUT EMITTING
+            // when the ValidateTokenRequest can't reach the ApiToken/{hashPrefix} hub (its Orleans
+            // grain deactivated on idle → "invalid activation, rejecting now"). FirstAsync would
+            // then throw "Sequence contains no elements" — an UNCAUGHT exception → 500. A request
+            // with NO bearer token always EMITS the NoToken sentinel, so a null here can only mean
+            // "a token WAS presented but validation produced no verdict" — which, like an
+            // explicitly-unavailable response, is a retryable infrastructure fault (issue #637).
+            var bearer = await ExtractFromBearerToken(context.Request, hub)
+                .FirstOrDefaultAsync().ToTask(context.RequestAborted);
+            var unavailableReason = bearer is null
+                ? "token validation produced no verdict (ApiToken hub unreachable)"
+                : bearer.UnavailableReason;
+            if (unavailableReason is not null)
+            {
+                // 🚨 Token validation UNAVAILABLE — retryable, NOT an invalid token. Only requests
+                // that actually presented a Bearer mw_ token can reach this branch, i.e. genuine
+                // API calls: answer 503 + Retry-After so the client retries with the SAME token
+                // instead of treating the degradation as an auth failure and re-authenticating.
+                logger.LogWarning(
+                    "Bearer token validation UNAVAILABLE for {Path} ({Reason}) — retryable infrastructure fault, NOT an invalid token; answering 503 + Retry-After",
+                    path, unavailableReason);
+                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                context.Response.Headers.RetryAfter = "5";
+                context.Response.ContentType = "text/plain; charset=utf-8";
+                await context.Response.WriteAsync(
+                    "API token validation is temporarily unavailable — retry shortly. "
+                    + "The token was NOT rejected; keep it and retry, do not re-authenticate.");
+                return;
+            }
+            userContext = bearer!.Context;
+        }
 
         if (userContext is not null)
         {
@@ -248,42 +273,67 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
     /// The ApiToken node type handler validates hash/expiry/revocation and returns user info.
     /// This gives the token holder the exact same access rights as the user who created the token.
     /// </summary>
-    private static IObservable<AccessContext?> ExtractFromBearerToken(HttpRequest request, IMessageHub hub)
+    /// <summary>
+    /// Outcome of resolving a request's Bearer token, keeping the three cases apart
+    /// (issue #637): <see cref="NoToken"/> — no Bearer mw_ token was presented at all
+    /// (proceed by other means / anonymous); <see cref="Context"/> non-null — the token
+    /// validated; <see cref="UnavailableReason"/> non-null — a token WAS presented but
+    /// validation could not run (retryable → the caller answers 503, never 401/anonymous);
+    /// both null (with a token presented) — definitive invalid → anonymous.
+    /// </summary>
+    private sealed record BearerTokenResolution(AccessContext? Context, string? UnavailableReason)
+    {
+        // Immutable write-once constant (NoStaticState permits static readonly constants).
+        public static readonly BearerTokenResolution NoToken = new((AccessContext?)null, null);
+    }
+
+    private static IObservable<BearerTokenResolution> ExtractFromBearerToken(HttpRequest request, IMessageHub hub)
     {
         var authHeader = request.Headers.Authorization.ToString();
         if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return Observable.Return<AccessContext?>(null);
+            return Observable.Return(BearerTokenResolution.NoToken);
 
         var rawToken = authHeader["Bearer ".Length..].Trim();
         if (string.IsNullOrEmpty(rawToken) || !rawToken.StartsWith(ValidateTokenRequest.TokenPrefix))
-            return Observable.Return<AccessContext?>(null);
+            return Observable.Return(BearerTokenResolution.NoToken);
 
         return ValidateTokenViaHub(rawToken, hub)
-            .Select(response => response is { Success: true }
-                                && !string.IsNullOrEmpty(response.UserId)
-                                && response.UserId.IndexOf('@') < 0
-                ? new AccessContext
-                {
-                    // ObjectId must be the mesh User.Id (e.g. "rbuergi"), never
-                    // the email. Guarded by the `IndexOf('@') < 0` check above:
-                    // if the validated token somehow carries an email-shaped
-                    // UserId (legacy tokens, malformed records), we refuse the
-                    // token rather than fall through to UserEmail. Treating
-                    // anonymous is safer than mis-partitioning.
-                    ObjectId = response.UserId,
-                    Name = response.UserName ?? "",
-                    Email = response.UserEmail!,
-                    // Stamp the roles captured on the ApiToken at creation time so
-                    // SecurityService.GetEffectivePermissions can resolve permissions via
-                    // its claim-based role path (lines 166-174). Without this, API-token
-                    // requests against per-node hubs see 0 roles → 0 perms → the
-                    // IsApiToken gate strips → DENY — because per-node hubs intentionally
-                    // don't register the synced AccessAssignment query
-                    // (SecurityServiceExtensions:44-50, recursion avoidance).
-                    Roles = response.Roles,
-                    IsApiToken = true,
-                }
-                : null);
+            .Select(response =>
+            {
+                // UNAVAILABLE is a fault category, not a token verdict — surface it so
+                // InvokeAsync answers 503 + Retry-After instead of degrading a possibly
+                // valid token to Anonymous (issue #637).
+                if (response is { IsUnavailable: true })
+                    return new BearerTokenResolution(null, response.Error ?? "token validation unavailable");
+
+                return response is { Success: true }
+                       && !string.IsNullOrEmpty(response.UserId)
+                       && response.UserId.IndexOf('@') < 0
+                    ? new BearerTokenResolution(new AccessContext
+                    {
+                        // ObjectId must be the mesh User.Id (e.g. "rbuergi"), never
+                        // the email. Guarded by the `IndexOf('@') < 0` check above:
+                        // if the validated token somehow carries an email-shaped
+                        // UserId (legacy tokens, malformed records), we refuse the
+                        // token rather than fall through to UserEmail. Treating
+                        // anonymous is safer than mis-partitioning.
+                        ObjectId = response.UserId,
+                        Name = response.UserName ?? "",
+                        Email = response.UserEmail!,
+                        // Stamp the roles captured on the ApiToken at creation time so
+                        // SecurityService.GetEffectivePermissions can resolve permissions via
+                        // its claim-based role path (lines 166-174). Without this, API-token
+                        // requests against per-node hubs see 0 roles → 0 perms → the
+                        // IsApiToken gate strips → DENY — because per-node hubs intentionally
+                        // don't register the synced AccessAssignment query
+                        // (SecurityServiceExtensions:44-50, recursion avoidance).
+                        Roles = response.Roles,
+                        IsApiToken = true,
+                    }, null)
+                    // Definitive negative verdict (unknown/mismatch/revoked/expired) —
+                    // fail closed to anonymous, as before.
+                    : new BearerTokenResolution(null, null);
+            });
     }
 
     /// <summary>
@@ -312,16 +362,21 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                         new ValidateTokenRequest(rawToken),
                         o => o.WithTarget(tokenAddress))
                     .Select(d => (ValidateTokenResponse?)d.Message))
-            // Fail closed (null = not authenticated) but NEVER silently: an
-            // infrastructure fault here is otherwise indistinguishable from an
-            // invalid token, which makes auth incidents undiagnosable.
+            // Fail closed (no identity) but NEVER silently — and NEVER as "invalid":
+            // an infrastructure fault here reached no verdict about the token, so it
+            // is surfaced as an UNAVAILABLE response (IsUnavailable=true). Callers
+            // (ExtractFromBearerToken → InvokeAsync) turn that into a retryable 503
+            // instead of the anonymous degradation a definitive invalid token gets —
+            // collapsing the two made silo degradations indistinguishable from
+            // forged tokens (issue #637).
             .Catch((Exception ex) =>
             {
                 hub.ServiceProvider.GetService<ILogger<UserContextMiddleware>>()
                     ?.LogWarning(ex,
-                        "Token validation via {TokenAddress} faulted — treating token as invalid (hashPrefix={HashPrefix})",
+                        "Token validation via {TokenAddress} faulted — validation UNAVAILABLE (retryable), NOT an invalid token (hashPrefix={HashPrefix})",
                         tokenAddress, hashPrefix);
-                return Observable.Return<ValidateTokenResponse?>(null);
+                return Observable.Return<ValidateTokenResponse?>(
+                    ValidateTokenResponse.Unavailable($"Token validation faulted: {ex.GetType().Name}"));
             });
     }
 

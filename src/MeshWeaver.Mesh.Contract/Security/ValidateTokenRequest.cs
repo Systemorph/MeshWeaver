@@ -52,6 +52,20 @@ public record ValidateTokenResponse
 
     /// <summary>Error message if validation failed.</summary>
     public string? Error { get; init; }
+
+    /// <summary>
+    /// Fault category: <c>true</c> when validation could NOT be carried out at all
+    /// (storage/read timeout, routing fault, handler exception) — a RETRYABLE
+    /// infrastructure condition, not a verdict about the token. <c>false</c> for
+    /// every definitive outcome (valid, unknown, mismatch, revoked, expired).
+    /// Callers must never treat an unavailable response as "invalid token":
+    /// answering 401 here makes a platform hiccup indistinguishable from a forged
+    /// token and drives clients into pointless re-authentication (issue #637).
+    /// Additive, wire-compatible: absent on old payloads ⇒ <c>false</c> (definitive),
+    /// which matches the old behavior.
+    /// </summary>
+    public bool IsUnavailable { get; init; }
+
     /// <summary>Whether validation succeeded.</summary>
     public bool Success => Error == null && UserId != null;
 
@@ -68,7 +82,15 @@ public record ValidateTokenResponse
         IReadOnlyCollection<string> roles)
         => new() { UserId = userId, UserName = userName, UserEmail = userEmail, Roles = roles };
 
-    /// <summary>Creates a failed validation response.</summary>
+    /// <summary>Creates a failed validation response (a DEFINITIVE negative verdict).</summary>
     public static ValidateTokenResponse Fail(string error)
         => new() { Error = error };
+
+    /// <summary>
+    /// Creates an UNAVAILABLE validation response: validation could not run
+    /// (timeout, storage fault, routing failure). Retryable — never to be
+    /// surfaced to a client as an invalid-token 401.
+    /// </summary>
+    public static ValidateTokenResponse Unavailable(string error)
+        => new() { Error = error, IsUnavailable = true };
 }

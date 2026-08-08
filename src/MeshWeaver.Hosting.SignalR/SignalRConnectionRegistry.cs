@@ -8,6 +8,7 @@ using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.SignalR;
 
@@ -30,6 +31,7 @@ public sealed class SignalRConnectionRegistry : IDisposable
     private readonly IHubContext<SignalRConnectionHub> hubContext;
     private readonly AccessService accessService;
     private readonly IIoPool ioPool;
+    private readonly ILogger<SignalRConnectionRegistry> logger;
 
     /// <summary>
     /// Initializes a new instance of the <c>SignalRConnectionRegistry</c> class.
@@ -49,6 +51,7 @@ public sealed class SignalRConnectionRegistry : IDisposable
         this.hubContext = hubContext;
         accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         ioPool = ioPools?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
+        logger = hub.ServiceProvider.GetRequiredService<ILogger<SignalRConnectionRegistry>>();
     }
 
     // Immutable write-once constant (NoStaticState permits static readonly constants).
@@ -79,8 +82,19 @@ public sealed class SignalRConnectionRegistry : IDisposable
                 _ => hub.Observe(new ValidateTokenRequest(rawToken), o => o.WithTarget(tokenAddress))
                         .Select(d => d.Message as ValidateTokenResponse))
             .Take(1)
+            // Completed-empty = the request produced NO verdict at all (unroutable ApiToken hub) —
+            // an infrastructure fault, mapped to unavailable below, never to a token verdict.
+            .DefaultIfEmpty(null)
             .Select(resp =>
             {
+                // 🚨 UNAVAILABLE ≠ invalid (issue #637): when validation could not run, the
+                // possibly-valid token must NOT silently degrade to Anonymous — error the
+                // handshake instead so SignalRConnectionHub aborts it with a retryable,
+                // speaking failure and the client reconnects with the same token.
+                if (resp is null || resp.IsUnavailable)
+                    throw new TokenValidationUnavailableException(
+                        resp?.Error ?? "token validation produced no verdict (ApiToken hub unreachable)");
+
                 var user = resp is { Success: true }
                            && !string.IsNullOrEmpty(resp.UserId)
                            && resp.UserId.IndexOf('@') < 0
@@ -92,14 +106,22 @@ public sealed class SignalRConnectionRegistry : IDisposable
                         Roles = resp.Roles,
                         IsApiToken = true,
                     }
-                    : Anonymous;
+                    : Anonymous;   // definitive invalid/revoked/expired verdict — fail closed, as before
                 SetUser(connectionId, user);
                 return Unit.Default;
             })
-            .Catch((Exception _) =>
+            .Catch((Exception ex) =>
             {
+                // Any fault on this chain is infrastructure (verdicts arrive as responses, never
+                // as exceptions) — fail CLOSED (the connection keeps Begin's Anonymous identity)
+                // but surface the retryable nature instead of swallowing it.
+                var unavailable = ex as TokenValidationUnavailableException
+                    ?? new TokenValidationUnavailableException($"token validation faulted: {ex.GetType().Name}", ex);
+                logger.LogWarning(unavailable,
+                    "Token validation UNAVAILABLE for SignalR connection {ConnectionId} — retryable infrastructure fault, NOT an invalid token; aborting the handshake so the client retries instead of degrading to Anonymous",
+                    connectionId);
                 SetUser(connectionId, Anonymous);
-                return Observable.Return(Unit.Default);
+                return Observable.Throw<Unit>(unavailable);
             });
     }
 
