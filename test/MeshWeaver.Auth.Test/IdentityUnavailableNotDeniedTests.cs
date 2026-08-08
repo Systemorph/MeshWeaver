@@ -245,15 +245,25 @@ public class ApiTokenRoleResolutionUnavailableTests(ITestOutputHelper output) : 
     }
 
     /// <summary>
-    /// The seam the handler branches on, exercised against the real workspace: a budget the read
-    /// cannot possibly meet must classify Unavailable rather than hand back an empty role set.
+    /// The seam the handler branches on: a read that reaches no verdict inside its budget must
+    /// classify Unavailable rather than hand back an empty role set.
+    ///
+    /// <para>🚨 Driven with a source that CANNOT emit (<see cref="Observable.Never{T}()"/>) rather
+    /// than a zero budget over the real query. A zero budget is not unmeetable: <c>Bounded</c>
+    /// applies <c>.Timeout(budget, …)</c>, whose timer is scheduled, while a warm cached query
+    /// emits SYNCHRONOUSLY during Subscribe — so the value beats the timer and the read resolves.
+    /// That made the original form pass on a warm cache and fail on a cold one; it went green
+    /// pre-merge and red on main. "Never emits" removes the race instead of widening the bound.</para>
     /// </summary>
     [Fact]
-    public async Task LoadDbRoles_WithUnmeetableBudget_IsUnavailable_NotEmptyRoles()
+    public async Task ReadThatReachesNoVerdict_IsUnavailable_NotEmptyRoles()
     {
-        var services = new ServiceCollection().AddSingleton<IMessageHub>(Mesh).BuildServiceProvider();
-
-        var outcome = await UserRoleResolver.LoadDbRolesAsync(services, "someuser", TimeSpan.Zero);
+        var outcome = await IdentityRead.Bounded(
+                Observable.Never<IReadOnlyCollection<string>>(),
+                TimeSpan.FromMilliseconds(50),
+                "LoadUserRoles(someuser)",
+                logger: null)
+            .FirstAsync();
 
         outcome.IsUnavailable.Should().BeTrue(
             "a read that could not complete says nothing about the user's grants — an empty set here "
