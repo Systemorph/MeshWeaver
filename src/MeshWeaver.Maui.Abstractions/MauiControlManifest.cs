@@ -69,5 +69,10 @@ public static class MauiControlManifest
         // Presentation — invisible presenter-mode keyboard driver. Blazor wires a document
         // keydown listener via JS interop; no native key-binding equivalent in the MAUI pack yet.
         "SlideShowControl",
+        // Analysis views (#745). The Blazor and React renderers draw these with proportionally sized
+        // CSS blocks; the geometry is already framework-owned and client-agnostic
+        // (TowerControl.Layout / ComparisonBarsControl.Layout), so a native view is a layout exercise
+        // over the same numbers rather than new arithmetic — but it is not written yet.
+        "KpiStripControl", "TowerControl", "ComparisonBarsControl",
     }.ToImmutableHashSet(StringComparer.Ordinal);
 }

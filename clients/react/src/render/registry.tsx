@@ -15,6 +15,7 @@ import { editorControls } from "../controls/editors.js";
 import { meshControls } from "../controls/mesh.js";
 import { appearanceControls } from "../controls/appearance.js";
 import { itemTemplateControls } from "../controls/itemTemplate.js";
+import { analysisControls } from "../controls/analysis.js";
 
 export type { ControlComponent };
 
@@ -32,6 +33,7 @@ export const controlRegistry: Record<string, ControlComponent> = {
   ...meshControls,
   ...appearanceControls,
   ...itemTemplateControls,
+  ...analysisControls,
 };
 
 export function FallbackControl({ control }: { control: UiControl }): ReactNode {

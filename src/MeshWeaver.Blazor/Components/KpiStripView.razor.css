@@ -1,0 +1,40 @@
+.kpi-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: stretch;
+}
+
+.kpi-tile {
+    flex: 1 1 auto;
+    border: 1px solid var(--neutral-stroke-divider, #d0d0d0);
+    border-radius: 10px;
+    padding: 10px 14px;
+    background: var(--neutral-layer-1, transparent);
+}
+
+.kpi-label {
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--neutral-foreground-hint, #757575);
+}
+
+.kpi-value {
+    font-size: 20px;
+    font-weight: 700;
+    margin-top: 2px;
+    color: var(--neutral-foreground-rest, #242424);
+}
+
+.kpi-hint {
+    font-size: 11px;
+    margin-top: 2px;
+    color: var(--neutral-foreground-hint, #757575);
+}
+
+.kpi-empty {
+    margin: 0;
+    font-style: italic;
+    color: var(--neutral-foreground-hint, #757575);
+}

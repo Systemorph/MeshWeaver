@@ -1,0 +1,128 @@
+.tower {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.tower-plot {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+}
+
+/* The amount axis. Ticks are positioned from the bottom, so the axis reads the way the tower is
+   built: zero at the foot, exhaustion at the head. */
+.tower-axis {
+    position: relative;
+    flex: 0 0 auto;
+    min-width: 64px;
+    border-right: 1px solid var(--neutral-stroke-divider, #d0d0d0);
+}
+
+.tower-tick {
+    position: absolute;
+    right: 0;
+    transform: translateY(50%);
+    padding-right: 6px;
+    border-right: 4px solid var(--neutral-stroke-divider, #d0d0d0);
+    line-height: 1;
+}
+
+.tower-tick-label {
+    font-size: 11px;
+    color: var(--neutral-foreground-hint, #757575);
+    white-space: nowrap;
+}
+
+.tower-stack {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* The base the tower stands on — hatched so it never reads as another band. */
+.tower-retention {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--neutral-stroke-divider, #d0d0d0);
+    background: repeating-linear-gradient(
+        45deg,
+        transparent 0 4px,
+        var(--neutral-stroke-divider, #d0d0d0) 4px 6px
+    );
+}
+
+.tower-retention-label {
+    font-size: 12px;
+    color: var(--neutral-foreground-hint, #757575);
+    background: var(--neutral-layer-1, #fff);
+    padding: 0 6px;
+    border-radius: 4px;
+}
+
+.tower-band {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: block;
+    overflow: hidden;
+    border: 1px solid var(--neutral-stroke-divider, #d0d0d0);
+    background-color: color-mix(in srgb, var(--accent-fill-rest, #0ea5e9) 22%, transparent);
+    text-decoration: none;
+}
+
+/* The taken share, as the solid portion of the band's width. */
+.tower-band-share {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    background-color: color-mix(in srgb, var(--accent-fill-rest, #0ea5e9) 85%, transparent);
+}
+
+.tower-band-text {
+    position: relative;
+    display: block;
+    padding: 4px 10px;
+    min-width: 0;
+}
+
+.tower-band-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--neutral-foreground-rest, #242424);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tower-band-terms {
+    display: block;
+    font-size: 11px;
+    color: var(--neutral-foreground-hint, #757575);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tower-band-link:hover .tower-band-label,
+.tower-band-link:focus-visible .tower-band-label {
+    text-decoration: underline;
+}
+
+.tower-unit {
+    font-size: 11px;
+    color: var(--neutral-foreground-hint, #757575);
+}
+
+.tower-empty {
+    margin: 0;
+    font-style: italic;
+    color: var(--neutral-foreground-hint, #757575);
+}

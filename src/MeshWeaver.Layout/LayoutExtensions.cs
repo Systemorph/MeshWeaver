@@ -207,6 +207,14 @@ public static class LayoutExtensions
                 typeof(MeshWeaver.Layout.Catalog.CatalogGroup),
                 typeof(MeshWeaver.Layout.Catalog.SearchResultGroup),
                 typeof(MeshWeaver.Layout.Catalog.GroupedSearchResult),
+                // The analysis views' row records. They are plain data carried INSIDE the control's
+                // state (KpiStripControl.Items, TowerControl.Bands, ComparisonBarsControl.Pairs are
+                // `object` so a caller may bind them instead), so the IUiControl sweep above misses
+                // them and the polymorphic writer would emit an auto short-name the receiver adopts
+                // as a side effect of the read.
+                typeof(KpiItem),
+                typeof(TowerBand),
+                typeof(ComparisonPair),
                 // Icon lives in MeshWeaver.Domain, so the IUiControl/Skin reflection sweep above
                 // cannot see it — yet it rides inside control state on almost every control
                 // (IconStart/IconEnd, NavItem, MenuItem, ProgressMessage). Unregistered, it
