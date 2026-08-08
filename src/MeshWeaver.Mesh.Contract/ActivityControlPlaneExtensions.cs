@@ -181,18 +181,34 @@ public static class ActivityControlPlaneExtensions
     /// <summary>
     /// Subscribes to <paramref name="source"/> and keeps a control-plane / submission
     /// watcher alive across <b>transient</b> faults by re-establishing after a short
-    /// delay — but treats a <b>terminal</b> fault as terminal.
+    /// delay — but treats a <b>terminal</b> fault as terminal. This is THE subscription
+    /// primitive for any watcher whose death would leave a hub half-alive (its process
+    /// keeps running while its control plane is dead — the #891 wedges-to-zero violation);
+    /// never subscribe such a watcher with a bare log-and-die <c>OnError</c> handler.
     ///
-    /// <para>🚨 A <see cref="ErrorType.NotFound"/> <see cref="DeliveryFailureException"/>
-    /// on a hub's OWN node means the node this watcher exists to observe is gone /
-    /// unroutable. Re-establishing then just re-issues a doomed cross-hub
-    /// <c>SubscribeRequest</c> every second forever — the atioz compile-activity storm
-    /// of 2026-06-10 (4999 NotFound round-trips through the single RoutingGrain in 14
-    /// min, starving unrelated subscriptions). That is the exact "resubscribe to recover
-    /// from a state that shouldn't happen" pattern the deleted 2026-06-08 watchdog was.
-    /// On a terminal own-node-gone fault we STOP (the orphaned hub idle-disposes); we
-    /// re-establish ONLY for genuinely transient faults (a hub hiccup where the activity
-    /// is still alive and must not be left unobserved).</para>
+    /// <para>Three fault classes, in classification order:</para>
+    /// <list type="number">
+    ///   <item><description><b>Poisoned own content</b> — a
+    ///     <see cref="MeshNodeStreamException"/> with
+    ///     <see cref="MeshNodeErrorCode.Deserialization"/>: the watched node's own content
+    ///     cannot be materialized. TERMINAL for re-establish purposes: the faulted stream
+    ///     replays the same emission, so re-establishing is a 1 Hz poison loop, not a
+    ///     recovery. Logged CRITICAL and surfaced through
+    ///     <paramref name="onPoisonedContent"/> so the failure lands in a visible sink
+    ///     (e.g. the compile park registry) instead of a single log line.</description></item>
+    ///   <item><description><b>Own node gone</b> — a routing
+    ///     <see cref="ErrorType.NotFound"/> <see cref="DeliveryFailureException"/>: the node
+    ///     this watcher exists to observe is gone / unroutable. Re-establishing then just
+    ///     re-issues a doomed cross-hub <c>SubscribeRequest</c> every second forever — the
+    ///     atioz compile-activity storm of 2026-06-10 (4999 NotFound round-trips through the
+    ///     single RoutingGrain in 14 min, starving unrelated subscriptions). That is the
+    ///     exact "resubscribe to recover from a state that shouldn't happen" pattern the
+    ///     deleted 2026-06-08 watchdog was. STOP; the orphaned hub idle-disposes.</description></item>
+    ///   <item><description><b>Everything else</b> — a genuinely transient fault (hub
+    ///     hiccup, cross-hub delivery blip) where the node is still alive and must not be
+    ///     left unobserved: re-establish after a short delay with a fresh
+    ///     subscription.</description></item>
+    /// </list>
     /// </summary>
     /// <typeparam name="T">Element type produced by the observed source.</typeparam>
     /// <param name="source">Factory that (re-)creates the observable to watch; called once per
@@ -207,14 +223,18 @@ public static class ActivityControlPlaneExtensions
     /// <param name="scheduleReEstablish">Test seam for how a transient re-establish is
     /// scheduled. Production default is a 1 s <see cref="Observable.Timer(TimeSpan)"/>
     /// off the action block.</param>
-    internal static IDisposable SubscribeWithReEstablish<T>(
+    /// <param name="onPoisonedContent">Optional visible sink invoked (once, with the fault) when
+    /// the watcher stops on poisoned own content — route it somewhere a user/operator can see
+    /// (park registry, health surface), not just a log.</param>
+    public static IDisposable SubscribeWithReEstablish<T>(
         Func<IObservable<T>> source,
         Action<T> onNext,
         Address address,
         ILogger? logger,
         string faultLogContext,
         Action? onTransientFault = null,
-        Action<Action>? scheduleReEstablish = null)
+        Action<Action>? scheduleReEstablish = null,
+        Action<Exception>? onPoisonedContent = null)
     {
         var serial = new System.Reactive.Disposables.SerialDisposable();
         var disposed = false;
@@ -228,6 +248,21 @@ public static class ActivityControlPlaneExtensions
                 onNext,
                 ex =>
                 {
+                    if (IsPoisonedContent(ex))
+                    {
+                        // Terminal: the watched node's own content cannot be deserialized, and
+                        // the stream replays it — a re-establish is a 1 Hz poison loop, not a
+                        // recovery. Stop, scream, and surface through the visible sink; the
+                        // cure is repairing the content (then recycling the hub re-activates
+                        // fresh watchers).
+                        logger?.LogCritical(ex,
+                            "{Context} on {Address} STOPPED: own-node content cannot be deserialized — " +
+                            "re-establishing would replay the same poisoned emission. The watcher stays " +
+                            "down until the content is repaired and the hub re-activates (#891).",
+                            faultLogContext, address);
+                        onPoisonedContent?.Invoke(ex);
+                        return;
+                    }
                     if (IsOwnNodeGone(ex))
                     {
                         // Terminal: the node this watcher observes is gone/unroutable.
@@ -250,6 +285,24 @@ public static class ActivityControlPlaneExtensions
             disposed = true;
             serial.Dispose();
         });
+    }
+
+    /// <summary>
+    /// True when <paramref name="ex"/> (or an inner exception) is a
+    /// <see cref="MeshNodeStreamException"/> with
+    /// <see cref="MeshNodeErrorCode.Deserialization"/> — the per-emission typing fault
+    /// <c>MeshNodeStreamHandle</c>'s content-typing boundary raises when a node's persisted
+    /// content cannot be materialized. Re-subscribing replays the same emission, so for a
+    /// watcher this is terminal-with-visibility, never re-establish.
+    /// </summary>
+    internal static bool IsPoisonedContent(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is MeshNodeStreamException { Error.Code: MeshNodeErrorCode.Deserialization })
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
