@@ -112,6 +112,44 @@ internal class MeshNodeCompilationService(
             return Disposable.Empty;
         });
 
+    /// <summary>
+    /// 🚨 WALL-CLOCK BOUND on one leg of the compile pipeline, with the leg NAMED in the
+    /// failure. Companion to <see cref="SnapshotSources"/>'s
+    /// <see cref="CompilationCacheOptions.SourceSnapshotTimeout"/> and there for exactly the
+    /// same reason: the compile subscription is the ONLY component that can settle the
+    /// <c>CompilationStatus = Compiling</c> its dispatcher just flipped, so a leg that never
+    /// completes strands the NodeType at Compiling for the life of the activation — and the
+    /// (correct) single-flight status lock then ABSORBS every fresh trigger against it, so
+    /// nothing recovers it short of re-activation.
+    ///
+    /// <para>The totality guard in <c>RunCompile</c> (<c>DefaultIfEmpty</c>) already makes an
+    /// EMPTY completion terminal; this makes NO completion terminal. Together they close the
+    /// contract "every dispatched compile reaches exactly one terminal status". The bound is
+    /// NOT a retry, a watchdog or a supersede: it makes an IO/leaf answer, once, and the
+    /// answer propagates through <c>RunCompile</c>'s <c>Catch</c> to a
+    /// <c>CompilationStatus = Error</c> write naming the leg that hung.</para>
+    ///
+    /// <para>🚨 The timeout also CANCELS the leg: <see cref="CancellationDisposable"/> is
+    /// disposed when the bound unsubscribes, tripping the token the leaf was started with, so
+    /// an abandoned NuGet restore / Roslyn emit stops instead of pinning a compile thread for
+    /// the life of the process. Legs with nothing cancellable (assembly load + reflection) pass
+    /// <see cref="CancellationToken.None"/> and merely settle the state machine — the honest
+    /// limit of what a bound can do there.</para>
+    /// </summary>
+    private static IObservable<T> BoundLeg<T>(
+        Func<CancellationToken, IObservable<T>> leg,
+        TimeSpan bound,
+        string legName,
+        string nodePath)
+        => Observable
+            .Using(() => new CancellationDisposable(), cancel => leg(cancel.Token))
+            .Timeout(bound, Observable.Throw<T>(new TimeoutException(
+                $"Compile leg '{legName}' for '{nodePath}' did not complete within "
+                + $"{bound.TotalSeconds:0}s. The compile fails terminally instead of parking at "
+                + "CompilationStatus=Compiling forever (where the single-flight status lock would "
+                + "absorb every later trigger); retry via the Compile button / a fresh "
+                + "RequestedReleaseAt once the cause is understood.")));
+
     private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
     private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();
 
@@ -831,8 +869,19 @@ internal class MeshNodeCompilationService(
                 // `_ioPool.Run` re-entered/parked on the Compile pool's SemaphoreSlim gate (idle
                 // 40s wait). Task.Run (TaskScheduler.Default) has no gate and never captures the
                 // calling scheduler — see OnThreadPool.
-                return OnThreadPool(() =>
-                        CompileAsync(codeFile, configuration, contentCollections, node, CancellationToken.None))
+                //
+                // 🚨 …and BOUND it. Everything inside CompileAsync — the NuGet restore for a
+                // `#r "nuget:…"` (network IO with no timeout of its own), source generators,
+                // Roslyn Emit, the disk write — had no wall clock around it, so a hung leaf
+                // parked the type at Compiling for the life of the activation with nothing able
+                // to recover it (the status lock correctly absorbs later triggers). The token
+                // BoundLeg hands in is tripped when the bound fires, so NuGet/Roslyn actually
+                // stop; the TimeoutException propagates (it is not a CompilationException, so the
+                // Catch below leaves it alone) to RunCompile's terminal Error write.
+                return BoundLeg(
+                        ct => OnThreadPool(() =>
+                            CompileAsync(codeFile, configuration, contentCollections, node, ct)),
+                        _cacheOptions.RoslynCompileTimeout, "roslyn-compile", node.Path)
                     .Select(actualPath =>
                     {
                         ActivityLog finalLog;
@@ -929,6 +978,13 @@ internal class MeshNodeCompilationService(
             .SelectMany(inputs => inputs is null
                 ? Observable.Return<IReadOnlyList<Lsp.DiagnosticInfo>>(Array.Empty<Lsp.DiagnosticInfo>())
                 : OnThreadPool(() => DiagnoseInputs(inputs)))
+            // 🚨 BOUNDED with the same clock as the emit leg — this runs on the FAILURE path,
+            // where a hang is worst: the compile has already failed and this is what stands
+            // between that failure and its terminal Error write. Unbounded, a stalled
+            // re-compilation for diagnostics turned a plain Roslyn error into a Compiling wedge.
+            // Expiry lands in the best-effort Catch below (empty diagnostics), so the real
+            // failure still reports — with its flattened summary intact.
+            .Timeout(_cacheOptions.RoslynCompileTimeout)
             // Diagnostics are best-effort GUI sugar — a failure here must never break the
             // compile result; the flattened FormatCompileFailure summary still surfaces.
             .Catch<IReadOnlyList<Lsp.DiagnosticInfo>, Exception>(ex =>
@@ -1043,8 +1099,17 @@ internal class MeshNodeCompilationService(
                 // config instantiation is heavy, synchronous, blocking work. Run it on the
                 // ThreadPool (Task.Run), never inline (would wedge whatever hub action block
                 // emitted upstream) and never the IoPool's gated blocking factory.
-                .SelectMany(snapshot => OnThreadPool(() =>
-                    CompileResultFromAssembly(node, assemblyLocation, log, snapshot)))
+                //
+                // 🚨 BOUNDED: this leg runs USER code (an attribute constructor, a type
+                // initializer), so "it returns" is not a guarantee the framework can make —
+                // one blocking static ctor used to pin the type at Compiling forever. Nothing
+                // here is cancellable (a running type initializer cannot be interrupted), so
+                // the bound settles the state machine with a terminal Error naming the leg and
+                // the abandoned load thread is the honest cost.
+                .SelectMany(snapshot => BoundLeg(
+                    _ => OnThreadPool(() =>
+                        CompileResultFromAssembly(node, assemblyLocation, log, snapshot)),
+                    _cacheOptions.AssemblyLoadTimeout, "assembly-load", node.Path))
                 // Re-Finish the log after CompileResultFromAssembly. CompileCore already
                 // Finished it Succeeded, but CompileResultFromAssembly's downstream steps
                 // (assembly load, MeshNodeProviderAttribute reflection) can append fresh
@@ -1116,6 +1181,7 @@ internal class MeshNodeCompilationService(
         }
 
         var version = node.Version > 0 ? node.Version : 1;
+        var uploadBound = _cacheOptions.AssemblyStoreUploadTimeout;
         return _assemblyStore.PutWithLocation(node.Path, version, dll, pdb)
             .Select(loc => (NodeCompilationResult?)(result with
             {
@@ -1123,12 +1189,38 @@ internal class MeshNodeCompilationService(
                 ContentPath = string.IsNullOrEmpty(loc.ContentPath) ? null : loc.ContentPath,
                 Version = version
             }))
+            // 🚨 BOUNDED — the last unbounded leg of the compile pipeline. A wedged blob
+            // endpoint (no timeout of its own) left the compile hanging AFTER a perfectly good
+            // Roslyn emit, so the NodeType sat at Compiling forever with the assembly already
+            // on disk. Expiry is deliberately NOT terminal-Error: an upload failure has never
+            // failed a compile (see the summary above), and a bound must not silently change
+            // that contract — the TimeoutException falls into the same Catch as any other
+            // upload fault, which logs, records the leg on the ActivityLog and passes the
+            // un-stamped result through. The compile SETTLES (Ok, with a loud warning about
+            // cross-silo activation) instead of hanging.
+            .Timeout(uploadBound)
             .Catch<NodeCompilationResult?, Exception>(ex =>
             {
                 logger.LogWarning(ex,
                     "AssemblyStore upload failed for {NodePath}@v{Version}; compile still succeeded locally",
                     node.Path, version);
-                return Observable.Return(result);
+                var reason = ex is TimeoutException
+                    ? $"did not complete within {uploadBound.TotalSeconds:0}s"
+                    : $"failed — {ex.Message}";
+                // Surface it where compile diagnosis actually looks: the activity log the
+                // terminal write copies from. A silent Ok whose LatestAssembly* fields are null
+                // is how cross-silo activation breaks with no trace.
+                var log = result.Log;
+                if (log is null)
+                    return Observable.Return(result);
+                return Observable.Return<NodeCompilationResult?>(result with
+                {
+                    Log = AppendWarning(log,
+                        $"Compile leg 'assembly-store-upload' for '{node.Path}'@v{version} {reason}. "
+                        + "The compile SUCCEEDED locally and settles Ok, but the assembly was not "
+                        + "published to the store — cross-silo activation of this NodeType will not "
+                        + "find it until a later compile uploads successfully.")
+                });
             });
     }
 
