@@ -29,7 +29,6 @@ public static class SlideNodeType
     public static TBuilder AddSlideType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         return builder;
     }
 

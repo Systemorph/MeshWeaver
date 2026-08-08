@@ -22,10 +22,9 @@ namespace MeshWeaver.Graph.Configuration;
 /// cold-cache (Acme layout-area-render hang, 2026-05-24).
 /// </summary>
 /// <param name="PendingNode">Snapshot of the NodeType MeshNode at the moment
-/// CompilationStatus = Pending was observed. The handler ships it inside
-/// <see cref="RunCompileRequest"/> so the activity reads the trigger-time
-/// state (ReleaseNotes etc.) without re-fetching through the mesh-hub-cached
-/// remote stream.</param>
+/// CompilationStatus = Pending was observed. <see cref="NodeTypeCompilationHelpers.RunCompile"/>
+/// compiles from this snapshot so it reads the trigger-time state (ReleaseNotes
+/// etc.) without re-fetching through the mesh-hub-cached remote stream.</param>
 public record DispatchCompileTrigger(MeshNode PendingNode);
 
 /// <summary>

@@ -59,11 +59,11 @@ public class ThreadMessageChatTests : IAsyncLifetime
         _threadAdapter = new PostgreSqlStorageAdapter(ds, partitionDefinition: threadPartitionDef);
         _messageAdapter = new PostgreSqlStorageAdapter(ds, partitionDefinition: threadPartitionDef);
 
-        // Register ThreadMessage as public-read (visible to all authenticated users).
-        // Thread is NOT public-read â€” visibility is via user scope (path LIKE 'User/{userId}/%').
-        var schemaAccessControl = new PostgreSqlAccessControl(ds);
-        await schemaAccessControl.SyncNodeTypePermissionsAsync(
-            [new NodeTypePermission("ThreadMessage", PublicRead: true)]);
+        // 🔒 #953 — ThreadMessage is no longer (and never actually was, in production) public-read.
+        // Visibility comes from the per-user scope grant the tests make explicitly via
+        // GrantUserScopeAsync; thread messages carry MainNode = "User/{userId}", so that grant
+        // covers them. Making every ThreadMessage in the mesh readable by type would have exposed
+        // every user's conversations — see PostgreSqlSqlGenerator.BuildPerSchemaAccessClause.
     }
 
     public ValueTask DisposeAsync()
@@ -505,6 +505,12 @@ public class ThreadMessageChatTests : IAsyncLifetime
                 Timestamp = now.AddSeconds(1), Type = ThreadMessageType.AgentResponse
             }
         }, _options).Should().Within(30.Seconds()).Emit();
+
+        // 🔒 #953 — alice reads her own messages through her own scope grant (MainNode is
+        // "User/alice/_Thread", covered by the "User/alice" prefix). This test used to pass on the
+        // node-type public-read bypass alone, i.e. it proved that ANY authenticated user could list
+        // these messages — which is exactly the exposure the removed clause would have created.
+        await GrantUserScopeAsync("alice", ct).Run().Should().Within(30.Seconds()).Emit();
 
         var query = new PostgreSqlMeshQuery(_messageAdapter);
         var request = MeshQueryRequest.FromQuery(

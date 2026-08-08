@@ -778,15 +778,21 @@ Cross-schema search (`search_across_schemas`) enforces partition access at the S
 1. **Partition access** — user must have a `partition_access` entry for the schema (always required)
 2. **Node-level permission** — user must have Read permission on the node's `main_node` path
 
-`public_read` node types (e.g., User, Markdown) skip the node-level check but still require partition access. This prevents cross-partition data leakage — a user cannot see another organisation's nodes just because the node type is publicly readable.
-
 ```sql
--- Access control: partition_access is ALWAYS required.
--- public_read only skips node-level permission checks.
-WHERE partition_access_exists AND (
-    public_read_node_type OR node_level_permission
-)
+-- Access control: partition_access is ALWAYS required, and the node-level
+-- permission fold has no bypass.
+WHERE partition_access_exists AND node_level_permission
 ```
+
+## 🔒 There is no node-type public read (issue #953)
+
+The predicate above used to carry a third term — `public_read_node_type OR …` — reading a per-schema `node_type_permissions` table. **It was deleted, not connected.** The short version:
+
+- **It was inert.** Nothing in the product ever wrote a row (its only writer hung off a zero-caller extension method), so the term evaluated `false` in every deployment. Removing it changed no behaviour.
+- **Connecting it would have been a breach.** ~24 node types declared public read, including `Thread`/`ThreadMessage` (private conversations), `Markdown`/`Code`/`Document` (most content), and `Course`/`Module`/`Exercise`/`ExerciseAttempt` (paid course content and learners' own submissions).
+- **The shape was unsafe regardless of the type list.** Being an unconditional `OR` in front of the node fold, it short-circuited the longest-prefix resolution — i.e. it overrode DENY rows, which is precisely where store/course paywall gating lives. And `PermissionEvaluator` has no node-type-keyed term, so the SQL and evaluator paths would have diverged.
+
+**Declare public read with a mechanism both read paths honour instead:** a `PartitionAccessPolicy` `_Policy` node with `PublicRead = true` (issue #603 — projected as allow-`Read` rows for `Public`/`Anonymous` that *participate in* the prefix fold, so a deeper deny still wins), or a [`NodeTypeGate`](#type-declared-subtree-gates-nodetypegate) (issue #701) for a type that opens a short, explicitly listed set of surfaces on its own subtree.
 
 ## AI tool call identity
 

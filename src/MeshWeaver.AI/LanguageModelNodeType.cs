@@ -62,7 +62,6 @@ public static class LanguageModelNodeType
         if (dbSynced)
             typeDefinition = typeDefinition with { IsDefinitionOnly = true };
         builder.AddMeshNodes(typeDefinition);
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         // Companion NodeType: ModelProvider holds the credentials shared by
         // all child LanguageModel nodes. Registered together so a deployment
         // calling AddLanguageModelType wires the entire data shape (the

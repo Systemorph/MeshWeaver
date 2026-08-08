@@ -45,7 +45,6 @@ public static class ThreadMessageNodeType
         // instance ThreadMessage hubs can't subscribe to their type's
         // MeshNodeReference at activation. Same rule as Agent / User /
         // Markdown / etc.
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         // Per-instance access: ThreadMessage is a satellite of its containing
         // Thread → which is itself a satellite of the conversation's MainNode.
         // SatelliteAccessRule's MainNode delegation chains correctly when the

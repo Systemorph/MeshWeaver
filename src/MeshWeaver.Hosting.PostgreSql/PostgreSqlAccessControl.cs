@@ -234,27 +234,13 @@ public class PostgreSqlAccessControl
         await RebuildDenormalizedTableAsync(ct).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Syncs DI-registered NodeTypePermission records to the node_type_permissions table.
-    /// Called at startup to populate the DB with module-declared permissions.
-    /// Uses INSERT ON CONFLICT to be idempotent.
-    /// </summary>
-    public async Task SyncNodeTypePermissionsAsync(
-        IEnumerable<NodeTypePermission> permissions,
-        CancellationToken ct = default)
-    {
-        var ntpTable = Q("node_type_permissions");
-        foreach (var p in permissions)
-        {
-            await using var cmd = _dataSource.CreateCommand(
-                $"""
-                INSERT INTO {ntpTable} (node_type, public_read)
-                VALUES ($1, $2)
-                ON CONFLICT (node_type) DO UPDATE SET public_read = EXCLUDED.public_read
-                """);
-            cmd.Parameters.AddWithValue(p.NodeType);
-            cmd.Parameters.AddWithValue(p.PublicRead);
-            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        }
-    }
+    // 🔒 #953 — SyncNodeTypePermissionsAsync (DI NodeTypePermission → {schema}.node_type_permissions)
+    // was DELETED. It was the only writer of that table and was reachable only from
+    // InitializePostgreSqlSchemaAsync, which had zero callers, so no deployment ever held a row and
+    // the `public_read` term in every RLS predicate was a constant `false`. Do not reinstate it: the
+    // 24 types that declared public read included Thread/ThreadMessage, Markdown/Code/Document and
+    // the whole Course/Module/Exercise/ExerciseAttempt set, and the predicate OR'd past the
+    // longest-prefix DENY fold that paywall gating depends on. Public read is expressed by
+    // PartitionAccessPolicy._Policy (#603) or NodeTypeGate (#701) — both honoured by the SQL fold
+    // AND PermissionEvaluator.
 }

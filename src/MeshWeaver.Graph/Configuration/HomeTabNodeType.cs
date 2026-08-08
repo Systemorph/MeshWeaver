@@ -27,7 +27,6 @@ public static class HomeTabNodeType
         builder.AddMeshNodes(CreateMeshNode());
         // Tabs are UI config meant to appear on every user's home — public-readable by default;
         // a partition can still gate an individual tab node (visibility follows readability).
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         return builder;
     }
 

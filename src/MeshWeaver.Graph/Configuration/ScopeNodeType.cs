@@ -30,7 +30,6 @@ public static class ScopeNodeType
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         return builder;
     }
 
