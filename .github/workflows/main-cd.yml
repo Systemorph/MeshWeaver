@@ -247,11 +247,64 @@ jobs:
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration
           -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
-      # nodetype-bake — compiles every dynamic NodeType against THIS build into the shared assembly
-      # cache before the portal rolls onto it, and fails the release on a regression. It must be
-      # built from the SAME commit as the portal: the framework identity it bakes against is the
-      # Graph MVID of these binaries, so an image built from a different commit would warm a cache
-      # the portal cannot use. Same multi-arch publish; <RuntimeIdentifiers> is project-local.
+
+  # nodetype-bake — compiles every dynamic NodeType against THIS build into the shared assembly
+  # cache before the portal rolls onto it, and fails the release on a regression. It must be
+  # built from the SAME commit as the portal: the framework identity it bakes against is the
+  # Graph MVID of these binaries, so an image built from a different commit would warm a cache
+  # the portal cannot use. Same multi-arch publish; <RuntimeIdentifiers> is project-local.
+  #
+  # 🚨 Its OWN job, not a second step on migration-image. Built sequentially there, the two
+  # publishes made that leg the CD long pole: measured on run 31269491065, migration 420 s THEN
+  # bake 652 s — a 22-minute job while every other leg sat finished. They share no state (distinct
+  # projects, distinct repositories) and the $(Version) they compute is identical by construction,
+  # because GITHUB_RUN_NUMBER is per-RUN, not per-job. So the only thing the sequence bought was
+  # wall clock. Splitting drops the CD critical path by ~11 min.
+  bake-image:
+    name: "Build + push nodetype-bake image"
+    needs: gate
+    if: needs.gate.outputs.green == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          dotnet: false
+          android: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      # Same $(Version) computation as every other leg — GITHUB_RUN_NUMBER is shared across the
+      # run, so the 3.0.0-ci.<n> tag matches the migration/portal images by construction.
+      - name: Compute image tags (version + short SHA)
+        id: vars
+        run: |
+          set -euo pipefail
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          VERSION=$(dotnet msbuild memex/aspire/Memex.NodeType.Bake/Memex.NodeType.Bake.csproj \
+            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: az acr login --name meshweaver
       - name: Build + push nodetype-bake
         run: >
           dotnet publish memex/aspire/Memex.NodeType.Bake/Memex.NodeType.Bake.csproj
@@ -338,15 +391,25 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build + push mw-plugin-test (GHCR)
+      # MIRROR the ACR index to GHCR — do NOT publish a second time.
+      #
+      # 🚨 A second `dotnet publish` is not just slow (measured 411 s on top of the ACR leg's
+      # 637 s, run 31269491065), it is WRONG: two independent builds of the same commit are two
+      # independent compilations, so the bits the plugins repo gates on from GHCR were never
+      # provably the bits we validated in ACR. `imagetools create` copies the already-pushed
+      # multi-arch index blob-for-blob, so both registries serve a byte-identical image by
+      # construction — and the whole GHCR leg collapses to a manifest copy.
+      #
+      # Auth: `az acr login` (above) and docker/login-action both write ~/.docker/config.json,
+      # so buildx reads source and target credentials from the one store.
+      - name: Mirror mw-plugin-test to GHCR (no rebuild)
         run: >
-          dotnet publish tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj
-          -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
-          -p:CIRun=true
-          -p:ContainerRegistry=ghcr.io
-          -p:ContainerRepository=$IMAGE_NS/mw-plugin-test
-          -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main;latest"'
+          docker buildx imagetools create
+          --tag ghcr.io/$IMAGE_NS/mw-plugin-test:${{ steps.vars.outputs.version }}
+          --tag ghcr.io/$IMAGE_NS/mw-plugin-test:${{ steps.vars.outputs.sha }}
+          --tag ghcr.io/$IMAGE_NS/mw-plugin-test:main
+          --tag ghcr.io/$IMAGE_NS/mw-plugin-test:latest
+          ${{ env.ACR }}/mw-plugin-test:${{ steps.vars.outputs.version }}
 
   # ─────────────────────────── portal-next (Next.js) ─────────────────────────
   # The React/Next.js portal. It is NOT a .NET project, so it cannot use the
@@ -452,7 +515,7 @@ jobs:
   #   only created when none is open (close the issue once CD is green again).
   alert-on-failure:
     name: "Alert: CD failed on main"
-    needs: [portal-image, migration-image, plugin-test-image, portal-next-image]
+    needs: [portal-image, migration-image, bake-image, plugin-test-image, portal-next-image]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
