@@ -403,8 +403,7 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
         // 🚨 Dependency order, for the same reason the default install needs it: provisioning a
         // module before the one it declares fails outright ("NodeType(s) not registered"). An
         // unattended pass has to derive the order a human would pick implicitly.
-        var ordered = InstanceAutoRegistrationService.InDependencyOrder(
-            modules, (ILogger?)logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        var ordered = PackageDependencyGraph.InDependencyOrder(modules, logger);
 
         var evaluated = ordered.Count == 0
             ? Observable.Return<IList<DiscoveredModule>>([])
