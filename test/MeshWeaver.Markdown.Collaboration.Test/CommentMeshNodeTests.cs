@@ -402,60 +402,67 @@ public class CommentMeshNodeTests
 
     #region Relative Time Formatting
 
-    // FormatTimeAgo is defined on CollaborativeMarkdownView (Blazor project).
-    // These tests use an inline copy for isolation.
-    private static string FormatTimeAgo(DateTimeOffset dateTime)
-    {
-        var timeSpan = DateTimeOffset.UtcNow - dateTime;
-        if (timeSpan.TotalMinutes < 1) return "just now";
-        if (timeSpan.TotalMinutes < 60) return $"{(int)timeSpan.TotalMinutes}m ago";
-        if (timeSpan.TotalHours < 24) return $"{(int)timeSpan.TotalHours}h ago";
-        if (timeSpan.TotalDays < 7) return $"{(int)timeSpan.TotalDays}d ago";
-        if (timeSpan.TotalDays < 30) return $"{(int)(timeSpan.TotalDays / 7)}w ago";
-        return dateTime.ToString("MMM d, yyyy");
-    }
+    // These exercise TimeAgo.Format — the SHIPPING implementation the Blazor comment/change
+    // timestamps render through (CollaborativeMarkdownView.FormatTimeAgo delegates to it).
+    // They used to run against an inline copy "for isolation"; the copy drifted (it grew a
+    // weeks bucket the product never had) and the suite stayed green while asserting behaviour
+    // that did not ship (#788).
 
     [Fact]
     public void FormatTimeAgo_RecentDate_ShowsJustNow()
     {
-        var result = FormatTimeAgo(DateTimeOffset.UtcNow);
+        var result = TimeAgo.Format(DateTimeOffset.UtcNow);
         result.Should().Be("just now");
     }
 
     [Fact]
     public void FormatTimeAgo_MinutesAgo_ShowsMinutes()
     {
-        var result = FormatTimeAgo(DateTimeOffset.UtcNow.AddMinutes(-5));
+        var result = TimeAgo.Format(DateTimeOffset.UtcNow.AddMinutes(-5));
         result.Should().Be("5m ago");
     }
 
     [Fact]
     public void FormatTimeAgo_HoursAgo_ShowsHours()
     {
-        var result = FormatTimeAgo(DateTimeOffset.UtcNow.AddHours(-2));
+        var result = TimeAgo.Format(DateTimeOffset.UtcNow.AddHours(-2));
         result.Should().Be("2h ago");
     }
 
     [Fact]
     public void FormatTimeAgo_DaysAgo_ShowsDays()
     {
-        var result = FormatTimeAgo(DateTimeOffset.UtcNow.AddDays(-3));
+        var result = TimeAgo.Format(DateTimeOffset.UtcNow.AddDays(-3));
         result.Should().Be("3d ago");
     }
 
     [Fact]
-    public void FormatTimeAgo_WeeksAgo_ShowsWeeks()
+    public void FormatTimeAgo_TwoWeeksAgo_FallsThroughToAbsoluteDate()
     {
-        var result = FormatTimeAgo(DateTimeOffset.UtcNow.AddDays(-14));
-        result.Should().Be("2w ago");
+        // There is deliberately NO weeks bucket: past 7 days the label is the absolute date.
+        // (The drifted inline copy asserted "2w ago" here — behaviour the product never had.)
+        var date = DateTimeOffset.UtcNow.AddDays(-14);
+        var result = TimeAgo.Format(date);
+        result.Should().Be(date.ToString("MMM d, yyyy"));
     }
 
     [Fact]
     public void FormatTimeAgo_OldDate_ShowsFormattedDate()
     {
         var date = new DateTimeOffset(2024, 3, 15, 0, 0, 0, TimeSpan.Zero);
-        var result = FormatTimeAgo(date);
+        var result = TimeAgo.Format(date);
         result.Should().Be("Mar 15, 2024");
+    }
+
+    [Fact]
+    public void FormatTimeAgo_AbsoluteDate_RendersInTheViewersZone()
+    {
+        // 23:30 UTC on Mar 15 is already Mar 16 in Auckland (UTC+13 in March) — the absolute
+        // branch converts to the viewer's zone (#785), the relative buckets never need to.
+        var date = new DateTimeOffset(2024, 3, 15, 23, 30, 0, TimeSpan.Zero);
+        var auckland = TimeZoneInfo.FindSystemTimeZoneById("Pacific/Auckland");
+        var result = TimeAgo.Format(date, auckland);
+        result.Should().Be("Mar 16, 2024");
     }
 
     #endregion
