@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -47,6 +48,7 @@ public class CodeNodeRoundTripTests : IDisposable
     [InlineData("lastExecutedCodeHash")]
     [InlineData("lastActivityPath")]
     [InlineData("language")]
+    [InlineData("unknownMembers")]
     public void ConfigWithNonRepresentableState_IsDeclined(string field)
     {
         var config = field switch
@@ -58,6 +60,16 @@ public class CodeNodeRoundTripTests : IDisposable
             "lastExecutedCodeHash" => new CodeConfiguration { Code = "1+1", LastExecutedCodeHash = "abc" },
             "lastActivityPath" => new CodeConfiguration { Code = "1+1", LastActivityPath = "me/_Activity/1" },
             "language" => new CodeConfiguration { Code = "print(1)", Language = "python" },
+            // Schema evolution: members captured by [JsonExtensionData] from a newer build must
+            // not be stripped by the bare-code .cs form either.
+            "unknownMembers" => new CodeConfiguration
+            {
+                Code = "1+1",
+                UnknownMembers = new Dictionary<string, System.Text.Json.JsonElement>
+                {
+                    ["futureField"] = System.Text.Json.JsonDocument.Parse("42").RootElement,
+                },
+            },
             _ => throw new ArgumentOutOfRangeException(nameof(field)),
         };
         var parser = new CSharpFileParser();
