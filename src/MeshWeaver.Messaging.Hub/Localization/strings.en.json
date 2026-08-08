@@ -74,6 +74,8 @@
   "menu.breadcrumb": "Breadcrumb",
   "menu.mainMenu": "Main menu",
   "menu.expandCollapse": "Menu expand/collapse toggle",
+  "nav.contents": "Contents",
+  "nav.youAreHere": "You are here",
   "menu.edit": "Edit",
   "menu.pin": "Pin",
   "menu.move": "Move",
