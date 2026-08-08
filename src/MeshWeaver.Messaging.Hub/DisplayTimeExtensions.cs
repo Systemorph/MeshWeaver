@@ -73,7 +73,12 @@ public static class DisplayTimeExtensions
         return accessService?.CircuitContext?.TimeZoneId;
     }
 
-    private static TimeZoneInfo? ResolveZone(string? timeZoneId)
+    /// <summary>
+    /// Resolves a named IANA zone id to its <see cref="TimeZoneInfo"/>; null, empty, unknown or
+    /// invalid ids resolve to null (callers fall back to UTC). Public for formatters that live in
+    /// hub-free projects (e.g. <c>TimeAgo</c>) and take the resolved zone as a parameter.
+    /// </summary>
+    public static TimeZoneInfo? ResolveZone(string? timeZoneId)
     {
         if (string.IsNullOrWhiteSpace(timeZoneId))
             return null;
