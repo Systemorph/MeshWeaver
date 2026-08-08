@@ -400,7 +400,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         DateTimeOffset EnteredAt,
         // Non-null ⇒ this is an OVERWRITE (ChangeType.Full of the whole node), not a field-merge
         // Update. The Update func is ignored in that case. See Overwrite/OverwriteRaw.
-        MeshNode? FullNode = null);
+        MeshNode? FullNode = null,
+        // 🚨 issue #919 — THE ENQUEUER'S IDENTITY RIDES THE REQUEST, because the write does not run
+        // on the enqueuer's thread. The per-path queue is a Concat: only the FIRST request is
+        // subscribed synchronously inside Subject.OnNext (i.e. still inside the caller's
+        // `using (ImpersonateAsSystem())`); every later one is subscribed when its PREDECESSOR
+        // settles — on the owner's response thread, where that scope is long disposed and the
+        // AsyncLocal AccessContext is whatever happened to be there. Both halves of the write read
+        // the ambient identity at that moment (UpdateRemote captures it for the outbound
+        // PatchDataRequest AND opens the initial-state SubscribeRequest under it), so a queued
+        // write silently degraded to "no identity" / a leaked one. On a partition with no grants
+        // that is fatal in the read direction: the initial state never arrives and the write dies
+        // with "Update aborted: no initial state arrived for '…' within 30s" — the Store self-heal
+        // deadlock, where the import's own progress log could not be written into the partition it
+        // was repairing. Captured synchronously at ENQUEUE (the caller's thread, scope live) and
+        // re-established around the dispatch below.
+        AccessContext? Caller = null);
 
     /// <summary>Cached effective-permission probe with expiry.</summary>
     private sealed record AccessEntry(Permission Permissions, DateTimeOffset ValidUntil);
@@ -1458,8 +1473,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         logger.LogDebug(
             "[UpdateQueue] ENQUEUE path={Path} seq={Seq} enteredAt={EnteredAt}",
             path, seq, DateTimeOffset.UtcNow);
-        queue.OnNext(new UpdateRequest(update, result, path, seq, DateTimeOffset.UtcNow));
+        queue.OnNext(new UpdateRequest(
+            update, result, path, seq, DateTimeOffset.UtcNow, FullNode: null, Caller: CaptureCaller()));
         return result;
+    }
+
+    /// <summary>
+    /// The enqueuing thread's identity, read SYNCHRONOUSLY so it is still inside whatever scope the
+    /// caller established (a user's <c>delivery.AccessContext</c>, or an infrastructure caller's
+    /// <c>ImpersonateAsSystem</c>). Carried on <see cref="UpdateRequest"/> and re-established around
+    /// the dispatch — see the <c>Caller</c> field's comment for why the dispatch cannot read it
+    /// itself (issue #919).
+    /// </summary>
+    private AccessContext? CaptureCaller()
+    {
+        var accessService = meshHub.ServiceProvider.GetService<AccessService>();
+        return accessService?.Context ?? accessService?.CircuitContext;
     }
 
     private long _updateSeq;
@@ -1548,6 +1577,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     "[UpdateQueue] START path={Path} seq={Seq} waitedInQueue={WaitedMs}ms",
                     path, req.Seq, waitedToStart);
                 var entry = GetEntry(path);
+                // 🚨 issue #919 — re-establish the ENQUEUER's identity for the whole dispatch. This
+                // Defer is subscribed by the Concat, which for every request after the first runs on
+                // the PREDECESSOR's settle thread, not the caller's: the caller's
+                // `using (ImpersonateAsSystem())` / handler AccessContext is gone by then. Both
+                // Handle.Update/Overwrite (UpdateRemote's eager capture for the outbound patch) AND
+                // the initial-state SubscribeRequest it opens read the ambient identity right here,
+                // so without this the queued write goes out unattributed and, on a partition whose
+                // grants are missing, its initial-state read is refused → "Update aborted: no initial
+                // state arrived … within 30s" (the Store self-heal deadlock: the repair could not
+                // even record its own progress). Only re-stamp when the enqueuer HAD an identity —
+                // a genuinely context-less caller keeps failing closed, as it must.
+                var accessService = meshHub.ServiceProvider.GetService<AccessService>();
+                using var callerScope = req.Caller is not null && accessService is not null
+                    ? accessService.SwitchAccessContext(req.Caller)
+                    : null;
+
                 // FullNode set ⇒ overwrite (ChangeType.Full wholesale replace); else field-merge.
                 var update = req.FullNode is not null
                     ? entry.Handle.Overwrite(req.FullNode)
@@ -1700,7 +1745,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             "[UpdateQueue] ENQUEUE-OVERWRITE path={Path} seq={Seq} enteredAt={EnteredAt}",
             path, seq, DateTimeOffset.UtcNow);
         // Update func is a placeholder (never invoked — the FullNode branch is taken).
-        queue.OnNext(new UpdateRequest(static n => n, result, path, seq, DateTimeOffset.UtcNow, node));
+        queue.OnNext(new UpdateRequest(
+            static n => n, result, path, seq, DateTimeOffset.UtcNow, node, CaptureCaller()));
         return result;
     }
 
