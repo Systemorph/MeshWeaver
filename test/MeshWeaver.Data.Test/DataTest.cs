@@ -258,7 +258,6 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Saves updated MyData instances to storage
     /// </summary>
     /// <param name="instanceCollection">The collection of instances to save</param>
-    /// <returns>The saved instance collection</returns>
     private void SaveMyData(InstanceCollection instanceCollection)
     {
         storage.OnNext(instanceCollection.Instances);
