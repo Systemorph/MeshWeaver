@@ -54,7 +54,7 @@ public class CrossPartitionSearchTests
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
-        // Admin partition (default schema) â€” stores partition metadata
+        // Admin partition (default schema) — stores partition metadata
         var adminAdapter = _fixture.StorageAdapter;
 
         // Create 3 org schemas
@@ -387,7 +387,7 @@ public class CrossPartitionSearchTests
 
         var results = await CallSearchAcrossSchemas("", "testuser", "last_modified DESC", 50, ct);
 
-        // testuser has partition_access only to ACME â€” should only see ACME nodes
+        // testuser has partition_access only to ACME — should only see ACME nodes
         results.Should().NotBeEmpty();
         results.Select(n => n.Id).Should().Contain("ACME");
 
