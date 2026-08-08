@@ -185,6 +185,119 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
         result.Reason.Should().Be(NodeRejectionReason.InvalidPath);
     }
 
+    // ── #638: a PROVISIONED-BUT-OWNERLESS partition speaks, instead of "access denied" ───────
+
+    private IStorageAdapter Storage => Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+
+    private Task<MeshNode?> Write(MeshNode node) =>
+        Storage.Write(node, Mesh.JsonSerializerOptions).Should().Emit();
+
+    /// <summary>Seeds a partition ROOT with no grants and no policy — the #638 residue.</summary>
+    private Task<MeshNode?> SeedOwnerlessRoot(string partition) =>
+        Write(new MeshNode(partition)
+        {
+            NodeType = "Space",
+            Name = partition,
+            State = MeshNodeState.Active,
+            CreatedBy = WellKnownUsers.System,   // no owner to restore — the state stays broken
+        });
+
+    [Fact(Timeout = 20000)]
+    public async Task DescribeOwnerlessPartition_NoGrantsAtAll_NamesTheStateAndTheWayOut()
+    {
+        const string partition = "OwnerlessProbe";
+        await SeedOwnerlessRoot(partition);
+
+        var diagnosis = await PartitionWriteGuardValidator
+            .DescribeOwnerlessPartition(Mesh, $"{partition}/page1").Should().Emit();
+
+        diagnosis.Should().NotBeNull("a partition that carries no grants is BROKEN, not merely forbidden");
+        diagnosis.Should().Contain(partition);
+        diagnosis.Should().Contain("NO access grants");
+        diagnosis.Should().Contain($"{partition}/_Access", "the message must name where a grant has to go");
+    }
+
+    [Fact(Timeout = 20000)]
+    public async Task DescribeOwnerlessPartition_PartitionWithAGrant_SaysNothing()
+    {
+        const string partition = "OwnerlessProbeGranted";
+        await SeedOwnerlessRoot(partition);
+        await Write(new MeshNode("rsalzmann_Access", $"{partition}/_Access")
+        {
+            NodeType = "AccessAssignment",
+            Name = "rsalzmann Access",
+            MainNode = partition,
+            State = MeshNodeState.Active,
+            Content = new AccessAssignment
+            {
+                AccessObject = "rsalzmann",
+                DisplayName = "rsalzmann",
+                Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
+            }
+        });
+
+        var diagnosis = await PartitionWriteGuardValidator
+            .DescribeOwnerlessPartition(Mesh, $"{partition}/page1").Should().Emit();
+
+        diagnosis.Should().BeNull("one grant means ownership is intact — an ordinary permission decision");
+    }
+
+    [Fact(Timeout = 20000)]
+    public async Task DescribeOwnerlessPartition_PolicyGovernedPartition_SaysNothing()
+    {
+        // The installed catalogs (Agent, Doc, Store) are governed by a _Policy and legitimately
+        // carry no per-user grants — they must never be reported as broken.
+        const string partition = "OwnerlessProbePolicy";
+        await SeedOwnerlessRoot(partition);
+        await Write(new MeshNode("_Policy", partition)
+        {
+            NodeType = "PartitionAccessPolicy",
+            Name = "Policy",
+            State = MeshNodeState.Active,
+            Content = new PartitionAccessPolicy { PublicRead = true },
+        });
+
+        var diagnosis = await PartitionWriteGuardValidator
+            .DescribeOwnerlessPartition(Mesh, $"{partition}/page1").Should().Emit();
+
+        diagnosis.Should().BeNull("a policy-governed partition has no grants BY DESIGN");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task CreateInto_OwnerlessPartition_IsRefusedWithTheSpeakingError()
+    {
+        // End-to-end through the real create pipeline: the denial the user actually sees must name
+        // the broken partition, not just "Access denied".
+        const string partition = "OwnerlessEndToEnd";
+        await SeedOwnerlessRoot(partition);
+
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var userId = "rsalzmann";
+        var ctx = new AccessContext { ObjectId = userId, Name = userId };
+        accessService.SetContext(ctx);
+        accessService.SetCircuitContext(ctx);
+
+        try
+        {
+            var node = MeshNode.FromPath($"{partition}/page_{Guid.NewGuid().AsString()}") with
+            {
+                NodeType = "Markdown",
+                Name = "Page",
+                State = MeshNodeState.Active,
+            };
+
+            Func<Task> act = () => NodeFactory.CreateNode(node).FirstAsync().ToTask();
+
+            (await act.Should().ThrowAsync<UnauthorizedAccessException>())
+                .Which.Message.Should().Contain("NO access grants",
+                    "a write into a grant-less partition must name that state, not read as an ordinary denial");
+        }
+        finally
+        {
+            TestUsers.DevLogin(Mesh);
+        }
+    }
+
     [Fact(Timeout = 20000)]
     public void SupportedOperations_AreCreateAndUpdate()
     {

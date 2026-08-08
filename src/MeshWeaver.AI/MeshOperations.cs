@@ -3230,14 +3230,26 @@ public class MeshOperations
                 // the CompileWatcher to settle. Where(settled).Take(1) keeps the
                 // read in lockstep with the writer; without it we'd race against
                 // the Compiling → Ok/Error write-back and return stale state.
-                return hub.GetWorkspace().GetMeshNodeStream(nodeTypePath)
+                var typeStream = hub.GetWorkspace().GetMeshNodeStream(nodeTypePath);
+                return typeStream
                     // JsonElement-tolerant settle check: a degraded NodeType node (Content
                     // stayed a JsonElement because the per-node hub's TypeRegistry lacked the
                     // NodeTypeDefinition $type) still satisfies the wait, instead of hanging to
                     // the 5s timeout and then reporting "Unknown".
                     .Where(n => IsSettled(ReadCompilationStatusFromNode(n)))
                     .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(5))
+                    // 🚨 #576 — DON'T settle-wait into a LIE. A compile that is genuinely
+                    // in flight cannot settle inside this budget, and the timeout used to
+                    // fall through to the null-node path → `{status:"Unknown", message:
+                    // "NodeType '…' has no definition"}`. That is the opposite of the truth
+                    // (the definition exists; its compile is RUNNING) and it made the
+                    // Compiling + elapsedMs branch of FormatDiagnostics unreachable for the
+                    // one state it was written for. On expiry, fall back to the CURRENT
+                    // snapshot — Compiling reports as Compiling with its elapsed time,
+                    // Pending as Pending — and only a node that cannot be read at all
+                    // (its own bounded read fails) still reports Unknown.
+                    .Timeout(TimeSpan.FromSeconds(5),
+                        typeStream.Take(1).Timeout(TimeSpan.FromSeconds(5)))
                     .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
                     .Select(typeNode =>
                     {
@@ -3250,7 +3262,13 @@ public class MeshOperations
                         var status = ReadCompilationStatusFromNode(typeNode);
                         if (status is not null)
                             return FormatDiagnostics(status.Value, nodeTypePath,
-                                ReadCompilationError(typeNode), startedAt: null, lastCompiledAt: null,
+                                ReadCompilationError(typeNode),
+                                // An in-flight compile on a degraded node still reports its
+                                // elapsed time — same tolerant reader the Compile tool uses.
+                                startedAt: status == CompilationStatus.Compiling
+                                    ? ReadCompileStartedAt(typeNode)
+                                    : null,
+                                lastCompiledAt: null,
                                 hub.JsonSerializerOptions);
                         return JsonSerializer.Serialize(
                             new { status = "Unknown", message = $"NodeType '{nodeTypePath}' has no definition" },
@@ -3261,8 +3279,9 @@ public class MeshOperations
 
     /// <summary>
     /// True when the NodeType's <see cref="NodeTypeDefinition.CompilationStatus"/>
-    /// has reached a terminal state (<see cref="CompilationStatus.Ok"/> or
-    /// <see cref="CompilationStatus.Error"/>). Pending and Compiling are
+    /// has reached a terminal state (<see cref="CompilationStatus.Ok"/>,
+    /// <see cref="CompilationStatus.Error"/> or
+    /// <see cref="CompilationStatus.Unavailable"/>). Pending and Compiling are
     /// transient — readers should keep waiting for the watcher's settle
     /// write rather than report a half-baked state.
     /// </summary>
@@ -3277,7 +3296,11 @@ public class MeshOperations
     /// the compile-settle wait instead of hanging until the 5s timeout.
     /// </summary>
     private static bool IsSettled(CompilationStatus? status)
-        => status == CompilationStatus.Ok || status == CompilationStatus.Error;
+        => status is CompilationStatus.Ok
+                  or CompilationStatus.Error
+                  // Terminal too: a driver already gave up determining the state, so no
+                  // further write is coming and a waiter would hang out its whole budget.
+                  or CompilationStatus.Unavailable;
 
     private string FormatDiagnosticsFromDef(
         Graph.Configuration.NodeTypeDefinition def, string nodeTypePath)
@@ -3286,7 +3309,9 @@ public class MeshOperations
         return FormatDiagnostics(
             status,
             nodeTypePath,
-            error: status == CompilationStatus.Error ? def.CompilationError : null,
+            error: status is CompilationStatus.Error or CompilationStatus.Unavailable
+                ? def.CompilationError
+                : null,
             startedAt: status == CompilationStatus.Compiling ? def.LastCompileStartedAt : null,
             lastCompiledAt: status == CompilationStatus.Ok ? def.LastCompileSucceededAt : null,
             hub.JsonSerializerOptions);
@@ -3323,6 +3348,14 @@ public class MeshOperations
     /// <c>compilationStatus</c> transitions, then once it settles to Ok/Error
     /// follow <c>lastCompilationActivityPath</c> to fetch the full executed-source-
     /// queries / matched-Code-paths / Roslyn-output trace.</para>
+    ///
+    /// <para>🚨 #576 — ALREADY COMPILING is answered, not waited out. When the NodeType is
+    /// already at <see cref="CompilationStatus.Compiling"/> this returns IMMEDIATELY with
+    /// <c>{status:"Compiling", activityPath, elapsedMs}</c> and stamps NO trigger: the status
+    /// is the single-flight lock, so a second trigger cannot start a second run — it would only
+    /// queue redundant work behind the running one. Every exit path now carries
+    /// <c>activityPath</c>, including the settle-timeout, so "is it running or wedged?" is
+    /// always answerable from the response alone.</para>
     /// </summary>
     public IObservable<string> Compile(string path)
     {
@@ -3376,6 +3409,34 @@ public class MeshOperations
                 })
                 .SelectMany(before =>
                 {
+                    // 🚨 #576 — ANSWER TRUTHFULLY WHEN A COMPILE IS ALREADY IN FLIGHT.
+                    //
+                    // CompilationStatus IS the single-flight lock: the compile watcher fires
+                    // only on a transition INTO Pending and the Pending→Compiling flip inside
+                    // the owner's serialized Update elects exactly one dispatcher. So a
+                    // trigger stamped while the type is Compiling starts NOTHING now — the
+                    // release watcher's settled-gate holds it until the running compile
+                    // settles, and this call then sat out its 60s budget and answered
+                    // `{status:"Pending"}` with no activity path: the caller could not tell a
+                    // healthy long compile from a wedged one, which is the complaint in #576.
+                    // Report the truth instead, and hand back the RUNNING activity to watch.
+                    // We deliberately do NOT stamp a trigger here: a second run against the
+                    // same sources is pure waste, and the lock would coalesce it anyway.
+                    //
+                    // Pending is deliberately NOT short-circuited: it has no activity to watch
+                    // yet, and its compile has not snapshotted sources, so the caller's fresh
+                    // trigger is still meaningful — that path is unchanged.
+                    if (ReadCompilationStatusFromNode(before) == CompilationStatus.Compiling)
+                    {
+                        var runningActivity = ReadActivityPath(before);
+                        logger.LogInformation(
+                            "Compile: {Path} is already compiling (activity {Activity}) — reporting the in-flight run instead of queueing a second one",
+                            resolvedPath, runningActivity ?? "(none recorded)");
+                        return Observable.Return(FormatAlreadyCompiling(
+                            resolvedPath, runningActivity, ReadCompileStartedAt(before),
+                            hub.JsonSerializerOptions));
+                    }
+
                     try
                     {
                         // Impersonate System for the trigger write. Triggering a recompile is an
@@ -3417,8 +3478,7 @@ public class MeshOperations
                         .Where(n =>
                         {
                             var status = ReadCompilationStatusFromNode(n);
-                            return (status == CompilationStatus.Ok || status == CompilationStatus.Error)
-                                && IsNewCompileRun(n, before);
+                            return IsSettled(status) && IsNewCompileRun(n, before);
                         })
                         .Take(1)
                         .Timeout(TimeSpan.FromSeconds(60))
@@ -3434,11 +3494,18 @@ public class MeshOperations
                                     path = resolvedPath,
                                     error,
                                     activityPath,
-                                    message = status == CompilationStatus.Ok
-                                        ? "Compile SUCCEEDED."
-                                        : "Compile FAILED — see `error` for Roslyn diagnostics. "
-                                          + "Full source-discovery + matched-Code-paths trace lives at "
-                                          + (activityPath ?? "(no activity log written)") + "."
+                                    message = status switch
+                                    {
+                                        CompilationStatus.Ok => "Compile SUCCEEDED.",
+                                        // NOT a failure — the run never reported an answer.
+                                        CompilationStatus.Unavailable =>
+                                            "Compile state could NOT BE DETERMINED (see `error`) — this is a "
+                                            + "timeout, NOT a compile failure. Nothing is known to be wrong "
+                                            + "with the source; trigger the compile again.",
+                                        _ => "Compile FAILED — see `error` for Roslyn diagnostics. "
+                                            + "Full source-discovery + matched-Code-paths trace lives at "
+                                            + (activityPath ?? "(no activity log written)") + "."
+                                    }
                                 },
                                 hub.JsonSerializerOptions);
                         })
@@ -3446,16 +3513,33 @@ public class MeshOperations
                         {
                             logger.LogWarning(ex,
                                 "Compile: timeout / observer error waiting for {Path} to settle", resolvedPath);
-                            return Observable.Return(JsonSerializer.Serialize(
-                                new
-                                {
-                                    status = "Pending",
-                                    path = resolvedPath,
-                                    message = "Compile triggered but no NEW compile run settled within the deadline. "
-                                        + "Poll `get " + resolvedPath + "` for `compilationStatus` and "
-                                        + "`lastCompilationActivityPath`. Underlying error: " + ex.Message
-                                },
-                                hub.JsonSerializerOptions));
+                            // 🚨 #576 — the timeout branch must carry the SAME watchable handle
+                            // the Ok/Error branches do. It used to answer a flat
+                            // `{status:"Pending"}` with NO activityPath, so the one moment the
+                            // caller most needs to look at the running compile was the one
+                            // moment the tool refused to say where it is. Re-read the node
+                            // (bounded, best-effort) and report the state it is ACTUALLY in
+                            // plus its activity path.
+                            return stream
+                                .Take(1)
+                                .Timeout(TimeSpan.FromSeconds(5))
+                                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+                                .Select(now => JsonSerializer.Serialize(
+                                    new
+                                    {
+                                        status = (ReadCompilationStatusFromNode(now) ?? CompilationStatus.Pending)
+                                            .ToString(),
+                                        path = resolvedPath,
+                                        activityPath = ReadActivityPath(now),
+                                        startedAt = ReadCompileStartedAt(now),
+                                        message = "Compile triggered but no NEW compile run settled within the deadline. "
+                                            + "`status` is the NodeType's CURRENT compilationStatus — Compiling means a "
+                                            + "run is genuinely in flight (watch `activityPath`), anything else means the "
+                                            + "trigger has not been dispatched yet. Poll `get " + resolvedPath + "` for "
+                                            + "`compilationStatus` and `lastCompilationActivityPath`. Underlying error: "
+                                            + ex.Message
+                                    },
+                                    hub.JsonSerializerOptions));
                         });
                 });
         });
@@ -3623,6 +3707,45 @@ public class MeshOperations
     }
 
     /// <summary>
+    /// Pure JSON formatter for <see cref="Compile"/>'s ALREADY-IN-FLIGHT answer (#576).
+    /// Lives on its own — like <see cref="FormatDiagnostics"/> — so a unit test can lock in
+    /// the exact wording, because the wording is the whole point: the caller must learn
+    /// (a) that a compile IS running, (b) that this call did NOT start a second one, and
+    /// (c) WHERE to watch the running one. The previous answer (a 60s wait then
+    /// <c>{status:"Pending"}</c> with no activity path) conveyed none of the three.
+    /// </summary>
+    /// <param name="nodeTypePath">The NodeType whose compile is in flight.</param>
+    /// <param name="activityPath">The running compile's activity node, when it was recorded.</param>
+    /// <param name="startedAt">When the running compile flipped to Compiling, when recorded.</param>
+    /// <param name="options">Serializer options for the JSON envelope.</param>
+    /// <returns>The JSON envelope as a string.</returns>
+    public static string FormatAlreadyCompiling(
+        string nodeTypePath,
+        string? activityPath,
+        DateTimeOffset? startedAt,
+        JsonSerializerOptions options)
+        => JsonSerializer.Serialize(
+            new
+            {
+                status = "Compiling",
+                path = nodeTypePath,
+                activityPath,
+                startedAt,
+                elapsedMs = startedAt is null
+                    ? (long?)null
+                    : (long)(DateTimeOffset.UtcNow - startedAt.Value).TotalMilliseconds,
+                message = "A compile for this NodeType is ALREADY IN FLIGHT — this call did NOT "
+                    + "start a second run (compilationStatus is the single-flight lock, so a "
+                    + "concurrent trigger is coalesced by design). "
+                    + (activityPath is null
+                        ? "No activity node was recorded for the running compile; poll `get "
+                          + nodeTypePath + "` for `compilationStatus`."
+                        : "Watch `get " + activityPath + "` for its live progress, then re-call "
+                          + "compile / get_diagnostics once `compilationStatus` settles to Ok or Error.")
+            },
+            options);
+
+    /// <summary>
     /// Pure JSON formatter for <see cref="GetDiagnostics"/>. Lives on its own so a unit
     /// test can lock in the exact wording: in particular, the Ok branch must explicitly
     /// say "Compile SUCCEEDED" (not just "status: Ok") so that agents and humans reading
@@ -3674,6 +3797,22 @@ public class MeshOperations
                         lastCompiledAt,
                         message = "Compile SUCCEEDED at " + lastCompiledAt?.ToString("u")
                             + ". The NodeType assembly was built without errors and is loaded."
+                    },
+                    options);
+            case CompilationStatus.Unavailable:
+                // 🚨 Must never read as a compile failure: `error` here describes why the
+                // state could not be DETERMINED, not what is wrong with the source. An
+                // agent that confuses the two starts "fixing" code that compiles fine.
+                return JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Unavailable",
+                        nodeTypePath,
+                        error,
+                        message = "The compile state could NOT BE DETERMINED (a settle wait or an "
+                            + "assembly lookup timed out) — this is NOT a compile failure and NOTHING "
+                            + "is known to be wrong with the source. See `error` for what timed out. "
+                            + "Trigger a fresh compile and re-call GetDiagnostics."
                     },
                     options);
             case CompilationStatus.Unknown:

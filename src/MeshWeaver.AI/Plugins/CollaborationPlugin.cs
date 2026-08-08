@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
+using MeshWeaver.Graph;
 using MeshWeaver.Markdown.Collaboration;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -129,17 +131,27 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
     }
 
     /// <summary>
-    /// Agent tool: proposes a text edit (insertion, replacement, or deletion) on a Markdown document
-    /// as a tracked change other collaborators can accept or reject. An empty
-    /// <paramref name="originalText"/> means insertion at document start; an empty
-    /// <paramref name="newText"/> means deletion.
+    /// Agent tool: applies a text edit (insertion, replacement, or deletion) to a Markdown document
+    /// as a normal versioned write. An empty <paramref name="originalText"/> means insertion at
+    /// document start; an empty <paramref name="newText"/> means deletion.
+    /// <para>
+    /// 🚨 The edit is NOT parked in a <c>_Tracking</c> satellite any more — it lands in the document
+    /// and therefore in the version history, which records who changed what and when. Reviewers see
+    /// it as a tracked change (projected from that history — see <c>ChangeProjection</c>) and revert
+    /// it with one click; the revert is itself a versioned write. One source of truth, no anchors to
+    /// go stale.
+    /// </para>
+    /// <para>
+    /// The splice happens INSIDE the document's update lambda, against the LIVE node the owning hub
+    /// hands us — a read-then-write would lose any edit that landed in between.
+    /// </para>
     /// </summary>
     /// <param name="documentPath">Canonical mesh path of the document (the node's <c>path</c>, not its display name).</param>
     /// <param name="originalText">The exact text to replace; empty string for a pure insertion at document start.</param>
     /// <param name="newText">The replacement text; empty string for a deletion.</param>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
-    /// <returns>A status message describing the suggested change, or the reason it could not be created.</returns>
-    [Description("Suggests a text edit (insertion, replacement, or deletion) on a Markdown document as a tracked change. Other collaborators can accept or reject the suggestion.")]
+    /// <returns>A status message describing the edit, or the reason it could not be made.</returns>
+    [Description("Edits a Markdown document (insertion, replacement, or deletion). The edit is applied and recorded in the document's version history, where collaborators review it as a tracked change and can revert it.")]
     public Task<string> SuggestEdit(
         [Description("Canonical path to the document — NOT the display name. Use @/full/path for absolute or @relative/path relative to the current context. Example: @/PartnerRe/AIConsulting/FinalReport or @FinalReport. If you only know the display name, call Search('name:\"...\"') first and use the path field.")] string documentPath,
         [Description("The exact text to replace (empty string for pure insertion at document start)")] string originalText,
@@ -153,11 +165,13 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         var resolvedPath = MeshOperations.ResolvePath(resolvedInput);
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        // Probe existence first — the single most common agent mistake is passing a display name
+        // instead of a path, and "Document not found" is far more actionable than whatever the write
+        // path reports for an address that routes nowhere.
         ops.Get(resolvedInput)
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
-                docJson => SuggestEditContinuation(
-                    docJson, resolvedPath, documentPath, originalText, newText, tcs),
+                docJson => SuggestEditContinuation(docJson, resolvedPath, documentPath, originalText, newText, tcs),
                 err => tcs.TrySetResult($"Error reading '{documentPath}': {err.Message}"));
 
         return tcs.Task;
@@ -177,52 +191,53 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
             return;
         }
 
-        var content = ExtractContent(docJson);
-        if (string.IsNullOrEmpty(content))
-        {
-            tcs.TrySetResult($"Could not extract content from {documentPath}");
-            return;
-        }
+        var options = hub.JsonSerializerOptions;
 
-        int start;
+        // The splice runs INSIDE the update lambda, against the LIVE node the owning hub hands us —
+        // the probe above only established existence; splicing the text it returned would lose any
+        // edit that landed in between. DefaultIfEmpty guarantees the tool always answers: an update
+        // that completes without emitting must not leave the agent's task pending forever.
+        hub.GetMeshNodeStream(resolvedPath)
+            .Update(live => MarkdownOverviewLayoutArea.WithMarkdownContent(
+                live, Splice(MarkdownOverviewLayoutArea.GetMarkdownContent(live), originalText, newText), options))
+            .Take(1)
+            .DefaultIfEmpty()
+            .Subscribe(
+                written => tcs.TrySetResult(written is null
+                    ? $"The edit produced no change in {documentPath}."
+                    : Describe(documentPath, originalText, newText)),
+                err =>
+                {
+                    logger.LogWarning(err, "SuggestEdit failed for {Path}", resolvedPath);
+                    tcs.TrySetResult($"Error editing '{documentPath}': {err.Message}");
+                });
+    }
+
+    /// <summary>
+    /// The pure edit transition: replaces the first occurrence of <paramref name="originalText"/>
+    /// with <paramref name="newText"/> (empty original ⇒ prepend). Throws when the text is no longer
+    /// there — silently splicing at offset 0 would corrupt the document.
+    /// </summary>
+    internal static string Splice(string? content, string originalText, string newText)
+    {
+        var text = content ?? "";
         if (string.IsNullOrEmpty(originalText))
-        {
-            start = 0;
-        }
-        else
-        {
-            start = content.IndexOf(originalText, StringComparison.Ordinal);
-            if (start < 0)
-            {
-                tcs.TrySetResult($"Text '{originalText}' not found in document {documentPath}");
-                return;
-            }
-        }
+            return newText + text;
 
-        var request = new CreateSuggestedEditRequest
-        {
-            DocumentId = resolvedPath,
-            Position = start,
-            DeletedText = string.IsNullOrEmpty(originalText) ? null : originalText,
-            InsertedText = string.IsNullOrEmpty(newText) ? null : newText,
-            Author = chat.Context?.Path ?? "agent"
-        };
+        var start = text.IndexOf(originalText, StringComparison.Ordinal);
+        if (start < 0)
+            throw new InvalidOperationException(
+                $"Text '{Truncate(originalText)}' is not present in the document — it may have been edited since you read it.");
+        return text.Remove(start, originalText.Length).Insert(start, newText ?? "");
+    }
 
-        PostAndReport<CreateSuggestedEditResponse>(
-            request,
-            new Address(resolvedPath),
-            documentPath,
-            tcs,
-            resp =>
-            {
-                if (!resp.Success)
-                    return $"Error suggesting edit: {resp.Error ?? "unknown error"}";
-                if (string.IsNullOrEmpty(originalText))
-                    return $"Suggested insertion of \"{Truncate(newText)}\" in {documentPath}";
-                if (string.IsNullOrEmpty(newText))
-                    return $"Suggested deletion of \"{Truncate(originalText)}\" in {documentPath}";
-                return $"Suggested replacing \"{Truncate(originalText)}\" with \"{Truncate(newText)}\" in {documentPath}";
-            });
+    private static string Describe(string documentPath, string originalText, string newText)
+    {
+        if (string.IsNullOrEmpty(originalText))
+            return $"Inserted \"{Truncate(newText)}\" in {documentPath} — visible as a tracked change, revertible from the document.";
+        if (string.IsNullOrEmpty(newText))
+            return $"Deleted \"{Truncate(originalText)}\" from {documentPath} — visible as a tracked change, revertible from the document.";
+        return $"Replaced \"{Truncate(originalText)}\" with \"{Truncate(newText)}\" in {documentPath} — visible as a tracked change, revertible from the document.";
     }
 
     /// <summary>
