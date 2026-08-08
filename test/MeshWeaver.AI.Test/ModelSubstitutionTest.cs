@@ -166,9 +166,14 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
         cell.Status.Should().Be(ThreadMessageStatus.Error,
             "a round that no model can serve must FAIL — settling as Completed reads as success to "
             + "every automation that checks the node (#476)");
-        cell.Summary.Should().Contain("No language model can serve this round",
-            "the failure must speak: name the situation instead of pasting a raw provider error");
+        // The failure must SPEAK — and speak the viewer's language: it comes from the localization
+        // catalog, not a hard-coded English literal, and it names the requested model.
+        cell.Summary.Should().Be(
+            LocalizationCatalog.Get("chat.noUsableModel", locale: null, StaleModel),
+            "the round's failure text must be the localized catalog message for this situation");
         cell.Summary.Should().Contain(StaleModel, "the message must name the model that was requested");
+        cell.Summary.Should().NotContain("ApiKey",
+            "the raw provider/factory error belongs in the log, never pasted into the thread (#476)");
         thread.Status.Should().Be(ThreadExecutionStatus.Idle, "the round must settle, never park");
     }
 

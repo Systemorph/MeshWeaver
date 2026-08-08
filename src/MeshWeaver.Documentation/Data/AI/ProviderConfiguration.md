@@ -138,8 +138,10 @@ model so the thread keeps running. Three rules make that swap honest:
   — an unusable pin is a configuration problem the user cannot act on mid-round.
 - **Nothing usable ⇒ the round FAILS.** If the selection is unusable and the catalog offers no
   usable replacement *and* no agent could be built, the round terminates with
-  `ThreadMessageStatus.Error` and a message naming the situation. It does not proceed to produce a
-  raw provider error under a `Completed` status, which any automation would read as success.
+  `ThreadMessageStatus.Error` and a localized message naming the situation (`chat.noUsableModel`,
+  resolved off the round's own `AccessContext.Locale`); the raw factory error stays in the log. It
+  does not proceed to produce a raw provider error under a `Completed` status, which any automation
+  would read as success.
   (Exhausted-fallback alone is not fatal: a deployment whose keys live in factory config is
   invisible to the credential resolver yet builds agents and runs normally.)
 
