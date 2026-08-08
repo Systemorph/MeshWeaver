@@ -129,6 +129,10 @@ the whole explanation for "the module is merged but I cannot find it".
 
 ### Adding a NEW module to an instance
 
+The supported answer is now **auto-discovery on the repo** — see below; turn the two flags on and a
+newly merged module provisions itself as SYSTEM. What follows is what happens under the covers, and
+what you still do by hand on a source that has not opted in.
+
 A new module needs a Space *and* a sync entry, and the order matters:
 
 1. **Do not hand-create the Space.** Creating it makes the creator **Admin on a system-owned
@@ -160,10 +164,48 @@ A new module needs a Space *and* a sync entry, and the order matters:
 - Does every folder named by `installPaths`, an embed, or a `shared=` have a backing node file?
 - If the symptom smells like core behaviour: is the running image new enough?
 
-### Where this is going — auto-discovery per repo
+### Auto-discovery per repo — the configuration lives on the REPO
 
-Requiring one entry per Space is why modules go missing, so the configuration is moving **up to the
-repo**: a configured plugin repo gains *auto-discover new modules* and *auto-sync discovered
-modules* settings, and a build event then provisions any new module as SYSTEM, writes its
-`_GitSync`, imports and recompiles it — with no per-Space interaction, gated by the free-vs-
-commercial permission rule. Removed modules are surfaced as orphaned, never auto-deleted.
+Requiring one entry per Space is why modules go missing, so the unit of configuration is the
+**repo**, not the Space. A configured plugin source carries two flags next to the repo and ref it
+already had:
+
+```
+PluginCatalog:Sources:0:RepoPath        https://github.com/…/MeshWeaver.Plugins
+PluginCatalog:Sources:0:Ref             main
+PluginCatalog:Sources:0:AutoDiscover    true      # enumerate the repo's modules, report what is missing
+PluginCatalog:Sources:0:AutoSync        true      # provision the missing ones, unattended
+```
+
+Both default to **false**, and only a literal `true` opts in — a typo can never be what enables
+unattended Space creation. They belong in the deployment's Helm values, beside the source itself.
+
+`ModuleDiscoveryService` scans once at boot (after the default install settles) and again on every
+green build of the repo — it subscribes to the same `Admin/_Build/{owner}.{repo}` node the update
+watcher does, so nothing polls. Scans are serialized, so two never write partitions at once.
+
+**What a scan does per module**, in this order:
+
+1. Already has a `{Space}/_GitSync`, or an install record ⇒ `Synced` / `Installed`, nothing done.
+2. Its path is already occupied by another Space ⇒ `Occupied`, **left alone**. Wiring a `_GitSync`
+   onto somebody's existing Space makes that partition system-owned and retracts its owner's
+   access — an unattended scan may not do that to content it did not create.
+3. Missing, `AutoSync` off ⇒ `Discovered`. Reported, nothing written.
+4. Missing, `AutoSync` on ⇒ **provisioned as SYSTEM**: the Space root, the `_GitSync`
+   (repo + subdirectory + branch, import-only, never creating a branch or repository), the module's
+   declared access, then the first import — which runs as the standard Update activity, so it
+   recompiles affected types exactly as a hand-run update does. Priced modules are `Refused` here by
+   the free-vs-commercial rule: an unattended scan has no authorizing principal.
+
+**Why SYSTEM is the whole point.** Creating the Space under the system identity means `createdBy` is
+`system-security`, and both grant-minting paths skip a System creator by construction — so no
+personal Admin grant is ever minted on a repo-owned partition, and there is nothing for the
+system-owned retraction handler to clean up afterwards. That is what makes "add a module to an
+instance" self-service at last.
+
+**Every verdict is recorded**, at `Admin/_Discovery/{owner}.{repo}` — one node per source, listing
+every module with its status, reason, first-seen and provisioned timestamps. A status that CHANGED
+since the last scan also raises a notification, so a refusal or a failure speaks instead of
+no-op'ing. Re-running is a genuine no-op: nothing written, nothing re-notified.
+
+Modules the repo has **dropped** are surfaced as `Orphaned`, never auto-deleted.
