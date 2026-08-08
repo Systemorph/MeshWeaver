@@ -241,6 +241,19 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         var schema = !string.IsNullOrEmpty(def.Schema) ? def.Schema : def.Namespace;
         if (string.IsNullOrEmpty(schema)) return def;
 
+        // 🚨 Defense-in-depth (#714): this is the LAST stop before
+        // public.ensure_partition_schema materialises the schema, so validate the resolved
+        // schema name here no matter which code path called (EnsurePartitionProvisioned,
+        // the boot-time static-partition seeding, tests). A URL/query-string-shaped name
+        // (`search?q=…`, `login?returnurl=…`) must never become a schema — fail LOUD,
+        // naming the offender, instead of provisioning junk the router can never route to.
+        // (Explicit schemas of the `_`-prefix globals — `system_access` etc. — are ordinary
+        // identifiers and pass; the rule constrains shape, not the registered names.)
+        if (!PartitionDefinition.IsValidPartitionSegment(schema))
+            throw new ArgumentException(
+                $"Cannot provision partition '{def.Namespace}' (schema '{schema}'): "
+                + $"{PartitionDefinition.PartitionSegmentRequirement}.");
+
         if (_schemasInitialized.ContainsKey(schema)) return def;
 
         // Single source of truth for per-partition DDL: the public.ensure_partition_schema
@@ -330,6 +343,18 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     {
         if (string.IsNullOrEmpty(@namespace))
             return Observable.Return(Unit.Default);
+        // 🚨 Defense-in-depth (#714): the namespace becomes the schema name verbatim
+        // (lowercased). The router already refuses to ROUTE malformed segments, but a
+        // deliberate top-level create — or any future caller — must never reach
+        // public.ensure_partition_schema with a URL-shaped id (`search?q=…`,
+        // `login?returnurl=…`: the junk schemas that filled the memex/memexcloud DBs).
+        // Fail BEFORE the promise-cache so the rejection is loud (OnError naming the
+        // offending id), never a cached silent no-op the caller mistakes for success.
+        if (!PartitionDefinition.IsValidPartitionSegment(@namespace))
+            return Observable.Throw<Unit>(new ArgumentException(
+                $"Cannot provision partition '{@namespace}': "
+                + $"{PartitionDefinition.PartitionSegmentRequirement}.",
+                nameof(@namespace)));
         var def = new PartitionDefinition
         {
             Namespace = @namespace,
