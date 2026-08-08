@@ -395,9 +395,9 @@ public class CrossPartitionSearchTests
         // testuser has NO partition_access to FutuRe or Contoso, and no grant there either,
         // so those nodes must not appear even though Markdown is flagged public_read.
         results.Should().NotContain(n => n.Id == "FutuRe",
-            "testuser has no access to FutuRe â€” a public_read row must not grant one");
+            "testuser has no access to FutuRe - a public_read row must not grant one");
         results.Should().NotContain(n => n.Id == "Contoso",
-            "testuser has no access to Contoso â€” a public_read row must not grant one");
+            "testuser has no access to Contoso - a public_read row must not grant one");
         results.Should().NotContain(n => n.Id == "Report" && n.Namespace == "FutuRe",
             "FutuRe child nodes must also be hidden");
         results.Should().NotContain(n => n.Id == "Report" && n.Namespace == "Contoso",
