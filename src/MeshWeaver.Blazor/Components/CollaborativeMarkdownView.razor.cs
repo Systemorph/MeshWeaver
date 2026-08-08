@@ -911,17 +911,10 @@ public partial class CollaborativeMarkdownView
         _ => "Change"
     };
 
-    // The relative buckets are zone-independent; only the absolute >7d fallback is a wall
-    // clock, so that one renders in the viewer's zone.
+    // The formatting itself lives in the hub-free Collaboration project so its tests exercise
+    // the shipping function (#788); this wrapper only resolves the viewer's zone id.
     internal static string FormatTimeAgo(DateTimeOffset dateTime, string? zoneId = null)
-    {
-        var timeSpan = DateTimeOffset.UtcNow - dateTime;
-        if (timeSpan.TotalMinutes < 1) return "just now";
-        if (timeSpan.TotalMinutes < 60) return $"{(int)timeSpan.TotalMinutes}m ago";
-        if (timeSpan.TotalHours < 24) return $"{(int)timeSpan.TotalHours}h ago";
-        if (timeSpan.TotalDays < 7) return $"{(int)timeSpan.TotalDays}d ago";
-        return DisplayTimeExtensions.ToDisplayTime(dateTime, zoneId).ToString("MMM d, yyyy");
-    }
+        => TimeAgo.Format(dateTime, DisplayTimeExtensions.ResolveZone(zoneId));
 
     /// <summary>
     /// Disposes the JavaScript interop module, releases the <c>DotNetObjectReference</c>,
