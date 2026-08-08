@@ -227,32 +227,31 @@ public class AccessControlQueryTests
         results.Cast<MeshNode>().Single().Path.Should().Be("ACME/Docs/Public");
     }
 
+    /// <summary>
+    /// 🔒 #953 — no node type is readable on the strength of its TYPE. The predicate used to OR in
+    /// <c>EXISTS(node_type_permissions … public_read)</c>, which read a table nothing ever wrote;
+    /// this pins the replacement invariant: with zero grants a reader sees nothing, whatever the
+    /// node type. The types below are drawn from the ~24 that declared <c>WithPublicRead</c>.
+    /// </summary>
     [Fact]
-    public async Task NodeTypeDefinitionsAlwaysVisible()
+    public async Task WithoutGrants_NoNodeTypeIsVisible()
     {
-        var ct = TestContext.Current.CancellationToken;
         await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
 
-        // Register NodeType as public-read (normally done by AddGraph() at startup)
-        await _fixture.AccessControl.SyncNodeTypePermissionsAsync(
-            [new MeshWeaver.Mesh.Security.NodeTypePermission("NodeType", PublicRead: true)], ct)
-            .Run().Should().Within(30.Seconds()).Emit();
-
-        // Seed a NodeType definition and a regular node — no access grants at all
         await Write(new MeshNode("Space", "") { Name = "Space", NodeType = "NodeType" });
         await Write(new MeshNode("ACME", "") { Name = "ACME Corp", NodeType = "Space" });
-        await Write(new MeshNode("Secret", "Private") { Name = "Secret", NodeType = "Document" });
+        await Write(new MeshNode("Readme", "Private") { Name = "Readme", NodeType = "Markdown" });
+        await Write(new MeshNode("Chat", "Private") { Name = "Chat", NodeType = "Thread" });
+        await Write(new MeshNode("Lesson", "Private") { Name = "Lesson", NodeType = "Module" });
 
-        // Query as unknown user with zero grants
+        // Query as an authenticated user with zero grants.
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQuery("scope:descendants", "nobody");
 
         var results = await Query(query, request);
 
-        var paths = results.Cast<MeshNode>().Select(n => n.Path).ToList();
-        paths.Should().Contain("Space", "NodeType definitions are always publicly readable");
-        paths.Should().NotContain("ACME", "Space instances require explicit grants");
-        paths.Should().NotContain("Private/Secret", "Regular nodes require explicit grants");
+        results.Should().BeEmpty(
+            "deny-by-default is the only floor — no node type carries an implicit read grant");
     }
 
     [Fact]
@@ -394,73 +393,108 @@ public class AccessControlQueryTests
     }
 
     /// <summary>
-    /// Seeds the node_type_permissions table with public-read entries for User and Space.
+    /// 🔒 #953 — the store/course paywall shape, which is what the removed node-type public-read
+    /// term would have broken. A public surface everyone may read (<c>Store</c>, the projection of a
+    /// <c>PartitionAccessPolicy { PublicRead = true }</c> <c>_Policy</c> — issue #603), gated content
+    /// behind a DENY at a deeper prefix (<c>Store/Course1/Paid</c>), and one entitled buyer with an
+    /// explicit allow at that prefix.
+    ///
+    /// <para><c>Course</c>, <c>Module</c>, <c>Exercise</c> and <c>Markdown</c> were all among the ~24
+    /// types that declared <c>WithPublicRead</c>. A re-introduced <c>public_read OR …</c> term would
+    /// short-circuit the longest-prefix fold and OR straight past the DENY, so every one of these
+    /// negative assertions is a direct guard against re-granting paid content.</para>
     /// </summary>
-    private async Task SeedPublicReadPermissions()
+    private async Task SeedPaywalledCourse()
     {
+        var ct = TestContext.Current.CancellationToken;
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var ac = _fixture.AccessControl;
-        await ac.SyncNodeTypePermissionsAsync([
-            new NodeTypePermission("User", PublicRead: true),
-            new NodeTypePermission("Space", PublicRead: true)
-        ], TestContext.Current.CancellationToken).Run().Should().Within(30.Seconds()).Emit();
+
+        await Write(new MeshNode("Course1", "Store") { Name = "Course One", NodeType = "Course" });
+        await Write(new MeshNode("Overview", "Store/Course1") { Name = "Overview", NodeType = "Markdown" });
+        await Write(new MeshNode("Module1", "Store/Course1/Paid") { Name = "Module One", NodeType = "Module" });
+        await Write(new MeshNode("Exercise1", "Store/Course1/Paid") { Name = "Exercise One", NodeType = "Exercise" });
+        await Write(new MeshNode("Notes", "Store/Course1/Paid") { Name = "Notes", NodeType = "Markdown" });
+
+        // The public surface — what a PublicRead _Policy at `Store` projects into
+        // user_effective_permissions for the Public/Anonymous subjects.
+        await ac.Grant("Store", "Public", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
+        // The paywall — a DENY at the deeper prefix; the per-subject longest-prefix fold makes it win.
+        await ac.Grant("Store/Course1/Paid", "Public", "Read", isAllow: false, ct).Should().Within(30.Seconds()).Emit();
+        // The entitlement — one explicit allow for the buyer at the gated prefix.
+        await ac.Grant("Store/Course1/Paid", "alice", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
     }
 
     [Fact]
-    public async Task PublicReadNodeTypes_VisibleWithoutExplicitGrants()
+    public async Task PaywalledContent_StaysInvisibleToUnentitledReader()
     {
-        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
-        await SeedPublicReadPermissions();
-
-        // Seed User and Space nodes (public-read types) plus a regular node
-        await Write(new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" });
-        await Write(new MeshNode("Acme") { Name = "Acme Corp", NodeType = "Space" });
-        await Write(new MeshNode("Secret", "Private") { Name = "Secret Doc", NodeType = "Document" });
+        await SeedPaywalledCourse();
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var results = (await Query(query, MeshQueryRequest.FromQuery("scope:descendants", "bob")))
+            .OfType<MeshNode>().Select(n => n.Path).ToList();
 
-        // Query as unprivileged user with NO explicit grants
-        var request = MeshQueryRequest.FromQuery("scope:descendants", "alice");
-        var results = (await Query(query, request)).OfType<MeshNode>().ToList();
-
-        var paths = results.Select(n => n.Path).ToList();
-        paths.Should().Contain("User/Roland", "User nodes are publicly readable");
-        paths.Should().Contain("Acme", "Space nodes are publicly readable");
-        paths.Should().NotContain("Private/Secret", "Document nodes still require explicit grants");
+        results.Should().Contain("Store/Course1", "the course cover is the public surface");
+        results.Should().Contain("Store/Course1/Overview", "the marketing page is the public surface");
+        results.Should().NotContain("Store/Course1/Paid/Module1", "Module is paid content behind the deny");
+        results.Should().NotContain("Store/Course1/Paid/Exercise1", "Exercise is paid content behind the deny");
+        results.Should().NotContain("Store/Course1/Paid/Notes", "Markdown under the deny is paid content too");
     }
 
     [Fact]
-    public async Task PublicReadNodeTypes_NotVisibleToAnonymous()
+    public async Task PaywalledContent_StaysInvisibleToAnonymous()
     {
-        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
-        await SeedPublicReadPermissions();
-
-        await Write(new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" });
+        await SeedPaywalledCourse();
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var results = (await Query(query, MeshQueryRequest.FromQuery("scope:descendants", WellKnownUsers.Anonymous)))
+            .OfType<MeshNode>().Select(n => n.Path).ToList();
 
-        var request = MeshQueryRequest.FromQuery("scope:descendants", WellKnownUsers.Anonymous);
-        var results = (await Query(query, request)).OfType<MeshNode>().ToList();
-
-        results.Should().BeEmpty("Anonymous users should not see public-read nodes without explicit grants");
+        results.Should().BeEmpty(
+            "Anonymous does not inherit the Public baseline, so it sees neither the cover nor the paid content");
     }
 
     [Fact]
-    public async Task PublicReadNodeTypes_QueryByNodeType()
+    public async Task PaywalledContent_VisibleToEntitledReader()
     {
-        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
-        await SeedPublicReadPermissions();
-
-        await Write(new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" });
-        await Write(new MeshNode("Alice", "User") { Name = "Alice", NodeType = "User" });
-        await Write(new MeshNode("Acme") { Name = "Acme", NodeType = "Space" });
+        await SeedPaywalledCourse();
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var results = (await Query(query, MeshQueryRequest.FromQuery("scope:descendants", "alice")))
+            .OfType<MeshNode>().Select(n => n.Path).ToList();
 
-        // Query by nodeType:User as unprivileged user
-        var request = MeshQueryRequest.FromQuery("nodeType:User", "bob");
-        var results = (await Query(query, request)).OfType<MeshNode>().ToList();
+        results.Should().Contain("Store/Course1/Paid/Module1", "alice bought the course");
+        results.Should().Contain("Store/Course1/Paid/Exercise1");
+        results.Should().Contain("Store/Course1/Paid/Notes");
+    }
 
-        results.Should().HaveCount(2, "Both User nodes should be publicly readable");
-        results.Select(n => n.Path).Should().BeEquivalentTo(new[] { "User/Roland", "User/Alice" }, JsonSerializerOptions.Default);
+    /// <summary>
+    /// 🔒 #953 — the anti-regression test. <c>node_type_permissions</c> still EXISTS for one release
+    /// (a rolling deploy's older replicas still name it), so a populated row is exactly the state a
+    /// naive "just wire the sync up" fix would produce. The predicate must ignore it completely.
+    ///
+    /// <para>Delete this test together with the table in the follow-up drop migration.</para>
+    /// </summary>
+    [Fact]
+    public async Task PopulatedLegacyNodeTypePermissions_DoNotBypassThePaywallDeny()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPaywalledCourse();
+
+        // Exactly what wiring the deleted SyncNodeTypePermissionsAsync back up would write.
+        foreach (var nodeType in new[] { "Course", "Module", "Exercise", "Markdown" })
+            await _fixture.DataSource.ExecuteNonQuery(
+                $"INSERT INTO node_type_permissions (node_type, public_read) VALUES ('{nodeType}', true) "
+                + "ON CONFLICT (node_type) DO UPDATE SET public_read = true", ct)
+                .Should().Within(30.Seconds()).Emit();
+
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var results = (await Query(query, MeshQueryRequest.FromQuery("scope:descendants", "bob")))
+            .OfType<MeshNode>().Select(n => n.Path).ToList();
+
+        results.Should().NotContain("Store/Course1/Paid/Module1",
+            "a public_read row must NOT override the paywall deny — that is the #953 breach");
+        results.Should().NotContain("Store/Course1/Paid/Exercise1");
+        results.Should().NotContain("Store/Course1/Paid/Notes");
     }
 }

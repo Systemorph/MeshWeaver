@@ -19,18 +19,20 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// (<c>source:activity</c>) fan-out and any unscoped <c>nodeType:Markdown/Thread</c> query
 /// route through <see cref="PostgreSqlSqlGenerator"/>'s <c>BuildPerSchemaAccessClause</c>. That
 /// clause used to emit <c>public_read OR (partition_access AND node)</c> — the lone outlier that
-/// OR'd public_read OUTSIDE the partition gate — so a partition's public-read content (Markdown,
-/// Threads, …) leaked into a user's feed even with NO access to that partition (the "listed but
-/// access-denied on open" symptom). The documented invariant (AccessControl.md, the
-/// <c>search_across_schemas</c> stored proc, the schema-qualified <c>GenerateAccessControlClause</c>)
-/// is <c>partition_access AND (public_read OR node)</c>.
+/// OR'd public_read OUTSIDE the partition gate — so a partition's publicly-readable content
+/// (Markdown, Threads, …) leaked into a user's feed even with NO access to that partition (the
+/// "listed but access-denied on open" symptom).
 ///
-/// <para>These tests pin BOTH sides: (a) DENY — a partition's public-read Markdown / Thread /
-/// activity feed is NOT visible to a user with no access to it; (b) ALLOW — a genuinely GRANTED
-/// cross-partition node (including a shared thread) STILL appears; and (c) the GUARDRAIL — the
-/// <c>auth</c> global identity directory keeps its public-read visibility (display-name
-/// resolution / subject picker / login) even though no user holds a <c>partition_access</c> row
-/// for it, while a NON-auth partition's public-read User node stays gated.</para>
+/// <para>🔒 #953 — the invariant is now simply <c>partition_access AND node</c>: the node-type
+/// <c>public_read</c> term (and the <c>auth</c> exemption written against it) is gone entirely.
+/// "Publicly readable" is expressed as an allow-Read grant to the well-known <c>Public</c> subject,
+/// which PARTICIPATES in the longest-prefix fold instead of short-circuiting it.</para>
+///
+/// <para>These tests pin BOTH sides: (a) DENY — a partition's publicly-granted Markdown / Thread /
+/// activity feed is NOT visible to a user with no access to that partition; (b) ALLOW — a genuinely
+/// GRANTED cross-partition node (including a shared thread) STILL appears; and (c) the GUARDRAIL —
+/// the <c>auth</c> global identity directory stays resolvable through its own Public grant, while a
+/// data partition's publicly-granted User node stays gated.</para>
 /// </summary>
 [Collection("PostgreSql")]
 public class PerSchemaAccessClauseLeakTests
@@ -118,7 +120,7 @@ public class PerSchemaAccessClauseLeakTests
             Name = "edit", NodeType = "Activity", MainNode = "FutuRe/Report",
             State = MeshNodeState.Active, Content = new ActivityLog("DataUpdate") { HubPath = "FutuRe/Report" }
         }, _options, ct);
-        // A public-read User node in a DATA partition — must stay gated (deny control).
+        // A publicly-granted User node in a DATA partition — must stay gated (deny control).
         await future.WriteAsync(new MeshNode("futureuser")
         {
             Name = "Future User", NodeType = "User", State = MeshNodeState.Active
@@ -135,34 +137,54 @@ public class PerSchemaAccessClauseLeakTests
             State = MeshNodeState.Active, Content = new MeshThread { CreatedBy = "someone" }
         }, _options, ct);
 
-        // ── auth (global identity directory) — a public-read User node ──
+        // ── auth (global identity directory) — the shared User node ──
         await auth.WriteAsync(new MeshNode("shareduser")
         {
             Name = "Shared Directory User", NodeType = "User", State = MeshNodeState.Active,
             Content = new MeshWeaver.Mesh.Security.User { Email = "shared@example.com" }
         }, _options, ct);
 
-        // public_read node types per schema (Markdown/Thread/User; Document is NOT public_read).
-        foreach (var (schema, types) in new[]
-                 {
-                     ("acme", new[] { "Markdown", "Thread" }),
-                     ("future", new[] { "Markdown", "Thread", "User" }),
-                     ("beta", new[] { "Markdown", "Thread" }),
-                     ("auth", new[] { "User", "Group", "Role" }),
-                 })
+        // 🔒 #953 — the public content surface is now a Read grant to the well-known `Public`
+        // subject (what a PartitionAccessPolicy { PublicRead = true } `_Policy` projects into
+        // user_effective_permissions, #603), NOT a node-type flag. Granting at each partition ROOT
+        // is what makes every negative assertion below non-vacuous: the content genuinely IS
+        // readable inside its own partition, so the only thing that can hide it from this user is
+        // the PARTITION gate. (The prefix must match `main_node`, and a satellite thread's
+        // main_node is the partition root, not its `_Thread` namespace.)
+        foreach (var (schema, ns) in new[] { ("acme", "ACME"), ("future", "FutuRe"), ("beta", "Beta") })
         {
-            foreach (var t in types)
-                await Exec(
-                    $"INSERT INTO \"{schema}\".node_type_permissions (node_type, public_read) " +
-                    $"VALUES ('{t}', true) ON CONFLICT (node_type) DO UPDATE SET public_read = true", ct);
+            await Exec(
+                $"INSERT INTO \"{schema}\".user_effective_permissions (user_id, node_path_prefix, permission, is_allow) " +
+                $"VALUES ('Public', '{ns}', 'Read', true) ON CONFLICT DO NOTHING", ct);
         }
+        // `Beta/Secret` is carved back OUT of the public surface with a deny at the deeper prefix,
+        // so it stays reachable ONLY through the explicit cross-partition grant below — which is
+        // what GrantedCrossPartitionNode_IsStillVisible asserts.
+        await Exec(
+            "INSERT INTO beta.user_effective_permissions (user_id, node_path_prefix, permission, is_allow) " +
+            "VALUES ('Public', 'Beta/Secret', 'Read', false) ON CONFLICT DO NOTHING", ct);
+        // The deny control in `future`: its User node is publicly granted INSIDE its own partition
+        // (its main_node is the bare id, which the 'FutuRe' prefix does not cover).
+        await Exec(
+            "INSERT INTO future.user_effective_permissions (user_id, node_path_prefix, permission, is_allow) " +
+            "VALUES ('Public', 'futureuser', 'Read', true) ON CONFLICT DO NOTHING", ct);
+
+        // The global identity directory: a PublicRead `_Policy` on the `auth` partition — an
+        // allow-Read row for `Public` AND the partition_access row the uep rebuild derives from it.
+        // This is what keeps display-name resolution / the subject picker working. It replaces the
+        // node-type `auth` EXEMPTION the generator used to carry, which read node_type_permissions
+        // and was therefore inert in every real deployment (issue #953).
+        await Exec(
+            "INSERT INTO auth.user_effective_permissions (user_id, node_path_prefix, permission, is_allow) " +
+            "VALUES ('Public', '', 'Read', true) ON CONFLICT DO NOTHING", ct);
 
         // Access: user has partition + Read on ACME; a node-level grant on beta/Secret (which also
-        // grants partition_access to beta). NO access to future. NO partition_access to auth.
+        // grants partition_access to beta). NO access to future. NO partition_access to auth
+        // in the user's OWN name — the directory is reached through the `Public` subject.
         await Exec("DELETE FROM public.partition_access WHERE user_id = '" + User + "'", ct);
         await Exec(
             "INSERT INTO public.partition_access (user_id, partition) VALUES " +
-            $"('{User}', 'acme'), ('{User}', 'beta') ON CONFLICT DO NOTHING", ct);
+            $"('{User}', 'acme'), ('{User}', 'beta'), ('Public', 'auth') ON CONFLICT DO NOTHING", ct);
         await Exec(
             "INSERT INTO acme.user_effective_permissions (user_id, node_path_prefix, permission, is_allow) " +
             $"VALUES ('{User}', 'ACME', 'Read', true) ON CONFLICT DO NOTHING", ct);
@@ -172,7 +194,7 @@ public class PerSchemaAccessClauseLeakTests
     }
 
     [Fact(Timeout = 90000)]
-    public async Task PublicReadMarkdownFeed_DoesNotLeakUngrantedPartition()
+    public async Task PubliclyGrantedMarkdownFeed_DoesNotLeakUngrantedPartition()
     {
         var ct = TestContext.Current.CancellationToken;
         await SetupAsync(ct);
@@ -184,7 +206,7 @@ public class PerSchemaAccessClauseLeakTests
         var paths = results.Select(n => n.Path).ToList();
         paths.Should().Contain("ACME/Report", "the user has access to ACME");
         paths.Should().NotContain("FutuRe/Report",
-            "public_read must NOT bypass the partition gate — the user has no access to future");
+            "the partition gate must hold — the user has no access to future");
     }
 
     [Fact(Timeout = 90000)]
@@ -200,11 +222,11 @@ public class PerSchemaAccessClauseLeakTests
         var paths = results.Select(n => n.Path).ToList();
         paths.Should().Contain("ACME/Report", "the user has access to ACME's activity feed");
         paths.Should().NotContain("FutuRe/Report",
-            "the Last-Edited (source:activity) feed must not surface an ungranted partition's public-read node");
+            "the Last-Edited (source:activity) feed must not surface an ungranted partition node");
     }
 
     [Fact(Timeout = 90000)]
-    public async Task PublicReadThreadFeed_LeaksNothingUngranted_ButShowsGrantedPartition()
+    public async Task PubliclyGrantedThreadFeed_LeaksNothingUngranted_ButShowsGrantedPartition()
     {
         var ct = TestContext.Current.CancellationToken;
         await SetupAsync(ct);
@@ -216,9 +238,9 @@ public class PerSchemaAccessClauseLeakTests
         var paths = results.Select(n => n.Path).ToList();
         paths.Should().Contain("ACME/_Thread/acme-thread-1", "the user has access to ACME");
         paths.Should().Contain("Beta/_Thread/beta-thread-1",
-            "a shared thread in a partition the user was granted into stays visible (public_read + partition_access)");
+            "a shared thread in a partition the user was granted into stays visible (Public grant + partition_access)");
         paths.Should().NotContain("FutuRe/_Thread/future-thread-1",
-            "an ungranted partition's public-read thread must not leak into the fan-out");
+            "an ungranted partition thread must not leak into the fan-out");
     }
 
     [Fact(Timeout = 90000)]
@@ -227,7 +249,7 @@ public class PerSchemaAccessClauseLeakTests
         var ct = TestContext.Current.CancellationToken;
         await SetupAsync(ct);
 
-        // beta/Secret is a Document (NOT public_read) — visible ONLY via the explicit node-level
+        // beta/Secret carries NO Public grant — visible ONLY via the explicit node-level
         // cross-partition Read grant. Proves the fix keeps genuinely-shared content reachable.
         var results = await FanOut(
             Parse("nodeType:Document is:main"),
@@ -237,34 +259,41 @@ public class PerSchemaAccessClauseLeakTests
             "a genuinely-granted cross-partition node must remain visible");
     }
 
+    /// <summary>
+    /// 🔒 #953 — the pinned <c>nodeType:User → auth</c> route. The identity directory stays
+    /// resolvable because the `auth` partition carries a PublicRead `_Policy`-shaped grant (an
+    /// allow-Read row for `Public`, plus the `partition_access` row the rebuild derives from it) —
+    /// NOT because the generator special-cases the schema. The old <c>auth</c> exemption OR'd a
+    /// <c>node_type_permissions</c> lookup OUTSIDE the partition gate; since nothing ever wrote
+    /// that table, it granted nothing in any real deployment and was removed with the rest of the
+    /// term.
+    /// </summary>
     [Fact(Timeout = 90000)]
-    public async Task AuthDirectory_UserRoute_StaysResolvable_WithoutPartitionAccess()
+    public async Task AuthDirectory_UserRoute_ResolvableViaPublicGrant()
     {
         var ct = TestContext.Current.CancellationToken;
         await SetupAsync(ct);
 
-        // The pinned nodeType:User → auth route. The user holds NO partition_access to auth, yet
-        // display-name resolution / subject picker / login require the public identity directory
-        // to stay resolvable. The auth exemption preserves exactly that.
         var results = await FanOut(
             Parse("nodeType:User"), "mesh_nodes", ["auth"], User, ct);
 
         results.Select(n => n.Path).Should().Contain("shareduser",
-            "the auth identity directory must stay readable to every authenticated user (name resolution)");
+            "the auth identity directory is readable through its Public Read grant (name resolution)");
     }
 
     [Fact(Timeout = 90000)]
-    public async Task NonAuthPartition_PublicReadUser_StaysGatedByPartitionAccess()
+    public async Task NonAuthPartition_PubliclyGrantedUser_StaysGatedByPartitionAccess()
     {
         var ct = TestContext.Current.CancellationToken;
         await SetupAsync(ct);
 
-        // Deny control: the auth exemption is auth-ONLY. A public-read User node living in a
-        // DATA partition the user cannot access must still be gated.
+        // Deny control, and the reason this is not vacuous: `futureuser` IS granted to `Public`
+        // inside its own partition, so the ONLY thing hiding it is the partition gate. No schema
+        // gets an exemption from that gate — there is no node-type escape hatch any more.
         var results = await FanOut(
             Parse("nodeType:User"), "mesh_nodes", ["future"], User, ct);
 
         results.Select(n => n.Path).Should().NotContain("futureuser",
-            "a non-auth partition's public-read User must not bypass the partition gate");
+            "a data partition's publicly-granted User must not bypass the partition gate");
     }
 }

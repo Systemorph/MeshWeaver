@@ -39,10 +39,11 @@ public class UserNamespaceAccessTests
         var adapter = _fixture.StorageAdapter;
         var ac = _fixture.AccessControl;
 
-        // Register User as a public-read node type
-        await ac.SyncNodeTypePermissionsAsync([
-            new NodeTypePermission("User", PublicRead: true)
-        ], ct).Run().Should().Within(30.Seconds()).Emit();
+        // 🔒 #953 — "the profile is discoverable, its content is not" is expressed with GRANTS, not
+        // with a node-type flag. A prefix grant inherits strictly downward, so opening the profile
+        // node means also denying the subtree beneath it — the per-subject longest-prefix fold makes
+        // the deeper deny win. (This asymmetry is exactly why NodeTypeGate.Self exists, see #701.)
+        // Applied after the nodes are seeded, at the bottom of this method.
 
         // Seed User nodes
         await adapter.Write(new MeshNode("Alice", "User")
@@ -75,6 +76,10 @@ public class UserNamespaceAccessTests
         {
             await ac.Grant("User/Bob", "Bob", perm, isAllow: true, ct).Should().Within(30.Seconds()).Emit();
         }
+
+        // Profiles discoverable by every authenticated reader, their content NOT (see the note above).
+        await ac.Grant("User/Alice", "Public", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
+        await ac.Grant("User/Alice/MyProject", "Public", "Read", isAllow: false, ct).Should().Within(30.Seconds()).Emit();
     }
 
     [Fact]
@@ -83,11 +88,11 @@ public class UserNamespaceAccessTests
         await SeedUserNamespaceData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        // Bob queries for User/Alice â€” should be visible via public-read on User nodeType
+        // Bob queries for User/Alice — visible via the Public allow-Read grant on the profile node
         var request = MeshQueryRequest.FromQuery("path:User/Alice", "Bob");
         var results = await Query(query, request);
 
-        results.Should().HaveCount(1, "User/Alice should be visible to Bob via public-read on User nodeType");
+        results.Should().HaveCount(1, "User/Alice is granted Read to the Public subject");
         results[0].Path.Should().Be("User/Alice");
         results[0].Name.Should().Be("Alice");
     }

@@ -578,7 +578,6 @@ public class PostgreSqlSqlGenerator
             // Falls back to the branch schema when no user schema is supplied (legacy shape).
             var userActivityTable = $"\"{activityUserSchema ?? schema}\".\"user_activities\"";
             var uepTable = $"\"{schema}\".\"user_effective_permissions\"";
-            var ntpTable = $"\"{schema}\".\"node_type_permissions\"";
 
             // For source:activity, project the JOINed activity's last_modified into
             // the same column slot so the outer ORDER BY ranks rows by activity recency.
@@ -599,7 +598,7 @@ public class PostgreSqlSqlGenerator
                 selectSql += $" INNER JOIN {activityTable} act ON act.main_node = n.path" +
                              " AND act.node_type = 'Activity'";
 
-            var accessClause = BuildPerSchemaAccessClause(userId, schema, uepTable, ntpTable, parameters);
+            var accessClause = BuildPerSchemaAccessClause(userId, schema, uepTable, parameters);
             var mainNodeFilter = (isActivity || isAccessed) ? "n.main_node = n.path" : null;
 
             var clauses = new List<string>();
@@ -687,7 +686,7 @@ public class PostgreSqlSqlGenerator
     }
 
     private string BuildPerSchemaAccessClause(
-        string? userId, string schema, string uepTable, string ntpTable,
+        string? userId, string schema, string uepTable,
         Dictionary<string, object> parameters)
     {
         if (string.IsNullOrEmpty(userId))
@@ -700,9 +699,6 @@ public class PostgreSqlSqlGenerator
 
         var userList = userId == MeshWeaver.Mesh.Security.WellKnownUsers.Anonymous
             ? paramName : $"{paramName}, 'Public'";
-
-        var publicReadClause = userId == MeshWeaver.Mesh.Security.WellKnownUsers.Anonymous ? "" :
-            $"EXISTS (SELECT 1 FROM {ntpTable} ntp WHERE ntp.node_type = n.node_type AND ntp.public_read = true)";
 
         var partitionAccessExists = $"EXISTS (SELECT 1 FROM public.partition_access pa WHERE pa.user_id IN ({userList}) AND pa.partition = '{schema}')";
 
@@ -726,41 +722,24 @@ public class PostgreSqlSqlGenerator
 
         // 🔒 #471/#385 RC3 — the documented invariant (AccessControl.md, search_across_schemas,
         // and the schema-qualified GenerateAccessControlClause) is
-        //   partition_access AND (public_read OR node)
-        // — public_read SKIPS the node-level check but NEVER the partition gate, so a partition's
-        // public-read content (Markdown, Threads, …) does not leak into another tenant's unscoped
-        // fan-out feed. BuildPerSchemaAccessClause was the lone outlier that OR'd public_read
-        // OUTSIDE the partition gate, so cross-partition public-read rows leaked into the
-        // "Last Edited" (source:activity) feed → the "listed but access-denied on open" symptom.
+        //   partition_access AND node
+        // so a partition's content never leaks into another tenant's unscoped fan-out feed.
         //
-        // EXCEPTION — the 'auth' mirror is the GLOBAL public identity directory (User/Group/Role/
-        // VUser replicated across every tenant). It is deliberately EXCLUDED from the tenant fan-out
-        // (PostgreSqlCrossSchemaQueryProvider.ExcludedSchemas) and reached ONLY by the pinned
-        // identity routes (e.g. nodeType:User → auth). Its public-read identity nodes MUST stay
-        // resolvable to every authenticated user regardless of partition_access — display-name
-        // resolution, invites, @-mentions, the subject picker and login all depend on it, and NO
-        // user holds a partition_access row for 'auth'. Non-public node types in auth (e.g.
-        // ApiToken) still fall through to the node-level check, so this exemption exposes only the
-        // public identity directory it is meant to. Because auth is never part of the feed fan-out,
-        // this cannot reopen the cross-partition leak.
-        if (string.Equals(schema, PublicDirectorySchema, StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrEmpty(publicReadClause))
-            return $"({publicReadClause} OR ({partitionAccessExists} AND ({nodeAccess})))";
-
-        if (!string.IsNullOrEmpty(publicReadClause))
-            return $"({partitionAccessExists} AND ({publicReadClause} OR ({nodeAccess})))";
-
+        // 🔒 #953 — the `public_read OR …` term that used to sit here (and its 'auth' exemption,
+        // which OR'd it OUTSIDE the partition gate) is GONE. It read `{schema}.node_type_permissions`,
+        // a table NOTHING in the product ever wrote: the sole writer, SyncNodeTypePermissionsAsync,
+        // hung off InitializePostgreSqlSchemaAsync, which had zero callers. The clause was therefore
+        // a constant `false` in every deployment, and removing it is a provable no-op.
+        //
+        // It must not come back in this shape. `public_read` was an UNCONDITIONAL OR that
+        // short-circuited the per-subject longest-prefix fold below — i.e. it overrode a DENY, which
+        // is exactly where store/course paywall gating lives. Node-type-keyed public read also has
+        // no counterpart in PermissionEvaluator, so SQL listing and evaluator reads would diverge.
+        // The supported, dual-path public-read mechanisms are PartitionAccessPolicy._Policy
+        // (PublicRead → projected as allow-Read uep rows that PARTICIPATE in the prefix fold, #603)
+        // and NodeTypeGate (#701).
         return $"({partitionAccessExists} AND ({nodeAccess}))";
     }
-
-    /// <summary>
-    /// The global public identity directory schema — the cross-tenant mirror of User/Group/Role/
-    /// VUser/ApiToken nodes. It is excluded from the tenant fan-out and reached only by pinned
-    /// identity routes; its public-read identity nodes stay resolvable to all authenticated users
-    /// regardless of partition_access (see <see cref="BuildPerSchemaAccessClause"/>). Kept in
-    /// lock-step with <c>PostgreSqlCrossSchemaQueryProvider.ExcludedSchemas</c>.
-    /// </summary>
-    private const string PublicDirectorySchema = "auth";
 
     /// <summary>
     /// SQL that replicates <c>DocumentPaths.Slug</c> (MeshWeaver.ContentCollections.Indexing) for a
@@ -1234,34 +1213,29 @@ public class PostgreSqlSqlGenerator
         _parameters[paramName] = userId;
         // Anonymous users only get their own permissions (no Public inheritance).
         // All other users also inherit Public permissions as a baseline floor.
-        // NodeType definitions (node_type = 'NodeType') are always publicly readable.
-        // Node types marked as public_read in node_type_permissions are visible to authenticated users.
         var userList = userId == WellKnownUsers.Anonymous
             ? $"{paramName}"
             : $"{paramName}, 'Public'";
 
         var uepTable = QualifyTable("user_effective_permissions");
-        var ntpTable = QualifyTable("node_type_permissions");
 
         // Partition-level access check (only for schema-qualified queries).
         // partition_access controls which schemas the user can see.
-        // Public-read node types bypass the partition check — they're visible to all authenticated users.
         var hasPartitionCheck = !string.IsNullOrEmpty(SchemaName);
         var partitionAccessExists = hasPartitionCheck
             ? $"EXISTS (SELECT 1 FROM public.partition_access pa WHERE pa.user_id IN ({userList}) AND pa.partition = '{SchemaName}')"
             : "";
 
-        // Public-read node types (e.g. User, Markdown) are visible to all authenticated users
-        // who have partition access. public_read skips node-level permission checks but
-        // still requires partition_access — prevents cross-partition data leakage.
-        var publicReadClause = userId == WellKnownUsers.Anonymous
-            ? ""
-            : $"EXISTS (SELECT 1 FROM {ntpTable} ntp WHERE ntp.node_type = n.node_type AND ntp.public_read = true)";
+        // 🔒 #953 — the `public_read` term over {schema}.node_type_permissions is GONE from this
+        // predicate. See BuildPerSchemaAccessClause for the full rationale; the short version is
+        // that the table had no product writer (so the term was a constant `false` everywhere),
+        // it OR'd past the DENY that paywall gating relies on, and the no-schema branch below
+        // OR'd it past the partition gate too. Public read is expressed by
+        // PartitionAccessPolicy._Policy (#603) / NodeTypeGate (#701), which both read paths honour.
 
         // Build the access control clause:
-        // A node is visible if the user has partition access (when schema-qualified) AND:
-        //   (a) public-read node type (no further permission check), OR
-        //   (b) owns the node OR has Read permission
+        // A node is visible if the user has partition access (when schema-qualified) AND
+        // owns the node OR has Read permission.
         //
         // The Read fold is per-SUBJECT closest-scope, then OR across subjects
         // (AccessControl.md; mirrors the AccessControlPipeline evaluator): DISTINCT ON
@@ -1286,16 +1260,6 @@ public class PostgreSqlSqlGenerator
         if (hasPartitionCheck)
         {
             // Schema-qualified: partition_access is always required.
-            // public_read skips node-level checks but NOT partition access.
-            if (!string.IsNullOrEmpty(publicReadClause))
-            {
-                return $"""
-                    (
-                        {partitionAccessExists} AND ({publicReadClause} OR {nodeAccessClause})
-                    )
-                    """;
-            }
-
             return $"""
                 (
                     {partitionAccessExists} AND ({nodeAccessClause})
@@ -1303,17 +1267,7 @@ public class PostgreSqlSqlGenerator
                 """;
         }
 
-        // No schema: just node-level access (or public-read bypass)
-        if (!string.IsNullOrEmpty(publicReadClause))
-        {
-            return $"""
-                (
-                    {publicReadClause}
-                    OR {nodeAccessClause}
-                )
-                """;
-        }
-
+        // No schema: just node-level access.
         return $"({nodeAccessClause})";
     }
 

@@ -420,7 +420,13 @@ public static class SnowflakeSchemaInitializer
         )
         """;
 
-    /// <summary>Node-type permission flags (populated from DI-registered NodeTypePermission records).</summary>
+    /// <summary>
+    /// 🔒 #953 — LEGACY, always empty, referenced by NOTHING. The <c>public_read</c> term that read
+    /// this table was removed from every generated predicate: no product code ever wrote a row (so
+    /// the term was a constant <c>false</c>), and it OR'd past the longest-prefix DENY fold that
+    /// paywall gating relies on. Kept for one release so a rolling deploy's older replicas, whose
+    /// generated SQL still names the table, do not fault; drop it in a follow-up.
+    /// </summary>
     private static string GetNodeTypePermissionsStatement(string schema) => $"""
         CREATE TABLE IF NOT EXISTS {SnowflakeIdentifiers.Qualify(schema, "node_type_permissions")} (
             "node_type"   TEXT NOT NULL PRIMARY KEY,

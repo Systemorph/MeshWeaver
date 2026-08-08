@@ -27,7 +27,6 @@ public static class CodeNodeType
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         return builder;
     }
 

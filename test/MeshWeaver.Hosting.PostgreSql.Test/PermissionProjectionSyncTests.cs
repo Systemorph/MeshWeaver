@@ -83,8 +83,8 @@ public class PermissionProjectionSyncTests
             Content = new Space()
         }, _options, ct);
 
-    /// <summary>A plain content node — "Document" is NOT public_read in node_type_permissions,
-    /// so the node-level projection fold (not the nodeType bypass) decides listing visibility.</summary>
+    /// <summary>A plain content node. Since #953 there is no node-type bypass at all, so the
+    /// node-level projection fold alone decides listing visibility — for every node type.</summary>
     private Task WriteDocAsync(PostgreSqlStorageAdapter adapter, string space, string id, CancellationToken ct)
         => adapter.WriteAsync(new MeshNode(id, space)
         {

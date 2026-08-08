@@ -50,7 +50,6 @@ public static class ExerciseAttemptNodeType
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         return builder;
     }
 

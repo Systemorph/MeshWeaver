@@ -50,7 +50,6 @@ public static class HomeConfigNodeType
         // Typed content so the home reads HomeConfig (not raw JSON) and the Edit form binds its fields.
         builder.ConfigureHub(config => config.WithType<HomeConfig>(nameof(HomeConfig)));
         // Platform config: readable by every user's home; only admins (Admin partition) can WRITE it.
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         // Seed the singleton with defaults (the GlobalSettings _Setting pattern) so it's editable at
         // once. If a backend doesn't materialise this Admin-partition seed, the in-code Defaults keep
         // the home correct and an admin can create the node in-platform.

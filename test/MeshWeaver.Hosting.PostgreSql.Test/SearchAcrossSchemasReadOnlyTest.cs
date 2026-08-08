@@ -11,12 +11,11 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// <b>read-only / public schemas that have <c>mesh_nodes</c> but NO per-partition
 /// permission tables</b> (the mirrored documentation lives in the <c>doc</c>
 /// schema — created by <c>DocumentationBackfill</c> — which ships
-/// <c>mesh_nodes</c> only, never <c>user_effective_permissions</c> /
-/// <c>node_type_permissions</c>).
+/// <c>mesh_nodes</c> only, never <c>user_effective_permissions</c>).
 ///
 /// <para><b>The bug.</b> For an authenticated user the proc appended an access
-/// sub-clause referencing <c>{schema}.user_effective_permissions</c> and
-/// <c>{schema}.node_type_permissions</c> for EVERY searchable schema. When one of
+/// sub-clause referencing <c>{schema}.user_effective_permissions</c> (and, before
+/// #953, <c>{schema}.node_type_permissions</c>) for EVERY searchable schema. When one of
 /// those schemas (e.g. <c>doc</c>) lacked the tables, the whole UNION failed to
 /// plan with <c>42P01 relation "doc.user_effective_permissions" does not exist</c>
 /// → the entire fan-out returned nothing → every Space / cross-partition search

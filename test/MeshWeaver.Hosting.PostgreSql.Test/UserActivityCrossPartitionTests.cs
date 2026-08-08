@@ -90,10 +90,9 @@ public class UserActivityCrossPartitionTests
 
             // Grant testuser access
             var ac = new PostgreSqlAccessControl(ds);
+            // 🔒 #953 — no node-type public read; the org-scoped Read grant above is what makes
+            // these nodes visible, which is what production always used.
             await ac.GrantAsync(org, "testuser", "Read", isAllow: true, ct);
-            await ac.SyncNodeTypePermissionsAsync(
-                [new NodeTypePermission("Space", PublicRead: true),
-                 new NodeTypePermission("Markdown", PublicRead: true)], ct);
         }
 
         await PopulateSearchableSchemasAsync(orgNames.Select(o => o.ToLowerInvariant()), ct);
