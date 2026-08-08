@@ -65,26 +65,30 @@ public class PermissionFoldGateTests
 
     /// <summary>
     /// The fix: the decision is still TAKEN inside the fold, but the continuation runs outside
-    /// it — on another thread, holding none of the fold's locks.
+    /// it, holding none of the fold's locks.
     /// </summary>
     [Fact(Timeout = 30000)]
     public async Task TakeDecisionOutsideGate_runs_the_continuation_OUTSIDE_the_folds_gate()
     {
         var foldGate = new object();
-        var subscriberThread = Environment.CurrentManagedThreadId;
-        var observed = new TaskCompletionSource<(bool InsideGate, int Thread, Permission Value)>(
+        var observed = new TaskCompletionSource<(bool InsideGate, Permission Value)>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         RxFanOutInversionHarness.FoldEmittingInsideGate(foldGate, Permission.All)
             .TakeDecisionOutsideGate()
             .Subscribe(p => observed.TrySetResult(
-                (Monitor.IsEntered(foldGate), Environment.CurrentManagedThreadId, p)));
+                (Monitor.IsEntered(foldGate), p)));
 
         var result = await observed.Task.WaitAsync(RxFanOutInversionHarness.DeadlockBound);
 
+        // "Outside the gate" IS Monitor.IsEntered == false: an inline in-gate delivery would run
+        // on the gate-holding thread, where IsEntered is true. Deliberately NO thread-id
+        // assertion — the hop queues through the thread pool (Scheduler.Default), and once this
+        // test method yields at the await, the pool may LEGALLY dispatch the continuation onto
+        // the very thread that ran Subscribe: same ManagedThreadId, gate long released. The old
+        // `Thread.Should().NotBe(subscriberThread)` was an over-strict proxy that redded
+        // unrelated PRs whenever the pool reused the thread (CI 31239308980, 2026-08-08).
         result.InsideGate.Should().BeFalse("the continuation must not hold the fold's gate");
-        result.Thread.Should().NotBe(subscriberThread,
-            "leaving the gate requires leaving the emitting thread");
         result.Value.Should().Be(Permission.All,
             "the decision itself is unchanged — only where the continuation runs moved");
     }
