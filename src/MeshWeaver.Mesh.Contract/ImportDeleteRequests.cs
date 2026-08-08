@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Mesh.Security;
+﻿using System.Text.Json.Serialization;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Security;
 
@@ -123,6 +124,16 @@ public record SyncContentFilesRequest(
     /// that is NOT present in <see cref="Files"/> (mirror the folder to the supplied set). When false,
     /// the write is purely additive (upsert only). Default true.
     /// </summary>
+    /// <remarks>
+    /// 🚨 <see cref="JsonIgnoreCondition.Never"/> is load-bearing — the declared-<c>true</c> bool trap.
+    /// The hub serializer runs <c>DefaultIgnoreCondition = WhenWritingDefault</c>, so an explicit
+    /// <c>Mirror = false</c> (which IS the CLR default for a bool) would be omitted from the wire and
+    /// the receiving hub would rebuild it as <c>true</c> from this initializer. Every caller asking for
+    /// an ADDITIVE sync would silently get a PRUNING mirror — i.e. the request would delete files it
+    /// was explicitly told to leave alone. Writing the field unconditionally is what lets the
+    /// <c>false</c> survive the hop.
+    /// </remarks>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool Mirror { get; init; } = true;
 
     /// <summary>
