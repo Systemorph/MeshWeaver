@@ -100,6 +100,26 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     public LayoutAreaControl WithSpinnerType(SpinnerType spinnerType) => this with { SpinnerType = spinnerType };
 
     /// <summary>
+    /// The identity of the synchronization stream this control mounts: <c>Address</c> plus the
+    /// three fields <see cref="LayoutAreaReference"/> compares (<c>Layout</c>, <c>Area</c>, <c>Id</c>).
+    /// Two controls with the same value address the SAME area stream; a different value means a
+    /// DIFFERENT stream and therefore a different renderer-level component identity.
+    /// <para>Renderers use it as the component key so that changing only the <see cref="Reference"/>
+    /// on a control that keeps its slot unmounts the old area instead of hot-swapping a live stream
+    /// (and the subtree bound to it) underneath a retained component — issue #733.</para>
+    /// </summary>
+    /// <returns>A stable string identity for the (address, reference) pair.</returns>
+    public string GetStreamIdentity()
+        // Both parts are normalized through LayoutAreaReference: Address and Reference.Id are
+        // `object`s that ROUND-TRIP THROUGH JSON, so the raw ToString of a freshly-built control
+        // and of a deserialized one can differ for the same logical target. An identity that
+        // flapped between two representations would remount the embedded area on EVERY render.
+        // Length-prefixed like Reference.GetIdentity's own parts, for the same reason: this is a
+        // Blazor @key, and a "|"-joined interpolation lets one address+area pair forge another's.
+        => LayoutAreaReference.IdentityPart(LayoutAreaReference.NormalizeScalar(Address))
+           + Reference.GetIdentity();
+
+    /// <summary>
     /// Determines whether this instance is equal to another <see cref="LayoutAreaControl"/> by
     /// comparing all significant properties (Address, Reference, ShowProgress, SpinnerType, ProgressMessage).
     /// </summary>
