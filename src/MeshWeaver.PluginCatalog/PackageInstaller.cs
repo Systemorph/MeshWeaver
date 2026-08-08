@@ -50,22 +50,41 @@ public static class PackageInstaller
     /// Installs <paramref name="manifest"/>'s content <paramref name="files"/> into its target
     /// partition and records the install, writing only the nodes that actually changed.
     /// </summary>
+    /// <param name="hub">The installing hub.</param>
+    /// <param name="manifest">The package manifest to install.</param>
+    /// <param name="files">The package folder's files.</param>
+    /// <param name="installedFromRef">The git ref the files were read at.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="batchSize">Bounded concurrency for the per-node upsert fan-out.</param>
+    /// <param name="authorizingUserId">The principal that AUTHORIZED this install, captured before
+    /// the install's system impersonation. Only consulted for a COMMERCIAL package, which requires
+    /// a global admin (#830); null means nobody authorized it (unattended provisioning), which is
+    /// fine for a free package and refuses a priced one. See <see cref="PackageEntitlement"/>.</param>
+    /// <returns>A cold observable of the install outcome; Subscribe to run.</returns>
     public static IObservable<InstallResult> Install(
         IMessageHub hub,
         PackageManifest manifest,
         IReadOnlyList<PackageFile> files,
         string installedFromRef,
         ILogger? logger = null,
-        int batchSize = DefaultBatchSize)
+        int batchSize = DefaultBatchSize,
+        string? authorizingUserId = null)
     {
-        // Installing a curated package is a platform action (the catalog tab gates it to global
-        // admins; that gate IS the authorization) — the same footing as a GitSync import: it
-        // writes partition ROOTS whose node types are dynamic (e.g. Store/Plugin — invisible to
+        // Installing a curated package is a platform action — the same footing as a GitSync import:
+        // it writes partition ROOTS whose node types are dynamic (e.g. Store/Plugin — invisible to
         // the static-only PartitionWriteGuard check) and type/infrastructure nodes no user
         // principal may create. The SYSTEM impersonation is scoped around EACH write (inside
         // Upsert), never around the whole pipeline: the pipeline hops schedulers (visibility
         // barriers on a timer), and an ambient impersonation does not survive those hops.
-        return InstallCore(hub, manifest, files, installedFromRef, logger, batchSize);
+        //
+        // WHO may trigger it is decided HERE, before a single node is written — on the action, not
+        // on the UI surface that happened to trigger it (#830): free packages need no permission,
+        // commercial ones need a global admin. Every install path funnels through this method (and
+        // InstallNodeRepoDelta, which carries the same gate), so the machine paths — the unattended
+        // default install, the update watcher — are gated identically to a click.
+        return PackageEntitlement.Authorize(hub, manifest, authorizingUserId, logger)
+            .SelectMany(_ => InstallCore(
+                hub, manifest, files, installedFromRef, logger, batchSize, authorizingUserId));
     }
 
     private static IObservable<InstallResult> InstallCore(
@@ -74,16 +93,17 @@ public static class PackageInstaller
         IReadOnlyList<PackageFile> files,
         string installedFromRef,
         ILogger? logger,
-        int batchSize)
+        int batchSize,
+        string? authorizingUserId)
     {
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.PluginCatalog.PackageInstaller");
 
         if (manifest.Kind == PackageKind.Code)
-            return InstallCode(hub, manifest, files, installedFromRef, logger, batchSize);
+            return InstallCode(hub, manifest, files, installedFromRef, logger, batchSize, authorizingUserId);
 
         if (manifest.Kind == PackageKind.NodeRepo)
-            return InstallNodeRepo(hub, manifest, files, installedFromRef, logger, batchSize);
+            return InstallNodeRepo(hub, manifest, files, installedFromRef, logger, batchSize, authorizingUserId);
 
         var partition = manifest.TargetPartition;
         if (string.IsNullOrWhiteSpace(partition))
@@ -120,7 +140,8 @@ public static class PackageInstaller
                 // the shape this package declares, not a partition nobody can read.
                 return EnsureDeclaredAccess(hub, manifest, partition, logger,
                         nodes.Select(n => n.Path))
-                    .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length))
+                    .SelectMany(_ => WriteInstalledRecord(
+                        hub, manifest, installedFromRef, nodes.Length, authorizingUserId: authorizingUserId))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
                     .SelectMany(_ => RunInstallHooks(hub, partition!, logger))
                     .Select(_ => result);
@@ -293,7 +314,7 @@ public static class PackageInstaller
         // A priced package (positive = purchasable, negative = coupon-only) installs GATED: no
         // public read of any kind — entitlement (PluginGate / purchase / coupon) is the only way
         // in. Pre-installed overrides a price: platform baseline is public by definition.
-        if (!manifest.PreInstalled && manifest.Price is { } price && price != 0m)
+        if (!manifest.PreInstalled && manifest.IsCommercial())
         {
             logger?.LogDebug(
                 "[PackageInstaller] {Id} is priced — {Partition} stays gated (entitlement only)",
@@ -524,9 +545,19 @@ public static class PackageInstaller
             .Select(_ => Unit.Default);
     }
 
+    /// <summary>
+    /// The install record's <c>AuthorizedBy</c> on a (re-)stamp: the principal that authorized THIS
+    /// action when there is one, otherwise the existing record's — the record is rebuilt from the
+    /// CATALOG manifest, which never carries the field, so without the carry-forward the first
+    /// unattended update would erase the admin authorization it is itself checked against. Pure.
+    /// </summary>
+    // Internal for the commercial-authorization pin (InternalsVisibleTo).
+    internal static string? SeedAuthorizedBy(PackageManifest? existingRecord, string? authorizingUserId) =>
+        string.IsNullOrWhiteSpace(authorizingUserId) ? existingRecord?.AuthorizedBy : authorizingUserId;
+
     private static IObservable<MeshNode> WriteInstalledRecord(
         IMessageHub hub, PackageManifest manifest, string installedFromRef, int count,
-        ModuleManifest? moduleManifest = null)
+        ModuleManifest? moduleManifest = null, string? authorizingUserId = null)
     {
         var recordPath = $"{InstalledPartition}/{manifest.Id}";
         var serializerOptions = hub.JsonSerializerOptions;
@@ -563,6 +594,9 @@ public static class PackageInstaller
                     ManifestFiles = null,
                     AutoUpdate = SeedAutoUpdate(
                         existingRecord, hub.ServiceProvider.GetService<PluginCatalogOptions>()),
+                    // WHO authorized this install — what an unattended update of a commercial
+                    // package is re-checked against (#830).
+                    AuthorizedBy = SeedAuthorizedBy(existingRecord, authorizingUserId),
                 },
             };
             // System-impersonated like every installer write (Using — see Upsert): this runs after
@@ -586,7 +620,7 @@ public static class PackageInstaller
     // re-install neither rewrites nodes nor recompiles.
     private static IObservable<InstallResult> InstallCode(
         IMessageHub hub, PackageManifest manifest, IReadOnlyList<PackageFile> files,
-        string installedFromRef, ILogger? logger, int batchSize)
+        string installedFromRef, ILogger? logger, int batchSize, string? authorizingUserId)
     {
         if (string.IsNullOrWhiteSpace(manifest.NodeTypeConfiguration))
             return Observable.Throw<InstallResult>(new InvalidOperationException(
@@ -647,7 +681,8 @@ public static class PackageInstaller
                             onError: msg => logger?.LogWarning(
                                 "Release request for {Path} failed: {Msg}", nodeTypePath, msg));
                 }
-                return WriteInstalledRecord(hub, manifest, installedFromRef, all.Length)
+                return WriteInstalledRecord(
+                        hub, manifest, installedFromRef, all.Length, authorizingUserId: authorizingUserId)
                     .SelectMany(_ => WarmInstalledRoots(hub, all.Select(n => n.Path), logger))
                     .Select(_ => result);
             });
@@ -855,7 +890,7 @@ public static class PackageInstaller
     // live compile for every NodeType node. This is the shape MeshWeaver.Plugins ships.
     private static IObservable<InstallResult> InstallNodeRepo(
         IMessageHub hub, PackageManifest manifest, IReadOnlyList<PackageFile> files,
-        string installedFromRef, ILogger? logger, int batchSize)
+        string installedFromRef, ILogger? logger, int batchSize, string? authorizingUserId)
     {
         _ = batchSize; // node-repo installs are ordered (bucketed bulk saves + Concat), not fanned out
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
@@ -1245,7 +1280,7 @@ public static class PackageInstaller
                 return EnsureDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id,
                         logger, nodes.Select(n => n.Path))
                     .SelectMany(_ => WriteInstalledRecord(
-                        hub, manifest, installedFromRef, nodes.Length, moduleManifest))
+                        hub, manifest, installedFromRef, nodes.Length, moduleManifest, authorizingUserId))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
                     .Select(_ => result);
             }));
@@ -1261,7 +1296,21 @@ public static class PackageInstaller
     /// <paramref name="newManifest"/> as the next diff baseline. A delta presupposes a prior
     /// install, so no fresh-mesh placeholder dance — the root and existing types are already
     /// present; a visibility barrier still guards instances of a type ADDED by this very delta.
+    ///
+    /// <para>Carries the same commercial gate as <see cref="Install"/> (#830): an update IS an
+    /// install of new content, and the unattended path reaches it directly.</para>
     /// </summary>
+    /// <param name="hub">The installing hub.</param>
+    /// <param name="manifest">The catalog manifest of the package being updated.</param>
+    /// <param name="newManifest">The module manifest at the candidate ref — the next diff baseline.</param>
+    /// <param name="changedFiles">The files the diff named as added/changed.</param>
+    /// <param name="removedNodePaths">Previously-installed node paths the diff removed.</param>
+    /// <param name="installedFromRef">The git ref the files were read at.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="authorizingUserId">The principal that AUTHORIZED this update — for an
+    /// unattended update, the install record's <see cref="PackageManifest.AuthorizedBy"/>. Only
+    /// consulted for a commercial package. See <see cref="PackageEntitlement"/>.</param>
+    /// <returns>A cold observable of the update outcome; Subscribe to run.</returns>
     public static IObservable<InstallResult> InstallNodeRepoDelta(
         IMessageHub hub,
         PackageManifest manifest,
@@ -1269,10 +1318,29 @@ public static class PackageInstaller
         IReadOnlyList<PackageFile> changedFiles,
         IReadOnlyCollection<string> removedNodePaths,
         string installedFromRef,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        string? authorizingUserId = null)
     {
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.PluginCatalog.PackageInstaller");
+
+        var effectiveLogger = logger;
+        return PackageEntitlement.Authorize(hub, manifest, authorizingUserId, effectiveLogger)
+            .SelectMany(_ => InstallNodeRepoDeltaCore(
+                hub, manifest, newManifest, changedFiles, removedNodePaths, installedFromRef,
+                effectiveLogger, authorizingUserId));
+    }
+
+    private static IObservable<InstallResult> InstallNodeRepoDeltaCore(
+        IMessageHub hub,
+        PackageManifest manifest,
+        ModuleManifest newManifest,
+        IReadOnlyList<PackageFile> changedFiles,
+        IReadOnlyCollection<string> removedNodePaths,
+        string installedFromRef,
+        ILogger? logger,
+        string? authorizingUserId)
+    {
 
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
         var nodes = changedFiles
@@ -1396,7 +1464,7 @@ public static class PackageInstaller
                 return EnsureDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id,
                         logger, nodes.Select(n => n.Path))
                     .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
-                        newManifest.Files.Count, newManifest))
+                        newManifest.Files.Count, newManifest, authorizingUserId))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
                     .Select(_ => result);
             });
@@ -1506,6 +1574,59 @@ public static class PackageInstaller
             return null;
         var (id, ns) = NodeFileMapper.FromRelativePath(relativePath);
         return string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+    }
+
+    /// <summary>
+    /// Removes the install record <c>{InstalledPartition}/{packageId}</c> — the ONE sanctioned
+    /// removal route for a record the installer wrote (#840).
+    ///
+    /// <para><b>Why this has to exist.</b> Install records are written under SYSTEM impersonation
+    /// into a partition whose <c>_Policy</c> caps <c>create/update/delete</c> at <c>false</c> for
+    /// EVERY caller — a platform admin holding an Admin assignment on <c>Plugins</c> included. That
+    /// policy is correct (only the installer writes there), but it left no way out: when a package
+    /// leaves the registry (a course folder renamed <c>KmuBasics</c> → <c>AgenticOffice</c>) its
+    /// record has no catalog card, hence no Uninstall, and <c>publicRead</c> keeps the phantom
+    /// "installed" record rendering publicly forever. The gap was the missing SURFACE, not the
+    /// policy — so the fix is a system-identity removal primitive, used by an ADMIN-GATED action
+    /// (<see cref="CatalogLayoutAreas"/>' orphan list), never a relaxation of the policy or a
+    /// user-identity delete.</para>
+    ///
+    /// <para>Same shape as the installer's prune: <c>ImpersonateAsSystem</c> scoped around the ONE
+    /// delete (<c>Observable.Using</c>, so the impersonation is alive when the request is actually
+    /// posted on Subscribe). Only the RECORD is removed — the installed content partition is a
+    /// separate lifecycle (delete it as a partition), which is why removing the record is safe even
+    /// while its content is still in use.</para>
+    ///
+    /// <para>A thin pass-through: an ABSENT record faults with the mesh's own "Node not found"
+    /// (the delete's contract), which the caller surfaces. That is the second admin clicking a card
+    /// the first one already removed — logged, never swallowed into a fake success.</para>
+    /// </summary>
+    /// <param name="hub">The hub owning the mesh service.</param>
+    /// <param name="packageId">The package id whose record to remove (the record's node id).</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <returns>A cold observable emitting whether the record was deleted; Subscribe to run.</returns>
+    public static IObservable<bool> RemoveInstalledRecord(
+        IMessageHub hub, string packageId, ILogger? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        if (string.IsNullOrWhiteSpace(packageId))
+            return Observable.Throw<bool>(new ArgumentException(
+                "A package id is required to remove an install record.", nameof(packageId)));
+
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Throw<bool>(new InvalidOperationException(
+                "No IMeshService is registered — cannot remove an install record."));
+
+        var recordPath = $"{InstalledPartition}/{packageId}";
+        return Observable.Using(
+                () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
+                      ?? Disposable.Empty,
+                _ => meshService.DeleteNode(recordPath))
+            .Take(1)
+            .Do(deleted => logger?.LogInformation(
+                "[PackageInstaller] removing install record {Path}: {Result}",
+                recordPath, deleted ? "removed" : "not found"));
     }
 }
 
