@@ -206,13 +206,19 @@ public static class CatalogLayoutAreas
         if (available.Count == 0)
             container = container.WithView(Controls.Markdown(host.Localize("ui.mdNoPackages")));
 
+        // The whole catalog + what is already installed are what a click needs to resolve the
+        // package's dependency closure (PackageDependencyGraph.InstallClosure) — both are already
+        // in hand here, so the card carries them down rather than re-listing the source on click.
+        var installedIds = installedById.Keys.ToImmutableHashSet(StringComparer.Ordinal);
+
         var n = 0;
         foreach (var pkg in available)
         {
             n++;
             installedById.TryGetValue(pkg.Id, out var inst);
             container = container.WithView(
-                BuildCard(host, source, sourceRef, pkg, inst, viewerIsGlobalAdmin), $"pkg-{n}");
+                BuildCard(host, source, sourceRef, pkg, inst, viewerIsGlobalAdmin, available, installedIds),
+                $"pkg-{n}");
         }
 
         var orphans = Orphaned(available, installed, host.Hub.JsonSerializerOptions);
@@ -309,7 +315,8 @@ public static class CatalogLayoutAreas
 
     private static UiControl BuildCard(
         LayoutAreaHost host, IPackageSource? source, string sourceRef, PackageManifest pkg,
-        PackageManifest? installed, bool viewerIsGlobalAdmin)
+        PackageManifest? installed, bool viewerIsGlobalAdmin,
+        IReadOnlyList<PackageManifest> catalog, IReadOnlySet<string> installedIds)
     {
         var card = Controls.Stack
             .WithWidth("100%")
@@ -353,7 +360,7 @@ public static class CatalogLayoutAreas
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>
                 {
-                    InstallPackage(host, source, sourceRef, pkg);
+                    InstallPackage(host, source, sourceRef, pkg, catalog, installedIds);
                     return Task.CompletedTask;
                 }));
         }
@@ -361,8 +368,26 @@ public static class CatalogLayoutAreas
         return card;
     }
 
-    // Fire the install; the Plugins-registry stream re-emits on completion → card flips.
-    internal static void InstallPackage(LayoutAreaHost host, IPackageSource source, string sourceRef, PackageManifest pkg)
+    /// <summary>
+    /// Fire the install; the Plugins-registry stream re-emits on completion → the card flips.
+    ///
+    /// <para>Installs the package's DEPENDENCY CLOSURE, not just the package: every requirement
+    /// (<see cref="PackageManifest.Requires"/>) the instance does not yet have is installed first,
+    /// in dependency order, on the one Concat so each finishes before the next begins. Without it a
+    /// click on a dependent simply fails — the installer refuses an instance whose NodeType is not
+    /// present ("NodeType(s) not registered: Training/Tour"), naming a path that appears in neither
+    /// the package the user clicked nor any error they can act on. The unattended boot pass
+    /// (<see cref="InstanceAutoRegistrationService"/>) has derived this order for a while; the
+    /// click did not, which is the half #636 closes.</para>
+    /// </summary>
+    /// <param name="catalog">Every package the source offers — the dependency resolution universe.
+    /// Omitted (a single-package caller) means only <paramref name="pkg"/> installs, exactly as
+    /// before.</param>
+    /// <param name="installedIds">Package ids already in the install registry; those dependencies
+    /// are skipped rather than re-installed.</param>
+    internal static void InstallPackage(
+        LayoutAreaHost host, IPackageSource source, string sourceRef, PackageManifest pkg,
+        IReadOnlyList<PackageManifest>? catalog = null, IReadOnlySet<string>? installedIds = null)
     {
         var logger = Logger(host);
 
@@ -390,11 +415,40 @@ public static class CatalogLayoutAreas
         // itself lives in the installer, so the machine paths cannot bypass it.
         var authorizingUserId = ResolveViewerId(host);
 
-        var install = InstallOrUpdate(host.Hub, source, sourceRef, pkg, logger, authorizingUserId);
+        IReadOnlyList<PackageManifest> closure;
+        try
+        {
+            closure = PackageDependencyGraph.InstallClosure(
+                pkg, catalog ?? [pkg], installedIds ?? ImmutableHashSet<string>.Empty, logger);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // A declared cycle: there is no order that works, so installing anything would fail
+            // later with a NodeType path naming neither package. Refuse with the named loop —
+            // the boot pass deliberately keeps the tolerant behaviour instead (it must not strand
+            // a whole instance over one malformed package).
+            logger?.LogWarning(ex, "Install of {Id} refused: {Reason}", pkg.Id, ex.Message);
+            return;
+        }
+
+        if (closure.Count > 1)
+            logger?.LogInformation(
+                "Installing {Id} with {Count} dependency package(s) first — {Closure}",
+                pkg.Id, closure.Count - 1, string.Join(", ", closure.Select(p => p.Id)));
+
+        // Sequential (Concat): a dependency's install must COMPLETE before the dependent's begins,
+        // which is what makes its NodeType nodes present for the dependent's type validation.
+        var install = closure
+            .Select(p => InstallOrUpdate(host.Hub, source, sourceRef, p, logger, authorizingUserId)
+                .Do(result => logger?.LogInformation(
+                    "Installed {Id}: {Written} written, {Unchanged} unchanged.",
+                    p.Id, result.Written, result.Unchanged)))
+            .ToObservable()
+            .Concat();
+
         Observable.Using(() => accessService.ImpersonateAsSystem(), _ => install)
             .Subscribe(
-                result => logger?.LogInformation("Installed {Id}: {Written} written, {Unchanged} unchanged.",
-                    pkg.Id, result.Written, result.Unchanged),
+                _ => { },
                 ex => logger?.LogWarning(ex, "Install of {Id} failed.", pkg.Id));
     }
 
