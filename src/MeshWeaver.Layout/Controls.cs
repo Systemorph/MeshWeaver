@@ -109,8 +109,16 @@ public static class Controls
 
     /// <summary>Creates a clickable button labelled with <paramref name="title"/>.</summary>
     /// <param name="title">The button label text or content.</param>
-    /// <returns>A new <see cref="ButtonControl"/> with the "button" style applied.</returns>
-    public static ButtonControl Button(object title) => new(title) { Style = "button" };
+    /// <returns>A new <see cref="ButtonControl"/>.</returns>
+    /// <remarks>
+    /// 🚨 This factory used to seed <c>Style = "button"</c> — a CSS CLASS token parked in the inline
+    /// STYLE slot. Nothing ever read it (no <c>.button</c> rule ships, no client branches on it) and it
+    /// was invisible only for as long as <c>ButtonView</c> dropped <see cref="UiControl.Style"/>
+    /// altogether. The moment the view started forwarding the style, every un-styled button emitted
+    /// <c>style="button"</c> — invalid CSS the browser discards. The style slot belongs to the caller;
+    /// it is left empty here.
+    /// </remarks>
+    public static ButtonControl Button(object title) => new(title);
 
     /// <summary>Creates a control that displays the message and type of <paramref name="ex"/>.</summary>
     /// <param name="ex">The exception whose message and type name are rendered.</param>
