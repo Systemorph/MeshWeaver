@@ -147,17 +147,25 @@ public record PartitionDefinition
     /// </summary>
     public const string PartitionSegmentRequirement =
         "a partition name must start with a letter or digit, contain only letters, digits, "
-        + "'.', '-' or '_', and be at most 63 characters";
+        + "'.', '-' or '_', and be at most 63 bytes when encoded as UTF-8";
 
     /// <summary>
     /// Whether <paramref name="segment"/> is a valid partition name (a top-level id / first
     /// path segment). A partition becomes a backing-store SCHEMA (Postgres/Snowflake), so it
     /// must be a simple identifier: start with a letter/digit, then only
-    /// letters/digits/<c>. - _</c>, ≤63 chars (the Postgres identifier limit; kept identical
-    /// across backends so a path routable on one is routable on the other). Rejects
-    /// URL/query-string-shaped segments (containing <c>? = &amp; % # :</c>, whitespace, …) —
-    /// the atioz DB-corruption root cause (2026-06-05, #714): request URLs routed as mesh
-    /// paths materialised garbage schemas like <c>login?returnurl=…</c>.
+    /// letters/digits/<c>. - _</c>. Rejects URL/query-string-shaped segments (containing
+    /// <c>? = &amp; % # :</c>, whitespace, …) — the atioz DB-corruption root cause
+    /// (2026-06-05, #714): request URLs routed as mesh paths materialised garbage schemas
+    /// like <c>login?returnurl=…</c>.
+    ///
+    /// <para><b>Letters/digits are Unicode, not ASCII</b> (<see cref="char.IsLetterOrDigit(char)"/>),
+    /// so an accented partition name such as <c>müller</c> is legitimate. The length cap is
+    /// therefore counted in <b>UTF-8 BYTES, not chars</b> — 63 is Postgres' <c>NAMEDATALEN</c>
+    /// identifier limit, which is a byte limit that SILENTLY TRUNCATES anything longer. A
+    /// char-counted cap would admit a 63-char multi-byte name that Postgres then stores under a
+    /// truncated schema name, so the router (which computes the UNtruncated name) could never
+    /// route back to it — the very unroutable-schema class this rule exists to prevent. The cap
+    /// is kept identical across backends so a path routable on one is routable on the other.</para>
     ///
     /// <para>The ONE charset rule, shared by the storage routers
     /// (<c>PostgreSqlPathRoutingAdapter</c> / <c>SnowflakePathRoutingAdapter</c>: unroutable →
@@ -171,7 +179,7 @@ public record PartitionDefinition
     /// </summary>
     public static bool IsValidPartitionSegment(string? segment)
         => !string.IsNullOrEmpty(segment)
-           && segment.Length <= 63
+           && System.Text.Encoding.UTF8.GetByteCount(segment) <= 63
            && char.IsLetterOrDigit(segment[0])
            && segment.All(c => char.IsLetterOrDigit(c) || c is '.' or '-' or '_');
 

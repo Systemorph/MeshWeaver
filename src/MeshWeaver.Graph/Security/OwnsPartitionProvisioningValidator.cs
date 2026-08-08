@@ -106,14 +106,14 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
         // PartitionDefinition.IsValidPartitionSegment rule), so a partition created with
         // one would be permanently unreachable anyway — reject the create with a speaking
         // error naming the offending id instead of provisioning junk.
-        // 🚨 EXEMPT framework system containers (`_`-prefixed: `_Access` at root, and its kin).
-        // These are minted by the framework, never by a request path, so they are not the junk-id
-        // vector #714 is about — and the segment rule deliberately refuses a leading `_` because a
-        // USER partition may not start with one. Applying it here rejected the root `_Access`
-        // container that every access-rights setup creates, taking whole test classes down with a
-        // partition-name error (DeleteNodeBehaviorTest, CommentDeletePermissionTest).
-        if (!partitionName.StartsWith('_')
-            && !PartitionDefinition.IsValidPartitionSegment(partitionName))
+        // 🚨 NO `_`-prefix exemption. A `_`-prefixed name is a SATELLITE CONTAINER segment
+        // ({P}/_Access/…, {P}/_Thread/…) or a global-satellite NAMESPACE, never a partition:
+        // the router resolves a `_`-prefixed first segment ONLY through a registered
+        // PartitionDefinition with an EXPLICIT schema (`_Access` → `system_access`) and never
+        // derives one from the name, so a schema named `_access` is unroutable by construction —
+        // exactly the ghost this guard exists to prevent. A `Space` create with id `_Access`
+        // is therefore a bug in the CALLER, and rejecting it loud is the point.
+        if (!PartitionDefinition.IsValidPartitionSegment(partitionName))
             return Observable.Return(NodeValidationResult.Invalid(
                 $"Cannot create '{context.Node.NodeType}' with id '{partitionName}': "
                 + $"{PartitionDefinition.PartitionSegmentRequirement}.",
