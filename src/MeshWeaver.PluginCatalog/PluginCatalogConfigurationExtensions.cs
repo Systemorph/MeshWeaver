@@ -32,6 +32,7 @@ public static class PluginCatalogConfigurationExtensions
             .AddMeshNodes(CreateCatalogNodeType())
             .AddMeshNodes(CreateInstalledPartitionPolicy())
             .AddMeshNodes(CreateRegistryCredentialNodeType())
+            .AddMeshNodes(CreateModuleDiscoveryNodeType())
             // Infrastructure credential, never pickable content.
             .AddAutocompleteExcludedTypes(PluginRegistryCredentials.NodeType)
             // The build-completion subscriber. A mesh-scoped SINGLETON, so its subscriptions live
@@ -73,7 +74,15 @@ public static class PluginCatalogConfigurationExtensions
                 // until the next package update. Idempotent: on a repaired instance it writes nothing.
                 .AddSingleton<InstalledPackageRepairService>()
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
-                    sp => sp.GetRequiredService<InstalledPackageRepairService>()))
+                    sp => sp.GetRequiredService<InstalledPackageRepairService>())
+                // Auto-discovery of a configured repo's modules (#833). Registered LAST of the
+                // package services because its boot scan deliberately waits for
+                // InstanceAutoRegistrationService.Completed — both touch the same partitions. Inert
+                // unless a source sets AutoDiscover, so it costs an unconfigured instance nothing.
+                // Same two-registration idiom: the IHostedService forward is what STARTS it.
+                .AddSingleton<ModuleDiscoveryService>()
+                .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
+                    sp => sp.GetRequiredService<ModuleDiscoveryService>()))
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();
@@ -100,7 +109,8 @@ public static class PluginCatalogConfigurationExtensions
             .WithType(typeof(PackageManifest), nameof(PackageManifest))
             .WithType(typeof(PluginCatalogContent), nameof(PluginCatalogContent))
             .WithType(typeof(PluginManifest), nameof(PluginManifest))
-            .WithType(typeof(PluginRegistryCredential), nameof(PluginRegistryCredential));
+            .WithType(typeof(PluginRegistryCredential), nameof(PluginRegistryCredential))
+            .WithType(typeof(ModuleDiscovery), nameof(ModuleDiscovery));
 
     private static MeshNode CreatePackageNodeType() => new(PackageInstaller.PackageNodeType)
     {
@@ -128,6 +138,21 @@ public static class PluginCatalogConfigurationExtensions
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         HubConfiguration = config => config
             .AddMeshDataSource(s => s.WithContentType<PluginRegistryCredential>()),
+    };
+
+    // What a configured plugin repo carries and what this instance did with it (#833). An
+    // Admin-partition record, like the BuildCompletion node it sits beside: it describes modules
+    // that may not exist here at all, so it cannot live on any of them. Not pickable content —
+    // it is infrastructure a platform admin reads, never something a user creates.
+    private static MeshNode CreateModuleDiscoveryNodeType() => new(ModuleDiscovery.NodeType)
+    {
+        Name = "Module Discovery",
+        Icon = "/static/NodeTypeIcons/box.svg",
+        IsSatelliteType = false,
+        ExcludeFromContext = new HashSet<string> { "create" },
+        HubConfiguration = config => config
+            .AddDefaultLayoutAreas()
+            .AddMeshDataSource(s => s.WithContentType<ModuleDiscovery>()),
     };
 
     // Read-only, world-readable policy for the install-records partition — the same shape every
