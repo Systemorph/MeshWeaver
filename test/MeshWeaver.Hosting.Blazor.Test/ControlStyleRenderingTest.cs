@@ -55,10 +55,9 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
                 // The two ambient browser services every view assumes. Neither is exercised by a
                 // static render, but Blazor's [Inject] pipeline throws if they are unregistered.
                 // AddBlazor() also wires the MCP endpoint, whose IdleTrackingBackgroundService needs
-                // the web host's lifetime. A test mesh has no WebApplication, so supply the real
-                // framework implementation rather than dropping AddBlazor (which owns PortalApplication).
-                .AddSingleton<Microsoft.Extensions.Hosting.IHostApplicationLifetime,
-                    Microsoft.Extensions.Hosting.Internal.ApplicationLifetime>()
+                // the web host's lifetime. A test mesh has no WebApplication, so supply a stub rather
+                // than dropping AddBlazor (which owns PortalApplication).
+                .AddSingleton<Microsoft.Extensions.Hosting.IHostApplicationLifetime, StaticHostLifetime>()
                 .AddSingleton<IJSRuntime, NoopJsRuntime>()
                 .AddSingleton<NavigationManager>(new StaticNavigationManager())
                 .AddSingleton<INavigationInterception, NoopNavigationInterception>()
@@ -165,8 +164,18 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
     {
         var html = await RenderAsync<ButtonView>(Controls.Button("Go"));
 
-        html.Should().NotContain("style=",
+        // Prefix, not the exact attribute: the token must not open the style slot even if the view
+        // later appends further declarations to it.
+        html.Should().NotContain("style=\"button",
             because: "Controls.Button must not seed the style slot with the class token \"button\" — #742");
+    }
+
+    private sealed class StaticHostLifetime : Microsoft.Extensions.Hosting.IHostApplicationLifetime
+    {
+        public CancellationToken ApplicationStarted { get; } = new(canceled: true);
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+        public void StopApplication() { }
     }
 
     private sealed class NoopJsRuntime : IJSRuntime
