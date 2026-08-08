@@ -222,7 +222,8 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
 | `Log watcher is not configured` | Step 1 missed — `PortalUrl`/`IngestToken` unset. |
 | `Portal REJECTED report … with 401` | The two tokens differ — the watcher's secret and the portal's `LogWatch__IngestToken` must be the same string. |
 | `Portal REJECTED report … with 404` | The portal's `LogWatch__IngestToken` is unset, so `/api/log-incidents` is not mapped at all — step 1 was done on the watcher side only. |
-| `Loki: 0 red line(s)` forever | Nothing red in the watched namespaces, or `Namespaces` names the wrong ones. |
+| `Loki: 0 line(s)` forever | The namespace label is wrong, or Promtail is not shipping that namespace. |
+| `Could not persist watcher state … Access to the path … is denied` | The state PVC mounted root-owned. The pod needs `securityContext.fsGroup: 1654` (the shipped manifest sets it). The watcher still reports, but the cursor stops persisting, so a restart replays the lookback window. |
 | Incidents appear but stay `New` | Step 2 missed — no repository routed, so the control plane idles. |
 
 Then browse `Admin/_LogIncident` in the portal: every incident links to the ticket it opened and to

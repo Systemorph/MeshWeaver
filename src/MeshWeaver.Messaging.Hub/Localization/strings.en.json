@@ -785,5 +785,10 @@
   "pivot.noAggregates": "No pivot aggregates configured",
   "common.total": "Total",
   "chat.noNamespace": "No namespace to start a thread in.",
-  "search.meshPlaceholder": "Search the mesh... (e.g. nodeType:Story status:Open)"
+  "search.meshPlaceholder": "Search the mesh... (e.g. nodeType:Story status:Open)",
+  "analysis.kpi.empty": "No figures to show.",
+  "analysis.tower.empty": "No structure to draw.",
+  "analysis.tower.retained": "retained",
+  "analysis.comparison.empty": "No amounts on either side.",
+  "analysis.comparison.absent": "not on this side"
 }
