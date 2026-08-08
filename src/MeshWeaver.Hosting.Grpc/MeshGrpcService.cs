@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using Grpc.Core;
 using MeshWeaver.Hosting.Grpc.Protocol;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
@@ -55,6 +56,32 @@ public sealed class MeshGrpcService(IMessageHub hub, GrpcConnectionRegistry regi
         }
     }
 
+    /// <summary>
+    /// Boundary bridge: validate the connection's Bearer token (gRPC call metadata) once per
+    /// connection; a call on the trusted loopback endpoint authenticates by reachability instead.
+    /// When token validation is UNAVAILABLE (retryable infrastructure fault — issue #637) the
+    /// registry errors with <see cref="TokenValidationUnavailableException"/>; this helper turns
+    /// that into <see cref="StatusCode.Unavailable"/> — the status gRPC clients treat as
+    /// retryable — instead of silently connecting a possibly-valid token as Anonymous. A
+    /// DEFINITIVE invalid token still connects as Anonymous (unchanged: writes are cleanly
+    /// RLS-denied, never fail-closed).
+    /// </summary>
+    private async Task AuthenticateOrAbortRetryable(string connectionId, ServerCallContext context)
+    {
+        try
+        {
+            await registry.Authenticate(connectionId, ExtractBearerToken(context), IsTrusted(context))
+                .FirstAsync().ToTask(context.CancellationToken);
+        }
+        catch (TokenValidationUnavailableException ex)
+        {
+            throw new RpcException(new Status(
+                StatusCode.Unavailable,
+                "Token validation is temporarily unavailable — retry shortly. "
+                + $"The token was NOT rejected; do not re-authenticate. ({ex.Message})"));
+        }
+    }
+
     /// <inheritdoc />
     public override async Task Open(
         IAsyncStreamReader<ClientFrame> requestStream,
@@ -72,8 +99,7 @@ public sealed class MeshGrpcService(IMessageHub hub, GrpcConnectionRegistry regi
         {
             // Boundary bridge: validate the Bearer token (gRPC call metadata) once per connection.
             // A call on the trusted loopback endpoint authenticates by reachability instead.
-            await registry.Authenticate(connectionId, ExtractBearerToken(context), IsTrusted(context))
-                .FirstAsync().ToTask(context.CancellationToken);
+            await AuthenticateOrAbortRetryable(connectionId, context);
 
             await foreach (var frame in requestStream.ReadAllAsync(context.CancellationToken))
             {
@@ -124,8 +150,7 @@ public sealed class MeshGrpcService(IMessageHub hub, GrpcConnectionRegistry regi
         var pump = WritePumpAsync(outbound.Reader, responseStream);
         try
         {
-            await registry.Authenticate(connectionId, ExtractBearerToken(context), IsTrusted(context))
-                .FirstAsync().ToTask(context.CancellationToken);
+            await AuthenticateOrAbortRetryable(connectionId, context);
             var address = JsonSerializer.Deserialize<Address>(request.Address, hub.JsonSerializerOptions)
                 ?? throw new RpcException(new Status(StatusCode.InvalidArgument, "Address did not deserialize."));
             registry.Connect(address, connectionId);
