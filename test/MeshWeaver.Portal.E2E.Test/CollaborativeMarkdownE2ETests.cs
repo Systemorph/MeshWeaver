@@ -75,30 +75,19 @@ public class CollaborativeMarkdownE2ETests(PortalFixture fixture)
         return path;
     }
 
-    /// <summary>Seeds a pending insertion TrackedChange at offset 0 of <paramref name="docPath"/>.</summary>
-    private async Task SeedInsertionAsync(IBrowserContext context, string token, string docPath,
-        string changeId, string author, string newText)
-        => await fixture.CreateNodeAsync(context, token, $$"""
-            {
-              "id": "{{changeId}}",
-              "namespace": "{{docPath}}/_Tracking",
-              "name": "Suggestion (e2e)",
-              "nodeType": "TrackedChange",
-              "mainNode": "{{docPath}}",
-              "content": {
-                "$type": "TrackedChange",
-                "id": "{{changeId}}",
-                "primaryNodePath": "{{docPath}}",
-                "markerId": "{{changeId}}",
-                "changeType": "Insertion",
-                "author": "{{author}}",
-                "status": "Pending",
-                "start": 0,
-                "length": 0,
-                "newText": "{{newText}}"
-              }
-            }
-            """);
+    /// <summary>
+    /// Makes a second version of <paramref name="docPath"/> by inserting <paramref name="inserted"/>
+    /// into the prose — a NORMAL versioned write. That is the whole seeding story now: tracked
+    /// changes are projected from the version history, so an edit IS the tracked change (there is no
+    /// <c>_Tracking</c> satellite to plant).
+    /// </summary>
+    private async Task EditDocAsync(IBrowserContext context, string token, string docPath, string inserted)
+    {
+        var edited = DocBody.Replace("Position-anchored", $"{inserted} Position-anchored");
+        var body = JsonSerializer.Serialize(edited);   // properly-escaped JSON string literal
+        await fixture.PatchNodeAsync(context, token, docPath,
+            "{\"content\":{\"content\":" + body + "}}");
+    }
 
     private async Task<IPage> OpenDocAsync(IBrowserContext context, string docPath)
     {
@@ -222,56 +211,62 @@ public class CollaborativeMarkdownE2ETests(PortalFixture fixture)
         await page.GetByText(replyText).First.WaitForAsync(new LocatorWaitForOptions { Timeout = 20_000 });
     }
 
-    /// <summary>"Who changed what": a tracked insertion renders with author + inserted text; Accept applies it.</summary>
+    /// <summary>
+    /// "Who changed what": an edit that landed in the document's version history renders as a
+    /// tracked change — inline redline plus a card carrying the author and the inserted text.
+    /// Nothing was seeded into a <c>_Tracking</c> satellite; the card is projected from history.
+    /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task Change_WhoChangedWhat_RendersAuthorAndText_ThenAcceptApplies()
+    public async Task Change_WhoChangedWhat_RendersAuthorAndTextFromVersionHistory()
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
         await using var context = await fixture.NewAuthenticatedContextAsync();
         var token = await fixture.MintTokenAsync(context);
         var docPath = await SeedDocAsync(context, token);
 
-        var changeId = $"ch{Guid.NewGuid():N}"[..12];
-        var inserted = $"E2E_ACCEPT_{changeId}_ ";
-        await SeedInsertionAsync(context, token, docPath, changeId, author: "alice-e2e", newText: inserted);
+        var inserted = $"E2ETRACKED{Guid.NewGuid():N}"[..20];
+        await EditDocAsync(context, token, docPath, inserted);
 
         var page = await OpenDocAsync(context, docPath);
 
-        // The suggestion is rendered inline as a track-insert...
-        await page.Locator($".collab-md-content .track-insert[data-change-id='{changeId}']").WaitForAsync(
+        // The edit is rendered inline as a track-insert...
+        var redline = page.Locator(".collab-md-content .track-insert")
+            .Filter(new LocatorFilterOptions { HasTextString = inserted });
+        await redline.First.WaitForAsync(
             new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 30_000 });
-        // ...and the change card shows WHO (author) + WHAT (the inserted text).
-        var card = page.Locator($".annotation-card.annotation-for-{changeId}");
-        (await card.Locator(".collab-md-author").InnerTextAsync()).Should().Contain("alice-e2e", "who changed it");
-        (await card.Locator(".quote-insert").InnerTextAsync()).Should().Contain(inserted.Trim(), "what was inserted");
 
-        // Accept applies the text to the document and removes the suggestion.
-        await card.Locator(".btn-accept").ClickAsync(new LocatorClickOptions { Timeout = 15_000 });
-        await page.Locator(".collab-md-content")
-            .Filter(new LocatorFilterOptions { HasTextString = inserted.Trim() })
-            .WaitForAsync(new LocatorWaitForOptions { Timeout = 15_000 });
-        await card.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Detached, Timeout = 15_000 });
+        // ...and the change card shows WHO (author, from the version's audit stamp) + WHAT.
+        var card = page.Locator(".annotation-card").Filter(new LocatorFilterOptions { HasTextString = inserted }).First;
+        await card.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 30_000 });
+        (await card.Locator(".collab-md-author").InnerTextAsync())
+            .Should().NotBeNullOrWhiteSpace("the version history records who made the edit");
+        (await card.Locator(".quote-insert").InnerTextAsync())
+            .Should().Contain(inserted, "what was inserted");
     }
 
-    /// <summary>Reject drops the suggestion and never applies it to the document.</summary>
+    /// <summary>
+    /// Revert puts the previous text back. There is no "accept": the edit is already in the
+    /// document, so the only action is undoing it — and the revert is itself a versioned write.
+    /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task Change_Reject_DropsTheSuggestionAndLeavesTheDocument()
+    public async Task Change_Revert_RestoresThePreviousText()
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
         await using var context = await fixture.NewAuthenticatedContextAsync();
         var token = await fixture.MintTokenAsync(context);
         var docPath = await SeedDocAsync(context, token);
 
-        var changeId = $"ch{Guid.NewGuid():N}"[..12];
-        var inserted = $"E2E_REJECT_{changeId}_ ";
-        await SeedInsertionAsync(context, token, docPath, changeId, author: "bob-e2e", newText: inserted);
+        var inserted = $"E2EREVERT{Guid.NewGuid():N}"[..20];
+        await EditDocAsync(context, token, docPath, inserted);
 
         var page = await OpenDocAsync(context, docPath);
-        var card = page.Locator($".annotation-card.annotation-for-{changeId}");
-        await card.Locator(".btn-reject").ClickAsync(new LocatorClickOptions { Timeout = 30_000 });
+        var card = page.Locator(".annotation-card").Filter(new LocatorFilterOptions { HasTextString = inserted }).First;
+        await card.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 30_000 });
 
-        await card.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Detached, Timeout = 15_000 });
+        await card.Locator(".btn-revert").ClickAsync(new LocatorClickOptions { Timeout = 30_000 });
+
+        await card.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Detached, Timeout = 20_000 });
         (await page.Locator(".collab-md-content").InnerTextAsync())
-            .Should().NotContain(inserted.Trim(), "a rejected suggestion is never applied to the document");
+            .Should().NotContain(inserted, "reverting the change takes the text back out of the document");
     }
 }

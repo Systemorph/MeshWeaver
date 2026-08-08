@@ -1,153 +1,30 @@
-using System.Reactive.Linq;
-using MeshWeaver.Data;
-using MeshWeaver.Graph.Configuration;
-using MeshWeaver.Markdown;
-using MeshWeaver.Markdown.Collaboration;
-using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using TrackedChange = MeshWeaver.Mesh.TrackedChange;
-using TrackedChangeType = MeshWeaver.Mesh.TrackedChangeType;
-using TrackedChangeStatus = MeshWeaver.Mesh.TrackedChangeStatus;
-
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Extension methods for adding tracked change support to a message hub.
+/// The retired tracked-change satellite sub-partition.
 /// <para>
-/// Tracked changes are satellite nodes in the <c>_Tracking</c> sub-partition. Like comments, a change
-/// is NOT woven into the document text: it captures its range/anchor and the diff view is re-derived
-/// at render time (see <see cref="ChangeRendering"/> / <see cref="CollaborativeRenderer"/>). Accepting
-/// applies the suggested text to the document; rejecting drops the satellite.
+/// 🚨 <b>Nothing writes <c>_Tracking</c> satellites any more.</b> Tracked changes are a VIEW MODEL
+/// computed from the version history (<see cref="ChangeProjection"/>): the history already records
+/// author, timestamp and full before/after content for every change, so persisting a second copy
+/// only added failure modes (anchors going stale as the document moves, orphaned satellite state, a
+/// reconcile surface, and two sources of truth for "what changed"). A suggested edit is now applied
+/// as a normal versioned write, and "reject" is a revert — which itself lands in the history.
 /// </para>
-/// Comments remain in <c>_Comment</c> via <see cref="CommentsExtensions"/>.
+/// <para>
+/// The constant survives for the deprecation window: rows written by older builds stay READABLE
+/// (the <c>_Tracking → annotations</c> table mapping, the <c>TrackedChange</c> node type and its
+/// satellite access rule are all still registered), and the central Collaboration plugin keeps a
+/// legacy reader that accepts / rejects them. Once no deployment carries such rows, this constant
+/// and those registrations go together.
+/// </para>
+/// Comments are NOT affected — they are genuinely additional data and remain satellites in
+/// <c>_Comment</c> (see <see cref="CommentsExtensions"/>).
 /// </summary>
 public static class AnnotationExtensions
 {
     /// <summary>
-    /// The sub-partition name where tracked changes are stored.
+    /// The sub-partition legacy tracked-change satellites were stored in. Read-only — see the class
+    /// remarks.
     /// </summary>
     public const string TrackingPartition = "_Tracking";
-
-    /// <summary>
-    /// Marker type used to detect if tracking is enabled in a hub configuration.
-    /// </summary>
-    public record TrackingEnabled;
-
-    /// <summary>
-    /// Adds tracked change support to the message hub configuration.
-    /// Registers the TrackedChange type under the _Tracking partition and the suggest-edit handler.
-    /// Comments are handled separately by AddComments().
-    /// </summary>
-    public static MessageHubConfiguration AddTracking(this MessageHubConfiguration configuration)
-    {
-        return configuration
-            .WithType<TrackedChange>(nameof(TrackedChange))
-            .WithType<CreateSuggestedEditRequest>(nameof(CreateSuggestedEditRequest))
-            .WithType<CreateSuggestedEditResponse>(nameof(CreateSuggestedEditResponse))
-            .Set(new TrackingEnabled())
-            .WithHandler<CreateSuggestedEditRequest>(HandleCreateSuggestedEdit)
-            .AddData(data => data.WithDataSource(_ =>
-                new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace)
-                    .WithType<TrackedChange>(TrackingPartition, nameof(TrackedChange))));
-    }
-
-    /// <summary>
-    /// Handles a suggested edit by capturing it as a position-anchored satellite — WITHOUT mutating
-    /// the document. The diff view is re-derived from the satellite at render time; accepting later
-    /// applies the text. Mirrors the comment handler: read the node once for content + version,
-    /// create the satellite, never await.
-    /// </summary>
-    private static IMessageDelivery HandleCreateSuggestedEdit(
-        IMessageHub hub,
-        IMessageDelivery<CreateSuggestedEditRequest> request)
-    {
-        var logger = hub.ServiceProvider.GetService<ILogger<TrackingEnabled>>();
-        var msg = request.Message;
-
-        try
-        {
-            var nodePath = hub.Address.ToString();
-            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var workspace = hub.GetWorkspace();
-            var changeId = Guid.NewGuid().ToString("N")[..8];
-
-            // A read that gave up knows NOTHING about the node — creating the satellite anyway
-            // stamped Version 0 with an empty anchor, a suggestion that could never re-resolve.
-            // Let the timeout surface as a failed CreateSuggestedEditResponse instead.
-            workspace.GetMeshNodeStream()
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(5))
-                .SelectMany(node =>
-                {
-                    var version = node?.Version ?? 0;
-                    // Shape-tolerant markdown read (typed / string / JsonElement) — a JsonElement
-                    // frame used to collapse every suggestion to offset 0 with an empty anchor.
-                    var markdown = MarkdownOverviewLayoutArea.GetMarkdownContent(node);
-                    var clean = string.IsNullOrEmpty(markdown)
-                        ? ""
-                        : MarkdownAnnotationParser.StripAllMarkers(markdown);
-
-                    var changeType = ChangeRendering.Classify(msg.DeletedText, msg.InsertedText);
-                    var start = Math.Clamp(msg.Position, 0, clean.Length);
-                    var length = msg.DeletedText?.Length ?? 0;
-                    if (start + length > clean.Length)
-                        length = Math.Max(0, clean.Length - start);
-
-                    var change = new TrackedChange
-                    {
-                        Id = changeId,
-                        PrimaryNodePath = nodePath,
-                        MarkerId = changeId,
-                        ChangeType = changeType,
-                        Author = msg.Author,
-                        CreatedAt = DateTimeOffset.UtcNow,
-                        Status = TrackedChangeStatus.Pending,
-                        Version = version,
-                        Start = start,
-                        Length = length,
-                        AnchorText = clean,
-                        OriginalText = msg.DeletedText,
-                        NewText = msg.InsertedText
-                    };
-                    var changeNode = new MeshNode(changeId, $"{nodePath}/{TrackingPartition}")
-                    {
-                        Name = $"Suggestion by {msg.Author}",
-                        NodeType = TrackedChangeNodeType.NodeType,
-                        MainNode = nodePath,
-                        Content = change
-                    };
-
-                    logger?.LogInformation(
-                        "[SuggestEdit] {Id} on {Path}: {Kind} pos={Start}+{Length} v={Version}",
-                        changeId, nodePath, changeType, start, length, version);
-
-                    return meshService.CreateNode(changeNode);
-                })
-                .Subscribe(
-                    _ => hub.Post(new CreateSuggestedEditResponse(true, changeId, null), o => o.ResponseFor(request)),
-                    ex =>
-                    {
-                        logger?.LogWarning(ex, "[SuggestEdit] FAILED for {Path}", nodePath);
-                        hub.Post(new CreateSuggestedEditResponse(false, null, ex.Message), o => o.ResponseFor(request));
-                    });
-
-            return request.Processed();
-        }
-        catch (Exception ex)
-        {
-            logger?.LogError(ex, "[SuggestEdit] EXCEPTION on {Path}", hub.Address);
-            hub.Post(new CreateSuggestedEditResponse(false, null, ex.Message), o => o.ResponseFor(request));
-            return request.Processed();
-        }
-    }
-
-    /// <summary>
-    /// Checks if tracking is enabled in the configuration.
-    /// </summary>
-    public static bool HasTracking(this MessageHubConfiguration configuration)
-        => configuration.Get<TrackingEnabled>() != null;
 }
