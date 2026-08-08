@@ -30,7 +30,7 @@ adds an environment on top of it.
 
 ## 1. Scaffold the env folder
 
-Copy an existing env folder under `deploy/aks/envs/` to `deploy/aks/envs/<env>/`:
+Copy the template folder `deploy/aks/envs/example/` to `deploy/aks/envs/<env>/`:
 
 | File | What to change |
 |---|---|

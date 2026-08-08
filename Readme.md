@@ -57,6 +57,21 @@ Production deployment recipes live under [`deploy/`](deploy/):
 - [`deploy/aca`](deploy/aca) — Azure Container Apps (Bicep)
 - [`deploy/compose`](deploy/compose) · [`deploy/compose-ha`](deploy/compose-ha) — Docker Compose (single-node / HA)
 
+**These are recipes, not the configuration of any running service.** Point them at your own
+infrastructure: copy [`deploy/aks/envs/example`](deploy/aks/envs/example) to your own environment
+folder and fill in your values. The files that carry real per-environment values —
+`values.<env>.yaml`, `secretproviderclass.yaml` — are git-ignored and never committed here.
+
+The AKS material is deliberately written as a **worked example** rather than an abstraction, so parts
+of it name the cluster and hosts it was first proven on. Read those as illustration; they are not
+config you inherit, and nothing in this repo is authoritative about a live installation.
+
+If you are **self-hosting**, the recipes above plus your own values are the whole story.
+
+If you are **operating an installation Systemorph runs**, its per-environment configuration and the
+record of what runs where live in the private
+**[Systemorph/Memex](https://github.com/Systemorph/Memex)** repo. Start there.
+
 ### CLI
 
 The `memex` CLI operates any portal's mesh over the REST API — read, search, mutate, compile, and mirror nodes from the shell:
