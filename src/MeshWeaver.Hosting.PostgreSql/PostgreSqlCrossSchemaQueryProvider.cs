@@ -94,6 +94,21 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     };
 
     /// <summary>
+    /// True when <paramref name="schema"/> belongs in <c>public.searchable_schemas</c> — the SAME
+    /// predicate the discovery sync applies, exposed so the ONE place that provisions a partition
+    /// (<see cref="PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned"/>) can register
+    /// the new schema in the registry immediately instead of waiting for the throttled poll.
+    ///
+    /// <para>🚨 It must stay the same predicate, not a second copy: registering an EXCLUDED schema
+    /// (notably <c>auth</c>, the access-object mirror) would surface every access object twice in
+    /// the cross-schema UNION until the next sync deleted it again.</para>
+    /// </summary>
+    internal static bool IsSearchableSchema(string? schema)
+        => !string.IsNullOrEmpty(schema)
+           && !ExcludedSchemas.Contains(schema)
+           && !schema.EndsWith("_versions", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Syncs the searchable_schemas table by querying information_schema for
     /// schemas that contain a <c>mesh_nodes</c> table. Same SQL the legacy
     /// factory's <c>DiscoverPartitionsAsync</c> ran; inlined here so this

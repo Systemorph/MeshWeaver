@@ -284,9 +284,20 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     /// a write whose payload actually satisfies the query's own filter
     /// (<see cref="QueryEvaluator.Matches"/> — the same matcher the pedestrian provider uses) can
     /// bring a NEW row in. A delete carries no payload (<c>Entity == null</c>), but a delete can
-    /// only ever REMOVE, so "not in the current result set" is a complete answer for it. Anything
-    /// we cannot classify (a notification with no entity that is not a delete) re-queries — under-
-    /// notifying is a security hole, over-notifying only costs a query.</para>
+    /// only ever REMOVE, so "not in the current result set" is a complete answer for it — once
+    /// there IS a result set: until the Initial snapshot is established every delete counts as
+    /// relevant, because a delete racing the initial read could otherwise leave a just-deleted row
+    /// in the Initial with nothing to correct it. Anything we cannot classify (a notification with
+    /// no entity that is not a delete) re-queries — under-notifying is a security hole,
+    /// over-notifying only costs a query.</para>
+    ///
+    /// <para><b>The schema list must be current, and that is NOT this method's job.</b> The
+    /// cross-schema re-query fans out over <c>public.searchable_schemas</c>. That registry is
+    /// written when a partition is PROVISIONED
+    /// (<see cref="PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned"/>), not
+    /// discovered by the throttled sync alone — because a live re-query runs only when a change
+    /// arrives, so a partition missing from the list at that instant is not seen late, it is never
+    /// seen at all.</para>
     ///
     /// <para>Not completing is the norm, not a change in kind: the per-schema
     /// <see cref="PostgreSqlMeshQuery"/> that serves every SCOPED query never completes either, so
@@ -374,13 +385,24 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
             // change-feed's thread, REPLACED wholesale (never mutated) by ApplySnapshot. An
             // immutable set + Volatile keeps the hot filter off any lock.
             var livePaths = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
+            // 0 until the Initial snapshot has been established (set alongside `initialDone`).
+            // Read by IsRelevant on the feed's thread — Volatile, never a lock on the hot filter.
+            var initialEstablished = 0;
 
             bool IsRelevant(DataChangeNotification n)
             {
                 if (!string.IsNullOrEmpty(n.Path) && Volatile.Read(ref livePaths).Contains(n.Path))
                     return true;                      // in the result set — may be updated or removed
                 if (n.Kind == DataChangeKind.Deleted)
-                    return false;                     // a delete can only remove, and we don't hold it
+                    // A delete can only REMOVE, so "not in the current result set" is a complete
+                    // answer — but ONLY once there IS a result set. Before the Initial snapshot is
+                    // established `livePaths` is still empty, so a delete racing the initial read
+                    // would be dropped while the read itself may still have returned the row: the
+                    // Initial would carry a row that no longer exists, and nothing would correct it
+                    // until some unrelated write happened to re-query. Treat every delete as
+                    // relevant until then — it lands in the early backlog and is drained through
+                    // the same serialised re-query right after the Initial.
+                    return Volatile.Read(ref initialEstablished) == 0;
                 if (n.Entity is not MeshNode node)
                     return true;                      // unclassifiable — re-query rather than miss it
                 foreach (var parsed in parsedQueries)
@@ -455,14 +477,23 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
                     Volatile.Write(ref livePaths,
                         currentItems.Keys.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
 
-                    var changeBuffer = new System.Reactive.Subjects.Subject<DataChangeNotification>();
+                    // 🚨 TWO producers write this buffer — the live feed subscription below AND
+                    // the backlog drain scheduled after the Initial — so it must be SYNCHRONIZED.
+                    // A plain Subject delivers OnNext straight through on the calling thread with
+                    // no serialisation; two concurrent OnNext calls interleave inside the observer
+                    // list and can corrupt delivery. Subject.Synchronize is the same wrapper the
+                    // other multi-producer subjects in the codebase use (MeshNodeStreamCache).
+                    // The INNER subject is what gets disposed — disposing the synchronized facade
+                    // is not the same object.
+                    var innerBuffer = new System.Reactive.Subjects.Subject<DataChangeNotification>();
+                    var changeBuffer = System.Reactive.Subjects.Subject.Synchronize(innerBuffer);
                     // 🚨 ORDER MATTERS. CompositeDisposable disposes in INSERTION order, so the
                     // feeding subscription must be registered BEFORE the buffer it writes into —
                     // the other way round, teardown disposes changeBuffer while the subscription
                     // is still live and a write in that window calls OnNext on a disposed Subject
                     // (the ObjectDisposedException that starved the $security-access fold, #889).
                     disposables.Add(feed.Where(IsRelevant).Subscribe(changeBuffer));
-                    disposables.Add(changeBuffer);
+                    disposables.Add(innerBuffer);
                     // One re-query per relevant change, serialised via Concat so currentItems is
                     // never raced. No debounce: a batching window is exactly the gap in which a
                     // subscriber attaching mid-flush sees the pre-write snapshot.
@@ -477,6 +508,9 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
                         backlog = earlyBacklog.ToArray();
                         earlyBacklog.Clear();
                         initialDone = true;
+                        // Same instant, for IsRelevant's lock-free read: from here on a delete is
+                        // classified against the (now existing) result set instead of blanket-kept.
+                        Volatile.Write(ref initialEstablished, 1);
                     }
                     earlySubscription.Dispose();
 

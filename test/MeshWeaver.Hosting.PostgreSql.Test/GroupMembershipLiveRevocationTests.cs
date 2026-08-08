@@ -32,6 +32,16 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// froze at its Initial for the lifetime of the process: a user removed from a group kept reading
 /// the protected records — fail OPEN — and re-adding them was equally invisible.</para>
 ///
+/// <para><b>The second half of the same defect: the fan-out's schema list.</b> Making the fan-out
+/// live is not enough if it re-queries the wrong set of partitions. The cross-schema UNION spans
+/// <c>public.searchable_schemas</c>, which was written ONLY by a discovery sync throttled to one
+/// run per 30 s and triggered only by query traffic. A partition provisioned inside that window
+/// was absent from the list, so the ONE re-query a membership write triggers ran without it and
+/// nothing ever looked again — the live path silently reproduced the frozen snapshot for any Space
+/// younger than the last sync. The registry is now written by
+/// <c>EnsurePartitionProvisioned</c> — the single place that creates a partition — so the list is
+/// correct by construction and the poll only has to pick up other processes' partitions.</para>
+///
 /// <para><b>Why these two tests, in this order.</b>
 /// <see cref="PathLessNodeTypeQuery_DeliversLiveAddedAndRemoved"/> pins the defect at its root —
 /// the query layer's Initial-then-deltas contract — and fails in BOTH directions without the fix.
@@ -153,23 +163,25 @@ public class GroupMembershipLiveRevocationTests(PostgreSqlFixture fixture, ITest
     /// Removed can arrive either. That silent one-shot is the whole of #697; every consumer of a
     /// path-less query (<c>$security-memberships</c>, <c>$security-roles</c>, the root
     /// <c>$security-policy</c>) inherited a snapshot frozen for the life of the process.</para>
+    ///
+    /// <para>🚨 <b>The query is opened BEFORE the partition exists, and that ordering is the test.</b>
+    /// A path-less query fans out over <c>public.searchable_schemas</c>, whose only writer used to
+    /// be a discovery sync throttled to one run per 30 s. Opening the query first PINS that
+    /// registry with a schema list that cannot contain the Space created next — so a membership
+    /// written into that Space is re-queried exactly once, against a stale schema list, and is then
+    /// never looked for again (the live re-query fires only on a change notification, and no
+    /// further change comes). Seeding the Space first, as this test originally did, made the
+    /// outcome depend on which of the two — the first fan-out or the partition's provisioning —
+    /// happened to run first: it passed on a fast machine and failed in CI. The partition is now
+    /// registered by <c>EnsurePartitionProvisioned</c> itself, so the ordering no longer matters —
+    /// which is exactly what this ordering asserts.</para>
     /// </summary>
     [Fact(Timeout = 180000)]
     public async Task PathLessNodeTypeQuery_DeliversLiveAddedAndRemoved()
     {
-        // A Space so the partition schema exists and participates in the cross-schema fan-out.
-        await MeshService.CreateNode(MeshNode.FromPath(Space) with
-        { Name = Space, NodeType = SpaceNodeType.NodeType, Content = new Space() })
-            .Should().Within(90.Seconds()).Emit();
-        await MeshService.CreateNode(new MeshNode("HRTeam", Space)
-        {
-            Name = "HR Team",
-            NodeType = "Group",
-            MainNode = GroupPath,
-            Content = new AccessObject { Description = "HR team" },
-        }).Should().Within(90.Seconds()).Emit();
-
-        // EXACTLY the query PermissionEvaluator.ObserveAllMembershipNodes opens.
+        // EXACTLY the query PermissionEvaluator.ObserveAllMembershipNodes opens — and, like the
+        // running portal of the report, it is opened while the Space it must later see does not
+        // exist yet.
         var hot = MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 "nodeType:GroupMembership scope:subtree select:path,id,namespace,name,nodeType,content"))
             .Replay();
@@ -182,13 +194,27 @@ public class GroupMembershipLiveRevocationTests(PostgreSqlFixture fixture, ITest
         initial.Items.Should().NotContain(n => n.Path == MembershipPath,
             "the membership under test does not exist yet");
 
+        // A Space so the partition schema exists and participates in the cross-schema fan-out.
+        await MeshService.CreateNode(MeshNode.FromPath(Space) with
+        { Name = Space, NodeType = SpaceNodeType.NodeType, Content = new Space() })
+            .Should().Within(90.Seconds()).Emit();
+        await MeshService.CreateNode(new MeshNode("HRTeam", Space)
+        {
+            Name = "HR Team",
+            NodeType = "Group",
+            MainNode = GroupPath,
+            Content = new AccessObject { Description = "HR team" },
+        }).Should().Within(90.Seconds()).Emit();
+
         await MeshService.CreateNode(Membership()).Should().Within(90.Seconds()).Emit();
 
         await hot.Should().Within(60.Seconds()).Match(
             c => c.ChangeType == QueryChangeType.Added
                  && c.Items.Any(n => n.Path == MembershipPath),
             "a path-less nodeType query must deliver the new node live — a one-shot fan-out "
-            + "freezes every consumer's snapshot for the life of the process (#697)");
+            + "freezes every consumer's snapshot for the life of the process (#697), and a "
+            + "partition missing from public.searchable_schemas when the re-query runs is not "
+            + "seen late, it is never seen at all");
 
         await MeshService.DeleteNode(MembershipPath).Should().Within(90.Seconds()).Emit();
 
