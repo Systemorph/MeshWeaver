@@ -317,6 +317,7 @@
   "ui.approve": "Freigeben",
   "ui.reject": "Ablehnen",
   "ui.archive": "Archivieren",
+  "ui.revert": "Diese Änderung rückgängig machen",
   "ui.compare": "Vergleichen",
   "ui.check": "Prüfen",
   "ui.validate": "Validieren",

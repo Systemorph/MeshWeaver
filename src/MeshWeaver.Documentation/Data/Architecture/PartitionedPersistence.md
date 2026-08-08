@@ -226,7 +226,7 @@ Satellite entities are stored in dedicated sub-namespaces within the node hierar
 | `_Activity` | `activities` | Activity | Node lifecycle events |
 | `_UserActivity` | `user_activities` | UserActivity | Per-user access tracking |
 | `_Thread` | `threads` | Thread, ThreadMessage | Chat / discussion threads |
-| `_Tracking` | `tracking` | TrackedChange | Suggested edits (track changes) |
+| `_Tracking` | `tracking` | TrackedChange | Legacy track changes — no longer written (computed from version history) |
 | `_Approval` | `approvals` | Approval | Approval workflow records |
 | `_Access` | `access` | AccessAssignment | Permission grants / denials |
 | `_Comment` | `comments` | Comment | Document comments |

@@ -317,6 +317,7 @@
   "ui.approve": "Approve",
   "ui.reject": "Reject",
   "ui.archive": "Archive",
+  "ui.revert": "Revert this change",
   "ui.compare": "Compare",
   "ui.check": "Check",
   "ui.validate": "Validate",
