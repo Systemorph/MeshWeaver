@@ -281,10 +281,13 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// Cross-process per-test phase trace. Single line per event into a fixed
     /// file so a developer can `tail -f` it during a hung suite run and spot the
     /// stuck test class without waiting for the run to finish.
+    ///
+    /// <para>The path and its write lock live on <see cref="Fixture.TestTraceLog"/>
+    /// because this is no longer the only writer — <c>XUnitFileLogger</c> appends
+    /// fault records (exception type + stack) to the same file. Two writers with two
+    /// locks would interleave mid-line and corrupt both.</para>
     /// </summary>
-    private static readonly string TestTraceLogPath =
-        Path.Combine(Path.GetTempPath(), "meshweaver-test-trace.log");
-    private static readonly object TestTraceLogLock = new();
+    private static string TestTraceLogPath => Fixture.TestTraceLog.Path;
 
     /// <summary>
     /// Cross-process per-class memory delta summary — one line per test class
@@ -310,8 +313,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             var line = $"{DateTime.UtcNow:HH:mm:ss.fff} pid={Environment.ProcessId} [{testClass}] {phase}"
                 + (elapsedMs.HasValue ? $" elapsed={elapsedMs}ms" : "")
                 + (extra is null ? "" : $" {extra}");
-            lock (TestTraceLogLock)
-                File.AppendAllText(TestTraceLogPath, line + Environment.NewLine);
+            Fixture.TestTraceLog.Append(line);
         }
         catch
         {
@@ -521,7 +523,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                 if (onCi)
                 {
                     // Force a flush so the trace lines reach disk before exit.
-                    try { File.AppendAllText(TestTraceLogPath, string.Empty); } catch { }
+                    Fixture.TestTraceLog.Touch();
                     try { File.AppendAllText(MemoryDeltaLogPath, string.Empty); } catch { }
 
                     Environment.FailFast(

@@ -77,6 +77,25 @@ export { str, useClick, useField, useOptions, useText, type Field } from "./cont
 // the Fluent pack and the React Native pack aggregate and format through THESE, so a pivot total is
 // computed by one implementation rather than one per platform.
 export { formatValue } from "./controls/format.js";
+// The analysis views' geometry (#745) — the ports of TowerControl.Layout / ComparisonBarsControl.Layout.
+// Renderer-free for exactly the reason formatValue is: both the Fluent pack and the React Native pack
+// place a tower band and size a comparison bar through THESE, so the two draw the same picture.
+export {
+  analysisRows,
+  clamp,
+  comparisonLayout,
+  navigableHref,
+  num,
+  optionalNum,
+  towerLayout,
+  towerTicks,
+  type ComparisonPairWire,
+  type ComparisonPlacement,
+  type ComparisonRow,
+  type TowerBandPlacement,
+  type TowerBandWire,
+  type TowerPlacement,
+} from "./controls/analysisLayout.js";
 export {
   computePivot,
   formatCell,

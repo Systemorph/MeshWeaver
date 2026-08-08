@@ -259,7 +259,7 @@ public static class SnowflakeExtensions
 
     /// <summary>
     /// Initializes the Snowflake schema (central tables, events schema, capability probe,
-    /// node-type permissions, top-level index) — the twin of <c>InitializePostgreSqlSchemaAsync</c>.
+    /// top-level index) — the twin of <c>InitializePostgreSqlSchemaAsync</c>.
     /// Call during application startup, before the mesh serves traffic.
     /// </summary>
     public static async Task InitializeSnowflakeSchemaAsync(
@@ -286,16 +286,8 @@ public static class SnowflakeExtensions
 
         await SnowflakeSchemaInitializer.InitializeAsync(source, options, logger, ct).ConfigureAwait(false);
 
-        // Sync node type permissions from MeshConfiguration to the database.
-        var meshConfig = serviceProvider.GetService<MeshConfiguration>();
-        if (meshConfig?.NodeTypePermissions is { Count: > 0 } permissions)
-        {
-            var ac = serviceProvider.GetService<SnowflakeAccessControl>()
-                ?? new SnowflakeAccessControl(
-                    source, schemaName: options.Schema, centralSchema: options.Schema,
-                    capabilities: holder);
-            await ac.SyncNodeTypePermissionsAsync(permissions, ct).ConfigureAwait(false);
-        }
+        // 🔒 #953 — the node-type-permission sync that used to run here is gone (twin of the PG
+        // change), together with the `public_read` term in the generated predicates.
 
         // Build (or refresh) the top-level autocomplete index so first queries don't race it.
         var searchInfra = serviceProvider.GetService<SnowflakeSearchInfrastructure>();

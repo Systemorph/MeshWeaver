@@ -42,38 +42,12 @@ public record RunTestsRequest : IRequest<RunTestsResponse>;
 /// <param name="Error">Failure reason when no activities were dispatched.</param>
 public record RunTestsResponse(IReadOnlyList<string> ActivityPaths, string? Error = null);
 
-/// <summary>
-/// Posted to a compile-activity hub to run the Roslyn compile for the NodeType
-/// at <see cref="ParentNodeTypePath"/>. The activity hub is the **execution
-/// sandbox**: it owns the long-running Roslyn invocation while the per-NodeType
-/// hub and the mesh hub stay responsive. The handler reads the parent's
-/// NodeTypeDefinition, runs <c>compilationService.CompileAndGetConfigurations</c>,
-/// updates the activity's <c>ActivityLog</c> with progress, and finally writes
-/// the terminal compile state back to the parent's MeshNode.
-///
-/// <para>Activity Control Plane doctrine — see
-/// <c>Doc/Architecture/ActivityControlPlane.md</c>: "every long-running
-/// operation runs on an Activity hub."</para>
-/// </summary>
-/// <param name="ParentNodeTypePath">Path of the parent NodeType MeshNode whose
-/// compile state this activity will update on completion.</param>
-/// <param name="ParentSnapshot">Optional snapshot of the parent NodeType MeshNode
-/// captured by the dispatcher (the per-NodeType hub's CompileWatcher) at the
-/// moment it flipped <c>Compiling</c>. Carrying it here lets the activity see
-/// the trigger-time fields (<c>ReleaseNotes</c>, <c>RequestedReleaseAt</c>,
-/// <c>RequestedReleaseForce</c>) without re-reading from the mesh-hub-cached
-/// remote stream — that cache lags OWN by however long the
-/// <c>DataChangedEvent</c> fan-out takes, and a stale snapshot causes the
-/// produced release to lose the caller-authored fields (regression repro:
-/// <c>NodeTypeReleaseTest.CompilationPending_CreatesReleaseMeshNode_WithNotes</c>
-/// — release lands with <c>Notes = null</c>). When <c>null</c> the activity
-/// falls back to the cached-stream read (sufficient for kickoff compiles
-/// dispatched before any caller mutation).</param>
-public record RunCompileRequest(string ParentNodeTypePath, MeshNode? ParentSnapshot = null) : IRequest<RunCompileResponse>;
-
-/// <summary>
-/// Result of <see cref="RunCompileRequest"/>. Reports whether the compile
-/// was dispatched (the activity is now running); subscribers observe the
-/// activity's <c>ActivityLog</c> for the final outcome.
-/// </summary>
-public record RunCompileResponse(bool Dispatched, string? Error = null);
+// NOTE: `RunCompileRequest` / `RunCompileResponse` used to live here — the compile was
+// dispatched cross-hub to a freshly created `_Activity` hub. That path was replaced by an
+// inline `NodeTypeCompilationHelpers.RunCompile` (see the comment at its call site in
+// HandleDispatchCompile): `RouteMessage` resolves a path ONCE with no retry, so a
+// just-created `_Activity` hub was not yet routable, the request was dropped, and the
+// compile never ran — the NodeType then sat at `Compiling` forever. The request pair and
+// its activity handler were deleted with #890: nothing posted them, and the dead handler
+// still carried the pre-#612 bare-`.Message` compile error, so a grep for the compile's
+// terminal write landed on the un-enriched copy first.

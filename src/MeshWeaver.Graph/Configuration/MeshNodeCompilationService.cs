@@ -311,14 +311,46 @@ internal class MeshNodeCompilationService(
         => GetAssemblyLocationWithLog(node).Select(t => t.Path);
 
     /// <summary>
+    /// One compile attempt's outcome: the assembly path (null on failure), the
+    /// <see cref="ActivityLog"/>, and — the point of carrying it — the ONE source snapshot
+    /// the attempt was taken against. Every downstream stage
+    /// (<see cref="DiscoverSourceVersionSnapshot"/>, <see cref="BuildFailureDiagnostics"/>)
+    /// reuses <see cref="Sources"/> instead of re-discovering; see
+    /// <see cref="GetAssemblyLocationWithLog"/>.
+    /// </summary>
+    private readonly record struct CompileAttempt(
+        string? Path, ActivityLog Log, IReadOnlyList<MeshNode> Sources);
+
+    /// <summary>
     /// Companion to <see cref="GetAssemblyLocation"/> that also surfaces the
     /// <see cref="ActivityLog"/> of the compile attempt — every executed source
     /// query, every matched Code path, the final compile result. The same chain
     /// runs underneath; this method is what <see cref="CompileAndGetConfigurations"/>
     /// uses so the response surfaced through <c>GetCompilationPathResponse.Log</c>
     /// reflects what actually happened (no double-compile to gather diagnostics).
+    ///
+    /// <para>🚨 ONE SOURCE SNAPSHOT PER COMPILE. The source set is discovered here, exactly
+    /// once, and then THREADED — into the cache-key fold, into <see cref="CompileCore"/> (as
+    /// its <c>sourcesOverride</c>), and out on <see cref="CompileAttempt.Sources"/> for the
+    /// version-snapshot / failure-diagnostics stages. It used to be re-discovered
+    /// independently at each of those stages: measured on a Monolith compile,
+    /// <b>three</b> full source-set materializations per successful compile
+    /// (<c>freshness</c> → <c>compile-core</c> → <c>version-snapshot</c>), each racing a fresh
+    /// set of live <see cref="IMeshService.Query"/> discovery reads against the cached synced
+    /// query. On memex those reads are cross-partition and measured ~0.25s each (issue #686),
+    /// so the multiplication is paid in seconds against a mesh that a compile is already
+    /// loading; on a fresh mesh it is ~0ms, which is precisely why the fresh-mesh comparison
+    /// never showed it.</para>
+    ///
+    /// <para>It is also a CORRECTNESS fix, independent of cost: the three snapshots were three
+    /// independent races over a LIVE source collection, so they could disagree. The cache key
+    /// (<c>effectiveLastModified</c>) could be folded from set A while set B compiled and set C
+    /// was recorded into <see cref="NodeTypeDefinition.CompiledSources"/> — and <c>CompiledSources</c>
+    /// is what the recompile-needed check compares against, so a set that was never compiled
+    /// either suppresses a needed recompile or triggers a spurious one. One snapshot cannot
+    /// disagree with itself.</para>
     /// </summary>
-    private IObservable<(string? Path, ActivityLog Log)> GetAssemblyLocationWithLog(
+    private IObservable<CompileAttempt> GetAssemblyLocationWithLog(
         MeshNode node, IReadOnlyList<MeshNode>? sourcesOverride = null)
     {
         var log = new ActivityLog(ActivityCategory.Compilation)
@@ -330,9 +362,10 @@ internal class MeshNodeCompilationService(
         if (string.IsNullOrEmpty(node.NodeType))
         {
             logger.LogDebug("Node {NodePath} has no NodeType, skipping assembly compilation", node.Path);
-            return Observable.Return<(string?, ActivityLog)>((null,
+            return Observable.Return(new CompileAttempt(null,
                 AppendInfo(log, $"Skipped — node '{node.Path}' has no NodeType.")
-                    .Finish((int)hub.Version, ActivityStatus.Succeeded)));
+                    .Finish((int)hub.Version, ActivityStatus.Succeeded),
+                Array.Empty<MeshNode>()));
         }
 
         var nodeName = cacheService.SanitizeNodeName(node.Path);
@@ -368,23 +401,33 @@ internal class MeshNodeCompilationService(
 
         // ⏱️ Two clocks, because the 45s has to be SOMEWHERE and every guess so far picked the
         // wrong somewhere: one for resolving the NodeType definition (a bounded 15s read that
-        // yields null on stall), one for the source-freshness scan that follows it. Both feed the
+        // yields null on stall), one for the source snapshot that follows it. Both feed the
         // compile's ActivityLog so a single `get @{Type}/_Activity/compile-…` shows the split.
         var resolveClock = System.Diagnostics.Stopwatch.StartNew();
         return resolveDef.SelectMany(ntDef =>
         {
             var resolveMs = resolveClock.ElapsedMilliseconds;
-            var freshnessClock = System.Diagnostics.Stopwatch.StartNew();
-            // Source-aware cache check: discover the LastModified of every source
-            // Code node + the NodeType itself. The cache is valid only if the
-            // compiled DLL is newer than the most recent source change.
-            return DiscoverSourceMaxLastModified(ntDef, selfPath, sourcesOverride)
-                .Do(_ => log = AppendInfo(log,
-                    $"⏱ NodeType definition resolved in {resolveMs}ms "
-                    + $"({(ntDef is null ? "NULL — the read stalled or the node is absent" : "ok")}); "
-                    + $"source-freshness scan {freshnessClock.ElapsedMilliseconds}ms."))
-                .SelectMany(maxSourceLastModified =>
+            var snapshotClock = System.Diagnostics.Stopwatch.StartNew();
+            // 🚨 THE compile's source snapshot — taken here, once, and reused by every stage
+            // below (cache-key fold, CompileCore, and the caller's version-snapshot /
+            // failure-diagnostics via CompileAttempt.Sources). See the method remarks.
+            return SnapshotSources(ntDef, selfPath, sourcesOverride)
+                .Select(nodes => nodes as IReadOnlyList<MeshNode> ?? nodes.ToList())
+                .SelectMany(sources =>
                 {
+                    // Source-aware cache check: the LastModified of every source Code node +
+                    // the NodeType itself. The cache is valid only if the compiled DLL is
+                    // newer than the most recent source change — so the freshness fold and
+                    // the compile MUST see the same set, which is why it is one snapshot.
+                    var maxSourceLastModified = sources.Aggregate(
+                        DateTimeOffset.MinValue,
+                        (acc, n) => n.LastModified > acc ? n.LastModified : acc);
+                    log = AppendInfo(log,
+                        $"⏱ NodeType definition resolved in {resolveMs}ms "
+                        + $"({(ntDef is null ? "NULL — the read stalled or the node is absent" : "ok")}); "
+                        + $"source snapshot {snapshotClock.ElapsedMilliseconds}ms "
+                        + $"({sources.Count} node(s), taken ONCE and reused by every stage).");
+
                     var effectiveLastModified = node.LastModified > maxSourceLastModified
                         ? node.LastModified
                         : maxSourceLastModified;
@@ -397,15 +440,19 @@ internal class MeshNodeCompilationService(
                             logger.LogDebug(
                                 "Using cached assembly for {NodePath} at {DllPath} (effectiveLastModified={EffectiveLastModified})",
                                 node.Path, cachedDllPath, effectiveLastModified);
-                            return Observable.Return<(string?, ActivityLog)>((
+                            return Observable.Return(new CompileAttempt(
                                 cachedDllPath,
                                 AppendInfo(log,
                                     $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).")
-                                    .Finish((int)hub.Version, ActivityStatus.Succeeded)));
+                                    .Finish((int)hub.Version, ActivityStatus.Succeeded),
+                                sources));
                         }
                     }
 
-                    return CompileCore(node, ntDef, selfPath, log, sourcesOverride);
+                    // Hand the snapshot down as the override — CompileCore then short-circuits
+                    // its own SnapshotSources to this authoritative point-in-time set.
+                    return CompileCore(node, ntDef, selfPath, log, sources)
+                        .Select(t => new CompileAttempt(t.Path, t.Log, sources));
                 });
         });
     }
@@ -456,28 +503,18 @@ internal class MeshNodeCompilationService(
     }
 
     /// <summary>
-    /// Returns the maximum <c>LastModified</c> across all source Code nodes that
-    /// would feed a compile of <paramref name="ntDef"/>. Reads from the cached
-    /// SyncedQuery so cache invalidation tracks the exact same set of files the
-    /// compile reads. Returns <see cref="DateTimeOffset.MinValue"/> if there are
-    /// no sources.
-    /// </summary>
-    private IObservable<DateTimeOffset> DiscoverSourceMaxLastModified(
-        NodeTypeDefinition? ntDef, string selfPath,
-        IReadOnlyList<MeshNode>? sourcesOverride = null) =>
-        SnapshotSources(ntDef, selfPath, sourcesOverride)
-            .Select(nodes => nodes.Aggregate(
-                DateTimeOffset.MinValue,
-                (acc, n) => n.LastModified > acc ? n.LastModified : acc));
-
-    /// <summary>
     /// Captures <c>{path → MeshNode.LastModified.Ticks}</c> for every source Code/Test
-    /// node that feeds a compile of <paramref name="ntDef"/>. Sibling to
-    /// <see cref="DiscoverSourceMaxLastModified"/> — same SyncedQuery, different
-    /// aggregation. Used by the compile watcher to populate
-    /// <c>NodeTypeDefinition.CompiledSources</c> on success so a future
+    /// node that feeds a compile of <paramref name="ntDef"/>. Used by the compile watcher
+    /// to populate <c>NodeTypeDefinition.CompiledSources</c> on success so a future
     /// recompile-needed check is a data comparison (added/removed/modified)
     /// instead of a max-LastModified timing guess.
+    /// <para>
+    /// 🚨 On the compile path this is ALWAYS called with the snapshot the compile actually
+    /// consumed (<see cref="CompileAttempt.Sources"/>), so it folds rather than re-discovers —
+    /// that is what makes <c>CompiledSources</c> a record of what was compiled instead of a
+    /// second, independently-raced observation of a live collection. A <c>null</c>
+    /// <paramref name="sourcesOverride"/> (external callers) still takes its own snapshot.
+    /// </para>
     /// <para>
     /// Uses <c>LastModified.Ticks</c> (not <c>Version</c>) because the framework's
     /// <c>UpdateNodeRequest</c> handler reliably refreshes <c>LastModified</c>, while
@@ -754,14 +791,14 @@ internal class MeshNodeCompilationService(
             .ToList();
         var matchedCodePaths = new List<string>();
 
-        // Source discovery: prefer the caller-supplied freshly-observed sources
-        // (HandleCreateRelease's uncached IMeshService.Query snapshot —
-        // authoritative for the just-modified Code node), falling back to the
-        // workspace SyncedQuery registry's Replay(1) cache when no override is
-        // supplied. Without the override, the .Take(1) on the cached observable
-        // could pick up the pre-update Initial emission and the V2 compile would
-        // silently consume V1 source — that was the V1↔V2 mismatch root cause in
-        // CodeEditRecompileTest.
+        // Source discovery: on the compile path this ALWAYS receives the snapshot
+        // GetAssemblyLocationWithLog already took (one snapshot per compile — see its
+        // remarks), so SnapshotSources short-circuits to it rather than racing a second
+        // discovery. The override is also how HandleCreateRelease injects its uncached
+        // IMeshService.Query snapshot — authoritative for the just-modified Code node.
+        // Without an override, the .Take(1) on the cached observable could pick up the
+        // pre-update Initial emission and the V2 compile would silently consume V1 source
+        // — that was the V1↔V2 mismatch root cause in CodeEditRecompileTest.
         // ⏱️ PHASE TIMING. The 2026-07-27 outage was diagnosed — three times, wrongly — by inferring
         // WHERE a compile spends its time from the gaps between existing log lines. The activity log
         // showed 45.20s between "Invoking compiler…" and the source queries resolving, against 2.83s
@@ -847,7 +884,7 @@ internal class MeshNodeCompilationService(
                 // source files from queries [Q1, Q2…]" without re-running the pipeline.
                 var discoveryLog = AppendInfo(log,
                     $"⏱ Source discovery took {discoveryClock.ElapsedMilliseconds}ms "
-                    + $"({(sourcesOverride is not null ? "caller-supplied override" : "synced query")}) — "
+                    + $"({(sourcesOverride is not null ? "reused source snapshot" : "synced query")}) — "
                     + "everything below this line is Roslyn.");
                 foreach (var q in executedQueries)
                     discoveryLog = AppendInfo(discoveryLog, $"Source query: {q}");
@@ -1078,9 +1115,9 @@ internal class MeshNodeCompilationService(
     public IObservable<NodeCompilationResult?> CompileAndGetConfigurations(
         MeshNode node,
         IReadOnlyList<MeshNode>? sourcesOverride = null)
-        => GetAssemblyLocationWithLog(node, sourcesOverride).SelectMany(t =>
+        => GetAssemblyLocationWithLog(node, sourcesOverride).SelectMany(attempt =>
         {
-            var (assemblyLocation, log) = t;
+            var (assemblyLocation, log, sources) = attempt;
             if (string.IsNullOrEmpty(assemblyLocation))
                 // Failed compile: capture the per-source-file Roslyn diagnostics (one
                 // LSP-style per-file-tree compilation of all this NodeType's src+test) so
@@ -1088,17 +1125,22 @@ internal class MeshNodeCompilationService(
                 // position in a Monaco editor and link to the Code node. Failure-only — the
                 // working success emit is untouched. The flattened summary still lives on
                 // the ActivityLog (FormatCompileFailure).
-                return BuildFailureDiagnostics(node, sourcesOverride)
+                //
+                // Diagnosed against the SNAPSHOT THAT FAILED, not a fresh discovery: a
+                // re-read could return a different set and then report diagnostics for code
+                // the failing compile never saw (and pay the discovery a second time).
+                return BuildFailureDiagnostics(node, sources)
                     .Select(diags => (NodeCompilationResult?)new NodeCompilationResult(
                         null, [], log, Diagnostics: diags));
 
-            // Capture the per-source version snapshot AFTER the compile resolved
-            // its source set so the snapshot reflects the same storage enumeration
-            // the cache check uses. Compose via SelectMany so the observable chain
-            // stays reactive (no Task bridges, no .Result deadlocks).
+            // The per-source version snapshot folds the SAME set the compile consumed
+            // (attempt.Sources) — see GetAssemblyLocationWithLog: one snapshot per compile,
+            // so CompiledSources records what was compiled instead of a second, independently
+            // raced observation. Compose via SelectMany so the observable chain stays
+            // reactive (no Task bridges, no .Result deadlocks).
             var ntDef = node.ContentAs<NodeTypeDefinition>(JsonOptions);
             var selfPath = ntDef != null ? node.Path : node.NodeType ?? node.Path;
-            return DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "", sourcesOverride)
+            return DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "", sources)
                 // 🚨 Assembly load + GetTypes() + MeshNodeProviderAttribute reflection +
                 // config instantiation is heavy, synchronous, blocking work. Run it on the
                 // ThreadPool (Task.Run), never inline (would wedge whatever hub action block

@@ -664,7 +664,6 @@ public class SnowflakeSqlGenerator
             // branch schema's — that's what makes cross-partition "last accessed" work.
             var userActivityTable = SnowflakeIdentifiers.Qualify(activityUserSchema ?? schema, "user_activities");
             var uepTable = SnowflakeIdentifiers.Qualify(schema, "user_effective_permissions");
-            var ntpTable = SnowflakeIdentifiers.Qualify(schema, "node_type_permissions");
 
             // For source:activity, project the JOINed activity's last_modified into
             // the same column slot so the outer ORDER BY ranks rows by activity recency.
@@ -690,7 +689,7 @@ public class SnowflakeSqlGenerator
             // schemas would 42S02 the whole UNION (the PG stored proc guarded this with
             // to_regclass; here the caller supplies the provisioned set explicitly).
             var accessClause = aclSet.Contains(schema)
-                ? BuildPerSchemaAccessClause(userId, schema, uepTable, ntpTable, parameters)
+                ? BuildPerSchemaAccessClause(userId, schema, uepTable, parameters)
                 : "";
             var mainNodeFilter = (isActivity || isAccessed) ? "n.\"main_node\" = n.\"path\"" : null;
 
@@ -776,7 +775,7 @@ public class SnowflakeSqlGenerator
     /// branches. Empty when <paramref name="userId"/> is not set (system access).
     /// </summary>
     private string BuildPerSchemaAccessClause(
-        string? userId, string schema, string uepTable, string ntpTable,
+        string? userId, string schema, string uepTable,
         Dictionary<string, object> parameters)
     {
         if (string.IsNullOrEmpty(userId))
@@ -791,38 +790,22 @@ public class SnowflakeSqlGenerator
         var userList = userId == WellKnownUsers.Anonymous
             ? marker : $"{marker}, 'Public'";
 
-        var publicReadClause = userId == WellKnownUsers.Anonymous ? "" :
-            $"EXISTS (SELECT 1 FROM {ntpTable} ntp WHERE ntp.\"node_type\" = n.\"node_type\" AND ntp.\"public_read\" = true)";
-
         var partitionAccessExists =
             $"EXISTS (SELECT 1 FROM {PartitionAccessTable} pa WHERE pa.\"user_id\" IN ({userList}) AND pa.\"partition\" = '{EscapeSqlLiteral(schema)}')";
 
         var nodeAccess = BuildNodeAccessPredicate(uepTable, marker, userList);
 
         // 🔒 #471/#385 RC3 — mirror of PostgreSqlSqlGenerator.BuildPerSchemaAccessClause. The
-        // invariant is partition_access AND (public_read OR node): public_read skips the node-level
-        // check but NEVER the partition gate, so a partition's public-read content does not leak
-        // into another tenant's unscoped fan-out. The lone EXCEPTION is the global public identity
-        // directory ('auth' mirror) — excluded from the tenant fan-out and reached only by pinned
-        // identity routes — whose public-read identity nodes must stay resolvable to all
-        // authenticated users regardless of partition_access (display-name resolution / invites /
-        // subject picker / login). See the PG generator for the full rationale.
-        if (string.Equals(schema, PublicDirectorySchema, StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrEmpty(publicReadClause))
-            return $"({publicReadClause} OR ({partitionAccessExists} AND ({nodeAccess})))";
-
-        if (!string.IsNullOrEmpty(publicReadClause))
-            return $"({partitionAccessExists} AND ({publicReadClause} OR ({nodeAccess})))";
-
+        // invariant is partition_access AND node, so a partition's content does not leak into
+        // another tenant's unscoped fan-out.
+        //
+        // 🔒 #953 — the `public_read OR …` term over node_type_permissions (and its 'auth'
+        // exemption, which OR'd it OUTSIDE the partition gate) is GONE here and in the PG twin.
+        // Nothing ever wrote that table, so the term was a constant `false`; and it OR'd past the
+        // longest-prefix DENY fold that store/course paywall gating relies on. Public read is
+        // PartitionAccessPolicy._Policy (#603) / NodeTypeGate (#701).
         return $"({partitionAccessExists} AND ({nodeAccess}))";
     }
-
-    /// <summary>
-    /// The global public identity directory schema (cross-tenant User/Group/Role/VUser/ApiToken
-    /// mirror). Kept in lock-step with the PostgreSQL generator and
-    /// <c>PostgreSqlCrossSchemaQueryProvider.ExcludedSchemas</c>.
-    /// </summary>
-    private const string PublicDirectorySchema = "auth";
 
     /// <summary>
     /// The node-level permission predicate: the user owns the node, OR the longest matching
@@ -1445,49 +1428,31 @@ public class SnowflakeSqlGenerator
         var marker = Marker(paramName);
         // Anonymous users only get their own permissions (no Public inheritance).
         // All other users also inherit Public permissions as a baseline floor.
-        // Node types marked as public_read in node_type_permissions are visible to authenticated users.
         var userList = userId == WellKnownUsers.Anonymous
             ? marker
             : $"{marker}, 'Public'";
 
         var uepTable = QualifyTable("user_effective_permissions");
-        var ntpTable = QualifyTable("node_type_permissions");
 
         // Partition-level access check (only for schema-qualified queries).
         // partition_access controls which schemas the user can see.
-        // Public-read node types bypass the partition check — they're visible to all authenticated users.
         var hasPartitionCheck = !string.IsNullOrEmpty(SchemaName);
         var partitionAccessExists = hasPartitionCheck
             ? $"EXISTS (SELECT 1 FROM {PartitionAccessTable} pa WHERE pa.\"user_id\" IN ({userList}) AND pa.\"partition\" = '{EscapeSqlLiteral(SchemaName!)}')"
             : "";
 
-        // Public-read node types (e.g. User, Markdown) are visible to all authenticated users
-        // who have partition access. public_read skips node-level permission checks but
-        // still requires partition_access — prevents cross-partition data leakage.
-        var publicReadClause = userId == WellKnownUsers.Anonymous
-            ? ""
-            : $"EXISTS (SELECT 1 FROM {ntpTable} ntp WHERE ntp.\"node_type\" = n.\"node_type\" AND ntp.\"public_read\" = true)";
+        // 🔒 #953 — no node_type_permissions.public_read term here (mirror of the PG generator).
+        // See BuildPerSchemaAccessClause for why it was removed rather than wired up.
 
         // Build the access control clause:
-        // A node is visible if the user has partition access (when schema-qualified) AND:
-        //   (a) public-read node type (no further permission check), OR
-        //   (b) owns the node OR has Read permission (longest matching prefix wins,
-        //       own row breaks ties — see BuildNodeAccessPredicate).
+        // A node is visible if the user has partition access (when schema-qualified) AND
+        // owns the node OR has Read permission (longest matching prefix wins, own row breaks
+        // ties — see BuildNodeAccessPredicate).
         var nodeAccessClause = BuildNodeAccessPredicate(uepTable, marker, userList);
 
         if (hasPartitionCheck)
         {
             // Schema-qualified: partition_access is always required.
-            // public_read skips node-level checks but NOT partition access.
-            if (!string.IsNullOrEmpty(publicReadClause))
-            {
-                return $"""
-                    (
-                        {partitionAccessExists} AND ({publicReadClause} OR {nodeAccessClause})
-                    )
-                    """;
-            }
-
             return $"""
                 (
                     {partitionAccessExists} AND ({nodeAccessClause})
@@ -1495,17 +1460,7 @@ public class SnowflakeSqlGenerator
                 """;
         }
 
-        // No schema: just node-level access (or public-read bypass)
-        if (!string.IsNullOrEmpty(publicReadClause))
-        {
-            return $"""
-                (
-                    {publicReadClause}
-                    OR {nodeAccessClause}
-                )
-                """;
-        }
-
+        // No schema: just node-level access.
         return $"({nodeAccessClause})";
     }
 

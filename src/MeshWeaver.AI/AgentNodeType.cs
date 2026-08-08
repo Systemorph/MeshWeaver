@@ -54,7 +54,6 @@ public static class AgentNodeType
         if (dbSynced)
             typeDefinition = typeDefinition with { IsDefinitionOnly = true };
         builder.AddMeshNodes(typeDefinition);
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         // When the "Agent" partition is DB-synced (static-repo import), DO NOT register the
         // read-only in-memory static surfaces — they would shadow Postgres (specific wins over
         // the wildcard PG provider) and reject the import's writes. The import materializes the

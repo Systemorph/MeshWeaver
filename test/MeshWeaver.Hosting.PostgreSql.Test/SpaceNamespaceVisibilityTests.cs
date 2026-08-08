@@ -56,10 +56,8 @@ public class SpaceNamespaceVisibilityTests
             NodeType = "Group"
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        // Register Space as public-read
-        await ac.SyncNodeTypePermissionsAsync([
-            new NodeTypePermission("Space", PublicRead: true)
-        ], ct).Run().Should().Within(30.Seconds()).Emit();
+        // 🔒 #953 — no node-type public read; alice's explicit grant below is what makes the Space
+        // root and its children visible, which is what production always relied on.
 
         // Grant authenticated user access
         await ac.Grant("PartnerRe", "alice", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();

@@ -433,70 +433,9 @@ public class SnowflakeAccessControl
             connection, _schemaName ?? _centralSchema, _centralSchema, _logger, ct).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Syncs DI-registered <see cref="NodeTypePermission"/> records to the
-    /// <c>node_type_permissions</c> table. Called at startup to populate the DB with
-    /// module-declared permissions; idempotent. Where the PG code loops one
-    /// <c>INSERT ... ON CONFLICT</c> per record, Snowflake round-trips are expensive, so the
-    /// records batch into chunked multi-row MERGEs (UNION-ALL source); the emulator fallback is
-    /// per-row DELETE + INSERT on one connection.
-    /// </summary>
-    /// <param name="permissions">The node-type permission flags to upsert.</param>
-    /// <param name="ct">Cancellation token.</param>
-    public async Task SyncNodeTypePermissionsAsync(
-        IEnumerable<NodeTypePermission> permissions,
-        CancellationToken ct = default)
-    {
-        var rows = permissions.ToList();
-        if (rows.Count == 0)
-            return;
-
-        var ntpTable = Q("node_type_permissions");
-        await using var connection = await _source.OpenAsync(ct).ConfigureAwait(false);
-
-        if (_capabilities.Current.SupportsMerge)
-        {
-            // 2 binds per row; chunk to keep statements well under driver/emulator limits.
-            const int chunkSize = 200;
-            foreach (var chunk in rows.Chunk(chunkSize))
-            {
-                await using var merge = connection.CreateCommand();
-                var sourceRows = new List<string>(chunk.Length);
-                for (var i = 0; i < chunk.Length; i++)
-                {
-                    sourceRows.Add(i == 0
-                        ? $"SELECT :nt{i} AS \"node_type\", :pr{i} AS \"public_read\""
-                        : $"SELECT :nt{i}, :pr{i}");
-                    SnowflakeConnectionSource.AddParam(merge, $"nt{i}", chunk[i].NodeType, DbType.String);
-                    SnowflakeConnectionSource.AddParam(merge, $"pr{i}", chunk[i].PublicRead, DbType.Boolean);
-                }
-                merge.CommandText = $"""
-                    MERGE INTO {ntpTable} AS t
-                    USING ({string.Join(" UNION ALL ", sourceRows)}) AS s
-                    ON t."node_type" = s."node_type"
-                    WHEN MATCHED THEN UPDATE SET "public_read" = s."public_read"
-                    WHEN NOT MATCHED THEN INSERT ("node_type", "public_read")
-                    VALUES (s."node_type", s."public_read")
-                    """;
-                await merge.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            }
-            return;
-        }
-
-        foreach (var p in rows)
-        {
-            await using (var delete = connection.CreateCommand())
-            {
-                delete.CommandText = $"DELETE FROM {ntpTable} WHERE \"node_type\" = :node_type";
-                SnowflakeConnectionSource.AddParam(delete, "node_type", p.NodeType, DbType.String);
-                await delete.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            }
-            await using var insert = connection.CreateCommand();
-            insert.CommandText =
-                $"INSERT INTO {ntpTable} (\"node_type\", \"public_read\") SELECT :node_type, :public_read";
-            SnowflakeConnectionSource.AddParam(insert, "node_type", p.NodeType, DbType.String);
-            SnowflakeConnectionSource.AddParam(insert, "public_read", p.PublicRead, DbType.Boolean);
-            await insert.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        }
-    }
+    // 🔒 #953 — SyncNodeTypePermissionsAsync was DELETED here as in the PG twin. See
+    // PostgreSqlAccessControl for the rationale: the table it wrote had no reachable caller, its
+    // `public_read` term OR'd past the longest-prefix DENY fold that paywall gating relies on, and
+    // it had no counterpart in PermissionEvaluator. Use PartitionAccessPolicy._Policy (#603) or
+    // NodeTypeGate (#701) to express public read.
 }

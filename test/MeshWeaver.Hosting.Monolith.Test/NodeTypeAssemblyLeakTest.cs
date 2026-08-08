@@ -11,6 +11,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -160,12 +161,25 @@ public class NodeTypeAssemblyLeakTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Tear the mesh down: every hosted per-node hub disposes, firing the
         // SubscribeToOwnDeletion → UnloadNodeContexts hook that drops its ALC.
-        Mesh.Dispose();
-        await Mesh.DisposalCompleted
-            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
-            .FirstOrDefaultAsync()
+        //
+        // 🚨 Wait on the TERMINAL teardown signal, NOT on DisposalCompleted. During mesh teardown
+        // the ALC unload is deliberately deferred past IoPoolRegistry.DrainAll() — a pooled
+        // layout-render leaf can still be executing this ALC's compiled types when
+        // DisposalCompleted fires, and unloading under it frees the LoaderAllocator beneath a live
+        // thread (issue #613: AccessViolation → SIGABRT). MeshTeardownSignal is the point where
+        // every drain phase has finished AND the unload has run; waiting on DisposalCompleted here
+        // would pin the pre-#613 ordering as the contract. What this test ASSERTS is unchanged —
+        // zero surviving DynamicNode_* contexts — only WHEN it checks moved.
+        var teardownSignal = Mesh.ServiceProvider.GetRequiredService<MeshTeardownSignal>();
+        var terminal = teardownSignal.Completed
+            .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
             .ToTask();
+        var report = await Mesh.TeardownAsync(TimeSpan.FromSeconds(30));
+        await terminal;
+
+        report.Clean.Should().BeTrue(
+            $"a dirty teardown means live work survived into the ALC unload — {report}");
 
         await ForceCollectAsync(weakRefs);
 

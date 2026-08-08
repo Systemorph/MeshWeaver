@@ -1,0 +1,62 @@
+@inherits BlazorView<TowerControl, TowerView>
+@inject AccessService Access
+
+<div class="@($"tower {Class}".TrimEnd())" style="@Style" id="@Id">
+    @if (Layout is null)
+    {
+        <p class="tower-empty">@Access.Localize("analysis.tower.empty")</p>
+    }
+    else
+    {
+        <div class="tower-plot" style="@($"height:{Height}")">
+            <div class="tower-axis">
+                @foreach (var tick in Ticks)
+                {
+                    <div class="tower-tick" style="@($"bottom:{Css(tick.Percent)}%")">
+                        <span class="tower-tick-label">@tick.Label</span>
+                    </div>
+                }
+            </div>
+            <div class="tower-stack">
+                @if (RetentionPercent > 0)
+                {
+                    <div class="tower-retention" style="@($"height:{Css(RetentionPercent)}%")">
+                        <span class="tower-retention-label">@RetentionLabel</span>
+                    </div>
+                }
+                @foreach (var band in Layout.Bands)
+                {
+                    var style = $"bottom:{Css(band.BottomPercent)}%;height:{Css(band.HeightPercent)}%";
+                    var href = TowerControl.NavigableHref(band.Band.Href);
+                    if (href is null)
+                    {
+                        <div class="tower-band" style="@style">
+                            @BandBody(band)
+                        </div>
+                    }
+                    else
+                    {
+                        <a class="tower-band tower-band-link" style="@style" href="@href">
+                            @BandBody(band)
+                        </a>
+                    }
+                }
+            </div>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(Currency))
+        {
+            <div class="tower-unit">@Currency</div>
+        }
+    }
+</div>
+
+@code {
+    private RenderFragment BandBody(TowerBandLayout band) =>
+    @<text>
+        <span class="tower-band-share" style="@($"width:{Css(SharePercent(band.Band))}%")"></span>
+        <span class="tower-band-text">
+            <span class="tower-band-label">@band.Band.Label</span>
+            <span class="tower-band-terms">@band.Band.Terms</span>
+        </span>
+    </text>;
+}

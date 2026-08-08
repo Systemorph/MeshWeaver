@@ -66,6 +66,30 @@ const leaves: Record<string, UiControl> = {
     $type: "LayoutAreaDefinition",
     definition: { area: "Overview", url: "/app/Overview", title: "Overview", description: "The overview area" },
   },
+  kpiStrip: {
+    $type: "KpiStrip",
+    items: [
+      { label: "Premium", value: "12.4m" },
+      { label: "Combined ratio", value: "94.1%", hint: "before commission" },
+    ],
+  },
+  tower: {
+    $type: "Tower",
+    currency: "EUR",
+    bands: [
+      { label: "Layer 1", terms: "7m xs 3m", attachment: 3_000_000, cover: 7_000_000, share: 0.5 },
+      { label: "Layer 2", terms: "15m xs 10m", attachment: 10_000_000, cover: 15_000_000, share: 1 },
+    ],
+  },
+  comparisonBars: {
+    $type: "ComparisonBars",
+    leftLegend: "reported",
+    rightLegend: "ours",
+    pairs: [
+      { label: "Paid", left: 120_000, right: 118_500 },
+      { label: "Outstanding", left: 90_000, right: null },
+    ],
+  },
 };
 
 const LEAVES = Object.keys(leaves);
