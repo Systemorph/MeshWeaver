@@ -119,6 +119,38 @@ public class MonacoCompletionSessionTest
     }
 
     [Fact]
+    public void FailedSubscribe_DoesNotWedgeTheToken_NextRequestRetries()
+    {
+        // 🚨 A query whose subscribe FAILS must not keep session ownership. If it did, every later
+        // request for the same token would short-circuit on "already current" and serve empty
+        // forever — one transient fault turning into a permanently dead suggest list for that
+        // token (wedges-to-zero). The next request must re-attempt the subscribe.
+        var subject = new Subject<IReadOnlyList<CompletionItem>>();
+        var attempts = new List<string>();
+        var failures = new List<string>();
+        var failFirst = true;
+        var session = new MonacoCompletionSession(
+            q =>
+            {
+                attempts.Add(q);
+                if (failFirst) { failFirst = false; throw new InvalidOperationException("transient"); }
+                return subject;
+            },
+            (_, _) => { },
+            (q, _) => failures.Add(q));
+
+        session.GetCompletions("@x").Should().BeEmpty();
+        attempts.Should().Equal("@x");
+        failures.Should().Equal("@x");
+
+        // Same token again — pre-fix this returned empty WITHOUT re-subscribing, because the
+        // failed attempt still owned the session. Two attempts prove the retry happened.
+        session.GetCompletions("@x").Should().BeEmpty();
+        attempts.Should().Equal("@x", "@x");
+        subject.HasObservers.Should().BeTrue("the retry established a real subscription");
+    }
+
+    [Fact]
     public void Dispose_ClosesTheActiveSubscription()
     {
         var subject = new Subject<IReadOnlyList<CompletionItem>>();

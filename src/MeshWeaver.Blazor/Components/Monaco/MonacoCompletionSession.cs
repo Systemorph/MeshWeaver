@@ -65,7 +65,14 @@ public sealed class MonacoCompletionSession(
         }
 
         if (stream is null)
+        {
+            // 🚨 Release the session: a query we could not subscribe must NOT stay owner, or every
+            // later request for the SAME token short-circuits on "already current" and serves empty
+            // forever — the token wedges (wedges-to-zero: a failure must never become a permanent
+            // silent state). Clearing lets the next keystroke re-attempt the subscribe.
+            ReleaseIfCurrent(query);
             return [];
+        }
 
         IDisposable? subscription = null;
         try
@@ -94,6 +101,13 @@ public sealed class MonacoCompletionSession(
         {
             if (string.Equals(currentQuery, query, StringComparison.Ordinal))
             {
+                if (subscription is null)
+                {
+                    // Subscribe threw — same rule as the null-stream path above: give up ownership
+                    // so the next request for this token retries instead of serving empty forever.
+                    currentQuery = null;
+                    return [];
+                }
                 activeSubscription = subscription;
                 return currentCompletions;
             }
@@ -102,6 +116,20 @@ public sealed class MonacoCompletionSession(
         // The query moved on while we were subscribing — this subscription lost the session.
         subscription?.Dispose();
         return [];
+    }
+
+    /// <summary>
+    /// Gives up session ownership for <paramref name="query"/> IF it is still the current one, so a
+    /// failed attempt cannot leave the token permanently "already current" (and therefore
+    /// permanently empty). A newer query that took over in the meantime is left untouched.
+    /// </summary>
+    private void ReleaseIfCurrent(string query)
+    {
+        lock (gate)
+        {
+            if (string.Equals(currentQuery, query, StringComparison.Ordinal))
+                currentQuery = null;
+        }
     }
 
     /// <summary>Disposes the active completion subscription, if any.</summary>
