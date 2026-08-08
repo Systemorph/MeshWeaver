@@ -90,10 +90,13 @@ public sealed record ImportConflictPolicy(
 /// create pipeline — content + prerender — tracked as a content-addressed <c>Activity</c> and
 /// idempotent via the source fingerprint. See <c>Doc/Architecture/StaticRepoImport.md</c>.
 ///
-/// <para>Single-execution: the activity at <c>{Partition}/_Activity/import-{fingerprint}</c> is the
-/// lock — <see cref="IMeshService.CreateNode"/> makes the first caller win and concurrent replicas
-/// get "already exists". A <see cref="ActivityStatus.Succeeded"/> activity for the fingerprint is
-/// the durable "already imported" record (the short-circuit). Reactive end-to-end — no await.</para>
+/// <para>Idempotence, NOT mutual exclusion: the activity at
+/// <c>{Partition}/_Activity/import-{fingerprint}</c> is a content-addressed MARKER. A
+/// <see cref="ActivityStatus.Succeeded"/> one for the fingerprint is the durable "already imported"
+/// record that short-circuits the next boot. It does not serialise anything — a marker left
+/// <see cref="ActivityStatus.Running"/> is deliberately reclaimed rather than obeyed (see Reimport),
+/// so two replicas booting together can both import. That is safe because every write on the path is
+/// an upsert. Reactive end-to-end — no await.</para>
 /// </summary>
 public static class StaticRepoImporter
 {
@@ -512,7 +515,7 @@ public static class StaticRepoImporter
 
     /// <summary>
     /// Imports a single static-repo source into its partition: provisions the partition
-    /// schema, acquires the content-addressed import activity lock (idempotent — a prior
+    /// schema, stamps the content-addressed import marker (idempotent — a prior
     /// Succeeded activity for the same fingerprint short-circuits), then upserts every
     /// source node, prunes stale ones, and syncs content imports. Runs on the supplied
     /// (dedicated import) hub. Reactive — Subscribe to run.
@@ -545,7 +548,28 @@ public static class StaticRepoImporter
             nodes.Append(root).ToArray(), source.Versioned, hub.JsonSerializerOptions);
         var activityId = $"import-{fingerprint}";
         var activityNamespace = $"{source.Partition}/_Activity";
+        // 🚨 issue #919 — THE MARKER. Content-addressed BY DESIGN and therefore the ONE id that cannot
+        // be minted fresh per attempt: a Succeeded one is the durable "this exact content is already
+        // imported" record the short-circuit below reads, and that only works if the id is derived
+        // from the content. It is NOT a lock — see the note on Reimport: a Running marker is reclaimed,
+        // not obeyed, so it excludes nobody. It is written ONLY through the idempotent, repair-capable
+        // Upsert (CreateOrUpdateNodeRequest floors the version on the durable row it just read, #902/#909,
+        // so even a forked/ghost lock row heals in place) — never through the per-progress-line stream
+        // Update that made a faulted row fatal.
         var activityPath = $"{activityNamespace}/{activityId}";
+        // 🚨 issue #919 — THE ATTEMPT. Everything a RUN writes WHILE it runs — the opening progress line,
+        // every per-file ⚠/🗑 diagnostic, the terminal summary — goes to a FRESH node per attempt.
+        // Before this split the run logged into the deterministic lock node, so a single poisoned prior
+        // row at that id (memex Store 2026-08-07: v166, 16 KB, unloadable by its own hub) made EVERY
+        // retry re-target the same broken node and die identically — each progress write burning the
+        // 30 s "no initial state arrived" abort — with no way out but deleting the row by hand in SQL.
+        // A fresh id per attempt means a faulted attempt can never be re-targeted, while the marker keeps
+        // the content-addressed id its short-circuit depends on. The attempt history is also the log an
+        // operator wants:
+        // one node per run, not a single node overwritten in place.
+        var attemptId =
+            $"{activityId}-{DateTime.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid().ToString("N")[..8]}";
+        var attemptPath = $"{activityNamespace}/{attemptId}";
 
         // 🚨 Provision the partition schema BEFORE the activity-lock create. The lock node lives at
         // {Partition}/_Activity/… — i.e. INSIDE the partition schema. On a not-yet-provisioned
@@ -554,13 +578,64 @@ public static class StaticRepoImporter
         // promise-cached, so Run's later re-provision of the touched partitions is a no-op.
         return ProvisionPartitions(hub, [source.Partition])
             // Short-circuit: a Succeeded import activity for this fingerprint = already imported.
-            // (Existence check via query — eventually consistent, but the CreateNode lock below is the
-            // authoritative guard; a stale miss just attempts the create and loses the race.)
+            // (Existence check via query — eventually consistent. Nothing downstream re-checks, so a
+            // stale miss simply re-runs the whole import; that is wasteful but harmless, because every
+            // write it makes is an idempotent upsert of the same content.)
             .SelectMany(_ => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{activityPath}")))
             .Take(1)
             .SelectMany(change =>
             {
                 var existing = change.Items.FirstOrDefault();
+
+                // 🚨 issue #919 — THE IMPORT'S OWN BOOKKEEPING IS NOT SUBJECT TO THE ACCESS STATE IT
+                // REPAIRS. The lock, the attempt and the manifests are infrastructure records ABOUT the
+                // import, not partition content, so they are written under the well-known System identity
+                // — established per write inside Upsert's AsSystem and (since #919) carried across the
+                // stream cache's per-path serial queue, whose Concat subscribes a queued write on the
+                // PREVIOUS write's settle thread where the caller's scope is long gone. Without that a
+                // grant-less partition could not record the progress of the sync sent to repair it: the
+                // write's initial-state read was refused and it died with "no initial state arrived …
+                // within 30s" — the repair needed the grants it existed to write (memex Store, 2026-08-07).
+                // Only the BOOKKEEPING is Systemed here; the imported CONTENT keeps the exact write path
+                // (and identity) it always had.
+                MeshNode BookkeepingNode(
+                    string id, string name, ActivityStatus status, params LogMessage[] messages) =>
+                    new(id, activityNamespace)
+                    {
+                        Name = name,
+                        NodeType = ActivityNodeType.NodeType,
+                        MainNode = source.Partition,
+                        State = MeshNodeState.Active,
+                        Content = new ActivityLog(ActivityCategory.Import)
+                        {
+                            Id = id,
+                            HubPath = source.Partition,
+                            Status = status,
+                            End = status == ActivityStatus.Running ? null : DateTime.UtcNow,
+                            Messages = ImmutableList.CreateRange(messages),
+                        }
+                    };
+
+                var lockName = $"Import {source.Partition} ({nodes.Count} nodes)";
+
+                // Terminal stamp on the LOCK — through Upsert, the repair-capable verb, so it lands on a
+                // node that may not exist yet (the early-failure path) AND on one left forked by a prior
+                // half-write. The human-readable log lives on the attempt; the lock carries the verdict
+                // plus a pointer to the attempt that produced it.
+                IObservable<int> StampLock(ActivityStatus status, string summary) =>
+                    Upsert(hub, BookkeepingNode(activityId, lockName, status,
+                            new LogMessage(summary, status is ActivityStatus.Succeeded
+                                ? Microsoft.Extensions.Logging.LogLevel.Information
+                                : status is ActivityStatus.Warning
+                                    ? Microsoft.Extensions.Logging.LogLevel.Warning
+                                    : Microsoft.Extensions.Logging.LogLevel.Error)))
+                        .Catch<int, Exception>(ex =>
+                        {
+                            logger?.LogWarning(ex,
+                                "[StaticRepoImport] {Partition}: could not stamp the import lock at {Path} (attempt log is at {Attempt}).",
+                                source.Partition, activityPath, attemptPath);
+                            return Observable.Return(0);
+                        });
 
                 // The content-skip path: the content fingerprint matches a prior Succeeded import, so
                 // verify ONLY the CRITICAL governance (partition ROOT + its read-only _Policy —
@@ -584,7 +659,10 @@ public static class StaticRepoImporter
                     logger?.LogInformation(
                         "[StaticRepoImport] {Partition} already at {Fingerprint} — content skipped; verifying root + {Count} governance node(s).",
                         source.Partition, fingerprint, governance.Length);
-                    return EnsureRoot(hub, source, root, activityPath, logger, refreshExisting: false)
+                    // No attempt runs on the skip path (nothing is imported), so there is no activity to
+                    // log to — passing the LOCK's path here would resurrect the very "write progress into
+                    // the durable marker" shape #919 removed, on a node that may itself be the faulted one.
+                    return EnsureRoot(hub, source, root, activityPath: null, logger, refreshExisting: false)
                         .SelectMany(_ => governance.Length == 0
                             ? Observable.Return(0)
                             : governance
@@ -613,36 +691,41 @@ public static class StaticRepoImporter
                 // briefly running two pods, or a materialization fault) instead of skipping forever
                 // ("AlreadyRunning", 0 nodes): the atioz Agent/Harness/Command wedge. Under System
                 // (Upsert wraps AsSystem) so the lock write authorizes on read-only-_Policy partitions.
-                IObservable<StaticRepoImportResult> Reimport()
-                {
-                    var activityNode = new MeshNode(activityId, activityNamespace)
-                    {
-                        Name = $"Import {source.Partition} ({nodes.Count} nodes)",
-                        NodeType = ActivityNodeType.NodeType,
-                        MainNode = source.Partition,
-                        State = MeshNodeState.Active,
-                        Content = new ActivityLog(ActivityCategory.Import)
-                        {
-                            Id = activityId,
-                            HubPath = source.Partition,
-                            Status = ActivityStatus.Running
-                        }
-                    };
-                    return Upsert(hub, activityNode)
-                        .SelectMany(_ => Run(hub, source, nodes, root, activityPath, fingerprint, syncMode, logger, policy, changedNodePaths))
+                IObservable<StaticRepoImportResult> Reimport() =>
+                    // 1. Stamp the MARKER Running (deterministic id, repair-capable Upsert). This
+                    //    records that an import is under way; it does not exclude a concurrent one.
+                    Upsert(hub, BookkeepingNode(activityId, lockName, ActivityStatus.Running))
+                        // 2. Open a FRESH attempt node — the only node this run logs progress to (#919).
+                        .SelectMany(_ => Upsert(hub, BookkeepingNode(
+                            attemptId, $"{lockName} — attempt {DateTime.UtcNow:u}", ActivityStatus.Running)))
+                        .SelectMany(_ => Run(hub, source, nodes, root, attemptPath, fingerprint, syncMode, logger, policy, changedNodePaths))
+                        // 3. Stamp the verdict on the lock. Succeeded here is what makes the NEXT boot
+                        //    skip; ImportedWithErrors stays Warning and a guarded-to-Failed run stays
+                        //    Failed, so both re-import — exactly the statuses Run wrote before the split.
+                        //    (Run guards its own faults into a "Failed" RESULT rather than an exception,
+                        //    so this arm — not the Catch below — is what a failed run reaches.)
+                        .SelectMany(result => StampLock(
+                                result.Outcome switch
+                                {
+                                    "ImportedWithErrors" => ActivityStatus.Warning,
+                                    "Failed" => ActivityStatus.Failed,
+                                    _ => ActivityStatus.Succeeded,
+                                },
+                                $"{result.Outcome}: {result.Count} node(s) imported — see {attemptPath}.")
+                            .Select(_ => result))
                         .Catch<StaticRepoImportResult, Exception>(ex =>
                         {
                             logger?.LogWarning(ex,
                                 "[StaticRepoImport] {Partition} ({Fingerprint}) import failed: {Message}",
                                 source.Partition, fingerprint, ex.Message);
                             // Surface to the activity log + a GUI bell notification linking to it —
-                            // a failed boot import must be SEEN, never a silent wedge.
-                            NodeTypeCompilationActivity.MarkFailed(hub, activityPath, ex.Message, logger!);
-                            NotifyStartupFailure(hub, source.Partition, activityPath, ex.Message, logger);
-                            return Observable.Return(
-                                new StaticRepoImportResult(source.Partition, fingerprint, "Failed"));
+                            // a failed boot import must be SEEN, never a silent wedge. The diagnostics
+                            // go to the ATTEMPT (fresh id, guaranteed live), the verdict to the lock.
+                            NodeTypeCompilationActivity.MarkFailed(hub, attemptPath, ex.Message, logger!);
+                            NotifyStartupFailure(hub, source.Partition, attemptPath, ex.Message, logger);
+                            return StampLock(ActivityStatus.Failed, $"Import failed: {ex.Message} — see {attemptPath}.")
+                                .Select(_ => new StaticRepoImportResult(source.Partition, fingerprint, "Failed"));
                         });
-                }
 
                 // No Succeeded marker → import. 🚨 Read the marker through the TOLERANT ContentAs, NEVER
                 // a raw `existing.Content is ActivityLog {…}` pattern: a node read back from storage/query
@@ -671,7 +754,8 @@ public static class StaticRepoImporter
                 // skills MISSING FOREVER ("a user didn't see the core app skills", atioz). Cheaply verify
                 // a CONTENT sentinel is still present; if it's gone, fall through to the full idempotent
                 // re-import instead of skipping. Eventually-consistent query: a stale miss re-imports
-                // idempotently (wasteful, not wrong; the activity lock still serialises concurrent runs).
+                // idempotently — wasteful, not wrong, which is the same property that lets two replicas
+                // import concurrently (nothing serialises them; every write on the path is an upsert).
                 var contentSentinel = nodes.FirstOrDefault(n =>
                     n.NodeType != "PartitionAccessPolicy"
                     && !n.Segments.Skip(1).Any(seg => seg.StartsWith('_')));
@@ -705,8 +789,11 @@ public static class StaticRepoImporter
         // (e.g. the model catalog: the read-only _Policy under "Model", the provider/model content
         // under "_Provider"), so read each touched partition's subtree. The snapshot yields each
         // target's SyncBehavior (skip decision), its identity (CreatedDate/CreatedBy, preserved on
-        // overwrite), and the prune candidate set. Eventual consistency is fine here — the import
-        // runs under the content-addressed activity lock, so no concurrent import races this read.
+        // overwrite), and the prune candidate set. Eventual consistency is tolerated here because the
+        // import is idempotent, NOT because anything excludes a concurrent one: a second replica
+        // running the same fingerprint writes byte-identical content, so a snapshot that misses its
+        // writes re-upserts rather than diverging. (The marker at import-{fingerprint} is a
+        // short-circuit record, not a lock — a Running one is reclaimed, not obeyed.)
         var partitions = nodes
             .Select(n => FirstSegment(n.Path))
             .Where(p => !string.IsNullOrEmpty(p))
@@ -892,14 +979,19 @@ public static class StaticRepoImporter
                                 CreatedDate = target.CreatedDate,
                                 CreatedBy = target.CreatedBy
                             };
-                        // Mesh-owned compile state stays LIVE: a NodeType file in the repo embeds
-                        // whatever bookkeeping it had when exported, and letting it land regressed
-                        // the live node to a STALE GREEN (an assembly pointer weeks old, "Ok" for a
-                        // compile that never ran against these sources) — correct-looking until a
-                        // cold cache parks the type. The repo owns the authored definition; the
-                        // operational members end up exactly as the mesh last wrote them.
-                        materialized = NodeTypeOperationalContent.PreserveLiveOperational(
-                            materialized, target, hub.JsonSerializerOptions);
+                        // 🚨 Mesh-owned compile state is NOT carried over here any more (#748). It
+                        // used to be — against `target`, which comes from the eventually-consistent
+                        // `path:{p} scope:descendants` snapshot above. That snapshot is fine for the
+                        // decisions it was read for (SyncBehavior, identity, prune candidates: all
+                        // authored, all under the import's own lock) but NOT for the operational
+                        // members, which the compile pipeline writes OUTSIDE that lock. Preserving
+                        // from a lagged index is the CQRS rule's forbidden shape ("never read a
+                        // single node's content from the query"), and it actively regressed live
+                        // state: after a framework roll, an import would stamp the pre-roll verdict
+                        // back and a healthy type reverted to `Pending` with a dangling
+                        // `latestReleasePath` (memex 2026-08-02). The rule now lives at the OWNER —
+                        // MeshExtensions.PreserveMeshOwnedOperational, inside the upsert's merge —
+                        // where the answer is authoritative and every upsert writer gets it.
                         // 🚨 Per-FILE isolation. A single node's upsert faulting (bad content, a
                         // validator reject, a transient owner timeout) must NOT abort the whole
                         // partition import — the first failure used to propagate through Merge and
@@ -1070,6 +1162,10 @@ public static class StaticRepoImporter
             })
             .Catch<StaticRepoImportResult, Exception>(ex =>
             {
+                // 🚨 issue #919 — `activityPath` here is the RUN's per-attempt node (minted fresh by
+                // Reimport and created before Run is entered), never the deterministic lock: a run's
+                // diagnostics belong on the attempt it came from. Reimport maps the "Failed" outcome
+                // below onto the lock's terminal verdict.
                 NodeTypeCompilationActivity.MarkFailed(hub, activityPath, ex.Message, logger!);
                 logger?.LogWarning(ex, "[StaticRepoImport] {Partition} import failed.", source.Partition);
                 NotifyStartupFailure(hub, source.Partition, activityPath, ex.Message, logger);
@@ -1166,7 +1262,7 @@ public static class StaticRepoImporter
     /// </summary>
     private static IObservable<int> EnsureRoot(
         IMessageHub hub, IStaticRepoSource source, MeshNode root,
-        string activityPath, ILogger? logger, bool refreshExisting = true)
+        string? activityPath, ILogger? logger, bool refreshExisting = true)
     {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         // 🚨 Honour an admin's "stop sync" claim on the partition ROOT. If the EXISTING root carries a

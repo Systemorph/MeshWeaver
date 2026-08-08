@@ -65,6 +65,8 @@ public class ThreadTokenUsageTest : AITestBase
                 services.AddSingleton<IChatClientFactory>(new UsageBlockChatClientFactory());
                 services.AddSingleton<IChatClientFactory>(new UsageThrowChatClientFactory());
                 services.AddSingleton<IChatClientFactory>(new UsageCacheChatClientFactory());
+                services.AddSingleton<IChatClientFactory>(new UsageResolvedCancelFactory());
+                services.AddSingleton<IChatClientFactory>(new UsageResolvedErrorFactory());
                 return services;
             });
 
@@ -192,6 +194,79 @@ public class ThreadTokenUsageTest : AITestBase
         cell.TotalTokens.Should().Be(TotalTokens);
     }
 
+    // ─── Cancelled/Error attribution (pins actualModel ?? request.ModelName, #595) ───
+    //
+    // The stream's updates carry a RESOLVED ModelId (like a harness resolving "sonnet" to a
+    // concrete id, or a delegation sub-thread whose request.ModelName is null). The terminal
+    // paths must key the TokenUsage satellite — and stamp the response cell — by that ACTUAL
+    // model, not the bare requested alias. Before f97b44fa9 the Cancelled/Error satellite was
+    // keyed by request.ModelName (null on a sub-thread → "(unknown)"); the cell's model was
+    // still the bare alias until this fix.
+
+    [Fact]
+    public async Task CancelledRound_KeysUsageAndCellByActualModel_NotRequestedAlias()
+    {
+        var threadPath = await SeedThread();
+        var client = GetClient();
+        client.SubmitMessage(threadPath, "cancel me resolved", modelName: "usage-cancel-alias", createdBy: TestUser);
+
+        var executing = await WaitForThread(threadPath,
+            t => t.IsExecuting && t.ActiveMessageId != null, 20_000);
+        var cellId = executing.ActiveMessageId!;
+
+        // Marker on the cell proves the usage update (and the ModelId-stamped chunks) were
+        // aggregated before we request the cancel — same deterministic gate as the plain
+        // Cancelled test, no sleep.
+        await WaitForCell(threadPath, cellId, m => (m.Text ?? "").Contains(UsageMarker), 20_000);
+
+        await client.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Update(curr => curr?.Content is MeshThread t
+                ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
+                : curr!)
+            .FirstAsync().ToTask();
+
+        await WaitForThread(threadPath,
+            t => t.Status == ThreadExecutionStatus.Cancelled, 20_000);
+
+        // Satellite keyed by the RESOLVED model — if the code regressed to request.ModelName
+        // this wait times out (the satellite would sit at usage_cancel_alias instead).
+        var usage = await WaitForUsage(threadPath, "usage_cancel_resolved",
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
+        usage.Model.Should().Be("usage-cancel-resolved",
+            "the satellite records the model that actually ran, not the requested alias");
+
+        var cell = await WaitForCell(threadPath, cellId,
+            m => m.Status == ThreadMessageStatus.Cancelled, 10_000);
+        cell.ModelName.Should().Be("usage-cancel-resolved",
+            "the cancelled cell shows the resolved model, matching the Completed path");
+    }
+
+    [Fact]
+    public async Task ErrorRound_KeysUsageAndCellByActualModel_NotRequestedAlias()
+    {
+        var threadPath = await SeedThread();
+        var client = GetClient();
+        client.SubmitMessage(threadPath, "throw after usage resolved", modelName: "usage-error-alias", createdBy: TestUser);
+
+        var terminal = await WaitForThread(threadPath,
+            t => t.Status == ThreadExecutionStatus.Idle
+                 && t.IngestedMessageIds.Count >= 1
+                 && t.Messages.Count >= 2,
+            20_000);
+
+        var usage = await WaitForUsage(threadPath, "usage_error_resolved",
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
+        usage.Model.Should().Be("usage-error-resolved",
+            "the satellite records the model that actually ran, not the requested alias");
+
+        var cell = await WaitForCell(threadPath, terminal.Messages[^1],
+            m => m.Status == ThreadMessageStatus.Error, 10_000);
+        cell.ModelName.Should().Be("usage-error-resolved",
+            "the errored cell shows the resolved model, matching the Completed path");
+        cell.InputTokens.Should().Be(InTokens);
+        cell.OutputTokens.Should().Be(OutTokens);
+    }
+
     // ─── Provider reports only in/out (pins the total-derivation fallback) ───
 
     [Fact]
@@ -289,8 +364,11 @@ public class ThreadTokenUsageTest : AITestBase
     /// does after the marker is controlled by <see cref="PostUsage"/>: complete cleanly, block on
     /// the round CTS until cancelled (→ OperationCanceledException → Cancelled path), or throw
     /// (→ Error path). <paramref name="reportTotal"/> toggles whether TotalTokenCount is reported.
+    /// <paramref name="modelId"/>, when set, stamps every update's ModelId — modelling a provider
+    /// or harness that reports the RESOLVED model it actually ran (ThreadExecution captures it as
+    /// actualModel), distinct from the requested alias the factory routes on.
     /// </summary>
-    private sealed class UsageChatClient(bool reportTotal, PostUsage mode, bool emitCache = false) : IChatClient
+    private sealed class UsageChatClient(bool reportTotal, PostUsage mode, bool emitCache = false, string? modelId = null) : IChatClient
     {
         public ChatClientMetadata Metadata => new("UsageProvider");
 
@@ -304,7 +382,7 @@ public class ThreadTokenUsageTest : AITestBase
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             // Text first — the round is genuinely streaming past the Executing flip.
-            yield return new ChatResponseUpdate(ChatRole.Assistant, "Working. ");
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "Working. ") { ModelId = modelId };
             // The usage report — this is what ThreadExecution aggregates. When emitCache is set, the
             // cache breakdown rides in AdditionalCounts under MIXED provider keys (OpenAI's
             // "InputTokenDetails.CachedTokenCount" for read, Claude's "CacheCreationInputTokens" for
@@ -324,9 +402,9 @@ public class ThreadTokenUsageTest : AITestBase
             yield return new ChatResponseUpdate(ChatRole.Assistant, new AIContent[]
             {
                 new UsageContent(details)
-            });
+            }) { ModelId = modelId };
             // Post-usage marker — once it lands on the cell, the usage above was provably pulled.
-            yield return new ChatResponseUpdate(ChatRole.Assistant, UsageMarker);
+            yield return new ChatResponseUpdate(ChatRole.Assistant, UsageMarker) { ModelId = modelId };
 
             switch (mode)
             {
@@ -412,5 +490,24 @@ public class ThreadTokenUsageTest : AITestBase
         public override string Name => "UsageCacheFactory";
         public override IReadOnlyList<string> Models => ["usage-cache-model"];
         protected override IChatClient CreateClient() => new UsageChatClient(reportTotal: true, PostUsage.Complete, emitCache: true);
+    }
+
+    // Routes on the ALIAS; the stream reports the RESOLVED ModelId — the terminal Cancelled
+    // path must attribute usage to the resolved model (#595).
+    private sealed class UsageResolvedCancelFactory : UsageFactoryBase
+    {
+        public override string Name => "UsageResolvedCancelFactory";
+        public override IReadOnlyList<string> Models => ["usage-cancel-alias"];
+        protected override IChatClient CreateClient() => new UsageChatClient(
+            reportTotal: true, PostUsage.BlockUntilCancel, modelId: "usage-cancel-resolved");
+    }
+
+    // Same for the Error terminal path.
+    private sealed class UsageResolvedErrorFactory : UsageFactoryBase
+    {
+        public override string Name => "UsageResolvedErrorFactory";
+        public override IReadOnlyList<string> Models => ["usage-error-alias"];
+        protected override IChatClient CreateClient() => new UsageChatClient(
+            reportTotal: true, PostUsage.Throw, modelId: "usage-error-resolved");
     }
 }

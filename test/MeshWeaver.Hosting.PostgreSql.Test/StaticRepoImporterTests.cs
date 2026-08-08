@@ -14,6 +14,7 @@ using MeshWeaver.Hosting.Security;
 using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -464,6 +465,205 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
         // The dropped content is back.
         (await Read($"{_partition}/Page1")).Should().NotBeNull(
             "the content sentinel was missing despite the marker → the importer re-imported (self-healed)");
+    }
+
+    /// <summary>
+    /// Issue #919, fix 1 — THE RLS CIRCLE. The GitSync-driven self-heal records its progress in an
+    /// activity node INSIDE the partition it is repairing (<c>{partition}/_Activity/import-*</c>).
+    /// When that partition has NO grants (the memex Store lost its assignments) and the sync is
+    /// triggered with an ordinary USER as the ambient identity, any bookkeeping write that escapes
+    /// the importer's System scope is refused — and it escaped in a way no call-site review could
+    /// see: the stream cache's per-path serial queue subscribes every write after the first on its
+    /// PREDECESSOR's settle thread, where the caller's <c>using (ImpersonateAsSystem())</c> is long
+    /// disposed. The write then opened its initial-state read unattributed, the read was refused,
+    /// and it died with "Update aborted: no initial state arrived … within 30s" — the repair needed
+    /// the grants it existed to write.
+    ///
+    /// <para>The contract pinned here: the sync's own bookkeeping is NEVER subject to the partition's
+    /// access state. The import completes, and BOTH bookkeeping records — the deterministic lock and
+    /// the per-attempt log — really landed (asserted straight from storage, which bypasses RLS, so
+    /// the assertion cannot be fooled by the caller's own read permissions).</para>
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task Reimport_AsPlainUserOnGrantlessPartition_WritesItsOwnBookkeeping()
+    {
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        // First import (boot shape) — the partition now exists. It carries no PartitionAccessPolicy
+        // and no per-partition assignments: exactly the locked-out shape for any plain user.
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+
+        // Precondition, CHECKED not assumed: the plain user holds no write permission on the partition.
+        const string PlainUser = "plain-user-919";
+        var effective = await Mesh.GetEffectivePermissions(_partition, PlainUser)
+            .Should().Within(30.Seconds()).Emit();
+        effective.HasFlag(Permission.Create).Should().BeFalse(
+            $"'{PlainUser}' must hold no Create on '{_partition}' for this repro, got {effective}");
+        effective.HasFlag(Permission.Update).Should().BeFalse(
+            $"'{PlainUser}' must hold no Update on '{_partition}' for this repro, got {effective}");
+
+        // The sync runs with the ORDINARY USER as the ambient identity — the incident topology.
+        // (Not "no identity": with no identity an escaped write fails closed and is loud; with a
+        // user ambient it is silently refused — the shape that wedged the Store.)
+        accessService.SetContext(null);
+        accessService.SetCircuitContext(new AccessContext { ObjectId = PlainUser, Name = PlainUser });
+
+        // Repo changed → new fingerprint → full re-import: the GitSync "update" entry point
+        // (GitHubSyncService.FetchAndImport → StaticRepoImporter.ImportSource).
+        _source.Nodes =
+        [
+            new MeshNode("Page1", _partition)
+            {
+                NodeType = "Markdown", Name = "Page 1", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "# Page 1\n\nHEALED body." }
+            }
+        ];
+        var result = (await StaticRepoImporter
+                .ImportSource(Mesh, _source, null, ImportConflictPolicy.GitFirst)
+                .ToList().Should().Within(150.Seconds()).Emit())
+            .Single(r => r.Partition == _partition);
+        result.Outcome.Should().Be("Imported",
+            "the import's own bookkeeping must not be subject to the access state of the partition "
+            + "it is repairing — an RLS-refused progress write used to abort the whole sync");
+
+        // The LOCK really landed and reached its terminal Succeeded verdict.
+        var lockNode = await storage.Read($"{_partition}/_Activity/import-{result.Fingerprint}",
+                Mesh.JsonSerializerOptions)
+            .Should().Within(30.Seconds()).Emit();
+        lockNode.Should().NotBeNull("the deterministic import lock must be written under System");
+        lockNode!.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions)!.Status
+            .Should().Be(ActivityStatus.Succeeded);
+
+        // And so did the per-attempt log — the node whose progress writes were the ones being refused.
+        var attempts = await AttemptPaths(result.Fingerprint);
+        attempts.Should().NotBeEmpty(
+            "the run's per-attempt activity node carries the progress lines the sync was refused");
+
+        // 🚨 The sharpest half of the assertion. The attempt's progress + terminal writes are
+        // `GetMeshNodeStream(path).Update` calls, which the stream cache SERIALISES per path — so every
+        // one after the first is dispatched on its predecessor's settle thread, outside the importer's
+        // System scope. Reaching a terminal Succeeded here is the proof that the identity survived that
+        // hop: unattributed, its initial-state read is refused on this grant-less partition and the
+        // status stays stuck at Running.
+        var attemptNode = await storage.Read(attempts[0], Mesh.JsonSerializerOptions)
+            .Should().Within(30.Seconds()).Emit();
+        attemptNode.Should().NotBeNull();
+        attemptNode!.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions)!.Status
+            .Should().Be(ActivityStatus.Succeeded,
+                "the queued progress/terminal writes must carry the enqueuer's System identity across "
+                + "the cache's serial-queue hop, or they are refused by the partition being repaired");
+
+        // The content itself was healed.
+        var page = await storage.Read($"{_partition}/Page1", Mesh.JsonSerializerOptions)
+            .Should().Within(30.Seconds()).Emit();
+        page!.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)!.Content
+            .Should().Contain("HEALED body.");
+    }
+
+    /// <summary>
+    /// Issue #919, fix 2 — NEVER RE-TARGET A PRIOR ATTEMPT'S ACTIVITY NODE. The import activity id
+    /// used to be deterministic per source content, so a poisoned prior row at that id (memex Store,
+    /// 2026-08-07: v166, 16 KB, unloadable by its own hub) made EVERY subsequent attempt write its
+    /// progress into the same broken node and fail identically — each line burning the 30 s "no
+    /// initial state arrived" abort, with no clean retry short of deleting the row in SQL.
+    ///
+    /// <para>Two halves of the contract, both pinned here:</para>
+    /// <list type="bullet">
+    ///   <item>every attempt logs to a FRESH node, so a faulted attempt can never be re-targeted;</item>
+    ///   <item>the DETERMINISTIC node survives as the lock (create-wins serialization + the durable
+    ///     "already imported" marker) and is written only through the repair-capable upsert — so an
+    ///     import over a poisoned row at that id heals it in place and completes on the first try.</item>
+    /// </list>
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task Reimport_MintsAFreshAttemptId_AndHealsAPoisonedDeterministicLock()
+    {
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+
+        // Provision the partition's schema first — the poison must be durable BEFORE the import,
+        // i.e. a fresh process meeting a row a previous one left behind (the incident's shape).
+        var providers = Mesh.ServiceProvider.GetServices<IPartitionStorageProvider>().ToArray();
+        await Observable.Merge(providers.Select(p => p.EnsurePartitionProvisioned(_partition)))
+            .ToList().Should().Within(60.Seconds()).Emit();
+
+        // The deterministic lock id this import WILL target — computed exactly like the importer.
+        var fingerprint = PartitionSourceFingerprint.Compute(
+            _source.Nodes.Append(_source.Root!).ToArray(), _source.Versioned, Mesh.JsonSerializerOptions);
+        var lockPath = $"{_partition}/_Activity/import-{fingerprint}";
+
+        // Plant the poison the way one really appears (same shape as GhostPartitionRootRecoveryTest):
+        // straight to storage, bypassing every create path — content-less, and at a version far above
+        // anything a blank activation can mint, so the create path refuses ("already exists") while
+        // the naive update path can never converge.
+        const long PoisonVersion = 166;
+        await storage.Write(
+                new MeshNode($"import-{fingerprint}", $"{_partition}/_Activity")
+                {
+                    MainNode = _partition,
+                    Version = PoisonVersion,
+                },
+                Mesh.JsonSerializerOptions)
+            .Should().Within(30.Seconds()).Emit();
+
+        // The import must NOT wedge on the poisoned row.
+        var first = (await Import()).Single(r => r.Partition == _partition);
+        first.Fingerprint.Should().Be(fingerprint, "the repro must poison the id the import targets");
+        first.Outcome.Should().Be("Imported",
+            "a poisoned prior row at the deterministic import id must be healed, not re-targeted into "
+            + "the same failure forever");
+
+        // The lock is healthy again — typed, terminal, and its version moved FORWARD from the poison
+        // (repaired in place, not shadowed by a forked lineage).
+        var healed = await storage.Read(lockPath, Mesh.JsonSerializerOptions)
+            .Should().Within(30.Seconds()).Emit();
+        healed.Should().NotBeNull();
+        healed!.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions)!.Status
+            .Should().Be(ActivityStatus.Succeeded);
+        healed!.Version.Should().BeGreaterThan(PoisonVersion);
+
+        // The content landed behind the healed lock.
+        (await storage.Read($"{_partition}/Page1", Mesh.JsonSerializerOptions)
+                .Should().Within(30.Seconds()).Emit())
+            .Should().NotBeNull();
+
+        // FRESH ATTEMPT ID: the run logged to its own node, never to the deterministic lock.
+        var firstAttempts = await AttemptPaths(fingerprint);
+        firstAttempts.Should().NotBeEmpty("every run opens its own attempt node");
+        firstAttempts.Should().NotContain(lockPath, "the lock is not the progress log");
+
+        // A SECOND run over the same partition mints a DIFFERENT id again — which is exactly what
+        // makes a faulted attempt survivable: nothing ever writes to a prior attempt's node.
+        _source.Nodes =
+        [
+            new MeshNode("Page1", _partition)
+            {
+                NodeType = "Markdown", Name = "Page 1", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "# Page 1\n\nSECOND run." }
+            }
+        ];
+        var second = (await Import()).Single(r => r.Partition == _partition);
+        second.Outcome.Should().Be("Imported");
+        second.Fingerprint.Should().NotBe(fingerprint);
+
+        var secondAttempts = await AttemptPaths(second.Fingerprint);
+        secondAttempts.Should().NotBeEmpty();
+        secondAttempts.Any(firstAttempts.Contains).Should().BeFalse(
+            "an attempt id is minted per RUN — re-targeting a prior attempt's node is what made a "
+            + "single poisoned row permanent");
+    }
+
+    /// <summary>
+    /// The per-attempt activity node paths for <paramref name="fingerprint"/>, read straight from
+    /// storage (authoritative + RLS-free, so the assertion never depends on the caller's grants).
+    /// The lock itself is <c>import-{fingerprint}</c>; an attempt is <c>import-{fingerprint}-…</c>.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> AttemptPaths(string fingerprint)
+    {
+        var prefix = $"{_partition}/_Activity/import-{fingerprint}-";
+        var all = await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
+            .ListDescendantPaths(_partition).Should().Within(30.Seconds()).Emit();
+        return all.Where(p => p.StartsWith(prefix, StringComparison.Ordinal)).ToArray();
     }
 
     /// <summary>Mutable in-memory repo: children + a customizable Space root.</summary>
