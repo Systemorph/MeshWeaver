@@ -233,9 +233,11 @@ public static class PackageSources
     }
 
     /// <summary>
-    /// Reads a boolean source flag. Only a literal <c>true</c> opts in — an absent, malformed or
-    /// oddly-cased value leaves the flag OFF. These flags create Spaces on their own, so a typo in a
-    /// Helm value must never be the thing that turns unattended provisioning on.
+    /// Reads a boolean source flag. Only a value <see cref="bool.TryParse(string, out bool)"/> reads
+    /// as <c>true</c> opts in — so <c>true</c>, <c>True</c> and <c>TRUE</c> all enable it (parsing is
+    /// case-insensitive and we trim surrounding whitespace), while an ABSENT or NON-BOOLEAN value
+    /// (<c>""</c>, <c>yes</c>, <c>1</c>, <c>on</c>) leaves the flag OFF. These flags create Spaces on
+    /// their own, so a value that is not a boolean at all must never be read as consent.
     /// </summary>
     private static bool Flag(string? value) =>
         bool.TryParse(value?.Trim(), out var parsed) && parsed;

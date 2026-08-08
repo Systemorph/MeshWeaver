@@ -235,8 +235,10 @@ public class ModuleAutoDiscoveryTest(ITestOutputHelper output) : MonolithMeshTes
 
     /// <summary>
     /// Both flags off — the default — means literally nothing runs: the source is filtered out
-    /// before anything is listed, queried or written. Only a literal <c>true</c> opts in, so a typo
-    /// in a Helm value can never be what turns unattended Space creation on.
+    /// before anything is listed, queried or written. A NON-BOOLEAN value is not consent either, so a
+    /// typo in a Helm value can never be what turns unattended Space creation on. (Case does not
+    /// matter — <c>TRUE</c> is a boolean and does enable it; that is pinned below so the guarantee
+    /// stays exactly as strong as the code, no stronger.)
     /// </summary>
     [Fact]
     public void BothFlagsOff_IsTheDefault_AndNothingIsEvenEnumerated()
@@ -254,8 +256,29 @@ public class ModuleAutoDiscoveryTest(ITestOutputHelper output) : MonolithMeshTes
             ("PluginCatalog:Sources:0:AutoDiscover", "yes"),
             ("PluginCatalog:Sources:0:AutoSync", "1"));
         PackageSources.FromConfiguration(Mesh, typo)[0].AutoDiscover.Should().BeFalse(
-            "only a literal 'true' may enable unattended provisioning");
+            "a non-boolean value is not consent to unattended provisioning");
         PackageSources.FromConfiguration(Mesh, typo)[0].AutoSync.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Boolean parsing is case-insensitive, so <c>TRUE</c> / <c>True</c> DO opt in. Pinned
+    /// explicitly because the comment next to <c>Flag</c> used to claim otherwise — and a comment
+    /// promising a stricter safety guarantee than the code delivers is what a later change leans on.
+    /// </summary>
+    [Theory]
+    [InlineData("true")]
+    [InlineData("True")]
+    [InlineData("TRUE")]
+    [InlineData(" true ")]
+    public void AnyCasingOfTrue_OptsIn(string value)
+    {
+        var config = Configure(
+            ("PluginCatalog:Sources:0:RepoPath", RepoUrl),
+            ("PluginCatalog:Sources:0:AutoDiscover", value),
+            ("PluginCatalog:Sources:0:AutoSync", value));
+        var source = PackageSources.FromConfiguration(Mesh, config)[0];
+        source.AutoDiscover.Should().BeTrue();
+        source.AutoSync.Should().BeTrue();
     }
 
     /// <summary>The flags are read off the SAME per-source config the repo/ref come from — the repo

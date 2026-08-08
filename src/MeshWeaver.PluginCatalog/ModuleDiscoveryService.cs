@@ -73,6 +73,10 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
     /// empty answer (which fails CLOSED: an unknown state provisions nothing).</summary>
     private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(30);
 
+    /// <summary>How long the single-node existence probe waits on a host with no
+    /// <see cref="IStorageAdapter"/> to read from directly.</summary>
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(15);
+
     private readonly IMessageHub hub;
     private readonly ILogger<ModuleDiscoveryService>? logger;
     private readonly CompositeDisposable subscriptions = new();
@@ -80,6 +84,21 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
     /// <summary>The scan queue. One subject + <c>Concat</c> is how "one at a time" is expressed on the
     /// mesh — never a lock or a semaphore (AGENTS.md). Instance state; one per mesh.</summary>
     private readonly Subject<ScanRequest> scans = new();
+
+    /// <summary>
+    /// The ENQUEUE side of <see cref="scans"/>, and the only thing that may be pushed to.
+    ///
+    /// <para>🚨 This service has TWO producers by design — the boot pass emits from a pool thread,
+    /// and every build-node emission arrives on the hub's scheduler — so concurrent <c>OnNext</c> is
+    /// the normal case, not a corner. A bare <c>Subject&lt;T&gt;</c> is not thread-safe for that: two
+    /// producers can interleave inside one notification and tear it or throw. <c>Concat</c> does NOT
+    /// help — it serializes CONSUMPTION (which inner observable runs when), and says nothing about
+    /// who may call <c>OnNext</c> concurrently.</para>
+    ///
+    /// <para><c>Subject.Synchronize</c> is Rx's own answer and stays inside the reactive model — this
+    /// is not a hand-woven async gate: it guards a synchronous hand-off, never a wait.</para>
+    /// </summary>
+    private readonly ISubject<ScanRequest> enqueue;
 
     /// <summary>Build-node paths already subscribed, so two sources naming the same repo do not open
     /// two subscriptions. Instance state; one per mesh.</summary>
@@ -92,6 +111,7 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
     {
         this.hub = hub;
         this.logger = logger;
+        enqueue = Subject.Synchronize(scans);
     }
 
     /// <inheritdoc />
@@ -162,8 +182,10 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
             .Subscribe(
                 _ =>
                 {
+                    // Through `enqueue`, never `scans` — a build emission can land on the hub
+                    // scheduler at the same moment (see the field's remarks).
                     foreach (var source in sources)
-                        scans.OnNext(new ScanRequest(source, source.GitRef));
+                        enqueue.OnNext(new ScanRequest(source, source.GitRef));
                 },
                 exception => logger?.LogError(exception,
                     "[ModuleDiscovery] the boot scan could not start.")));
@@ -221,7 +243,9 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
             // that is per module, against what the instance actually carries.
             .DistinctUntilChanged(build => build.HeadSha)
             .Subscribe(
-                build => scans.OnNext(new ScanRequest(source, build.HeadSha)),
+                // Through `enqueue`: this emission arrives on the hub's scheduler while the boot
+                // pass may still be pushing from a pool thread.
+                build => enqueue.OnNext(new ScanRequest(source, build.HeadSha)),
                 exception => logger?.LogWarning(exception,
                     "[ModuleDiscovery] the build stream for {BuildPath} faulted.", buildPath)));
     }
@@ -304,18 +328,26 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
     /// Whether a node already occupies <paramref name="path"/>. A persistence-direct read (never a
     /// point <c>GetMeshNodeStream</c> on a path that is expected to be ABSENT — that NotFound-storms
     /// the router, and the whole point here is that most probes come back empty).
+    ///
+    /// <para>A host with no <see cref="IStorageAdapter"/> falls back to the authoritative single-node
+    /// read rather than answering <c>false</c>. Answering "not occupied" without looking is what made
+    /// an existing Space report <see cref="ModuleDiscoveryStatus.Failed"/> instead of
+    /// <see cref="ModuleDiscoveryStatus.Occupied"/> — and since accurate reporting IS the product in
+    /// discovery-only mode, the probe has to be answerable in every configuration, not merely in the
+    /// one that has a storage adapter.</para>
     /// </summary>
     private IObservable<bool> IsOccupied(string path)
     {
-        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
-        if (storage is null)
-            // No adapter to ask. Fail towards "not occupied" and let the create decide — a create
-            // onto an existing root fails, and that failure is classified as Occupied below.
-            return Observable.Return(false);
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        return Observable.Using(
+        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var probe = storage is not null
+            ? Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
                 _ => storage.Read(path, hub.JsonSerializerOptions))
+            : Observable.Using(
+                () => accessService.ImpersonateAsSystem(),
+                _ => hub.GetMeshNode(path, ProbeTimeout));
+        return probe
             .Take(1)
             .Select(node => node is not null)
             .Catch((Exception exception) =>
@@ -584,7 +616,16 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
         // 🚨 The free-vs-commercial gate (#830), on the ACTION. There is no authorizing principal on
         // a webhook or a boot, so a priced module is REFUSED here rather than quietly appearing.
         return PackageEntitlement.Authorize(hub, module, authorizingUserId: null, logger)
-            .SelectMany(_ => AsSystem(() => meshService.CreateNode(spaceNode)))
+            // 🚨 The create is the ONE step that can fail because the path is already taken (it is
+            // create-only). Losing that race — another replica, or an existing Space the probe could
+            // not see — is NOT a failure to report as `Failed`: it is exactly the `Occupied` verdict,
+            // and calling it anything else contradicts what the probe promises and hands the operator
+            // a wrong, unactionable answer. Re-probe rather than sniff the message, so the mapping
+            // holds whatever wording the create layer uses.
+            .SelectMany(_ => AsSystem(() => meshService.CreateNode(spaceNode))
+                .Catch((Exception createFailure) => IsOccupied(spaceId).SelectMany(occupied => occupied
+                    ? Observable.Throw<MeshNode>(new ModulePathOccupiedException(spaceId, createFailure))
+                    : Observable.Throw<MeshNode>(createFailure))))
             .SelectMany(_ => AsSystem(() => sync.SaveConfig(
                 spaceId,
                 source.RepoPath,
@@ -617,6 +658,19 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
                     {
                         Status = ModuleDiscoveryStatus.Refused,
                         Detail = exception.Message,
+                    });
+                }
+                if (exception is ModulePathOccupiedException)
+                {
+                    logger?.LogInformation(
+                        "[ModuleDiscovery] '{Space}' is already taken — reporting it as occupied and "
+                        + "leaving it alone.", spaceId);
+                    return Observable.Return(seed with
+                    {
+                        Status = ModuleDiscoveryStatus.Occupied,
+                        Detail = $"'{spaceId}' already exists here and carries no sync entry for this "
+                                 + "repo. It is left alone — wiring a _GitSync onto an existing Space "
+                                 + "makes the partition system-owned and retracts its owner's access.",
                     });
                 }
                 logger?.LogError(exception,
@@ -670,13 +724,17 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
     }
 
     /// <summary>Establishes the System identity on the write's OWN subscribe thread — the only place
-    /// it is reliably in scope when the primitive captures the AccessContext at its call.</summary>
+    /// it is reliably in scope when the primitive captures the AccessContext at its call.
+    ///
+    /// <para><c>GetRequiredService</c>, never <c>GetService</c>: a missing <c>AccessService</c> would
+    /// silently run every provisioning write under the AMBIENT identity — i.e. as whoever's session
+    /// triggered the scan — which is precisely the "creator becomes Admin on a repo-owned partition"
+    /// failure this whole service exists to prevent. Failing to resolve must be a startup error, not
+    /// a silent downgrade.</para></summary>
     private IObservable<T> AsSystem<T>(Func<IObservable<T>> write)
     {
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        return accessService is null
-            ? Observable.Defer(write)
-            : Observable.Using(() => accessService.ImpersonateAsSystem(), _ => write());
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return Observable.Using(() => accessService.ImpersonateAsSystem(), _ => write());
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -715,7 +773,7 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
         ImmutableList<DiscoveredModule> modules,
         ImmutableDictionary<string, DiscoveredModule> previous)
     {
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         var announcements = modules
@@ -761,6 +819,16 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
         .GroupBy(m => m.Status)
         .OrderBy(g => g.Key)
         .Select(g => $"{g.Count()} {g.Key.ToString().ToLowerInvariant()}"));
+
+    /// <summary>
+    /// The module's Space path is already taken, discovered when the create-only
+    /// <c>CreateNode</c> lost to whatever is there. Internal signal, never surfaced as an error: the
+    /// catch turns it into the <see cref="ModuleDiscoveryStatus.Occupied"/> verdict, which is an
+    /// accurate answer rather than a failure. Carries the create's own exception as
+    /// <see cref="Exception.InnerException"/> so the underlying cause is never lost.
+    /// </summary>
+    private sealed class ModulePathOccupiedException(string spacePath, Exception cause)
+        : InvalidOperationException($"'{spacePath}' already exists — it was not adopted.", cause);
 
     /// <summary>One queued scan.</summary>
     private sealed record ScanRequest(ConfiguredPackageSource Source, string GitRef);
