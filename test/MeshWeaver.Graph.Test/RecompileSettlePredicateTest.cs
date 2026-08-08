@@ -116,6 +116,23 @@ public class RecompileSettlePredicateTest
     }
 
     [Fact]
+    public void Unavailable_IsTerminal_SoTheWaitCannotBurnItsWholeBudget()
+    {
+        // CompilationStatus.Unavailable records that a driver already GAVE UP determining
+        // the state (a settle or lookup timeout). No further write is coming, so treating
+        // it as unsettled would hold the activation for the whole no-progress budget and
+        // then surface the same overlay anyway.
+        NodeTypeEnrichmentHelpers
+            .IsRecompileSettled(TypeNode(CompilationStatus.Unavailable, version: 21), staleVersion: 20, requireUsableBuild: false)
+            .Should().BeTrue("nothing further will be written for an undetermined state");
+
+        // …but it is still not a USABLE build, so the framework-stale heal keeps waiting.
+        NodeTypeEnrichmentHelpers
+            .IsRecompileSettled(TypeNode(CompilationStatus.Unavailable, version: 99), staleVersion: null, requireUsableBuild: true)
+            .Should().BeFalse("requireUsableBuild accepts only a genuinely loadable build");
+    }
+
+    [Fact]
     public void NonNodeTypeDefinitionContent_IsSettled_SoTheWaitCannotHang()
     {
         // Nothing left to wait on: the path is not a NodeTypeDefinition at all.

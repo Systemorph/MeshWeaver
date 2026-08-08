@@ -340,6 +340,8 @@
   "ui.compileFailed": "Kompilieren fehlgeschlagen",
   "ui.compiling": "Wird kompiliert…",
   "ui.neverCompiled": "Noch nie kompiliert — zum Erstellen auf Kompilieren klicken",
+  "ui.compileStateUnknown": "Letzte Kompilierung: Status konnte nicht ermittelt werden",
+  "ui.viewCompileLog": "Vollständiges Kompilierungsprotokoll anzeigen →",
   "ui.noConfiguration": "Keine Konfiguration definiert.",
   "ui.noConfigLambda": "Kein Konfigurations-Lambda definiert.",
   "ui.noneConfigured": "Nichts konfiguriert.",

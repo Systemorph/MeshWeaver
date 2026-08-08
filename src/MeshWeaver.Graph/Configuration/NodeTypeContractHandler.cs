@@ -74,7 +74,7 @@ internal static class NodeTypeContractHandler
             .SelectMany(_ => workspace.GetMeshNodeStream()
                 .AwaitCompilationSettled()
                 .Take(1))
-            .Timeout(TimeSpan.FromSeconds(60))
+            .Timeout(SettleBudget)
             .SelectMany(node =>
             {
                 if (node.Content is not NodeTypeDefinition def)
@@ -85,7 +85,8 @@ internal static class NodeTypeContractHandler
                     return Observable.Return(new ResolvedResponse(Fail(
                         null,
                         $"Node at '{hubPath}' is not a valid NodeType definition "
-                        + $"(Content type: {node.Content?.GetType().Name ?? "null"})."), false));
+                        + $"(Content type: {node.Content?.GetType().Name ?? "null"})."), false,
+                        Unavailable: true));
                 }
 
                 // Pinned release: resolve the explicitly requested Release MeshNode
@@ -110,9 +111,13 @@ internal static class NodeTypeContractHandler
                                     "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} could not be resolved (releaseNode={ReleaseNode}).",
                                     hubPath, requestedReleasePath,
                                     releaseNode == null ? "null" : releaseNode.Content?.GetType().Name ?? "no-content");
+                                // A release that does not RESOLVE is a lookup miss, not a
+                                // compile failure — flagged Unavailable so the write-back
+                                // below never brands the source broken.
                                 return Observable.Return(new ResolvedResponse(Fail(
                                     null,
-                                    $"Pinned release '{requestedReleasePath}' for '{hubPath}' could not be resolved."), false));
+                                    $"Pinned release '{requestedReleasePath}' for '{hubPath}' could not be resolved."), false,
+                                    Unavailable: true));
                             }
                             // Use the persisted integer version the IAssemblyStore.Put
                             // used, not a parse of the display Version string.
@@ -127,7 +132,8 @@ internal static class NodeTypeContractHandler
                                             hubPath, requestedReleasePath, release.AssemblyCollection, releaseVersion);
                                         return Observable.Return(new ResolvedResponse(Fail(
                                             null,
-                                            $"Pinned release '{requestedReleasePath}' assembly not found in store."), false));
+                                            $"Pinned release '{requestedReleasePath}' assembly not found in store."), false,
+                                            Unavailable: true));
                                     }
                                     logger?.LogDebug(
                                         "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} → {LocalPath}.",
@@ -188,6 +194,23 @@ internal static class NodeTypeContractHandler
                     .Select(result => new ResolvedResponse(
                         BuildResponse(hubPath, node, result), true));
             })
+            // 🚨 A settle TIMEOUT (or any resolution abort) is NOT a compile failure.
+            // It used to fall straight to the Subscribe error sink as
+            // Fail("The operation has timed out.") — a message that names nothing and,
+            // once persisted, made every instance page of the type say "There was a
+            // compilation error… Please correct the code" for source that was never
+            // even read (#641). Fold it into the SAME write-back as every other
+            // outcome, flagged Unavailable, with a message that names the type, the
+            // budget, and (for a non-timeout abort) the exception TYPE — the
+            // "{TypeName}: {Message}" treatment RunCompile gives a non-Roslyn abort.
+            .Catch<ResolvedResponse, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "GetCompilationPathRequest at {HubPath}: compile state could not be determined ({ExceptionType}).",
+                    hubPath, ex.GetType().Name);
+                return Observable.Return(new ResolvedResponse(
+                    Fail(null, DescribeResolutionFailure(hubPath, ex)), false, Unavailable: true));
+            })
             .SelectMany(resolved =>
             {
                 var response = resolved.Response;
@@ -241,6 +264,26 @@ internal static class NodeTypeContractHandler
                                         : def.CompiledFrameworkVersion
                                 }
                             };
+                        // 🚨 "Could not determine" is not "failed". Unavailable is a
+                        // MARKER, so it may never overwrite a state another driver owns
+                        // (Pending / Compiling — a compile is in flight and writes its own
+                        // terminal state; clobbering it would strand the dispatch), a
+                        // strictly better one (Ok — a usable build), or a never-compiled
+                        // null (which the first-build kickoff gates on).
+                        if (resolved.Unavailable)
+                            return def.CompilationStatus is null
+                                    or CompilationStatus.Pending
+                                    or CompilationStatus.Compiling
+                                    or CompilationStatus.Ok
+                                ? curr
+                                : curr with
+                                {
+                                    Content = def with
+                                    {
+                                        CompilationStatus = CompilationStatus.Unavailable,
+                                        CompilationError = response.Error
+                                    }
+                                };
                         return curr with
                         {
                             Content = def with
@@ -282,13 +325,44 @@ internal static class NodeTypeContractHandler
     }
 
     /// <summary>
-    /// Branch result: the response to post plus whether it came from a FRESH
+    /// Wall-clock budget for the dispatched compile to settle. Elapsing means the
+    /// state is UNDETERMINED — never that the source is broken (see
+    /// <see cref="DescribeResolutionFailure"/>).
+    /// </summary>
+    private static readonly TimeSpan SettleBudget = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Branch result: the response to post, whether it came from a FRESH
     /// <see cref="IMeshNodeCompilationService.CompileAndGetConfigurations"/> run
     /// (drives the <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/> stamp
     /// in the write-back) as opposed to a hydrate of an existing assembly (which
-    /// must never re-stamp — that would erase an ABI-staleness marker).
+    /// must never re-stamp — that would erase an ABI-staleness marker), and whether
+    /// a failure was an AVAILABILITY failure rather than a compile failure.
     /// </summary>
-    private sealed record ResolvedResponse(GetCompilationPathResponse? Response, bool FreshCompile);
+    /// <param name="Unavailable">
+    /// True when the branch could not DETERMINE the compile state — a settle
+    /// timeout, an unresolvable pinned release, assembly bytes the store does not
+    /// hold. Persisted as <see cref="CompilationStatus.Unavailable"/>, never
+    /// <see cref="CompilationStatus.Error"/>, so readers show "retry / wait" instead
+    /// of telling the author to correct code that was never in question.
+    /// </param>
+    private sealed record ResolvedResponse(
+        GetCompilationPathResponse? Response, bool FreshCompile, bool Unavailable = false);
+
+    /// <summary>
+    /// Human-readable cause for a resolution that never produced an answer. A bare
+    /// <see cref="TimeoutException"/> message ("The operation has timed out.") tells
+    /// the reader neither WHAT timed out nor that it was a timeout at all once it is
+    /// persisted onto the node — which is exactly how a 60 s settle wait ended up
+    /// rendered as a compile error (#641).
+    /// </summary>
+    private static string DescribeResolutionFailure(string hubPath, Exception ex)
+        => ex is TimeoutException
+            ? $"The compile state of '{hubPath}' could not be determined: it did not settle within "
+              + $"{SettleBudget.TotalSeconds:0}s. This is a TIMEOUT, not a compilation error — "
+              + "no code change is implied."
+            : $"The compile state of '{hubPath}' could not be determined — "
+              + $"{ex.GetType().Name}: {ex.Message}";
 
     /// <summary>
     /// 🚨 The single-compile-driver gate. Ensures a NEVER-COMPILED dynamic NodeType
@@ -300,9 +374,11 @@ internal static class NodeTypeContractHandler
     /// (<c>InstallCompileWatcher</c>'s <c>firstBuildKickoffSub</c>): both guard on
     /// <c>CompilationStatus is null</c>, and the per-NodeType hub's serialized action
     /// block makes exactly ONE of them transition the status, so exactly one compile
-    /// runs. Any non-null status returns unchanged — the status machine already owns
-    /// the compile lifecycle (Pending/Compiling hold the settled-wait; Ok/Error are
-    /// terminal and handled by the response branches).
+    /// runs. Any other non-null status returns unchanged — the status machine already
+    /// owns the compile lifecycle (Pending/Compiling hold the settled-wait; Ok/Error
+    /// are terminal and handled by the response branches). The one exception is
+    /// <see cref="CompilationStatus.Unavailable"/>: it records that a previous attempt
+    /// gave up WITHOUT an answer, so it is treated like "never determined".
     /// <para>Runs as System — dispatching a first build is infrastructure, same as the
     /// kickoff; the requester (often an instance activation) only needs READ rights and
     /// must not be denied for lacking Edit on the NodeType node.</para>
@@ -319,7 +395,12 @@ internal static class NodeTypeContractHandler
                 _ => workspace.GetMeshNodeStream().Update(curr =>
                 {
                     if (curr.Content is not NodeTypeDefinition def) return curr;
-                    if (def.CompilationStatus is not null) return curr;
+                    // Unavailable counts as "no compile has determined anything" — a
+                    // previous attempt gave up without an answer, so the next REQUEST
+                    // (never a timer) dispatches a fresh one instead of leaving the type
+                    // stuck on an undetermined state forever.
+                    if (def.CompilationStatus is not null and not CompilationStatus.Unavailable)
+                        return curr;
                     if (NodeTypeCompilationHelpers.HasUsableBuild(curr, def)) return curr;
                     if (NodeTypeCompilationHelpers.IsStaticOnlyNodeType(curr, def)) return curr;
                     return curr with

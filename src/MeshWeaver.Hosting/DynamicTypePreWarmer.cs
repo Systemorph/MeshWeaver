@@ -476,7 +476,8 @@ public static class DynamicTypePreWarmer
 
                             var settled = stream
                                 .Where(n => n?.Content is NodeTypeDefinition d
-                                    && (d.CompilationStatus == CompilationStatus.Error
+                                    && (d.CompilationStatus is CompilationStatus.Error
+                                                            or CompilationStatus.Unavailable
                                         || (d.CompilationStatus == CompilationStatus.Ok
                                             && IsFreshSuccess(d.LastCompileSucceededAt, baseline))))
                                 .Take(1)
@@ -484,9 +485,17 @@ public static class DynamicTypePreWarmer
                                 .Select(n =>
                                 {
                                     var d = (NodeTypeDefinition)n!.Content!;
-                                    return d.CompilationStatus == CompilationStatus.Error
-                                        ? new PreWarmOutcome(typePath, PreWarmStatus.CompileError, d.CompilationError)
-                                        : new PreWarmOutcome(typePath, PreWarmStatus.Compiled, "rebuilt after store miss");
+                                    return d.CompilationStatus switch
+                                    {
+                                        CompilationStatus.Error => new PreWarmOutcome(
+                                            typePath, PreWarmStatus.CompileError, d.CompilationError),
+                                        // The rebuild never reported an answer — not a
+                                        // compile failure, so never labelled one.
+                                        CompilationStatus.Unavailable => new PreWarmOutcome(
+                                            typePath, PreWarmStatus.TimedOut, d.CompilationError),
+                                        _ => new PreWarmOutcome(
+                                            typePath, PreWarmStatus.Compiled, "rebuilt after store miss")
+                                    };
                                 });
 
                             // Never emits — it exists only for its write side effect, and it is
@@ -547,17 +556,28 @@ public static class DynamicTypePreWarmer
         => Observable.Using(
                 () => AccessContextScope.AsSystem(accessService),
                 _ => workspace.GetMeshNodeStream(typePath)
+                    // Unavailable is terminal too — a driver already gave up determining
+                    // the state, so waiting out the rest of the budget for a write that
+                    // is not coming only slows the sweep down.
                     .Where(n => n?.Content is NodeTypeDefinition d
                         && (NodeTypeCompilationHelpers.HasUsableBuild(n, d)
-                            || d.CompilationStatus == CompilationStatus.Error))
+                            || d.CompilationStatus is CompilationStatus.Error
+                                                   or CompilationStatus.Unavailable))
                     .Take(1)
                     .Timeout(budget)
                     .Select(n =>
                     {
                         var d = (NodeTypeDefinition)n!.Content!;
-                        return d.CompilationStatus == CompilationStatus.Error
-                            ? new PreWarmOutcome(typePath, PreWarmStatus.CompileError, d.CompilationError)
-                            : new PreWarmOutcome(typePath, PreWarmStatus.Compiled);
+                        return d.CompilationStatus switch
+                        {
+                            CompilationStatus.Error => new PreWarmOutcome(
+                                typePath, PreWarmStatus.CompileError, d.CompilationError),
+                            // TimedOut, never CompileError: the type is not broken, its
+                            // state simply never came back.
+                            CompilationStatus.Unavailable => new PreWarmOutcome(
+                                typePath, PreWarmStatus.TimedOut, d.CompilationError),
+                            _ => new PreWarmOutcome(typePath, PreWarmStatus.Compiled)
+                        };
                     }))
             .Catch<PreWarmOutcome, Exception>(ex => Observable.Return(
                 ex is TimeoutException
