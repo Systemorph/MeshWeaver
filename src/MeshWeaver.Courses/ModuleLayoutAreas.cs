@@ -116,7 +116,7 @@ public static class ModuleLayoutAreas
             var section = Controls.Stack.WithWidth("100%");
             foreach (var block in orderedTheory)
                 section = section.WithView(
-                    new LayoutAreaControl(new Address(block.Path), new LayoutAreaReference("")),
+                    new LayoutAreaControl(new Address(block.Path), EmbedReference()),
                     Embed(block));
             stack = stack.WithView(section, TheorySection);
         }
@@ -130,7 +130,7 @@ public static class ModuleLayoutAreas
                 .WithView(Controls.H2(LocalizationCatalog.Get("ui.examples", locale)).WithStyle("margin: 16px 0 8px 0;"));
             foreach (var example in orderedExamples)
                 section = section.WithView(
-                    new LayoutAreaControl(new Address(example.Path), new LayoutAreaReference("")),
+                    new LayoutAreaControl(new Address(example.Path), EmbedReference()),
                     Embed(example));
             stack = stack.WithView(section, ExampleSection);
         }
@@ -197,4 +197,13 @@ public static class ModuleLayoutAreas
 
     /// <summary>Stable per-child embed area id (the child's node id).</summary>
     private static string Embed(MeshNode node) => $"Embed-{node.Id}";
+
+    /// <summary>
+    /// The child's DEFAULT area, referenced as an EMBED — the same
+    /// <c>showHeader=false</c> flag the <c>@@</c> markdown embed carries. The module page already
+    /// frames each block, so the embedded node must not bring its own page chrome with it: no node
+    /// header with Move/Copy/Delete, no inline comments, and no left-hand index (the course index
+    /// belongs to the page the reader opened, not to a block inside it).
+    /// </summary>
+    private static LayoutAreaReference EmbedReference() => new("") { Id = "?showHeader=false" };
 }

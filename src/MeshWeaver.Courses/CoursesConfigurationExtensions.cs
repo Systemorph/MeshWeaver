@@ -1,6 +1,8 @@
 using MeshWeaver.Courses.Configuration;
 using MeshWeaver.Domain;
+using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Courses;
 
@@ -17,7 +19,9 @@ public static class CoursesConfigurationExtensions
     /// Registers the Courses facility on the mesh builder: the four node types
     /// and the courses content types on the mesh hub + every per-node hub (so
     /// course content round-trips through polymorphic JSON across routing,
-    /// mesh and per-node hubs — mirrors <c>AddAI</c>).
+    /// mesh and per-node hubs — mirrors <c>AddAI</c>), plus the
+    /// <see cref="CourseNavigationProvider"/> that gives every page inside a
+    /// course the WHOLE course as its left-hand index.
     /// </summary>
     public static TBuilder AddCourses<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => (TBuilder)builder
@@ -25,6 +29,9 @@ public static class CoursesConfigurationExtensions
             .AddModuleType()
             .AddExerciseType()
             .AddExerciseAttemptType()
+            // Mesh-scoped singleton — its lifetime IS the mesh's, and every per-node hub resolves
+            // it from the same container, so a course page anywhere in the mesh gets the index.
+            .ConfigureServices(services => services.AddSingleton<INodeNavigationProvider, CourseNavigationProvider>())
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddCoursesTypes();
