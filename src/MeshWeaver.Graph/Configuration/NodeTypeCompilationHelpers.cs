@@ -173,7 +173,13 @@ internal static class NodeTypeCompilationHelpers
         // start / GetQuery wait inside the Subscribe callback (those can deadlock when
         // the callback fires on the workspace emission thread that coincides with the
         // ActionBlock). HandleDispatchCompile owns all the work on the hub's ActionBlock.
-        var watcherSub = ownStream
+        // #891: subscribed through SubscribeWithReEstablish — the old bare log-and-die OnError
+        // left the compile control plane permanently dead (no Pending flip ever dispatched
+        // again) while the hub kept running. Transient stream faults re-establish; poisoned
+        // own content (undeserializable NodeTypeDefinition) parks the type — the visible,
+        // bounded sink — and stops instead of looping on the replayed emission.
+        var watcherSub = ActivityControlPlaneExtensions.SubscribeWithReEstablish(
+            () => ownStream
             .Where(node => node?.Content is NodeTypeDefinition)
             .DistinctUntilChanged(node => ((NodeTypeDefinition)node!.Content!).CompilationStatus)
             .Where(node =>
@@ -189,8 +195,7 @@ internal static class NodeTypeCompilationHelpers
                         && string.IsNullOrWhiteSpace(def.Configuration)
                         && string.IsNullOrWhiteSpace(def.HubConfiguration)
                         && (def.Sources is null || def.Sources.Count == 0));
-            })
-            .Subscribe(
+            }),
                 pendingNode =>
                 {
                     // 🅿️ PARKED short-circuit. A prior compile of this NodeType reached a
@@ -271,8 +276,14 @@ internal static class NodeTypeCompilationHelpers
                             o => o.WithTarget(hub.Address));
                     }
                 },
-                ex => logger?.LogWarning(ex,
-                    "Compile watcher faulted for {HubPath}", hub.Address.Path));
+            hub.Address,
+            logger,
+            "Compile watcher",
+            onPoisonedContent: ex => parkRegistry?.OnCompileFailed(
+                hub, hubPath,
+                "The NodeType's own node content could not be deserialized — the compile control "
+                + "plane is parked until the content is repaired: " + ex.Message,
+                deterministic: true, recipientUserId: null, sources: null, logger));
 
         // 🚨 2026-05-21 (PM) — First-build-only kickoff (safer variant).
         //
@@ -569,7 +580,14 @@ internal static class NodeTypeCompilationHelpers
         // (`nodeType:Code namespace:{hubPath}/Source scope:subtree`) was
         // the dominant background traffic in prod (2026-05-21). Mirrors the
         // skip branch in InstallCompileWatcher's kickoff at line ~122.
-        return ownStream
+        // #891: SubscribeWithReEstablish, not a bare log-and-die Subscribe — a fault in the
+        // per-path source streams (a cross-hub delivery blip riding through Switch) used to
+        // kill source tracking permanently: IsDirty froze and the parked-type auto-retry
+        // never fired again. Transient faults re-establish (the DistinctUntilChanged resets
+        // and the current source set re-resolves — idempotent); poisoned own content stops
+        // loudly (the compile watcher's park is the visible sink for the same emission).
+        return ActivityControlPlaneExtensions.SubscribeWithReEstablish(
+            () => ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && !IsStaticOnlyNodeType(node, def))
             .DistinctUntilChanged(node =>
@@ -624,8 +642,7 @@ internal static class NodeTypeCompilationHelpers
                     if (!string.IsNullOrEmpty(n.Path))
                         snap = snap.SetItem(n.Path!, n.LastModified.UtcTicks);
                 return (IReadOnlyDictionary<string, long>)snap;
-            })
-            .Subscribe(
+            }),
                 snapshot =>
                 {
                     // 🅿️ Auto-retry a PARKED (terminally-failed) type when its SOURCE snapshot has
@@ -692,8 +709,9 @@ internal static class NodeTypeCompilationHelpers
                             "SourcesWatcher: failed to write CurrentSourceVersions for {HubPath}",
                             hubPath));
                 },
-                ex => logger?.LogWarning(ex,
-                    "SourcesWatcher: per-path stream for {HubPath} faulted", hubPath));
+            hub.Address,
+            logger,
+            "Sources watcher");
     }
 
     /// <summary>
@@ -824,7 +842,14 @@ internal static class NodeTypeCompilationHelpers
         // post-settle emission stamps `LastReleaseRequestHandledAt`, so
         // subsequent emissions with the same trigger fail the `req > handled`
         // gate.
-        return ownStream
+        // #891: SubscribeWithReEstablish, not a bare log-and-die Subscribe — a dead release
+        // watcher means the user's Compile button silently does nothing forever. On a transient
+        // re-establish the high-water marks live OUTSIDE the factory, so an already-committed
+        // trigger replayed by the fresh subscription fails the IsPast gate — no double compile.
+        // Poisoned own content stops loudly (the compile watcher parks the type on the same
+        // emission — the visible sink).
+        return ActivityControlPlaneExtensions.SubscribeWithReEstablish(
+            () => ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.RequestedReleaseAt is { } req
                 // Strictly past our process-local COMMIT high-water — a flapped-back
@@ -836,8 +861,7 @@ internal static class NodeTypeCompilationHelpers
                 && (def.LastReleaseRequestHandledAt is null
                     || req > def.LastReleaseRequestHandledAt.Value)
                 && def.CompilationStatus is not CompilationStatus.Pending
-                                          and not CompilationStatus.Compiling)
-            .Subscribe(
+                                          and not CompilationStatus.Compiling),
                 node =>
                 {
                     // 🚨 The trigger value OBSERVED by the Where for THIS emission.
@@ -905,8 +929,9 @@ internal static class NodeTypeCompilationHelpers
                         ex => logger?.LogWarning(ex,
                             "[ReleaseRequestWatcher] {HubPath}: failed to dispatch release", hubPath));
                 },
-                ex => logger?.LogWarning(ex,
-                    "[ReleaseRequestWatcher] {HubPath}: stream faulted", hubPath));
+            hub.Address,
+            logger,
+            "ReleaseRequestWatcher");
     }
 
     /// <summary>
