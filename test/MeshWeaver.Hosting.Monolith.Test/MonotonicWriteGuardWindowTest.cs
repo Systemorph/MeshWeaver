@@ -2,6 +2,7 @@
 
 using System;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -43,10 +44,17 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// — which is published from inside the write, before the guard records its mark — and issues the
 /// stale write from that notification. No sleeps, no timing budget, no retry.</para>
 ///
+/// <para>🚨 <b>And the assertion is SEQUENCED on that write, not merely placed after it.</b> The
+/// durable read is composed off the forced write's completion (an <see cref="AsyncSubject{T}"/>
+/// the write is subscribed into), so the store can never be inspected before the rollback had its
+/// chance. Reverting the fix proves this test CAN fail; composing the read is what makes it
+/// ALWAYS fail when it should — a pin that could pass without the forced write having landed
+/// would be a lucky observation, which is precisely the property this whole change relies on.</para>
+///
 /// <para><b>Fail-without:</b> the stale write takes the unverified fast path (<c>version 1 >=
-/// mark 1</c>) and the durable row is rolled back to the create-time node.
-/// <b>Pass-with:</b> the guard claims the mark BEFORE mutating the row, so the stale write is
-/// verified against durable truth and refused; the store never moves backward.</para>
+/// mark 1</c>) and, once it has settled, the durable row is the create-time node.
+/// <b>Pass-with:</b> the guard claims the mark BEFORE mutating the row, so the same settled write
+/// was verified against durable truth and refused; the store never moves backward.</para>
 /// </summary>
 public class MonotonicWriteGuardWindowTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -76,8 +84,15 @@ public class MonotonicWriteGuardWindowTest(ITestOutputHelper output) : MonolithM
         var stale = created with { Name = "stale-snapshot" };
 
         const long durableVersion = 7000L;
-        Exception? staleWriteError = null;
-        MeshNode? staleWriteResult = null;
+
+        // 🚨 The stale write's COMPLETION, as an observable — the durable read below is composed
+        // OFF this, never merely sequenced after it in wall-clock terms. Without that composition
+        // the assertion could observe the store BEFORE the forced write landed and pass for the
+        // wrong reason (a pin that can pass without the thing it pins having happened is not a
+        // pin). AsyncSubject is what makes it airtight in both directions: it replays its final
+        // value to a late subscriber, so the read is correctly ordered whether the forced write
+        // settles inside the advance write (the synchronous in-memory fan-out) or after it.
+        var staleWriteSettled = new AsyncSubject<MeshNode?>();
 
         // 🚨 The forcing. IStorageAdapter.Changes is published from INSIDE the write (see
         // InMemoryStorageAdapter.Write: `_nodes[path] = node` then `_changes.OnNext(...)`), so this
@@ -89,20 +104,23 @@ public class MonotonicWriteGuardWindowTest(ITestOutputHelper output) : MonolithM
                         && c.Entity is MeshNode { Version: durableVersion })
             .Take(1)
             .Subscribe(
-                _ => Storage.Write(stale, JsonOptions).Subscribe(
-                    n => staleWriteResult = n,
-                    ex => staleWriteError = ex),
-                ex => staleWriteError = ex);
+                _ => Storage.Write(stale, JsonOptions).Subscribe(staleWriteSettled),
+                ex => staleWriteSettled.OnError(ex));
 
         await Storage.Write(created with
         {
             Name = "durable-advance", Version = durableVersion
         }, JsonOptions).Should().Within(30.Seconds()).Emit();
 
-        Output.WriteLine($"[stale write] result={(staleWriteResult is null ? "none" : $"v{staleWriteResult.Version}/{staleWriteResult.Name}")}"
-            + $" error={staleWriteError?.Message ?? "(none)"}");
-
-        var durable = await ReadDurable(path).Should().Within(30.Seconds()).Emit();
+        // Read durable state ONLY once the forced stale write has SETTLED — the read is chained
+        // off its completion, so "the store was not rolled back" can never be asserted against a
+        // moment before the rollback had its chance. A forcing that never fired never completes
+        // this subject and the test fails here rather than passing blind.
+        var durable = await staleWriteSettled
+            .Do(n => Output.WriteLine(
+                $"[stale write] settled result={(n is null ? "null" : $"v{n.Version}/{n.Name}")}"))
+            .SelectMany(_ => ReadDurable(path))
+            .Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"[durable] {(durable is null ? "null" : $"v{durable.Version}/{durable.Name}")}");
 
         durable.Should().NotBeNull();
