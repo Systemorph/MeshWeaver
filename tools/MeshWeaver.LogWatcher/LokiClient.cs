@@ -27,21 +27,15 @@ public sealed class LokiClient(HttpClient http, IIoPool pool, ILogger<LokiClient
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     /// <summary>
-    /// The LogQL selector for red lines in one namespace. <c>|~</c> is a line filter, so Loki does
-    /// the matching server-side and only red lines cross the wire — the whole point of filtering
-    /// here rather than shipping every INFO line to the watcher.
-    /// </summary>
-    public static string RedLineQuery(string ns) =>
-        $"{{namespace=\"{ns}\"}} |~ `^(fail|crit):`";
-
-    /// <summary>
-    /// Reads red lines in <c>[start, end)</c> for one namespace, oldest first. Emits the batch.
+    /// Reads the lines in <c>[start, end)</c> for one namespace, oldest first. Emits the batch —
+    /// ALL lines, not just red ones: the grouper needs each red header's continuation lines to
+    /// reconstruct the burst (see <see cref="LokiQuery.ForNamespace"/>).
     /// </summary>
     public IObservable<ImmutableList<LogLine>> Query(
         string ns, DateTimeOffset start, DateTimeOffset end, int limit)
     {
         var url = "/loki/api/v1/query_range"
-                  + $"?query={Uri.EscapeDataString(RedLineQuery(ns))}"
+                  + $"?query={Uri.EscapeDataString(LokiQuery.ForNamespace(ns))}"
                   + $"&start={Nanos(start)}&end={Nanos(end)}"
                   + $"&limit={limit.ToString(CultureInfo.InvariantCulture)}"
                   + "&direction=forward";
@@ -52,7 +46,7 @@ public sealed class LokiClient(HttpClient http, IIoPool pool, ILogger<LokiClient
                 var entries = Flatten(response).ToImmutableList();
                 if (entries.Count > 0)
                     logger?.LogInformation(
-                        "Loki: {Count} red line(s) in {Namespace} for [{Start:HH:mm:ss}, {End:HH:mm:ss})",
+                        "Loki: {Count} line(s) in {Namespace} for [{Start:HH:mm:ss}, {End:HH:mm:ss})",
                         entries.Count, ns, start.UtcDateTime, end.UtcDateTime);
                 return entries;
             });
