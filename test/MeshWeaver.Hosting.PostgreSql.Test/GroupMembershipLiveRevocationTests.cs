@@ -93,6 +93,43 @@ public class GroupMembershipLiveRevocationTests(PostgreSqlFixture fixture, ITest
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     /// <summary>
+    /// TEMPORARY CI diagnostic (see PR #905): dumps the state the cross-schema fan-out reads, so a
+    /// CI-only failure names WHICH of the three preconditions is missing — the partition schema,
+    /// its registration in public.searchable_schemas, or the row itself. Remove once the CI-only
+    /// failure is understood.
+    /// </summary>
+    private async Task DumpFanOutStateAsync(string label)
+    {
+        var schema = Space.ToLowerInvariant();
+        var registered = new System.Collections.Generic.List<string>();
+        await using (var cmd = fixture.DataSource.CreateCommand(
+            "SELECT schema_name FROM public.searchable_schemas ORDER BY schema_name"))
+        await using (var r = await cmd.ExecuteReaderAsync())
+            while (await r.ReadAsync()) registered.Add(r.GetString(0));
+
+        var schemaExists = false;
+        await using (var cmd = fixture.DataSource.CreateCommand(
+            "SELECT to_regclass(format('%I.mesh_nodes', @s)) IS NOT NULL"))
+        {
+            cmd.Parameters.AddWithValue("s", schema);
+            schemaExists = (bool)(await cmd.ExecuteScalarAsync())!;
+        }
+
+        var rowCount = -1L;
+        if (schemaExists)
+        {
+            await using var cmd = fixture.DataSource.CreateCommand(
+                $"SELECT count(*) FROM \"{schema.Replace("\"", "\"\"")}\".mesh_nodes "
+                + "WHERE node_type = 'GroupMembership'");
+            rowCount = (long)(await cmd.ExecuteScalarAsync())!;
+        }
+
+        Output.WriteLine($"[FANOUT-DIAG] {label}: schema={schema} meshNodesTableExists={schemaExists} "
+            + $"groupMembershipRowsInSchema={rowCount} registeredInSearchableSchemas="
+            + $"{registered.Contains(schema)} searchable=[{string.Join(",", registered)}]");
+    }
+
+    /// <summary>
     /// The GroupMembership node in the shape production writes it
     /// (<c>EventSubscriptionOps.AddToGroup</c>): id <c>{member}_Membership</c>, namespace = the
     /// GROUP path, so it lives in the group's partition schema.
@@ -207,6 +244,8 @@ public class GroupMembershipLiveRevocationTests(PostgreSqlFixture fixture, ITest
         }).Should().Within(90.Seconds()).Emit();
 
         await MeshService.CreateNode(Membership()).Should().Within(90.Seconds()).Emit();
+
+        await DumpFanOutStateAsync("after-membership-create");
 
         await hot.Should().Within(60.Seconds()).Match(
             c => c.ChangeType == QueryChangeType.Added
