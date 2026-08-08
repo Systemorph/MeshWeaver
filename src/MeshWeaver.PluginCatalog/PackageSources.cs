@@ -18,7 +18,36 @@ namespace MeshWeaver.PluginCatalog;
 /// <param name="Source">The package source itself.</param>
 /// <param name="GitRef">The git ref this source is read at.</param>
 /// <param name="Name">Display name (logs, grant matching).</param>
-public sealed record ConfiguredPackageSource(IPackageSource Source, string GitRef, string Name);
+public sealed record ConfiguredPackageSource(IPackageSource Source, string GitRef, string Name)
+{
+    /// <summary>
+    /// The repo URL (or local path) this source was configured with — <c>PluginCatalog:Sources:N:RepoPath</c>.
+    /// Empty for a source that did not come from that list (a DI-registered source, a remote registry
+    /// read over <c>/api/plugins</c>), which is precisely a source whose modules this instance cannot
+    /// wire a <c>_GitSync</c> to.
+    /// </summary>
+    public string RepoPath { get; init; } = "";
+
+    /// <summary>The path prefix inside the repo the modules live under
+    /// (<c>PluginCatalog:Sources:N:Subdir</c>); empty = the repository root.</summary>
+    public string Subdir { get; init; } = "";
+
+    /// <summary>
+    /// Whether this instance ENUMERATES the repo's modules and reports the ones it does not carry
+    /// (<c>PluginCatalog:Sources:N:AutoDiscover</c>, default <c>false</c>). Discovery alone writes
+    /// nothing into a Space — it makes absence VISIBLE, which is the whole complaint behind #833: a
+    /// module with no sync entry is simply not on the mesh and nothing says so.
+    /// </summary>
+    public bool AutoDiscover { get; init; }
+
+    /// <summary>
+    /// Whether a discovered-but-absent module is PROVISIONED without interaction
+    /// (<c>PluginCatalog:Sources:N:AutoSync</c>, default <c>false</c>) — Space + declared access +
+    /// <c>{Space}/_GitSync</c>, all written as SYSTEM. Ignored unless
+    /// <see cref="AutoDiscover"/> is on: there is nothing to sync that was never discovered.
+    /// </summary>
+    public bool AutoSync { get; init; }
+}
 
 /// <summary>
 /// Builds the git-based <see cref="IPackageSource"/> for a repo path/ref — the ONE place that maps a
@@ -92,17 +121,33 @@ public static class PackageSources
     public static IReadOnlyList<ConfiguredPackageSource> FromConfiguration(
         IMessageHub hub, IConfiguration config, ILogger? logger = null)
     {
-        ConfiguredPackageSource? Build(string? repo, string? subdir, string? gitRef, string? format, string? name)
+        ConfiguredPackageSource? Build(
+            string? repo, string? subdir, string? gitRef, string? format, string? name,
+            string? autoDiscover, string? autoSync)
         {
             // Default to the node-native repo format (what MeshWeaver.Plugins ships); a package.json
             // repo can opt in with Format=package-json.
             var nodeRepo = !string.Equals(format ?? "node-repo", "package-json", StringComparison.OrdinalIgnoreCase);
             var source = FromRepo(hub, repo, subdir, logger, nodeRepo);
-            return source is null ? null : new ConfiguredPackageSource(source, gitRef ?? "HEAD", name ?? repo ?? "");
+            return source is null
+                ? null
+                : new ConfiguredPackageSource(source, gitRef ?? "HEAD", name ?? repo ?? "")
+                {
+                    RepoPath = repo ?? "",
+                    Subdir = subdir ?? "",
+                    // Both default to FALSE: an instance that configures nothing keeps today's
+                    // behaviour exactly (no enumeration, no unattended Space creation). Opting in is
+                    // a deliberate deployment decision, made in the same place the source itself is
+                    // configured (the Helm values — #829).
+                    AutoDiscover = Flag(autoDiscover),
+                    AutoSync = Flag(autoSync),
+                };
         }
 
         var configured = config.GetSection("PluginCatalog:Sources").GetChildren()
-            .Select(s => Build(s["RepoPath"], s["Subdir"] ?? "", s["Ref"], s["Format"], s["Name"]))
+            .Select(s => Build(
+                s["RepoPath"], s["Subdir"] ?? "", s["Ref"], s["Format"], s["Name"],
+                s["AutoDiscover"], s["AutoSync"]))
             .Where(s => s is not null)
             .Select(s => s!)
             .ToList();
@@ -114,7 +159,9 @@ public static class PackageSources
             config["PluginCatalog:SourceSubdir"] ?? "catalog",
             config["PluginCatalog:SourceRef"],
             config["PluginCatalog:SourceFormat"],
-            name: "registry");
+            name: "registry",
+            config["PluginCatalog:SourceAutoDiscover"],
+            config["PluginCatalog:SourceAutoSync"]);
         return legacy is null ? [] : [legacy];
     }
 
@@ -184,6 +231,16 @@ public static class PackageSources
             ? appTokens.GetInstallationToken
             : () => Observable.Return(string.Empty);
     }
+
+    /// <summary>
+    /// Reads a boolean source flag. Only a value <see cref="bool.TryParse(string, out bool)"/> reads
+    /// as <c>true</c> opts in — so <c>true</c>, <c>True</c> and <c>TRUE</c> all enable it (parsing is
+    /// case-insensitive and we trim surrounding whitespace), while an ABSENT or NON-BOOLEAN value
+    /// (<c>""</c>, <c>yes</c>, <c>1</c>, <c>on</c>) leaves the flag OFF. These flags create Spaces on
+    /// their own, so a value that is not a boolean at all must never be read as consent.
+    /// </summary>
+    private static bool Flag(string? value) =>
+        bool.TryParse(value?.Trim(), out var parsed) && parsed;
 
     private static bool IsUrl(string s) =>
         s.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
