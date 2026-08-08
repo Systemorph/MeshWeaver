@@ -64,42 +64,12 @@ public record CreateCommentResponse
     public string? Error { get; init; }
 }
 
-/// <summary>
-/// Request to create a suggested edit (track change).
-/// </summary>
-public record CreateSuggestedEditRequest : IRequest<CreateSuggestedEditResponse>
-{
-    /// <summary>
-    /// The document to add the suggestion to.
-    /// </summary>
-    public string DocumentId { get; init; } = string.Empty;
-
-    /// <summary>
-    /// Character position where the edit applies.
-    /// </summary>
-    public int Position { get; init; }
-
-    /// <summary>
-    /// Text to insert (for insertions and replacements).
-    /// </summary>
-    public string? InsertedText { get; init; }
-
-    /// <summary>
-    /// Text to delete (for deletions and replacements).
-    /// </summary>
-    public string? DeletedText { get; init; }
-
-    /// <summary>
-    /// The author suggesting the edit.
-    /// </summary>
-    public string Author { get; init; } = string.Empty;
-}
-
-/// <summary>
-/// Response after creating a suggested edit.
-/// </summary>
-public record CreateSuggestedEditResponse(bool Success, string? ChangeId, string? Error);
-
+// NOTE: CreateSuggestedEditRequest / CreateSuggestedEditResponse are gone. A suggested edit is a
+// DOCUMENT MUTATION, and every mutation goes through workspace.GetMeshNodeStream(path).Update(...) —
+// not a bespoke request/response verb. The agent tool (CollaborationPlugin.SuggestEdit) writes the
+// edit straight onto the document, and the version history records who changed what, when; the
+// tracked-change view is projected from that history (ChangeProjection) instead of stored.
+//
 // NOTE: the Resolve/Delete-comment and Accept/Reject-change request records that used to live here
 // had NO handler anywhere — posting them hung the caller to the timeout. They are gone; resolve,
 // delete, accept and reject are node operations on the satellite / document (see the Collaboration

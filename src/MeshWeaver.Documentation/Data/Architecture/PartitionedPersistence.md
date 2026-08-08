@@ -226,7 +226,7 @@ Satellite entities are stored in dedicated sub-namespaces within the node hierar
 | `_Activity` | `activities` | Activity | Node lifecycle events |
 | `_UserActivity` | `user_activities` | UserActivity | Per-user access tracking |
 | `_Thread` | `threads` | Thread, ThreadMessage | Chat / discussion threads |
-| `_Tracking` | `tracking` | TrackedChange | Suggested edits (track changes) |
+| `_Tracking` | `annotations` | TrackedChange | Legacy track changes — no longer written (computed from version history) |
 | `_Approval` | `approvals` | Approval | Approval workflow records |
 | `_Access` | `access` | AccessAssignment | Permission grants / denials |
 | `_Comment` | `comments` | Comment | Document comments |
@@ -291,7 +291,7 @@ public static Dictionary<string, string> StandardTableMappings => new()
     ["_Activity"]     = "activities",
     ["_UserActivity"] = "user_activities",
     ["_Thread"]       = "threads",
-    ["_Tracking"]     = "tracking",
+    ["_Tracking"]     = "annotations",
     ["_Approval"]     = "approvals",
     ["_Access"]       = "access",
     ["_Comment"]      = "comments",
@@ -337,7 +337,6 @@ Database
 │   ├── activities                   ← _Activity satellite nodes
 │   ├── user_activities              ← _UserActivity satellite nodes
 │   ├── threads                      ← _Thread satellite nodes
-│   ├── tracking                     ← _Tracking satellite nodes (track changes)
 │   ├── approvals                    ← _Approval satellite nodes
 │   ├── access                       ← _Access satellite nodes (permissions)
 │   ├── comments                     ← _Comment satellite nodes
