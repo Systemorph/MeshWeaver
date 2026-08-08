@@ -134,21 +134,23 @@ internal static class NodeTypeEnrichmentHelpers
                 .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
                 .Take(1)
                 .Timeout(NodeTypeProbeTimeout)
-                .Catch<QueryResultChange<MeshNode>, Exception>(ex =>
+                .Select(probe => probe.Items.Count > 0 ? ProbeOutcome.Registered : ProbeOutcome.Missing)
+                // 🚨 A FAULTED probe is NOT the same answer as an EMPTY one. Folding
+                // both into "missing" made a ~3s lookup timeout (busy mesh hub, slow
+                // storage, restart in progress) render the genuine-compile-failure
+                // overlay — "There was a compilation error… Please correct the code" —
+                // for a type whose source was never even read (#641). Keep the two
+                // apart and say which one happened.
+                .Catch<ProbeOutcome, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
-                        "EnrichWithNodeType probe for NodeType '{NodeType}' faulted ({ExceptionType}) — treating as missing",
+                        "EnrichWithNodeType probe for NodeType '{NodeType}' faulted ({ExceptionType}) — registration is INDETERMINATE, not missing",
                         nodeType, ex.GetType().Name);
-                    return Observable.Return(new QueryResultChange<MeshNode>
-                    {
-                        ChangeType = QueryChangeType.Initial,
-                        Items = []
-                    });
+                    return Observable.Return(ProbeOutcome.Indeterminate);
                 })
-                .Select(probe => probe.Items.Count > 0)
-                .SelectMany(found =>
+                .SelectMany(outcome =>
                 {
-                    if (!found)
+                    if (outcome == ProbeOutcome.Missing)
                     {
                         var msg =
                             $"NodeType '{nodeType}' is not registered (referenced by instance '{node.Path}'). " +
@@ -164,6 +166,22 @@ internal static class NodeTypeEnrichmentHelpers
                         return Observable.Return(
                             WithOverlaySelfHeal(
                                 WithCompilationErrorOverlay(node, nodeType, msg, meshConfiguration),
+                                meshHub, nodeType, typeVersionAtOverlay: null, logger));
+                    }
+                    if (outcome == ProbeOutcome.Indeterminate)
+                    {
+                        var msg =
+                            $"The registration lookup for NodeType '{nodeType}' did not complete within "
+                            + $"{NodeTypeProbeTimeout.TotalSeconds:0}s.\n"
+                            + $"Instance '{node.Path}' is rendering this fallback until the lookup succeeds.";
+                        var (intro, callToAction, guidance) = OverlayCopy(OverlayCause.LookupTimedOut);
+                        // NULL version gate for the same reason as the missing case:
+                        // no type node was ever read here, so the first usable
+                        // emission is genuine news.
+                        return Observable.Return(
+                            WithOverlaySelfHeal(
+                                WithCompilationErrorOverlay(node, nodeType, msg, meshConfiguration,
+                                    guidance: guidance, intro: intro, callToAction: callToAction),
                                 meshHub, nodeType, typeVersionAtOverlay: null, logger));
                     }
                     return BuildEnrichmentChain(meshHub, meshConfiguration, compilationService, node, nodeType, logger);
@@ -182,6 +200,25 @@ internal static class NodeTypeEnrichmentHelpers
     /// "missing" and emit the error overlay.
     /// </summary>
     private static readonly TimeSpan NodeTypeProbeTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// What the type-existence probe actually established. The three answers are
+    /// deliberately distinct: "the type is not registered" (the author's problem)
+    /// and "the lookup did not answer" (the platform's problem) call for opposite
+    /// remedies, and collapsing them is what made a lookup timeout read as a
+    /// compile failure.
+    /// </summary>
+    private enum ProbeOutcome
+    {
+        /// <summary>A node exists at the NodeType path — proceed with enrichment.</summary>
+        Registered,
+
+        /// <summary>The probe answered, and nothing is registered at that path.</summary>
+        Missing,
+
+        /// <summary>The probe timed out or faulted — registration is UNKNOWN, not absent.</summary>
+        Indeterminate
+    }
 
     private static IObservable<MeshNode> BuildEnrichmentChain(
         IMessageHub meshHub,
@@ -244,7 +281,12 @@ internal static class NodeTypeEnrichmentHelpers
                 var userMessage = timedOut
                     ? $"NodeType '{nodeType}' build did not settle within {SlowPathTimeout.TotalSeconds:0}s.\n"
                       + $"Instance '{node.Path}' is rendering this fallback until the type's build settles."
-                    : $"NodeType '{nodeType}' enrichment failed for instance '{node.Path}': {ex.Message}";
+                    // A non-timeout abort still isn't the author's code: name the
+                    // exception TYPE, exactly as RunCompile does for a non-Roslyn abort.
+                    : $"NodeType '{nodeType}' could not be prepared for instance '{node.Path}'\n"
+                      + $"{ex.GetType().Name}: {ex.Message}";
+                var (intro, callToAction, guidance) = OverlayCopy(
+                    timedOut ? OverlayCause.BuildNotSettled : OverlayCause.EnrichmentFaulted);
                 // Self-heal with a NULL version gate: no type node is in hand
                 // here, and a currently-usable state would have settled instead
                 // of timing out — so the first usable emission is genuine news
@@ -252,9 +294,7 @@ internal static class NodeTypeEnrichmentHelpers
                 return Observable.Return(
                     WithOverlaySelfHeal(
                         WithCompilationErrorOverlay(node, nodeType, userMessage, meshConfiguration,
-                            guidance: timedOut ? UnsettledBuildGuidance : null,
-                            intro: timedOut ? UnsettledBuildIntro : null,
-                            callToAction: timedOut ? UnsettledBuildCallToAction : null),
+                            guidance: guidance, intro: intro, callToAction: callToAction),
                         meshHub, nodeType, typeVersionAtOverlay: null, logger));
             });
     }
@@ -376,16 +416,20 @@ internal static class NodeTypeEnrichmentHelpers
                     && string.IsNullOrWhiteSpace(staticDef.Configuration)
                     && string.IsNullOrWhiteSpace(staticDef.HubConfiguration)
                     && (staticDef.Sources is null || staticDef.Sources.Count == 0))
-                // Settled compile — Ok with assembly fields, or Error. The
-                // kickoff has flipped Pending and the activity is driving the
+                // Settled compile — Ok with assembly fields, Error, or Unavailable.
+                // The kickoff has flipped Pending and the activity is driving the
                 // transition. Take(1) here would otherwise snap a pre-compile
                 // null/Unknown emission and bind every per-instance hub to
                 // default config before the assembly even exists.
+                // Unavailable is terminal too: it means a driver already gave up
+                // determining the state, so waiting the full no-progress budget
+                // would only delay the (correct, retry-flavoured) overlay.
                 || (typeNode.Content is NodeTypeDefinition def
                     && ((def.CompilationStatus == CompilationStatus.Ok
                             && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
                             && !string.IsNullOrEmpty(def.LatestAssemblyPath))
-                        || def.CompilationStatus == CompilationStatus.Error))
+                        || def.CompilationStatus is CompilationStatus.Error
+                                                 or CompilationStatus.Unavailable))
                 || typeNode.Content is not NodeTypeDefinition)
             .Take(1);
 
@@ -550,11 +594,20 @@ internal static class NodeTypeEnrichmentHelpers
                         // LATEST build may already be usable while the pin is
                         // broken — without the gate the watcher would fire on
                         // the replayed current state and hot-loop the recycle.
+                        // 🚨 A release that doesn't RESOLVE is a lookup miss, not a
+                        // compile failure — the source was never in question. Say so,
+                        // instead of sending the author off to "correct the code".
+                        var (unresolvedIntro, unresolvedCta, unresolvedGuidance) =
+                            OverlayCopy(OverlayCause.AssemblyUnavailable);
                         return Observable.Return(
                             WithOverlaySelfHeal(
                                 WithCompilationErrorOverlay(node, nodeType,
                                     $"Pinned release '{requestedReleasePath}' for '{nodeType}' could not be resolved.",
-                                    meshConfiguration),
+                                    meshConfiguration,
+                                    guidance: unresolvedGuidance,
+                                    intro: unresolvedIntro,
+                                    callToAction: unresolvedCta,
+                                    activityPath: def.LastCompilationActivityPath),
                                 meshHub, nodeType, typeNode.Version, logger));
                     }
                     // Use the persisted integer version the IAssemblyStore.Put used,
@@ -586,11 +639,17 @@ internal static class NodeTypeEnrichmentHelpers
                                     // the unresolved-pin overlay above: the latest
                                     // build may satisfy HasUsableBuild right now,
                                     // so only a Version ADVANCE may recycle.
+                                    var (missIntro, missCta, missGuidance) =
+                                        OverlayCopy(OverlayCause.AssemblyUnavailable);
                                     return Observable.Return(
                                         WithOverlaySelfHeal(
                                             WithCompilationErrorOverlay(node, nodeType,
                                                 $"Pinned release '{requestedReleasePath}' assembly not found in store.",
-                                                meshConfiguration),
+                                                meshConfiguration,
+                                                guidance: missGuidance,
+                                                intro: missIntro,
+                                                callToAction: missCta,
+                                                activityPath: def.LastCompilationActivityPath),
                                             meshHub, nodeType, typeNode.Version, logger));
                                 }
                                 return TriggerRecompileAndRetry(
@@ -773,12 +832,16 @@ internal static class NodeTypeEnrichmentHelpers
                 // Version-gated self-heal: when the operator's recompile lands
                 // (a Version-advancing write with a framework-matching build),
                 // every instance stuck on this prompt recycles itself.
+                var (staleIntro, staleCta, staleGuidance) = OverlayCopy(OverlayCause.FrameworkStale);
                 return Observable.Return(
                     WithOverlaySelfHeal(
                         WithCompilationErrorOverlay(node, nodeType,
                             "Built against a previous framework version",
                             meshConfiguration,
-                            guidance: "This type's compiled assembly targets an older MeshWeaver build, so the current process can't load it. Click **Recompile** (or call `compile` via MCP) to rebuild it against the current framework — no source changes are needed."),
+                            guidance: staleGuidance,
+                            intro: staleIntro,
+                            callToAction: staleCta,
+                            activityPath: def.LastCompilationActivityPath),
                         meshHub, nodeType, typeNode.Version, logger));
             }
             return TriggerRecompileAndRetry(
@@ -788,15 +851,41 @@ internal static class NodeTypeEnrichmentHelpers
                 requireUsableBuild: true);
         }
 
+        // 🚨 The compile state could not be DETERMINED (a settle wait or an assembly
+        // lookup timed out and persisted CompilationStatus.Unavailable — see
+        // NodeTypeContractHandler). Nothing is known to be wrong with the source, so
+        // this page must NOT say "correct the code": it swaps in the same
+        // no-code-change-needed copy the slow-path timeout uses, and links the compile
+        // log so the operator can see how far the build got.
+        if (def.CompilationStatus == CompilationStatus.Unavailable)
+        {
+            var (undeterminedIntro, undeterminedCta, undeterminedGuidance) =
+                OverlayCopy(OverlayCause.StateUndetermined);
+            return Observable.Return(
+                WithOverlaySelfHeal(
+                    WithCompilationErrorOverlay(node, nodeType,
+                        def.CompilationError
+                            ?? $"The compile state of NodeType '{nodeType}' could not be determined.",
+                        meshConfiguration,
+                        guidance: undeterminedGuidance,
+                        intro: undeterminedIntro,
+                        callToAction: undeterminedCta,
+                        activityPath: def.LastCompilationActivityPath),
+                    meshHub, nodeType, typeNode.Version, logger));
+        }
+
         var error = def.CompilationError ?? "Compilation failed";
         // Genuine compile failure — the page wording stays as-is ("correct the
         // code"), but the instance still self-heals: once the author fixes the
         // source and a SUCCESSFUL compile writes back (Version advances +
         // HasUsableBuild turns true), every instance stuck on this overlay
-        // recycles itself instead of waiting for a manual Recycle.
+        // recycles itself instead of waiting for a manual Recycle. The compile
+        // log link rides along so the broken INSTANCE page reaches the same
+        // diagnostics the NodeType's own Overview offers.
         return Observable.Return(
             WithOverlaySelfHeal(
-                WithCompilationErrorOverlay(node, nodeType, error, meshConfiguration),
+                WithCompilationErrorOverlay(node, nodeType, error, meshConfiguration,
+                    activityPath: def.LastCompilationActivityPath),
                 meshHub, nodeType, typeNode.Version, logger));
     }
 
@@ -962,7 +1051,10 @@ internal static class NodeTypeEnrichmentHelpers
         if (staleVersion is { } stale && typeNode.Version <= stale)
             return false;
 
-        if (d.CompilationStatus == CompilationStatus.Error)
+        // Error is terminal — and so is Unavailable: a driver has already given up
+        // determining the state, so no further emission is coming and waiting out the
+        // no-progress budget would only delay the overlay.
+        if (d.CompilationStatus is CompilationStatus.Error or CompilationStatus.Unavailable)
             return true;
 
         return (typeNode.HubConfiguration != null
@@ -1266,6 +1358,12 @@ internal static class NodeTypeEnrichmentHelpers
     /// </summary>
     private static readonly TimeSpan SelfHealGrace = TimeSpan.FromSeconds(45);
 
+    /// <param name="activityPath">
+    /// The NodeType's <see cref="NodeTypeDefinition.LastCompilationActivityPath"/>, when
+    /// the caller has the type node in hand. Renders the same "View full compile log →"
+    /// anchor the NodeType's OWN Overview offers — the broken INSTANCE page used to be the
+    /// one place with no route to the diagnostics (#641). Null simply omits the link.
+    /// </param>
     public static MeshNode WithCompilationErrorOverlay(
         MeshNode node,
         string nodeType,
@@ -1273,7 +1371,8 @@ internal static class NodeTypeEnrichmentHelpers
         MeshConfiguration meshConfiguration,
         string? guidance = null,
         string? intro = null,
-        string? callToAction = null)
+        string? callToAction = null,
+        string? activityPath = null)
     {
         var baseConfig = string.IsNullOrEmpty(error)
             ? (node.HubConfiguration ?? meshConfiguration.DefaultNodeHubConfiguration)
@@ -1282,7 +1381,7 @@ internal static class NodeTypeEnrichmentHelpers
         if (string.IsNullOrEmpty(error))
             return node with { HubConfiguration = baseConfig };
 
-        var overlay = CreateCompilationErrorConfiguration(error, guidance, intro, callToAction);
+        var overlay = CreateCompilationErrorConfiguration(error, guidance, intro, callToAction, activityPath);
         // Fallback-hub contract: the overlay hub serves what its default config CAN
         // (the error Overview layout, node data binding, Ping) — but everything else,
         // notably typed requests the broken assembly would have registered (which
@@ -1315,7 +1414,12 @@ internal static class NodeTypeEnrichmentHelpers
     // WithOverlaySelfHeal watcher) with manual Recycle only as fallback.
     private const string UnsettledBuildIntro =
         "This item's type has not finished **compilation** yet, so its page couldn't be built.";
-    private const string UnsettledBuildCallToAction =
+    /// <summary>
+    /// Shared lead-in for EVERY overlay whose cause is an availability problem — a
+    /// lookup timeout, a settle timeout, an assembly the store can't hand over. The
+    /// one sentence that has to be there: this is not the author's code.
+    /// </summary>
+    private const string NoCodeChangeNeeded =
         "**No code change is needed for this.** ";
     private const string UnsettledBuildGuidance =
         "This usually happens while a mesh restart or a bulk recompile is still in progress. "
@@ -1323,18 +1427,152 @@ internal static class NodeTypeEnrichmentHelpers
         + "itself and shows the real page on the next load. If it stays stuck, use the **Recycle** "
         + "menu to refresh it manually.";
 
+    // Overlay copy for a REGISTRATION LOOKUP that never answered (the probe timeout).
+    // Nothing about the type's source was read, so a "correct the code" page is a
+    // straight falsehood.
+    private const string LookupUnavailableIntro =
+        "This item's type could not be looked up in time, so its page couldn't be built. "
+        + "This is a lookup timeout — not a **compilation** error.";
+    private const string LookupUnavailableGuidance =
+        "The mesh did not answer the type-registration lookup within its budget — typically a "
+        + "restart in progress, a slow storage backend, or a busy mesh hub. The page recovers "
+        + "automatically once the lookup succeeds; use the **Recycle** menu to retry immediately.";
+
+    // Overlay copy for "the build exists but its ASSEMBLY cannot be handed over here"
+    // (pinned release unresolved, bytes missing from the store on this pod).
+    private const string AssemblyUnavailableIntro =
+        "This item's type has a build, but its compiled assembly could not be loaded on this node, "
+        + "so its page couldn't be built. This is not a **compilation** error in the source.";
+    private const string AssemblyUnavailableGuidance =
+        "The assembly store reachable from here does not hold the bytes this build points at — a "
+        + "fresh pod, a cold cache, or a release whose artifact was removed. Click **Recompile** "
+        + "(or call `compile` via MCP) to republish them; clearing the pinned release also resolves it.";
+
+    // Overlay copy for a persisted CompilationStatus.Unavailable — a driver already
+    // gave up determining the state (see NodeTypeContractHandler's settle timeout).
+    private const string UndeterminedBuildIntro =
+        "This item's type did not report its **compilation** state in time, so its page couldn't be built.";
+    private const string UndeterminedBuildGuidance =
+        "The last attempt to determine this type's build state timed out — a mesh restart, a queued "
+        + "bulk recompile, or a busy per-type hub. Nothing is known to be wrong with the code. The "
+        + "page recovers automatically once the build settles; **Recompile** forces a fresh attempt.";
+
+    // Overlay copy for an enrichment chain that FAULTED outright (a hub unreachable,
+    // a stream errored) — the build was never even consulted.
+    private const string EnrichmentFaultedIntro =
+        "This item's type could not be prepared, so its page couldn't be built. "
+        + "This is a platform fault — not a **compilation** error in the source.";
+    private const string EnrichmentFaultedGuidance =
+        "Preparing this type for the instance failed before its build was consulted; the summary "
+        + "above names the fault, and the full stack is in the platform log. Use the **Recycle** "
+        + "menu to retry — the page also recovers on its own once the type resolves again.";
+
+    private const string FrameworkStaleIntro =
+        "This item's type was built by a previous MeshWeaver version, so the **compilation** output "
+        + "this process needs can't be loaded.";
+    private const string FrameworkStaleGuidance =
+        "This type's compiled assembly targets an older MeshWeaver build, so the current process "
+        + "can't load it. Click **Recompile** (or call `compile` via MCP) to rebuild it against the "
+        + "current framework — no source changes are needed.";
+
+    /// <summary>
+    /// Default label of the compile-log anchor. The rendered overlay localizes it
+    /// through <c>host.Localize("ui.viewCompileLog")</c> at render time; this literal
+    /// is the fallback for the pure builder (and its unit tests).
+    /// </summary>
+    internal const string ViewCompileLogLabel = "View full compile log →";
+
+    /// <summary>
+    /// WHY an instance is showing the emergency page — and therefore whether that page
+    /// may tell the author to change code.
+    ///
+    /// <para>🚨 This exists because the answer used to be implicit: every overlay call
+    /// site that passed no <c>guidance</c> silently inherited "There was a
+    /// <b>compilation error</b>… <b>Please correct the code.</b>", so a 3 s registration
+    /// lookup timeout, a 60 s settle timeout, an assembly the store couldn't hand over,
+    /// and an ABI-stale DLL all told the author to fix source that Roslyn had never
+    /// rejected (#641). Naming the cause makes the wording a DECISION, and
+    /// <see cref="ImpliesCodeFix"/> pins which causes may make it.</para>
+    /// </summary>
+    internal enum OverlayCause
+    {
+        /// <summary>Roslyn rejected the source. A code fix IS the remedy.</summary>
+        CompileFailed,
+
+        /// <summary>Nothing is registered at the NodeType path — an authoring mistake.</summary>
+        TypeNotRegistered,
+
+        /// <summary>The registration lookup timed out: registration is UNKNOWN, not absent.</summary>
+        LookupTimedOut,
+
+        /// <summary>The type's build did not settle within its budget.</summary>
+        BuildNotSettled,
+
+        /// <summary>A driver recorded <see cref="CompilationStatus.Unavailable"/> — state undetermined.</summary>
+        StateUndetermined,
+
+        /// <summary>A build exists, but its assembly could not be resolved on this node.</summary>
+        AssemblyUnavailable,
+
+        /// <summary>The assembly was built against a previous framework version.</summary>
+        FrameworkStale,
+
+        /// <summary>The enrichment chain itself faulted before any build was consulted.</summary>
+        EnrichmentFaulted
+    }
+
+    /// <summary>
+    /// The single mapping from <see cref="OverlayCause"/> to the overlay's reason line,
+    /// lead-in and guidance. <c>null</c> keeps the genuine-error wording byte-for-byte.
+    /// </summary>
+    internal static (string? Intro, string? CallToAction, string? Guidance) OverlayCopy(OverlayCause cause)
+        => cause switch
+        {
+            OverlayCause.LookupTimedOut =>
+                (LookupUnavailableIntro, NoCodeChangeNeeded, LookupUnavailableGuidance),
+            OverlayCause.BuildNotSettled =>
+                (UnsettledBuildIntro, NoCodeChangeNeeded, UnsettledBuildGuidance),
+            OverlayCause.StateUndetermined =>
+                (UndeterminedBuildIntro, NoCodeChangeNeeded, UndeterminedBuildGuidance),
+            OverlayCause.AssemblyUnavailable =>
+                (AssemblyUnavailableIntro, NoCodeChangeNeeded, AssemblyUnavailableGuidance),
+            OverlayCause.EnrichmentFaulted =>
+                (EnrichmentFaultedIntro, NoCodeChangeNeeded, EnrichmentFaultedGuidance),
+            // The assembly is ABI-stale, not wrong: the guidance already said "no source
+            // changes are needed" while the lead-in said "Please correct the code."
+            // Contradictory copy is how an operator ends up editing working source.
+            OverlayCause.FrameworkStale =>
+                (FrameworkStaleIntro, NoCodeChangeNeeded, FrameworkStaleGuidance),
+            // CompileFailed / TypeNotRegistered — a code or registration fix IS the
+            // remedy, so the genuine-error wording stands.
+            _ => (null, null, null)
+        };
+
+    /// <summary>
+    /// True only for the causes whose remedy really is an edit by the author. Every other
+    /// cause is an availability problem the page must present as "retry / wait".
+    /// </summary>
+    internal static bool ImpliesCodeFix(OverlayCause cause)
+        => cause is OverlayCause.CompileFailed or OverlayCause.TypeNotRegistered;
+
     private static Func<MessageHubConfiguration, MessageHubConfiguration>
         CreateCompilationErrorConfiguration(
-            string errorMessage, string? guidance, string? intro = null, string? callToAction = null)
+            string errorMessage, string? guidance, string? intro = null,
+            string? callToAction = null, string? activityPath = null)
     {
+        // The markdown is assembled at RENDER time, so the compile-log anchor can be
+        // localized off the viewing user's AccessContext (host.Localize) rather than
+        // baked in English at enrichment time.
         return config => config.AddLayout(layout =>
             layout.WithView(MeshNodeLayoutAreas.OverviewArea, (host, ctx) =>
                 Observable.Return<UiControl?>(
-                    BuildCompilationErrorMarkdown(errorMessage, guidance, intro, callToAction))));
+                    BuildCompilationErrorMarkdown(errorMessage, guidance, intro, callToAction,
+                        activityPath, host.Localize("ui.viewCompileLog")))));
     }
 
     private static UiControl BuildCompilationErrorMarkdown(
-        string errorMessage, string? guidance, string? intro = null, string? callToAction = null)
+        string errorMessage, string? guidance, string? intro = null, string? callToAction = null,
+        string? activityPath = null, string? activityLinkLabel = null)
         => Controls.Stack
             // Card-style emergency page: an error accent, a comfortable reading
             // width and generous padding so a broken instance gets a real
@@ -1345,7 +1583,8 @@ internal static class NodeTypeEnrichmentHelpers
                 "border: 1px solid var(--error, #d13438); border-left: 4px solid var(--error, #d13438); " +
                 "border-radius: 8px; background: var(--neutral-layer-2);")
             .WithView(Controls.Markdown(
-                BuildCompilationErrorMarkdownText(errorMessage, guidance, intro, callToAction)));
+                BuildCompilationErrorMarkdownText(
+                    errorMessage, guidance, intro, callToAction, activityPath, activityLinkLabel)));
 
     /// <summary>
     /// Builds the markdown body of the emergency compile-error page: a friendly
@@ -1356,11 +1595,16 @@ internal static class NodeTypeEnrichmentHelpers
     /// <c>CompileErrorOverviewTest</c> asserts — keep them.
     /// <para><paramref name="intro"/> / <paramref name="callToAction"/> override the
     /// genuine-error reason line and the "Please correct the code." lead-in for
-    /// call sites where a code fix is NOT the remedy (the unsettled-build timeout
+    /// call sites where a code fix is NOT the remedy (every timeout / lookup-miss
     /// overlay). Null keeps the genuine-Error wording byte-for-byte.</para>
+    /// <para><paramref name="activityPath"/> appends the "View full compile log →"
+    /// anchor pointing at the NodeType's last compile activity — the same route the
+    /// NodeType's own Overview offers, which the broken INSTANCE page previously
+    /// lacked entirely.</para>
     /// </summary>
     internal static string BuildCompilationErrorMarkdownText(
-        string errorMessage, string? guidance, string? intro = null, string? callToAction = null)
+        string errorMessage, string? guidance, string? intro = null, string? callToAction = null,
+        string? activityPath = null, string? activityLinkLabel = null)
     {
         var newlineIdx = errorMessage.IndexOf('\n');
         var header = newlineIdx >= 0 ? errorMessage[..newlineIdx].TrimEnd(':') : errorMessage;
@@ -1380,6 +1624,12 @@ internal static class NodeTypeEnrichmentHelpers
         sb.Append("\n---\n\n");
         sb.Append(callToAction ?? "**Please correct the code.** ")
             .Append(guidance ?? DefaultCompilationErrorGuidance).Append('\n');
+        // The route to the diagnostics. A markdown link, never an embedded
+        // LayoutAreaControl: the activity is history and may be unaddressable, and
+        // subscribing to an inexistent address is the resubscribe storm.
+        if (!string.IsNullOrEmpty(activityPath))
+            sb.Append("\n[").Append(activityLinkLabel ?? ViewCompileLogLabel)
+                .Append("](/").Append(activityPath).Append(")\n");
         return sb.ToString();
     }
 }
