@@ -239,6 +239,43 @@ public class AnalysisControlsTest(ITestOutputHelper output) : HubTestBase(output
         layout.Rows[1].LeftPercent!.Value.Should().BeLessThan(1);
     }
 
+    /// <summary>
+    /// A negative figure must NOT come out as a positive bar. The scale runs from zero upward, so a
+    /// negative ratio has no direction to be drawn in — and the minimum-visible sliver would lift it
+    /// into a small POSITIVE length, making the chart state the opposite of its data. Deltas and net
+    /// figures are exactly what a paired comparison gets used for, so this is correctness.
+    /// </summary>
+    [Fact]
+    public void ComparisonBars_never_draws_a_negative_value_as_a_positive_bar()
+    {
+        var layout = ComparisonBarsControl.Layout(
+        [
+            new ComparisonPair("Net result", -50_000, 30_000),
+            new ComparisonPair("Reference", 100_000, 100_000),
+        ])!;
+
+        layout.Rows[0].LeftPercent.Should().NotBeNull(because: "the figure exists — it is not absent");
+        layout.Rows[0].LeftPercent!.Value.Should()
+            .Be(0, because: "a negative gets no length, never the sliver's positive one");
+
+        // The sliver still applies to the small POSITIVE side, so the two cases stay distinguishable.
+        layout.Rows[0].RightPercent!.Value.Should().BeApproximately(30, 1e-9);
+        layout.Rows[1].LeftPercent!.Value.Should().BeApproximately(100, 1e-9);
+    }
+
+    /// <summary>
+    /// The sliver's own case, isolated: a value far below the scale's resolution must still be
+    /// clamped UP to a visible length — the negative rule above must not have taken that away.
+    /// </summary>
+    [Fact]
+    public void ComparisonBars_tiny_positive_value_keeps_its_visible_sliver()
+    {
+        var layout = ComparisonBarsControl.Layout([new ComparisonPair("Rounding", 1, 1_000_000)])!;
+
+        layout.Rows[0].LeftPercent!.Value.Should().BeApproximately(0.5, 1e-9,
+            because: "0.0001% would be invisible; the sliver floors it at 0.5%");
+    }
+
     [Fact]
     public void ComparisonBars_layout_is_null_when_no_side_carries_a_value()
     {

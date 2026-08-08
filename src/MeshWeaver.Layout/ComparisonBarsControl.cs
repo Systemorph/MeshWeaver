@@ -110,8 +110,24 @@ public record ComparisonBarsControl(object Pairs)
                 .ToImmutableList());
     }
 
-    // An absent side is null, never 0. A present-but-tiny value keeps a visible sliver so the row
-    // still reads as "there is a figure here, and it is small".
+    // An absent side is null, never 0.
+    //
+    // A NEGATIVE value gets no length. The scale runs from zero upward, so a negative ratio has no
+    // direction to be drawn in — and the minimum-visible sliver below would LIFT it into a small
+    // POSITIVE bar, making the chart state the opposite of its data. Deltas and net figures are
+    // exactly what a paired comparison gets reached for, so this is a correctness rule, not a
+    // cosmetic one. The figure is still printed beside the row, with its sign, so a negative reads
+    // as "-50,000 and no bar" rather than as a small positive quantity. (Drawing negative magnitudes
+    // properly means a signed bar about a zero baseline — a real feature, deliberately not invented
+    // here on guesswork.)
+    //
+    // A present-but-tiny NON-NEGATIVE value keeps a visible sliver so the row still reads as
+    // "there is a figure here, and it is small".
     private static double? Percent(double? value, double max) =>
-        value is null ? null : Math.Clamp(Math.Max(value.Value / max, 0.005), 0, 1) * 100;
+        value switch
+        {
+            null => null,
+            < 0 => 0,
+            _ => Math.Clamp(Math.Max(value.Value / max, 0.005), 0, 1) * 100,
+        };
 }
