@@ -55,12 +55,12 @@ meshHub.GetHostedHub(
 1. **Resolve the Space root** — `source.PartitionRoot` or a synthesized generic `Space` — and fold it into the source node set.
 2. **Provision the partition schema** (`IPartitionStorageProvider.EnsurePartitionProvisioned`, lowercased, idempotent/promise-cached) **before** anything is written — the activity-lock node in step 4 lives at `{P}/_Activity/…`, *inside* the partition schema, so a fresh partition would otherwise fault (42P01 — there is no lazy schema create; see [GhostSchemaInvariantTests]).
 3. **Fingerprint + short-circuit** — `PartitionSourceFingerprint.Compute(nodes + root)`. If a `Succeeded` activity at `{P}/_Activity/import-{fingerprint}` already exists, **stop** (the common case on every boot).
-4. **Lock** — `CreateNode({P}/_Activity/import-{fingerprint})`. The node lifecycle makes the **first caller win**; concurrent replicas get "already exists" and stop. The activity *is* the lock and the durable "version vN imported at T" record.
+4. **Stamp the marker, then open a fresh attempt** — upsert `{P}/_Activity/import-{fingerprint}` to `Running`. That deterministic node is the durable "version vN imported at T" record — nothing else. It is **not** a lock: a marker left `Running` is deliberately *reclaimed* rather than obeyed, so two replicas booting together can both import. That is safe because every write on the path is an upsert. The run's own log goes to a **fresh** `{P}/_Activity/import-{fingerprint}-{timestamp}-{rand}` node, one per attempt. See *Content-addressed Activity — the lock + the short-circuit* below for why the two roles are split.
 5. **Ensure the Space root** (standard step) via the canonical upsert — creating a `Space` triggers eager schema provisioning + the `Admin/Partition/{P}` routing prime + the admin grant; an existing root is updated. This makes the partition routable, listed in `public.top_level_index`, and gives it a landing page. **Exception — a *claimed* root is left untouched:** if the existing root carries `SyncBehavior != Include` (i.e. an admin set `ExcludeThisAndChildren` = "sync: none"), `EnsureRoot` does **not** re-materialise it. Re-materialising would reset the root's `SyncBehavior` back to `Include` and silently re-enable sync — see *Decoupling a partition (sync: none)* below.
 6. **Upsert every source node** through **`CreateOrUpdateNodeRequest`** — the single canonical verb (the same one `NodeCopyHelper` uses). It **creates** absent nodes and **updates** existing ones (the owner **re-stamps Version**), running the full pipeline: prerender (`MarkdownContent.Parse`), embedding, satellites, access. **Claimed subtrees are skipped** — both a **child** claimed in the snapshot (`SyncBehavior != Include`) and an **entire partition whose root is claimed** (`ExcludeThisAndChildren`). The partition-root claim is read **authoritatively** (`GetMeshNodeStream`), NOT from the eventually-consistent query snapshot, so a *just-set* decouple is honoured before the read-model catches up (the snapshot lags writes — reading the claim from it re-synced the partition and clobbered the admin's edits: a production `Provider/Anthropic` key reset, 2026-06-25). **Each upsert is independently guarded** (per-file `try/catch`): a single node faulting (bad content, a validator reject, a transient owner timeout) logs a `⚠ Failed to import {path}` line **into the import activity** and the import **continues** — the first failure never aborts the rest of the partition. Failures are tallied.
-7. **Prune (per the partition's [sync mode](#per-partition-sync-mode-what-gets-pruned))** — delete target nodes absent from the source (except governance `_Policy`/`_Access`/`_Activity`, claimed subtrees, and — in `Additive` mode — user-added nodes the source never owned), then write the **terminal status atomically** via `NodeTypeCompilationActivity.Complete`: **`Succeeded`** when every node imported, **`Warning`** (`"N FAILED (see ⚠ above)"`) when any per-file upsert failed — so the activity log never shows a green Succeeded while hiding failures, and the `⚠` lines pinpoint exactly which files to investigate. A hard fault in provisioning/root/read still `MarkFailed`s the whole run.
+7. **Prune (per the partition's [sync mode](#per-partition-sync-mode-what-gets-pruned))** — delete target nodes absent from the source (except governance `_Policy`/`_Access`/`_Activity`, claimed subtrees, and — in `Additive` mode — user-added nodes the source never owned), then write the **terminal status atomically** onto the ATTEMPT node via `NodeTypeCompilationActivity.Complete`: **`Succeeded`** when every node imported, **`Warning`** (`"N FAILED (see ⚠ above)"`) when any per-file upsert failed — so the activity log never shows a green Succeeded while hiding failures, and the `⚠` lines pinpoint exactly which files to investigate. A hard fault in provisioning/root/read still `MarkFailed`s the attempt. The same verdict is then stamped on the **lock** (upsert), because that is what the next boot's short-circuit reads.
 
-All writes run under `AccessService.ImpersonateAsSystem` (re-established at each write's own subscribe, since the System identity must reach the cross-hub write — see [AccessContextPropagation.md](/Doc/Architecture/AccessContextPropagation)).
+All writes run under `AccessService.ImpersonateAsSystem` (re-established at each write's own subscribe, since the System identity must reach the cross-hub write — see [AccessContextPropagation.md](/Doc/Architecture/AccessContextPropagation)). **That includes the queued leg**: `IMeshNodeStreamCache` serialises writes per path through a `Concat`, so every write after the first is subscribed on its predecessor's settle thread — the enqueuer's identity is captured at enqueue and carried onto the request, or the import's own progress write would go out unattributed and be refused by the very partition it is repairing (issue #919).
 
 ## Per-partition sync mode (what gets pruned)
 
@@ -129,6 +129,17 @@ This copy path is for a source whose target nodes have a **writable** per-node `
 
 This is how a source with a writable target collection gets its `@@content/<file>` assets to land on a fresh deployment (e.g. a FileSystem source at `/mnt/content`): the importer copies them into the runtime `content` collection on boot, alongside the nodes. Tests: `ContentImportSyncTest` (monolith, filesystem + embedded sources) and `OrleansContentImportSyncTest` (the distributed cross-grain path — the shape that must not deadlock).
 
+### The same landing, reached from a REGISTRY install (issue #848)
+
+The two paths above are for sources **compiled into the portal**. A course or plugin installed **from the plugin registry** is not one — so for a long time nothing copied its assets, and its `content/**` binaries had to be uploaded to each portal out of band. `PackageInstaller.SyncPackageContent` closes that: after the nodes land it classifies the package's `{package}/content/**` files with the same `ContentAssetMapper` and posts the same **`SyncContentFilesRequest`** (the byte-carrying sibling of `ImportContentRequest`) to the partition ROOT — the one hub where the per-Space `content` collection resolves.
+
+Two things make that work end to end, and both are easy to break again:
+
+- **The bytes must survive the transport.** `RepoFileCodec` classifies a non-UTF-8 blob as binary and puts its bytes on `RepoFile.Binary`, leaving `Content` deliberately **empty**. Any projection that copies only `Content` therefore publishes an empty file — which is exactly what `POST /api/plugins/files` did (`content = 0 chars`). `PackageFile` mirrors `RepoFile` (`Content` + `Binary` + `Bytes`) and every package source must carry both.
+- **The install is ADDITIVE, never a mirror.** GitSync mirrors because it owns the whole Space; an install does not, and portals carry assets uploaded by hand that the repo has never tracked. Note that `SyncContentFilesRequest.Mirror` is a declared-`true` bool and so carries `[JsonIgnore(Condition = Never)]` — without it the hub serializer drops an explicit `Mirror = false` (it *is* the CLR default) and the receiving hub rebuilds it as `true`, silently turning an additive sync into a pruning one.
+
+Test: `PackageContentAssetInstallTest` — the bytes land at the exact layout `/api/content/{root}/{file}` resolves to, a text asset still round-trips, and an untracked upload survives a re-install.
+
 ## The two primitives
 
 ### 1. Source fingerprint — the content-version
@@ -143,13 +154,20 @@ fingerprint = sha256( join(lines, "\n") )[..16]
 
 Changes iff a node is added, removed, or modified — including an edited welcome (the root is in the set). Helper: `PartitionSourceFingerprint.Compute`.
 
-### 2. Content-addressed Activity — the lock + the short-circuit
+### 2. Content-addressed Activity — the marker + the short-circuit
 
-The import runs as an [Activity](/Doc/Architecture/ActivityControlPlane) whose **id is the fingerprint**: `{Partition}/_Activity/import-{fingerprint}`.
+The import is governed by TWO [Activity](/Doc/Architecture/ActivityControlPlane) nodes with deliberately different lifetimes.
 
-- **Same source ⇒ same id.** Concurrent replicas both `CreateNode` that exact path → first writer wins; the rest get "already exists" and observe. No advisory lock, no leader election.
-- **A `Succeeded` activity for the fingerprint is the durable "already imported" record** — the boot short-circuit reads it; equal fingerprint ⇒ no work.
-- **Changed source ⇒ new id** ⇒ a fresh import runs. Old `import-{prevHash}` activities remain as a visible import history.
+**The marker** — `{Partition}/_Activity/import-{fingerprint}`, id = the fingerprint:
+
+- **A `Succeeded` activity for the fingerprint is the durable "already imported" record** — the boot short-circuit reads it; equal fingerprint ⇒ no work. This is the marker's whole job, and it is why the id must be derived from the content.
+- **Changed source ⇒ new id** ⇒ a fresh import runs. Old `import-{prevHash}` markers remain as a visible import history.
+- It is written **only** through the idempotent upsert (`CreateOrUpdateNodeRequest`), twice per run: `Running` at the start, then the terminal verdict. That verb floors the version on the durable row it just read, so a forked/ghost row is repaired in place rather than silently discarded (#902/#909).
+- 🚨 **It is not a lock, and nothing else serialises replicas.** A marker left `Running` — by a crashed import, or by a rollout briefly running two pods — is *reclaimed*, not obeyed: the guard re-imports on anything that is not `Succeeded`. Obeying it was the old behaviour and it wedged a partition into "AlreadyRunning, 0 nodes" forever (the atioz Agent/Harness/Command wedge). So two replicas on the same fingerprint can import concurrently. That is safe **only** because every write on the path is an upsert of byte-identical content — do not add a step here that is not idempotent, and do not treat "the lock protects me" as an available argument.
+
+**The attempt** — `{Partition}/_Activity/import-{fingerprint}-{timestamp}-{rand}`, a **fresh id per run**, carrying every progress line, per-file `⚠`/`🗑` diagnostic and the run's terminal summary.
+
+🚨 The split exists because a deterministic id is a *trap* for anything written many times per run. When one poisoned row sat at `import-{fingerprint}` (memex Store, 2026-08-07: v166, 16 KB, unloadable by its own hub), **every** retry re-targeted that same node and died identically — each progress write burning the full 30 s `no initial state arrived` abort — and the only way out was deleting the row by hand in SQL. Minting the attempt id fresh means a faulted attempt can never be re-targeted; keeping the marker deterministic preserves the content-addressed short-circuit that is the whole point of it (issue #919).
 
 ## Why startup, not the SQL migration
 
