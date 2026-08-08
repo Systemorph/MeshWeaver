@@ -57,12 +57,11 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
 
     /// <summary>
     /// Diffs the incoming instance collection against the last-saved snapshot and syncs
-    /// adds and updates back to the persistence partition (deletes are not yet supported).
-    /// Returns the supplied collection as the new authoritative snapshot.
+    /// adds and updates back to the persistence partition (deletes are not yet supported);
+    /// the supplied collection becomes the new snapshot.
     /// </summary>
     /// <param name="instances">The instance collection to persist/update.</param>
-    /// <returns>The instance collection to store as the new authoritative snapshot.</returns>
-    protected override InstanceCollection UpdateImpl(InstanceCollection instances)
+    protected override void UpdateImpl(InstanceCollection instances)
     {
         _logger?.LogDebug("PartitionTypeSource<{Type}>.UpdateImpl: Called with {Count} instances",
             typeof(T).Name, instances.Instances.Count);
@@ -107,7 +106,6 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
         // If needed, we could add DeletePartitionObjectAsync to IStorageAdapter
 
         _lastSaved = instances;
-        return instances;
     }
 
     /// <summary>
