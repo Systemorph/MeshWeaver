@@ -9,34 +9,20 @@
 @inject AccessService Access
 
 <div class="collab-md-container @ViewModeClass" data-theme="@Mode.ToString().ToLower()" @ref="containerRef">
-    @* Toolbar — comment filter + accept/reject-all, shown when there are comments or pending changes *@
-    @if (HasAnnotations || HasCommentAnnotations)
+    @* Toolbar — comment filter. Tracked changes are already IN the document (they are projected from
+       the version history), so there is nothing to "accept": the only action is Revert, per card. *@
+    @if (HasCommentAnnotations)
     {
         <div class="collab-md-toolbar">
-            @if (HasCommentAnnotations)
-            {
-                <FluentSelect TOption="string"
-                              Value="@CurrentCommentFilter"
-                              ValueChanged="@OnCommentFilterChanged"
-                              Label="Comments"
-                              Style="min-width: 160px;">
-                    <FluentOption Value="Unresolved">@Access.Localize("ui.unresolved")</FluentOption>
-                    <FluentOption Value="All">@Access.Localize("comments.all")</FluentOption>
-                    <FluentOption Value="None">@Access.Localize("ui.noComments")</FluentOption>
-                </FluentSelect>
-            }
-
-            @if (BoundCanEdit && HasAnnotations)
-            {
-                <div class="collab-md-toolbar-separator"></div>
-
-                <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
-                              OnClick="@OnAcceptAll"
-                              Style="color: var(--annotation-insert-border); font-size: 0.85rem;">@Access.Localize("ui.acceptAll")</FluentButton>
-                <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
-                              OnClick="@OnRejectAll"
-                              Style="color: var(--annotation-delete-border); font-size: 0.85rem;">@Access.Localize("ui.rejectAll")</FluentButton>
-            }
+            <FluentSelect TOption="string"
+                          Value="@CurrentCommentFilter"
+                          ValueChanged="@OnCommentFilterChanged"
+                          Label="@Access.Localize("comments.label")"
+                          Style="min-width: 160px;">
+                <FluentOption Value="Unresolved">@Access.Localize("ui.unresolved")</FluentOption>
+                <FluentOption Value="All">@Access.Localize("comments.all")</FluentOption>
+                <FluentOption Value="None">@Access.Localize("ui.noComments")</FluentOption>
+            </FluentSelect>
         </div>
     }
 
@@ -76,7 +62,8 @@
                     </div>
                 }
 
-                @* Tracked-change cards — the git-diff review with accept/reject *@
+                @* Tracked-change cards — the redline computed from the version history. Each card is
+                   an edit that already landed, so the one action is Revert (itself a versioned write). *@
                 @foreach (var change in SidebarChanges)
                 {
                     var id = change.MarkerId!;
@@ -93,8 +80,7 @@
                             @if (BoundCanEdit)
                             {
                                 <div class="collab-md-card-actions">
-                                    <button class="btn-accept" title="@Access.Localize("ui.accept")" @onclick="() => OnAcceptChange(id)" @onclick:stopPropagation="true">✓</button>
-                                    <button class="btn-reject" title="@Access.Localize("ui.reject")" @onclick="() => OnRejectChange(id)" @onclick:stopPropagation="true">✗</button>
+                                    <button class="btn-revert" title="@Access.Localize("ui.revert")" @onclick="() => OnRevertChange(id)" @onclick:stopPropagation="true">↩</button>
                                 </div>
                             }
                         </div>

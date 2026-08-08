@@ -64,7 +64,9 @@ A comment is top-level when its namespace ends with `_Comment` (e.g. `Doc/MyDoc/
 
 ### Comments and changes are anchored, NOT injected into the document
 
-A text-range comment or tracked change is **never** written into the document's markdown — the document stays clean. The satellite carries its own anchor: `Start`/`Length` (the captured character range in the document's clean text), the `Version` it was captured against, the `AnchorText` (the document text at that version), and the `HighlightedText`/`OriginalText`. At render time the **effective range** is recomputed against the current text: while the document is still at the captured `Version` the stored offsets are used verbatim; once it has moved ahead, `AnchorMath` diffs `AnchorText` against the current text and maps the offsets through that diff (`diff_xIndex`-style), exposed as `EffectiveStart`/`EffectiveEnd`. The comment highlight (`CommentRendering`) and the tracked-change diff (`ChangeRendering`) are overlaid for that one render by `CollaborativeRenderer` — never persisted. This decouples annotating from the document: a `Comment`-only user (no document `Update` permission) can comment, and edits above an annotation don't strand it. Tracked changes are satellites too (`_Tracking`); **accepting** one applies its `NewText` to the document, **rejecting** drops the satellite.
+A text-range comment is **never** written into the document's markdown — the document stays clean. The satellite carries its own anchor: `Start`/`Length` (the captured character range in the document's clean text), the `Version` it was captured against, the `AnchorText` (the document text at that version), and the `HighlightedText`. At render time the **effective range** is recomputed against the current text: while the document is still at the captured `Version` the stored offsets are used verbatim; once it has moved ahead, `AnchorMath` diffs `AnchorText` against the current text and maps the offsets through that diff (`diff_xIndex`-style), exposed as `EffectiveStart`/`EffectiveEnd`. The comment highlight (`CommentRendering`) is overlaid for that one render by `CollaborativeRenderer` — never persisted. This decouples annotating from the document: a `Comment`-only user (no document `Update` permission) can comment, and edits above an annotation don't strand it.
+
+> **Tracked changes are NOT satellites** — they are a view model. `ChangeProjection` diffs a baseline version of the node against its current text and attributes each hunk to the version-history step that introduced it, producing `TrackedChange` view models with the same anchor shape (so `ChangeRendering.ResolveEffective` re-locates them the same way). Nothing is stored, so nothing can go stale or orphan; "reject" is `ChangeRendering.Revert`, a normal versioned write. The persisted `_Tracking` satellites are legacy: nothing writes them, and their registrations survive only so existing rows stay readable.
 
 ---
 
@@ -214,7 +216,7 @@ var node = new MeshNode(id, threadPath) { NodeType = "ThreadMessage" };
 // MainNode = "PartnerRe/.../threadId/msgId" — not a real entity; has no permissions
 ```
 
-This applies to all satellite types: `Thread`, `ThreadMessage`, `Comment`, `TrackedChange`, `Approval`.
+This applies to all satellite types: `Thread`, `ThreadMessage`, `Comment`, `Approval` (and the legacy, no-longer-written `TrackedChange`).
 
 ---
 

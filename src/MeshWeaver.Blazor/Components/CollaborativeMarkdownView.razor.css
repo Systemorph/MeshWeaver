@@ -94,13 +94,6 @@
     flex-wrap: wrap;
 }
 
-.collab-md-toolbar-separator {
-    width: 1px;
-    height: 20px;
-    background: var(--neutral-stroke-rest);
-    margin: 0 4px;
-}
-
 .collab-md-split {
     display: flex;
     gap: 20px;
@@ -229,6 +222,12 @@
 }
 
 .collab-md-card-actions .btn-reject {
+    color: var(--annotation-delete-border);
+}
+
+/* Revert a history-derived change — the only action on a tracked-change card, since the edit is
+   already in the document. */
+.collab-md-card-actions .btn-revert {
     color: var(--annotation-delete-border);
 }
 

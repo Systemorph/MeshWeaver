@@ -50,7 +50,6 @@ public static class MarkdownNodeType
             .AddMeshDataSource(s => s.WithContentType<MarkdownContent>())
             .AddContentCollections()
             .AddComments()
-            .AddTracking()
             .AddApprovals()
     };
 }

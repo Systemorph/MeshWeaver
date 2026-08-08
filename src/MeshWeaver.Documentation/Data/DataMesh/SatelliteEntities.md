@@ -34,7 +34,7 @@ Every primary node can carry a family of related records — comments, approval 
   <rect x="244" y="178" width="126" height="58" rx="8" fill="#5c6bc0"/>
   <text x="307" y="196" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">_Tracking</text>
   <text x="307" y="212" text-anchor="middle" fill="#c5cae9" font-size="10">TrackedChange</text>
-  <text x="307" y="228" text-anchor="middle" fill="#9fa8da" font-size="10">→ tracking</text>
+  <text x="307" y="228" text-anchor="middle" fill="#9fa8da" font-size="10">→ annotations</text>
   <rect x="352" y="178" width="126" height="58" rx="8" fill="#f57c00"/>
   <text x="415" y="196" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">_Approval</text>
   <text x="415" y="212" text-anchor="middle" fill="#ffe0b2" font-size="10">Approval</text>
@@ -70,7 +70,7 @@ ACME/Projects/Alpha/_Comment/c1            ← Comment on Alpha
 ACME/Projects/Alpha/_Access/Alice_Access   ← Access assignment for Alice
 ACME/Projects/Alpha/_Approval/a1           ← Approval record
 ACME/Projects/Alpha/_Thread/abc123         ← Discussion thread
-ACME/Projects/Alpha/_Tracking/tc1          ← Tracked change (suggestion)
+ACME/Projects/Alpha/_Tracking/tc1          ← Tracked change (LEGACY — no longer written)
 ACME/Projects/Alpha/_Activity/act1         ← Activity log entry
 ```
 
@@ -106,7 +106,7 @@ Each satellite type has a reserved sub-namespace prefix. The routing layer depen
 |---|---|---|
 | `_Access` | AccessAssignment | Permission grants and denials — see [Access Control](../../Architecture/AccessControl) |
 | `_Comment` | Comment | Document comments and replies — see [Collaborative Editing](../CollaborativeEditing) |
-| `_Tracking` | TrackedChange | Suggested edits and track changes |
+| `_Tracking` | TrackedChange | **Legacy, read-only** — tracked changes are now computed from the version history, not stored |
 | `_Approval` | Approval | Approval workflow records |
 | `_Thread` | Thread | Chat and discussion threads |
 | `_Activity` | Activity | Node lifecycle events (created, updated, deleted) |
@@ -156,7 +156,7 @@ Configuration lives in `PartitionDefinition.StandardTableMappings`:
 | `_Activity` | `activities` | Activity log entries |
 | `_UserActivity` | `user_activities` | User access records |
 | `_Thread` | `threads` | Threads and thread messages |
-| `_Tracking` | `tracking` | Track change records |
+| `_Tracking` | `annotations` | Legacy track-change records (no longer written) |
 | `_Approval` | `approvals` | Approval records |
 | `_Access` | `access` | Access assignments |
 | `_Comment` | `comments` | Comments and replies |
@@ -226,9 +226,11 @@ Control who can read, edit, or administer a node and its descendants. See [Acces
 
 Anchored to text ranges in markdown documents via inline markers. Replies nest as children of the comment node within `_Comment/`. See [Collaborative Editing](../CollaborativeEditing).
 
-## Tracked Changes (`_Tracking`)
+## Tracked Changes (`_Tracking`) — retired
 
-Suggested insertions and deletions in collaborative documents. Each `TrackedChange` records the author, change type, and acceptance status.
+Tracked changes are **no longer satellites**. The node's version history already records author, timestamp and full content for every change, so the redline is *computed* from it (`ChangeProjection`) rather than stored a second time — and "reject" is a revert, itself a versioned write. See [Collaborative Editing](../CollaborativeEditing).
+
+Nothing writes `_Tracking` any more. The sub-namespace and its table mapping stay registered for a deprecation window so rows written by older builds remain readable.
 
 ## Approvals (`_Approval`)
 
