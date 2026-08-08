@@ -456,12 +456,10 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(ApiToken), nameof(ApiToken));
         typeRegistry.WithType(typeof(MeshDataSourceConfiguration), nameof(MeshDataSourceConfiguration));
         typeRegistry.WithType(typeof(PartitionDefinition), nameof(PartitionDefinition));
-        // Compile trigger / activity contract — the per-NodeType hub posts
-        // RunCompileRequest to its compile-activity hub and must deserialise
-        // the RunCompileResponse that comes back; CreateReleaseRequest /
-        // RunTests* are the UI-facing triggers on the same hub.
-        typeRegistry.WithType(typeof(RunCompileRequest), nameof(RunCompileRequest));
-        typeRegistry.WithType(typeof(RunCompileResponse), nameof(RunCompileResponse));
+        // Compile trigger contract — CreateReleaseRequest / RunTests* are the
+        // UI-facing triggers on the per-NodeType hub. (The cross-hub
+        // RunCompileRequest/Response pair was deleted with the activity-dispatch
+        // path it served; the compile now runs inline in RunCompile.)
         typeRegistry.WithType(typeof(CreateReleaseRequest), nameof(CreateReleaseRequest));
         typeRegistry.WithType(typeof(CreateReleaseResponse), nameof(CreateReleaseResponse));
         typeRegistry.WithType(typeof(RunTestsRequest), nameof(RunTestsRequest));

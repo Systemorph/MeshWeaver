@@ -522,6 +522,19 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
 
         failedDef.CompilationError.Should().NotBeNullOrEmpty(
             "Failed compile must persist a human-readable error so the operator can fix the source");
+        // 🚨 The error must be a ROSLYN DIAGNOSTIC, not merely non-empty (#890).
+        // FormatCompileFailure writes "{d.Id} {d.Severity} (line N): {message}", so a
+        // genuine rejection of the planted `this is not valid C#;` always carries a
+        // CS#### code. A non-empty check alone passes just as happily on an
+        // infrastructure abort — the recurring CI failure where EVERY compile in the
+        // process, this one included, settled as
+        //   CompilationError = Object reference not set to an instance of an object.
+        // i.e. the NRE struck BEFORE Roslyn ever ran and the test still went green.
+        // Requiring the diagnostic code turns that silent case into a red test.
+        failedDef.CompilationError.Should().MatchRegex(@"CS\d{4}",
+            "a failed compile must carry a Roslyn diagnostic code (CS####); an error without "
+            + "one means the compile aborted BEFORE Roslyn ran (infrastructure fault, #890), "
+            + $"which is not what this test is asserting. Actual: {failedDef.CompilationError}");
         failedDef.LastCompilationActivityPath.Should().NotBeNullOrEmpty(
             "Failed compile must link to its activity log so the UI can surface Roslyn diagnostics");
         failedDef.LatestReleasePath.Should().BeNullOrEmpty(
