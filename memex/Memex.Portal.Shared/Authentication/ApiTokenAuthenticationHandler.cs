@@ -62,7 +62,12 @@ public class ApiTokenAuthenticationHandler(
         // HTTP boundary — bridge IObservable to Task once. The service exposes
         // IObservable<TokenValidationResult> per the "no async in hub-reachable code" rule.
         var validationStopwatch = Stopwatch.StartNew();
-        var validation = await tokenService.Validate(rawToken).FirstAsync().ToTask();
+        // 🚨 Bridge under the REQUEST's abort token: a client that gives up mid-validation must
+        // release the wait at once rather than holding it to the validation read's own timeout.
+        // That matters most in exactly the degraded window this change is about — storage slow,
+        // clients retrying — where holding every abandoned request would compound the pressure.
+        var validation = await tokenService.Validate(rawToken)
+            .FirstAsync().ToTask(Context.RequestAborted);
         if (validation.Status == TokenValidationStatus.Unavailable)
         {
             // Token validation UNAVAILABLE — retry; NOT an auth failure. The token was

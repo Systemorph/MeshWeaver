@@ -27,8 +27,11 @@ public sealed class SignalRConnectionHub(IMessageHub hub, SignalRConnectionRegis
         try
         {
             // Boundary bridge (SignalR is async by contract): validate the token once per connection.
+            // 🚨 Pass the connection's abort token: a client that disconnects mid-validation must
+            // release the wait immediately, not hold it until the validation read's own timeout —
+            // otherwise a burst of connect-then-drop clients parks one pending validation each.
             await registry.Authenticate(Context.ConnectionId, ExtractBearerToken(Context.GetHttpContext()))
-                .FirstAsync().ToTask();
+                .FirstAsync().ToTask(Context.ConnectionAborted);
         }
         catch (TokenValidationUnavailableException ex)
         {
