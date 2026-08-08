@@ -93,7 +93,13 @@ public record DataChangeResponse(long Version, ActivityLog Log)
 /// </summary>
 public enum DataChangeStatus
 {
-    /// <summary>The change was committed (possibly with warnings).</summary>
+    /// <summary>
+    /// The change was applied to the in-memory store (possibly with warnings) and is visible to
+    /// every subscriber. NOT a durability guarantee: persistence is dispatched to the
+    /// System-identity persistence hub AFTER this status is reported, so a crash in that window
+    /// can lose an acknowledged change. Callers that need durable-write semantics must observe
+    /// the storage backend, not this status.
+    /// </summary>
     Committed,
     /// <summary>The change failed and was not committed.</summary>
     Failed
