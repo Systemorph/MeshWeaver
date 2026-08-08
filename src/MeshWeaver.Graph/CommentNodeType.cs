@@ -40,7 +40,10 @@ public static class CommentNodeType
                 new SatelliteAccessRule(NodeType, sp.GetRequiredService<IMessageHub>()));
             return services;
         });
-        // Register all comment and collaborative editing domain types
+        // Register all comment and collaborative editing domain types. The TrackedChange types stay
+        // registered even though nothing WRITES a _Tracking satellite any more: they are the tracked-
+        // change view model (ChangeProjection) and the wire shape legacy satellites still deserialize
+        // through during the deprecation window (see AnnotationExtensions).
         builder.ConfigureHub(config => config
             .WithType<Mesh.Comment>(nameof(Mesh.Comment))
             .WithType<Mesh.CommentStatus>(nameof(Mesh.CommentStatus))
@@ -48,9 +51,7 @@ public static class CommentNodeType
             .WithType<Mesh.TrackedChangeType>(nameof(Mesh.TrackedChangeType))
             .WithType<Mesh.TrackedChangeStatus>(nameof(Mesh.TrackedChangeStatus))
             .WithType<CreateCommentRequest>(nameof(CreateCommentRequest))
-            .WithType<CreateCommentResponse>(nameof(CreateCommentResponse))
-            .WithType<CreateSuggestedEditRequest>(nameof(CreateSuggestedEditRequest))
-            .WithType<CreateSuggestedEditResponse>(nameof(CreateSuggestedEditResponse)));
+            .WithType<CreateCommentResponse>(nameof(CreateCommentResponse)));
         // Resolve/Delete/Accept/Reject request records are deliberately NOT registered any more:
         // they never had a handler, so posting one hung the caller to the timeout. Those operations
         // are node writes on the satellite / document (see CollaborativeMarkdownView and the
