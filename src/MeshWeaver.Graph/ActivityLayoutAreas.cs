@@ -250,10 +250,14 @@ public static class ActivityLayoutAreas
     /// <summary>
     /// The activity log — one row per <see cref="LogMessage"/>: a fixed-width
     /// level tag (INFO / WARN / ERROR / DBG, coloured by severity) beside the
-    /// message text. An empty log on a running activity renders a single
-    /// "Running…" row. Control-based (a vertical <see cref="StackControl"/> of
-    /// horizontal rows) — replaces the former hand-rolled messages HTML and is
-    /// unit-testable without a layout host.
+    /// message text. An empty log on a RUNNING activity renders a single
+    /// "Running…" row; an empty log on a TERMINAL activity says explicitly that
+    /// the run produced no output (#915 — a script whose result is a control
+    /// logs nothing, and "Running…" beside a "✓ Done" header read as a
+    /// contradiction the reader had to decode as failure). Control-based
+    /// (a vertical <see cref="StackControl"/> of horizontal rows) — replaces
+    /// the former hand-rolled messages HTML and is unit-testable without a
+    /// layout host.
     /// </summary>
     public static StackControl BuildLog(ActivityLog log, string? locale = null)
     {
@@ -263,10 +267,7 @@ public static class ActivityLayoutAreas
                 + "font-size: .85rem; gap: 2px; max-height: 320px; overflow: auto;");
 
         if (log.Messages.Count == 0)
-        {
-            return stack.WithView(Controls.Label(LocalizationCatalog.Get("ui.running", locale))
-                .WithStyle("font-style: italic; color: var(--neutral-foreground-hint);"));
-        }
+            return stack.WithView(BuildEmptyLogLabel(log, locale));
 
         foreach (var msg in log.Messages)
         {
@@ -282,6 +283,19 @@ public static class ActivityLayoutAreas
 
         return stack;
     }
+
+    /// <summary>
+    /// The single row an EMPTY log renders: "Running…" while the activity is still
+    /// <see cref="ActivityStatus.Running"/>, and an explicit "this run produced no output"
+    /// statement once it is terminal — never a running label on a finished activity
+    /// (#915: a code cell whose result is a control logs nothing, so "✓ Done" sat beside
+    /// "Running…" and read as a failure). Public pure builder like its siblings so the
+    /// status dependence is unit-testable without a layout host.
+    /// </summary>
+    public static LabelControl BuildEmptyLogLabel(ActivityLog log, string? locale = null) =>
+        Controls.Label(LocalizationCatalog.Get(
+                log.Status == ActivityStatus.Running ? "ui.running" : "ui.activityNoOutput", locale))
+            .WithStyle("font-style: italic; color: var(--neutral-foreground-hint);");
 
     private static string StatusColor(ActivityStatus status) => status switch
     {

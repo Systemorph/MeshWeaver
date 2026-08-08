@@ -347,6 +347,7 @@
   "ui.sourceChanged": "Source changed — needs compile",
   "ui.upToDate": "Up to date",
   "ui.notYetRun": "Not yet run.",
+  "ui.activityNoOutput": "This run produced no output.",
   "ui.running": "Running…",
   "ui.noActivityData": "No activity data.",
   "ui.noActivityYet": "No activity yet.",

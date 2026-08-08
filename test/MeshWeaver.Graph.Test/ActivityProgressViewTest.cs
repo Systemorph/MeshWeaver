@@ -105,6 +105,26 @@ public class ActivityProgressViewTest
         var logStack = ActivityLayoutAreas.BuildLog(Running());
 
         logStack.Areas.Should().HaveCount(1, "an empty running log shows a single 'Running…' row");
+        ActivityLayoutAreas.BuildEmptyLogLabel(Running()).Data!.ToString()
+            .Should().Be("Running…");
+    }
+
+    [Theory]
+    [InlineData(ActivityStatus.Succeeded)]
+    [InlineData(ActivityStatus.Failed)]
+    [InlineData(ActivityStatus.Warning)]
+    [InlineData(ActivityStatus.Cancelled)]
+    public void Log_EmptyTerminal_SaysNoOutput_NeverRunning(ActivityStatus status)
+    {
+        // #915: a script whose result is a control logs nothing, so a terminal activity with an
+        // empty log is a normal outcome — it must say so explicitly. The old branch rendered
+        // "Running…" without consulting Status, so the reader saw "✓ Done" beside "Running…"
+        // and had to decode the contradiction as failure.
+        var log = new ActivityLog("test") { Status = status, End = DateTime.UtcNow };
+
+        ActivityLayoutAreas.BuildLog(log).Areas.Should().HaveCount(1);
+        ActivityLayoutAreas.BuildEmptyLogLabel(log).Data!.ToString()
+            .Should().Be("This run produced no output.");
     }
 
     [Fact]
