@@ -5,7 +5,7 @@ Icon: /static/DocContent/DataMesh/CollaborativeEditing/icon.svg
 Abstract: Real-time collaborative markdown editing with comments, track changes, and annotation satellite entities
 ---
 
-Work together on documents in real time — comment on passages, propose edits as tracked suggestions, and accept or reject changes without ever leaving the document.
+Work together on documents in real time — comment on passages, edit freely, and see every change tracked (who, when, what) with a one-click revert, without ever leaving the document.
 
 ---
 
@@ -18,7 +18,7 @@ Work together on documents in real time — comment on passages, propose edits a
     </marker>
   </defs>
   <rect x="10" y="10" width="740" height="340" rx="12" fill="none" stroke="currentColor" stroke-opacity=".15" stroke-width="1"/>
-  <text x="380" y="32" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11" font-weight="bold" letter-spacing="1">CLEAN DOCUMENT + POSITION-ANCHORED SATELLITES</text>
+  <text x="380" y="32" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11" font-weight="bold" letter-spacing="1">CLEAN DOCUMENT + ANCHORED COMMENTS + DERIVED CHANGES</text>
   <rect x="300" y="48" width="160" height="56" rx="10" fill="#1e88e5"/>
   <text x="380" y="72" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Document Node</text>
   <text x="380" y="91" text-anchor="middle" fill="#fff" font-size="11">clean markdown — no markers</text>
@@ -28,12 +28,12 @@ Work together on documents in real time — comment on passages, propose edits a
   <text x="120" y="72" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">_Comment</text>
   <text x="120" y="91" text-anchor="middle" fill="#fff" font-size="11">Comment satellite</text>
   <rect x="560" y="48" width="160" height="56" rx="10" fill="#8e24aa"/>
-  <text x="640" y="72" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">_Tracking</text>
-  <text x="640" y="91" text-anchor="middle" fill="#fff" font-size="11">TrackedChange satellite</text>
+  <text x="640" y="72" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Version history</text>
+  <text x="640" y="91" text-anchor="middle" fill="#fff" font-size="11">every version, author, time</text>
   <text x="120" y="124" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="10">captures start, length,</text>
   <text x="120" y="138" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="10">version, anchor text</text>
-  <text x="640" y="124" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="10">+ original / suggested text</text>
-  <text x="640" y="138" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="10">(insert / delete / replace)</text>
+  <text x="640" y="124" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="10">tracked changes are DERIVED</text>
+  <text x="640" y="138" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="10">from it — nothing is stored</text>
   <line x1="380" y1="104" x2="380" y2="158" stroke="currentColor" stroke-opacity=".35" stroke-width="1.5" marker-end="url(#arrow)"/>
   <text x="392" y="135" fill="currentColor" fill-opacity=".45" font-size="10">at render</text>
   <rect x="40" y="162" width="170" height="52" rx="8" fill="#26a69a"/>
@@ -53,24 +53,28 @@ Work together on documents in real time — comment on passages, propose edits a
   <line x1="574" y1="188" x2="594" y2="188" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arrow)"/>
   <text x="380" y="252" text-anchor="middle" fill="currentColor" fill-opacity=".55" font-size="11">The highlight (comment) or the inline diff (change) is rendered at the effective range —</text>
   <text x="380" y="270" text-anchor="middle" fill="currentColor" fill-opacity=".55" font-size="11">a transient overlay for that one render. The stored document is never modified.</text>
-  <text x="380" y="300" text-anchor="middle" fill="currentColor" fill-opacity=".45" font-size="10">Accepting a change applies its text to the document; rejecting just drops the satellite.</text>
+  <text x="380" y="300" text-anchor="middle" fill="currentColor" fill-opacity=".45" font-size="10">Reverting a change is a normal versioned write — it lands in the history like any other edit.</text>
 </svg>
-*The document text stays clean. Each annotation captures the character range it covers (plus the document version and the text at that version); the live highlight or diff is recomputed at render time.*
+*The document text stays clean. Comments capture the character range they cover; tracked changes are computed from the version history. Both are recomputed at render time.*
 
-MeshWeaver stores annotations **beside** the document, never inside it. Every comment or tracked change is a satellite entity living in a dedicated partition next to the document node:
+MeshWeaver keeps the document's markdown **clean** — nothing is woven into it. The two annotation kinds get there differently, and the difference is the point:
 
-| Annotation type | Partition | Extension class |
+| Annotation type | Where it lives | Source of truth |
 |---|---|---|
-| Comment | `_Comment` | `CommentsExtensions` |
-| Tracked change | `_Tracking` | `AnnotationExtensions` |
+| Comment | `_Comment` satellite | The satellite (genuinely additional data — the document never carried it) |
+| Tracked change | **nowhere** — a view model | The node's **version history** (`IVersionQuery` / `mesh_node_history`) |
 
-The document's markdown is kept **clean** — nothing is woven into it. Each annotation records, on the satellite, the character range it covers (`Start`/`Length`), the document **version** that range was captured against, and the document **text** at that version (the *anchor*). The inline highlight or diff is never persisted in the document; it is re-derived every time the document is rendered.
+A **comment** records, on its satellite, the character range it covers (`Start`/`Length`), the document **version** that range was captured against, and the document **text** at that version (the *anchor*).
+
+A **tracked change** stores nothing at all. The version history is already the authoritative record of every change — who made it, when, and the full text before and after — so `ChangeProjection` diffs a baseline version against the current text and attributes each resulting hunk to the version step that introduced it. Persisting that a second time only bought a failure class: anchors going stale as the document moved, orphaned satellite state, and two answers to "what changed".
+
+> **Legacy `_Tracking` satellites.** Older builds persisted tracked changes at `{doc}/_Tracking/{id}`. Nothing writes them any more; the node type and the `_Tracking → annotations` table mapping stay registered for a deprecation window so existing rows remain readable.
 
 ### Capturing and recomputing positions
 
 There is no "strip markers / reassemble" round-trip and no marker is ever written into the source. Instead:
 
-1. **Capture** — when you comment or suggest, the satellite records `Start`, `Length`, `Version`, and `AnchorText` (the clean document text at that version) — plus the highlighted/affected text.
+1. **Capture** — when you comment, the satellite records `Start`, `Length`, `Version`, and `AnchorText` (the clean document text at that version) plus the highlighted text. A tracked change captures nothing: it is *projected* from the history, and the text it was projected against becomes its anchor.
 2. **Recompute** — when the document is displayed, each annotation's **effective range** is computed against the current text. If the document is still at the captured version, the stored offsets are used directly; if it has moved on, the engine **diffs** the anchor text against the current text and maps the offsets through that diff (a `diff_xIndex`-style position map). This is exposed as `EffectiveStart` / `EffectiveEnd` / `EffectiveVersion`.
 3. **Overlay** — the comment highlight, or the tracked-change diff, is injected as a transient span for that render only.
 
@@ -89,17 +93,17 @@ Because the range is recomputed from the actual edit delta, an annotation follow
 | `Status` | `Active` or `Resolved` |
 | `PrimaryNodePath` | Document path used for permission delegation |
 
-**TrackedChange** (`_Tracking` partition)
+**TrackedChange** — a **view model**, computed by `ChangeProjection`, never persisted
 
 | Field | Purpose |
 |---|---|
-| `ChangeType` | `Insertion`, `Deletion`, or `Replacement` |
-| `Start` / `Length` / `Version` / `AnchorText` | The captured range + anchor (as above) |
-| `OriginalText` / `NewText` | The text being removed/replaced, and the suggested text |
-| `Status` | `Pending`, `Accepted`, or `Rejected` |
-| `PrimaryNodePath` | Document path used for permission delegation |
+| `ChangeType` | `Insertion`, `Deletion`, or `Replacement` — classified from the diff hunk |
+| `Author` / `CreatedAt` / `Version` | The version-history step that introduced the hunk |
+| `OriginalText` / `NewText` | What the range held before, and what it holds now |
+| `Start` / `Length` / `AnchorText` | The range in the text it was projected against (so a later edit re-locates it) |
+| `PrimaryNodePath` | The document the change belongs to |
 
-Both types have `IsSatelliteType = true`.
+`Comment` has `IsSatelliteType = true`; `TrackedChange` has no node type of its own any more (the legacy one stays registered read-only — see above).
 
 ---
 
@@ -123,17 +127,17 @@ A reviewer might attach comments to:
 
 ## Making Suggestions (Track Changes)
 
-**Suggest Edit** lets you propose changes without altering the document directly. A `TrackedChange` satellite is created (an insertion, deletion, or replacement); reviewers can accept or reject each suggestion individually — or all at once. The suggestion is shown as an inline **diff** computed from the satellite.
+**Suggest Edit** (in the UI, or the agent tool of the same name) applies the edit to the document as a **normal versioned write**. There is no pending-proposal limbo: the edit lands, the version history records who made it and when, and every reader sees it as a tracked change with a one-click **Revert**. Reverting is itself a versioned write, so the whole review is auditable instead of a satellite quietly appearing and disappearing.
 
-### Suggested additions
+### Additions
 
-Proposed new text shows as a green-underlined insertion.
+New text shows as a green-underlined insertion in the redline.
 
 > The quarterly report shows significant growth of 25% in user engagement.
 
-### Suggested deletions
+### Deletions
 
-Text proposed for removal shows struck through. The original text stays visible until the suggestion is decided.
+Removed text shows struck through, reconstructed from the baseline version — the current document does not carry it.
 
 > Please review the outdated documentation before the meeting.
 
@@ -149,21 +153,23 @@ Text proposed for removal shows struck through. The original text stays visible 
 
 ## Reviewing Changes
 
-### Accepting a change
+### Keeping a change
 
-Click the **checkmark** next to a suggestion — the suggested text is applied to the document at the change's current effective range, and the satellite is dropped.
+Do nothing. The change is already in the document — that is precisely why it appears in the version history and therefore in the redline. There is no "accept" button because there is nothing left to apply.
 
-- **Accept insertion** — the suggested text is inserted into the document.
-- **Accept deletion** — the marked text is removed.
-- **Accept replacement** — the old text is swapped for the new.
+### Reverting a change
 
-### Rejecting a change
+Click **↩** on the change card. The range is re-resolved against the **live** document (so a concurrent edit can never make the revert splice the wrong text) and the previous text is put back:
 
-Click the **X** next to a suggestion — the satellite is dropped and the document is left exactly as it was.
+- **Revert an insertion** — the added text is removed again.
+- **Revert a deletion** — the removed text comes back.
+- **Revert a replacement** — the old text is restored.
 
-### Bulk review
+The revert is a normal versioned write, so it shows up in the history exactly like the edit it undoes.
 
-Use **Accept All** / **Reject All** to resolve every pending suggestion in one step.
+### Reverting everything
+
+Use the **Versions** page: pick the version you want and restore it. That is one write with one clear meaning, instead of N independent reverts racing each other.
 
 ---
 
@@ -184,9 +190,11 @@ This is a pure, deterministic text operation — the same engine drives both com
 
 Multiple editors work on the same document without conflicts:
 
-- Each collaborator's suggestions are **colour-coded** by author.
+- Each change card names the **author** and **when** — read straight off the version that introduced it.
 - Comments show the **author name and timestamp**.
-- Annotation satellites update **reactively** for every connected editor.
+- Comment satellites and the derived change list update **reactively** for every connected editor.
+
+> An edit whose text several people touched attributes to nobody rather than to the wrong person — the card then reads as an unattributed change. That is deliberate: guessing an author is worse than admitting the edit is shared.
 
 ### Example — team review session
 
@@ -203,7 +211,7 @@ Multiple editors work on the same document without conflicts:
 ## Tips for Effective Collaboration
 
 1. **Comment before you change** — if you are uncertain, ask rather than edit.
-2. **Keep suggestions atomic** — one logical change per suggestion makes review faster.
+2. **Keep edits atomic** — one logical change per write makes both the redline and the revert clean.
 3. **Resolve threads when done** — mark comment threads resolved to keep the sidebar clean.
-4. **Read before bulk-accepting** — scan all pending suggestions before using Accept All.
-5. **Add context** — a brief note explaining *why* you propose a change helps reviewers decide quickly.
+4. **Reach for Versions for a wholesale undo** — restoring a version beats reverting a dozen cards.
+5. **Add context** — a comment explaining *why* you made a change helps reviewers decide quickly.

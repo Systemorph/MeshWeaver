@@ -854,8 +854,12 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
             ex => Log(ex, "add comment"));                                    // live query re-renders the list
     }
 
-    // Pending tracked-changes panel: lists the node's _Tracking satellites (author + original→new) with a
+    // LEGACY tracked-changes panel: lists the node's _Tracking satellites (author + original→new) with a
     // functional Accept (apply the suggested text to the collaborative doc) and Reject (delete the satellite).
+    // 🚨 Nothing WRITES _Tracking satellites any more — tracked changes are projected from the version
+    // history (MeshWeaver.Graph.ChangeProjection). This panel stays for the deprecation window so rows
+    // written by older builds remain actionable on mobile; it renders empty on any new document. The
+    // history-derived redline is the web view's (CollaborativeMarkdownView) surface.
     private void AddTrackedChangesPanel()
     {
         if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;

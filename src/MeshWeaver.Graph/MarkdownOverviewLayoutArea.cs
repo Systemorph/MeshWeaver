@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using Microsoft.Extensions.DependencyInjection;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
@@ -338,5 +339,40 @@ public static class MarkdownOverviewLayoutArea
         }
 
         return string.Empty;
+    }
+
+    /// <summary>
+    /// Writes <paramref name="markdown"/> back into <paramref name="node"/>, PRESERVING the content
+    /// shape <see cref="GetMarkdownContent"/> reads: a typed <see cref="MarkdownContent"/> keeps its
+    /// front-matter metadata (Authors / Tags / Thumbnail / Abstract), a plain string stays a string,
+    /// and a <c>JsonElement</c> frame (the shape content arrives in over a query / remote seam) is
+    /// materialised first. Replacing the whole content with a fresh <c>MarkdownContent</c> would
+    /// silently drop that metadata.
+    /// <para>Throws when the node does not hold markdown — a silent no-op reads to the caller as a
+    /// lost write.</para>
+    /// </summary>
+    public static MeshNode WithMarkdownContent(MeshNode node, string markdown, JsonSerializerOptions options)
+    {
+        switch (node.Content)
+        {
+            case MarkdownContent typedContent:
+                return node with { Content = typedContent with { Content = markdown } };
+            case string:
+                return node with { Content = markdown };
+            case JsonElement { ValueKind: JsonValueKind.String }:
+                return node with { Content = markdown };
+            case JsonElement { ValueKind: JsonValueKind.Object } element:
+            {
+                var isMarkdownShaped = element.TryGetProperty("$type", out var typeProperty)
+                    ? typeProperty.GetString() is "MarkdownContent" or "MarkdownDocument"
+                    : element.TryGetProperty("content", out var probe) && probe.ValueKind == JsonValueKind.String;
+                if (isMarkdownShaped && node.ContentAs<MarkdownContent>(options) is { } materialised)
+                    return node with { Content = materialised with { Content = markdown } };
+                break;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"'{node.Path}' does not hold markdown content — cannot write markdown to it.");
     }
 }

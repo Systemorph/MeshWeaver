@@ -4,11 +4,18 @@ using AnchorMath = MeshWeaver.Markdown.Collaboration.AnchorMath;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Capture, version-delta resolution, and accept/reject application for tracked changes (suggested
-/// edits). Mirrors <see cref="CommentRendering"/> for comments: the document text is kept CLEAN, the
-/// change records its range/anchor, and the diff view is re-derived against the current text.
-/// Accepting a change applies <see cref="TrackedChange.NewText"/> to the document; rejecting drops
-/// the satellite.
+/// Version-delta resolution and text application for tracked changes.
+/// <para>
+/// Tracked changes are a VIEW MODEL computed from the version history (see
+/// <see cref="ChangeProjection"/>) — they are not stored. A projected change is already applied to
+/// the document, so the meaningful transition is <see cref="Revert"/> (put the original text back —
+/// itself a normal versioned write). <see cref="Apply"/> remains for the LEGACY <c>_Tracking</c>
+/// satellites that older flows created and that readers keep accepting during the deprecation
+/// window.
+/// </para>
+/// <see cref="ResolveEffective"/> mirrors <see cref="CommentRendering"/>: the document text is kept
+/// CLEAN, the change carries its range plus the text it was taken against, and the range is
+/// re-derived against the current text through <c>AnchorMath</c>.
 /// </summary>
 public static class ChangeRendering
 {
@@ -81,6 +88,27 @@ public static class ChangeRendering
             TrackedChangeType.Replacement => clean.Remove(start, end - start).Insert(start, newText),
             _ => clean
         };
+    }
+
+    /// <summary>
+    /// Reverts an ALREADY-APPLIED change — the inverse of <see cref="Apply"/>: puts
+    /// <see cref="TrackedChange.OriginalText"/> back over the change's effective range. This is what
+    /// "reject" means for a history-derived change (see <see cref="ChangeProjection"/>): the edit is
+    /// already in the document, so undoing it is a normal versioned write that itself lands in the
+    /// version history.
+    /// <para>Throws when the range could not be located (<c>EffectiveStart &lt; 0</c>) — a silent
+    /// no-op would read to the user as a lost revert.</para>
+    /// </summary>
+    public static string Revert(string clean, TrackedChange resolvedChange)
+    {
+        clean ??= "";
+        if (resolvedChange.EffectiveStart < 0)
+            throw new InvalidOperationException(
+                "The changed range could not be located in the current document — it may have been edited away since this view rendered.");
+
+        var start = Math.Clamp(resolvedChange.EffectiveStart, 0, clean.Length);
+        var end = Math.Clamp(resolvedChange.EffectiveEnd, start, clean.Length);
+        return clean.Remove(start, end - start).Insert(start, resolvedChange.OriginalText ?? "");
     }
 
     /// <summary>
