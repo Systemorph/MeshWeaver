@@ -59,8 +59,13 @@ public sealed record LogWatcherOptions
     /// </summary>
     public TimeSpan IngestLag { get; init; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>Max entries Loki may return per query.</summary>
-    public int QueryLimit { get; init; } = 1000;
+    /// <summary>
+    /// Max entries Loki may return per query. The query is deliberately UNFILTERED (the grouper
+    /// needs each red header's continuation lines), so this bounds every line in the window, not
+    /// just the red ones — hence the headroom. Hitting it is safe: the worker advances the cursor
+    /// only to the last line actually read and catches up on the next poll, logging that it did.
+    /// </summary>
+    public int QueryLimit { get; init; } = 5000;
 
     /// <summary>Evidence lines sent per report.</summary>
     public int MaxSamplesPerReport { get; init; } = 5;

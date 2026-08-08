@@ -206,8 +206,14 @@ public sealed class LogIncidentControlPlane : BackgroundService
             Error = null,
         }).Select(_ =>
         {
+            // 🚨 The thread hangs off the INCIDENT node, not the satellite namespace. Passing
+            // `Admin/_LogIncident` here failed every triage in production with "No node found at
+            // 'Admin/_LogIncident'. Closest ancestor is 'Admin'" — that path is a namespace, not a
+            // node, and StartThread needs a real owner to anchor under (satellites never sit at top
+            // level). The incident IS the owner, so its thread lands at {incidentPath}/_Thread/{id}
+            // and stays reachable from the ticket.
             hub.StartThread(
-                namespacePath: LogIncidentNodeType.IncidentNamespace,
+                namespacePath: work.Path,
                 userText: Prompt(work.Incident),
                 agentName: options.TriageAgent,
                 contextPath: work.Path,
