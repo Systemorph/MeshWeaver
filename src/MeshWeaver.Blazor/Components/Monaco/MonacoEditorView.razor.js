@@ -728,11 +728,24 @@ export function registerCompletionProvider(editorId, config) {
 
             let currentItems;
 
-            if (isAsync && currentState._pendingCompletionItems) {
-                // Progressive update: use pre-fetched items pushed via pushCompletionUpdate
-                currentItems = currentState._pendingCompletionItems;
+            const pending = isAsync ? currentState._pendingCompletionItems : null;
+            if (pending && pending.query === fullQuery) {
+                // Progressive update: use pre-fetched items pushed via pushCompletionUpdate —
+                // but ONLY when they answer the query currently being completed. The buffer is
+                // keyed by the query the .NET subscription computed the snapshot for.
+                currentItems = pending.items;
                 currentState._pendingCompletionItems = null;
             } else if (isAsync) {
+                // Any pending buffer here answers a DIFFERENT (stale) query: a push for an
+                // earlier trigger token landing after the user typed on, or a leftover from a
+                // previous suggest session (a push that arrived while no @-token was active is
+                // never consumed — the early `!triggerMatch` return above skips the buffer).
+                // Consuming it unkeyed served the stale items as the FIRST result for the new
+                // trigger AND skipped the fetch for the real query — issue #542 ("first @
+                // autocomplete shows wrong results; only re-triggering shows the right list").
+                // Discard it and fetch for the current query; the resulting .NET subscription
+                // re-pushes snapshots keyed to this query, which the branch above then serves.
+                currentState._pendingCompletionItems = null;
                 // Async mode: fetch from server with debounce (send full query including trigger char)
                 currentItems = await debouncedFetch(fullQuery);
             } else {
@@ -949,11 +962,15 @@ export function triggerSuggest(editorId) {
 
 // Push updated completion items into the editor's pending state and re-trigger suggestions.
 // Used for progressive streaming: fast local results arrive first, remote results merge in later.
-export function pushCompletionUpdate(editorId, items) {
+// `query` is the query these items answer — the completion provider consumes the buffer ONLY
+// when it still matches the trigger token being completed, and discards-and-fetches otherwise
+// (issue #542: an unkeyed buffer served a previous query's items as the first result while
+// suppressing the fetch for the current one).
+export function pushCompletionUpdate(editorId, query, items) {
     const state = editorState.get(editorId);
     if (state) {
-        // Store updated items — the completion provider's debouncedFetch will use these on re-trigger
-        state._pendingCompletionItems = items;
+        // Store updated items keyed by query — consumed by the provider on the re-trigger below
+        state._pendingCompletionItems = { query, items };
         const editorInstance = state.editorInstance;
         if (editorInstance) {
             editorInstance.trigger('', 'editor.action.triggerSuggest', {});

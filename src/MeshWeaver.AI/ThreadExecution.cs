@@ -1021,7 +1021,8 @@ internal static class ThreadExecution
             string? summary = null,
             string? harness = null,
             int? cacheReadTokens = null, int? cacheWriteTokens = null,
-            bool stampActivity = true)
+            bool stampActivity = true,
+            string? requestedModelName = null)
         {
             // Cell already latched dead (no initial state ever arrived) — skip the write entirely.
             // Never construct/subscribe a doomed cache.Update; that is the storm. Empty completes
@@ -1156,6 +1157,10 @@ internal static class ThreadExecution
                     // persisted/displayed cell author is the friendly short name (last segment).
                     AgentName = SelectionId.IdOf(agentName) ?? current.AgentName,
                     ModelName = modelName ?? current.ModelName,
+                    // 🪧 Substitution marker (#476) — sticky once stamped: every later push in the
+                    // round carries it, so the terminal cell (Completed / Cancelled / Error alike)
+                    // records BOTH the model that answered and the one that was asked for.
+                    RequestedModelName = requestedModelName ?? current.RequestedModelName,
                     Harness = harness ?? current.Harness,
                     InputTokens = inputTokens ?? current.InputTokens,
                     OutputTokens = outputTokens ?? current.OutputTokens,
@@ -1448,6 +1453,29 @@ internal static class ThreadExecution
                         "[ThreadExec] Harness '{Harness}' → {Client} (bypassing provider chain) for {ThreadPath}",
                         request.Harness, harnessClient.GetType().Name, threadPath);
 
+                // 🪙 #476 — TRUTHFUL MODEL RECORD. `request.ModelName` is what the caller ASKED for;
+                // the model that actually answers is the one AgentChatClient resolved after its
+                // stale-model fallback (a pinned model with no usable credential is swapped for the
+                // lowest-Order model that HAS one; a round carrying no selection at all — delegation
+                // sub-thread, generator, scheduled automation — resolves the deployment default).
+                // Recording the request meant the node claimed a model that never ran, and every
+                // downstream consumer (audit trail, per-model token roll-up, cost) inherited the lie.
+                // A CLI harness resolves its own model, so read the client's value only for the
+                // MeshWeaver path; `actualModel` (the id the provider itself reports mid-stream)
+                // still wins over both wherever it is known.
+                var effectiveModel = harnessClient == null ? client.EffectiveModelName : null;
+                var substitutedFrom = harnessClient == null ? client.SubstitutedFromModel : null;
+                // 🔊 NEVER SILENT. The user-facing chat notice is deliberately gone (directive
+                // 2026-07-13), but an operator must be able to see the swap after the fact on ANY
+                // round type — hence this Warning naming both models AND the durable marker stamped
+                // onto the response cell below (ThreadMessage.RequestedModelName).
+                if (!string.IsNullOrEmpty(substitutedFrom))
+                    logger.LogWarning(
+                        "[ThreadExec] MODEL_SUBSTITUTED threadPath={ThreadPath} responseId={ResponseId} "
+                        + "requested={Requested} answered={Effective} — the requested model has no usable "
+                        + "credentials; this round runs on the fallback",
+                        threadPath, responseMsgId, substitutedFrom, effectiveModel ?? "(none)");
+
                 // Set context from remote stream — must subscribe (Current is null on cold streams).
                 // When ContextPath is empty we just set null; otherwise wait for the first emission
                 // (with a short timeout fallback so a missing/inaccessible node doesn't stall execution)
@@ -1635,7 +1663,8 @@ internal static class ThreadExecution
                     // link while the sub-thread executes (streaming loop is blocked
                     // during tool execution; throttle block never runs).
                     PushToResponseMessage(textSnapshot, snapshotLog, snapshotNodes,
-                        request.AgentName, request.ModelName);
+                        request.AgentName, effectiveModel ?? request.ModelName,
+                        requestedModelName: substitutedFrom);
                         })
                     : null;
                 // Middleware-side ForwardToolCall: UPDATES the matching bare entry
@@ -1718,6 +1747,64 @@ internal static class ThreadExecution
                     : chatHistory.Add(new ChatMessage(ChatRole.User, request.UserMessageText));
                 logger.LogInformation("[ThreadExec] Sending {Count} messages to agent ({HistoryCount} history + 1 new): threadPath={ThreadPath}, agent={Agent}",
                     allMessages.Count, chatHistory.Count, threadPath, request.AgentName ?? "(default)");
+
+                // 🛑 #476 — NO MODEL CAN SERVE THIS ROUND. The selection has no usable credential,
+                // the catalog offered no usable replacement, and no agent could be built. Proceeding
+                // would call a client that can only answer with a raw provider error (the "ApiKey is
+                // missing" / 429 dump pasted into the thread summary), and the round would settle as
+                // COMPLETED — success, to any automation reading the node. Fail it instead, with a
+                // message that names the situation. Deterministic terminal write, same shape as the
+                // NOTHING_TO_SEND branch below, plus the parent/notification signals the error path
+                // uses so a delegating parent never waits on a round that will not run.
+                if (harnessClient == null && client.HasNoUsableModel)
+                {
+                    // 🌍 The message the USER reads is localized off the round's own AccessContext —
+                    // explicit locale, never ambient CultureInfo (a round hops schedulers). The raw
+                    // English factory detail ("ApiKey is missing for model 'X'") goes to the LOG
+                    // only: a raw provider dump in the thread is precisely what #476 complained of.
+                    var noModelError = LocalizationCatalog.Get(
+                        string.IsNullOrEmpty(client.RequestedModelName)
+                            ? "chat.noUsableModelNoSelection"
+                            : "chat.noUsableModel",
+                        userAccessContext?.Locale,
+                        client.RequestedModelName);
+                    logger.LogError(
+                        "[ThreadExec] NO_USABLE_MODEL threadPath={ThreadPath} responseId={ResponseId} "
+                        + "requested={Requested}: {Detail}",
+                        threadPath, responseMsgId,
+                        client.RequestedModelName ?? "(none selected)",
+                        client.NoUsableModelDetail ?? "(none)");
+                    var noModelDone = new System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit>();
+                    PushToResponseMessage(
+                        $"*Error: {noModelError}*",
+                        ImmutableList<ToolCallEntry>.Empty, ImmutableList<NodeChangeEntry>.Empty,
+                        request.AgentName, effectiveModel ?? request.ModelName,
+                        completedAt: DateTime.UtcNow,
+                        status: ThreadMessageStatus.Error,
+                        summary: noModelError,
+                        harness: request.Harness,
+                        requestedModelName: substitutedFrom).Subscribe(
+                        _ => { },
+                        ex => execLogger?.LogWarning(ex,
+                            "PushToResponseMessage(NoUsableModel) failed for {ThreadPath}", threadPath));
+                    UpdateThreadExecution(t => t.ResetExecution() with { Summary = noModelError }).Subscribe(
+                        _ => { },
+                        ex =>
+                        {
+                            execLogger?.LogWarning(ex,
+                                "UpdateThreadExecution(NoUsableModel): stream.Update failed for {ThreadPath}", threadPath);
+                            noModelDone.OnError(ex);
+                        },
+                        () =>
+                        {
+                            noModelDone.OnNext(System.Reactive.Unit.Default);
+                            noModelDone.OnCompleted();
+                        });
+                    NotifyParentCompletion(parentHub, threadPath, noModelError, false,
+                        ImmutableList<NodeChangeEntry>.Empty);
+                    EmitCompletionNotification(parentHub, threadPath, noModelError, request.AgentName);
+                    return noModelDone;
+                }
 
                 // 🚫 Nothing to send: no current user turn AND no prior history. There is
                 // genuinely nothing for the agent to respond to — finish the round gracefully
@@ -1852,9 +1939,13 @@ internal static class ThreadExecution
                 // placeholder is NOT agent progress, so it must not set LastActivityAt
                 // (else first-token latency reads as a stall to the parent heartbeat).
                 PushToResponseMessage("Generating response...", ImmutableList<ToolCallEntry>.Empty,
-                    ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName,
+                    ImmutableList<NodeChangeEntry>.Empty, request.AgentName,
+                    effectiveModel ?? request.ModelName,
                     status: ThreadMessageStatus.Streaming, harness: request.Harness,
-                    stampActivity: false);
+                    stampActivity: false,
+                    // Stamp the substitution marker on the FIRST write of the round, so a live
+                    // reader (and any round that dies before the terminal write) already carries it.
+                    requestedModelName: substitutedFrom);
 
                 // 🚦 The streaming round is an async I/O leaf and MUST run on the bounded AI
                 // I/O pool — NEVER Task.Run, NEVER inline on the hub turn. The pool offloads onto
@@ -1954,8 +2045,9 @@ internal static class ThreadExecution
                         .Sample(StreamingSampleInterval)
                         .Subscribe(s => PushToResponseMessage(
                             StripSummaryBlock(s.Text), s.ToolCalls, s.NodeChanges,
-                            request.AgentName, request.ModelName,
-                            status: ThreadMessageStatus.Streaming));
+                            request.AgentName, actualModel ?? effectiveModel ?? request.ModelName,
+                            status: ThreadMessageStatus.Streaming,
+                            requestedModelName: substitutedFrom));
 
                     // 💓 #321 reasoning heartbeat. Derived from the SAME `snapshots` stream:
                     // every real emission (text chunk / tool call / result) restarts an idle
@@ -2290,12 +2382,13 @@ internal static class ThreadExecution
                     // Single push: writes Text=finalText, Summary=summaryText,
                     // Status=Completed atomically to the response cell.
                     PushToResponseMessage(finalText, finalToolCalls, aggregatedChanges,
-                        request.AgentName, actualModel ?? request.ModelName,
+                        request.AgentName, actualModel ?? effectiveModel ?? request.ModelName,
                         inputTokens: inputTokens, outputTokens: outputTokens,
                         totalTokens: totalTokens, completedAt: DateTime.UtcNow,
                         status: ThreadMessageStatus.Completed,
                         summary: summaryText, harness: request.Harness,
-                        cacheReadTokens: cacheReadTokens, cacheWriteTokens: cacheWriteTokens).Subscribe(
+                        cacheReadTokens: cacheReadTokens, cacheWriteTokens: cacheWriteTokens,
+                        requestedModelName: substitutedFrom).Subscribe(
                         _ => { },
                         ex => execLogger?.LogWarning(ex,
                             "PushToResponseMessage(Completed) failed for {ThreadPath}", threadPath));
@@ -2319,7 +2412,7 @@ internal static class ThreadExecution
                     // never touches the round on the no-usage path.
                     TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                         AgentPickerProjection.PartitionOf(threadPath),
-                        actualModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
+                        actualModel ?? effectiveModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
                         cacheReadTokens, cacheWriteTokens)
                     .Subscribe(
                         _ => { },
@@ -2385,13 +2478,17 @@ internal static class ThreadExecution
                         // OperationCanceledException — so the cell + thread reflect what
                         // the round actually cost.
                         totalTokens = NormalizeTotal(totalTokens, inputTokens, outputTokens);
+                        // 🪙 #476: the model that ACTUALLY ran, exactly as the Completed branch and
+                        // RecordUsage record it — a cancelled round's cell must not claim the
+                        // requested model either.
                         PushToResponseMessage(cancelText, cancelToolCalls, cancelNodeChanges,
-                            request.AgentName, request.ModelName,
+                            request.AgentName, actualModel ?? effectiveModel ?? request.ModelName,
                             inputTokens: inputTokens, outputTokens: outputTokens,
                             totalTokens: totalTokens,
                             completedAt: DateTime.UtcNow,
                             status: ThreadMessageStatus.Cancelled,
-                            cacheReadTokens: cacheReadTokens, cacheWriteTokens: cacheWriteTokens).Subscribe(
+                            cacheReadTokens: cacheReadTokens, cacheWriteTokens: cacheWriteTokens,
+                            requestedModelName: substitutedFrom).Subscribe(
                             _ => { },
                             ex => execLogger?.LogWarning(ex,
                                 "PushToResponseMessage(Cancelled) failed for {ThreadPath}", threadPath));
@@ -2412,7 +2509,7 @@ internal static class ThreadExecution
                         // after the terminal Cancelled status). Fail-open + no-op on zero tokens.
                         TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                             AgentPickerProjection.PartitionOf(threadPath),
-                            actualModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
+                            actualModel ?? effectiveModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
                             cacheReadTokens, cacheWriteTokens)
                         .Subscribe(
                             _ => { },
@@ -2488,13 +2585,19 @@ internal static class ThreadExecution
                         // Record tokens consumed before the fault (same rationale as the
                         // Cancelled branch) so an errored round still reports its cost.
                         totalTokens = NormalizeTotal(totalTokens, inputTokens, outputTokens);
+                        // 🪙 #476 — THE issue's repro: a round asked for model X, ran on the fallback
+                        // Y, and died on Y's 429. The error cell stamped `request.ModelName` (X), so
+                        // the record blamed a model that never ran while the summary quoted Y's rate
+                        // limit. Stamp what actually answered — and carry the requested id alongside
+                        // it as RequestedModelName so the swap is visible on the failed round too.
                         var pushErrorObs = PushToResponseMessage(errorText, errorToolCalls, errorNodeChanges,
-                            request.AgentName, request.ModelName,
+                            request.AgentName, actualModel ?? effectiveModel ?? request.ModelName,
                             inputTokens: inputTokens, outputTokens: outputTokens,
                             totalTokens: totalTokens,
                             completedAt: DateTime.UtcNow,
                             status: ThreadMessageStatus.Error,
-                            cacheReadTokens: cacheReadTokens, cacheWriteTokens: cacheWriteTokens)
+                            cacheReadTokens: cacheReadTokens, cacheWriteTokens: cacheWriteTokens,
+                            requestedModelName: substitutedFrom)
                             .Timeout(TimeSpan.FromSeconds(10));
                         var errorTextLocal = errorText;
                         var errorNodeChangesLocal = errorNodeChanges;
@@ -2520,7 +2623,7 @@ internal static class ThreadExecution
                                 // Fail-open + no-op on zero tokens.
                                 TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                                     AgentPickerProjection.PartitionOf(threadPath),
-                                    actualModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
+                                    actualModel ?? effectiveModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
                                     cacheReadTokens, cacheWriteTokens)
                                 .Subscribe(
                                     _ => { },
