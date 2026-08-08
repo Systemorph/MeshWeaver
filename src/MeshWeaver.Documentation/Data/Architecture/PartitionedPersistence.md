@@ -340,14 +340,14 @@ Database
 │   ├── approvals                    ← _Approval satellite nodes
 │   ├── access                       ← _Access satellite nodes (permissions)
 │   ├── comments                     ← _Comment satellite nodes
-│   └── node_type_permissions        ← Public-read node type flags
+│   └── node_type_permissions        ← 🪦 legacy, empty, read by nothing (#953)
 ├── schema "acme_versions"           ← History tracking
 │   ├── mesh_nodes
 │   ├── activities
 │   └── ...
 ├── schema "admin"                   ← System partition (no satellite tables)
 │   ├── mesh_nodes
-│   └── node_type_permissions
+│   └── node_type_permissions        ← 🪦 legacy, empty, read by nothing (#953)
 ├── schema "user"                    ← User partition (with satellite tables)
 │   ├── mesh_nodes
 │   ├── activities
@@ -357,7 +357,7 @@ Database
 │   ├── approvals
 │   ├── access
 │   ├── comments
-│   └── node_type_permissions
+│   └── node_type_permissions        ← 🪦 legacy, empty, read by nothing (#953)
 ├── schema "portal"                  ← Portal sessions (no satellite tables)
 │   └── mesh_nodes
 └── schema "kernel"                  ← Kernel sessions (no satellite tables)
