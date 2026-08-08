@@ -145,6 +145,33 @@ model so the thread keeps running. Three rules make that swap honest:
   (Exhausted-fallback alone is not fatal: a deployment whose keys live in factory config is
   invisible to the credential resolver yet builds agents and runs normally.)
 
+### The credential check cannot see quota — so the refusal has to read well
+
+A usable credential means the deployment will *answer*, not that it will *serve*. A model with a
+perfectly good key can still refuse every round because it is out of quota (HTTP 429) or because the
+deployment itself is faulting (HTTP 5xx). No local check can predict that — only the provider's
+answer reveals it — so the requirement is not "never fall back onto a throttled model", it is **fail
+legibly when the provider refuses**.
+
+`ProviderFailureClassifier` names the condition from the exception chain (typed
+`HttpRequestException.StatusCode`, else the conventional `Status: NNN` banner that Azure.Core and
+System.ClientModel both render), and `ThreadExecution` builds the prose at write time off the round's
+own `AccessContext.Locale`:
+
+- **429** → `chat.modelRateLimited`, naming the model that actually served.
+- **5xx** → `chat.modelProviderError`, naming the model and the status.
+- **Substituted rounds add one sentence** (`chat.modelSubstitutionNote`) naming the requested model
+  and the one used instead. This is the only place the swap is spelled out to the user, and it earns
+  its place: the failure names a model they never picked, which is otherwise inexplicable.
+- **Anything unclassified keeps its own message verbatim** — for a tool fault or a bug in our code
+  that message *is* the diagnosis, and generic prose would erase it.
+
+The raw transport text is never discarded, only relocated: it stays on the `LogError(ex, …)` that
+precedes the terminal write, alongside a `PROVIDER_REFUSED` warning carrying the status, the serving
+model and the requested one. What changed is what the *user* reads — previously `ex.Message` went
+straight into the cell's Text and Summary, which for these failures is the status line plus the
+response body plus the complete HTTP header block.
+
 ---
 
 ## How the Model Picker Is Populated

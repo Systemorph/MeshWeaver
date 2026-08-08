@@ -12,7 +12,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
 /// Tests that Partition nodes are correctly stored and queried in PostgreSQL,
-/// including node_type_permissions for public read access.
+/// including a Public Read grant on the partition catalog namespace.
 /// </summary>
 [Collection("PostgreSql")]
 public class PartitionQueryTests
@@ -67,10 +67,15 @@ public class PartitionQueryTests
             }
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        // Register Partition node type as public read (low-level PG op stays async inside Run()).
-        await _fixture.AccessControl.SyncNodeTypePermissionsAsync(
-            [new NodeTypePermission("Partition", PublicRead: true)])
-            .Run().Should().Within(30.Seconds()).Emit();
+        // 🔒 #953 — the partition catalog is world-readable to authenticated users through a Read
+        // grant to the well-known `Public` subject at its namespace: exactly what a
+        // PartitionAccessPolicy { PublicRead = true } `_Policy` projects into
+        // user_effective_permissions (#603). Anonymous does NOT inherit `Public`, so the
+        // NotVisibleToAnonymous case below still holds.
+        await _fixture.AccessControl
+            .Grant("Admin/Partition", "Public", "Read", isAllow: true,
+                TestContext.Current.CancellationToken)
+            .Should().Within(30.Seconds()).Emit();
     }
 
     [Fact(Timeout = 30000)]
@@ -93,7 +98,7 @@ public class PartitionQueryTests
     }
 
     [Fact(Timeout = 30000)]
-    public async Task PublicReadPartitions_VisibleToAuthenticatedUser()
+    public async Task PublicGrantedPartitions_VisibleToAuthenticatedUser()
     {
         await SeedPartitionData();
 
@@ -107,7 +112,7 @@ public class PartitionQueryTests
             .Should().Within(30.Seconds()).Emit();
 
         results.Should().HaveCountGreaterThanOrEqualTo(2,
-            "Partition nodes with public read should be visible to any authenticated user");
+            "Partition nodes granted Read to `Public` are visible to any authenticated user");
         results.OfType<MeshNode>().Should().Contain(n => n.Path == "Admin/Partition/ACME");
         results.OfType<MeshNode>().Should().Contain(n => n.Path == "Admin/Partition/Documentation");
     }
@@ -126,7 +131,7 @@ public class PartitionQueryTests
         var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
-        results.Should().BeEmpty("Anonymous users should not see public-read partition nodes");
+        results.Should().BeEmpty("Anonymous does not inherit the Public baseline, so it sees no partition nodes");
     }
 
     [Fact(Timeout = 30000)]

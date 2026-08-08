@@ -143,9 +143,8 @@ public class CrossSchemaUnionTests
             }, ct);
         }
 
-        // Register Partition as public-read node type
-        await _fixture.AccessControl.SyncNodeTypePermissionsAsync(
-            [new NodeTypePermission("Partition", PublicRead: true)], ct);
+        // 🔒 #953 — no node-type public read (mirror of the PG change). Visibility comes from
+        // partition_access + user_effective_permissions.
 
         return (adminAdapter, partitions);
     }
@@ -415,9 +414,10 @@ public class CrossSchemaUnionTests
             "SELECT 'testuser', 'ACME', 'Read', true", ct)
             .Should().Within(30.Seconds()).Emit();
 
-        // Also register Markdown as public_read in all schemas
-        // (delete-then-insert = PG's ON CONFLICT DO UPDATE upsert; node_type_permissions is not
-        // wiped per schema by CleanDataAsync's central batch on PG either).
+        // 🔒 #953 — deliberately populate the legacy node_type_permissions table in EVERY schema:
+        // exactly what wiring the deleted DI→DB sync back up would write. The generated predicate
+        // must ignore it completely. Delete this block with the table in the follow-up migration.
+        // (delete-then-insert = PG's ON CONFLICT DO UPDATE upsert.)
         foreach (var schema in schemas)
         {
             await _fixture.ConnectionSource.ExecuteNonQuery(
@@ -435,13 +435,13 @@ public class CrossSchemaUnionTests
         results.Should().NotBeEmpty();
         results.Select(n => n.Id).Should().Contain("ACME");
 
-        // CRITICAL: public_read must NOT bypass partition_access.
-        // testuser has NO partition_access to FutuRe or Contoso,
-        // so those nodes must NOT appear even though Markdown is public_read.
+        // CRITICAL: a populated node_type_permissions row grants NOTHING.
+        // testuser has NO access to FutuRe or Contoso, so those nodes must not
+        // appear even though Markdown is flagged public_read.
         results.Should().NotContain(n => n.Id == "FutuRe",
-            "testuser has no partition_access to FutuRe — public_read must not bypass partition check");
+            "testuser has no access to FutuRe — a public_read row must not grant one");
         results.Should().NotContain(n => n.Id == "Contoso",
-            "testuser has no partition_access to Contoso — public_read must not bypass partition check");
+            "testuser has no access to Contoso — a public_read row must not grant one");
         results.Should().NotContain(n => n.Id == "Report" && n.Namespace == "FutuRe",
             "FutuRe child nodes must also be hidden");
         results.Should().NotContain(n => n.Id == "Report" && n.Namespace == "Contoso",

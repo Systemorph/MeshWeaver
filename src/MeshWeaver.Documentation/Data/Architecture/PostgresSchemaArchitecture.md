@@ -195,7 +195,7 @@ The `public` schema plays a single, well-defined role: it holds the cross-partit
 |---|---|
 | `partition_access` | Binary "user X has any access to partition P" gate. PK `(user_id, partition)`. Populated by per-schema `rebuild_user_effective_permissions`. |
 | `searchable_schemas` | Schemas that cross-schema search (`search_across_schemas`) iterates over. Repopulated on every migration run. |
-| `node_type_permissions` | `(node_type, public_read)`. Allows certain node types to skip per-row permission checks (still subject to the partition gate). |
+| `node_type_permissions` | 🪦 **Legacy, always empty, read by nothing** (issue #953). Kept for one release only so a rolling deploy's older replicas don't fault on the table name; a follow-up migration drops it. See "Why there is no node-type public read" below. |
 | `user_effective_permissions` and `_shadow` | Denormalised cache of every `(user, path-prefix, permission)` tuple. The shadow is rebuilt then atomically swapped (`PostgreSqlSchemaInitializer.cs:542`). |
 | `change_logs` | Partition-level change feed. |
 
@@ -251,9 +251,25 @@ EXISTS (SELECT 1 FROM public.partition_access WHERE user_id = $me AND partition 
 No row here means the user cannot read **anything** in the partition, regardless of any row-level grants.
 
 **Gate 2 — node gate**
-A matching row in `{schema}.user_effective_permissions` with the longest-prefix match against the node's path. Setting `public_read = true` in `node_type_permissions` bypasses this gate for a given node type — but the partition gate still applies.
+A matching row in `{schema}.user_effective_permissions` with the longest-prefix match against the node's path, folded per subject and OR'd across subjects. There is **no bypass** of this gate.
 
 Cross-schema search (`public.search_across_schemas`) iterates `searchable_schemas`, applies both gates per schema, and returns only rows where both pass. See `PostgreSqlSchemaInitializer.cs:34`.
+
+### Why there is no node-type public read
+
+Both gates used to carry a third term: `EXISTS (SELECT 1 FROM {schema}.node_type_permissions WHERE node_type = n.node_type AND public_read)`, OR'd in front of gate 2. **It was removed in issue #953 rather than wired up**, and it must not come back in that shape:
+
+- **It never did anything.** The table's only writer, `SyncNodeTypePermissionsAsync`, hung off `InitializePostgreSqlSchemaAsync`, which had **zero callers** — the migration container calls `PostgreSqlSchemaInitializer.InitializeAsync` directly. Every deployment's copy of the table was empty, so the term was a constant `false`. Removing it is a provable no-op.
+- **Wiring it up would have been a breach, not a fix.** ~24 node types declared public read, among them `Thread` and `ThreadMessage` (every user's private conversations), `Markdown`, `Code` and `Document` (the bulk of all content), and `Course`, `Module`, `Exercise`, `ExerciseAttempt` (paid course content and learners' own submissions).
+- **The shape was wrong even for a safe type list.** The term was an unconditional `OR` in front of gate 2, so it short-circuited the longest-prefix fold — which is exactly where the store/course paywall's DENY rows live. A grant that cannot be denied is not a grant, it is a hole.
+- **It had no counterpart in the evaluator.** `PermissionEvaluator` has no node-type-keyed term, so SQL listing and exact reads would have diverged — the failure mode the evaluator's own comments record from memex-cloud 2026-07-19.
+
+**To make content publicly readable, use a mechanism both read paths honour:**
+
+| Need | Mechanism |
+|---|---|
+| A whole partition/subtree world-readable | `PartitionAccessPolicy` `_Policy` node with `PublicRead = true` (issue #603). Projected into `user_effective_permissions` as allow-`Read` rows for `Public`/`Anonymous`, so it **participates in** the longest-prefix fold — a deeper deny still wins. |
+| A type that opens a short list of surfaces on its own subtree (storefront cover, course landing page) | `NodeTypeGate` via `ConfigureNodeTypeAccess(a => a.WithGate(...))` (issue #701). |
 
 ### Which schemas are searchable (and the catalog-partition rule)
 

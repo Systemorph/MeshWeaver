@@ -52,7 +52,6 @@ public static class HarnessNodeType
         if (dbSynced)
             typeDefinition = typeDefinition with { IsDefinitionOnly = true };
         builder.AddMeshNodes(typeDefinition);
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         builder.ConfigureServices(services =>
         {
             // The native MeshWeaver harness ships from this assembly. CLI harnesses

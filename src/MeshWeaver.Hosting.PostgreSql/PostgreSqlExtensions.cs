@@ -244,14 +244,11 @@ public static class PostgreSqlExtensions
 
         await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options, ct).ConfigureAwait(false);
 
-        // Sync node type permissions from MeshConfiguration to the database
-        var meshConfig = serviceProvider.GetService<MeshConfiguration>();
-        if (meshConfig?.NodeTypePermissions is { Count: > 0 } permissions)
-        {
-            var ac = serviceProvider.GetService<PostgreSqlAccessControl>()
-                ?? new PostgreSqlAccessControl(dataSource);
-            await ac.SyncNodeTypePermissionsAsync(permissions, ct).ConfigureAwait(false);
-        }
+        // 🔒 #953 — the node-type-permission sync that used to run here is gone, together with the
+        // `public_read` RLS term it fed. Nothing ever called this method (the migration container
+        // calls PostgreSqlSchemaInitializer.InitializeAsync directly), so the table stayed empty and
+        // the term was a constant `false`. Do not re-add a "populate public_read" step: see
+        // PostgreSqlAccessControl and PostgreSqlSqlGenerator.BuildPerSchemaAccessClause.
     }
 
     /// <summary>
