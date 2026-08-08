@@ -114,7 +114,10 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
         // `object`s that ROUND-TRIP THROUGH JSON, so the raw ToString of a freshly-built control
         // and of a deserialized one can differ for the same logical target. An identity that
         // flapped between two representations would remount the embedded area on EVERY render.
-        => $"{LayoutAreaReference.NormalizeScalar(Address)}|{Reference.GetIdentity()}";
+        // Length-prefixed like Reference.GetIdentity's own parts, for the same reason: this is a
+        // Blazor @key, and a "|"-joined interpolation lets one address+area pair forge another's.
+        => LayoutAreaReference.IdentityPart(LayoutAreaReference.NormalizeScalar(Address))
+           + Reference.GetIdentity();
 
     /// <summary>
     /// Determines whether this instance is equal to another <see cref="LayoutAreaControl"/> by
