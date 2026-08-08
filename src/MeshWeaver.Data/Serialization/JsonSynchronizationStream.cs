@@ -661,6 +661,28 @@ public static class JsonSynchronizationStream
         return reduced;
     }
 
+    /// <summary>
+    /// The frame a resubscribing subscriber is served: the stream's CURRENT state re-asserted as a
+    /// <see cref="ChangeType.Full"/>, stamped with the version that state already carries.
+    /// <para>🚨 MUST be invoked from INSIDE the stream's update turn (i.e. from the
+    /// <c>Update</c> lambda) — that is what makes <c>stream.Current</c> the freshest committed
+    /// state rather than a snapshot bound before the turn was scheduled. Re-asserting a
+    /// pre-turn capture rolls the stream BACKWARD over frames that committed in between, and
+    /// those entries are never re-sent (issue #945). And the version MUST come off the state
+    /// itself — the owner's content clock — never <c>stream.Hub.Version</c>, which is this
+    /// per-subscriber sync hub's unrelated message counter; mixing clocks on one stream either
+    /// sneaks a stale Full past the receive-side monotonicity guard or freezes the mirror by
+    /// making every later content patch look stale. Same rule as
+    /// <c>StandardReducers.PatchJsonElement</c>.</para>
+    /// <returns><c>null</c> when there is nothing to assert yet (the initial subscribe is still
+    /// hydrating) — a no-op update.</returns>
+    /// </summary>
+    internal static ChangeItem<TReduced>? BuildReassertFrame<TReduced>(
+        ISynchronizationStream<TReduced> stream)
+        => stream.Current is { Value: not null } live
+            ? new ChangeItem<TReduced>(live.Value, stream.StreamId, live.Version)
+            : null;
+
     internal static ISynchronizationStream CreateSynchronizationStream<TReduced, TReference>(
         this IWorkspace workspace,
         IMessageDelivery<SubscribeRequest> delivery
@@ -694,9 +716,34 @@ public static class JsonSynchronizationStream
             logger.LogDebug(
                 "Owner {Owner} already serves stream {StreamId} for {Subscriber} — re-asserting the current snapshot instead of creating a second stream",
                 hub.Address, request.StreamId, request.Subscriber);
-            if (alreadyServing.Current is { Value: not null } snapshot)
+            // 🚨 Read the snapshot IN-TURN and carry ITS version — never a value captured out
+            // here, never this stream's own hub clock. Both were data loss (issue #945):
+            //
+            //   • STALE CAPTURE. `Update` posts an UpdateStreamRequest; the lambda runs LATER on
+            //     the stream's action block. A snapshot bound out here and written back blindly
+            //     (`_ => snapshot`) OVERWRITES every frame that committed in between — the stream
+            //     moves BACKWARD, and because the owner-side outbound JSON cursor is re-based on
+            //     that rolled-back state, the erased entries are never re-sent. Subsequent patches
+            //     keep applying cleanly on top, so the mirror tracks the owner forever at a
+            //     CONSTANT deficit with no error anywhere. Measured under a 288-write burst:
+            //     mirror at 245 entries/v246 → 234 entries/v235, ending 11 entries short of the
+            //     owner while every write acked success.
+            //   • WRONG CLOCK. Content frames on this stream carry the OWNER's data-source clock
+            //     (WorkspaceExtensions.ApplyChanges → primary stream Hub.Version, carried through
+            //     the reduce as ChangeItem.Version). Stamping the per-subscriber SYNC hub's clock
+            //     here mixes two unrelated counters on one stream — the same defect StandardReducers
+            //     documents ("CARRY the base version … NEVER stream.Hub.Version"). It is what lets
+            //     a stale Full slip past the receive-side monotonicity guard that exists to drop
+            //     exactly that; when the sync clock instead runs AHEAD, every later content patch
+            //     is dropped as "stale" and the mirror freezes.
+            //
+            // Re-asserting the CURRENT state at ITS OWN version is still a full authoritative
+            // snapshot — the orphaned mirror re-converges (a Full always lands, and the mirror
+            // that resubscribed is by definition not ahead) — but it can neither erase newer
+            // state nor poison the mirror's version.
+            if (alreadyServing.Current is { Value: not null })
                 alreadyServing.Update(
-                    _ => new ChangeItem<TReduced>(snapshot.Value, alreadyServing.StreamId, alreadyServing.Hub.Version),
+                    _ => BuildReassertFrame(alreadyServing),
                     ex => logger.LogWarning(ex,
                         "Stream {StreamId}: could not re-assert snapshot for resubscribing subscriber {Subscriber}",
                         alreadyServing.StreamId, request.Subscriber));
