@@ -130,7 +130,9 @@ internal sealed class SnowflakePathRoutingAdapter : IStorageAdapter
         // be lazily CREATE SCHEMA'd. Prod 2026-06-05 (PG): the atioz DB filled with exactly
         // these garbage schemas (request URLs routed as mesh paths) and corrupted itself.
         // → null so no schema is created; the write falls through to the next provider.
-        if (!IsValidPartitionSegment(seg))
+        // The charset rule is the shared PartitionDefinition.IsValidPartitionSegment —
+        // one predicate for both backends AND the provisioning boundary (#714).
+        if (!PartitionDefinition.IsValidPartitionSegment(seg))
             return null;
         // Valid partition segment → schema is the lowercased first segment. If a
         // richer PartitionDefinition was registered for it (e.g. a non-default
@@ -148,20 +150,6 @@ internal sealed class SnowflakePathRoutingAdapter : IStorageAdapter
             Versioned = true,
         };
     }
-
-    /// <summary>
-    /// A partition's first path segment becomes a Snowflake schema, so it must be a simple
-    /// identifier: start with a letter/digit, then only letters/digits/<c>. - _</c>, ≤63
-    /// chars (kept identical to the PG rule — same 63-char cap — so a path routable on one
-    /// backend is routable on the other). Rejects URL/query-string-shaped segments
-    /// (containing <c>? = &amp; % # :</c>, whitespace, …) that the partition router would
-    /// otherwise materialise as garbage schemas — the atioz DB-corruption root cause
-    /// (2026-06-05). (<c>_</c>-prefixed global-satellite segments are handled before this.)
-    /// </summary>
-    internal static bool IsValidPartitionSegment(string seg) =>
-        seg.Length is > 0 and <= 63
-        && char.IsLetterOrDigit(seg[0])
-        && seg.All(c => char.IsLetterOrDigit(c) || c is '.' or '-' or '_');
 
     /// <summary>
     /// Schema-bound adapter cache: once we've materialised the
