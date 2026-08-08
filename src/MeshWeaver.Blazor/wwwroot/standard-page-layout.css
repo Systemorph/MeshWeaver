@@ -135,10 +135,11 @@ body {
     overflow-x: hidden;
 }
 
-/* Shell menu pane scrolls on its own. NavMenuView ignores inline Style on its root,
-   so the scroll context has to come from the stylesheet. flex:1 1 auto (not
-   height:100%) for the same indefinite-percentage-height reason as the content pane.
-   The settings nav menu is NOT listed here: it flows with the page scroll. */
+/* Shell menu pane scrolls on its own. This is shell chrome, not a per-caller choice, so it
+   belongs in the stylesheet rather than on a control's inline Style. (NavMenuView DOES forward
+   inline Style now — see #742 — but a caller-set style would be the wrong place for it.)
+   flex:1 1 auto (not height:100%) for the same indefinite-percentage-height reason as the
+   content pane. The settings nav menu is NOT listed here: it flows with the page scroll. */
 .shell-splitter .navmenu {
     flex: 1 1 auto;
     min-height: 0;
