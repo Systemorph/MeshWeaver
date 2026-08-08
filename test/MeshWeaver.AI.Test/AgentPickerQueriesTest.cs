@@ -424,6 +424,50 @@ public class AgentPickerQueriesTest
                 "namespace:Office/Skill nodeType:Skill");
     }
 
+    // ─── ResolveAgentQueries: the READ side of AgentQueries (#901) ───
+    // Packages write their {partition}/Agent rows into AiSettings.AgentQueries; these pin that the
+    // picker pipeline actually RESOLVES them — the missing half that left plugin agents invisible.
+
+    [Fact]
+    public void ResolveAgentQueries_Defaults_IsExactlyTheCanonicalBase()
+    {
+        // Null settings ⇒ the fused default template resolves to the canonical base union and
+        // dedupes against it — pre-#901 behavior preserved bit-for-bit for users with no packages.
+        AiSettingsNodeType.ResolveAgentQueries(null, "AgenticPension/Foo/_Thread/x", "rbuergi")
+            .Should().Equal("namespace:rbuergi/Agent|AgenticPension/Agent|Agent nodeType:Agent" + Proj);
+    }
+
+    [Fact]
+    public void ResolveAgentQueries_PackageRow_AppendsAfterBase()
+    {
+        var settings = AiSettingsNodeType.MergePackageSources(new AiSettings(), "Essentials");
+        AiSettingsNodeType.ResolveAgentQueries(settings, "AgenticPension", "rbuergi")
+            .Should().Equal(
+                "namespace:rbuergi/Agent|AgenticPension/Agent|Agent nodeType:Agent" + Proj,
+                "namespace:Essentials/Agent nodeType:Agent" + Proj);
+    }
+
+    [Fact]
+    public void ResolveAgentQueries_NullContext_KeepsPlatformAndUserViaBase()
+    {
+        // The fused default template references {currentPath} and DROPS with a null context — the
+        // always-first canonical base is what keeps platform + user agents present regardless.
+        var settings = AiSettingsNodeType.MergePackageSources(new AiSettings(), "Essentials");
+        AiSettingsNodeType.ResolveAgentQueries(settings, contextPath: null, userPath: "rbuergi")
+            .Should().Equal(
+                "namespace:rbuergi/Agent|Agent nodeType:Agent" + Proj,
+                "namespace:Essentials/Agent nodeType:Agent" + Proj);
+    }
+
+    [Fact]
+    public void ResolveAgentQueries_ReservedContext_IsNulled()
+    {
+        // A rogue route partition (login, settings, …) must never reach the query — it would fail
+        // the whole union with a permission error on the policy-less reserved partition.
+        AiSettingsNodeType.ResolveAgentQueries(null, "login/whatever", "rbuergi")
+            .Should().Equal("namespace:rbuergi/Agent|Agent nodeType:Agent" + Proj);
+    }
+
     [Fact]
     public void MergeSkillSource_EmptyList_SeedsDefaultsThenAppends()
     {
