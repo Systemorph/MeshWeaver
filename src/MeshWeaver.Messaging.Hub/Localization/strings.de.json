@@ -307,6 +307,7 @@
   "files.includeSatellites": "Satellitendaten einbeziehen:",
   "form.validationFailed": "Validierung fehlgeschlagen",
   "grid.itemsPerPage": "Einträge pro Seite:",
+  "comments.label": "Kommentare",
   "comments.add": "Kommentar hinzufügen",
   "comments.placeholder": "Kommentar schreiben…",
   "ui.icon": "Symbol",

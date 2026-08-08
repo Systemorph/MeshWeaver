@@ -17,7 +17,7 @@
             <FluentSelect TOption="string"
                           Value="@CurrentCommentFilter"
                           ValueChanged="@OnCommentFilterChanged"
-                          Label="Comments"
+                          Label="@Access.Localize("comments.label")"
                           Style="min-width: 160px;">
                 <FluentOption Value="Unresolved">@Access.Localize("ui.unresolved")</FluentOption>
                 <FluentOption Value="All">@Access.Localize("comments.all")</FluentOption>

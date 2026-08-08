@@ -34,7 +34,7 @@ Every primary node can carry a family of related records — comments, approval 
   <rect x="244" y="178" width="126" height="58" rx="8" fill="#5c6bc0"/>
   <text x="307" y="196" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">_Tracking</text>
   <text x="307" y="212" text-anchor="middle" fill="#c5cae9" font-size="10">TrackedChange</text>
-  <text x="307" y="228" text-anchor="middle" fill="#9fa8da" font-size="10">→ tracking</text>
+  <text x="307" y="228" text-anchor="middle" fill="#9fa8da" font-size="10">→ annotations</text>
   <rect x="352" y="178" width="126" height="58" rx="8" fill="#f57c00"/>
   <text x="415" y="196" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">_Approval</text>
   <text x="415" y="212" text-anchor="middle" fill="#ffe0b2" font-size="10">Approval</text>
@@ -156,7 +156,7 @@ Configuration lives in `PartitionDefinition.StandardTableMappings`:
 | `_Activity` | `activities` | Activity log entries |
 | `_UserActivity` | `user_activities` | User access records |
 | `_Thread` | `threads` | Threads and thread messages |
-| `_Tracking` | `tracking` | Legacy track-change records (no longer written) |
+| `_Tracking` | `annotations` | Legacy track-change records (no longer written) |
 | `_Approval` | `approvals` | Approval records |
 | `_Access` | `access` | Access assignments |
 | `_Comment` | `comments` | Comments and replies |
