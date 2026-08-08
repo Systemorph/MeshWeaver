@@ -934,11 +934,19 @@ public class AgentChatClient : IAgentChat
         // request.ModelName is non-null; stamping the resolved id here fixes the sub-thread AND keeps
         // top-level rounds keyed by the same resolved id (ModelPricing.Default last-segments a path,
         // so both the bare id and a picker path still price). Prefer an id the inner provider already
-        // reported (e.g. a CLI harness resolving "sonnet" → a concrete id); otherwise stamp ours.
-        ChatResponseUpdate Emit(ChatResponseUpdate update)
+        // reported (e.g. an OpenAI-compatible endpoint that re-routes "glm-5.2" → "z-ai/glm-5.2", or a
+        // provider that answers with a concrete tag); otherwise stamp ours.
+        //
+        // 🚨 The provider's id must be passed in EXPLICITLY (`providerModelId`). Every update this
+        // method yields is a FRESHLY CONSTRUCTED ChatResponseUpdate — the inner update's ModelId is
+        // not carried over by construction — so a guard on `update.ModelId` alone always saw null and
+        // the "prefer the provider's id" half was unreachable (#595). Usage was then keyed by OUR
+        // requested id even when the provider served a different model, on every terminal path.
+        ChatResponseUpdate Emit(ChatResponseUpdate update, string? providerModelId = null)
         {
-            if (string.IsNullOrEmpty(update.ModelId) && !string.IsNullOrEmpty(currentModelName))
-                update.ModelId = currentModelName;
+            var resolved = string.IsNullOrEmpty(providerModelId) ? currentModelName : providerModelId;
+            if (string.IsNullOrEmpty(update.ModelId) && !string.IsNullOrEmpty(resolved))
+                update.ModelId = resolved;
             return update;
         }
 
@@ -1077,7 +1085,7 @@ public class AgentChatClient : IAgentChat
                         yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, [content])
                         {
                             AuthorName = currentAgentName ?? "Assistant"
-                        });
+                        }, update.ModelId);
                     }
                     else if (content is FunctionResultContent functionResult)
                     {
@@ -1093,16 +1101,18 @@ public class AgentChatClient : IAgentChat
                         yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, [content])
                         {
                             AuthorName = currentAgentName ?? "Assistant"
-                        });
+                        }, update.ModelId);
                     }
                     else if (content is UsageContent)
                     {
                         // Forward token-usage content so ThreadExecution can record
                         // InputTokens / OutputTokens / TotalTokens on the response cell.
+                        // The provider's own ModelId rides along so the usage is attributed to
+                        // the model that ACTUALLY served the round.
                         yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, [content])
                         {
                             AuthorName = currentAgentName ?? "Assistant"
-                        });
+                        }, update.ModelId);
                     }
                 }
             }
@@ -1113,7 +1123,7 @@ public class AgentChatClient : IAgentChat
                 yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, update.Text)
                 {
                     AuthorName = currentAgentName ?? "Assistant"
-                });
+                }, update.ModelId);
             }
         }
 
