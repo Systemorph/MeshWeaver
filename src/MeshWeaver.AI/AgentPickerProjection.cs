@@ -345,10 +345,30 @@ public static class AgentPickerProjection
     /// </summary>
     public static IObservable<IReadOnlyList<AgentDisplayInfo>> ObserveAgents(
         IMessageHub hub, string? userPath = null, string? spacePath = null)
-        => ObserveSnapshot(hub.GetWorkspace(), hub,
-                $"{AgentsQueryId}|u={userPath ?? ""}|s={spacePath ?? ""}",
-                BuildAgentQuery(userPath, spacePath))
+    {
+        // #901: the pipeline is settings-aware — the user's AiSettings.AgentQueries rows (written
+        // by AiSourcesInstallHook on package install) extend the canonical base query, so
+        // plugin-shipped agents surface in EVERY consumer of this pipe (combobox, default
+        // composer, AgentChatClient's execution-side resolution) without per-surface wiring.
+        // The query id carries a fingerprint of the resolved set: hub.GetQuery caches the shared
+        // upstream by id, so a settings change MUST mint a new id or the old subscription serves
+        // stale queries forever.
+        var workspace = hub.GetWorkspace();
+        return AiSettingsNodeType.ObserveAgentQueries(workspace, hub, hub.ServiceProvider, userPath, spacePath)
+            .Select(queries => ObserveSnapshot(workspace, hub,
+                $"{AgentsQueryId}|u={userPath ?? ""}|s={spacePath ?? ""}|q={Fingerprint(queries)}",
+                queries))
+            .Switch()
             .Select(snapshot => ProjectAgents(snapshot, hub.JsonSerializerOptions));
+    }
+
+    /// <summary>Deterministic short fingerprint of a resolved query set, for cache-keying the
+    /// shared synced-query subscription per distinct set (SHA-256 prefix — stable across
+    /// processes, unlike string.GetHashCode).</summary>
+    private static string Fingerprint(IReadOnlyList<string> queries)
+        => Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(string.Join("\n", queries))))[..12];
 
     /// <summary>
     /// 🚨 The EXACT pipeline the chat model combobox is bound to. The view subscribes to this; tests
