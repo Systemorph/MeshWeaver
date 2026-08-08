@@ -1,0 +1,35 @@
+# Fallback build path for mw-log-watcher, used with `az acr build` when pushing image layers
+# from a laptop to ACR is unreliable (the SDK's PublishContainer pushes every layer over the local
+# link; this uploads SOURCE instead and lets ACR do the heavy work).
+#
+#   az acr build --registry meshweaver --image memex-log-watcher:1.0.0 \
+#     --file Dockerfile.logwatcher .
+#
+# NOT the sanctioned build path — that stays `dotnet publish -t:PublishContainer`
+# (deploy/aks/DEPLOY-RUNBOOK.md § 6b), which is what CI and the runbook use. This is tracked only
+# so the escape hatch exists when the local link to ACR cannot carry image layers: on 2026-08-08 the
+# SDK push wedged on repeated "Broken pipe" retries, and the deploy completed only by building
+# ACR-side from a source-only context. Build the context deliberately — a bare `.` from the repo
+# root sweeps in `.claude/worktrees/` (dozens of full checkouts) and the upload never finishes.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+# Central package management + the props/targets every project inherits — copied first so a source
+# edit alone does not invalidate the restore layer.
+COPY Directory.Build.props Directory.Packages.props nuget.config ./
+
+# The watcher and the two framework projects it references (see MeshWeaver.LogWatcher.csproj).
+COPY src/ src/
+COPY tools/MeshWeaver.LogWatcher/ tools/MeshWeaver.LogWatcher/
+
+RUN dotnet publish tools/MeshWeaver.LogWatcher/MeshWeaver.LogWatcher.csproj \
+    -c Release -o /app --no-self-contained
+
+FROM mcr.microsoft.com/dotnet/runtime:10.0 AS final
+WORKDIR /app
+COPY --from=build /app .
+
+# Matches the Deployment's securityContext (runAsNonRoot) — the state volume is mounted at
+# /var/lib/mw-log-watcher and must be writable by this uid.
+USER $APP_UID
+ENTRYPOINT ["dotnet", "mw-log-watcher.dll"]

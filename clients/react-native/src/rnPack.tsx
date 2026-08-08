@@ -35,6 +35,7 @@ import { rnContainerControls } from "./rnContainers";
 import { rnLiveControls } from "./rnMeshLive";
 import { rnDataControls } from "./rnData";
 import { rnDocumentControls } from "./rnDocuments";
+import { rnAnalysisControls } from "./rnAnalysis";
 
 // Binding helpers (useField/useOptions/str) come from the shared core — the RN pack used to carry
 // its own copies before the core exported them.
@@ -701,6 +702,8 @@ export const rnPack: LeafPack = {
     ...rnDataControls,
     // DocumentSource / ExportDocument / NodeExport / NodeImport / FileBrowser
     ...rnDocumentControls,
+    // KpiStrip / Tower / ComparisonBars — placed from the shared geometry, not a native re-derivation
+    ...rnAnalysisControls,
   },
   fallback,
 };
