@@ -183,7 +183,11 @@ public class McpCompileInFlightTruthTest(ITestOutputHelper output) : AITestBase(
             root.GetProperty("status").GetString().Should().Be("Compiling");
             root.GetProperty("activityPath").GetString()
                 .Should().Be("ACME/SomeType/_Activity/compile-1");
-            root.GetProperty("elapsedMs").GetInt64().Should().BeGreaterThanOrEqualTo(5000);
+            // 🚨 Not >= 5000: elapsed is (UtcNow - startedAt) TRUNCATED to a long, and UtcNow has
+            // advanced by microseconds between the seed and the call — 4999 is a legitimate
+            // outcome, so an exact-boundary assertion is a latent flake. Assert the ORDER OF
+            // MAGNITUDE the field is meant to convey (a multi-second run), not the boundary.
+            root.GetProperty("elapsedMs").GetInt64().Should().BeGreaterThan(4000);
             var message = root.GetProperty("message").GetString()!;
             message.Should().Contain("ALREADY IN FLIGHT");
             message.Should().Contain("did NOT");
