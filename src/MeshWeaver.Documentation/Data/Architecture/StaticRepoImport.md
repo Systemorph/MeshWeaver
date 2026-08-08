@@ -129,6 +129,17 @@ This copy path is for a source whose target nodes have a **writable** per-node `
 
 This is how a source with a writable target collection gets its `@@content/<file>` assets to land on a fresh deployment (e.g. a FileSystem source at `/mnt/content`): the importer copies them into the runtime `content` collection on boot, alongside the nodes. Tests: `ContentImportSyncTest` (monolith, filesystem + embedded sources) and `OrleansContentImportSyncTest` (the distributed cross-grain path — the shape that must not deadlock).
 
+### The same landing, reached from a REGISTRY install (issue #848)
+
+The two paths above are for sources **compiled into the portal**. A course or plugin installed **from the plugin registry** is not one — so for a long time nothing copied its assets, and its `content/**` binaries had to be uploaded to each portal out of band. `PackageInstaller.SyncPackageContent` closes that: after the nodes land it classifies the package's `{package}/content/**` files with the same `ContentAssetMapper` and posts the same **`SyncContentFilesRequest`** (the byte-carrying sibling of `ImportContentRequest`) to the partition ROOT — the one hub where the per-Space `content` collection resolves.
+
+Two things make that work end to end, and both are easy to break again:
+
+- **The bytes must survive the transport.** `RepoFileCodec` classifies a non-UTF-8 blob as binary and puts its bytes on `RepoFile.Binary`, leaving `Content` deliberately **empty**. Any projection that copies only `Content` therefore publishes an empty file — which is exactly what `POST /api/plugins/files` did (`content = 0 chars`). `PackageFile` mirrors `RepoFile` (`Content` + `Binary` + `Bytes`) and every package source must carry both.
+- **The install is ADDITIVE, never a mirror.** GitSync mirrors because it owns the whole Space; an install does not, and portals carry assets uploaded by hand that the repo has never tracked. Note that `SyncContentFilesRequest.Mirror` is a declared-`true` bool and so carries `[JsonIgnore(Condition = Never)]` — without it the hub serializer drops an explicit `Mirror = false` (it *is* the CLR default) and the receiving hub rebuilds it as `true`, silently turning an additive sync into a pruning one.
+
+Test: `PackageContentAssetInstallTest` — the bytes land at the exact layout `/api/content/{root}/{file}` resolves to, a text asset still round-trips, and an untracked upload survives a re-install.
+
 ## The two primitives
 
 ### 1. Source fingerprint — the content-version

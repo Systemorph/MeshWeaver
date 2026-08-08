@@ -90,6 +90,14 @@ public sealed class GitPackageSource(GitCli git, string repoPath, string subdir 
             });
 
     // git show <ref>:<path> — the file's content at that ref, or null when the path is absent there.
+    //
+    // 🚨 TEXT ONLY: the bytes come back through the git CLI's stdout, decoded as a string, so a
+    // binary blob is corrupt by the time it gets here — this source cannot publish a `content/**`
+    // asset (issue #848). It is the LOCAL-CHECKOUT, package.json-format source (dev convenience);
+    // both sources a registry actually serves from carry binaries properly, because they read
+    // `RepoFile.Binary`: NodeRepoPackageSource (the node-native default, incl. the local-directory
+    // fetch) and GitHubPackageSource. Making this one binary-safe needs a byte-capturing
+    // `git cat-file` leaf on GitCli, not a change here.
     private IObservable<string?> ShowFile(string gitRef, string path) =>
         git.Run(repoPath, ["show", $"{gitRef}:{path}"])
             .Select(res => res.ExitCode == 0 ? res.StdOut : (string?)null);
