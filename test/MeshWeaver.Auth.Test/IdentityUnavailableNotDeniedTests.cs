@@ -1,13 +1,18 @@
 using System.Globalization;
 using System.Reactive.Linq;
 using System.Text;
+using System.Text.Encodings.Web;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace MeshWeaver.Auth.Test;
@@ -178,6 +183,149 @@ public class IdentityUnavailableResponseTests
             context, "FindUserByEmail(alice@example.com) reached no verdict within 20s", access);
 
         return (context, Encoding.UTF8.GetString(body.ToArray()));
+    }
+}
+
+/// <summary>
+/// The API-token leg of the SAME collapse (issue #637): role enrichment used to sit behind a bare
+/// <c>catch { }</c>, so a role store that could not be read authenticated the caller with a
+/// SILENTLY REDUCED role set. Every later request they made was then refused "Access denied" —
+/// an availability failure reported as an authorization failure, and one that looks like success
+/// at the moment it happens, which is exactly why it needs pinning.
+///
+/// <para>Both legs use a REAL mesh and a REAL minted token, so only the reachability of the role
+/// store differs between them.</para>
+/// </summary>
+public class ApiTokenRoleResolutionUnavailableTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    /// <summary>
+    /// SHOULD-FAIL-IF: an unreadable role store is absorbed and the request authenticates anyway.
+    /// That is the pre-fix behaviour — and it succeeds silently, so nothing downstream can tell
+    /// the caller why they are suddenly being denied.
+    /// </summary>
+    [Fact]
+    public async Task RoleStoreUnreachable_ChallengeIs503WithRetryAfter_NotAReducedPrincipal()
+    {
+        var rawToken = await MintValidToken();
+
+        // The role source cannot be produced at all — the shape a portal mid-restart presents.
+        // Token validation still works (it reads storage directly), so ONLY role resolution fails.
+        var (context, result) = await AuthenticateAndChallenge(rawToken,
+            services => services.AddSingleton<IMessageHub>(
+                _ => throw new InvalidOperationException("mesh unavailable")));
+
+        result.Succeeded.Should().BeFalse(
+            "authenticating with a silently reduced role set is the defect — the caller would then "
+            + "be denied everywhere with no way to tell an outage from a revoked grant");
+        context.Response.StatusCode.Should().Be(
+            StatusCodes.Status503ServiceUnavailable,
+            "an unreadable role store reached no verdict about this caller's permissions — retryable");
+        context.Response.StatusCode.Should().NotBe(StatusCodes.Status401Unauthorized,
+            "the token itself was validated fine; answering 401 would send a good token to be re-minted");
+        context.Response.Headers.RetryAfter.ToString().Should().Be(
+            ApiTokenAuthenticationHandler.RetryAfterSeconds.ToString(CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// SHOULD-FAIL-IF: the fix over-reaches and every token request 503s. A reachable role store —
+    /// even one holding no grants for this user — must authenticate exactly as before.
+    /// </summary>
+    [Fact]
+    public async Task RoleStoreReachable_StillAuthenticates()
+    {
+        var rawToken = await MintValidToken();
+
+        var (context, result) = await AuthenticateAndChallenge(rawToken,
+            services => services.AddSingleton<IMessageHub>(Mesh));
+
+        result.Succeeded.Should().BeTrue(
+            "a reachable role store is the normal path — this pins that the retryable branch did "
+            + "not swallow the happy path");
+        context.Response.StatusCode.Should().NotBe(StatusCodes.Status503ServiceUnavailable);
+    }
+
+    /// <summary>
+    /// The seam the handler branches on, exercised against the real workspace: a budget the read
+    /// cannot possibly meet must classify Unavailable rather than hand back an empty role set.
+    /// </summary>
+    [Fact]
+    public async Task LoadDbRoles_WithUnmeetableBudget_IsUnavailable_NotEmptyRoles()
+    {
+        var services = new ServiceCollection().AddSingleton<IMessageHub>(Mesh).BuildServiceProvider();
+
+        var outcome = await UserRoleResolver.LoadDbRolesAsync(services, "someuser", TimeSpan.Zero);
+
+        outcome.IsUnavailable.Should().BeTrue(
+            "a read that could not complete says nothing about the user's grants — an empty set here "
+            + "is indistinguishable from 'this user has none' and silently strips their access");
+    }
+
+    /// <summary>The same call with a real budget resolves — the no-over-reach twin of the above.</summary>
+    [Fact]
+    public async Task LoadDbRoles_WithRealBudget_ResolvesEmptyForUserWithNoGrants()
+    {
+        var services = new ServiceCollection().AddSingleton<IMessageHub>(Mesh).BuildServiceProvider();
+
+        var outcome = await UserRoleResolver.LoadDbRolesAsync(
+            services, $"nobody{Guid.NewGuid():N}"[..16]);
+
+        outcome.IsUnavailable.Should().BeFalse("the query converged — that IS a verdict");
+        outcome.Value.Should().BeEmpty();
+    }
+
+    private ApiTokenService CreateTokenService() =>
+        new(Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
+            Mesh,
+            Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>(),
+            Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>());
+
+    /// <summary>Mints a real token and waits until it actually validates (absorbs read-side index lag).</summary>
+    private async Task<string> MintValidToken()
+    {
+        var service = CreateTokenService();
+        var created = await service.CreateToken(
+            "roleuser", "Role User", "roleuser@example.com", "Role test").Should().Emit();
+
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(created.RawToken).Take(1))
+            .Should().Match(v => v is not null);
+
+        return created.RawToken;
+    }
+
+    /// <summary>
+    /// Runs the real handler over a real <see cref="HttpContext"/>: authenticate, then issue the
+    /// challenge ASP.NET would issue for a failed authentication. The challenge is where 401 and
+    /// 503 diverge — <c>AuthenticateResult.Fail</c> looks identical for both.
+    /// </summary>
+    private async Task<(HttpContext Context, AuthenticateResult Result)> AuthenticateAndChallenge(
+        string rawToken, Action<IServiceCollection> configure)
+    {
+        IServiceCollection collection = new ServiceCollection();
+        collection.AddOptions().AddLogging();
+        collection.AddSingleton(CreateTokenService());
+        configure(collection);
+        var services = collection.BuildServiceProvider();
+
+        var context = new DefaultHttpContext { RequestServices = services };
+        context.Request.Headers.Authorization = $"Bearer {rawToken}";
+        context.Response.Body = new MemoryStream();
+
+        var handler = new ApiTokenAuthenticationHandler(
+            services.GetRequiredService<IOptionsMonitor<AuthenticationSchemeOptions>>(),
+            services.GetRequiredService<ILoggerFactory>(),
+            UrlEncoder.Default,
+            services);
+        await handler.InitializeAsync(
+            new AuthenticationScheme(
+                ApiTokenAuthenticationHandler.SchemeName, null, typeof(ApiTokenAuthenticationHandler)),
+            context);
+
+        var result = await handler.AuthenticateAsync();
+        if (!result.Succeeded)
+            await handler.ChallengeAsync(properties: null);
+
+        return (context, result);
     }
 }
 

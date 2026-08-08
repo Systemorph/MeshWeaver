@@ -185,8 +185,8 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     internal static async Task WriteIdentityUnavailable(
         HttpContext context, string? reason, AccessService? accessService = null)
     {
-        accessService ??= context.RequestServices?.GetService<PortalApplication>()
-            ?.Hub.ServiceProvider.GetService<AccessService>();
+        var logger = context.RequestServices?.GetService<ILogger<OnboardingMiddleware>>();
+        accessService ??= TryResolveViewer(context, logger);
 
         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         // Shared with the API-token challenge so the two retry hints cannot drift apart.
@@ -200,10 +200,43 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
             context.RequestAborted);
 
         // The reason is engineering detail — logged, never rendered.
-        context.RequestServices?.GetService<ILogger<OnboardingMiddleware>>()?.LogWarning(
+        logger?.LogWarning(
             "Identity resolution UNAVAILABLE for {Path} ({Reason}) — answering 503 + Retry-After "
             + "instead of bouncing a signed-in user to /onboarding (issue #637)",
             context.Request.Path, reason ?? "(no reason given)");
+    }
+
+    /// <summary>
+    /// The viewer's <see cref="AccessService"/> for language resolution, or <c>null</c> when this
+    /// scope has no portal application (an excluded path, teardown, a bare test context).
+    ///
+    /// <para><see cref="PortalApplication"/> is genuinely OPTIONAL per scope, so it is resolved with
+    /// <c>GetService</c>. <see cref="AccessService"/> is a REQUIRED hub service, so it is resolved
+    /// with <c>GetRequiredService</c> — per the repo rule, never <c>GetService</c> plus implicit
+    /// trust.</para>
+    ///
+    /// <para>🚨 The lookup is nonetheless guarded, and the guard is the point:
+    /// <see cref="WriteIdentityUnavailable"/> is the code that REPORTS an availability failure, so
+    /// it must never BECOME one. A throw here would be turned into a <c>500</c> by ASP.NET —
+    /// re-creating, inside the fix, exactly the collapse-into-the-wrong-status this fix exists to
+    /// prevent. Nothing is hidden: the failure is logged at Warning, and the 503 plus its reason is
+    /// still reported. Only the viewer's LANGUAGE degrades, to the English catalog.</para>
+    /// </summary>
+    private static AccessService? TryResolveViewer(HttpContext context, ILogger? logger)
+    {
+        try
+        {
+            // Hub is non-nullable on a constructed PortalApplication.
+            return context.RequestServices?.GetService<PortalApplication>()
+                ?.Hub.ServiceProvider.GetRequiredService<AccessService>();
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex,
+                "Could not resolve the viewer's AccessService while reporting identity-unavailable — "
+                + "falling back to the default language. The 503 itself is unaffected.");
+            return null;
+        }
     }
 
     /// <summary>
@@ -444,8 +477,16 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     /// "Access denied": an availability failure reported as an authorization failure. An
     /// empty set now means exactly one thing: the read RESOLVED and found no grants.</para>
     /// </summary>
+    /// <param name="workspace">Workspace to run the synced grant query on.</param>
+    /// <param name="username">The mesh user id whose grants to read.</param>
+    /// <param name="logger">Optional logger for the emit/timeout diagnostics.</param>
+    /// <param name="budget">
+    /// Optional override of the read budget. Production passes nothing and gets the cold-start-sized
+    /// <see cref="LookupTimeout"/>; tests pass a short window to reach the unavailable branch
+    /// deterministically, mirroring how <c>ApiTokenService</c> exposes <c>ValidationReadTimeout</c>.
+    /// </param>
     internal static IObservable<IdentityReadOutcome<IReadOnlyCollection<string>>> LoadUserRoles(
-        IWorkspace workspace, string username, ILogger? logger)
+        IWorkspace workspace, string username, ILogger? logger, TimeSpan? budget = null)
     {
         var jsonOptions = workspace.Hub.JsonSerializerOptions;
 
@@ -459,7 +500,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                         username, items.Count()))
                     .Take(1)
                     .Select(items => (IReadOnlyCollection<string>?)FoldRoles(items, jsonOptions))),
-            LookupTimeout, $"LoadUserRoles({username})", logger);
+            budget ?? LookupTimeout, $"LoadUserRoles({username})", logger);
     }
 
     /// <summary>Back-compat overload used by callers that don't yet pass a logger.</summary>
