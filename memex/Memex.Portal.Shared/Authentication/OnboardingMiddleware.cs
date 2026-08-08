@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
@@ -104,7 +105,22 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         //     call next.
         //   • Result = "PassThrough" — context updated (or skipped because
         //     unauthenticated / virtual / excluded path); fall through to next.
-        var outcome = await BuildPipeline(context).FirstAsync().ToTask();
+        //   • Result = "Unavailable" — identity could not be RESOLVED (not: resolved
+        //     to "no account"); answers 503 + Retry-After, doesn't call next.
+        var decision = await BuildPipeline(context).FirstAsync().ToTask();
+        var outcome = decision.Outcome;
+
+        if (outcome == OnboardingOutcome.Unavailable)
+        {
+            // 🚨 UNAVAILABLE ≠ "you have no account" (issue #637). The lookup that decides
+            // whether this user is onboarded reached NO verdict — a storage/query fault, not a
+            // fact about the user. Bouncing them to /onboarding would tell a correctly
+            // signed-in person that their account does not exist and invite them to create a
+            // second one; it is the browser-side twin of answering 401 for a read timeout.
+            // Answer retryable instead, and say plainly that signing in again will not help.
+            await WriteIdentityUnavailable(context, decision.UnavailableReason);
+            return;
+        }
 
         if (outcome == OnboardingOutcome.RedirectHome)
         {
@@ -134,37 +150,124 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         await next(context);
     }
 
-    private enum OnboardingOutcome { PassThrough, Redirect, RedirectHome }
+    private enum OnboardingOutcome { PassThrough, Redirect, RedirectHome, Unavailable }
+
+    /// <summary>
+    /// What the middleware should do next, plus — for
+    /// <see cref="OnboardingOutcome.Unavailable"/> — WHY no identity verdict was reached.
+    /// The reason is logged (never shown verbatim: it is engineering detail, and the page a
+    /// user sees is localized).
+    /// </summary>
+    private sealed record OnboardingDecision(OnboardingOutcome Outcome, string? UnavailableReason = null)
+    {
+        public static readonly OnboardingDecision PassThrough = new(OnboardingOutcome.PassThrough);
+        public static readonly OnboardingDecision Redirect = new(OnboardingOutcome.Redirect);
+        public static readonly OnboardingDecision RedirectHome = new(OnboardingOutcome.RedirectHome);
+        public static OnboardingDecision Unavailable(string reason)
+            => new(OnboardingOutcome.Unavailable, reason);
+    }
+
+    /// <summary>
+    /// Answers a request whose identity could not be RESOLVED with
+    /// <c>503 Service Unavailable</c> + <c>Retry-After</c> and a localized, plain-text
+    /// explanation (issue #637).
+    ///
+    /// <para>The wording matters as much as the status: the failure mode this replaces sent a
+    /// signed-in user to a sign-up form, so the body says explicitly that the sign-in is fine and
+    /// that signing in again will not help. Localized through the one seam
+    /// (<c>AccessService.Localize</c> → <see cref="MeshWeaver.Messaging.AccessContext.Locale"/>) —
+    /// never ambient <c>CultureInfo</c>. Plain text, not hand-built HTML.</para>
+    ///
+    /// <para>Internal + static so the response SHAPE is testable over a real
+    /// <see cref="HttpContext"/> without an HTTP host: asserting the classification alone would
+    /// pass while production still redirected.</para>
+    /// </summary>
+    internal static async Task WriteIdentityUnavailable(
+        HttpContext context, string? reason, AccessService? accessService = null)
+    {
+        var logger = context.RequestServices?.GetService<ILogger<OnboardingMiddleware>>();
+        accessService ??= TryResolveViewer(context, logger);
+
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        // Shared with the API-token challenge so the two retry hints cannot drift apart.
+        context.Response.Headers.RetryAfter =
+            ApiTokenAuthenticationHandler.RetryAfterSeconds.ToString(CultureInfo.InvariantCulture);
+        context.Response.ContentType = "text/plain; charset=utf-8";
+        await context.Response.WriteAsync(
+            accessService.Localize("error.identityUnavailable")
+            + "\n\n"
+            + accessService.Localize("error.identityUnavailableHint"),
+            context.RequestAborted);
+
+        // The reason is engineering detail — logged, never rendered.
+        logger?.LogWarning(
+            "Identity resolution UNAVAILABLE for {Path} ({Reason}) — answering 503 + Retry-After "
+            + "instead of bouncing a signed-in user to /onboarding (issue #637)",
+            context.Request.Path, reason ?? "(no reason given)");
+    }
+
+    /// <summary>
+    /// The viewer's <see cref="AccessService"/> for language resolution, or <c>null</c> when this
+    /// scope has no portal application (an excluded path, teardown, a bare test context).
+    ///
+    /// <para><see cref="PortalApplication"/> is genuinely OPTIONAL per scope, so it is resolved with
+    /// <c>GetService</c>. <see cref="AccessService"/> is a REQUIRED hub service, so it is resolved
+    /// with <c>GetRequiredService</c> — per the repo rule, never <c>GetService</c> plus implicit
+    /// trust.</para>
+    ///
+    /// <para>🚨 The lookup is nonetheless guarded, and the guard is the point:
+    /// <see cref="WriteIdentityUnavailable"/> is the code that REPORTS an availability failure, so
+    /// it must never BECOME one. A throw here would be turned into a <c>500</c> by ASP.NET —
+    /// re-creating, inside the fix, exactly the collapse-into-the-wrong-status this fix exists to
+    /// prevent. Nothing is hidden: the failure is logged at Warning, and the 503 plus its reason is
+    /// still reported. Only the viewer's LANGUAGE degrades, to the English catalog.</para>
+    /// </summary>
+    private static AccessService? TryResolveViewer(HttpContext context, ILogger? logger)
+    {
+        try
+        {
+            // Hub is non-nullable on a constructed PortalApplication.
+            return context.RequestServices?.GetService<PortalApplication>()
+                ?.Hub.ServiceProvider.GetRequiredService<AccessService>();
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex,
+                "Could not resolve the viewer's AccessService while reporting identity-unavailable — "
+                + "falling back to the default language. The 503 itself is unaffected.");
+            return null;
+        }
+    }
 
     /// <summary>
     /// Builds the reactive onboarding pipeline. Returns an observable that
-    /// emits exactly one <see cref="OnboardingOutcome"/> describing what the
+    /// emits exactly one <see cref="OnboardingDecision"/> describing what the
     /// middleware should do next. Composition is end-to-end reactive — no
     /// intermediate <c>await</c>, no fire-and-forget Subscribe, no
     /// TaskCompletionSource. The single Task bridge lives in
     /// <see cref="InvokeAsync"/>.
     /// </summary>
-    private IObservable<OnboardingOutcome> BuildPipeline(HttpContext context)
+    private IObservable<OnboardingDecision> BuildPipeline(HttpContext context)
     {
         if (context.User?.Identity?.IsAuthenticated != true)
-            return Observable.Return(OnboardingOutcome.PassThrough);
+            return Observable.Return(OnboardingDecision.PassThrough);
 
         // /onboarding is resolved (not blanket-excluded): a not-yet-onboarded user
         // stays on the form, but an already-onboarded one is redirected home.
         var onOnboardingPage = context.Request.Path.StartsWithSegments("/onboarding");
         if (!onOnboardingPage && IsExcludedPath(context.Request.Path))
-            return Observable.Return(OnboardingOutcome.PassThrough);
+            return Observable.Return(OnboardingDecision.PassThrough);
 
         var portalApp = context.RequestServices.GetService<PortalApplication>();
         if (portalApp == null)
-            return Observable.Return(OnboardingOutcome.PassThrough);
+            return Observable.Return(OnboardingDecision.PassThrough);
 
         var accessService = portalApp.Hub.ServiceProvider.GetRequiredService<AccessService>();
         var userContext = accessService.Context ?? accessService.CircuitContext;
 
         // Skip virtual users — they don't need onboarding.
         if (userContext is not { IsVirtual: false } || string.IsNullOrEmpty(userContext.ObjectId))
-            return Observable.Return(OnboardingOutcome.PassThrough);
+            return Observable.Return(OnboardingDecision.PassThrough);
 
         var email = userContext.Email ?? userContext.ObjectId;
         var workspace = portalApp.Hub.GetWorkspace();
@@ -187,20 +290,29 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         // Reactive composition: FindUser → SelectMany → either Redirect (no
         // node / Transient) or LoadRoles → set context → PassThrough.
         return FindUserByEmail(workspace, email, logger)
-            .SelectMany(node =>
+            .SelectMany(userRead =>
             {
-                // Not onboarded (no node, or only a Transient shell).
+                // 🚨 UNAVAILABLE ≠ "no account" (issue #637). The lookup reached NO verdict —
+                // it says nothing about whether this user is onboarded. Bouncing them to
+                // /onboarding would report an availability failure as an identity failure and
+                // invite a signed-in user to create a second account.
+                if (userRead.UnavailableReason is { } userReason)
+                    return Observable.Return(OnboardingDecision.Unavailable(userReason));
+
+                var node = userRead.Value;
+
+                // Not onboarded (no node, or only a Transient shell) — a DEFINITIVE verdict.
                 if (node == null || node.State == MeshNodeState.Transient)
                 {
                     // On /onboarding: stay on the form — NEVER redirect back to
                     // /onboarding (that would loop). Everywhere else: bounce there.
                     if (onOnboardingPage)
-                        return Observable.Return(OnboardingOutcome.PassThrough);
+                        return Observable.Return(OnboardingDecision.PassThrough);
 
                     logger.LogInformation(
                         "OnboardingMiddleware: Redirecting to onboarding for {Email} (node={NodeState})",
                         email, node?.State.ToString() ?? "(null — lookup returned no match)");
-                    return Observable.Return(OnboardingOutcome.Redirect);
+                    return Observable.Return(OnboardingDecision.Redirect);
                 }
 
                 // Onboarded but sitting on /onboarding → the form isn't for them; go home.
@@ -209,32 +321,42 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                     logger.LogInformation(
                         "OnboardingMiddleware: {Email} is already onboarded — redirecting off /onboarding to home",
                         email);
-                    return Observable.Return(OnboardingOutcome.RedirectHome);
+                    return Observable.Return(OnboardingDecision.RedirectHome);
                 }
 
                 var username = node.Id;
                 return LoadUserRoles(workspace, username, logger)
-                    .Select(roles =>
+                    .Select(rolesRead =>
                     {
+                        // 🚨 Same distinction on the role side (issue #637). Stamping an EMPTY
+                        // role set because the grant read timed out silently strips the user's
+                        // privileges, and every screen they open then says "Access denied" — an
+                        // availability failure reported as an authorization failure. An empty
+                        // set is only ever stamped when the read RESOLVED to "no grants".
+                        if (rolesRead.UnavailableReason is { } rolesReason)
+                            return OnboardingDecision.Unavailable(rolesReason);
+
                         var updatedContext = userContext with
                         {
                             ObjectId = username,
                             Name = node.Name ?? username,
-                            Roles = roles
+                            Roles = rolesRead.Value ?? Array.Empty<string>()
                         };
                         // Set per-request context. CircuitAccessHandler handles
                         // per-circuit persistence via CreateInboundActivityHandler.
                         accessService.SetContext(updatedContext);
-                        return OnboardingOutcome.PassThrough;
+                        return OnboardingDecision.PassThrough;
                     });
             })
-            .Catch<OnboardingOutcome, Exception>(ex =>
+            // Both lookups classify their OWN faults (IdentityRead.Bounded), so this only
+            // covers a fault in the surrounding composition — not an identity read.
+            .Catch<OnboardingDecision, Exception>(ex =>
             {
                 // Non-critical — don't block the request on onboarding check failure.
                 logger.LogWarning(ex,
                     "OnboardingMiddleware: Failed to check user node for {UserId}",
                     userContext.ObjectId);
-                return Observable.Return(OnboardingOutcome.PassThrough);
+                return Observable.Return(OnboardingDecision.PassThrough);
             });
     }
 
@@ -254,43 +376,48 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     ///
     /// <para>Robustness: the synced layer's Initial-gating means the first
     /// emission is already the authoritative snapshot — no per-emission Where
-    /// filter needed. We Take(1) and Timeout (cold start can take seconds while
-    /// the partition hydrates). Empty snapshot → <c>null</c> → "redirect to
-    /// /onboarding".</para>
+    /// filter needed. We Take(1) and bound the read (cold start can take seconds while
+    /// the partition hydrates). An empty snapshot is a DEFINITIVE
+    /// <c>Resolved(null)</c> → "redirect to /onboarding".</para>
+    ///
+    /// <para>🚨 A read that does NOT complete within the budget is
+    /// <see cref="IdentityReadOutcome{T}.Unavailable"/>, never <c>Resolved(null)</c> (issue
+    /// #637). It used to fall back to null, so a storage/query stall told a correctly
+    /// signed-in user "you have no account" and bounced them to the sign-up form — an
+    /// availability failure reported as an identity failure, and one that re-signing-in
+    /// cannot fix. The two facts are kept apart HERE, where the timeout is known; no caller
+    /// has to infer it from a null or an exception message.</para>
     /// </summary>
-    internal static IObservable<MeshNode?> FindUserByEmail(
+    internal static IObservable<IdentityReadOutcome<MeshNode>> FindUserByEmail(
         IWorkspace workspace, string email, ILogger? logger)
     {
         var query = $"nodeType:User content.email:{email} limit:1";
 
-        // Fast path: the shared, cross-request synced-query snapshot. For a user this process
-        // has ALREADY seen, this replays the cached hit with no DB round-trip.
-        return workspace.GetQuery($"auth:userByEmail:{email}", query)
-            .Do(items => logger?.LogDebug(
-                "FindUserByEmail({Email}): synced query emit, items={Count}",
-                email, items.Count()))
-            .Take(1)
-            .Select(items => (MeshNode?)items.FirstOrDefault())
-            .SelectMany(cached => cached is not null
-                ? Observable.Return<MeshNode?>(cached)
-                // A cached HIT is authoritative; a cached MISS is NOT. This lookup is a pathless,
-                // auth-routed one-shot fan-out query, and workspace.GetQuery caches its result
-                // PERMANENTLY (Replay(1).AutoConnect(1)) with no live-delta source in the partitioned
-                // portal (the pg_notify listener is disabled). The middleware itself seeds an EMPTY
-                // snapshot while rendering the pre-onboarding / /onboarding requests — so a user
-                // onboarded afterwards would replay that empty snapshot and get bounced to
-                // /onboarding forever ("cannot advance", until a process restart clears the cache).
-                // On a miss, re-read the source of truth (auth.mesh_nodes) before concluding "no
-                // account". The DB row exists synchronously (the auth-mirror trigger fires inside the
-                // onboarding write), so the authoritative re-read finds the just-onboarded user.
-                : QueryUserByEmailAuthoritative(workspace, query, email, logger))
-            .Timeout(LookupTimeout, Observable.Defer(() =>
-            {
-                logger?.LogWarning(
-                    "FindUserByEmail({Email}): no user node within {Timeout} — falling back to null (will redirect to /onboarding)",
-                    email, LookupTimeout);
-                return Observable.Return<MeshNode?>(null);
-            }));
+        return IdentityRead.Bounded(
+            // Deferred so a synchronous throw while composing is classified too.
+            Observable.Defer(() =>
+                // Fast path: the shared, cross-request synced-query snapshot. For a user this
+                // process has ALREADY seen, this replays the cached hit with no DB round-trip.
+                workspace.GetQuery($"auth:userByEmail:{email}", query)
+                    .Do(items => logger?.LogDebug(
+                        "FindUserByEmail({Email}): synced query emit, items={Count}",
+                        email, items.Count()))
+                    .Take(1)
+                    .Select(items => (MeshNode?)items.FirstOrDefault())
+                    .SelectMany(cached => cached is not null
+                        ? Observable.Return<MeshNode?>(cached)
+                        // A cached HIT is authoritative; a cached MISS is NOT. This lookup is a pathless,
+                        // auth-routed one-shot fan-out query, and workspace.GetQuery caches its result
+                        // PERMANENTLY (Replay(1).AutoConnect(1)) with no live-delta source in the partitioned
+                        // portal (the pg_notify listener is disabled). The middleware itself seeds an EMPTY
+                        // snapshot while rendering the pre-onboarding / /onboarding requests — so a user
+                        // onboarded afterwards would replay that empty snapshot and get bounced to
+                        // /onboarding forever ("cannot advance", until a process restart clears the cache).
+                        // On a miss, re-read the source of truth (auth.mesh_nodes) before concluding "no
+                        // account". The DB row exists synchronously (the auth-mirror trigger fires inside the
+                        // onboarding write), so the authoritative re-read finds the just-onboarded user.
+                        : QueryUserByEmailAuthoritative(workspace, query, email, logger))),
+            LookupTimeout, $"FindUserByEmail({email})", logger);
     }
 
     /// <summary>
@@ -334,11 +461,6 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
             });
     }
 
-    /// <summary>Back-compat overload used by callers that don't yet pass a logger.</summary>
-    internal static IObservable<MeshNode?> FindUserByEmail(
-        IWorkspace workspace, string email)
-        => FindUserByEmail(workspace, email, logger: null);
-
     /// <summary>
     /// Reactive load of the user's role names from AccessAssignment nodes via the
     /// canonical synced query (<c>workspace.GetQuery</c>). Same machinery as
@@ -347,36 +469,42 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     /// <see cref="UserRoleResolver.LoadDbRolesAsync"/> to enrich principals with
     /// DB-resolved roles rather than only the roles stamped on the API token at
     /// creation time.
+    ///
+    /// <para>🚨 A stalled or faulted read is <see cref="IdentityReadOutcome{T}.Unavailable"/>,
+    /// never an empty role set (issue #637). It used to default to no roles, which is
+    /// indistinguishable from "this user genuinely has no grants" — so a transient storage
+    /// fault silently stripped a user's privileges and every screen they opened answered
+    /// "Access denied": an availability failure reported as an authorization failure. An
+    /// empty set now means exactly one thing: the read RESOLVED and found no grants.</para>
     /// </summary>
-    internal static IObservable<IReadOnlyCollection<string>> LoadUserRoles(
-        IWorkspace workspace, string username, ILogger? logger)
+    /// <param name="workspace">Workspace to run the synced grant query on.</param>
+    /// <param name="username">The mesh user id whose grants to read.</param>
+    /// <param name="logger">Optional logger for the emit/timeout diagnostics.</param>
+    /// <param name="budget">
+    /// Optional override of the read budget. Production passes nothing and gets the cold-start-sized
+    /// <see cref="LookupTimeout"/>; tests pass a short window to reach the unavailable branch
+    /// deterministically, mirroring how <c>ApiTokenService</c> exposes <c>ValidationReadTimeout</c>.
+    /// </param>
+    internal static IObservable<IdentityReadOutcome<IReadOnlyCollection<string>>> LoadUserRoles(
+        IWorkspace workspace, string username, ILogger? logger, TimeSpan? budget = null)
     {
         var jsonOptions = workspace.Hub.JsonSerializerOptions;
 
-        return workspace.GetQuery(
-                $"auth:userRoles:{username}",
-                $"nodeType:AccessAssignment content.accessObject:\"{username}\" scope:subtree limit:10")
-            .Do(items => logger?.LogDebug(
-                "LoadUserRoles({User}): synced query emit, items={Count}",
-                username, items.Count()))
-            .Take(1)
-            .Select(items => FoldRoles(items, jsonOptions))
-            .Timeout(LookupTimeout, Observable.Defer(() =>
-            {
-                logger?.LogWarning(
-                    "LoadUserRoles({User}): no snapshot within {Timeout} — defaulting to no roles",
-                    username, LookupTimeout);
-                return Observable.Return((IReadOnlyCollection<string>)Array.Empty<string>());
-            }))
-            .Catch<IReadOnlyCollection<string>, Exception>(ex =>
-            {
-                logger?.LogWarning(ex, "LoadUserRoles({User}) failed — defaulting to no roles", username);
-                return Observable.Return((IReadOnlyCollection<string>)Array.Empty<string>());
-            });
+        return IdentityRead.Bounded(
+            Observable.Defer(() =>
+                workspace.GetQuery(
+                        $"auth:userRoles:{username}",
+                        $"nodeType:AccessAssignment content.accessObject:\"{username}\" scope:subtree limit:10")
+                    .Do(items => logger?.LogDebug(
+                        "LoadUserRoles({User}): synced query emit, items={Count}",
+                        username, items.Count()))
+                    .Take(1)
+                    .Select(items => (IReadOnlyCollection<string>?)FoldRoles(items, jsonOptions))),
+            budget ?? LookupTimeout, $"LoadUserRoles({username})", logger);
     }
 
     /// <summary>Back-compat overload used by callers that don't yet pass a logger.</summary>
-    internal static IObservable<IReadOnlyCollection<string>> LoadUserRoles(
+    internal static IObservable<IdentityReadOutcome<IReadOnlyCollection<string>>> LoadUserRoles(
         IWorkspace workspace, string username)
         => LoadUserRoles(workspace, username, logger: null);
 
