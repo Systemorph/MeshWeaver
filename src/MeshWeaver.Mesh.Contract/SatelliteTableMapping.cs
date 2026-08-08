@@ -29,6 +29,9 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
         new SatelliteTableMapping("_Thread", "threads", "Thread", "ThreadComposer"),
         new SatelliteTableMapping("_ThreadMessage", "threads", "ThreadMessage"),
         new SatelliteTableMapping("_Access", "access", "AccessAssignment"),
+        // LEGACY read-only: nothing writes _Tracking satellites any more (tracked changes are
+        // projected from the version history). Mapped so rows written by older builds stay readable
+        // for the deprecation window — see MeshWeaver.Graph.AnnotationExtensions.
         new SatelliteTableMapping("_Tracking", "annotations", "TrackedChange"),
         new SatelliteTableMapping("_Approval", "annotations", "Approval"),
         new SatelliteTableMapping("_Comment", "annotations", "Comment"),
