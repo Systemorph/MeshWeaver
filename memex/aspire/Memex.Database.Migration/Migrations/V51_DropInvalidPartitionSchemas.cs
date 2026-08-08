@@ -17,8 +17,11 @@ namespace Memex.Database.Migration.Migrations;
 /// <para>This migration is pattern-based, not name-list based: it enumerates every
 /// non-system schema and drops exactly those that FAIL the shared segment-validity rule
 /// (<see cref="PartitionDefinition.IsValidPartitionSegment"/> — the SAME predicate the
-/// router and the provisioning boundary enforce), i.e. names containing characters outside
-/// <c>[A-Za-z0-9._-]</c> or not starting with a letter/digit. Every legitimate schema —
+/// router and the provisioning boundary enforce), i.e. names that do not start with a
+/// letter/digit, contain anything other than a letter/digit/<c>.</c>/<c>-</c>/<c>_</c>, or
+/// exceed 63 UTF-8 bytes. <b>The rule is Unicode-aware, NOT ASCII-only</b>
+/// (<c>char.IsLetterOrDigit</c>): an accented schema such as <c>müller</c> PASSES and is
+/// never dropped — do not read this as an <c>[A-Za-z0-9._-]</c> whitelist. Every legitimate schema —
 /// partitions, their <c>*_versions</c> twins, <c>admin</c>/<c>auth</c>/<c>apitoken</c>/
 /// <c>system_access</c>/<c>event_log</c> — passes the rule and is untouched; a schema that
 /// fails it can never be routed to (the router's validity check precedes even its

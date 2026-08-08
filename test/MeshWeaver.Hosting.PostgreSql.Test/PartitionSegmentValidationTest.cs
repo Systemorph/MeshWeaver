@@ -51,12 +51,25 @@ public class PartitionSegmentValidationTest
     [InlineData("space-1")]
     [InlineData("my_space")]
     [InlineData("a")]
+    // The rule is Unicode-aware (char.IsLetterOrDigit), NOT an [A-Za-z0-9._-] whitelist — an
+    // accented partition name is legitimate and must not be refused (nor dropped by V51).
+    [InlineData("müller")]
+    [InlineData("Straße")]
     public void Accepts_ValidPartitionNames(string seg)
         => PartitionDefinition.IsValidPartitionSegment(seg).Should().BeTrue(
             "a simple identifier is a valid partition / schema name");
 
     [Fact]
-    public void Rejects_TooLong()
-        => PartitionDefinition.IsValidPartitionSegment(new string('a', 64)).Should().BeFalse(
-            "Postgres identifiers are capped at 63 characters");
+    public void Accepts_ExactlyAtTheByteLimit()
+        => PartitionDefinition.IsValidPartitionSegment(new string('a', 63)).Should().BeTrue(
+            "63 bytes is Postgres' NAMEDATALEN limit — the boundary itself is still valid");
+
+    [Theory]
+    [InlineData(64, 'a')]   // 64 ASCII chars = 64 bytes
+    [InlineData(32, 'ü')]   // 32 two-byte chars = 64 bytes, but only 32 CHARS
+    public void Rejects_LongerThan63Utf8Bytes(int count, char fill)
+        => PartitionDefinition.IsValidPartitionSegment(new string(fill, count)).Should().BeFalse(
+            "Postgres identifiers are capped at 63 BYTES (NAMEDATALEN) and silently truncate "
+            + "beyond it — a char-counted cap would let a multi-byte name be provisioned under a "
+            + "truncated schema the router could never route back to");
 }

@@ -206,6 +206,51 @@ public class PartitionRootBootstrapTest(ITestOutputHelper output) : MonolithMesh
             "creating an _Access node completes without recursion");
     }
 
+    /// <summary>
+    /// #714 — a ROOT-SCOPE grant must not turn <c>_Access</c> into a partition.
+    ///
+    /// <para>A mesh-wide grant lives at <c>_Access/{subject}_Access</c> (namespace <c>_Access</c>,
+    /// scope <c>""</c>) — the shape <c>AssignmentNodeFactory.UserRole(user, role)</c> with no scope
+    /// produces, used at ~200 harness call sites. The bootstrap's skip test is
+    /// <c>Path.Contains("/_Access/")</c>, whose LEADING SLASH matches <c>{P}/_Access/…</c> but NOT
+    /// this root-scope path. So it fell through, <c>Segments[0]</c> read <c>_Access</c> as a
+    /// PARTITION, and the bootstrap created a <c>Space</c> root at <c>_Access</c> and provisioned a
+    /// backing schema literally named <c>_access</c>.</para>
+    ///
+    /// <para>That schema is a ghost by construction: the router resolves a <c>_</c>-prefixed first
+    /// segment ONLY through a registered <c>PartitionDefinition</c> carrying an explicit schema
+    /// (<c>_Access</c> → <c>system_access</c>) and never derives one from the segment name — so
+    /// nothing could ever read or write <c>_access</c>. It is the exact unroutable-schema class
+    /// #714 exists to prevent, which is why the provisioning boundary must keep rejecting
+    /// <c>_access</c> rather than exempting <c>_</c>-prefixed names.</para>
+    /// </summary>
+    [Fact]
+    public async Task RootScopeAccessGrant_DoesNotBootstrap_AccessAsAPartition()
+    {
+        // The canonical root-scope grant: no scope → namespace "_Access", MainNode "".
+        var grant = AssignmentNodeFactory.UserRole("Carol", Role.Admin.Id);
+        grant.Namespace.Should().Be("_Access",
+            "pre-condition: a root-scope grant's first path segment IS `_Access`");
+        grant.Path.Should().Be("_Access/Carol_Access");
+
+        await MeshService.CreateNode(grant).Should().Within(30.Seconds()).Emit();
+
+        // The grant itself landed — the fix must not cost root-scope grants their write path.
+        (await ReadStorage("_Access/Carol_Access")).Should().NotBeNull(
+            "a root-scope grant is a supported shape and must still be creatable");
+
+        // ...and `_Access` was NOT bootstrapped as a partition.
+        (await ReadStorage("_Access")).Should().BeNull(
+            "`_Access` is a satellite container namespace, never a partition root — a `Space` here "
+            + "would also have provisioned an unroutable `_access` schema (#714)");
+
+        // The same mis-read minted the creator grant at `{partition}/_Access/{creator}_Access`
+        // with partition == "_Access" — i.e. a doubled-up `_Access/_Access/…` node. Its absence
+        // pins that the bootstrap did not run at all here, not merely that the root was skipped.
+        (await ReadStorage($"_Access/_Access/{Creator}_Access")).Should().BeNull(
+            "no `_Access/_Access/…` grant — treating `_Access` as a partition doubled the segment");
+    }
+
     [Fact]
     public async Task MainNode_StaleSelfDefaultAfterRebase_IsRepairedToPath_OnCreate_NoPhantomPartition()
     {

@@ -248,12 +248,11 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         // (`search?q=…`, `login?returnurl=…`) must never become a schema — fail LOUD,
         // naming the offender, instead of provisioning junk the router can never route to.
         // (Explicit schemas of the `_`-prefix globals — `system_access` etc. — are ordinary
-        // identifiers and pass; the rule constrains shape, not the registered names.)
-        // Framework `_`-prefixed system containers (root `_Access` and kin) are minted by the
-        // framework, never by a request path — not the junk-id vector this guards. The segment
-        // rule refuses a leading `_` because a USER partition may not start with one, so exempt
-        // them here or the root access container cannot be provisioned at all.
-        if (!schema.StartsWith('_') && !PartitionDefinition.IsValidPartitionSegment(schema))
+        // identifiers and pass; the rule constrains shape, not the registered names. That is
+        // precisely why a `_`-prefixed name must NOT be exempted here: `_Access` reaching this
+        // point means the caller resolved the schema from the NAMESPACE instead of the
+        // registered definition, and `_access` is a schema the router can never route to.)
+        if (!PartitionDefinition.IsValidPartitionSegment(schema))
             throw new ArgumentException(
                 $"Cannot provision partition '{def.Namespace}' (schema '{schema}'): "
                 + $"{PartitionDefinition.PartitionSegmentRequirement}.");
@@ -354,8 +353,10 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         // `login?returnurl=…`: the junk schemas that filled the memex/memexcloud DBs).
         // Fail BEFORE the promise-cache so the rejection is loud (OnError naming the
         // offending id), never a cached silent no-op the caller mistakes for success.
-        // Same framework-container exemption as EnsureSchemaAsync above.
-        if (!@namespace.StartsWith('_') && !PartitionDefinition.IsValidPartitionSegment(@namespace))
+        // A `_`-prefixed namespace is rejected like any other malformed name: global
+        // satellites (`_Access`) get their schema from a REGISTERED PartitionDefinition
+        // (`system_access`), never from this namespace-derived path — see EnsureSchemaAsync.
+        if (!PartitionDefinition.IsValidPartitionSegment(@namespace))
             return Observable.Throw<Unit>(new ArgumentException(
                 $"Cannot provision partition '{@namespace}': "
                 + $"{PartitionDefinition.PartitionSegmentRequirement}.",
