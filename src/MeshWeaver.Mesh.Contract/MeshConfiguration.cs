@@ -20,7 +20,8 @@ public class MeshConfiguration(
     IReadOnlySet<string>? autocompleteExcludedNodeTypes = null,
     IReadOnlyList<NodeTypePermission>? nodeTypePermissions = null,
     IReadOnlyList<QueryRoutingRule>? queryRoutingRules = null,
-    IReadOnlySet<string>? streamRoutedAddressTypes = null)
+    IReadOnlySet<string>? streamRoutedAddressTypes = null,
+    IReadOnlyList<NodeTypeGate>? nodeTypeGates = null)
 {
     /// <summary>
     /// Address-type prefixes that route via the cluster-wide Orleans memory
@@ -106,6 +107,14 @@ public class MeshConfiguration(
     /// Read by the persistence layer to sync to the database.
     /// </summary>
     public IReadOnlyList<NodeTypePermission> NodeTypePermissions { get; } = nodeTypePermissions ?? [];
+
+    /// <summary>
+    /// Type-declared subtree gates configured via
+    /// <c>ConfigureNodeTypeAccess(a => a.WithGate(...))</c> — see <see cref="NodeTypeGate"/>.
+    /// Read by <c>PermissionEvaluator</c>; EMPTY on every mesh that declares none, which is the
+    /// condition under which the evaluator skips the gate machinery entirely.
+    /// </summary>
+    public IReadOnlyList<NodeTypeGate> NodeTypeGates { get; } = nodeTypeGates ?? [];
 
     /// <summary>
     /// Query routing rules that resolve partition and table hints from ParsedQuery.

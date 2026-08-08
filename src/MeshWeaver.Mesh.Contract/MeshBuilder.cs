@@ -160,7 +160,8 @@ public record MeshBuilder
                     autocompleteExcludedNodeTypes: excludedTypes.Count > 0 ? excludedTypes : null,
                     nodeTypePermissions: accessConfig.Build(),
                     queryRoutingRules: routingRules,
-                    streamRoutedAddressTypes: streamRoutedTypes);
+                    streamRoutedAddressTypes: streamRoutedTypes,
+                    nodeTypeGates: accessConfig.BuildGates());
             })
             // Static nodes registered via AddMeshNodes(...) flow as an
             // IStaticNodeProvider. Application code reads them via
