@@ -134,6 +134,12 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
     /// (c): NOTHING resolves — the requested model is unusable and the catalog offers no usable
     /// replacement, so no agent can be built. The round must FAIL with a message that names the
     /// situation, not settle as a success carrying a raw provider error.
+    ///
+    /// <para>🌍 The round submits under a GERMAN submitter (#948) and asserts the GERMAN catalog
+    /// text. Asserting the English entry (<c>locale: null</c>) would pass equally against a
+    /// hard-coded English literal AND against a round that lost the submitter's locale — which is
+    /// exactly the defect this pins: the submission watcher rebuilds the round's identity from the
+    /// submitter rider on the pending message, so the locale has to ride there too.</para>
     /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task NoUsableModelAnywhere_FailsRoundWithSpeakingError()
@@ -153,9 +159,31 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
         resolver.ResolveDefaultModelId().Should().BeNull(
             "the precondition for this test is that NO model in the catalog has a usable credential");
 
+        // 🌍 The assertion below only bites if EN and DE actually differ for this key — otherwise
+        // "renders German" and "renders English" are the same string and the test goes vacuous.
+        var germanText = LocalizationCatalog.Get("chat.noUsableModel", "de", StaleModel);
+        var englishText = LocalizationCatalog.Get("chat.noUsableModel", locale: null, StaleModel);
+        germanText.Should().NotBe(englishText,
+            "the German and English catalog entries must differ, or asserting the German text "
+            + "would pass against an English round and prove nothing (#948)");
+
         var threadPath = await SeedThread();
         var client = GetClient();
-        client.SubmitMessage(threadPath, "hello", modelName: StaleModel, createdBy: TestUser);
+
+        // Submit as a GERMAN-speaking user. The submitter's identity — locale included — is
+        // captured at the submit boundary and rides on the pending message, because the submission
+        // watcher's Throttle/Subscribe continuation has no live AccessContext (#948).
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var previousContext = access.CircuitContext;
+        access.SetCircuitContext((previousContext ?? TestUsers.Admin) with { Locale = "de" });
+        try
+        {
+            client.SubmitMessage(threadPath, "hello", modelName: StaleModel, createdBy: TestUser);
+        }
+        finally
+        {
+            access.SetCircuitContext(previousContext);
+        }
 
         var thread = await WaitForThread(threadPath,
             t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 2, 60_000);
@@ -166,11 +194,20 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
         cell.Status.Should().Be(ThreadMessageStatus.Error,
             "a round that no model can serve must FAIL — settling as Completed reads as success to "
             + "every automation that checks the node (#476)");
-        // The failure must SPEAK — and speak the viewer's language: it comes from the localization
-        // catalog, not a hard-coded English literal, and it names the requested model.
-        cell.Summary.Should().Be(
-            LocalizationCatalog.Get("chat.noUsableModel", locale: null, StaleModel),
-            "the round's failure text must be the localized catalog message for this situation");
+
+        // The mechanism, pinned: the submitter's language rides on the user message next to their
+        // identity. That rider is what the round-dispatch watcher rebuilds the round's
+        // AccessContext from, so if it loses the locale every round speaks English (#948).
+        var userCell = await WaitForCell(threadPath, thread.Messages[0], _ => true, 30_000);
+        userCell.SubmitterLocale.Should().Be("de",
+            "the submit boundary must capture the submitter's language onto the message — it is the "
+            + "only carrier that survives the watcher's Throttle/Subscribe hop (#948)");
+        // The failure must SPEAK — and speak the SUBMITTER's language: it comes from the
+        // localization catalog resolved off the round's own AccessContext.Locale, not a hard-coded
+        // English literal, and it names the requested model.
+        cell.Summary.Should().Be(germanText,
+            "the round's failure text must be the catalog message in the submitter's language — "
+            + "the round's AccessContext must carry the submitter's Locale (#948)");
         cell.Summary.Should().Contain(StaleModel, "the message must name the model that was requested");
         cell.Summary.Should().NotContain("ApiKey",
             "the raw provider/factory error belongs in the log, never pasted into the thread (#476)");

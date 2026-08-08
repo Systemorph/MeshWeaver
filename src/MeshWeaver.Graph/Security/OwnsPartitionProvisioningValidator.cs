@@ -99,6 +99,26 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
         if (string.IsNullOrEmpty(partitionName))
             return Observable.Return(NodeValidationResult.Valid());
 
+        // 🚨 Defense-in-depth (#714): the partition id becomes the backing schema name.
+        // A malformed id (URL/query-string shaped — '?', '%', ':', '=', '&', whitespace;
+        // >63 chars; not starting with a letter/digit) must NEVER provision a schema. The
+        // storage routers refuse to ROUTE such segments (the same shared
+        // PartitionDefinition.IsValidPartitionSegment rule), so a partition created with
+        // one would be permanently unreachable anyway — reject the create with a speaking
+        // error naming the offending id instead of provisioning junk.
+        // 🚨 NO `_`-prefix exemption. A `_`-prefixed name is a SATELLITE CONTAINER segment
+        // ({P}/_Access/…, {P}/_Thread/…) or a global-satellite NAMESPACE, never a partition:
+        // the router resolves a `_`-prefixed first segment ONLY through a registered
+        // PartitionDefinition with an EXPLICIT schema (`_Access` → `system_access`) and never
+        // derives one from the name, so a schema named `_access` is unroutable by construction —
+        // exactly the ghost this guard exists to prevent. A `Space` create with id `_Access`
+        // is therefore a bug in the CALLER, and rejecting it loud is the point.
+        if (!PartitionDefinition.IsValidPartitionSegment(partitionName))
+            return Observable.Return(NodeValidationResult.Invalid(
+                $"Cannot create '{context.Node.NodeType}' with id '{partitionName}': "
+                + $"{PartitionDefinition.PartitionSegmentRequirement}.",
+                NodeRejectionReason.InvalidPath));
+
         var providers = _hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToList();
         if (providers.Count == 0)
             return Observable.Return(NodeValidationResult.Valid());

@@ -556,6 +556,25 @@ public record ThreadMessage
     public string? SubmitterName { get; init; }
 
     /// <summary>
+    /// The submitter's <see cref="AccessContext.Locale"/> — their preferred UI language as a
+    /// BCP-47 tag (<c>de</c>, <c>en</c>, …) — captured alongside <see cref="SubmitterObjectId"/>
+    /// at submit time. Null OR EMPTY when the submitter has no language preference — the value is
+    /// copied verbatim from <see cref="AccessContext.Locale"/>, whose own contract is
+    /// null/empty/unsupported → English, so both absences reach here unchanged. Test it with
+    /// <see cref="string.IsNullOrEmpty(string)"/>, never a null check alone.
+    ///
+    /// <para><b>🌍 Why the LANGUAGE has to ride on the message too.</b> The round-dispatch watcher
+    /// rebuilds the round's <see cref="AccessContext"/> from this rider, because its
+    /// Throttle/Subscribe continuation has no live identity. Every user-facing string a round
+    /// emits is resolved explicitly off <c>AccessContext.Locale</c> (never ambient
+    /// <c>CultureInfo</c> — a round hops schedulers), so a rebuilt context that carries only
+    /// <see cref="SubmitterObjectId"/> + <see cref="SubmitterName"/> renders the DEFAULT language
+    /// for every viewer regardless of theirs. The identity's own presentation preference is part
+    /// of the identity: carry it on the same rider (#948).</para>
+    /// </summary>
+    public string? SubmitterLocale { get; init; }
+
+    /// <summary>
     /// Completed tool calls from this message's execution.
     /// Populated when execution finishes, used for post-execution inspection.
     /// </summary>
