@@ -80,6 +80,27 @@ describe("comparison layout (port of ComparisonBarsControl.Layout)", () => {
     expect(layout.rows[1].leftPercent!).toBeLessThan(1);
   });
 
+  // Must stay identical to AnalysisControlsTest.ComparisonBars_never_draws_a_negative_value_as_a_positive_bar.
+  it("never draws a negative value as a positive bar", () => {
+    const layout = comparisonLayout([
+      { label: "Net result", left: -50_000, right: 30_000 },
+      { label: "Reference", left: 100_000, right: 100_000 },
+    ])!;
+
+    // Not null — the figure exists, it just has no direction on a zero-upward scale. Without the
+    // guard the sliver would lift -50,000 to a small POSITIVE bar and the chart would state the
+    // opposite of its data.
+    expect(layout.rows[0].leftPercent).not.toBeNull();
+    expect(layout.rows[0].leftPercent).toBe(0);
+    expect(layout.rows[0].rightPercent).toBeCloseTo(30, 9);
+    expect(layout.rows[1].leftPercent).toBeCloseTo(100, 9);
+  });
+
+  it("keeps the visible sliver for a tiny positive value", () => {
+    const layout = comparisonLayout([{ label: "Rounding", left: 1, right: 1_000_000 }])!;
+    expect(layout.rows[0].leftPercent).toBeCloseTo(0.5, 9);
+  });
+
   it("is null when no side carries a positive value", () => {
     expect(comparisonLayout([])).toBeNull();
     expect(comparisonLayout([{ label: "Nothing", left: null, right: null }])).toBeNull();

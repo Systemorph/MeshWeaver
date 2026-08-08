@@ -1,15 +1,14 @@
-// The standard analysis views (#745) — KPI strip, excess-of-loss tower, paired comparison bars.
+// The standard analysis views (#745) — KPI strip, excess-of-loss tower, paired comparison bars —
+// for the WEB (Fluent) pack. The Blazor twins live in
+// src/MeshWeaver.Blazor/Components/{KpiStrip,Tower,ComparisonBars}View.razor.
 //
-// The Blazor twins live in src/MeshWeaver.Blazor/Components/{KpiStrip,Tower,ComparisonBars}View.razor
-// and the SHAPE they draw is defined by the framework, not by either renderer:
-// TowerControl.Layout / ComparisonBarsControl.Layout in src/MeshWeaver.Layout are the reference
-// semantics — ordering, the retention base, the shared scale, and (the point of the comparison view)
-// an absent side staying null rather than collapsing to zero. `towerLayout` and `comparisonLayout`
-// below are the faithful TS ports of exactly those two functions; change one, change both.
+// The SHAPE they draw belongs to the framework, not to either renderer: `analysisLayout.ts` holds
+// the ports of TowerControl.Layout / ComparisonBarsControl.Layout, renderer-free so the React Native
+// pack computes from the same numbers. Everything here is projection.
 //
-// Both are drawn with proportionally sized DOM blocks rather than SVG, for the same reasons as the
-// Blazor side: the design tokens theme them for free, they reflow when the container is narrow, and
-// every label stays real selectable text.
+// Drawn with proportionally sized DOM blocks rather than SVG, for the same reasons as the Blazor
+// side: the design tokens theme them for free, they reflow when the container is narrow, and every
+// label stays real selectable text.
 
 import type { CSSProperties, ReactNode } from "react";
 import { Text } from "@fluentui/react-components";
@@ -20,25 +19,30 @@ import { useLocalize } from "../i18n/LocaleContext.js";
 import { controlClass, controlStyle, mergeClass } from "../render/style.js";
 import { str, useText } from "./common.js";
 import { formatValue } from "./format.js";
+import {
+  analysisRows as rows,
+  clamp,
+  comparisonLayout,
+  navigableHref,
+  num,
+  optionalNum,
+  towerLayout,
+  towerTicks,
+  type ComparisonPairWire as ComparisonPair,
+  type TowerBandPlacement,
+  type TowerBandWire as TowerBand,
+} from "./analysisLayout.js";
 
-// ---------------------------------------------------------------------------- rows
-
-/** A bound row property is either the array itself or a pointer that resolved to one. */
-function rows<T>(value: Json): T[] {
-  return Array.isArray(value) ? (value as T[]) : [];
-}
-
-function num(v: unknown): number {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-/** Null/undefined stays null — an absent side is NOT a zero. */
-function optionalNum(v: unknown): number | null {
-  if (v == null) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
+// Re-exported for back-compat with importers that reached for the geometry here.
+export {
+  comparisonLayout,
+  navigableHref,
+  towerLayout,
+  type ComparisonPlacement,
+  type ComparisonRow,
+  type TowerBandPlacement,
+  type TowerPlacement,
+} from "./analysisLayout.js";
 
 const hintStyle: CSSProperties = { color: "var(--colorNeutralForeground3)" };
 const emptyStyle: CSSProperties = { ...hintStyle, fontStyle: "italic", margin: 0 };
@@ -94,69 +98,6 @@ function KpiStripView({ control }: { control: UiControl }): ReactNode {
 
 // ---------------------------------------------------------------------------- tower
 
-interface TowerBand {
-  label?: Json;
-  terms?: Json;
-  attachment?: Json;
-  cover?: Json;
-  share?: Json;
-  href?: Json;
-}
-
-export interface TowerBandPlacement {
-  band: TowerBand;
-  bottomPercent: number;
-  heightPercent: number;
-}
-
-export interface TowerPlacement {
-  top: number;
-  retention: number;
-  bands: TowerBandPlacement[];
-}
-
-const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
-
-/** TS port of TowerControl.Layout. Null when there is nothing honest to draw. */
-export function towerLayout(bands: TowerBand[]): TowerPlacement | null {
-  if (bands.length === 0) return null;
-  const ordered = [...bands].sort((a, b) => num(a.attachment) - num(b.attachment) || num(a.cover) - num(b.cover));
-  const top = Math.max(...ordered.map((b) => num(b.attachment) + num(b.cover)));
-  if (!(top > 0)) return null;
-  return {
-    top,
-    retention: Math.max(0, Math.min(...ordered.map((b) => num(b.attachment)))),
-    bands: ordered.map((band) => ({
-      band,
-      bottomPercent: clamp(num(band.attachment) / top, 0, 1) * 100,
-      heightPercent: clamp(num(band.cover) / top, 0, 1) * 100,
-    })),
-  };
-}
-
-/** TS port of TowerControl.NavigableHref. */
-export function navigableHref(href: string): string | null {
-  const trimmed = href.trim();
-  if (!trimmed) return null;
-  return trimmed.startsWith("/") || trimmed.includes("://") ? trimmed : `/${trimmed}`;
-}
-
-/** Zero, the exhaustion point, and every attachment — collapsed when they would overprint. */
-function towerTicks(layout: TowerPlacement, format: string | undefined): { percent: number; label: string }[] {
-  const amounts = [
-    ...new Set([0, layout.top, ...layout.bands.map((b) => num(b.band.attachment))]),
-  ]
-    .filter((a) => a >= 0 && a <= layout.top)
-    .sort((a, b) => a - b);
-
-  const ticks: { percent: number; label: string }[] = [];
-  for (const amount of amounts) {
-    const percent = (amount / layout.top) * 100;
-    if (ticks.length > 0 && percent - ticks[ticks.length - 1].percent < 4) continue;
-    ticks.push({ percent, label: formatValue(amount, format || "N0") });
-  }
-  return ticks;
-}
 
 /** One band. Its own component so a linked band can take the host's routing hook. */
 function TowerBandBox({ placement }: { placement: TowerBandPlacement }): ReactNode {
@@ -255,7 +196,7 @@ function TowerView({ control }: { control: UiControl }): ReactNode {
             borderRight: "1px solid var(--colorNeutralStroke2)",
           }}
         >
-          {towerTicks(layout, format).map((tick) => (
+          {towerTicks(layout).map((tick) => (
             <div
               key={tick.percent}
               style={{
@@ -271,7 +212,7 @@ function TowerView({ control }: { control: UiControl }): ReactNode {
                 ...hintStyle,
               }}
             >
-              {tick.label}
+              {formatValue(tick.amount, format || "N0")}
             </div>
           ))}
         </div>
@@ -316,41 +257,6 @@ function TowerView({ control }: { control: UiControl }): ReactNode {
 }
 
 // ---------------------------------------------------------------------------- comparison bars
-
-interface ComparisonPair {
-  label?: Json;
-  left?: Json;
-  right?: Json;
-}
-
-export interface ComparisonRow {
-  pair: ComparisonPair;
-  leftPercent: number | null;
-  rightPercent: number | null;
-}
-
-export interface ComparisonPlacement {
-  max: number;
-  rows: ComparisonRow[];
-}
-
-/** TS port of ComparisonBarsControl.Layout. Null when no side carries a positive value. */
-export function comparisonLayout(pairs: ComparisonPair[]): ComparisonPlacement | null {
-  if (pairs.length === 0) return null;
-  const max = Math.max(
-    ...pairs.map((p) => Math.max(optionalNum(p.left) ?? 0, optionalNum(p.right) ?? 0)),
-  );
-  if (!(max > 0)) return null;
-  const percent = (v: number | null) => (v === null ? null : clamp(Math.max(v / max, 0.005), 0, 1) * 100);
-  return {
-    max,
-    rows: pairs.map((pair) => ({
-      pair,
-      leftPercent: percent(optionalNum(pair.left)),
-      rightPercent: percent(optionalNum(pair.right)),
-    })),
-  };
-}
 
 function ComparisonBarsView({ control }: { control: UiControl }): ReactNode {
   const t = useLocalize();
