@@ -71,4 +71,51 @@ public class CompilationCacheOptions
     /// Default: 30 seconds.
     /// </summary>
     public TimeSpan SourceSnapshotTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// 🚨 Bound on the compile pipeline's ROSLYN leg — everything inside
+    /// <c>CompileCore</c>'s <c>CompileAsync</c> call: the NuGet restore for any
+    /// <c>#r "nuget:…"</c> the sources declare (network IO), source-generator
+    /// execution, and Roslyn's <c>Emit</c> plus the disk write. Sibling of
+    /// <see cref="SourceSnapshotTimeout"/> and there for the same reason: this
+    /// subscription is the ONLY component that can settle the
+    /// <c>CompilationStatus = Compiling</c> the dispatcher just flipped, so a leg that
+    /// never answers strands the NodeType at Compiling for the life of the activation —
+    /// and single-flight then ABSORBS every fresh trigger against it (no competing run,
+    /// but also no recovery). The realistic non-completion is the NuGet leaf: an
+    /// unreachable/hanging feed has no timeout of its own.
+    /// On expiry the leg is CANCELLED (its <c>CancellationToken</c> is tripped when the
+    /// bound unsubscribes, so Roslyn/NuGet stop rather than leak a compile thread) and
+    /// the compile fails TERMINALLY with an error naming the leg.
+    /// Generously above any legitimate run — a cold NuGet restore plus a large Roslyn
+    /// emit is seconds-to-a-minute, never five.
+    /// Default: 5 minutes.
+    /// </summary>
+    public TimeSpan RoslynCompileTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// 🚨 Bound on the compile pipeline's ASSEMBLY-LOAD leg — loading the freshly emitted
+    /// assembly into its <c>AssemblyLoadContext</c>, <c>GetTypes()</c>, the
+    /// <c>MeshNodeProviderAttribute</c> reflection scan and the configuration
+    /// instantiation it performs. That work runs USER code (an attribute's constructor, a
+    /// type initializer), so "it always returns" is not a guarantee the framework can make.
+    /// Unbounded, a single blocking static ctor pins the type at Compiling forever.
+    /// On expiry the compile fails TERMINALLY with an error naming the leg.
+    /// The leg is pure local CPU + a file read — sub-second in every healthy compile.
+    /// Default: 2 minutes.
+    /// </summary>
+    public TimeSpan AssemblyLoadTimeout { get; set; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// 🚨 Bound on the compile pipeline's ASSEMBLY-STORE UPLOAD leg
+    /// (<c>IAssemblyStore.PutWithLocation</c> — blob/HTTP IO). Unlike the two legs above,
+    /// expiry here is NOT terminal-Error: an upload failure has never failed a compile
+    /// (the assembly is usable in the producing silo; only cross-silo activation needs the
+    /// store), and a bound must not silently change that contract. The timeout falls into
+    /// the leg's existing failure path — a warning on the compile's ActivityLog naming the
+    /// leg, and the un-stamped result passed through — so the compile SETTLES (Ok) instead
+    /// of hanging at Compiling on a wedged blob endpoint.
+    /// Default: 2 minutes.
+    /// </summary>
+    public TimeSpan AssemblyStoreUploadTimeout { get; set; } = TimeSpan.FromMinutes(2);
 }
