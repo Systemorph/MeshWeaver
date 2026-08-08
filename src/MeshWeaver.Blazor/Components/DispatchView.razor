@@ -24,6 +24,27 @@ else if(ViewDescriptor != null)
                 @((RenderFragment)(builder =>
                 {
                     builder.OpenComponent(0, ViewDescriptor.Type);
+
+                    // 🚨 A LayoutAreaControl is not a passive view-model: the LayoutAreaView it
+                    // renders OWNS a synchronization stream whose identity is (Address, Reference),
+                    // plus the dialog/progress streams reduced off it and a whole already-rendered
+                    // child subtree bound to it. Without a key, changing ONLY the Reference on a
+                    // control that stays in the same slot is delivered as a parameter update to the
+                    // RETAINED component, which then has to hot-swap that live stream underneath
+                    // itself and its subtree — the freeze of #733 (server kept advancing, DOM stayed
+                    // on the previous emission). Keying on the stream identity makes a reference (or
+                    // address) change what it actually is: a DIFFERENT area — the old subtree is
+                    // unmounted (disposing its stream through the normal DisposeAsync path) and a
+                    // fresh one mounts. An unchanged identity keeps the same instance, so nothing
+                    // remounts on ordinary re-renders. No sibling can collide: this component is the
+                    // only frame in this fragment.
+                    // The routed page mounts LayoutAreaView DIRECTLY (ApplicationPage / AreaPage), so
+                    // its deliberate keep-last-good-across-navigation behaviour is untouched.
+                    if (ViewModel is LayoutAreaControl embeddedArea)
+                    {
+                        builder.SetKey(embeddedArea.GetStreamIdentity());
+                    }
+
                     var index = 0;
 
                     foreach (var parameter in ViewDescriptor.Parameters)
