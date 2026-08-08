@@ -51,6 +51,22 @@ public class AgentChatClient : IAgentChat
     private string? currentAgentPath;
     private AgentSession? sharedThread;
     private string? currentModelName;
+    // The model the CALLER asked for, resolved to its wire id but BEFORE the stale-model
+    // fallback ran — the "requested" half of the requested-vs-effective pair. Null when the
+    // round carried no selection (a delegation sub-thread, a generator/automation round).
+    private string? requestedModelName;
+    // Non-null ONLY when a NON-EMPTY requested model was swapped by ApplyStaleModelFallback:
+    // the id that was asked for while <see cref="currentModelName"/> is the one that answers.
+    // This is the machine-readable substitution marker ThreadExecution stamps onto the round's
+    // response cell (ThreadMessage.RequestedModelName) — an automation detects "I did not get
+    // the model I asked for" from the DATA, never from prose.
+    private string? substitutedFromModel;
+    // True when the selected model is unusable AND the catalog offered NO usable replacement,
+    // i.e. the fallback is exhausted. On its own that is not fatal (a deployment can keep its
+    // keys in factory config, invisible to the credential resolver) — it becomes fatal only
+    // when agent creation ALSO produced nothing, which is what latches noUsableModelError.
+    private bool modelFallbackExhausted;
+    private string? noUsableModelError;
     private string? persistentThreadId;
     private IReadOnlyList<string>? currentAttachments;
     private bool isPersistentFactory;
@@ -109,6 +125,34 @@ public class AgentChatClient : IAgentChat
     /// every <see cref="WhenInitialized"/> emission.
     /// </summary>
     public IReadOnlyList<ModelInfo> LoadedModels => loadedModels;
+
+    /// <summary>
+    /// The model that ACTUALLY serves rounds on this client — the caller's selection after
+    /// <c>ApplyStaleModelFallback</c> healed it (and, for a round that carried no selection at
+    /// all, the resolved deployment default). <c>ThreadExecution</c> records THIS on the round's
+    /// response cell and in token accounting, so the persisted record never claims a model that
+    /// did not answer (#476). Null only when no model is selected and none resolves.
+    /// </summary>
+    public string? EffectiveModelName => currentModelName;
+
+    /// <summary>
+    /// The model id the caller ASKED for when it differs from <see cref="EffectiveModelName"/> —
+    /// i.e. the round was silently moved onto another model — else <c>null</c>. Stamped onto the
+    /// response cell as <see cref="ThreadMessage.RequestedModelName"/> so a NON-INTERACTIVE round
+    /// (delegation sub-thread, generator, scheduled automation), which reads no chat transcript,
+    /// can still detect the substitution from the node data.
+    /// </summary>
+    public string? SubstitutedFromModel => substitutedFromModel;
+
+    /// <summary>
+    /// Speaking message describing why NO model can serve a round on this client: the selection has
+    /// no usable credential, the catalog offered no usable replacement, AND agent creation produced
+    /// nothing. Null in every other state — in particular a deployment whose keys live in factory
+    /// config (invisible to the credential resolver) still builds agents and keeps running.
+    /// <para><c>ThreadExecution</c> fails the round with this message instead of letting it proceed
+    /// onto a client that will only produce a raw provider error (#476).</para>
+    /// </summary>
+    public string? NoUsableModelError => noUsableModelError;
 
     // Live subscription to the workspace-level synced agent collection. Disposed
     // and replaced on every Initialize() call so the current context's queries
@@ -1483,6 +1527,13 @@ public class AgentChatClient : IAgentChat
         // last-ditch fallback when the resolver service is absent.
         currentModelName = hub.ServiceProvider.GetService<ChatClientCredentialResolver>()?.ResolveModelId(modelName)
                            ?? SelectionId.IdOf(modelName);
+        // Remember what was ASKED for, in the same wire form the fallback compares against, so a
+        // later swap can be reported as a requested→effective pair rather than silently overwriting
+        // the record (#476). Reset the swap markers: this Initialize starts a fresh resolution.
+        requestedModelName = currentModelName;
+        substitutedFromModel = null;
+        modelFallbackExhausted = false;
+        noUsableModelError = null;
         lastLoadedContextPath = contextPath;
         // Default the NodeType-search namespace to the context node's NodeType when the
         // caller didn't supply one. AgentPickerProjection.BuildAgentQueries will only
@@ -1748,6 +1799,8 @@ public class AgentChatClient : IAgentChat
         // Reset before this attempt — a previous failure shouldn't be surfaced
         // if the new attempt succeeds.
         lastAgentCreationError = null;
+        modelFallbackExhausted = false;
+        noUsableModelError = null;
 
         // 🩹 Self-heal a stale / deleted pinned model. The composer can carry a model id that no
         // longer resolves to a live LanguageModel (catalog refactor, deleted provider) — building a
@@ -1854,6 +1907,25 @@ public class AgentChatClient : IAgentChat
         // new full dict, never a half-built one.
         agents = createdAgents;
         agentsInitialized = true;
+
+        // 🛑 #476: the fallback is exhausted (no model in the catalog has a usable credential) AND
+        // not a single agent could be built — i.e. every factory refused the unusable selection
+        // ("ApiKey is missing for model 'X'"). Running the round now can only produce a raw provider
+        // dump on a model nobody can serve, so latch a SPEAKING failure that ThreadExecution turns
+        // into a terminal Error. Both conditions are required: exhausted-alone is normal for a
+        // deployment whose keys live in factory config (the resolver cannot see those, yet the
+        // agents build and the round runs fine), and empty-alone has other causes that keep their
+        // existing "surface the reason as chat output" behaviour.
+        noUsableModelError = modelFallbackExhausted && createdAgents.IsEmpty
+            ? $"No language model can serve this round: the selected model "
+              + $"'{(string.IsNullOrEmpty(requestedModelName) ? "(none selected)" : requestedModelName)}' "
+              + "has no usable credentials, and no other model in the catalog resolves one. "
+              + "Configure a provider key (Settings → Language Models) or pick a different model."
+              + (string.IsNullOrEmpty(lastAgentCreationError) ? "" : $" Details: {lastAgentCreationError}")
+            : null;
+        if (noUsableModelError is not null)
+            logger.LogWarning("[AgentChatClient] {Error}", noUsableModelError);
+
         logger.LogDebug("[AgentChatClient] Created {Count} agents", agents.Count);
     }
 
@@ -1948,16 +2020,31 @@ public class AgentChatClient : IAgentChat
         var declaredSize = loadedAgents
             .FirstOrDefault(a => string.Equals(a.Name, currentAgentName, StringComparison.OrdinalIgnoreCase))
             ?.AgentConfiguration?.ModelTier;
+        // 🩺 The fallback target is HEALTH-CHECKED, never assumed: ResolveModelIdForSize ranks the
+        // catalog through the SAME HasUsableCredential predicate the early return above uses (and
+        // that AgentPickerProjection.ObserveDefaultComposer uses for the composer default), so a
+        // swap can only ever land on a model whose credentials actually resolve.
         var fallback = resolver.ResolveModelIdForSize(declaredSize);
         if (string.IsNullOrEmpty(fallback)
             || string.Equals(fallback, currentModelName, StringComparison.OrdinalIgnoreCase))
+        {
+            // Nothing usable to swap TO. Not fatal on its own — a deployment can keep its keys in
+            // factory config where the resolver cannot see them — so the round still tries. The
+            // latch lets CreateAgentsSync turn "no usable model AND no agent could be built" into a
+            // speaking round failure instead of a raw provider error (#476).
+            modelFallbackExhausted = true;
             return;
+        }
         var stale = currentModelName;
         currentModelName = fallback;
-        // 🔇 SILENT correction (user directive 2026-07-13: "the user does not get such messages —
-        // silently correct this and take the first valid model"). We LOG the swap for operators but do
-        // NOT emit a user-facing notice: an unusable pinned model is a config/catalog problem the user
-        // can't act on mid-thread, and surfacing it read as noise. The round just runs on the default.
+        // 🔇 SILENT for the USER (directive 2026-07-13: "the user does not get such messages —
+        // silently correct this and take the first valid model"): no assistant chat message, because
+        // an unusable pinned model is a config/catalog problem the user cannot act on mid-thread.
+        // NEVER silent for an OPERATOR though — that was the #476 defect. Two durable signals:
+        // this Warning naming BOTH models, and `substitutedFromModel`, which ThreadExecution stamps
+        // onto the round's response cell so a non-interactive round (which reads no chat stream)
+        // still carries the fact in its data.
+        substitutedFromModel = string.IsNullOrEmpty(stale) ? null : stale;
         logger.LogWarning(
             "[AgentChatClient] Selected model '{Stale}' is not usable (no resolvable key); "
             + "silently falling back to default model '{Default}'.",
