@@ -232,6 +232,12 @@
     color: var(--annotation-delete-border);
 }
 
+/* Revert a history-derived change — the only action on a tracked-change card, since the edit is
+   already in the document. */
+.collab-md-card-actions .btn-revert {
+    color: var(--annotation-delete-border);
+}
+
 /* Quoted text snippet */
 .collab-md-quote {
     margin-top: 6px;

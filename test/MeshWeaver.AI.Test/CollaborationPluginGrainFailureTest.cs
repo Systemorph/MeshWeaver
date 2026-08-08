@@ -34,42 +34,19 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
 
     private CancellationToken TestTimeout => new CancellationTokenSource(15.Seconds()).Token;
 
-    /// <summary>
-    /// Foundational contract: posting a <see cref="CreateSuggestedEditRequest"/> to an
-    /// address with no registered hub must raise <see cref="DeliveryFailureException"/>
-    /// when using <c>AwaitResponse</c> â€” this test uses the test-only await style that
-    /// AGENTS.md permits in test code. Production plugin code must NOT use
-    /// <c>AwaitResponse</c>; it uses Post + RegisterCallback + TCS instead (exercised
-    /// by the plugin-level tests below). This test locks the routing contract that
-    /// the plugin callback's <c>DeliveryFailure</c> branch depends on.
-    /// </summary>
-    [Fact(Timeout = 20000)]
-    public async Task SuggestedEditRequest_ToNonExistentGrain_ThrowsDeliveryFailure()
-    {
-        var nonExistent = new Address("NonExistent", "Document/definitely-not-here");
-
-        // The observable must ERROR (routing fails fast). Materialize folds the
-        // OnError into a value so we assert it reactively — no await, no ThrowAsync.
-        var notification = await Mesh.Observe(new CreateSuggestedEditRequest
-                {
-                    DocumentId = "NonExistent/Document/definitely-not-here",
-                    Position = 0,
-                    InsertedText = "test",
-                    Author = "test"
-                }, o => o.WithTarget(nonExistent))
-            .Take(1)
-            .Materialize()
-            .Should().Within(15.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
-
-        var ex = notification.Exception!;
-        ex.Should().NotBeOfType<OperationCanceledException>(
-            "the routing layer should fail fast, not time out");
-        ex.Should().NotBeOfType<TaskCanceledException>();
-        ex.GetBaseException().Should().BeOfType<DeliveryFailureException>();
-    }
+    // NOTE: the CreateSuggestedEditRequest twin of the routing test below is gone with the request
+    // type itself — a suggested edit is now a normal versioned write through
+    // GetMeshNodeStream(path).Update(...), not a message verb. The routing contract it locked is the
+    // same one CreateCommentRequest exercises here, and the plugin's own not-found behaviour is
+    // covered by SuggestEdit_NonResolvablePath_ReturnsDocumentNotFound.
 
     /// <summary>
-    /// Same foundational contract for <see cref="CreateCommentRequest"/>.
+    /// Foundational contract: posting a <see cref="CreateCommentRequest"/> to an address with no
+    /// registered hub must raise <see cref="DeliveryFailureException"/>. This test uses the test-only
+    /// await style that AGENTS.md permits in test code; production plugin code must NOT use
+    /// <c>AwaitResponse</c> — it uses Post + RegisterCallback + TCS instead (exercised by the
+    /// plugin-level tests below). This locks the routing contract that the plugin callback's
+    /// <c>DeliveryFailure</c> branch depends on.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task CommentRequest_ToNonExistentGrain_ThrowsDeliveryFailure()
