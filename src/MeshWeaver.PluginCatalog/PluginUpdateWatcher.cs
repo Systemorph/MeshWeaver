@@ -242,24 +242,30 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
 
         if (ShouldAutoApply(record))
         {
-            ApplyUpdate(accessService, pkg, build, detail);
+            ApplyUpdate(accessService, meshService, pkg, record, recordPath, build, detail);
             return;
         }
 
-        Observable.Using(
+        Notify(
+            accessService, meshService, recordPath, pkg,
+            $"Update available: {pkg.Name ?? pkg.Id}",
+            $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}). Built from {build.HeadSha[..Math.Min(7, build.HeadSha.Length)]}.");
+    }
+
+    /// <summary>Raises a system notification on the install record (the user-visible surface of an
+    /// update reminder — and of a refusal, which must never be a silent skip).</summary>
+    private void Notify(
+        AccessService accessService, IMeshService meshService, string recordPath,
+        PackageManifest pkg, string title, string body)
+        => Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
                 _ => NotificationService.CreateNotification(
-                    meshService,
-                    recordPath,
-                    $"Update available: {pkg.Name ?? pkg.Id}",
-                    $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}). Built from {build.HeadSha[..Math.Min(7, build.HeadSha.Length)]}.",
-                    NotificationType.System,
-                    targetNodePath: recordPath))
+                    meshService, recordPath, title, body,
+                    NotificationType.System, targetNodePath: recordPath))
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex,
-                    "Plugin update watcher: raising the update reminder for {Id} failed.", pkg.Id));
-    }
+                    "Plugin update watcher: raising the notification for {Id} failed.", pkg.Id));
 
     /// <summary>
     /// The opt-in rule, extracted so it is pinnable on its own: a changed module installs
@@ -280,8 +286,20 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
     /// <para>Runs as SYSTEM: there is no user on a webhook-driven emission, and the install writes
     /// nodes. Errors are logged, never thrown — this is a background reaction, and a fault here must
     /// not tear down the subscription that serves every other package.</para>
+    ///
+    /// <para><b>Commercial packages are re-authorized here, every time (#830).</b> "No user on a
+    /// webhook emission" is precisely why this path was the hole: a priced package that was once an
+    /// install record kept updating itself with no permission check at all. The record carries the
+    /// principal that authorized its install
+    /// (<see cref="PackageManifest.AuthorizedBy"/>) and the installer re-checks that principal is
+    /// STILL a global admin — so revoking the admin stops the syncing, and a record that was never
+    /// admin-authorized (a free package that later acquired a price, an unattended install) is
+    /// refused rather than silently updated. A refusal surfaces as a notification on the record,
+    /// exactly like the reminder path.</para>
     /// </summary>
-    private void ApplyUpdate(AccessService accessService, PackageManifest pkg, BuildCompletion build, string detail)
+    private void ApplyUpdate(
+        AccessService accessService, IMeshService meshService, PackageManifest pkg,
+        PackageManifest record, string recordPath, BuildCompletion build, string detail)
     {
         var content = watchedCatalogs.TryGetValue(build.RepositoryUrl, out var c) ? c : null;
         var source = content is null
@@ -295,18 +313,33 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
         }
 
         logger?.LogInformation(
-            "Plugin update watcher: auto-updating {Id} to {Version} ({Detail}).",
-            pkg.Id, pkg.ModuleVersion, detail);
+            "Plugin update watcher: auto-updating {Id} to {Version} ({Detail}); authorized by {Principal}.",
+            pkg.Id, pkg.ModuleVersion, detail, record.AuthorizedBy ?? "(nobody)");
 
         Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
-                _ => CatalogLayoutAreas.InstallOrUpdate(hub, source, build.HeadSha, pkg, logger))
+                _ => CatalogLayoutAreas.InstallOrUpdate(
+                    hub, source, build.HeadSha, pkg, logger, record.AuthorizedBy))
             .Subscribe(
                 result => logger?.LogInformation(
                     "Plugin update watcher: {Id} auto-updated ({Result}).", pkg.Id, result),
-                ex => logger?.LogWarning(ex,
-                    "Plugin update watcher: auto-update of {Id} failed; the card still offers a manual Update.",
-                    pkg.Id));
+                ex =>
+                {
+                    if (ex is PackageAuthorizationException)
+                    {
+                        logger?.LogWarning(
+                            "Plugin update watcher: auto-update of {Id} REFUSED — {Reason}", pkg.Id, ex.Message);
+                        Notify(
+                            accessService, meshService, recordPath, pkg,
+                            $"Update needs a Global Admin: {pkg.Name ?? pkg.Id}",
+                            $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}), but it is a "
+                            + "commercial package and was not applied automatically. " + ex.Message);
+                        return;
+                    }
+                    logger?.LogWarning(ex,
+                        "Plugin update watcher: auto-update of {Id} failed; the card still offers a manual Update.",
+                        pkg.Id);
+                });
     }
 
     private static (string Owner, string Repo) OctokitParse(string url)
