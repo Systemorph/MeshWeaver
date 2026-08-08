@@ -44,6 +44,20 @@ namespace MeshWeaver.AI.Test;
 /// persisted. The version echo-suppression only skipped the single latest write, not the lagging
 /// echoes. The fix makes that refresh FORWARD-ONLY (apply a persisted snapshot only when strictly
 /// newer), so the in-RAM commit is authoritative and never moves backward.</para>
+///
+/// <para>SECOND ROOT CAUSE, issue #945 — the same symptom on the READ side. Under CI load this
+/// test kept failing with a handful of entries missing and ZERO write errors, and the owner-truth
+/// probe below proved the owner held all 288: the loss was in the shared-cache MIRROR. A write
+/// burst makes the mesh change feed announce versions faster than a loaded mirror applies them, so
+/// the mirror's version-gated <c>Resubscribe</c> fires; the owner answers on the
+/// <c>alreadyServing</c> path in <c>JsonSynchronizationStream.CreateSynchronizationStream</c> by
+/// re-asserting its snapshot. That re-assert bound <c>Current</c> OUTSIDE the stream's update turn
+/// and wrote it back blindly, stamped with the per-subscriber SYNC hub's clock instead of the
+/// state's own content version — so it rolled the stream BACKWARD over every frame that had
+/// committed in between (measured: 245 entries@v246 → 234 entries@v235), re-based the outbound
+/// JSON cursor on the rolled-back state, and left the mirror trailing the owner by a CONSTANT
+/// deficit forever. The fix reads the snapshot in-turn and carries its own version
+/// (<c>BuildReassertFrame</c>, pinned by <c>ResubscribeReassertFrameTest</c>).</para>
 /// </summary>
 public class CrossHubPatchAtomicityTest(ITestOutputHelper output) : AITestBase(output)
 {
@@ -90,8 +104,31 @@ public class CrossHubPatchAtomicityTest(ITestOutputHelper output) : AITestBase(o
                     .Where(n => n.Content is MeshThread)
                     .Take(1).Timeout(TimeSpan.FromSeconds(30)).ToTask(ct);
 
+            // INSTRUMENT: record every emission the shared-cache mirror delivers, timestamped, so a
+            // failure distinguishes the three shapes on its own instead of leaving it to inference:
+            // went BACKWARD (a stale snapshot re-applied over newer state — the #945 defect),
+            // stopped advancing (never converged), or merely arrived LATE (converged past the settle
+            // bound — a slow box, not a loss). No logging pipeline involved.
+            // 🚨 `using` + an explicit OnError, both load-bearing on the FAILURE path — the one
+            // path this instrument exists for. Without `using`, Assert.Fail below unwinds past a
+            // plain Dispose() and leaves the subscription pending into teardown (the "left Observe
+            // subscriptions pending past the Quiescing budget" class). Without an OnError handler,
+            // a stream fault would be rethrown on the producer's thread as an unhandled exception,
+            // replacing the very diagnostics the failure message is built from; instead the fault
+            // is captured and REPORTED alongside the sequence recorded so far.
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var observed = new System.Collections.Concurrent.ConcurrentQueue<(long Version, int Keys, long Ms)>();
+            Exception? watchError = null;
+            using var watch = Mesh.GetWorkspace().GetMeshNodeStream(path)
+                .Subscribe(
+                    n => observed.Enqueue(
+                        (n.Version, (n.Content as MeshThread)?.PendingUserMessages.Count ?? 0,
+                         clock.ElapsedMilliseconds)),
+                    ex => watchError = ex);
+
             var allKeys = new List<string>(total);
             var writes = new List<IObservable<MeshNode>>(total);
+            var writeErrors = new System.Collections.Concurrent.ConcurrentBag<string>();
             for (var m = 0; m < mirrors; m++)
             {
                 var client = clients[m];
@@ -114,7 +151,11 @@ public class CrossHubPatchAtomicityTest(ITestOutputHelper output) : AITestBase(o
                         })
                         .Take(1)
                         // A failed write must surface as a MISSING key (the loss), not abort the burst.
-                        .Catch((Exception _) => Observable.Empty<MeshNode>()));
+                        .Catch((Exception ex) =>
+                        {
+                            writeErrors.Add($"{key}: {ex.GetType().Name}: {ex.Message}");
+                            return Observable.Empty<MeshNode>();
+                        }));
                 }
             }
 
@@ -141,11 +182,47 @@ public class CrossHubPatchAtomicityTest(ITestOutputHelper output) : AITestBase(o
             catch (TimeoutException)
             {
                 var missing = allKeys.Where(k => !finalKeys.Contains(k)).ToArray();
+                var errs = writeErrors.ToArray();
+                // OWNER TRUTH: a brand-new client opens a FRESH remote subscription (bypassing the
+                // shared cache), so the initial frame it receives is the owner's authoritative
+                // Current. If the key is present here but absent above, the loss is on the READ
+                // (mirror) side; if it is absent here too, the owner genuinely dropped it.
+                var probe = GetClient();
+                var ownerNode = await probe.GetWorkspace().GetMeshNodeStreamBypassCache(path)
+                    .Where(n => n.Content is MeshThread)
+                    .Take(1).Timeout(TimeSpan.FromSeconds(30)).ToTask(ct);
+                var ownerKeys = (ownerNode.Content as MeshThread)!.PendingUserMessages.Keys.ToImmutableHashSet();
+                var ownerMissing = allKeys.Where(k => !ownerKeys.Contains(k)).ToArray();
+                var seq = observed.ToArray();
+                var regressions = seq.Zip(seq.Skip(1))
+                    .Where(p => p.Second.Keys < p.First.Keys)
+                    .Select(p => $"{p.First.Keys}@v{p.First.Version}(t{p.First.Ms}ms)"
+                                 + $"->{p.Second.Keys}@v{p.Second.Version}(t{p.Second.Ms}ms)")
+                    .ToArray();
+                // Did the mirror converge at all — before or after the settle bound expired?
+                var converged = seq.LastOrDefault(e => e.Keys >= total);
                 Assert.Fail(
-                    $"Round {round}: owner dropped {missing.Length} of {total} concurrent cross-hub adds "
-                    + $"(present={finalKeys.Count}). Missing (first 20): [{string.Join(",", missing.Take(20))}]. "
-                    + "The owner-side patch apply is non-atomic — a concurrent apply read a stale base and "
-                    + "overwrote a sibling writer's just-added key.");
+                    $"Round {round}: {missing.Length} of {total} concurrent cross-hub adds are not visible "
+                    + $"(present={finalKeys.Count}). Missing: [{string.Join(",", missing)}]. "
+                    + $"WRITE ERRORS ({errs.Length}): [{string.Join(" | ", errs)}]. "
+                    + $"OWNER-TRUTH probe: version={ownerNode.Version} present={ownerKeys.Count} "
+                    + $"missing=[{string.Join(",", ownerMissing)}]. "
+                    + (watchError is null
+                        ? ""
+                        : $"MIRROR STREAM FAULTED: {watchError.GetType().Name}: {watchError.Message} "
+                          + "(the sequence below stops there). ")
+                    + $"MIRROR SEQUENCE ({seq.Length} emissions), REGRESSIONS ({regressions.Length}): "
+                    + $"[{string.Join(",", regressions)}]; converged="
+                    + (converged.Keys >= total ? $"YES at t{converged.Ms}ms" : "NEVER")
+                    + "; tail="
+                    + $"[{string.Join(",", seq.TakeLast(6).Select(e => $"{e.Keys}@v{e.Version}(t{e.Ms}ms)"))}]. "
+                    + "READ THE DIAGNOSTICS BEFORE THEORISING: write errors non-empty ⇒ the write failed, "
+                    + "not the merge. Owner-truth missing ⇒ the OWNER apply lost it (a non-atomic "
+                    + "read-modify-write). Owner-truth complete but entries missing here ⇒ the shared-cache "
+                    + "MIRROR is behind — and then: a REGRESSION names the exact frame where the mirror "
+                    + "moved BACKWARD (the #945 stale resubscribe re-assert, a real loss), while "
+                    + "converged=YES with no regression means the mirror got everything but only after "
+                    + "the settle bound — a slow box, not a lost write.");
             }
 
             finalKeys.Count.Should().BeGreaterThanOrEqualTo(total,
