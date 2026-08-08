@@ -7,6 +7,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -35,8 +36,16 @@ public static class MarkdownOverviewLayoutArea
         var hideHeader = host.Reference.HasParameter("showHeader")
             && string.Equals(host.Reference.GetParameterValue("showHeader"), "false", System.StringComparison.OrdinalIgnoreCase);
 
+        // A module that OWNS this page may supply its own menu (a course lists the WHOLE course, not
+        // the branch you are in). An @@ embed never gets a side menu, so its providers are not even
+        // asked — no query is opened for a page that cannot show the result.
+        var suppliedStream = hideHeader
+            ? Observable.Return<NodeNavigation?>(null)
+            : SuppliedNavigation(host);
+
         return host.Workspace.GetMeshNodeStream()
-            .CombineLatest(permissionsStream, host.ObserveChildren("is:main"), (node, perms, children) =>
+            .CombineLatest(permissionsStream, host.ObserveChildren("is:main"), suppliedStream,
+                (node, perms, children, supplied) =>
             {
                 var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
                 var canEdit = perms.HasFlag(Permission.Update);
@@ -48,13 +57,11 @@ public static class MarkdownOverviewLayoutArea
                     return (UiControl?)content;
                 var subNodes = OrderSubNodes(
                     children.Where(c => !LastSegment(c.Path).StartsWith('_')));
-                // A module that OWNS this page may supply its own menu (a course lists the whole
-                // course, not the branch you are in). Nothing supplied → core's default child list,
-                // unchanged — which is why docs and spaces are untouched by this.
-                var supplied = SuppliedNavigation(host, node, subNodes);
-                return (UiControl?)(subNodes.Count == 0 && supplied is null
+                // Nothing supplied → core's default child list, unchanged — which is why docs and
+                // spaces are untouched by this.
+                return (UiControl?)(subNodes.Count == 0 && supplied is not { Entries.Count: > 0 }
                     ? content
-                    : BuildWithSubNodeNav(node, subNodes, content, supplied));
+                    : BuildWithSubNodeNav(host, node, subNodes, content, supplied));
             });
     }
 
@@ -74,59 +81,95 @@ public static class MarkdownOverviewLayoutArea
             .ToList();
 
     /// <summary>
-    /// Wraps the page content with a collapsible left-hand NavMenu listing the node's sub-nodes,
-    /// giving every markdown node with children a navigable side menu of them.
+    /// Area id of the collapsible left-hand navigation, so consumers and tests can address the menu
+    /// without walking anonymous auto-named slots.
     /// </summary>
-        /// <summary>
-    /// Asks each registered <see cref="INodeNavigationProvider"/> for this node's navigation, first
-    /// non-null wins. A provider that declines (or throws — a broken module must not take the page
-    /// down with it) leaves core's default child list in place.
+    public const string NavigationArea = "Navigation";
+
+    /// <summary>
+    /// The glyph that marks where the reader stands. Language-neutral by design (nothing to
+    /// translate) and carried IN ADDITION to the accent colour, so the position survives for a
+    /// reader who cannot distinguish the accent.
     /// </summary>
-    private static IReadOnlyList<NodeNavigationEntry>? SuppliedNavigation(
-        LayoutAreaHost host, MeshNode? node, IReadOnlyList<MeshNode> children)
+    public const string CurrentMarker = "▸";
+
+    /// <summary>
+    /// Asks each registered <see cref="INodeNavigationProvider"/> for this page's navigation, first
+    /// one that claims it wins. A provider that declines — synchronously by returning null, or
+    /// reactively by emitting null / no entries — leaves core's default child list in place, and one
+    /// that throws is logged and skipped: a module's navigation is a nicety, the page is not.
+    /// </summary>
+    private static IObservable<NodeNavigation?> SuppliedNavigation(LayoutAreaHost host)
     {
-        var providers = host.Hub.ServiceProvider
-            .GetServices<INodeNavigationProvider>();
-        foreach (var provider in providers)
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.NodeNavigation");
+        var streams = new List<IObservable<NodeNavigation?>>();
+        foreach (var provider in host.Hub.ServiceProvider.GetServices<INodeNavigationProvider>())
         {
+            IObservable<NodeNavigation?>? stream;
             try
             {
-                if (provider.GetNavigation(node, children) is { Count: > 0 } entries)
-                    return entries;
+                stream = provider.GetNavigation(host);
             }
-            catch
+            catch (Exception ex)
             {
-                // A module's navigation is a nicety; the page is not. Fall through to the default.
+                logger?.LogWarning(ex, "Navigation provider {Provider} threw for {Path} — using the default child list",
+                    provider.GetType().Name, host.Hub.Address);
+                continue;
             }
+            if (stream is null)
+                continue;
+            var declined = provider.GetType().Name;
+            streams.Add(stream
+                // Always emit, immediately: the stream is CombineLatest'd with the node and
+                // permission streams, so one that stayed silent would hold the whole page back.
+                .StartWith((NodeNavigation?)null)
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex, "Navigation provider {Provider} faulted for {Path} — using the default child list",
+                        declined, host.Hub.Address);
+                    return Observable.Return<NodeNavigation?>(null);
+                }));
         }
-        return null;
+
+        return streams.Count switch
+        {
+            0 => Observable.Return<NodeNavigation?>(null),
+            1 => streams[0],
+            _ => Observable.CombineLatest(streams)
+                .Select(supplied => supplied.FirstOrDefault(n => n is { Entries.Count: > 0 })),
+        };
     }
 
-private static UiControl BuildWithSubNodeNav(
-        MeshNode? node, IReadOnlyList<MeshNode> subNodes, UiControl content,
-        IReadOnlyList<NodeNavigationEntry>? supplied = null)
+    /// <summary>
+    /// Wraps the page content with the collapsible left-hand NavMenu: the navigation a module
+    /// supplied for this page when there is one, otherwise core's default list of the node's own
+    /// sub-nodes.
+    /// </summary>
+    private static UiControl BuildWithSubNodeNav(
+        LayoutAreaHost host, MeshNode? node, IReadOnlyList<MeshNode> subNodes, UiControl content,
+        NodeNavigation? supplied = null)
     {
-        var group = new NavGroupControl(node?.Name ?? "Contents").WithSkin(s => s.WithExpanded(true));
-        if (supplied is { Count: > 0 })
-        {
-            // A module OWNS these pages and knows more about them than core does — a course knows
-            // its whole chapter list and which one the reader is standing in. The current entry is
-            // rendered as TEXT, not a link: a link to the page you are on is a dead control that
-            // teaches the reader their position marker is broken.
-            foreach (var entry in supplied)
-                group = entry.IsCurrent
-                    ? group.WithView(Controls.Body($"▸ {entry.Label}")
-                        .WithStyle("display:block;padding:4px 12px;font-weight:600;"))
-                    : group.WithView(new NavLinkControl(entry.Label, entry.Icon, $"/{entry.Path}"));
-            var suppliedNav = Controls.NavMenu
-                .WithSkin(s => s.WithWidth(240).WithCollapsible(true)).WithNavGroup(group);
-            return Controls.Stack
-                .WithOrientation(Orientation.Horizontal).WithWidth("100%")
-                .WithStyle("gap: 24px; align-items: flex-start;")
-                .WithView(suppliedNav)
-                .WithView(Controls.Stack.WithStyle("flex: 1; min-width: 0;").WithView(content));
-        }
+        var group = supplied is { Entries.Count: > 0 }
+            ? BuildSuppliedGroup(host, supplied)
+            : BuildChildrenGroup(host, node, subNodes);
 
+        var nav = Controls.NavMenu.WithSkin(s => s.WithWidth(240).WithCollapsible(true)).WithNavGroup(group);
+
+        return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
+            .WithStyle("gap: 24px; align-items: flex-start;")
+            .WithView(nav, NavigationArea)
+            .WithView(Controls.Stack.WithStyle("flex: 1; min-width: 0;").WithView(content));
+    }
+
+    // Core's default: the node's own children, one flat list.
+    private static NavGroupControl BuildChildrenGroup(
+        LayoutAreaHost host, MeshNode? node, IReadOnlyList<MeshNode> subNodes)
+    {
+        var group = new NavGroupControl(node?.Name ?? host.Localize("nav.contents"))
+            .WithSkin(s => s.WithExpanded(true));
         foreach (var child in subNodes)
         {
             var href = $"/{child.Path}";
@@ -135,16 +178,57 @@ private static UiControl BuildWithSubNodeNav(
                 ? group.WithView(new NavLinkControl(child.Name ?? child.Id, null, href))
                 : group.WithView(new NavLinkControl(child.Name ?? child.Id, icon, href));
         }
-
-        var nav = Controls.NavMenu.WithSkin(s => s.WithWidth(240).WithCollapsible(true)).WithNavGroup(group);
-
-        return Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithWidth("100%")
-            .WithStyle("gap: 24px; align-items: flex-start;")
-            .WithView(nav)
-            .WithView(Controls.Stack.WithStyle("flex: 1; min-width: 0;").WithView(content));
+        return group;
     }
+
+    // A module OWNS these pages and knows more about them than core does — a course knows its whole
+    // module list and which lesson the reader is standing in. The heading names what is indexed (the
+    // course), NOT the page being read, and links to it unless that root IS the page being read.
+    private static NavGroupControl BuildSuppliedGroup(LayoutAreaHost host, NodeNavigation supplied)
+    {
+        var currentPath = host.Hub.Address.ToString();
+        var titleIsCurrent = supplied.TitlePath is { } titlePath
+            && string.Equals(titlePath, currentPath, System.StringComparison.Ordinal);
+
+        var group = new NavGroupControl(Marked(supplied.Title, titleIsCurrent))
+            .WithSkin(s => s.WithExpanded(true));
+        if (supplied.TitlePath is { } path && !titleIsCurrent)
+            group = group.WithUrl($"/{path}");
+
+        foreach (var entry in supplied.Entries)
+            group = AppendEntry(host, group, entry);
+        return group;
+    }
+
+    // One supplied entry: a nested collapsible group when it has children (a course's module),
+    // a link otherwise — or, when it is where the reader stands, MARKED TEXT rather than a link.
+    private static NavGroupControl AppendEntry(
+        LayoutAreaHost host, NavGroupControl group, NodeNavigationEntry entry)
+    {
+        if (entry.Children.Count > 0)
+        {
+            var sub = new NavGroupControl(Marked(entry.Label, entry.IsCurrent))
+                .WithSkin(s => s.WithExpanded(true));
+            if (!entry.IsCurrent)
+                sub = sub.WithUrl($"/{entry.Path}");
+            if (entry.Icon is { } icon)
+                sub = sub.WithIcon(icon);
+            foreach (var child in entry.Children)
+                sub = AppendEntry(host, sub, child);
+            return group.WithGroup(sub);
+        }
+
+        return entry.IsCurrent
+            // TEXT, not a link: a link to the page you are on is a dead control that teaches the
+            // reader their position marker is broken. Glyph AND accent — see CurrentMarker.
+            ? group.WithView(Controls.Body(Marked(entry.Label, true))
+                .WithTooltip(host.Localize("nav.youAreHere"))
+                .WithStyle("display:block;padding:4px 12px;font-weight:600;color:var(--accent-fill-rest);"))
+            : group.WithView(new NavLinkControl(entry.Label, entry.Icon, $"/{entry.Path}"));
+    }
+
+    private static string Marked(string label, bool isCurrent)
+        => isCurrent ? $"{CurrentMarker} {label}" : label;
 
     private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, bool canComment, bool canEdit, bool hideHeader)
     {
