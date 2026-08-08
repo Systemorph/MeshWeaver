@@ -1243,8 +1243,11 @@ public static class MeshExtensions
     ///
     /// <para><b>No recursion:</b> the root create (empty namespace) and the grant create (path
     /// under <c>/_Access/</c>) are exactly the two node shapes skipped at the top, so they never
-    /// re-enter the bootstrap. <b>Idempotent + race-safe:</b> a concurrent first-writer that
-    /// loses the create race sees "already exists" and treats it as success. <b>Re-heals:</b>
+    /// re-enter the bootstrap. A ROOT-SCOPE grant (<c>_Access/{subject}_Access</c>, scope
+    /// <c>""</c>) does not match that <c>/_Access/</c> test — it is stopped instead by the
+    /// partition-segment gate below, which is what keeps <c>_Access</c> from being mistaken for a
+    /// partition and provisioned as a schema (#714). <b>Idempotent + race-safe:</b> a concurrent
+    /// first-writer that loses the create race sees "already exists" and treats it as success. <b>Re-heals:</b>
     /// root + grant presence are re-probed on every child create, so a partition left half-broken
     /// (root-missing, root GHOSTED — a row with no type and no content, grant-missing,
     /// grant-less altogether, or any combination) is repaired on the next child create —
@@ -1272,6 +1275,25 @@ public static class MeshExtensions
 
         var partition = node.Segments.Count > 0 ? node.Segments[0] : null;
         if (string.IsNullOrEmpty(partition))
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        // 🚨 The first segment must actually BE a partition (#714). A partition becomes a
+        // backing-store SCHEMA derived from its name, so only a name satisfying the ONE shared
+        // rule can be bootstrapped — anything else would provision a schema the router refuses
+        // to route to, i.e. a ghost by construction.
+        //
+        // The shape this caught: a ROOT-SCOPE access grant lives at
+        // `_Access/{subject}_Access` (namespace `_Access`, scope ""). The skip test above is
+        // `Path.Contains("/_Access/")`, whose leading slash matches `{P}/_Access/…` but NOT that
+        // root-scope path — so it fell through here, `Segments[0]` read `_Access` as a PARTITION,
+        // and the bootstrap created a `Space` root at `_Access` AND provisioned a schema
+        // literally named `_access`. The router resolves a `_`-prefixed first segment ONLY via a
+        // registered PartitionDefinition with an explicit schema (`_Access` → `system_access`)
+        // and never derives one from the name, so nothing could ever read or write `_access`.
+        // The rule is general, not an `_Access` special case: no `_`-prefixed satellite container
+        // (`_Thread`, `_Activity`, …) and no URL-shaped junk segment is a bootstrappable
+        // partition.
+        if (!PartitionDefinition.IsValidPartitionSegment(partition))
             return Observable.Return(System.Reactive.Unit.Default);
 
         // Never bootstrap a system-managed MIRROR partition (User, Auth). These reject ALL

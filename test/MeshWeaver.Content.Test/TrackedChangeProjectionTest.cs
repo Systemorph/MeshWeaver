@@ -102,8 +102,30 @@ public class TrackedChangeProjectionTest(ITestOutputHelper output) : MonolithMes
             .Where(v => v.Count >= atLeast);
     }
 
-    private IObservable<MeshNode> CurrentNode(string path) =>
-        Mesh.GetWorkspace().GetMeshNodeStream(path).Where(n => n is not null).Take(1)!;
+    /// <summary>
+    /// The node ONCE it has caught up to <paramref name="atLeastVersion"/> — the newest version the
+    /// history says its edits landed at.
+    ///
+    /// <para>🚨 Deliberately NOT a bare <c>Take(1)</c> on the stream. <c>GetMeshNodeStream</c>
+    /// replays the node's currently cached snapshot, and immediately after an edit that is still the
+    /// PRE-edit one: <c>stream.Update</c> returns the locally computed node optimistically and the
+    /// storage layer stamps the reconciled version a moment later ("take the next emission off the
+    /// same handle" for the owner's reconciled state). <c>ChangeProjection.FromHistory</c> projects
+    /// only versions STRICTLY OLDER than the node it is handed, so a stale snapshot makes its
+    /// <c>older</c> set empty and the projection comes back EMPTY — with every version row already
+    /// sitting in the store. Waiting on the version ROWS does not imply the NODE has caught up: the
+    /// history and the node are two different stores, and a bare <c>Take(1)</c> silently asserted
+    /// against whichever snapshot happened to be cached.</para>
+    ///
+    /// <para>The live view never trips on this, which is why it stayed hidden:
+    /// <c>CollaborativeMarkdownView</c> re-projects with <c>Switch</c> on every node emission, so a
+    /// stale emission yields an empty list for an instant and is immediately superseded. Only a
+    /// ONE-SHOT assertion has to wait for the emission that actually carries the edit.</para>
+    /// </summary>
+    private IObservable<MeshNode> NodeAtVersion(string path, long atLeastVersion) =>
+        Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null && n.Version >= atLeastVersion)
+            .Take(1)!;
 
     [Fact(Timeout = 60000)]
     public async Task TrackedChanges_AreProjectedFromVersionHistory_WithNoTrackingSatellite()
@@ -127,7 +149,10 @@ public class TrackedChangeProjectionTest(ITestOutputHelper output) : MonolithMes
         var versions = await WaitForVersions(path, 4).Should().Within(Step).Emit();
         Output.WriteLine($"Version snapshots: {string.Join(", ", versions.Select(v => v.Version))}");
 
-        var current = await CurrentNode(path).Should().Within(Step).Emit();
+        // Same discipline as the revert test: read the node AT the newest recorded version. Three
+        // edits give this one more slack than the single-edit case, but the hazard is identical —
+        // a stale snapshot projects nothing (see NodeAtVersion).
+        var current = await NodeAtVersion(path, versions.Max(v => v.Version)).Should().Within(Step).Emit();
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
 
         var changes = await ChangeProjection
@@ -181,9 +206,14 @@ public class TrackedChangeProjectionTest(ITestOutputHelper output) : MonolithMes
         }).Should().Within(Step).Emit();
 
         await EditAs(path, "dave", "remains cautious", "remains RECKLESS");
-        await WaitForVersions(path, 2).Should().Within(Step).Emit();
+        var rows = await WaitForVersions(path, 2).Should().Within(Step).Emit();
 
-        var edited = await CurrentNode(path).Should().Within(Step).Emit();
+        // Read the node AT the version the history just recorded — not whatever snapshot the
+        // stream has cached. The rows landing does not mean the node has caught up (see
+        // NodeAtVersion): projecting from a stale pre-edit node yields nothing at all.
+        var edited = await NodeAtVersion(path, rows.Max(r => r.Version)).Should().Within(Step).Emit();
+        MarkdownOverviewLayoutArea.GetMarkdownContent(edited).Should().Contain("RECKLESS",
+            "the projection is only meaningful against the node that actually carries the edit");
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
         var change = (await ChangeProjection.FromHistory(versionQuery, edited, Mesh.JsonSerializerOptions)
                 .Should().Within(Step).Emit())
