@@ -127,6 +127,25 @@ public class GroupMembershipLiveRevocationTests(PostgreSqlFixture fixture, ITest
         Output.WriteLine($"[FANOUT-DIAG] {label}: schema={schema} meshNodesTableExists={schemaExists} "
             + $"groupMembershipRowsInSchema={rowCount} registeredInSearchableSchemas="
             + $"{registered.Contains(schema)} searchable=[{string.Join(",", registered)}]");
+
+        // The discriminator: a FRESH path-less query, issued right now. If ITS Initial carries the
+        // membership, the cross-schema SQL + access filter are fine and only the live change
+        // notification failed to arrive; if it does not, the re-query itself cannot see the row and
+        // the notification is irrelevant.
+        try
+        {
+            var probe = await MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    "nodeType:GroupMembership scope:subtree select:path,id,namespace,name,nodeType,content"))
+                .Should().Within(30.Seconds())
+                .Match(c => c.ChangeType == QueryChangeType.Initial);
+            Output.WriteLine($"[FANOUT-DIAG] {label}: freshQueryInitialCount={probe.Items.Count} "
+                + $"containsMembership={probe.Items.Any(n => n.Path == MembershipPath)} "
+                + $"paths=[{string.Join(",", probe.Items.Select(n => n.Path))}]");
+        }
+        catch (Exception ex)
+        {
+            Output.WriteLine($"[FANOUT-DIAG] {label}: fresh query FAILED {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     /// <summary>
