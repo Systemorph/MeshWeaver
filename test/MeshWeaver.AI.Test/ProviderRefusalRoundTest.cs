@@ -52,6 +52,54 @@ public class ProviderRefusalRoundTest(ITestOutputHelper output) : AITestBase(out
     /// <summary>The requested model: no key at all, so <c>ApplyStaleModelFallback</c> swaps it away.</summary>
     private const string StaleModel = "refusal-stale-model";
 
+    // ─── Timeout budget ───
+    // Every bound below detects a BROKEN fixture; none is a performance budget (the healthy test
+    // settles in well under a second). They are sized so their SUM stays under the method ceiling,
+    // which is what keeps an inner wait — the one carrying a message that names the stage — the
+    // thing that fires. See the budget note on the test method.
+
+    /// <summary>
+    /// One seeded node reaching the workspace. In-memory write, no IO. Five of these run before any
+    /// assertion, so they are part of the budget, not free setup.
+    /// </summary>
+    private const int SeedMs = 10_000;
+
+    /// <summary>Number of <see cref="SeedMs"/>-bounded seed calls the test makes before it waits.</summary>
+    private const int SeedCount = 5;
+
+    /// <summary>
+    /// Warm-up of an in-memory synced query — no network, no IO. Observed sub-second; this is a
+    /// loaded-CI allowance, not an expectation.
+    /// </summary>
+    private const int ResolverWarmupMs = 15_000;
+
+    /// <summary>
+    /// The round itself. Bounded by something real: the scripted client throws on the FIRST
+    /// streaming call, so this is mesh plumbing only — submit → watcher → round → terminal write.
+    /// There is no model call to wait on, which is why it does not need a "however long a round
+    /// takes" allowance.
+    /// </summary>
+    private const int RoundMs = 20_000;
+
+    /// <summary>
+    /// Pure backstop. The thread's terminal write (Status=Idle + Summary) happens INSIDE the
+    /// response cell push's completion handler, so by the time the thread wait above succeeds the
+    /// cell is already terminal — this wait cannot legitimately block. Kept as a bounded read rather
+    /// than an unbounded one so a broken ordering fails here, loudly, instead of hanging.
+    /// </summary>
+    private const int CellMs = 5_000;
+
+    /// <summary>Worst case if EVERY bounded stage in the method spends its full allowance.</summary>
+    private const int InnerBudgetMs = SeedMs * SeedCount + ResolverWarmupMs + RoundMs + CellMs;
+
+    /// <summary>
+    /// The method ceiling, DERIVED from <see cref="InnerBudgetMs"/> rather than written as a
+    /// literal, so the "inner waits fire first" invariant is structural: change any constant above
+    /// and the ceiling moves with it, and it can never silently drop below the sum it must exceed.
+    /// The 4/3 factor is the margin — 33% of whatever the stages currently add up to.
+    /// </summary>
+    private const int MethodTimeoutMs = InnerBudgetMs * 4 / 3;
+
     /// <summary>
     /// A verbatim-shaped Azure / System.ClientModel rate-limit failure, headers and all — the exact
     /// payload #476 reports finding pasted into the thread.
@@ -86,7 +134,35 @@ public class ProviderRefusalRoundTest(ITestOutputHelper output) : AITestBase(out
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact(Timeout = 120_000)]
+    /// <summary>
+    /// ⏱️ TIMEOUT BUDGET — the ceiling is a BACKSTOP; an inner wait must always be what fires.
+    /// xUnit's method-timeout abort carries no assertion message, so if it wins the race you lose
+    /// the single fact worth having: WHICH stage hung. Every bounded stage inside this method is
+    /// therefore counted, including the seeds — they run before the first assertion, so they spend
+    /// the same budget:
+    ///
+    /// <code>
+    ///   seeds   5 × 10s = 50s   (SeedMs × SeedCount)
+    ///   warm-up          15s    (ResolverWarmupMs)
+    ///   round            20s    (RoundMs)
+    ///   cell              5s    (CellMs)
+    ///   ────────────────────
+    ///   worst case       90s    (InnerBudgetMs)
+    ///   ceiling         120s    (MethodTimeoutMs = InnerBudgetMs × 4/3) → 30s margin
+    /// </code>
+    ///
+    /// <para>🚨 Those figures restate the constants for readability and are the ONE part of this
+    /// that can drift — the constants are authoritative. If you change a stage bound, update this
+    /// table or delete it; a table claiming numbers the code does not have is the exact failure
+    /// this derived ceiling exists to prevent.</para>
+    ///
+    /// <para>The ceiling is <b>derived</b> from that sum, not written as a literal, so it cannot
+    /// drift below it. It exceeds the repo's 30s default because of the sum, not because anything
+    /// here is slow: the healthy test settles in under a second, and every constant above is a
+    /// broken-fixture detector sized far beyond the observed time. To lower the ceiling, lower the
+    /// stage constants — the arithmetic then does it for you.</para>
+    /// </summary>
+    [Fact(Timeout = MethodTimeoutMs)]
     public async Task ProviderRefusesSubstituteModel_RoundFailsLegibly_NamingBothModels()
     {
         await SeedProvider(KeyedProviderName, apiKey: "sk-refusal-476");
@@ -98,7 +174,8 @@ public class ProviderRefusalRoundTest(ITestOutputHelper output) : AITestBase(out
         resolver.EnsureSubscription();
         await Observable.Interval(TimeSpan.FromMilliseconds(50))
             .Select(_ => resolver.ResolveDefaultModelId())
-            .Should().Within(30.Seconds()).Match(id => id == ThrottledModel);
+            .Should().Within(TimeSpan.FromMilliseconds(ResolverWarmupMs))
+            .Match(id => id == ThrottledModel);
 
         // The precondition that makes this test the INTERESTING case: the substitute passes every
         // check we can make locally. Only the provider's answer reveals it cannot serve.
@@ -115,9 +192,9 @@ public class ProviderRefusalRoundTest(ITestOutputHelper output) : AITestBase(out
         var thread = await WaitForThread(threadPath,
             t => t.Status == ThreadExecutionStatus.Idle
                  && t.Messages.Count >= 2
-                 && !string.IsNullOrEmpty(t.Summary), 60_000);
+                 && !string.IsNullOrEmpty(t.Summary), RoundMs);
         var cell = await WaitForCell(threadPath, thread.Messages[^1],
-            m => m.Status is ThreadMessageStatus.Completed or ThreadMessageStatus.Error, 30_000);
+            m => m.Status is ThreadMessageStatus.Completed or ThreadMessageStatus.Error, CellMs);
 
         cell.Status.Should().Be(ThreadMessageStatus.Error,
             "a round the provider refused must FAIL — settling as Completed reads as success to "
@@ -178,7 +255,7 @@ public class ProviderRefusalRoundTest(ITestOutputHelper output) : AITestBase(out
                 Label = name,
                 CreatedAt = DateTimeOffset.UtcNow
             }
-        }).Should().Within(30.Seconds()).Emit();
+        }).Should().Within(TimeSpan.FromMilliseconds(SeedMs)).Emit();
 
     private async Task SeedModel(string id, string providerPath, string providerName, int order) =>
         await NodeFactory.CreateNode(new MeshNode(id, providerPath)
@@ -194,7 +271,7 @@ public class ProviderRefusalRoundTest(ITestOutputHelper output) : AITestBase(out
                 ProviderRef = providerPath,
                 Order = order
             }
-        }).Should().Within(30.Seconds()).Emit();
+        }).Should().Within(TimeSpan.FromMilliseconds(SeedMs)).Emit();
 
     private async Task<string> SeedThread()
     {
@@ -206,7 +283,7 @@ public class ProviderRefusalRoundTest(ITestOutputHelper output) : AITestBase(out
             NodeType = ThreadNodeType.NodeType,
             MainNode = MonolithMeshTestBase.TestPartition,
             Content = new MeshThread { CreatedBy = TestUser }
-        }).Should().Within(30.Seconds()).Emit();
+        }).Should().Within(TimeSpan.FromMilliseconds(SeedMs)).Emit();
         return threadPath;
     }
 
