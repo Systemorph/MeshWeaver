@@ -340,6 +340,8 @@
   "ui.compileFailed": "Compile failed",
   "ui.compiling": "Compiling…",
   "ui.neverCompiled": "Never compiled — click Compile to build",
+  "ui.compileStateUnknown": "Last compile: state could not be determined",
+  "ui.viewCompileLog": "View full compile log →",
   "ui.noConfiguration": "No Configuration defined.",
   "ui.noConfigLambda": "No configuration lambda defined.",
   "ui.noneConfigured": "None configured.",

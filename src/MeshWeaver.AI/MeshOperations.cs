@@ -3261,8 +3261,9 @@ public class MeshOperations
 
     /// <summary>
     /// True when the NodeType's <see cref="NodeTypeDefinition.CompilationStatus"/>
-    /// has reached a terminal state (<see cref="CompilationStatus.Ok"/> or
-    /// <see cref="CompilationStatus.Error"/>). Pending and Compiling are
+    /// has reached a terminal state (<see cref="CompilationStatus.Ok"/>,
+    /// <see cref="CompilationStatus.Error"/> or
+    /// <see cref="CompilationStatus.Unavailable"/>). Pending and Compiling are
     /// transient — readers should keep waiting for the watcher's settle
     /// write rather than report a half-baked state.
     /// </summary>
@@ -3277,7 +3278,11 @@ public class MeshOperations
     /// the compile-settle wait instead of hanging until the 5s timeout.
     /// </summary>
     private static bool IsSettled(CompilationStatus? status)
-        => status == CompilationStatus.Ok || status == CompilationStatus.Error;
+        => status is CompilationStatus.Ok
+                  or CompilationStatus.Error
+                  // Terminal too: a driver already gave up determining the state, so no
+                  // further write is coming and a waiter would hang out its whole budget.
+                  or CompilationStatus.Unavailable;
 
     private string FormatDiagnosticsFromDef(
         Graph.Configuration.NodeTypeDefinition def, string nodeTypePath)
@@ -3286,7 +3291,9 @@ public class MeshOperations
         return FormatDiagnostics(
             status,
             nodeTypePath,
-            error: status == CompilationStatus.Error ? def.CompilationError : null,
+            error: status is CompilationStatus.Error or CompilationStatus.Unavailable
+                ? def.CompilationError
+                : null,
             startedAt: status == CompilationStatus.Compiling ? def.LastCompileStartedAt : null,
             lastCompiledAt: status == CompilationStatus.Ok ? def.LastCompileSucceededAt : null,
             hub.JsonSerializerOptions);
@@ -3417,8 +3424,7 @@ public class MeshOperations
                         .Where(n =>
                         {
                             var status = ReadCompilationStatusFromNode(n);
-                            return (status == CompilationStatus.Ok || status == CompilationStatus.Error)
-                                && IsNewCompileRun(n, before);
+                            return IsSettled(status) && IsNewCompileRun(n, before);
                         })
                         .Take(1)
                         .Timeout(TimeSpan.FromSeconds(60))
@@ -3434,11 +3440,18 @@ public class MeshOperations
                                     path = resolvedPath,
                                     error,
                                     activityPath,
-                                    message = status == CompilationStatus.Ok
-                                        ? "Compile SUCCEEDED."
-                                        : "Compile FAILED — see `error` for Roslyn diagnostics. "
-                                          + "Full source-discovery + matched-Code-paths trace lives at "
-                                          + (activityPath ?? "(no activity log written)") + "."
+                                    message = status switch
+                                    {
+                                        CompilationStatus.Ok => "Compile SUCCEEDED.",
+                                        // NOT a failure — the run never reported an answer.
+                                        CompilationStatus.Unavailable =>
+                                            "Compile state could NOT BE DETERMINED (see `error`) — this is a "
+                                            + "timeout, NOT a compile failure. Nothing is known to be wrong "
+                                            + "with the source; trigger the compile again.",
+                                        _ => "Compile FAILED — see `error` for Roslyn diagnostics. "
+                                            + "Full source-discovery + matched-Code-paths trace lives at "
+                                            + (activityPath ?? "(no activity log written)") + "."
+                                    }
                                 },
                                 hub.JsonSerializerOptions);
                         })
@@ -3674,6 +3687,22 @@ public class MeshOperations
                         lastCompiledAt,
                         message = "Compile SUCCEEDED at " + lastCompiledAt?.ToString("u")
                             + ". The NodeType assembly was built without errors and is loaded."
+                    },
+                    options);
+            case CompilationStatus.Unavailable:
+                // 🚨 Must never read as a compile failure: `error` here describes why the
+                // state could not be DETERMINED, not what is wrong with the source. An
+                // agent that confuses the two starts "fixing" code that compiles fine.
+                return JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Unavailable",
+                        nodeTypePath,
+                        error,
+                        message = "The compile state could NOT BE DETERMINED (a settle wait or an "
+                            + "assembly lookup timed out) — this is NOT a compile failure and NOTHING "
+                            + "is known to be wrong with the source. See `error` for what timed out. "
+                            + "Trigger a fresh compile and re-call GetDiagnostics."
                     },
                     options);
             case CompilationStatus.Unknown:
