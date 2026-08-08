@@ -11,6 +11,7 @@
         Typo="@Typo"
         Weight="@Weight"
         Style="@Style"
+        title="@InternalTooltip"
         @onclick="OnClick">
         @InternalData
     </FluentLabel>
@@ -22,7 +23,8 @@ else
         Disabled="@Disabled"
         Typo="@Typo"
         Weight="@Weight"
-        Style="@Style">
+        Style="@Style"
+        title="@InternalTooltip">
         @InternalData
     </FluentLabel>
 }
@@ -30,6 +32,7 @@ else
 @code
 {
     private string? InternalData { get; set; }
+    private string? InternalTooltip { get; set; }
     private HorizontalAlignment? Alignment { get; set; }
     private bool Disabled { get; set; }
     private Typography Typo { get; set; } = Typography.Body;
@@ -39,6 +42,7 @@ else
     {
         base.BindData();
         DataBind(ViewModel.Data, x => x.InternalData );
+        DataBind(ViewModel.Tooltip, x => x.InternalTooltip);
         DataBind(ViewModel.Disabled, x => x.Disabled);
         DataBind(ViewModel.Alignment, x => x.Alignment);
         DataBind(ViewModel.Typo, x => x.Typo);

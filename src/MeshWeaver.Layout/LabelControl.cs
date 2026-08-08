@@ -32,6 +32,12 @@ public record LabelControl(object Data)
     /// </summary>
     public object? Weight { get; init; }
     /// <summary>
+    /// Gets or initializes the hover / assistive text of the label, rendered as the element's
+    /// <c>title</c>. Use it to say in words what a glyph says visually — the text is user-facing,
+    /// so pass a localized string.
+    /// </summary>
+    public object? Tooltip { get; init; }
+    /// <summary>
     /// Sets the alignment of the label.
     /// </summary>
     /// <param name="alignment">The alignment to set.</param>
@@ -61,6 +67,12 @@ public record LabelControl(object Data)
     /// <param name="weight">The weight to set.</param>
     /// <returns>A new <see cref="LabelControl"/> instance with the specified weight.</returns>
     public LabelControl WithWeight(object weight) => this with {Weight = weight};
+    /// <summary>
+    /// Sets the hover / assistive text of the label.
+    /// </summary>
+    /// <param name="tooltip">The localized text to show as the element's <c>title</c>.</param>
+    /// <returns>A new <see cref="LabelControl"/> instance with the specified tooltip.</returns>
+    public LabelControl WithTooltip(object tooltip) => this with {Tooltip = tooltip};
 }
 /// <summary>
 /// Represents the typography options for a label.

@@ -429,17 +429,19 @@
             await OnCompletionAccepted.InvokeAsync(path);
     }
 
-    // Latest snapshot from the active completion observable. Updated by the Subscribe
-    // handler in GetAsyncCompletions; returned synchronously to JS on subsequent invokes.
-    private CompletionItem[] _currentCompletions = [];
-    private string _currentCompletionsQuery = "";
-    private IDisposable? _activeCompletionSub;
+    // Per-editor completion state machine: one subscription per query, every pushed snapshot
+    // stamped with the query it answers (the key the JS pending-buffer consume matches on —
+    // issue #542). Created lazily on the first suggest request; the lambdas re-read
+    // CompletionCallback / jsModule at invoke time so parameter/lifecycle updates flow.
+    private MonacoCompletionSession? _completionSession;
 
     /// <summary>
     /// JSInvokable method called from JavaScript to get async completions.
     /// Subscribes to the configured observable callback; returns the current snapshot
     /// synchronously and pushes subsequent snapshots via <see cref="PushCompletionUpdateAsync"/>
-    /// so the suggest widget streams in results as they arrive.
+    /// so the suggest widget streams in results as they arrive. Every push carries the query
+    /// the snapshot answers so the JS provider consumes it only for the matching trigger token
+    /// (see <see cref="MonacoCompletionSession"/>).
     /// </summary>
     [JSInvokable]
     public Task<object[]> GetAsyncCompletions(string query)
@@ -447,33 +449,18 @@
         if (CompletionCallback == null)
             return Task.FromResult(Array.Empty<object>());
 
-        if (!string.Equals(_currentCompletionsQuery, query, StringComparison.Ordinal))
-        {
-            _currentCompletionsQuery = query;
-            _activeCompletionSub?.Dispose();
-            _currentCompletions = [];
-
-            try
+        _completionSession ??= new MonacoCompletionSession(
+            q => CompletionCallback!(q),
+            (q, items) =>
             {
-                _activeCompletionSub = CompletionCallback(query).Subscribe(
-                    snapshot =>
-                    {
-                        var arr = snapshot is CompletionItem[] a ? a : snapshot.ToArray();
-                        _currentCompletions = arr;
-                        // Fire-and-forget: order is preserved by JS event loop. We can't
-                        // await here — Subscribe handlers must stay synchronous.
-                        if (jsModule != null)
-                            _ = PushCompletionUpdateAsync(arr);
-                    },
-                    ex => Logger.LogError(ex, "Error getting async completions for query: {Query}", query));
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "Error subscribing to async completions for query: {Query}", query);
-            }
-        }
+                // Fire-and-forget: order is preserved by JS event loop. We can't
+                // await here — Subscribe handlers must stay synchronous.
+                if (jsModule != null)
+                    _ = PushCompletionUpdateAsync(q, items);
+            },
+            (q, ex) => Logger.LogError(ex, "Error getting async completions for query: {Query}", q));
 
-        return Task.FromResult(MapCompletionsToJs(_currentCompletions));
+        return Task.FromResult(MapCompletionsToJs(_completionSession.GetCompletions(query)));
     }
 
     /// <summary>
@@ -598,8 +585,10 @@
     /// <summary>
     /// Pushes updated completion items to the editor and re-triggers the suggest widget.
     /// Used for progressive streaming: fast local results first, remote results merge in later.
+    /// <paramref name="query"/> is the query the items answer; the JS side keys its pending
+    /// buffer on it so a snapshot is never served for a different trigger token (issue #542).
     /// </summary>
-    public async Task PushCompletionUpdateAsync(CompletionItem[] items)
+    public async Task PushCompletionUpdateAsync(string query, CompletionItem[] items)
     {
         if (jsModule == null)
             return;
@@ -616,7 +605,7 @@
             sortKey = i.SortKey ?? ""
         }).ToArray<object>();
 
-        await jsModule.InvokeVoidAsync("pushCompletionUpdate", EditorId, mapped);
+        await jsModule.InvokeVoidAsync("pushCompletionUpdate", EditorId, query, mapped);
     }
 
     public async ValueTask<string> GetValueAsync()
@@ -939,7 +928,7 @@
     public async ValueTask DisposeAsync()
     {
         _activeDiagnosticsSub?.Dispose();
-        _activeCompletionSub?.Dispose();
+        _completionSession?.Dispose();
         if (jsModule != null)
         {
             try
