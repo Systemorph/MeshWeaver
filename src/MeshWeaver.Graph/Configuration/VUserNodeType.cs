@@ -36,7 +36,6 @@ public static class VUserNodeType
             services.AddSingleton<INodeTypeAccessRule, VUserAccessRule>();
             return services;
         });
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         return builder;
     }
 
