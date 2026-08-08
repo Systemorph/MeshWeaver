@@ -892,14 +892,19 @@ public static class StaticRepoImporter
                                 CreatedDate = target.CreatedDate,
                                 CreatedBy = target.CreatedBy
                             };
-                        // Mesh-owned compile state stays LIVE: a NodeType file in the repo embeds
-                        // whatever bookkeeping it had when exported, and letting it land regressed
-                        // the live node to a STALE GREEN (an assembly pointer weeks old, "Ok" for a
-                        // compile that never ran against these sources) — correct-looking until a
-                        // cold cache parks the type. The repo owns the authored definition; the
-                        // operational members end up exactly as the mesh last wrote them.
-                        materialized = NodeTypeOperationalContent.PreserveLiveOperational(
-                            materialized, target, hub.JsonSerializerOptions);
+                        // 🚨 Mesh-owned compile state is NOT carried over here any more (#748). It
+                        // used to be — against `target`, which comes from the eventually-consistent
+                        // `path:{p} scope:descendants` snapshot above. That snapshot is fine for the
+                        // decisions it was read for (SyncBehavior, identity, prune candidates: all
+                        // authored, all under the import's own lock) but NOT for the operational
+                        // members, which the compile pipeline writes OUTSIDE that lock. Preserving
+                        // from a lagged index is the CQRS rule's forbidden shape ("never read a
+                        // single node's content from the query"), and it actively regressed live
+                        // state: after a framework roll, an import would stamp the pre-roll verdict
+                        // back and a healthy type reverted to `Pending` with a dangling
+                        // `latestReleasePath` (memex 2026-08-02). The rule now lives at the OWNER —
+                        // MeshExtensions.PreserveMeshOwnedOperational, inside the upsert's merge —
+                        // where the answer is authoritative and every upsert writer gets it.
                         // 🚨 Per-FILE isolation. A single node's upsert faulting (bad content, a
                         // validator reject, a transient owner timeout) must NOT abort the whole
                         // partition import — the first failure used to propagate through Merge and

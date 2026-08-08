@@ -14,10 +14,14 @@ namespace MeshWeaver.Mesh;
 /// <list type="bullet">
 /// <item><b>Export STRIPS them</b> (<see cref="StripOperational"/>) — a repo file must not carry a
 /// stale compile verdict into git.</item>
-/// <item><b>Import PRESERVES the live node's values</b> (<see cref="PreserveLiveOperational"/>) — a
-/// repo import must never regress live compile state to whatever stale copy the file happened to
-/// embed (the "stale green" that claims a weeks-old assembly is current, which parks the type when
-/// the cache is cold).</item>
+/// <item><b>Every UPSERT preserves the live node's values</b> (<see cref="PreserveLiveOperational"/>,
+/// applied by the owner inside <c>CreateOrUpdateNodeRequest</c>'s merge) — no writer may regress
+/// live compile state to whatever stale copy it happens to hold, whether that is a repo file's
+/// embedded verdict (the "stale green" that claims a weeks-old assembly is current, which parks the
+/// type when the cache is cold) or a syncing client's eventually-consistent snapshot (which lags the
+/// compile pipeline and reverts a healthy type to its previous state — memex 2026-08-02).
+/// 🚨 Callers must NOT pre-apply this against their own snapshot: the rule is enforced where the
+/// answer is authoritative, and a client-side copy can only ever be as fresh as the index it read.</item>
 /// <item><b>Change detection IGNORES them</b> (<see cref="PartitionSourceFingerprint"/>) — a node
 /// differing only in bookkeeping has not changed.</item>
 /// </list>
