@@ -128,7 +128,7 @@ Every partition schema contains a consistent set of tables. The primary table ho
 | `threads` | Satellite | `Thread`, `ThreadMessage` |
 | `access` | Satellite | `AccessAssignment` |
 | `code` | Satellite | `Code` (under `Source/` and `Test/` namespaces) |
-| `annotations` | Satellite | `Comment`, `Approval`, `TrackedChange` |
+| `annotations` | Satellite | `Comment`, `Approval`, `TrackedChange` (legacy — no longer written) |
 | `partition_objects` | Internal | Non-mesh partition data |
 | `change_logs` | Bundled activity log | (internal) |
 | `user_activity` | Per-user access patterns | (internal) |

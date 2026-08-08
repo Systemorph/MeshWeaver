@@ -18,7 +18,6 @@ using MeshWeaver.Markdown.Collaboration;
 using AnnotationType = MeshWeaver.Markdown.AnnotationType;
 using TrackedChange = MeshWeaver.Mesh.TrackedChange;
 using TrackedChangeType = MeshWeaver.Mesh.TrackedChangeType;
-using TrackedChangeStatus = MeshWeaver.Mesh.TrackedChangeStatus;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -141,14 +140,16 @@ public partial class CollaborativeMarkdownView
     // Comments resolved against the CURRENT text (effective ranges set), produced by ProcessContent.
     private IReadOnlyList<Comment> _resolvedComments = Array.Empty<Comment>();
 
-    // Tracked-change satellites (markerId -> change / path), populated by the _Tracking subscription.
-    private Dictionary<string, TrackedChange> changeNodes = new();
-    private Dictionary<string, string> changePaths = new();
+    // Tracked changes PROJECTED from the node's version history (ChangeProjection) — never stored.
+    // Recomputed whenever the document's version moves; each entry already carries its range against
+    // the text it was projected from, so ProcessContent only has to re-resolve it onto whatever the
+    // view is currently showing.
+    private IReadOnlyList<TrackedChange> _projectedChanges = Array.Empty<TrackedChange>();
     // Changes resolved against the CURRENT text (effective ranges set), produced by ProcessContent.
     private IReadOnlyList<TrackedChange> _resolvedChanges = Array.Empty<TrackedChange>();
 
-    // Pending tracked changes drive the diff view + Accept All / Reject All.
-    private bool HasAnnotations => changeNodes.Values.Any(c => c.Status == TrackedChangeStatus.Pending);
+    // History-derived changes drive the inline redline + the sidebar cards.
+    private bool HasAnnotations => _projectedChanges.Count > 0;
 
     private bool HasCommentAnnotations => commentNodes.Count > 0;
 
@@ -161,9 +162,9 @@ public partial class CollaborativeMarkdownView
         _ => _resolvedComments.Where(c => c.Status == CommentStatus.Active).ToList()
     };
 
-    // Pending tracked changes shown as cards in the side panel.
+    // Tracked changes shown as cards in the side panel — only the ones still locatable in the text.
     private IReadOnlyList<TrackedChange> SidebarChanges =>
-        _resolvedChanges.Where(c => c.Status == TrackedChangeStatus.Pending).ToList();
+        _resolvedChanges.Where(c => c.EffectiveStart >= 0).ToList();
 
     private bool HasSideAnnotations => SidebarComments.Count > 0 || SidebarChanges.Count > 0;
 
@@ -243,7 +244,7 @@ public partial class CollaborativeMarkdownView
         {
             commentNodes = new();
             commentPaths = new();
-            changeNodes = new();
+            _projectedChanges = Array.Empty<TrackedChange>();
             _resolvedComments = Array.Empty<Comment>();
             _resolvedChanges = Array.Empty<TrackedChange>();
             activeAnnotationId = null;
@@ -259,55 +260,39 @@ public partial class CollaborativeMarkdownView
         ProcessContent();
     }
 
+    /// <summary>
+    /// Projects the tracked changes from the node's VERSION HISTORY — nothing is stored and nothing
+    /// is queried for: the history already records author, timestamp and full content per version,
+    /// so "who changed what" is a computation over it (see <see cref="ChangeProjection"/>).
+    /// <para>
+    /// One bounded walk per document version: <c>DistinctUntilChanged</c> on the version keeps a
+    /// bare re-emission from re-reading history, and <c>Switch</c> cancels an in-flight walk when a
+    /// newer version arrives — so a burst of edits costs one projection, not one per tick.
+    /// </para>
+    /// </summary>
     private void SubscribeToChanges()
     {
         if (string.IsNullOrEmpty(BoundNodePath))
             return;
 
-        var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshQuery == null)
+        // Null in a client that carries no version store (e.g. a pure SignalR front-end): the view
+        // then shows no tracked changes rather than storming a service that isn't there.
+        var versionQuery = Hub.ServiceProvider.GetService<IVersionQuery>();
+        if (versionQuery is null)
             return;
 
-        var query = MeshQueryRequest.FromQuery(
-            $"namespace:{BoundNodePath}/{AnnotationExtensions.TrackingPartition} nodeType:{MeshWeaver.Graph.Configuration.TrackedChangeNodeType.NodeType}");
-
-        AddBinding(meshQuery.Query<MeshNode>(query)
-            .Scan(new List<MeshNode>(), (list, change) =>
+        AddBinding(Hub.GetMeshNodeStream(BoundNodePath)
+            .Where(node => node is not null)
+            .DistinctUntilChanged(node => node!.Version)
+            .Select(node => ChangeProjection.FromHistory(versionQuery, node!, Hub.JsonSerializerOptions))
+            .Switch()
+            .Subscribe(changes =>
             {
-                if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
-                    return change.Items.ToList();
-                foreach (var item in change.Items)
-                {
-                    if (change.ChangeType == QueryChangeType.Added)
-                        list.Add(item);
-                    else if (change.ChangeType == QueryChangeType.Removed)
-                        list.RemoveAll(n => n.Path == item.Path);
-                    else if (change.ChangeType == QueryChangeType.Updated)
-                    {
-                        list.RemoveAll(n => n.Path == item.Path);
-                        list.Add(item);
-                    }
-                }
-                return list;
-            })
-            .Subscribe(list =>
-            {
-                // Materialize through ContentAs FIRST, then filter: over the query seam the
-                // content arrives as a JsonElement (or typed in a foreign dynamic assembly), and
-                // a bare `is TrackedChange` pattern silently dropped those changes — no card, no
-                // highlight, no error.
-                var withMarker = list
-                    .Select(n => (Node: n, Change: n.ContentAs<TrackedChange>(Hub.JsonSerializerOptions)))
-                    .Where(x => x.Change is not null && !string.IsNullOrEmpty(x.Change.MarkerId))
-                    .DistinctBy(x => x.Change!.MarkerId!)
-                    .ToList();
-                changeNodes = withMarker.ToDictionary(x => x.Change!.MarkerId!, x => x.Change!);
-                changePaths = withMarker.ToDictionary(x => x.Change!.MarkerId!, x => x.Node.Path);
-                // Tracked changes are overlaid as a diff view from these satellites — re-derive.
+                _projectedChanges = changes;
                 ProcessContent();
                 InvokeAsync(StateHasChanged);
             },
-            ex => SurfaceError(ex, "Loading document changes")));
+            ex => SurfaceError(ex, "Deriving tracked changes from the version history")));
     }
 
     private void SubscribeToCommentStatuses()
@@ -440,10 +425,11 @@ public partial class CollaborativeMarkdownView
 
     private void ProcessContent()
     {
-        // The document text is kept CLEAN. Comments and tracked changes are satellites carrying a
-        // captured range (Start/Length/Version/AnchorText); each is recomputed against the current
-        // clean text via the version delta and overlaid as a transient span for this render only —
-        // comments as highlights, changes as a git-diff view (insertions/deletions/replacements).
+        // The document text is kept CLEAN. Comments are satellites carrying a captured range
+        // (Start/Length/Version/AnchorText); tracked changes are PROJECTED from the version history
+        // (ChangeProjection) and carry the same shape. Both are recomputed against the current clean
+        // text via the version delta and overlaid as a transient span for this render only — comments
+        // as highlights, changes as a git-diff view (insertions/deletions/replacements).
         var clean = MarkdownAnnotationParser.StripAllMarkers(RawContent ?? "");
         var commentsForRender = commentNodes.Values
             .Where(c => !string.IsNullOrEmpty(c.MarkerId) && !string.IsNullOrEmpty(c.HighlightedText))
@@ -451,13 +437,12 @@ public partial class CollaborativeMarkdownView
         _resolvedComments = commentsForRender.Length > 0
             ? CommentRendering.ResolveAll(commentsForRender, clean, _docVersion)
             : Array.Empty<Comment>();
-        var changesForRender = changeNodes.Values
-            .Where(c => !string.IsNullOrEmpty(c.MarkerId))
-            .ToArray();
-        _resolvedChanges = changesForRender.Length > 0
-            ? ChangeRendering.ResolveAll(changesForRender, clean, _docVersion)
+        // Re-resolve even though the projection already carries effective ranges: an optimistic local
+        // edit moves the text ahead of the projection, and AnchorMath maps the ranges through it.
+        _resolvedChanges = _projectedChanges.Count > 0
+            ? ChangeRendering.ResolveAll(_projectedChanges, clean, _docVersion)
             : Array.Empty<TrackedChange>();
-        var decorated = _resolvedComments.Count > 0 || _resolvedChanges.Any(c => c.Status == TrackedChangeStatus.Pending)
+        var decorated = _resolvedComments.Count > 0 || _resolvedChanges.Any(c => c.EffectiveStart >= 0)
             ? CollaborativeRenderer.Decorate(clean, _resolvedComments, _resolvedChanges)
             : clean;
 
@@ -580,66 +565,37 @@ public partial class CollaborativeMarkdownView
         StateHasChanged();
     }
 
-    // Accept/Reject individual changes — operate on the satellites. Accept applies the suggested
-    // text to the document at the change's effective range and drops the satellite; Reject just drops
-    // the satellite (the document is left unchanged).
-    private void OnAcceptChange(string changeId)
+    /// <summary>
+    /// Reverts ONE history-derived change: puts the text back the way it was before that edit.
+    /// <para>
+    /// There is no "accept" any more — the change is already IN the document (that is what makes it
+    /// appear in the version history at all), so keeping it means doing nothing. Reverting is a
+    /// normal versioned write, which itself lands in the history.
+    /// </para>
+    /// 🚨 The range is RE-RESOLVED inside the owner's update lambda, against the LIVE node — a range
+    /// resolved at render time is stale the moment anyone else edits the document. A hunk that can no
+    /// longer be located throws (surfaced to the user) instead of splicing the wrong range.
+    /// </summary>
+    private void OnRevertChange(string changeId)
     {
-        if (!changeNodes.TryGetValue(changeId, out var change))
+        if (string.IsNullOrEmpty(BoundNodePath))
             return;
-        ApplyChanges(new[] { change }, () => DeleteChangeNode(changeId));
-    }
-
-    private void OnRejectChange(string changeId) => DeleteChangeNode(changeId);
-
-    // Accept/Reject all pending changes
-    private void OnAcceptAll()
-    {
-        var pending = changeNodes.Values.Where(c => c.Status == TrackedChangeStatus.Pending).ToList();
-        if (pending.Count == 0)
+        var change = _projectedChanges.FirstOrDefault(c => c.MarkerId == changeId);
+        if (change is null)
             return;
-        ApplyChanges(pending, () =>
-        {
-            foreach (var c in pending)
-                if (c.MarkerId is { } id) DeleteChangeNode(id);
-        });
-    }
 
-    private void OnRejectAll()
-    {
-        foreach (var c in changeNodes.Values.Where(c => c.Status == TrackedChangeStatus.Pending).ToList())
-            if (c.MarkerId is { } id) DeleteChangeNode(id);
-    }
-
-    // Apply accepted change(s) to the document, then run onApplied (drop the accepted satellite(s)).
-    // The changes are RE-RESOLVED against the LIVE node inside the owner's update lambda — resolving
-    // against the view's RawContent/_docVersion snapshot left a lost-update window (the document may
-    // have moved between render and click). A node that no longer holds markdown throws instead of
-    // silently no-oping (the old `: node` branch read as a lost accept), and the error is surfaced.
-    private void ApplyChanges(IReadOnlyCollection<TrackedChange> changes, Action onApplied)
-    {
-        if (string.IsNullOrEmpty(BoundNodePath) || changes.Count == 0)
-            return;
+        var options = Hub.JsonSerializerOptions;
         Hub.GetMeshNodeStream(BoundNodePath).Update(node =>
             {
-                if (node.Content is not MarkdownContent md)
-                    throw new InvalidOperationException(
-                        $"'{node.Path}' does not hold markdown content — cannot apply the suggestion.");
-                var clean = MarkdownAnnotationParser.StripAllMarkers(md.Content);
-                var newClean = ChangeRendering.ApplyAll(clean, changes, node.Version);
-                return node with { Content = md with { Content = newClean } };
+                var clean = MarkdownAnnotationParser.StripAllMarkers(
+                    MarkdownOverviewLayoutArea.GetMarkdownContent(node));
+                var resolved = ChangeRendering.ResolveEffective(change, clean, node.Version);
+                return MarkdownOverviewLayoutArea.WithMarkdownContent(
+                    node, ChangeRendering.Revert(clean, resolved), options);
             })
             .Subscribe(
-                _ => onApplied(),
-                ex => SurfaceError(ex, $"Applying suggestion to {BoundNodePath}"));
-    }
-
-    private void DeleteChangeNode(string changeId)
-    {
-        if (changePaths.TryGetValue(changeId, out var path))
-            Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(path).Subscribe(
                 _ => { },
-                ex => SurfaceError(ex, $"Removing suggestion {changeId}"));
+                ex => SurfaceError(ex, $"Reverting change in {BoundNodePath}"));
     }
 
     /// <summary>
