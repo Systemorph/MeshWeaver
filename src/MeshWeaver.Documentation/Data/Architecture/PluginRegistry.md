@@ -155,6 +155,54 @@ An admin clicks **Install** (or **Update**). No GitHub credential is involved on
 Re-installing is an upsert (create-or-update by path); installing one module never disturbs another
 in a shared partition.
 
+## Free syncs freely, commercial needs a Global Admin
+
+Who may bring a package onto an installation is decided by its **price**, and the decision is made on
+the **action**, not on the screen that triggered it:
+
+| Package | Access / sync |
+|---|---|
+| **Free** — `price` null or `0` | Installs and auto-updates with **no special permission**. This is what lets a fresh installation pick up the platform baseline unattended. |
+| **Commercial** — a non-zero `price` (positive = purchasable, negative = coupon-only) | Requires **Global Admin** on the installing instance to install or update. |
+
+`PackageEntitlement.Authorize` is the single rule, and it runs inside `PackageInstaller.Install` /
+`InstallNodeRepoDelta` — so the machine paths are gated exactly like a click:
+
+- **The catalog click** captures the clicking user *before* the install's system impersonation and
+  passes it as the authorizing principal (the install itself must run as System — it is provisioning).
+- **The install record remembers the authorizer** (`Package.authorizedBy`), and the
+  [update watcher](/Doc/Architecture/PluginUpdateOnGreenBuild) re-verifies that principal is *still* a
+  global admin before applying a commercial delta. Revoking the admin stops the syncing.
+- **Unattended paths carry no principal**, so a commercial package cannot ride in on the boot-time
+  default install — it fails closed.
+- **A refusal is never silent**: it logs a speaking reason and, on the auto-update path, raises a
+  notification on the install record. The manual Update button stays.
+
+The registry side needs nothing extra: `/api/plugins` already requires a registered instance key and
+scopes every listing and file fetch to that instance's `PluginGrant`, so an unauthenticated caller
+enumerates nothing at all — commercial or otherwise.
+
+## Removing an orphaned install record
+
+`Plugins/_Policy` caps `create/update/delete` at `false` for **every** caller — a platform admin
+holding an Admin assignment on the `Plugins` partition included. That is correct: install records are
+written only by `PackageInstaller`, under system impersonation.
+
+The consequence used to be a dead end. When a package leaves the registry — a course folder renamed,
+so it becomes a new product id — its record `Plugins/{oldId}` had no card (cards come from the
+registry's package list), hence no Uninstall, and no user identity could delete it. It rendered
+publicly forever as a phantom "installed" product.
+
+The catalog therefore also lists **install records the source no longer offers**, with a removal
+action for global admins that calls `PackageInstaller.RemoveInstalledRecord` — the same
+system-impersonated identity that wrote the record. Two properties matter:
+
+- The list is computed **only against a non-empty available list**. An empty one means "the registry
+  offers nothing" and "listing it failed" indistinguishably, and an unreachable registry must never
+  offer to remove every record.
+- Removing the record does **not** delete the content it installed — that is a separate partition
+  lifecycle.
+
 ## Why this shape
 
 - **Credential encapsulation.** GitHub access lives on exactly one instance. Onboarding a new

@@ -51,8 +51,18 @@ public class DeclaredAccessInstallTest(ITestOutputHelper output) : MonolithMeshT
     /// <summary>The not-logged-in reader (the well-known Anonymous permission bucket).</summary>
     private const string Anonymous = WellKnownUsers.Anonymous;
 
+    /// <summary>
+    /// The production-shaped platform admin (Admin on the Admin partition), needed to install the
+    /// PRICED package: a commercial package requires Global Admin to be installed at all (#830).
+    /// The access shape this fixture pins is unaffected — it is about what the installer PUBLISHES,
+    /// not about who may trigger it.
+    /// </summary>
+    private const string PlatformAdmin = "declared-access-admin";
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => ConfigureMeshBase(builder).AddPluginCatalog();
+        => ConfigureMeshBase(builder)
+            .AddPluginCatalog()
+            .AddMeshNodes(AssignmentNodeFactory.UserRole(PlatformAdmin, "Admin", "Admin"));
 
     // A node-native plugin repo in the shape MeshWeaver.Plugins ships, covering the four declared
     // access models: free-open, free-scoped (publicSegments), priced (gated) and free with a
@@ -152,7 +162,10 @@ public class DeclaredAccessInstallTest(ITestOutputHelper output) : MonolithMeshT
         var pkg = manifests.Single(m => m.Id == id);
         var files = await source.FetchPackageFiles(pkg, "HEAD")
             .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
-        return await PackageInstaller.Install(Mesh, pkg, files, "HEAD")
+        // Authorized by the platform admin: free packages ignore the principal, a priced one
+        // requires it to be a global admin (#830).
+        return await PackageInstaller.Install(
+                Mesh, pkg, files, "HEAD", authorizingUserId: PlatformAdmin)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
     }
 
