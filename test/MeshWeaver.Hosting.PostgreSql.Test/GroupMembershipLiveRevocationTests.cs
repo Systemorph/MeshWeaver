@@ -93,87 +93,6 @@ public class GroupMembershipLiveRevocationTests(PostgreSqlFixture fixture, ITest
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     /// <summary>
-    /// TEMPORARY CI diagnostic (see PR #905): dumps the state the cross-schema fan-out reads, so a
-    /// CI-only failure names WHICH of the three preconditions is missing — the partition schema,
-    /// its registration in public.searchable_schemas, or the row itself. Remove once the CI-only
-    /// failure is understood.
-    /// </summary>
-    private async Task DumpFanOutStateAsync(string label)
-    {
-        var schema = Space.ToLowerInvariant();
-        var registered = new System.Collections.Generic.List<string>();
-        await using (var cmd = fixture.DataSource.CreateCommand(
-            "SELECT schema_name FROM public.searchable_schemas ORDER BY schema_name"))
-        await using (var r = await cmd.ExecuteReaderAsync())
-            while (await r.ReadAsync()) registered.Add(r.GetString(0));
-
-        var schemaExists = false;
-        await using (var cmd = fixture.DataSource.CreateCommand(
-            "SELECT to_regclass(format('%I.mesh_nodes', @s)) IS NOT NULL"))
-        {
-            cmd.Parameters.AddWithValue("s", schema);
-            schemaExists = (bool)(await cmd.ExecuteScalarAsync())!;
-        }
-
-        var rowCount = -1L;
-        if (schemaExists)
-        {
-            await using var cmd = fixture.DataSource.CreateCommand(
-                $"SELECT count(*) FROM \"{schema.Replace("\"", "\"\"")}\".mesh_nodes "
-                + "WHERE node_type = 'GroupMembership'");
-            rowCount = (long)(await cmd.ExecuteScalarAsync())!;
-        }
-
-        Output.WriteLine($"[FANOUT-DIAG] {label}: schema={schema} meshNodesTableExists={schemaExists} "
-            + $"groupMembershipRowsInSchema={rowCount} registeredInSearchableSchemas="
-            + $"{registered.Contains(schema)} searchable=[{string.Join(",", registered)}]");
-
-        // The access gate the cross-schema UNION applies per schema: a partition_access row for the
-        // caller, then a Read fold over the partition's user_effective_permissions.
-        var pa = new System.Collections.Generic.List<string>();
-        await using (var cmd = fixture.DataSource.CreateCommand(
-            "SELECT user_id FROM public.partition_access WHERE partition = @s ORDER BY user_id"))
-        {
-            cmd.Parameters.AddWithValue("s", schema);
-            await using var r = await cmd.ExecuteReaderAsync();
-            while (await r.ReadAsync()) pa.Add(r.GetString(0));
-        }
-        var uep = new System.Collections.Generic.List<string>();
-        if (schemaExists)
-        {
-            await using var cmd = fixture.DataSource.CreateCommand(
-                $"SELECT user_id, node_path_prefix, permission, is_allow FROM "
-                + $"\"{schema.Replace("\"", "\"\"")}\".user_effective_permissions ORDER BY user_id LIMIT 25");
-            await using var r = await cmd.ExecuteReaderAsync();
-            while (await r.ReadAsync())
-                uep.Add($"{r.GetString(0)}|{r.GetString(1)}|{r.GetString(2)}|{r.GetBoolean(3)}");
-        }
-        var access = Mesh.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
-        Output.WriteLine($"[FANOUT-DIAG] {label}: callerObjectId={access?.Context?.ObjectId ?? "(none)"} "
-            + $"circuit={access?.CircuitContext?.ObjectId ?? "(none)"} "
-            + $"partition_access=[{string.Join(",", pa)}] uep=[{string.Join(" ;; ", uep)}]");
-
-        // The discriminator: a FRESH path-less query, issued right now. If ITS Initial carries the
-        // membership, the cross-schema SQL + access filter are fine and only the live change
-        // notification failed to arrive; if it does not, the re-query itself cannot see the row and
-        // the notification is irrelevant.
-        try
-        {
-            var probe = await MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    "nodeType:GroupMembership scope:subtree select:path,id,namespace,name,nodeType,content"))
-                .Should().Within(30.Seconds())
-                .Match(c => c.ChangeType == QueryChangeType.Initial);
-            Output.WriteLine($"[FANOUT-DIAG] {label}: freshQueryInitialCount={probe.Items.Count} "
-                + $"containsMembership={probe.Items.Any(n => n.Path == MembershipPath)} "
-                + $"paths=[{string.Join(",", probe.Items.Select(n => n.Path))}]");
-        }
-        catch (Exception ex)
-        {
-            Output.WriteLine($"[FANOUT-DIAG] {label}: fresh query FAILED {ex.GetType().Name}: {ex.Message}");
-        }
-    }
-
-    /// <summary>
     /// The GroupMembership node in the shape production writes it
     /// (<c>EventSubscriptionOps.AddToGroup</c>): id <c>{member}_Membership</c>, namespace = the
     /// GROUP path, so it lives in the group's partition schema.
@@ -289,26 +208,13 @@ public class GroupMembershipLiveRevocationTests(PostgreSqlFixture fixture, ITest
 
         await MeshService.CreateNode(Membership()).Should().Within(90.Seconds()).Emit();
 
-        await DumpFanOutStateAsync("after-membership-create");
-
-        try
-        {
-            await hot.Should().Within(60.Seconds()).Match(
-                c => c.ChangeType == QueryChangeType.Added
-                     && c.Items.Any(n => n.Path == MembershipPath),
-                "a path-less nodeType query must deliver the new node live — a one-shot fan-out "
-                + "freezes every consumer's snapshot for the life of the process (#697), and a "
-                + "partition missing from public.searchable_schemas when the re-query runs is not "
-                + "seen late, it is never seen at all");
-        }
-        catch
-        {
-            // TEMPORARY (PR #905): re-dump AFTER the wait. If the access projection is present now
-            // but was absent above, the row became visible LATE and nothing re-queried; if it is
-            // still absent, the caller simply never gains Read on the new partition.
-            await DumpFanOutStateAsync("after-failed-wait");
-            throw;
-        }
+        await hot.Should().Within(60.Seconds()).Match(
+            c => c.ChangeType == QueryChangeType.Added
+                 && c.Items.Any(n => n.Path == MembershipPath),
+            "a path-less nodeType query must deliver the new node live — a one-shot fan-out "
+            + "freezes every consumer's snapshot for the life of the process (#697), and a "
+            + "partition missing from public.searchable_schemas when the re-query runs is not "
+            + "seen late, it is never seen at all");
 
         await MeshService.DeleteNode(MembershipPath).Should().Within(90.Seconds()).Emit();
 
