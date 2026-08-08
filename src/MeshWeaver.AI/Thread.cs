@@ -558,7 +558,10 @@ public record ThreadMessage
     /// <summary>
     /// The submitter's <see cref="AccessContext.Locale"/> — their preferred UI language as a
     /// BCP-47 tag (<c>de</c>, <c>en</c>, …) — captured alongside <see cref="SubmitterObjectId"/>
-    /// at submit time. Null when the submitter has no language preference (→ English).
+    /// at submit time. Null OR EMPTY when the submitter has no language preference — the value is
+    /// copied verbatim from <see cref="AccessContext.Locale"/>, whose own contract is
+    /// null/empty/unsupported → English, so both absences reach here unchanged. Test it with
+    /// <see cref="string.IsNullOrEmpty(string)"/>, never a null check alone.
     ///
     /// <para><b>🌍 Why the LANGUAGE has to ride on the message too.</b> The round-dispatch watcher
     /// rebuilds the round's <see cref="AccessContext"/> from this rider, because its

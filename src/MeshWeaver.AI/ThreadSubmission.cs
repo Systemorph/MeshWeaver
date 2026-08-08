@@ -811,8 +811,11 @@ internal static class ThreadSubmissionServer
             fellBackToCreatedBy,
             userCtx?.ObjectId ?? "(null)",
             // 🌍 The language the round will speak — the one thing that makes a "renders English
-            // for a German user" report diagnosable from the log alone (#948).
-            userCtx?.Locale ?? "(default)");
+            // for a German user" report diagnosable from the log alone (#948). IsNullOrEmpty, not
+            // ??: AccessContext.Locale's contract is null/empty/unsupported → English, so an empty
+            // string is a real "no preference" and must read as "(default)", not as a blank gap
+            // that looks like the trace itself failed.
+            string.IsNullOrEmpty(userCtx?.Locale) ? "(default)" : userCtx!.Locale);
 
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
