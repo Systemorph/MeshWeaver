@@ -160,8 +160,14 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 // The whole plugin — root included — lives under `<Plugin>/`.
                 var folderPrefix = package.Id + "/";
                 return (IReadOnlyList<PackageFile>)snapshot.Files
+                    // 🚨 Carry `Binary` too. A non-UTF-8 blob (a course video/poster under
+                    // `<Plugin>/content/**`) has an EMPTY `Content` by design — RepoFileCodec puts
+                    // its bytes on `RepoFile.Binary` so a UTF-8 round-trip cannot corrupt them.
+                    // Projecting only `Content` here is what served every binary as `content = ""`
+                    // and left merged course videos 404ing until someone uploaded them by hand
+                    // (issue #848).
                     .Where(f => f.Path.StartsWith(folderPrefix, StringComparison.Ordinal))
-                    .Select(f => new PackageFile(f.Path, f.Content))
+                    .Select(f => new PackageFile(f.Path, f.Content, f.Binary))
                     .ToList();
             });
 
