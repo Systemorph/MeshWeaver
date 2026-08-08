@@ -1756,11 +1756,24 @@ internal static class ThreadExecution
                 // message that names the situation. Deterministic terminal write, same shape as the
                 // NOTHING_TO_SEND branch below, plus the parent/notification signals the error path
                 // uses so a delegating parent never waits on a round that will not run.
-                if (harnessClient == null && client.NoUsableModelError is { } noModelError)
+                if (harnessClient == null && client.HasNoUsableModel)
                 {
+                    // 🌍 The message the USER reads is localized off the round's own AccessContext —
+                    // explicit locale, never ambient CultureInfo (a round hops schedulers). The raw
+                    // English factory detail ("ApiKey is missing for model 'X'") goes to the LOG
+                    // only: a raw provider dump in the thread is precisely what #476 complained of.
+                    var noModelError = LocalizationCatalog.Get(
+                        string.IsNullOrEmpty(client.RequestedModelName)
+                            ? "chat.noUsableModelNoSelection"
+                            : "chat.noUsableModel",
+                        userAccessContext?.Locale,
+                        client.RequestedModelName);
                     logger.LogError(
-                        "[ThreadExec] NO_USABLE_MODEL threadPath={ThreadPath} responseId={ResponseId}: {Error}",
-                        threadPath, responseMsgId, noModelError);
+                        "[ThreadExec] NO_USABLE_MODEL threadPath={ThreadPath} responseId={ResponseId} "
+                        + "requested={Requested}: {Detail}",
+                        threadPath, responseMsgId,
+                        client.RequestedModelName ?? "(none selected)",
+                        client.NoUsableModelDetail ?? "(none)");
                     var noModelDone = new System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit>();
                     PushToResponseMessage(
                         $"*Error: {noModelError}*",

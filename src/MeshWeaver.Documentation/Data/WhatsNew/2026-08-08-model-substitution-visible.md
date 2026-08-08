@@ -25,6 +25,6 @@ served the round.
 
 And when *no* model can serve a round at all — the pinned one has no credentials
 and nothing else in the catalogue does either — the round now **fails**, with a
-message naming the situation and pointing at Settings → Language Models. Before,
-it ended as a success carrying a raw provider error, which anything reading the
-result had no way to tell apart from a real answer.
+message in your language naming the situation and pointing at Settings → Language
+Models. Before, it ended as a success carrying a raw provider error, which anything
+reading the result had no way to tell apart from a real answer.

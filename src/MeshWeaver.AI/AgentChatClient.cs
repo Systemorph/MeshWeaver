@@ -66,7 +66,7 @@ public class AgentChatClient : IAgentChat
     // keys in factory config, invisible to the credential resolver) — it becomes fatal only
     // when agent creation ALSO produced nothing, which is what latches noUsableModelError.
     private bool modelFallbackExhausted;
-    private string? noUsableModelError;
+    private bool noUsableModel;
     private string? persistentThreadId;
     private IReadOnlyList<string>? currentAttachments;
     private bool isPersistentFactory;
@@ -145,14 +145,30 @@ public class AgentChatClient : IAgentChat
     public string? SubstitutedFromModel => substitutedFromModel;
 
     /// <summary>
-    /// Speaking message describing why NO model can serve a round on this client: the selection has
-    /// no usable credential, the catalog offered no usable replacement, AND agent creation produced
-    /// nothing. Null in every other state — in particular a deployment whose keys live in factory
-    /// config (invisible to the credential resolver) still builds agents and keeps running.
-    /// <para><c>ThreadExecution</c> fails the round with this message instead of letting it proceed
-    /// onto a client that will only produce a raw provider error (#476).</para>
+    /// True when NO model can serve a round on this client: the selection has no usable credential,
+    /// the catalog offered no usable replacement, AND agent creation produced nothing. False in
+    /// every other state — in particular a deployment whose keys live in factory config (invisible
+    /// to the credential resolver) still builds agents and keeps running.
+    /// <para><c>ThreadExecution</c> fails such a round with a localized message naming the requested
+    /// model (<see cref="RequestedModelName"/>), instead of letting it proceed onto a client that
+    /// can only produce a raw provider error (#476). The English factory detail stays in
+    /// <see cref="NoUsableModelDetail"/> — logs and diagnostics only, never the user's cell.</para>
     /// </summary>
-    public string? NoUsableModelError => noUsableModelError;
+    public bool HasNoUsableModel => noUsableModel;
+
+    /// <summary>
+    /// The model the caller asked for, resolved to its wire id — the argument the localized
+    /// no-usable-model message names. Null when the round carried no selection.
+    /// </summary>
+    public string? RequestedModelName => requestedModelName;
+
+    /// <summary>
+    /// The raw (English) factory failure behind <see cref="HasNoUsableModel"/>, e.g.
+    /// <c>"ApiKey is missing for model 'X'"</c>. Diagnostic only — it is logged, never written to
+    /// the user's response cell, because a raw provider dump in the thread is exactly what #476
+    /// complained about.
+    /// </summary>
+    public string? NoUsableModelDetail => lastAgentCreationError;
 
     // Live subscription to the workspace-level synced agent collection. Disposed
     // and replaced on every Initialize() call so the current context's queries
@@ -1523,7 +1539,7 @@ public class AgentChatClient : IAgentChat
         requestedModelName = currentModelName;
         substitutedFromModel = null;
         modelFallbackExhausted = false;
-        noUsableModelError = null;
+        noUsableModel = false;
         lastLoadedContextPath = contextPath;
         // Default the NodeType-search namespace to the context node's NodeType when the
         // caller didn't supply one. AgentPickerProjection.BuildAgentQueries will only
@@ -1790,7 +1806,7 @@ public class AgentChatClient : IAgentChat
         // if the new attempt succeeds.
         lastAgentCreationError = null;
         modelFallbackExhausted = false;
-        noUsableModelError = null;
+        noUsableModel = false;
 
         // 🩹 Self-heal a stale / deleted pinned model. The composer can carry a model id that no
         // longer resolves to a live LanguageModel (catalog refactor, deleted provider) — building a
@@ -1901,20 +1917,20 @@ public class AgentChatClient : IAgentChat
         // 🛑 #476: the fallback is exhausted (no model in the catalog has a usable credential) AND
         // not a single agent could be built — i.e. every factory refused the unusable selection
         // ("ApiKey is missing for model 'X'"). Running the round now can only produce a raw provider
-        // dump on a model nobody can serve, so latch a SPEAKING failure that ThreadExecution turns
-        // into a terminal Error. Both conditions are required: exhausted-alone is normal for a
-        // deployment whose keys live in factory config (the resolver cannot see those, yet the
-        // agents build and the round runs fine), and empty-alone has other causes that keep their
-        // existing "surface the reason as chat output" behaviour.
-        noUsableModelError = modelFallbackExhausted && createdAgents.IsEmpty
-            ? $"No language model can serve this round: the selected model "
-              + $"'{(string.IsNullOrEmpty(requestedModelName) ? "(none selected)" : requestedModelName)}' "
-              + "has no usable credentials, and no other model in the catalog resolves one. "
-              + "Configure a provider key (Settings → Language Models) or pick a different model."
-              + (string.IsNullOrEmpty(lastAgentCreationError) ? "" : $" Details: {lastAgentCreationError}")
-            : null;
-        if (noUsableModelError is not null)
-            logger.LogWarning("[AgentChatClient] {Error}", noUsableModelError);
+        // dump on a model nobody can serve, so latch the condition; ThreadExecution turns it into a
+        // terminal Error carrying a LOCALIZED message (the prose belongs at the write, where the
+        // round's AccessContext gives the viewer's language — never hard-coded here). Both
+        // conditions are required: exhausted-alone is normal for a deployment whose keys live in
+        // factory config (the resolver cannot see those, yet the agents build and the round runs
+        // fine), and empty-alone has other causes that keep their existing "surface the reason as
+        // chat output" behaviour.
+        noUsableModel = modelFallbackExhausted && createdAgents.IsEmpty;
+        if (noUsableModel)
+            logger.LogWarning(
+                "[AgentChatClient] No usable model: selected '{Model}' has no resolvable key, the "
+                + "catalog offers no usable replacement, and no agent could be built. Detail: {Detail}",
+                string.IsNullOrEmpty(requestedModelName) ? "(none selected)" : requestedModelName,
+                lastAgentCreationError ?? "(none)");
 
         logger.LogDebug("[AgentChatClient] Created {Count} agents", agents.Count);
     }
