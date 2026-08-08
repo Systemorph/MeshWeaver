@@ -3,6 +3,7 @@ using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -143,6 +144,9 @@ public static class PackageInstaller
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, nodes.Length, authorizingUserId: authorizingUserId))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
+                    // …then the package's committed binaries, into the warmed root's content
+                    // collection — the half of "publish" that merging used to leave undone (#848).
+                    .SelectMany(_ => SyncPackageContent(hub, partition, sourceFolder, files, logger))
                     .SelectMany(_ => RunInstallHooks(hub, partition!, logger))
                     .Select(_ => result);
             });
@@ -554,6 +558,99 @@ public static class PackageInstaller
     // Internal for the commercial-authorization pin (InternalsVisibleTo).
     internal static string? SeedAuthorizedBy(PackageManifest? existingRecord, string? authorizingUserId) =>
         string.IsNullOrWhiteSpace(authorizingUserId) ? existingRecord?.AuthorizedBy : authorizingUserId;
+
+    /// <summary>
+    /// Publishes the package's CONTENT-COLLECTION assets — the raw binaries it commits under
+    /// <c>{package}/content/**</c> (course videos and their posters, og images, fonts) — into the
+    /// target partition root's <c>content</c> collection, so merging a course or plugin publishes it
+    /// COMPLETELY and nothing has to be uploaded to each portal out of band (issue #848).
+    ///
+    /// <para>No new mechanism: this reaches, from a REGISTRY install, the very path the compiled-source
+    /// GitSync import already uses. <see cref="ContentAssetMapper"/> classifies the repo paths exactly
+    /// as <c>GitHubSyncService.ParseSnapshot</c> does, and
+    /// <see cref="ContentImportExtensions.SyncContentFiles"/> posts one
+    /// <see cref="SyncContentFilesRequest"/> carrying the BYTES INLINE to the hub that owns the
+    /// collection — the partition ROOT, where the portal mounts <c>content</c> (children inherit it).
+    /// So a file committed at <c>AgenticPrimer/content/videos/primer1.mp4</c> becomes collection-relative
+    /// <c>videos/primer1.mp4</c> on node <c>AgenticPrimer</c> — i.e. exactly what the course's own
+    /// <c>&lt;video src&gt;</c> resolves to through the content route.</para>
+    ///
+    /// <para>🚨 <b>Additive, never a mirror.</b> The GitSync importer mirrors (pruning what the source
+    /// dropped) because it owns the whole Space; an install does not. Portals today serve content that
+    /// was uploaded by hand and never committed — measured on memex, <c>AgenticEngineering</c>'s
+    /// <c>module1-intro.mp4</c> is served but absent from git — and a pruning mirror would DELETE
+    /// exactly the files this issue exists to stop losing. Pruning is incoherent on the incremental
+    /// path anyway, which only ever fetches the manifest diff's changed files.</para>
+    ///
+    /// <para>A failure LOGS and continues rather than failing the install: a mesh with no <c>content</c>
+    /// collection mounted (tests, a minimal host) answers "collection not found", and by this point the
+    /// nodes have already landed — throwing would leave the package half-written. The written count is
+    /// logged so an incomplete publish is visible rather than silent.</para>
+    /// </summary>
+    private static IObservable<int> SyncPackageContent(
+        IMessageHub hub, string? rootPath, string? sourceFolder,
+        IReadOnlyList<PackageFile> files, ILogger? logger)
+    {
+        if (string.IsNullOrWhiteSpace(rootPath))
+            return Observable.Return(0);
+
+        // Cheap path-only precheck first, so the (majority) node files never materialize bytes —
+        // the same two-step GitHubSyncService.ParseSnapshot uses.
+        var assets = files
+            .Select(file => (File: file, Relative: FolderRelative(file.RelativePath, sourceFolder)))
+            .Where(x => ContentAssetMapper.IsContentPath(x.Relative))
+            .Select(x => ContentAssetMapper.TryClassify(x.Relative, () => x.File.Bytes))
+            .Where(asset => asset is not null).Select(asset => asset!)
+            .ToArray();
+        if (assets.Length == 0)
+            return Observable.Return(0);
+
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return ContentAssetMapper.ToContentSyncs(rootPath!, assets)
+            // Impersonated per post, like every other installer write: the pipeline hops schedulers
+            // and an ambient impersonation does not survive those hops (see Upsert).
+            .Select(sync => Observable.Using(
+                    () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
+                    _ => hub.SyncContentFiles(sync.NodePath)
+                        .To(sync.TargetCollection, sync.TargetPath)
+                        .Add(sync.Files)
+                        .Mirror(false)
+                        .Post())
+                .Select(response => response.Success
+                    ? response.FilesImported
+                    : throw new InvalidOperationException(
+                        response.Error ?? "content sync failed without an error message"))
+                .Catch<int, Exception>(exception =>
+                {
+                    logger?.LogWarning(exception,
+                        "[PackageInstaller] publishing {Count} content asset(s) to {Node} failed — the "
+                        + "package's nodes are installed but its binaries are not being served",
+                        sync.Files.Count, sync.NodePath);
+                    return Observable.Return(0);
+                }))
+            .ToObservable()
+            .Concat()
+            .Sum()
+            .Do(written => logger?.LogInformation(
+                "[PackageInstaller] published {Written}/{Total} content asset(s) into {Root}'s "
+                + "content collection", written, assets.Length, rootPath));
+    }
+
+    /// <summary>
+    /// A package file's path RELATIVE to its package folder — the form
+    /// <see cref="ContentAssetMapper"/> classifies against (the "relative to the Space" shape GitSync
+    /// feeds it, where the fetch has already stripped the subdirectory). A path that does not start
+    /// with the folder is returned unchanged.
+    /// </summary>
+    private static string FolderRelative(string relativePath, string? sourceFolder)
+    {
+        if (string.IsNullOrEmpty(sourceFolder))
+            return relativePath;
+        var prefix = sourceFolder + "/";
+        return relativePath.StartsWith(prefix, StringComparison.Ordinal)
+            ? relativePath[prefix.Length..]
+            : relativePath;
+    }
 
     private static IObservable<MeshNode> WriteInstalledRecord(
         IMessageHub hub, PackageManifest manifest, string installedFromRef, int count,
@@ -1282,6 +1379,12 @@ public static class PackageInstaller
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, nodes.Length, moduleManifest, authorizingUserId))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
+                    // …then the package's committed binaries (course videos/posters) into the
+                    // warmed root's content collection — the half of "publish" that merging used
+                    // to leave undone (#848).
+                    .SelectMany(_ => SyncPackageContent(
+                        hub, manifest.TargetPartition ?? manifest.Id,
+                        manifest.SourceFolder ?? manifest.Id, files, logger))
                     .Select(_ => result);
             }));
             });
@@ -1466,6 +1569,13 @@ public static class PackageInstaller
                     .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
                         newManifest.Files.Count, newManifest, authorizingUserId))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
+                    // A changed BINARY is a changed file like any other: manifest.lock hashes the
+                    // `content/**` assets too, so a re-cut video is in `changedFiles` and an
+                    // unchanged one never travels. This is what keeps the incremental path cheap
+                    // even for a course carrying tens of MB of video (#848).
+                    .SelectMany(_ => SyncPackageContent(
+                        hub, manifest.TargetPartition ?? manifest.Id,
+                        manifest.SourceFolder ?? manifest.Id, changedFiles, logger))
                     .Select(_ => result);
             });
     }
@@ -1488,7 +1598,13 @@ public static class PackageInstaller
     private static MeshNode? ParseCanonical(FileFormatParserRegistry parsers, PackageFile file, ILogger? logger)
     {
         if (string.Equals(file.RelativePath, "README.md", StringComparison.OrdinalIgnoreCase)
-            || ModuleManifest.IsManifestPath(file.RelativePath))
+            || ModuleManifest.IsManifestPath(file.RelativePath)
+            // A `{package}/content/**` asset is NOT a node — its bytes go to the partition root's
+            // content collection (SyncPackageContent), which is where the served
+            // `/static/{root}/content/…` URL resolves. Same split GitHubSyncService.ParseSnapshot
+            // makes, and the one NodePathForFile below has always asserted. Skipping it here also
+            // silences the "No parser for …/videos/x.mp4" warning every course emitted per install.
+            || ContentAssetMapper.IsContentPath(file.RelativePath))
             return null;
         var ext = System.IO.Path.GetExtension(file.RelativePath);
         var parsed = parsers.TryParse(ext, file.RelativePath, file.Content, file.RelativePath);
@@ -1531,10 +1647,12 @@ public static class PackageInstaller
     private static MeshNode? ParseNode(
         FileFormatParserRegistry parsers, string partition, string sourceFolder, PackageFile file, ILogger? logger)
     {
-        var rel = file.RelativePath;
-        var prefix = sourceFolder + "/";
-        if (rel.StartsWith(prefix, StringComparison.Ordinal))
-            rel = rel[prefix.Length..];
+        var rel = FolderRelative(file.RelativePath, sourceFolder);
+
+        // A `content/**` asset is not a node — SyncPackageContent writes its bytes into the target
+        // partition root's content collection instead (see ParseCanonical).
+        if (ContentAssetMapper.IsContentPath(rel))
+            return null;
 
         var ext = System.IO.Path.GetExtension(rel);
         var parsed = parsers.TryParse(ext, rel, file.Content, rel);
