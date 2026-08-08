@@ -24,8 +24,8 @@ namespace MeshWeaver.PluginCatalog;
 /// <list type="bullet">
 ///   <item><b>The unattended boot pass</b> (<see cref="InstanceAutoRegistrationService"/>) uses
 ///     <see cref="InDependencyOrder"/>: a cycle is a repo authoring error nobody is present to fix,
-///     so it degrades to catalog order and warns. Refusing to boot over it would strand the whole
-///     instance for one malformed package.</item>
+///     so it warns and still emits every package exactly once. Refusing to boot over it would
+///     strand the whole instance for one malformed package.</item>
 ///   <item><b>A person clicking Install</b> (<see cref="CatalogLayoutAreas.InstallPackage"/>) uses
 ///     <see cref="InstallClosure"/>, which throws <see cref="FindCycle"/>'s named cycle. There IS
 ///     someone to tell, and silently installing a cycle in arbitrary order would fail later with a
@@ -45,11 +45,29 @@ public static class PackageDependencyGraph
 
     /// <summary>
     /// Orders <paramref name="packages"/> so a dependency comes BEFORE anything that declares it —
-    /// a depth-first topological sort that is TOLERANT by design: a cycle degrades to catalog order
-    /// (warned, never dropped, never infinite), and a dependency outside
-    /// <paramref name="packages"/> is ignored because the instance was not granted it and there is
-    /// nothing to order against.
+    /// a depth-first topological sort that is TOLERANT by design: a dependency outside
+    /// <paramref name="packages"/> is ignored (the instance was not granted it, so there is nothing
+    /// to order against), and a cycle is warned about rather than thrown.
     /// </summary>
+    ///
+    /// <remarks>
+    /// 🚨 What a cycle does, precisely — it is NOT "falls back to catalog order", which this used to
+    /// claim and never did. The DFS drops the single BACK EDGE that closes the loop and keeps going,
+    /// so the guarantee is:
+    /// <list type="bullet">
+    ///   <item>every package is emitted exactly once (never dropped, never duplicated, never
+    ///     infinite);</item>
+    ///   <item>every dependency edge that is still satisfiable is respected — including edges from
+    ///     inside the cycle to packages outside it;</item>
+    ///   <item>the relative order of the packages WITHIN a cycle is unspecified (for
+    ///     <c>A→B, B→A</c> the result is <c>[B, A]</c>, i.e. NOT catalog order).</item>
+    /// </list>
+    /// Keeping the DFS result is deliberate rather than a limitation: inside a cycle no order is
+    /// correct, and a stable "catalog order" fallback would be strictly worse — it would also
+    /// discard the satisfiable edges from the cycle's members to everything else.
+    /// <c>PluginDependencyOrderTest.ACycle_DropsOnlyTheBackEdge_AndKeepsEveryOtherConstraint</c>
+    /// pins that guarantee.
+    /// </remarks>
     /// <param name="packages">The packages to order, in catalog order.</param>
     /// <param name="logger">Receives the cycle warning, if any.</param>
     /// <returns>The same packages, every one exactly once, dependencies first.</returns>
@@ -69,7 +87,8 @@ public static class PackageDependencyGraph
             {
                 if (s == 1)
                     logger?.LogWarning(
-                        "Dependency cycle involving package '{Id}' — installing it in catalog order.",
+                        "Dependency cycle involving package '{Id}' — ignoring the requirement that "
+                        + "closes the loop; order within the cycle is arbitrary.",
                         pkg.Id);
                 return;
             }

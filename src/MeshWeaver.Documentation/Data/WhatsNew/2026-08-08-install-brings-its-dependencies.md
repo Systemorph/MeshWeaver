@@ -19,8 +19,8 @@ not on the mesh yet. Whether an install worked came down to guessing the right o
 A declared cycle is now refused up front with the loop spelled out (`A → B → A`) instead of being
 installed in an arbitrary order and failing later somewhere unrecognisable. The first-boot pass
 deliberately keeps its old, forgiving behaviour — nobody is present at startup to fix a malformed
-repo, and one bad package must not strand a whole instance — so it still warns and carries on in
-catalog order.
+repo, and one bad package must not strand a whole instance — so it warns and still installs every
+package exactly once.
 
 Dependencies the catalog does not offer stay non-blocking: the instance may simply not be granted
 them, so the install proceeds and the installer's own refusal remains the accurate error if the

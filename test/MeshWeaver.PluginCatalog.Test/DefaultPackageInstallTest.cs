@@ -165,8 +165,11 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public void DependencyCycle_StillInstallsEveryPackageOnce()
     {
-        // A cycle is a repo authoring error, but it must degrade to catalog order rather than
-        // hang, drop packages, or recurse forever.
+        // A cycle is a repo authoring error, but it must still yield every package exactly once
+        // rather than hang, drop packages, or recurse forever. Deliberately order-agnostic: the
+        // sort drops the back edge and the order WITHIN a cycle is unspecified (see
+        // PackageDependencyGraph.InDependencyOrder's remarks), which is why this sorts before
+        // asserting.
         var cyclic = new[]
         {
             new PackageManifest { Id = "A", Requires = ["B"] },
