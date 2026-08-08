@@ -152,7 +152,7 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
             new PackageManifest { Id = "Training", Requires = ["Store@^1.0.0"] },
         };
 
-        var ordered = InstanceAutoRegistrationService
+        var ordered = PackageDependencyGraph
             .InDependencyOrder(catalogOrder, NullLogger.Instance)
             .Select(p => p.Id).ToList();
 
@@ -165,15 +165,18 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public void DependencyCycle_StillInstallsEveryPackageOnce()
     {
-        // A cycle is a repo authoring error, but it must degrade to catalog order rather than
-        // hang, drop packages, or recurse forever.
+        // A cycle is a repo authoring error, but it must still yield every package exactly once
+        // rather than hang, drop packages, or recurse forever. Deliberately order-agnostic: the
+        // sort drops the back edge and the order WITHIN a cycle is unspecified (see
+        // PackageDependencyGraph.InDependencyOrder's remarks), which is why this sorts before
+        // asserting.
         var cyclic = new[]
         {
             new PackageManifest { Id = "A", Requires = ["B"] },
             new PackageManifest { Id = "B", Requires = ["A"] },
         };
 
-        var ordered = InstanceAutoRegistrationService
+        var ordered = PackageDependencyGraph
             .InDependencyOrder(cyclic, NullLogger.Instance).Select(p => p.Id).OrderBy(x => x).ToList();
 
         ordered.Should().HaveCount(2);
@@ -188,7 +191,7 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
         // may well install fine, and there is nothing to order against.
         var packages = new[] { new PackageManifest { Id = "Store", Requires = ["PaidCourse@^1.0.0"] } };
 
-        var ordered = InstanceAutoRegistrationService
+        var ordered = PackageDependencyGraph
             .InDependencyOrder(packages, NullLogger.Instance).Select(p => p.Id).ToList();
         ordered.Should().HaveCount(1);
         ordered.Should().Contain("Store");

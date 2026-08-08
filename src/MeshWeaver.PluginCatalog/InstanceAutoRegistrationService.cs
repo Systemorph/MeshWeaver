@@ -501,7 +501,14 @@ public sealed class InstanceAutoRegistrationService(
                         + "registry predates source-stamped catalog entries, a Source/* pattern "
                         + "cannot match — it fails closed rather than guessing.",
                         string.Join(", ", wanted));
-                var ordered = InDependencyOrder(deduped.Select(c => c.Package).ToList(), logger);
+                // The TOLERANT sort: a cycle warns and still yields every package exactly once
+                // (the requirement closing the loop is ignored; order within the cycle is
+                // arbitrary — see InDependencyOrder's remarks) rather than refusing, because
+                // nobody is present at boot to fix a malformed repo and one bad package must not
+                // strand the whole instance. The Install CLICK uses the same graph with the strict
+                // policy (PackageDependencyGraph.InstallClosure).
+                var ordered = PackageDependencyGraph.InDependencyOrder(
+                    deduped.Select(c => c.Package).ToList(), logger);
                 var bySource = deduped.ToDictionary(c => c.Package.Id, StringComparer.Ordinal);
                 return (IReadOnlyList<InstallCandidate>)ordered
                     .Select(p => bySource[p.Id])
@@ -574,54 +581,6 @@ public sealed class InstanceAutoRegistrationService(
 
     /// <summary>One package the default install should carry, and the source it came from.</summary>
     private sealed record InstallCandidate(ConfiguredPackageSource Source, PackageManifest Package);
-
-    /// <summary>
-    /// Orders packages so a dependency is installed BEFORE anything that declares it
-    /// (<see cref="PackageManifest.Requires"/>, entries shaped <c>Store@^1.0.0</c>) — a depth-first
-    /// topological sort, falling back to catalog order within a cycle.
-    ///
-    /// <para>🚨 Not cosmetic: installing out of order FAILS. On the first live run, catalog
-    /// (alphabetical) order put <c>Chess</c> before <c>Training</c>, and the install died with
-    /// "NodeType(s) not registered: Training/Tour". A person clicking Install picks the order
-    /// implicitly; an unattended install has to derive it.</para>
-    ///
-    /// <para>Dependencies outside <paramref name="packages"/> are ignored — the instance was not
-    /// granted them, so they cannot be installed and there is nothing to order against.</para>
-    /// </summary>
-    internal static IReadOnlyList<PackageManifest> InDependencyOrder(
-        IReadOnlyList<PackageManifest> packages, ILogger logger)
-    {
-        var byId = packages.ToDictionary(p => p.Id, StringComparer.Ordinal);
-        var ordered = new List<PackageManifest>(packages.Count);
-        var state = new Dictionary<string, int>(StringComparer.Ordinal);   // 1 = visiting, 2 = done
-
-        void Visit(PackageManifest pkg)
-        {
-            if (state.TryGetValue(pkg.Id, out var s))
-            {
-                if (s == 1)
-                    logger.LogWarning(
-                        "Dependency cycle involving package '{Id}' — installing it in catalog order.",
-                        pkg.Id);
-                return;
-            }
-            state[pkg.Id] = 1;
-            foreach (var requirement in pkg.Requires)
-            {
-                // "Store@^1.0.0" → "Store". The version constraint is not resolved here: the
-                // registry serves one version per package, so ordering is all that is available.
-                var depId = requirement.Split('@')[0].Trim();
-                if (depId.Length > 0 && byId.TryGetValue(depId, out var dep) && !ReferenceEquals(dep, pkg))
-                    Visit(dep);
-            }
-            state[pkg.Id] = 2;
-            ordered.Add(pkg);
-        }
-
-        foreach (var pkg in packages)
-            Visit(pkg);
-        return ordered;
-    }
 
     /// <summary>
     /// The default install run against an EXPLICIT source list — the one seam
