@@ -347,6 +347,7 @@
   "ui.sourceChanged": "Quelle geändert — muss kompiliert werden",
   "ui.upToDate": "Aktuell",
   "ui.notYetRun": "Noch nicht ausgeführt.",
+  "ui.activityNoOutput": "Dieser Lauf hat keine Ausgabe erzeugt.",
   "ui.running": "Wird ausgeführt…",
   "ui.noActivityData": "Keine Aktivitätsdaten.",
   "ui.noActivityYet": "Noch keine Aktivität.",
