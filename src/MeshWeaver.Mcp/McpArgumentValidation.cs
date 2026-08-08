@@ -34,10 +34,18 @@ namespace MeshWeaver.Mcp;
 /// Validation is driven entirely by the tool's own published <see cref="Tool.InputSchema"/>, so it can
 /// never drift from what <c>tools/list</c> advertises.</para>
 ///
-/// <para><b>Conservative by construction.</b> The check must never reject something the binder would
-/// have accepted, so: JSON <c>null</c> always passes through (the tool's own required-field check
-/// gives a better answer), numeric strings are accepted for <c>integer</c>/<c>number</c> parameters
-/// (<c>McpJsonUtilities.DefaultOptions</c> sets <c>NumberHandling = AllowReadingFromString</c>), and a
+/// <para><b>One deliberate rejection, otherwise conservative.</b> Unknown argument NAMES are rejected
+/// ON PURPOSE, and that is the point of this class: the binder currently ACCEPTS them —
+/// <c>McpJsonUtilities.DefaultOptions</c> leaves <c>UnmappedMemberHandling</c> at <c>Skip</c> — so a
+/// caller using an older tool dialect has its argument silently dropped and, when the renamed
+/// parameter carries a default, gets a SUCCESS for a call that ignored what it asked for (#639's
+/// half-executed sequences). 🚨 Do NOT "restore conservatism" by loosening this check; a silent drop
+/// is the defect.</para>
+///
+/// <para>Everywhere ELSE the check stays strictly weaker than the binder — it must never reject a
+/// VALUE the binder would have accepted, so: JSON <c>null</c> always passes through (the tool's own
+/// required-field check gives a better answer), numeric strings are accepted for
+/// <c>integer</c>/<c>number</c> parameters (<c>NumberHandling = AllowReadingFromString</c>), and a
 /// parameter whose schema declares no <c>type</c> (<c>anyOf</c>/<c>$ref</c>) is not judged at all.</para>
 ///
 /// <para>🚨 These strings are MODEL-FACING, not user-facing: they are read by the calling agent, never
