@@ -67,6 +67,23 @@ public class NodeTypeGateEvaluatorTests
         Assert.Equal("Store/Catalog", NodeTypeGateEvaluator.ResolveRedirect(gate, "Storefront"));
     }
 
+    /// <summary>
+    /// An ABSOLUTE redirect gets the same scrutiny as a relative one. It previously skipped both
+    /// the trim and the `..` refusal, so a declaration with stray whitespace produced a path that
+    /// resolves to nothing, and one carrying a traversal was handed back verbatim — a redirect is
+    /// where a DENIED caller is sent, so it must never climb out of what was declared.
+    /// </summary>
+    [Theory]
+    [InlineData("/Store/../Escape", null)]
+    [InlineData("/../Escape", null)]
+    [InlineData("/", null)]
+    [InlineData("  /Store/Catalog  ", "Store/Catalog")]
+    public void AbsoluteRedirect_IsTrimmedAndRefusesTraversal(string declared, string? expected)
+    {
+        var gate = new NodeTypeGate(PluginType) { RedirectOnDenied = declared };
+        Assert.Equal(expected, NodeTypeGateEvaluator.ResolveRedirect(gate, "Storefront"));
+    }
+
     /// <summary>A gate must never be able to open a path outside the node it is anchored on.</summary>
     [Theory]
     [InlineData("../Sibling")]

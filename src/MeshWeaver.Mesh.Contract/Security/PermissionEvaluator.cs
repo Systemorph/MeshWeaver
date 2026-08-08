@@ -777,12 +777,14 @@ internal static class PermissionEvaluator
     /// TYPE (there is normally one), the same global shape <see cref="ObserveAllMembershipNodes"/>
     /// already uses, and bounded by the number of gated nodes rather than by their children.
     ///
-    /// <para>🚨 Each per-type query is <c>StartWith</c>-seeded with the statics. This observable
-    /// feeds a <c>CombineLatest</c> that gates EVERY permission check, and CombineLatest emits
-    /// nothing until every source has: a gated-type query that is slow (or that never matches
-    /// because no such node exists yet) would otherwise stall the whole fold and hang every read.
-    /// Seeding also starts STRICTER — no gated nodes known ⇒ no public surface ⇒ deny — so the
-    /// pre-load window can only be more restrictive, never a bypass.</para>
+    /// <para>🚨 Each per-type query is <c>StartWith</c>-seeded with an EMPTY list, and the fold
+    /// below then starts from <paramref name="staticGatedNodes"/>. This observable feeds a
+    /// <c>CombineLatest</c> that gates EVERY permission check, and CombineLatest emits nothing
+    /// until every source has: a gated-type query that is slow (or that never matches because no
+    /// such node exists yet) would otherwise stall the whole fold and hang every read. The empty
+    /// seed also starts STRICTER — before a query answers, only the statically-known gated nodes
+    /// are in the map, so an as-yet-unseen gated node has no public surface and is denied — which
+    /// makes the pre-load window more restrictive, never a bypass.</para>
     /// </summary>
     private static IObservable<ImmutableDictionary<string, string>> ObserveGatedNodes(
         IMessageHub hub, IMeshNodeStreamCache cache, IReadOnlyList<NodeTypeGate> gates,
