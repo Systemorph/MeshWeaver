@@ -1,9 +1,11 @@
 @using Icon = MeshWeaver.Domain.Icon
 @inherits BlazorView<IconControl, IconView>
 
-<FluentIcon 
+<FluentIcon
     Value="@Icon?.ToFluentIcon()"
     Width="@Width"
+    Class="@Class"
+    Style="@Style"
     />
     
 @code
