@@ -186,8 +186,14 @@ public static class ApiTokenNodeType
             })
             .Subscribe(
                 _ => { },
+                // A THROWN fault (GetMeshNode timeout, storage error, routing failure) means the
+                // validation never reached a verdict — that is UNAVAILABLE (retryable), never a
+                // definitive "invalid token". Collapsing the two into one Fail made a silo
+                // degradation answer 401 exactly like a forged token, driving clients into
+                // pointless re-authentication (issue #637). The definitive negatives above
+                // (not found / mismatch / revoked / expired) stay Fail.
                 ex => hub.Post(
-                    ValidateTokenResponse.Fail($"Validation error: {ex.Message}"),
+                    ValidateTokenResponse.Unavailable($"Validation error: {ex.Message}"),
                     o => o.ResponseFor(request)));
 
         return request.Processed();

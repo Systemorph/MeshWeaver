@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.SignalR;
@@ -23,9 +24,25 @@ public sealed class SignalRConnectionHub(IMessageHub hub, SignalRConnectionRegis
     /// <inheritdoc />
     public override async Task OnConnectedAsync()
     {
-        // Boundary bridge (SignalR is async by contract): validate the token once per connection.
-        await registry.Authenticate(Context.ConnectionId, ExtractBearerToken(Context.GetHttpContext()))
-            .FirstAsync().ToTask();
+        try
+        {
+            // Boundary bridge (SignalR is async by contract): validate the token once per connection.
+            // 🚨 Pass the connection's abort token: a client that disconnects mid-validation must
+            // release the wait immediately, not hold it until the validation read's own timeout —
+            // otherwise a burst of connect-then-drop clients parks one pending validation each.
+            await registry.Authenticate(Context.ConnectionId, ExtractBearerToken(Context.GetHttpContext()))
+                .FirstAsync().ToTask(Context.ConnectionAborted);
+        }
+        catch (TokenValidationUnavailableException ex)
+        {
+            // Retryable: validation reached NO verdict about the token (issue #637). Abort the
+            // handshake with a SPEAKING error (HubException messages reach the client even with
+            // detailed errors off) instead of silently connecting a possibly-valid token as
+            // Anonymous — the client's reconnect logic retries with the same token.
+            throw new HubException(
+                "Token validation is temporarily unavailable — retry shortly. "
+                + $"The token was NOT rejected; do not re-authenticate. ({ex.Message})");
+        }
         await base.OnConnectedAsync();
     }
 

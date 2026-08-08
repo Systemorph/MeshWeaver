@@ -9,6 +9,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Grpc;
 
@@ -33,6 +34,7 @@ public sealed class GrpcConnectionRegistry : IDisposable, IParticipantPresence
     private readonly IRoutingService routingService;
     private readonly AccessService accessService;
     private readonly IIoPool ioPool;
+    private readonly ILogger<GrpcConnectionRegistry> logger;
 
     /// <summary>Initializes a new instance of the <c>GrpcConnectionRegistry</c> class.</summary>
     /// <param name="hub">
@@ -52,6 +54,7 @@ public sealed class GrpcConnectionRegistry : IDisposable, IParticipantPresence
         this.routingService = routingService;
         accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         ioPool = ioPools?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
+        logger = hub.ServiceProvider.GetRequiredService<ILogger<GrpcConnectionRegistry>>();
     }
 
     /// <summary>
@@ -195,8 +198,19 @@ public sealed class GrpcConnectionRegistry : IDisposable, IParticipantPresence
                 _ => TransportHub.Observe(new ValidateTokenRequest(rawToken), o => o.WithTarget(tokenAddress))
                         .Select(d => d.Message as ValidateTokenResponse))
             .Take(1)
+            // Completed-empty = the request produced NO verdict at all (unroutable ApiToken hub) —
+            // an infrastructure fault, mapped to unavailable below, never to a token verdict.
+            .DefaultIfEmpty(null)
             .Select(resp =>
             {
+                // 🚨 UNAVAILABLE ≠ invalid (issue #637): when validation could not run, the
+                // possibly-valid token must NOT silently degrade to Anonymous — error the
+                // handshake instead so MeshGrpcService aborts the call with the retryable
+                // StatusCode.Unavailable and the client reconnects with the same token.
+                if (resp is null || resp.IsUnavailable)
+                    throw new TokenValidationUnavailableException(
+                        resp?.Error ?? "token validation produced no verdict (ApiToken hub unreachable)");
+
                 var user = resp is { Success: true }
                            && !string.IsNullOrEmpty(resp.UserId)
                            && resp.UserId.IndexOf('@') < 0
@@ -208,14 +222,22 @@ public sealed class GrpcConnectionRegistry : IDisposable, IParticipantPresence
                         Roles = resp.Roles,
                         IsApiToken = true,
                     }
-                    : Anonymous;
+                    : Anonymous;   // definitive invalid/revoked/expired verdict — fail closed, as before
                 SetUser(connectionId, user);
                 return Unit.Default;
             })
-            .Catch((Exception _) =>
+            .Catch((Exception ex) =>
             {
+                // Any fault on this chain is infrastructure (verdicts arrive as responses, never
+                // as exceptions) — fail CLOSED (the connection keeps Begin's Anonymous identity)
+                // but surface the retryable nature instead of swallowing it.
+                var unavailable = ex as TokenValidationUnavailableException
+                    ?? new TokenValidationUnavailableException($"token validation faulted: {ex.GetType().Name}", ex);
+                logger.LogWarning(unavailable,
+                    "Token validation UNAVAILABLE for gRPC connection {ConnectionId} — retryable infrastructure fault, NOT an invalid token; aborting the handshake so the client retries instead of degrading to Anonymous",
+                    connectionId);
                 SetUser(connectionId, Anonymous);
-                return Observable.Return(Unit.Default);
+                return Observable.Throw<Unit>(unavailable);
             });
     }
 
