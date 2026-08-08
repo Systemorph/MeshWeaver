@@ -94,8 +94,11 @@ public sealed class GitHubPackageSource : IPackageSource
     public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
         tokenProvider().SelectMany(token =>
                 fetch(repoUrl, gitRef, NullIfEmpty(package.SourceFolder ?? package.Id), token))
+            // Carry `Binary` too — a non-UTF-8 blob's `Content` is EMPTY by design (the bytes live
+            // on `RepoFile.Binary`), so projecting only `Content` publishes an empty file. See
+            // PackageFile / issue #848.
             .Select(snapshot => (IReadOnlyList<PackageFile>)snapshot.Files
-                .Select(f => new PackageFile(f.Path, f.Content)).ToList());
+                .Select(f => new PackageFile(f.Path, f.Content, f.Binary)).ToList());
 
     private static bool IsManifest(string path) =>
         path.EndsWith("/" + ManifestFile, StringComparison.OrdinalIgnoreCase)
