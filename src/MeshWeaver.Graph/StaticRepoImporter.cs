@@ -90,10 +90,13 @@ public sealed record ImportConflictPolicy(
 /// create pipeline — content + prerender — tracked as a content-addressed <c>Activity</c> and
 /// idempotent via the source fingerprint. See <c>Doc/Architecture/StaticRepoImport.md</c>.
 ///
-/// <para>Single-execution: the activity at <c>{Partition}/_Activity/import-{fingerprint}</c> is the
-/// lock — <see cref="IMeshService.CreateNode"/> makes the first caller win and concurrent replicas
-/// get "already exists". A <see cref="ActivityStatus.Succeeded"/> activity for the fingerprint is
-/// the durable "already imported" record (the short-circuit). Reactive end-to-end — no await.</para>
+/// <para>Idempotence, NOT mutual exclusion: the activity at
+/// <c>{Partition}/_Activity/import-{fingerprint}</c> is a content-addressed MARKER. A
+/// <see cref="ActivityStatus.Succeeded"/> one for the fingerprint is the durable "already imported"
+/// record that short-circuits the next boot. It does not serialise anything — a marker left
+/// <see cref="ActivityStatus.Running"/> is deliberately reclaimed rather than obeyed (see Reimport),
+/// so two replicas booting together can both import. That is safe because every write on the path is
+/// an upsert. Reactive end-to-end — no await.</para>
 /// </summary>
 public static class StaticRepoImporter
 {
@@ -512,7 +515,7 @@ public static class StaticRepoImporter
 
     /// <summary>
     /// Imports a single static-repo source into its partition: provisions the partition
-    /// schema, acquires the content-addressed import activity lock (idempotent — a prior
+    /// schema, stamps the content-addressed import marker (idempotent — a prior
     /// Succeeded activity for the same fingerprint short-circuits), then upserts every
     /// source node, prunes stale ones, and syncs content imports. Runs on the supplied
     /// (dedicated import) hub. Reactive — Subscribe to run.
@@ -545,10 +548,11 @@ public static class StaticRepoImporter
             nodes.Append(root).ToArray(), source.Versioned, hub.JsonSerializerOptions);
         var activityId = $"import-{fingerprint}";
         var activityNamespace = $"{source.Partition}/_Activity";
-        // 🚨 issue #919 — THE LOCK. Content-addressed BY DESIGN and therefore the ONE id that cannot
-        // be minted fresh per attempt: CreateNode makes the first caller win (concurrent replicas
-        // serialise on it) and a Succeeded one is the durable "this exact content is already imported"
-        // record the short-circuit below reads. It is written ONLY through the idempotent, repair-capable
+        // 🚨 issue #919 — THE MARKER. Content-addressed BY DESIGN and therefore the ONE id that cannot
+        // be minted fresh per attempt: a Succeeded one is the durable "this exact content is already
+        // imported" record the short-circuit below reads, and that only works if the id is derived
+        // from the content. It is NOT a lock — see the note on Reimport: a Running marker is reclaimed,
+        // not obeyed, so it excludes nobody. It is written ONLY through the idempotent, repair-capable
         // Upsert (CreateOrUpdateNodeRequest floors the version on the durable row it just read, #902/#909,
         // so even a forked/ghost lock row heals in place) — never through the per-progress-line stream
         // Update that made a faulted row fatal.
@@ -559,8 +563,9 @@ public static class StaticRepoImporter
         // row at that id (memex Store 2026-08-07: v166, 16 KB, unloadable by its own hub) made EVERY
         // retry re-target the same broken node and die identically — each progress write burning the
         // 30 s "no initial state arrived" abort — with no way out but deleting the row by hand in SQL.
-        // A fresh id per attempt means a faulted attempt can never be re-targeted, while the lock keeps
-        // the serialization it exists for. The attempt history is also the import log an operator wants:
+        // A fresh id per attempt means a faulted attempt can never be re-targeted, while the marker keeps
+        // the content-addressed id its short-circuit depends on. The attempt history is also the log an
+        // operator wants:
         // one node per run, not a single node overwritten in place.
         var attemptId =
             $"{activityId}-{DateTime.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid().ToString("N")[..8]}";
@@ -573,8 +578,9 @@ public static class StaticRepoImporter
         // promise-cached, so Run's later re-provision of the touched partitions is a no-op.
         return ProvisionPartitions(hub, [source.Partition])
             // Short-circuit: a Succeeded import activity for this fingerprint = already imported.
-            // (Existence check via query — eventually consistent, but the CreateNode lock below is the
-            // authoritative guard; a stale miss just attempts the create and loses the race.)
+            // (Existence check via query — eventually consistent. Nothing downstream re-checks, so a
+            // stale miss simply re-runs the whole import; that is wasteful but harmless, because every
+            // write it makes is an idempotent upsert of the same content.)
             .SelectMany(_ => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{activityPath}")))
             .Take(1)
             .SelectMany(change =>
@@ -686,7 +692,8 @@ public static class StaticRepoImporter
                 // ("AlreadyRunning", 0 nodes): the atioz Agent/Harness/Command wedge. Under System
                 // (Upsert wraps AsSystem) so the lock write authorizes on read-only-_Policy partitions.
                 IObservable<StaticRepoImportResult> Reimport() =>
-                    // 1. Acquire/refresh the LOCK (deterministic id, create-wins, repair-capable Upsert).
+                    // 1. Stamp the MARKER Running (deterministic id, repair-capable Upsert). This
+                    //    records that an import is under way; it does not exclude a concurrent one.
                     Upsert(hub, BookkeepingNode(activityId, lockName, ActivityStatus.Running))
                         // 2. Open a FRESH attempt node — the only node this run logs progress to (#919).
                         .SelectMany(_ => Upsert(hub, BookkeepingNode(
@@ -747,7 +754,8 @@ public static class StaticRepoImporter
                 // skills MISSING FOREVER ("a user didn't see the core app skills", atioz). Cheaply verify
                 // a CONTENT sentinel is still present; if it's gone, fall through to the full idempotent
                 // re-import instead of skipping. Eventually-consistent query: a stale miss re-imports
-                // idempotently (wasteful, not wrong; the activity lock still serialises concurrent runs).
+                // idempotently — wasteful, not wrong, which is the same property that lets two replicas
+                // import concurrently (nothing serialises them; every write on the path is an upsert).
                 var contentSentinel = nodes.FirstOrDefault(n =>
                     n.NodeType != "PartitionAccessPolicy"
                     && !n.Segments.Skip(1).Any(seg => seg.StartsWith('_')));
@@ -781,8 +789,11 @@ public static class StaticRepoImporter
         // (e.g. the model catalog: the read-only _Policy under "Model", the provider/model content
         // under "_Provider"), so read each touched partition's subtree. The snapshot yields each
         // target's SyncBehavior (skip decision), its identity (CreatedDate/CreatedBy, preserved on
-        // overwrite), and the prune candidate set. Eventual consistency is fine here — the import
-        // runs under the content-addressed activity lock, so no concurrent import races this read.
+        // overwrite), and the prune candidate set. Eventual consistency is tolerated here because the
+        // import is idempotent, NOT because anything excludes a concurrent one: a second replica
+        // running the same fingerprint writes byte-identical content, so a snapshot that misses its
+        // writes re-upserts rather than diverging. (The marker at import-{fingerprint} is a
+        // short-circuit record, not a lock — a Running one is reclaimed, not obeyed.)
         var partitions = nodes
             .Select(n => FirstSegment(n.Path))
             .Where(p => !string.IsNullOrEmpty(p))
