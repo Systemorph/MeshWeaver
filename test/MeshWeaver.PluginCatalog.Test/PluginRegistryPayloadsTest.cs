@@ -68,6 +68,68 @@ public class PluginRegistryPayloadsTest
         Assert.Equal("public record Slide;", source.Content);
     }
 
+    /// <summary>
+    /// 🚨 The gap issue #848 measured: <c>POST /api/plugins/files</c> answered every binary with
+    /// <c>content = 0 chars</c>, so a merged course video was never published and had to be uploaded
+    /// to each portal by hand. A binary file's bytes must survive the registry envelope (base64,
+    /// which <c>System.Text.Json</c> does natively for <c>byte[]</c>) — and a text file must still
+    /// round-trip through <c>Content</c> exactly as before, with NO stray binary field.
+    /// </summary>
+    [Fact]
+    public void Files_RoundTrip_BinaryBytes_AndLeaveTextUntouched()
+    {
+        // Deliberately NOT valid UTF-8 (0x00, 0xFF, a PNG signature): a string round-trip mangles
+        // these, which is why RepoFileCodec classifies such a blob as binary in the first place.
+        byte[] video = [0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0xFF, 0xFE, 0x89, 0x50, 0x4E, 0x47];
+        var files = new List<PackageFile>
+        {
+            new("Course/content/videos/clip.mp4", "", video),
+            new("Course/Lesson.md", "# Lesson\n\nWatch the clip."),
+        };
+
+        var json = PluginRegistryPayloads.Files(files);
+        var parsed = JsonSerializer.Deserialize<FilesEnvelope>(json, Json);
+
+        Assert.NotNull(parsed);
+        Assert.NotNull(parsed!.Files);
+
+        var clip = parsed.Files!.Single(f => f.RelativePath == "Course/content/videos/clip.mp4");
+        Assert.True(clip.IsBinary, "a committed video must arrive as bytes, not as an empty string");
+        Assert.Equal(video, clip.Bytes);
+
+        var lesson = parsed.Files.Single(f => f.RelativePath == "Course/Lesson.md");
+        Assert.Equal("# Lesson\n\nWatch the clip.", lesson.Content);
+        Assert.False(lesson.IsBinary);
+        Assert.Null(lesson.Binary);
+
+        // The computed helpers are [JsonIgnore]d — otherwise every response would carry a second
+        // base64 copy of each binary. Pin it: the payload names `binary` and nothing else byte-ish.
+        Assert.Contains("\"binary\":", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"bytes\":", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"isBinary\":", json, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A payload from an OLD registry — one that predates the binary field — must still parse, with
+    /// <see cref="PackageFile.Binary"/> null. That is what lets registry and consumer roll
+    /// independently instead of in lockstep.
+    /// </summary>
+    [Fact]
+    public void Files_FromARegistryWithoutTheBinaryField_ParseAsText()
+    {
+        const string legacy = """{"files":[{"relativePath":"Course/Lesson.md","content":"# Lesson"}]}""";
+
+        var parsed = JsonSerializer.Deserialize<FilesEnvelope>(legacy, Json);
+
+        Assert.NotNull(parsed);
+        Assert.NotNull(parsed!.Files);
+
+        var lesson = parsed.Files!.Single();
+        Assert.Equal("# Lesson", lesson.Content);
+        Assert.Null(lesson.Binary);
+        Assert.Equal("# Lesson"u8.ToArray(), lesson.Bytes);
+    }
+
     [Fact]
     public void EmptyCatalog_RoundTrips_ToEmptyList()
     {
