@@ -134,19 +134,32 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/Task") with { Name = "Task", NodeType = "Code" }).Should().Emit();
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/Task/Subtask") with { Name = "Subtask", NodeType = "Code" }).Should().Emit();
 
-        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Skip(initialCount)
+        // 🚨 Assert the SHAPE (the three paths we created each produced an Added), never a COUNT.
+        // `scope:descendants` legitimately matches anything created under {p} — a satellite the
+        // framework writes for the new nodes lands in the same window under load — so an
+        // exactly-3 assertion fails whenever one extra descendant shows up, which is what made
+        // this the top flake of 2026-08-08 (four unrelated PRs: #927, #940, #942, #947). Counting
+        // emissions on a change feed that races the initial snapshot is called out in AGENTS.md
+        // precisely because of this failure mode.
+        var expected = new[] { $"{p}/Project", $"{p}/Project/Task", $"{p}/Project/Task/Subtask" };
+        var changes = await accumulated.Should(WaitTimeout).Match(acc =>
+        {
+            var added = acc.Skip(initialCount)
+                .Where(c => c.ChangeType == QueryChangeType.Added)
+                .SelectMany(c => c.Items)
+                .Select(n => n.Path)
+                .ToHashSet();
+            return expected.All(added.Contains);
+        });
+
+        var addedPaths = changes.Skip(initialCount)
             .Where(c => c.ChangeType == QueryChangeType.Added)
             .SelectMany(c => c.Items)
             .Select(n => n.Path)
-            .Distinct()
-            .Count() >= 3);
-
-        var addedItems = changes.Skip(initialCount)
-            .Where(c => c.ChangeType == QueryChangeType.Added)
-            .SelectMany(c => c.Items)
-            .DistinctBy(n => n.Path)
-            .ToList();
-        addedItems.Should().HaveCount(3, "Each created descendant should emit an Added change");
+            .ToHashSet();
+        addedPaths.Should().Contain(expected,
+            "each created descendant must emit an Added change — extra descendants are allowed, "
+            + "the scope matches everything under the root");
     }
 
     [Fact]
