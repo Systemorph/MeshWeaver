@@ -67,9 +67,37 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     </ItemGroup>
-  <ItemGroup>
+  <!-- xunit.runner.json — the shared single-threaded default, UNLESS a project ships its own
+       next to its .csproj.
+
+       A per-project file is how a project opts INTO intra-project parallelism
+       (parallelizeTestCollections + maxParallelThreads > 1) once it has been measured
+       green that way. It is deliberately opt-in per project rather than a global flip:
+       parallel safety is a property of the tests, not of the runner, and the suite has
+       classes that share a Testcontainers instance ([Collection("PostgreSql")]) or assert
+       on process-global state.
+
+       The two includes are mutually exclusive on purpose. Two Content items both landing
+       `xunit.runner.json` in the same output directory is a duplicate-copy conflict whose winner
+       MSBuild picks without guaranteeing which — i.e. a project could silently get the shared
+       default back and quietly lose its parallelism, or worse, get parallelism it never opted into.
+
+       🚨 Both are `Content`, and the local one must NOT be written as `None Update`. This file is
+       imported by Microsoft.Common.props, which runs BEFORE the SDK's default item globs are
+       defined — so an `Update` here matches nothing and silently no-ops. The failure is not a
+       missing optimisation: with no xunit.runner.json in the output at all, xUnit falls back to
+       ITS OWN defaults, where parallelizeTestCollections is true and the thread count is the core
+       count. A silent no-op therefore hands the project unbounded parallelism nobody opted into.
+       `Content Include` works because the SDK's default None glob excludes @(Content), so the file
+       is not double-copied. -->
+  <ItemGroup Condition="!Exists('$(MSBuildProjectDirectory)/xunit.runner.json')">
     <Content Include="$(MSBuildThisFileDirectory)\xunit.runner.json">
       <Link>%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/xunit.runner.json')">
+    <Content Include="xunit.runner.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
