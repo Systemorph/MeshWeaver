@@ -170,4 +170,124 @@ public class CompileErrorPageTest
         md.Should().Contain("Edit the source and recompile.",
             "caller-supplied guidance is used when provided");
     }
+
+    // ── A TIMEOUT is not a compile failure (#641) ──
+    // Every overlay used to inherit "There was a compilation error… Please correct the
+    // code" whenever the call site passed no guidance, so a 3s registration-lookup
+    // timeout, a 60s settle timeout, an assembly the store couldn't hand over and an
+    // ABI-stale DLL all told the author to fix source Roslyn had never rejected.
+    // NodeTypeEnrichmentHelpers.OverlayCopy is now the SINGLE place that decides the
+    // wording, and ImpliesCodeFix pins which causes may claim a code fix.
+
+    [Fact]
+    public void EveryOverlayCause_SaysCorrectTheCode_OnlyWhenACodeFixIsActuallyTheRemedy()
+    {
+        // Enumerated, not listed: a NEW cause added later is covered automatically and
+        // cannot quietly inherit the genuine-error wording.
+        foreach (var cause in Enum.GetValues<NodeTypeEnrichmentHelpers.OverlayCause>())
+        {
+            var (intro, callToAction, guidance) = NodeTypeEnrichmentHelpers.OverlayCopy(cause);
+            var md = NodeTypeEnrichmentHelpers.BuildCompilationErrorMarkdownText(
+                "NodeType 'Acme/Widget' build did not settle within 60s.\n"
+                + "Instance 'Acme/widget-1' is rendering this fallback until the type's build settles.",
+                guidance, intro, callToAction);
+
+            md.Should().Contain("⚠", $"{cause}: every overlay keeps the emergency-page headline");
+            md.Should().Contain("compilation",
+                $"{cause}: the overlay contract CompileErrorOverviewTest asserts on the word 'compilation'");
+
+            if (NodeTypeEnrichmentHelpers.ImpliesCodeFix(cause))
+            {
+                md.Should().Contain("Please correct the code",
+                    $"{cause} genuinely IS the author's to fix");
+            }
+            else
+            {
+                md.Should().NotContain("Please correct the code",
+                    $"{cause} is an availability problem — telling the author to edit working source is the #641 bug");
+                md.Should().Contain("No code change is needed",
+                    $"{cause} must say so explicitly, not merely omit the code-fix line");
+            }
+        }
+    }
+
+    [Fact]
+    public void SettleTimeoutOverlay_ReadsAsRetry_AndStillNamesWhatTimedOut()
+    {
+        var (intro, callToAction, guidance) =
+            NodeTypeEnrichmentHelpers.OverlayCopy(NodeTypeEnrichmentHelpers.OverlayCause.BuildNotSettled);
+
+        var md = NodeTypeEnrichmentHelpers.BuildCompilationErrorMarkdownText(
+            "NodeType 'Acme/Widget' build did not settle within 60s.\n"
+            + "Instance 'Acme/widget-1' is rendering this fallback until the type's build settles.",
+            guidance, intro, callToAction);
+
+        md.Should().NotContain("Please correct the code");
+        md.Should().Contain("No code change is needed");
+        md.Should().Contain("Acme/Widget", "the page still names the type that didn't settle");
+        md.Should().Contain("60s", "and the budget that elapsed — a bare 'timed out' is unactionable");
+        md.Should().Contain("Recycle", "with a concrete way to retry");
+    }
+
+    [Fact]
+    public void GenuineRoslynFailure_StillShowsTheCompilerOutput_AndAsksForACodeFix()
+    {
+        // The counterpart guarantee: distinguishing timeouts must not soften a REAL failure.
+        var (intro, callToAction, guidance) =
+            NodeTypeEnrichmentHelpers.OverlayCopy(NodeTypeEnrichmentHelpers.OverlayCause.CompileFailed);
+
+        var md = NodeTypeEnrichmentHelpers.BuildCompilationErrorMarkdownText(
+            "Compilation failed for 'Acme/Widget'\n"
+            + "CS0103 error (line 9): 'Chart' does not exist in the current context",
+            guidance, intro, callToAction);
+
+        md.Should().Contain("Please correct the code");
+        md.Should().Contain("CS0103", "the actual compiler diagnostics are still shown");
+        md.Should().Contain("```text", "still in a code block, not prose");
+        md.Should().NotContain("No code change is needed");
+    }
+
+    [Fact]
+    public void InstanceOverlayPage_LinksTheCompileLog_WhenAnActivityPathIsKnown()
+    {
+        // 🚨 The broken INSTANCE page used to be the one surface with no route to the
+        // diagnostics — only the NodeType's own Overview carried "View full compile log →".
+        const string activityPath = "Acme/Widget/_Activity/compile-42";
+
+        var md = NodeTypeEnrichmentHelpers.BuildCompilationErrorMarkdownText(
+            "Compilation failed for 'Acme/Widget'\nCS0103 error (line 9): 'Chart' does not exist",
+            guidance: null, intro: null, callToAction: null, activityPath: activityPath);
+
+        md.Should().Contain($"](/{activityPath})",
+            "the overlay links straight to the compile activity so the user reaches the full log");
+        md.Should().Contain(NodeTypeEnrichmentHelpers.ViewCompileLogLabel);
+    }
+
+    [Fact]
+    public void InstanceOverlayPage_TimeoutWithActivity_CarriesBothTheRetryCopyAndTheLogLink()
+    {
+        const string activityPath = "Acme/Widget/_Activity/compile-43";
+        var (intro, callToAction, guidance) =
+            NodeTypeEnrichmentHelpers.OverlayCopy(NodeTypeEnrichmentHelpers.OverlayCause.StateUndetermined);
+
+        var md = NodeTypeEnrichmentHelpers.BuildCompilationErrorMarkdownText(
+            "The compile state of 'Acme/Widget' could not be determined: it did not settle within 60s.",
+            guidance, intro, callToAction, activityPath);
+
+        md.Should().NotContain("Please correct the code");
+        md.Should().Contain($"](/{activityPath})",
+            "a timeout page needs the log MORE than a failure page — it's the only evidence of how far the build got");
+    }
+
+    [Fact]
+    public void InstanceOverlayPage_OmitsTheCompileLogLink_WhenNoActivityWasEverRecorded()
+    {
+        // No phantom links: an activity path that was never written must not become a
+        // dead route (a subscription to an inexistent address is the resubscribe storm).
+        var md = NodeTypeEnrichmentHelpers.BuildCompilationErrorMarkdownText(
+            "Compilation failed", guidance: null);
+
+        md.Should().NotContain("](/");
+        md.Should().NotContain(NodeTypeEnrichmentHelpers.ViewCompileLogLabel);
+    }
 }
