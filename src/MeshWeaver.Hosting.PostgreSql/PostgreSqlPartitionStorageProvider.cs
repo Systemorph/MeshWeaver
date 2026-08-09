@@ -310,6 +310,34 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
                 ddlDs, schemaOptions, extraTables, ct).ConfigureAwait(false);
         }
 
+        // 🚨 Register the brand-new partition in the CENTRAL registry (public.searchable_schemas)
+        // as part of provisioning — never leave it to the discovery poll.
+        //
+        // public.searchable_schemas is the schema list every PATH-LESS (cross-schema) query fans
+        // out over. Its only other writer is PostgreSqlCrossSchemaQueryProvider.SyncSearchableSchemasAsync,
+        // which is throttled to one run per SyncTtl (30 s) and only runs when a fan-out query asks
+        // for the list. So a partition provisioned within that window was invisible to every
+        // path-less query — and for a LIVE path-less query that is not a delay, it is permanent
+        // loss: the live re-query fires only on a change notification, so a write that lands in the
+        // new partition inside the window is re-queried ONCE, against a schema list that cannot
+        // contain it, and nothing ever triggers another look. That is the fail-OPEN half of #697
+        // reappearing one layer down — a GroupMembership created in a just-provisioned Space never
+        // reached $security-memberships (repro: GroupMembershipLiveRevocationTests
+        // .PathLessNodeTypeQuery_DeliversLiveAddedAndRemoved, which opens the query BEFORE the
+        // partition exists exactly to pin this ordering).
+        //
+        // We KNOW the partition exists here — this is the one place that creates it — so the
+        // registry is written from knowledge, not rediscovered by a poll. The poll remains for
+        // partitions provisioned by OTHER processes. Runs AFTER the DDL commits so a concurrent
+        // sync can never observe the row without the schema.
+        if (PostgreSqlCrossSchemaQueryProvider.IsSearchableSchema(schema))
+        {
+            await using var registerCmd = _baseDataSource.CreateCommand(
+                "INSERT INTO public.searchable_schemas (schema_name) VALUES (@schema) ON CONFLICT DO NOTHING");
+            registerCmd.Parameters.AddWithValue("schema", schema);
+            await registerCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
         _schemasInitialized.TryAdd(schema, 0);
         if (!string.IsNullOrEmpty(def.Namespace))
             _registeredPartitions[def.Namespace] = def;
