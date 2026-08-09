@@ -359,19 +359,22 @@ public partial class NamedAreaView
                     // IsSafeRedirect blocks redirecting the target itself (or a node under it), so it can
                     // never loop. The lookup is best-effort + bounded: on error/timeout it shows the honest
                     // error, never a swallow. When no RedirectOnDenied is set, it falls through to the error.
+                    // The honest fallback both denial branches below fall back to.
+                    void ShowErrorMarkdown() => InvokeAsync(() =>
+                    {
+                        if (IsViewDisposed) return;
+                        try
+                        {
+                            RootControl = new MarkdownControl($"**Error loading area:** {error.Message}");
+                            RequestStateChange();
+                        }
+                        catch (ObjectDisposedException) { /* renderer gone */ }
+                    });
+
                     if (Top
                         && AreaErrorClassifier.TryGetAccessDeniedPath(error) is { } deniedPath)
                     {
-                        void ShowError() => InvokeAsync(() =>
-                        {
-                            if (IsViewDisposed) return;
-                            try
-                            {
-                                RootControl = new MarkdownControl($"**Error loading area:** {error.Message}");
-                                RequestStateChange();
-                            }
-                            catch (ObjectDisposedException) { /* renderer gone */ }
-                        });
+                        void ShowError() => ShowErrorMarkdown();
 
                         Hub.GetRedirectOnDenied(deniedPath)
                             .Take(1)
@@ -397,6 +400,47 @@ public partial class NamedAreaView
                                     });
                                 },
                                 _ => { if (!IsViewDisposed) ShowError(); }); // lookup failed → honest error
+                        return;
+                    }
+
+                    // EMBEDDED gated area (not Top): the block above deliberately refuses to let it
+                    // redirect the whole page — but falling through to "**Error loading area:**
+                    // Access denied: user 'x' lacks Read permission on 'Plugin/Live'" is just as
+                    // wrong. That is the DESIGNED state of gated content seen by someone without the
+                    // entitlement, and the page already carries the cover/paywall panel that explains
+                    // it. Printing a raw permission error above that panel reads as a broken page
+                    // (observed on /DoublePendulum, whose overview embeds the gated Live area).
+                    //
+                    // So: render NOTHING for an embedded area whose denial has a declared
+                    // RedirectOnDenied — the node itself is telling us this content is gated on
+                    // purpose. Without that policy the denial is unexpected and still surfaces as an
+                    // honest error, and a lookup failure/timeout never silently swallows it either.
+                    if (!Top && AreaErrorClassifier.TryGetAccessDeniedPath(error) is { } gatedPath)
+                    {
+                        void HideArea() => InvokeAsync(() =>
+                        {
+                            if (IsViewDisposed) return;
+                            try
+                            {
+                                RootControl = null;
+                                RequestStateChange();
+                            }
+                            catch (ObjectDisposedException) { /* renderer gone */ }
+                        });
+
+                        Hub.GetRedirectOnDenied(gatedPath)
+                            .Take(1)
+                            .Timeout(TimeSpan.FromSeconds(5))
+                            .Subscribe(
+                                redirectPath =>
+                                {
+                                    if (IsViewDisposed) return;
+                                    if (string.IsNullOrWhiteSpace(redirectPath))
+                                        ShowErrorMarkdown();   // not gated → a real problem, say so
+                                    else
+                                        HideArea();            // gated by design → the cover speaks
+                                },
+                                _ => { if (!IsViewDisposed) ShowErrorMarkdown(); });
                         return;
                     }
 

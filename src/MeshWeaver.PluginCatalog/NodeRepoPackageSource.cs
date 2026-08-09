@@ -46,13 +46,19 @@ public sealed class NodeRepoPackageSource : IPackageSource
         Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch,
         string repoUrl,
         Func<IObservable<string>> tokenProvider,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        string? defaultLicense = null)
     {
         this.fetch = fetch;
         this.repoUrl = repoUrl;
         this.tokenProvider = tokenProvider;
         this.logger = logger;
+        // The licence this SOURCE's repo is published under, from its own LICENSE file. Applied
+        // only where a package declares none — it records an existing grant, never invents one.
+        this.defaultLicense = defaultLicense;
     }
+
+    private readonly string? defaultLicense;
 
     /// <summary>
     /// Creates a node-repo source with a FIXED token (default empty = anonymous). Convenience for
@@ -63,8 +69,9 @@ public sealed class NodeRepoPackageSource : IPackageSource
         Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch,
         string repoUrl,
         string token = "",
-        ILogger? logger = null)
-        : this(fetch, repoUrl, () => Observable.Return(token), logger)
+        ILogger? logger = null,
+        string? defaultLicense = null)
+        : this(fetch, repoUrl, () => Observable.Return(token), logger, defaultLicense)
     {
     }
 
@@ -135,6 +142,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         // module ships no manifest.lock (legacy commit-sha comparison applies).
                         ManifestFiles = mm?.Files,
                         Requires = peeked.Requires,
+                        License = peeked.License ?? defaultLicense,
                         Category = peeked.Category,
                         Icon = peeked.Icon,
                         Price = peeked.Price,
@@ -174,7 +182,8 @@ public sealed class NodeRepoPackageSource : IPackageSource
     private readonly record struct PeekedRoot(
         string? NodeType, string? Name, string? Description,
         string? Category, string? Icon, decimal? Price, string? Currency, string? Poster,
-        bool PreInstalled, ImmutableList<string> Requires, ImmutableList<string> PublicSegments);
+        bool PreInstalled, ImmutableList<string> Requires, ImmutableList<string> PublicSegments,
+        string? License);
 
     // Reads the node's type/name/description — plus the storefront card fields (category/icon on
     // the node, price/currency/poster inside the content) — straight from the JSON: no MeshNode
@@ -191,6 +200,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
             string? poster = null;
             var preInstalled = false;
             var requires = ImmutableList<string>.Empty;
+            string? license = null;
             var publicSegments = ImmutableList<string>.Empty;
             if (r.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Object)
             {
@@ -211,6 +221,10 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 // depends on fails outright ("NodeType(s) not registered: Training/Tour" — Chess
                 // installed before Training on the first live run). A human clicking Install picks
                 // the order themselves, which is why this stayed unread for so long.
+                // The package's own declared licence (SPDX id or expression). Absent leaves it
+                // null — the source's DefaultLicense fills it, never a platform-wide guess.
+                if (content.TryGetProperty("license", out var lic) && lic.ValueKind == JsonValueKind.String)
+                    license = lic.GetString();
                 if (content.TryGetProperty("requires", out var req) && req.ValueKind == JsonValueKind.Array)
                     requires = req.EnumerateArray()
                         .Where(e => e.ValueKind == JsonValueKind.String)
@@ -232,7 +246,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 r.TryGetProperty("description", out var d) ? d.GetString() : null,
                 r.TryGetProperty("category", out var cat) ? cat.GetString() : null,
                 r.TryGetProperty("icon", out var ic) ? ic.GetString() : null,
-                price, currency, poster, preInstalled, requires, publicSegments);
+                price, currency, poster, preInstalled, requires, publicSegments, license);
         }
         catch (JsonException ex)
         {
