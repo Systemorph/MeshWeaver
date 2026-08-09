@@ -3110,11 +3110,17 @@ public class MeshOperations
         // target so a read-only caller can't bounce other partitions' hubs. With no RLS
         // wired, the default evaluator grants All and behavior is unchanged. Fail closed
         // on evaluator errors/timeouts.
-        // 🚨 TakeDecisionOutsideGate, NOT a bare Take(1) — issue #899. RecycleCore disposes the
-        //    target's hub and forces re-initialization; running that inside the evaluator's
-        //    CombineLatest gate is the same lock-order inversion Export hit above.
+        // 🚨 A bare Take(1) here, deliberately — do NOT "fix" it to TakeDecisionOutsideGate.
+        //    Measured: that hop makes NodeTypeCompileParkTest.ParkedNodeType_RecycleRetry_
+        //    AfterFix_SettlesOkAndUnparks fail 91s-timeout (7s pass without it). Leaving the
+        //    fold's gate also leaves the HUB'S TURN — the caveat #899's own commit records for
+        //    WorkspaceCacheEvictionTest — and RecycleCore's DisposeRequest + cache-invalidation
+        //    broadcast must stay ordered against the caller's turn, or the recompile that
+        //    follows re-runs its source query against a half-invalidated state and matches zero
+        //    Code nodes. Export above is the opposite case: its continuation is genuinely
+        //    detached work that must leave the gate.
         return hub.CheckPermission(resolvedPath, MeshWeaver.Mesh.Security.Permission.Update)
-            .TakeDecisionOutsideGate()
+            .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .Catch((Exception ex) =>
             {
