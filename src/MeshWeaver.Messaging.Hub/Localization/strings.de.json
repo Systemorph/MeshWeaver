@@ -627,6 +627,7 @@
   "export.pageBreakChildren": "Seitenumbruch zwischen Kapiteln",
   "export.headerText": "Kopfzeile (optional)",
   "export.footerText": "Fußzeile (optional)",
+  "export.corporateIdentityHint": "Pfad zu einem CorporateIdentity-Node. Leer lassen für die Portal-Vorgabe.",
   "export.fidelity": "Wiedergabetreue",
   "export.fidelityContent": "Inhaltstreu – schnell, klein, markierbarer Text",
   "export.fidelityPixel": "Pixelgetreu – exakt wie am Bildschirm",

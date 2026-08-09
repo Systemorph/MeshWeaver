@@ -65,6 +65,12 @@ The print stylesheet sets `@page { size: 13.333in 7.5in; margin: 0 }` — the st
 
 Chromium **discards every background paint when printing** unless colour adjustment is forced to exact. Without those two declarations a gradient deck prints as white pages — the feature would look implemented and produce nothing. It is pinned by a test for that reason.
 
+### A pixel export IS the slides — nothing else
+
+The browser prints the deck's own stage, so there is no document model to hang branding on: a pixel-faithful export has **no cover page, no table of contents, no running header or footer, and no page-break rules**. Those belong to the QuestPDF document and cannot be glued onto browser-printed pages within one document. The export dialog therefore **hides** them when pixel fidelity is selected, rather than leaving controls on screen that would silently do nothing.
+
+If a deck needs a branded cover, the honest answer today is to make the cover a slide — where the deck's own CSS can style it far better than the document model could.
+
 ### Assets are inlined, not linked
 
 Images in slides resolve to `api/content/{collection}/{path}` — an **access-controlled portal route**, which a `file://` document cannot fetch. So the export collects every such reference, reads it through `IContentService` **under the exporting user's identity**, and rewrites it to a `data:` URI. The printed deck is self-contained and contains only what that user could already read. An asset that cannot be read is left as a link and logged: a missing picture prints broken, exactly as it would on screen — it never fails the export.
