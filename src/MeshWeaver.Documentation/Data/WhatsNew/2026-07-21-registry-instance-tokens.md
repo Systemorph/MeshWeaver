@@ -1,8 +1,9 @@
 ---
 Name: Plugin registry is now gated to registered instances
-Category: What's New
+Category: Feature
 Description: The /api/plugins registry surface requires an issued instance token — anonymous access is reserved for local-dev registries with no tokens configured.
 Icon: ShieldKeyhole
+Order: -20260721
 ---
 
 # Plugin registry is now gated to registered instances

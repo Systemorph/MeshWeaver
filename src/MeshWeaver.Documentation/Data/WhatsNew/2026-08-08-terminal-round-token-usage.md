@@ -1,8 +1,9 @@
 ---
 Name: Cancelled and failed runs now count their tokens
-Category: What's New
+Category: Fix
 Description: Tokens consumed before a round was cancelled or hit an error are now recorded against the model that actually ran, so usage and cost reporting reflect real spend.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Cancelled and failed runs now count their tokens

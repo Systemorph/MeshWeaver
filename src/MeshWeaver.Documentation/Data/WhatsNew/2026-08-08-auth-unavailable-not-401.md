@@ -1,8 +1,9 @@
 ---
 Name: A busy platform no longer looks like a bad API token
-Category: What's New
+Category: Fix
 Description: When the platform is briefly unable to check an API token, callers now get a "retry shortly" answer instead of "your token is invalid".
 Icon: ShieldKeyhole
+Order: -20260808
 ---
 
 # A busy platform no longer looks like a bad API token

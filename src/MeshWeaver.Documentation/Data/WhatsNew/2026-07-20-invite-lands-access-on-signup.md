@@ -1,8 +1,9 @@
 ---
 Name: Invited people reliably get their access the moment they sign up
-Category: What's New
+Category: Fix
 Description: A pending group or space invite now grants membership and access as soon as the invitee onboards — even on the multi-node portal where the sign-up event used to be missed
 Icon: Sparkle
+Order: -20260720
 ---
 
 # Invites now land access on sign-up, every time

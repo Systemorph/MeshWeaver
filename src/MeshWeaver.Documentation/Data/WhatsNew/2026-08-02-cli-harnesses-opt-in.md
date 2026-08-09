@@ -1,8 +1,9 @@
 ---
 Name: Claude Code and GitHub Copilot are now opt-in per user
-Category: What's New
+Category: Feature
 Description: The CLI harnesses no longer appear in everyone's chat picker by default — install them from the Store when you want them; uninstalling removes them again.
 Icon: Sparkle
+Order: -20260802
 ---
 
 # Claude Code and GitHub Copilot are now opt-in per user

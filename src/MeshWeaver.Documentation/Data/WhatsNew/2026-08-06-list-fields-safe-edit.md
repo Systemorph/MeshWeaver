@@ -1,8 +1,9 @@
 ---
 Name: List fields can't be wiped by a stray keystroke
-Category: What's New
+Category: Fix
 Description: The node Edit form no longer lets a single character overwrite a whole list-valued field — collections now display read-only instead of as a destructive text box.
 Icon: ShieldCheckmark
+Order: -20260806
 ---
 
 # List fields can't be wiped by a stray keystroke

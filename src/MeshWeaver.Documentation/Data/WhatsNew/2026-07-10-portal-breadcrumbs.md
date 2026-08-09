@@ -1,8 +1,9 @@
 ---
 Name: Breadcrumb trail in the portal
-Category: What's New
+Category: Feature
 Description: The Blazor portal now shows a breadcrumb bar below the top bar — ⌂ Home › Ancestor › Current — so you always know where you are and can step back up.
 Icon: Navigation
+Order: -20260710
 ---
 
 # What's New — 10 July 2026

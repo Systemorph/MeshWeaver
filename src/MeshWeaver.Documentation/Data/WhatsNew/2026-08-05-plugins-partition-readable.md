@@ -1,8 +1,9 @@
 ---
 Name: Installed plugins visible on a fresh mesh
-Category: What's New
+Category: Fix
 Description: The plugin catalog's install records now ship with a read-only public access policy, so catalog views can show what is installed on a freshly bootstrapped mesh.
 Icon: Sparkle
+Order: -20260805
 ---
 
 # Installed plugins visible on a fresh mesh

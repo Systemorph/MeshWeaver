@@ -1,8 +1,9 @@
 ---
 Name: Snowflake storage backend
-Category: What's New
+Category: Feature
 Description: MeshWeaver portals can now run on Snowflake as their system of record, with full feature parity to the PostgreSQL backend.
 Icon: Sparkle
+Order: -20260713
 ---
 
 # Snowflake storage backend

@@ -1,8 +1,9 @@
 ---
 Name: Commercial plugins need a Global Admin, and orphaned install records can finally be removed
-Category: What's New
+Category: Feature
 Description: Free packages install and update with no special permission; commercial ones now require a Global Admin on every path, including the unattended one — and a package that left the registry no longer leaves an unremovable phantom record behind.
 Icon: ShieldCheckmark
+Order: -20260808
 ---
 
 # Commercial plugins need a Global Admin, and orphaned install records can finally be removed

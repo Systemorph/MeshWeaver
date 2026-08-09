@@ -1,8 +1,9 @@
 ---
 Name: Admins can enroll a user in one step
-Category: What's New
+Category: Feature
 Description: Giving somebody access to a package is now a single action — it writes the entitlement record and the access grant together, so nobody ends up "purchased but locked out".
 Icon: PersonAdd
+Order: -20260808
 ---
 
 # Admins can enroll a user in one step

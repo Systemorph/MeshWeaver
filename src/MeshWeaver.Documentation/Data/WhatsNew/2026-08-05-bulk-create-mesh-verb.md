@@ -1,8 +1,9 @@
 ---
 Name: One round-trip to create many nodes — the bulk create verb
-Category: What's New
+Category: Feature
 Description: Plugins and services can now create a whole plan of nodes in a single validated, permission-checked request instead of one round-trip per node.
 Icon: Sparkle
+Order: -20260805
 ---
 
 # One round-trip to create many nodes

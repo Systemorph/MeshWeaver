@@ -1,6 +1,9 @@
 ---
-title: "\"Access denied\" and \"Not found\" now mean what they say"
-date: 2026-08-09
+Name: "\"Access denied\" and \"Not found\" now mean what they say"
+Category: Fix
+Description: A lookup that could not complete no longer reports a confident negative — you get a retryable "cannot tell right now" instead of a false denial or a false missing node.
+Icon: ShieldCheckmark
+Order: -20260809
 ---
 
 # "Access denied" and "Not found" now mean what they say

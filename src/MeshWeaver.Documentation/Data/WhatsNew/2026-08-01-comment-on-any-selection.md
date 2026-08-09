@@ -1,8 +1,9 @@
 ---
 Name: Select text and comment — on any content, not just documents
-Category: What's New
+Category: Feature
 Description: Highlighting a passage and commenting on it used to work only on markdown documents. The affordance is now a wrapper any view can put around any content, so posts and other rendered text can offer it too.
 Icon: Sparkle
+Order: -20260801
 ---
 
 # Select text and comment — on any content

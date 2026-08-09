@@ -1,8 +1,9 @@
 ---
 Name: Chat composer grows with your message again
-Category: What's New
+Category: Fix
 Description: Typing or pasting a long message expands the chat composer up to its cap instead of scrolling invisibly inside a small box.
 Icon: Sparkle
+Order: -20260722
 ---
 
 # Chat composer grows with your message again

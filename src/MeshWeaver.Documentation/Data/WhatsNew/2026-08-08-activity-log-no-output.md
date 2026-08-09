@@ -1,8 +1,9 @@
 ---
 Name: Finished runs with no output now say so
-Category: What's New
+Category: Fix
 Description: An activity that finishes without producing log output now states that explicitly instead of showing a stale "Running…" row.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Finished runs with no output now say so

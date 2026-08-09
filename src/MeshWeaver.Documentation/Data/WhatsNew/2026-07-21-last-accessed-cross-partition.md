@@ -1,8 +1,9 @@
 ---
 Name: Last accessed now works across all your spaces
-Category: What's New
+Category: Fix
 Description: The home page's "Last accessed" order now shows what you actually opened last — across every space — and no longer lists your own profile.
 Icon: Sparkle
+Order: -20260721
 ---
 
 # Last accessed now works across all your spaces

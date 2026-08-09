@@ -1,8 +1,9 @@
 ---
 Name: Permission changes now take effect immediately
-Category: What's New
+Category: Fix
 Description: Editing who can see what — changing a role or denying access — now reaches everyone straight away, instead of waiting for a reload.
 Icon: ShieldCheckmark
+Order: -20260806
 ---
 
 # Permission changes now take effect immediately

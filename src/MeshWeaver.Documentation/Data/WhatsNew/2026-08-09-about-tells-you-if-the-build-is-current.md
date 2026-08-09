@@ -1,8 +1,9 @@
 ---
 Name: About now tells you whether the build you are on is current
-Category: What's New
+Category: Feature
 Description: The About page already named the exact build a portal runs; it now also says whether a newer one exists — for every user, not only platform admins.
 Icon: ArrowSync
+Order: -20260809
 ---
 
 # About now tells you whether the build you are on is current

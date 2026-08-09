@@ -1,8 +1,9 @@
 ---
 Name: Shutting down no longer crashes when custom types are in use
-Category: What's New
+Category: Fix
 Description: A portal or test host that had compiled custom NodeTypes could abort instead of exiting cleanly; shutdown now waits for in-flight work before reclaiming those types.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Shutting down no longer crashes when custom types are in use
