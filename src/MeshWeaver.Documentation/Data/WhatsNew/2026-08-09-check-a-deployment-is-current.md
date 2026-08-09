@@ -1,8 +1,9 @@
 ---
 Name: Checking that a deployment is up to date, from inside or outside
-Category: What's New
+Category: Feature
 Description: Every user can now see on About whether their build is current, and a new anonymous /api/version endpoint answers the same question from outside the portal.
 Icon: ArrowSync
+Order: -20260809
 ---
 
 # Checking that a deployment is up to date, from inside or outside
