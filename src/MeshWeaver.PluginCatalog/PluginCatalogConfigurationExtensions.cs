@@ -110,7 +110,8 @@ public static class PluginCatalogConfigurationExtensions
             .WithType(typeof(PluginCatalogContent), nameof(PluginCatalogContent))
             .WithType(typeof(PluginManifest), nameof(PluginManifest))
             .WithType(typeof(PluginRegistryCredential), nameof(PluginRegistryCredential))
-            .WithType(typeof(ModuleDiscovery), nameof(ModuleDiscovery));
+            .WithType(typeof(ModuleDiscovery), nameof(ModuleDiscovery))
+            .WithType(typeof(DefaultInstallLedger), nameof(DefaultInstallLedger));
 
     private static MeshNode CreatePackageNodeType() => new(PackageInstaller.PackageNodeType)
     {

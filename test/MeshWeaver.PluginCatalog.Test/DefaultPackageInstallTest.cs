@@ -197,11 +197,66 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
         ordered.Should().Contain("Store");
     }
 
+    /// <summary>
+    /// A REGISTRY installing from its OWN configured source matches by the source's configured
+    /// NAME, even though nothing stamped <see cref="PackageManifest.Source"/> on the way.
+    ///
+    /// <para>🚨 The live regression this pins: <c>Source</c> was stamped only by the registry's
+    /// HTTP merge, so an instance reading its own sources directly (no HTTP hop) saw null on every
+    /// package and <c>Plugins/*</c> matched nothing — a green deploy that installed zero plugins.
+    /// The lister always knows which source it read from, so it stamps.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task RegistryInstallingFromItsOwnSource_MatchesByConfiguredName()
+    {
+        Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch =
+            (_, _, _, _) => Observable.Return(new RepoSnapshot("commit-local", Repo));
+        // No SourceStampingCatalog wrapper — the raw source, exactly as a local registry reads it.
+        var unstamped = new NodeRepoPackageSource(fetch, "https://github.com/acme/plugins");
+
+        await Installer()
+            // The source is CONFIGURED as "Plugins"; nothing stamped the packages.
+            .InstallFrom([new ConfiguredPackageSource(unstamped, "HEAD", "Plugins")],
+                baseline: false, [PluginGrantEntry.TryParse("Plugins/*")!])
+            .Should().Within(120.Seconds()).Emit();
+
+        var records = (await InstalledRecords().Should().Emit()).Select(n => n.Id).ToList();
+        records.Should().Contain("Store", "a registry must install from its own source");
+        records.Should().Contain("Essentials");
+    }
+
+    /// <summary>
+    /// The seed ledger must NOT be typed as a Package.
+    ///
+    /// <para>🚨 It lives in the Plugins partition but is bookkeeping, not an install record, so
+    /// typing it <c>Package</c> puts it in every query that enumerates installed packages by node
+    /// type — the freshness probe, ModuleDiscovery's instance state, any inventory UI. The tell
+    /// was that every verification query written against this feature had to exclude it by id; a
+    /// filter you must repeat at each call site means the type is wrong.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task TheLedgerIsNotAnInstalledPackage()
+    {
+        await Installer()
+            .InstallFrom([new ConfiguredPackageSource(Catalog(), "HEAD", "Plugins")],
+                baseline: false, [PluginGrantEntry.TryParse("Plugins/Store")!])
+            .Should().Within(120.Seconds()).Emit();
+
+        // InstalledRecords() queries nodeType:Package — the ledger must be invisible to it, with
+        // NO id-based exclusion applied here.
+        var records = (await InstalledRecords().Should().Emit()).Select(n => n.Id).ToList();
+        records.Should().Contain("Store");
+        records.Should().NotContain("_DefaultInstallLedger",
+            "the ledger is bookkeeping and must never surface as an installed package");
+    }
+
     [Fact(Timeout = 180_000)]
     public async Task UnstampedCatalog_InstallsNothing_FailsClosed()
     {
-        // A registry predating source-stamped entries: a Source/* default cannot match, and the
-        // right answer is to install NOTHING rather than guess which source a package belongs to.
+        // A pattern naming a DIFFERENT source than the one configured ("Plugins/*" against a
+        // source configured as "test"): the right answer is to install NOTHING rather than guess
+        // that the operator meant this source. Fails closed — and UnmatchablePatterns reports it
+        // loudly, because silence here is what made a green deploy install zero plugins.
         Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch =
             (_, _, _, _) => Observable.Return(new RepoSnapshot("commit-default", Repo));
         var unstamped = new NodeRepoPackageSource(fetch, "https://github.com/acme/plugins");
