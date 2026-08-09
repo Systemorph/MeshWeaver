@@ -34,6 +34,32 @@ public readonly record struct UserIdentityLookup(MeshNode? Node, string? Unavail
 
     /// <summary>The index could not answer — report unavailable, never "unknown user".</summary>
     public static UserIdentityLookup Unavailable(string reason) => new(null, reason);
+
+    /// <summary>
+    /// The whole decision, as a PURE function of what the index knows — extracted so the
+    /// cold-cache boundary is unit-testable without a mesh, a hub or a query subscription (the
+    /// same reason <c>AreaErrorClassifier</c> is dependency-free). The cold leg is the one that
+    /// matters and the one a live-mesh test cannot pin: by the time a test can observe a real
+    /// cache, it has usually already hydrated.
+    /// </summary>
+    /// <param name="hit">The node found in the index, or <c>null</c> on a miss.</param>
+    /// <param name="hydrated">Whether the first snapshot has been applied. A miss is only
+    /// authoritative once this is true.</param>
+    /// <param name="subscriptionFailure">Non-null once the backing query has faulted; such an
+    /// index will never hydrate, so it can never honestly answer "unknown".</param>
+    public static UserIdentityLookup Classify(MeshNode? hit, bool hydrated, string? subscriptionFailure)
+    {
+        if (hit is not null)
+            return Found(hit);
+        // The failure outranks hydration: a subscription that faulted AFTER its first snapshot has
+        // both set, and "the index is broken" is the more useful and more honest answer — its
+        // contents are now arbitrarily stale, so a miss is no longer evidence of anything.
+        if (subscriptionFailure is not null)
+            return Unavailable(subscriptionFailure);
+        return hydrated
+            ? Unknown
+            : Unavailable("the mesh user index has not received its first snapshot yet");
+    }
 }
 
 /// <summary>
@@ -153,17 +179,12 @@ public sealed class UserIdentityCache : IDisposable
     {
         if (string.IsNullOrEmpty(email))
             return UserIdentityLookup.Unknown;
-        if (_byEmail.TryGetValue(email, out var node))
-            return UserIdentityLookup.Found(node);
 
-        // Read the failure BEFORE the hydration flag: a subscription that faulted mid-life has
-        // both set, and the fault is the more informative answer.
-        if (Volatile.Read(ref _subscriptionFailure) is { } failure)
-            return UserIdentityLookup.Unavailable(failure);
-        return Volatile.Read(ref _hydrated)
-            ? UserIdentityLookup.Unknown
-            : UserIdentityLookup.Unavailable(
-                "the mesh user index has not received its first snapshot yet");
+        _byEmail.TryGetValue(email, out var node);
+        return UserIdentityLookup.Classify(
+            node,
+            Volatile.Read(ref _hydrated),
+            Volatile.Read(ref _subscriptionFailure));
     }
 
     /// <summary>
