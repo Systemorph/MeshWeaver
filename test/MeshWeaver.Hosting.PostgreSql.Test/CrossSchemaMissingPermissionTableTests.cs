@@ -105,12 +105,29 @@ public class CrossSchemaMissingPermissionTableTests(PostgreSqlFixture fixture, I
             },
         }).Should().Within(90.Seconds()).Emit();
 
-        var initial = await MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                "nodeType:GroupMembership scope:subtree select:path,id,namespace,name,nodeType,content"))
-            .Should().Within(60.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
+        try
+        {
+            var initial = await MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    "nodeType:GroupMembership scope:subtree select:path,id,namespace,name,nodeType,content"))
+                .Should().Within(60.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
 
-        initial.Items.Should().Contain(n => n.Path == MembershipPath,
-            "a partition that cannot be access-filtered must be dropped from the union, not take "
-            + "every other partition's rows down with it via a swallowed 42P01");
+            initial.Items.Should().Contain(n => n.Path == MembershipPath,
+                "a partition that cannot be access-filtered must be dropped from the union, not take "
+                + "every other partition's rows down with it via a swallowed 42P01");
+        }
+        finally
+        {
+            // 🚨 Drop the deliberately-crippled partition again. Nothing else in the fixture ever
+            // drops a schema, and PostgreSqlFixture.CleanDataAsync locks EVERY (schema, table) pair
+            // of the container in one transaction between tests — so each partition a test leaves
+            // behind permanently raises the lock count every later test pays, and the container
+            // eventually answers `53200: out of shared memory`. A test that fabricates a partition
+            // purely to break it has no business leaving it in the shared container.
+            await using var cmd = fixture.DataSource.CreateCommand(
+                $"DROP SCHEMA IF EXISTS \"{crippled}\" CASCADE; "
+                + "DELETE FROM public.searchable_schemas WHERE schema_name = @s;");
+            cmd.Parameters.AddWithValue("s", crippled);
+            await cmd.ExecuteNonQueryAsync();
+        }
     }
 }
