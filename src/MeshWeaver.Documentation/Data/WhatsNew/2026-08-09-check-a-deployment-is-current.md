@@ -32,6 +32,13 @@ configured — or one where automatic checks have been switched off — has no e
 either way, and a reassuring "up to date" on the strength of a check that never ran
 would be worse than silence.
 
+## Nothing new is being collected
+
+The comparison was already being made. The self-update poller checks the registry a few
+times a day and records the newest build it finds; the Updates tab has shown that to
+admins all along. The About line is the same two numbers — the one you are on, and the
+newest one known — reduced to a verdict.
+
 ## From outside, with no sign-in
 
 A deploy check, an uptime monitor, or anyone comparing a running portal against the
