@@ -33,7 +33,7 @@ namespace MeshWeaver.Security.Test;
 /// </summary>
 public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string UserPath = "User/ChatUser";
+    private static readonly string UserPath = "User/ChatUser";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)

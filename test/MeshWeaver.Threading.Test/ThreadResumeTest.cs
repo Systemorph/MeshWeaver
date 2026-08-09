@@ -28,7 +28,7 @@ namespace MeshWeaver.Threading.Test;
 public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string FakeResponse = "This is the agent's response to verify resume.";
-    private const string ContextPath = "User/TestUser";
+    private static readonly string ContextPath = "User/TestUser";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)

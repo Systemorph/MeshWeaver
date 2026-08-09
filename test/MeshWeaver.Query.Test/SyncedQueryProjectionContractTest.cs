@@ -35,7 +35,7 @@ public class SyncedQueryProjectionContractTest(ITestOutputHelper output)
     // synced-query cache is keyed by id and lives for the mesh's lifetime).
     protected override bool ShareMeshAcrossTests => false;
 
-    private const string Ns = $"{TestPartition}/ProjectionContract";
+    private static readonly string Ns = $"{TestPartition}/ProjectionContract";
     private const string Body = "# Projected\n\nThe content column.";
 
     private static MeshNode Subject(string id) =>

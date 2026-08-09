@@ -40,7 +40,7 @@ namespace MeshWeaver.Threading.Test;
 /// </summary>
 public class UpdateEmitsDuringRoundTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string ContextPath = "User/Roland";
+    private static readonly string ContextPath = "User/Roland";
 
     // The mid-round write must emit FAR below the old 30s response wait. The production
     // bound is ~2s + optimistic fallback; 10s gives generous CI headroom while still
