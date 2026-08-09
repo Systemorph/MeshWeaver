@@ -1,8 +1,9 @@
 ---
 Name: The redline moved to where you ask for it
-Category: What's New
+Category: Feature
 Description: Documents no longer open covered in tracked changes. The redline now lives in the version comparison, where you say which version you want compared to which — and "compare with current" is one click from every version.
 Icon: Sparkle
+Order: -20260809
 ---
 
 # The redline moved to where you ask for it
