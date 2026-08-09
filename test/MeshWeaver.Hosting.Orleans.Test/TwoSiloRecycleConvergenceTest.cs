@@ -229,9 +229,9 @@ public class TwoSiloRecycleConvergenceTest : IClassFixture<TwoSiloCacheUpdateFix
 
     /// <summary>Polls the shared in-memory store until the node at <paramref name="path"/> carries at
     /// least <paramref name="minVersion"/>.</summary>
-    private static async Task WaitForPersistedVersion(string path, long minVersion, CancellationToken ct)
+    private async Task WaitForPersistedVersion(string path, long minVersion, CancellationToken ct)
         => await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .Where(_ => TwoSiloCacheUpdateFixture.SharedNodes.TryGetValue(path, out var n) && n.Version >= minVersion)
+            .Where(_ => _fixture.BackingStore.TryGetNode(path, out var n) && n is not null && n.Version >= minVersion)
             .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
 
     /// <summary>Polls the shared in-memory store until the node's version has advanced beyond
@@ -242,19 +242,19 @@ public class TwoSiloRecycleConvergenceTest : IClassFixture<TwoSiloCacheUpdateFix
     /// pre-recycle snapshot (durable loss of acked writes — the defect that produced
     /// <c>Version=12/sk-v6 → Version=2/sk-v0</c>). Diagnostics only; it changes no assertion.</para>
     /// </summary>
-    private static async Task<MeshNode> WaitForPersistedBeyond(string path, long beyondVersion, CancellationToken ct)
+    private async Task<MeshNode> WaitForPersistedBeyond(string path, long beyondVersion, CancellationToken ct)
     {
         try
         {
             return await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-                .Select(_ => TwoSiloCacheUpdateFixture.SharedNodes.TryGetValue(path, out var n) ? n : null)
+                .Select(_ => _fixture.BackingStore.TryGetNode(path, out var n) ? n : null)
                 .Where(n => n is not null && n.Version > beyondVersion)
                 .Select(n => n!)
                 .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
         }
         catch (TimeoutException ex)
         {
-            var present = TwoSiloCacheUpdateFixture.SharedNodes.TryGetValue(path, out var stored);
+            var present = _fixture.BackingStore.TryGetNode(path, out var stored);
             var apiKey = (stored?.Content as ModelProviderConfiguration)?.ApiKey ?? "(none)";
             throw new TimeoutException(
                 $"Store never advanced past version {beyondVersion} for '{path}'. "

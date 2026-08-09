@@ -48,7 +48,7 @@ public sealed class OrleansTestSeedProvider : IStaticNodeProvider
             Content = new AgentConfiguration
             {
                 Id = "Assistant",
-                Description = "Default test agent — handled by whichever IChatClientFactory the test class wired in (swappable via SharedOrleansFixture.SwappableFactory).",
+                Description = "Default test agent — handled by whichever IChatClientFactory the test class wired in (swappable via the fixture's per-cluster ChatFactory).",
                 IsDefault = true,
                 Instructions = "You are a helpful test assistant."
             }
