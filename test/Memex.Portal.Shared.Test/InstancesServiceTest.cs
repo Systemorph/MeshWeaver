@@ -24,7 +24,7 @@ public class InstancesServiceTest
           "status": { "readyReplicas": 2 }
         },
         {
-          "metadata": { "name": "memex-portal-deployment", "namespace": "prod" },
+          "metadata": { "name": "memex-portal-deployment", "namespace": "acme" },
           "spec": {
             "replicas": 1,
             "template": { "spec": { "containers": [
@@ -42,7 +42,7 @@ public class InstancesServiceTest
     {
       "items": [
         { "metadata": { "namespace": "memex" }, "spec": { "rules": [ { "host": "portal.example.com" } ] } },
-        { "metadata": { "namespace": "prod" }, "spec": { "rules": [ { "host": "portal.prod.example" } ] } }
+        { "metadata": { "namespace": "acme" }, "spec": { "rules": [ { "host": "portal.acme.example" } ] } }
       ]
     }
     """;
@@ -54,14 +54,17 @@ public class InstancesServiceTest
 
         Assert.Equal(2, instances.Length);
 
-        // Ordered by namespace (case-insensitive): prod before memex.
-        var prod = instances[0];
-        Assert.Equal("prod", prod.Namespace);
-        Assert.Equal("portal.prod.example", prod.Domain);
+        // Ordered by namespace (case-insensitive): acme before memex — note this is the
+        // REVERSE of the order they appear in DeploymentsJson, so the sort is what puts
+        // it here. Keep the second namespace sorting BEFORE "memex" or this stops
+        // discriminating between "sorted" and "as-listed".
+        var acme = instances[0];
+        Assert.Equal("acme", acme.Namespace);
+        Assert.Equal("portal.acme.example", acme.Domain);
         // Picks the memex-portal container's image, NOT the gate container's.
-        Assert.Equal("ci.610", prod.Version);
-        Assert.Equal(0, prod.ReadyReplicas);
-        Assert.Equal(1, prod.DesiredReplicas);
+        Assert.Equal("ci.610", acme.Version);
+        Assert.Equal(0, acme.ReadyReplicas);
+        Assert.Equal(1, acme.DesiredReplicas);
 
         var memex = instances[1];
         Assert.Equal("memex", memex.Namespace);

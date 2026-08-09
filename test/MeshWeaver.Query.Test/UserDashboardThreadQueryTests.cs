@@ -56,13 +56,16 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         // partition root, so the PartitionWriteGuard only lets System (the partition
         // provisioner) create a non-partition type there — seed these org/context roots
         // under System. The threads created beneath them belong to the test (Admin).
-        await SeedTopLevel(new MeshNode("Acme") { Name = "Partner Re", NodeType = "Markdown" });
+        // The two roots must differ by MORE than case: a top-level segment is a partition
+        // whose schema is `segment.ToLowerInvariant()`, so "Acme" and "ACME" are the SAME
+        // node and the second seed fails with "Node already exists".
+        await SeedTopLevel(new MeshNode("Contoso") { Name = "Contoso Ltd", NodeType = "Markdown" });
         await SeedTopLevel(new MeshNode("ACME") { Name = "ACME Corp", NodeType = "Markdown" });
 
         // Create threads in two different namespaces via CreateNodeRequest
         var client = GetClient();
 
-        var resp1 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("Acme", "Discussion about Partner Re portfolio", AdminUserId)), o => o.WithTarget(new Address("Acme"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
+        var resp1 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("Contoso", "Discussion about the Contoso portfolio", AdminUserId)), o => o.WithTarget(new Address("Contoso"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
         resp1.Message.Success.Should().BeTrue(resp1.Message.Error ?? "");
         Output.WriteLine($"Thread 1 at: {resp1.Message.Node?.Path}");
 
