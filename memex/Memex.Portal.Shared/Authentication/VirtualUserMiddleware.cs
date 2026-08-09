@@ -23,8 +23,17 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
 {
     private const string CookieName = "meshweaver_virtual_user";
 
+    // 🚨 Anonymous, high-frequency infrastructure routes belong here. They are polled by machines
+    // that keep no cookie, so the VUser flow can only ever churn: it re-derives an id and stamps a
+    // guest context on EVERY request, and it is the path that produced the 2026-06-12 outage
+    // (~15 VUsers/minute from kube-probe alone, 10 000+ leaked hubs). /api/version is exactly that
+    // shape — an unauthenticated build-identity poll target that must stay answerable, and cheap,
+    // when the mesh is unhealthy.
     private static readonly string[] ExcludedPrefixes =
-        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico", "/mcp", "/bootstrap", "/healthz"];
+    [
+        "/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico", "/mcp", "/bootstrap",
+        "/healthz", "/api/version"
+    ];
 
     public async Task InvokeAsync(HttpContext context)
     {
