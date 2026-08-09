@@ -83,8 +83,8 @@ SELECT schema_name FROM information_schema.schemata s
 SELECT 'user'      AS schema, namespace, content
   FROM "user".access  WHERE content->>'accessObject' = 'rbuergi'
 UNION ALL
-SELECT 'partnerre' AS schema, namespace, content
-  FROM partnerre.access WHERE content->>'accessObject' = 'rbuergi';
+SELECT 'acme'      AS schema, namespace, content
+  FROM acme.access    WHERE content->>'accessObject' = 'rbuergi';
 
 -- 4. Cross-schema search for a node by id (use when "where does X live?" is the question)
 DO $$

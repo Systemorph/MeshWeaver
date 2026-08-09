@@ -78,7 +78,7 @@ public class PluginGrantTest
     }
 
     [Fact]
-    public void AtiozGrant_CarriesOnlyThePlatformRepo()
+    public void CustomerPortalGrant_CarriesOnlyThePlatformRepo()
     {
         // The customer portal gets MeshWeaver.Plugins and nothing else — in particular none of the
         // reinsurance plugins and none of the paid course content.
