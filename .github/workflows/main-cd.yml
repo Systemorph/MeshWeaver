@@ -718,6 +718,12 @@ jobs:
   # grows by single-digit minutes, not by a full node-repo CI. The `preview` path costs nothing
   # extra: the layers are already in ACR under the staging tag.
   #
+  # A merge BURST costs three node-repo runs per merge: CD's concurrency group is per-run
+  # (`main-cd-${{ github.run_id }}`) so CD runs never supersede each other, and the node repo's
+  # group carries the candidate id so two candidates cannot cancel one another either. That is
+  # deliberate — a cancelled verification is a candidate nobody proved — but it is why the
+  # per-repo budget is 45 min: those runs may queue behind each other on the node repo's runners.
+  #
   # ⚠️ ARMING (see Doc/Architecture/CandidateReleaseGate). This dispatches workflows in OTHER
   # repositories, which the default GITHUB_TOKEN cannot do. Until the maintainer creates
   # NODE_REPO_DISPATCH_TOKEN the gate is INERT: it passes the candidate through — CD keeps
