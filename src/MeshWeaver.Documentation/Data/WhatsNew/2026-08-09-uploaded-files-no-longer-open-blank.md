@@ -1,8 +1,9 @@
 ---
 Name: A file you just uploaded no longer opens blank
-Category: What's New
+Category: Fix
 Description: Uploading a markdown file and opening it could show an empty page — the content was on disk the whole time. Exporting a subtree could also hang silently instead of finishing.
 Icon: Sparkle
+Order: -20260809
 ---
 
 # A file you just uploaded no longer opens blank

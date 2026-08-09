@@ -1,8 +1,9 @@
 ---
 Name: Interactive kernels now release their memory
-Category: What's New
+Category: Feature
 Description: Script assemblies from executed code cells unload when their session ends — long interactive sessions and bulk course runs no longer degrade the portal.
 Icon: Memory
+Order: -20260722
 ---
 
 # Interactive kernels now release their memory

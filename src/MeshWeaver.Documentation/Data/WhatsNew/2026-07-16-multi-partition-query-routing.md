@@ -1,8 +1,9 @@
 ---
 Name: Cross-partition shared sources now compile
-Category: What's New
+Category: Fix
 Description: Multi-query searches now route each query to its owning partition, so NodeTypes can consume shared source libraries from other Spaces.
 Icon: Sparkle
+Order: -20260716
 ---
 
 # Cross-partition shared sources now compile

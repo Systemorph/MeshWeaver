@@ -1,8 +1,9 @@
 ---
 Name: Client text no longer lags behind the server
-Category: What's New
+Category: Fix
 Description: The check that keeps the JavaScript clients' copy of the portal's text in step with the server now runs whenever either side changes, instead of only when someone edited the client.
 Icon: Globe
+Order: -20260809
 ---
 
 # Client text no longer lags behind the server

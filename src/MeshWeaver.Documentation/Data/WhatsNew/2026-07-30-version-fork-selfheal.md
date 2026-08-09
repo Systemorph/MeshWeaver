@@ -1,8 +1,9 @@
 ---
 Name: Stuck threads self-heal — version forks now reconcile instead of wedging
-Category: What's New
+Category: Fix
 Description: A thread (or any node) whose storage row got ahead of its live hub used to wedge permanently — every save silently refused. The owner now detects the refusal and rebases onto the durable truth, so the next write lands.
 Icon: Sparkle
+Order: -20260730
 ---
 
 # Stuck threads self-heal — version forks now reconcile instead of wedging

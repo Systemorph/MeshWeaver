@@ -1,8 +1,9 @@
 ---
 Name: Data grids show more rows before paging
-Category: What's New
+Category: Feature
 Description: Tables now display up to 50 rows per page by default, instead of 10.
 Icon: Sparkle
+Order: -20260719
 ---
 
 # Data grids show more rows before paging

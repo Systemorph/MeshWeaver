@@ -1,8 +1,9 @@
 ---
 Name: Layout areas that query while rendering no longer wedge the portal
-Category: What's New
+Category: Fix
 Description: A layout area that fetches mesh data during its render is now safe — the render subscribes off the hub turn, so it can't deadlock the node
 Icon: Sparkle
+Order: -20260719
 ---
 
 # Query-while-rendering is now safe

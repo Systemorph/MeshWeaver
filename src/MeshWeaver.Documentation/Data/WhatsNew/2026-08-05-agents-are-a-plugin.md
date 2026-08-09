@@ -1,8 +1,9 @@
 ---
 Name: The built-in agents are a plugin now
-Category: What's New
+Category: Feature
 Description: Assistant and its specialists ship as the pre-installed Agent plugin — improvements arrive in minutes, not with the next platform release.
 Icon: Sparkle
+Order: -20260805
 ---
 
 Assistant, Researcher, Worker and the rest of the built-in agents now ship as the **Agent plugin**
