@@ -63,7 +63,7 @@ public static class SeoResolver
                 : AnonymousGate.AllowAnonymous(hub, resolution.Prefix)
                     .Take(1)
                     .Select(allowed => allowed
-                        ? new SeoPageData(node, ExtractDescription(node), ExtractImage(node))
+                        ? new SeoPageData(node, ExtractDescription(node), ShareImage(node))
                         : null))
             .Timeout(TimeSpan.FromSeconds(3))
             .Catch<SeoPageData?, Exception>(_ => Observable.Return<SeoPageData?>(null));
@@ -84,16 +84,37 @@ public static class SeoResolver
             ContentString(node, "abstract"),
             ContentString(node, "description"));
 
-    /// <summary>The share image for og:image: the content's <c>poster</c> (store plugins) or
-    /// <c>thumbnail</c> (markdown pages). Root-relative or absolute URLs only.</summary>
+    /// <summary>
+    /// The AUTHORED share image, or null when the node carries none (the caller then falls back to
+    /// the generated card — see <see cref="ShareImage"/>).
+    ///
+    /// <para>🚨 <c>ogImage</c> is listed FIRST because it is the field store plugins actually
+    /// declare. This read used to check only <c>poster</c> and <c>thumbnail</c>, so every plugin's
+    /// hand-made <c>og.png</c> was ignored and no store page has ever emitted an <c>og:image</c> —
+    /// the tag is written only when this returns non-null. <c>poster</c> and <c>thumbnail</c>
+    /// remain for markdown pages and video nodes.</para>
+    ///
+    /// <para>Root-relative or absolute URLs only: a bare filename would resolve against whatever
+    /// path the crawler happened to fetch.</para>
+    /// </summary>
     public static string? ExtractImage(MeshNode node)
     {
-        var candidate = FirstNonEmpty(ContentString(node, "poster"), ContentString(node, "thumbnail"));
+        var candidate = FirstNonEmpty(
+            ContentString(node, "ogImage"),
+            ContentString(node, "poster"),
+            ContentString(node, "thumbnail"));
         return candidate is not null
             && (candidate.StartsWith('/') || candidate.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             ? candidate
             : null;
     }
+
+    /// <summary>
+    /// The image a public page shares with: whatever it authored, else the card the portal draws
+    /// for it. Never null — "this page has an Open Graph card" is the default, not an opt-in.
+    /// </summary>
+    public static string ShareImage(MeshNode node) =>
+        ExtractImage(node) ?? $"/api/og/{node.Path}";
 
     /// <summary>
     /// A string member of the node's content, by camelCase JSON name. Content arrives here in two
