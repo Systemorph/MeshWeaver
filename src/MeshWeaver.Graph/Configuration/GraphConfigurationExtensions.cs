@@ -161,6 +161,15 @@ public static class GraphConfigurationExtensions
             // Doc/Architecture/AsynchronousCalls.md → "Static handlers compose".
             builder.AddMeshNodes(GraphImportTemplates.GetStaticNodes());
 
+            // …and the access grant that lets an ordinary (non-admin) user actually RUN them.
+            // ExecuteScriptRequest is gated on Permission.Execute on the template's own path, so
+            // without this every non-admin's node copy failed "lacks Execute permission on
+            // Templates/Import/NodeCopy" (issue #423). Seeded here, next to the nodes it guards,
+            // because those nodes are in-memory statics that never reach Postgres — so a
+            // migration could not cover them. IfAbsent: AddMarkdownExport() seeds the same
+            // partition-level grant, and either call alone must land it exactly once.
+            builder.AddMeshNodesIfAbsent(ScriptTemplates.PublicExecuteGrant());
+
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
             {
