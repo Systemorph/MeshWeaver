@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 
 namespace MeshWeaver.Markdown.Export.Configuration;
 
@@ -28,13 +29,21 @@ public record DocumentExportOptions
     /// </summary>
     public string? BrandNodePath { get; init; }
 
+    // 🚨 [JsonIgnore(Never)] on every `= true` flag. The mesh serializer runs
+    // DefaultIgnoreCondition = WhenWritingDefault, so a bool set to FALSE equals default(bool)
+    // and is dropped from the payload — the receiver then falls back to this initializer and
+    // reads it as TRUE. Switching one of these off in the dialog therefore did nothing at all.
+    // Never is the codebase's standard remedy (GitHubSyncConfig, NotificationSettings, …).
     /// <summary>Render a branded cover page at the front of the document.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool CoverPage { get; init; } = true;
 
     /// <summary>Insert a table of contents after the cover (or at the top if no cover).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool TableOfContents { get; init; } = true;
 
     /// <summary>Emit a page break before each <c>#</c> H1 heading (after the first).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool PageBreakBeforeH1 { get; init; } = true;
 
     /// <summary>
@@ -46,6 +55,7 @@ public record DocumentExportOptions
     /// When including children, start each child node on a new page.
     /// Ignored when <see cref="IncludeChildren"/> is false.
     /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool PageBreakBetweenChildren { get; init; } = true;
 
     /// <summary>Include the markdown node's descendants as successive chapters.</summary>

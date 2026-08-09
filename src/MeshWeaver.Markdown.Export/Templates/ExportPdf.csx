@@ -166,8 +166,18 @@ if (rootNode.NodeType == DeckNodeType.NodeType)
     if (chapters.Count == 0)
         chapters.Add((title, "*This deck has no slides yet.*"));
 
-    // 16:9 slides read best in landscape, and every slide starts on its own page.
-    effectiveOptions = options with { Landscape = true, PageBreakBetweenChildren = true };
+    // 16:9 slides read best in landscape, and every slide starts on its own page — and ONLY
+    // slide boundaries break pages. A slide whose body opens with a heading must not be split
+    // in two by the heading page-break rules; for a deck the slide IS the page. (These two were
+    // dead until the options actually reached this script, so a deck that opened its slides with
+    // '#' silently gained a blank page per slide the moment they started working.)
+    effectiveOptions = options with
+    {
+        Landscape = true,
+        PageBreakBetweenChildren = true,
+        PageBreakBeforeH1 = false,
+        PageBreakBeforeH2 = false,
+    };
 }
 else
 {
