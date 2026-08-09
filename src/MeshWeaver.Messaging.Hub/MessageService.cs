@@ -401,9 +401,7 @@ public class MessageService : IMessageService
         // (Contain("No node found") / NotContain("shutting down")) precisely because nothing else
         // can catch it.
         var (errorType, message) = IsAddressDeleted()
-            ? (ErrorType.NotFound,
-                $"No node found at '{Address.Path}' — the node was deleted, so this address "
-                + "will not reactivate.")
+            ? (ErrorType.NotFound, DeletedAddressMessage)
             : (ErrorType.ShuttingDown, reason);
         try
         {
@@ -418,6 +416,25 @@ public class MessageService : IMessageService
                 delivery.Message.GetType().Name, delivery.Id, Address);
         }
     }
+
+    /// <summary>
+    /// The one authoritative "this address is gone for good" sentence, shared by BOTH sites that
+    /// classify a teardown-time failure — <see cref="NackThroughParent"/> (deliveries the hub
+    /// ABANDONS: intake gate, disposal drain) and the execution <c>Catch</c> (deliveries the hub
+    /// ACCEPTED and whose handler then threw <see cref="HubDisposingException"/>).
+    ///
+    /// <para>🚨 It lives in ONE place precisely because the wording is contract, not prose — the
+    /// full requirement is documented at <see cref="NackThroughParent"/>. Two hand-written copies
+    /// would drift, and a drift here is SILENT: it does not fail to compile, it quietly re-opens
+    /// #1029 at whichever site was missed. Which is exactly what happened — the fix landed only on
+    /// the abandoned-delivery site, and the accepted-then-faulted site kept answering the transient
+    /// <see cref="ErrorType.ShuttingDown"/> with the raw exception text ("Hub … <i>is shutting
+    /// down</i>", itself an <c>IsTransientOwnerFailure</c> marker), so a post-delete read still
+    /// rode it out and burned its whole budget.</para>
+    /// </summary>
+    private string DeletedAddressMessage =>
+        $"No node found at '{Address.Path}' — the node was deleted, so this address "
+        + "will not reactivate.";
 
     /// <summary>
     /// True when this hub's address carries a live delete tombstone — i.e. it is going down
@@ -1259,10 +1276,40 @@ public class MessageService : IMessageService
                     // Message TYPE + id, never LogText(delivery): serializing the payload for a
                     // Debug line is evaluated even when Debug is off and was itself a hot-path
                     // regression (the LogText storm, core #608).
-                    logger.LogDebug(e,
-                        "{MessageType} (ID: {MessageId}) raced hub disposal in {Address} after {Duration}ms — NACKing as transient (ShuttingDown).",
-                        messageTypeName, delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
-                    ReportFailure(delivery.Failed(e.ToString()), ErrorType.ShuttingDown);
+                    // 🚨 …UNLESS the address is gone for good. This is the SECOND door into the
+                    // #1029 park, and it is not the one NackThroughParent guards: there the hub
+                    // ABANDONS a delivery (intake gate / disposal drain); here it ACCEPTED one and
+                    // the handler then threw, because HostedHubsCollection is already frozen while
+                    // RunLevel still reads Started. Same tombstone, same verdict — an
+                    // accepted-then-faulted delivery is not more recoverable than an abandoned one.
+                    //
+                    // Reporting it as transient is what kept #1029 alive after that fix: the
+                    // consumer's sync stream rides ShuttingDown out waiting for a reactivation that
+                    // can never come, the 5 s keep-alive heartbeat draws the authoritative NotFound
+                    // from routing with nobody left to hand it to, and the reader burns its whole
+                    // budget to report "unavailable" for a node that is provably gone. Measured
+                    // with the first fix in place: MeshPluginTest.FullCrudWorkflow still failed 2 of
+                    // 4 whole-assembly runs under -parallel collections, identical signature.
+                    //
+                    // 🚨 The message must be DeletedAddressMessage, never e.ToString(): the raw
+                    // exception text says "Hub … is shutting down", which IsTransientOwnerFailure
+                    // matches — it would re-classify this verdict as retryable even under
+                    // ErrorType.NotFound. Both halves are pinned by
+                    // DeletedAddressNackClassificationTest.
+                    if (IsAddressDeleted())
+                    {
+                        logger.LogDebug(e,
+                            "{MessageType} (ID: {MessageId}) faulted in {Address} after {Duration}ms because the hub is tearing down, and the address is TOMBSTONED — NACKing as authoritative NotFound.",
+                            messageTypeName, delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
+                        ReportFailure(delivery.Failed(DeletedAddressMessage), ErrorType.NotFound);
+                    }
+                    else
+                    {
+                        logger.LogDebug(e,
+                            "{MessageType} (ID: {MessageId}) raced hub disposal in {Address} after {Duration}ms — NACKing as transient (ShuttingDown).",
+                            messageTypeName, delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
+                        ReportFailure(delivery.Failed(e.ToString()), ErrorType.ShuttingDown);
+                    }
                 }
                 else
                 {
