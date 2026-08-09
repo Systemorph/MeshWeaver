@@ -1,8 +1,9 @@
 ---
 Name: A compile that hangs now fails instead of spinning forever
-Category: What's New
+Category: Fix
 Description: Every stage of a NodeType compile is now time-bounded, so a stuck compile ends with an error naming the stage that hung — and the compile tool tells you when one is already running.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # A compile that hangs now fails instead of spinning forever

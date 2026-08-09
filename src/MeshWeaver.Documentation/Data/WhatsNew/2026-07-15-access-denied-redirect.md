@@ -1,8 +1,9 @@
 ---
 Name: Redirect on access denied
-Category: What's New
+Category: Feature
 Description: Send visitors without access to a page you choose, instead of a dead-end error.
 Icon: Sparkle
+Order: -20260715
 ---
 
 # Redirect on access denied

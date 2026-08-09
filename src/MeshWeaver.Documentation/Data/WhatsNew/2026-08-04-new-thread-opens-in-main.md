@@ -1,8 +1,9 @@
 ---
 Name: New thread opens in the main view
-Category: What's New
+Category: Fix
 Description: Starting a conversation from the ✨ menu now opens the composer in the main view instead of the side panel, and the entry is marked with a language-neutral ➕.
 Icon: Sparkle
+Order: -20260804
 ---
 
 # New thread opens in the main view

@@ -1,8 +1,9 @@
 ---
 Name: Compile retry now recovers types with a failed build
-Category: What's New
+Category: Fix
 Description: Retrying a compile (MCP compile/recycle tools) after fixing the source now reliably rebuilds a type whose previous compile failed — no more types stuck at Pending.
 Icon: Sparkle
+Order: -20260716
 ---
 
 # Compile retry now recovers types with a failed build

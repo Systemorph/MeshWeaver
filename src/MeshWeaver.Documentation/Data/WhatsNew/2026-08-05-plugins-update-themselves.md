@@ -1,8 +1,9 @@
 ---
 Name: Plugins can update themselves
-Category: What's New
+Category: Feature
 Description: Opt a plugin (or your whole deployment) into automatic updates — green builds install themselves, and your own added or claimed nodes are never touched.
 Icon: Sparkle
+Order: -20260805
 ---
 
 Installed plugins can now stay current on their own. When a plugin's repository passes CI, an

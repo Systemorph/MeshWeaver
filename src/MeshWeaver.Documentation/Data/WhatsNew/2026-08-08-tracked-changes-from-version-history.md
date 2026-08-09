@@ -1,8 +1,9 @@
 ---
 Name: Track changes now come from the document's history
-Category: What's New
+Category: Feature
 Description: Tracked changes are computed from the version history instead of being stored beside the document — edits apply immediately, each one shows who made it and when, and the only action is a one-click revert.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Track changes now come from the document's history

@@ -1,8 +1,9 @@
 ---
 Name: GitSync updates recompile what they change
-Category: What's New
+Category: Feature
 Description: A synced Space's update now recompiles every affected NodeType by itself — including types in other spaces that share the changed sources — so an update means new behavior, not just new files.
 Icon: ArrowSync
+Order: -20260806
 ---
 
 Updating a GitHub-synced Space now finishes the job. When a sync lands code — a `Source/*.cs`
