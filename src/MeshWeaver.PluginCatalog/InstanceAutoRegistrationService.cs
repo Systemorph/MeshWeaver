@@ -364,7 +364,20 @@ public sealed class InstanceAutoRegistrationService(
             return Observable.Return(DefaultInstallSummary.Empty);
 
         return Sources(options).SelectMany(sources => sources.Count == 0
-            ? Observable.Return(DefaultInstallSummary.Empty)
+            // 🚨 Asked to install, with nowhere to install FROM. Silence here would recreate the
+            // original "healthy boot, zero plugins" failure for the no-sources misconfiguration —
+            // the same shape, one layer up. Say it, and say what to set.
+            ? Observable.Defer(() =>
+            {
+                if (wanted.Count > 0)
+                    logger.LogError(
+                        "[DefaultInstall] {Count} InstallByDefault pattern(s) are configured "
+                        + "([{Wanted}]) but this installation has NO package sources — nothing can "
+                        + "be installed. Configure PluginCatalog:Sources (a registry serving its own "
+                        + "repos) or PluginCatalog:RegistryUrl (a consumer).",
+                        wanted.Count, string.Join(", ", wanted));
+                return Observable.Return(DefaultInstallSummary.Empty);
+            })
             : SeedLedger().SelectMany(seeded =>
             {
                 // 🚨 PER-PACKAGE, not once-per-installation. The old gate was "install the seed only
@@ -401,6 +414,10 @@ public sealed class InstanceAutoRegistrationService(
 
     /// <summary>Node holding the default-install ledger — what the SEED has delivered, ever.</summary>
     private const string SeedLedgerPath = PackageInstaller.InstalledPartition + "/_DefaultInstallLedger";
+
+    /// <summary>The ledger's own node type — deliberately distinct from <c>Package</c> so it never
+    /// appears in installed-package enumerations.</summary>
+    public const string LedgerNodeType = "DefaultInstallLedger";
 
     /// <summary>
     /// The package ids the default-install seed has already delivered. Empty on a fresh instance
@@ -445,7 +462,13 @@ public sealed class InstanceAutoRegistrationService(
         var node = new MeshNode("_DefaultInstallLedger", PackageInstaller.InstalledPartition)
         {
             Name = "Default install ledger",
-            NodeType = PackageInstaller.PackageNodeType,
+            // 🚨 NOT PackageNodeType. The ledger lives in the Plugins partition but is bookkeeping,
+            // not an install record — typing it "Package" puts it in every query that enumerates
+            // installed packages by nodeType (ModuleDiscoveryService.ReadInstanceState, the
+            // freshness probe, any inventory UI). The tell was undeniable: every verification query
+            // written against this feature had to say `id <> '_DefaultInstallLedger'`. A filter you
+            // must repeat at each call site is the schema telling you the type is wrong.
+            NodeType = LedgerNodeType,
             State = MeshNodeState.Active,
             Content = new DefaultInstallLedger
             {

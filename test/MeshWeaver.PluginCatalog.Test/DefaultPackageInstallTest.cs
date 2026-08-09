@@ -225,6 +225,31 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
         records.Should().Contain("Essentials");
     }
 
+    /// <summary>
+    /// The seed ledger must NOT be typed as a Package.
+    ///
+    /// <para>🚨 It lives in the Plugins partition but is bookkeeping, not an install record, so
+    /// typing it <c>Package</c> puts it in every query that enumerates installed packages by node
+    /// type — the freshness probe, ModuleDiscovery's instance state, any inventory UI. The tell
+    /// was that every verification query written against this feature had to exclude it by id; a
+    /// filter you must repeat at each call site means the type is wrong.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task TheLedgerIsNotAnInstalledPackage()
+    {
+        await Installer()
+            .InstallFrom([new ConfiguredPackageSource(Catalog(), "HEAD", "Plugins")],
+                baseline: false, [PluginGrantEntry.TryParse("Plugins/Store")!])
+            .Should().Within(120.Seconds()).Emit();
+
+        // InstalledRecords() queries nodeType:Package — the ledger must be invisible to it, with
+        // NO id-based exclusion applied here.
+        var records = (await InstalledRecords().Should().Emit()).Select(n => n.Id).ToList();
+        records.Should().Contain("Store");
+        records.Should().NotContain("_DefaultInstallLedger",
+            "the ledger is bookkeeping and must never surface as an installed package");
+    }
+
     [Fact(Timeout = 180_000)]
     public async Task UnstampedCatalog_InstallsNothing_FailsClosed()
     {
