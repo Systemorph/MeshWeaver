@@ -878,9 +878,27 @@ public class InboxToolIntegrationTest : AITestBase
             };
         }).SubscribeOn(TaskPoolScheduler.Default).Take(1).Timeout(TimeSpan.FromSeconds(30)).ToTask(ct);
 
-        // Gate on the SAME own stream check_inbox reads (load-tolerant budget).
+        // Gate on the own stream first — the node must genuinely carry the pending messages.
         await WaitForOwnAsync(threadHub,
             t => t.IsExecuting && ids.All(t.PendingUserMessages.ContainsKey), 30_000, ct);
+
+        // 🚨 …and then on the condition check_inbox ACTUALLY reads (#978). The gate above used to
+        // be the whole wait, described as "the SAME own stream check_inbox reads" — which stopped
+        // being true when the drain became a pure in-memory dequeue. check_inbox reads ONLY the
+        // ThreadInboxChannel; that channel is filled by the submission watcher's OWN subscription
+        // to the thread-node stream. Our WaitForOwnAsync handle is an INDEPENDENT subscription to
+        // the same source, so it proves the node carries the message and says nothing about
+        // whether the watcher's chain has processed that emission and called OfferFromNode. Under
+        // CI load the watcher can still be behind when we return, the first drain finds an empty
+        // queue, and the test fails with the exact reported signature:
+        //   Expected "(no new messages)" to contain "only one".
+        // Channeled replays the current set on subscribe, so a hand-off that already happened is
+        // not missed — no poll, no sleep, no retry.
+        await ThreadInboxChannel.For(threadHub).Channeled
+            .Should().Within(30.Seconds())
+            .Match(channeled => ids.All(channeled.Contains),
+                "check_inbox drains the in-memory channel, so the seed is only complete once the "
+                + "submission watcher has offered every message into it");
         return ids;
     }
 

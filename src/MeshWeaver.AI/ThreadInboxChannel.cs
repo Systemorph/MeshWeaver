@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Messaging;
 using MeshThread = MeshWeaver.AI.Thread;
 
@@ -64,6 +66,33 @@ internal sealed class ThreadInboxChannel
     private readonly ConcurrentQueue<string> consumedIds = new();
     private readonly ConcurrentDictionary<string, byte> consumedSeen = new();
 
+    // Emits the channeled-id set after every Stage-1 offer (and on Reset). Synchronized:
+    // OfferFromNode runs on the submission watcher's stream chain and Reset on the round's
+    // terminal continuation.
+    private readonly ISubject<ImmutableHashSet<string>> channeledSignal =
+        Subject.Synchronize(new Subject<ImmutableHashSet<string>>());
+
+    /// <summary>
+    /// Live view of the ids Stage 1 has buffered into the channel — the ONLY observable proof
+    /// that the node→channel hand-off has happened. Replays the current set on subscribe, then
+    /// emits on every offer.
+    ///
+    /// <para>🚨 Seeing a message in <see cref="MeshThread.PendingUserMessages"/> on the thread
+    /// node does NOT imply it is drainable. <c>check_inbox</c> reads ONLY this channel, which is
+    /// filled by the submission watcher's OWN subscription to the node stream. Any other observer
+    /// of that stream (a test's <c>GetMeshNodeStream()</c> handle, the GUI) is an INDEPENDENT
+    /// subscription with no happens-before relationship to the watcher's, so "the node shows it"
+    /// and "the watcher has offered it" are two different facts. Anything that needs the second
+    /// one must wait on THIS — waiting on the node is the #978
+    /// <c>CheckInbox_TwoCallsBackToBack_SecondReturnsEmpty</c> flake, where the first drain
+    /// returned "(no new messages)" for a message the node already carried.</para>
+    /// </summary>
+    public IObservable<ImmutableHashSet<string>> Channeled
+        => Observable.Defer(() => channeledSignal.StartWith(ChanneledSnapshot()));
+
+    private ImmutableHashSet<string> ChanneledSnapshot()
+        => channeled.Keys.ToImmutableHashSet(StringComparer.Ordinal);
+
     /// <summary>
     /// Resolve-or-create the per-thread channel from the thread hub's property bag.
     /// The first call is the submission-watcher install at thread-hub init (single
@@ -100,16 +129,29 @@ internal sealed class ThreadInboxChannel
         if (thread.Status != ThreadExecutionStatus.Executing) return;
         if (thread.PendingUserMessages.IsEmpty) return;
 
+        var offered = false;
+
         // Submission order first (UserMessageIds), so check_inbox delivers in order.
         foreach (var id in thread.UserMessageIds)
             if (thread.PendingUserMessages.TryGetValue(id, out var msg) && channeled.TryAdd(id, 0))
+            {
                 queue.Enqueue((id, msg));
+                offered = true;
+            }
 
         // Defensive: any pending id not yet present in UserMessageIds (shouldn't
         // happen, but never leak an entry by ignoring it).
         foreach (var (id, msg) in thread.PendingUserMessages)
             if (channeled.TryAdd(id, 0))
+            {
                 queue.Enqueue((id, msg));
+                offered = true;
+            }
+
+        // Publish AFTER the queue is filled, so a subscriber that reacts to the signal always
+        // finds the messages already drainable.
+        if (offered)
+            channeledSignal.OnNext(ChanneledSnapshot());
     }
 
     /// <summary>
@@ -149,5 +191,6 @@ internal sealed class ThreadInboxChannel
         while (consumedIds.TryDequeue(out _)) { }
         channeled.Clear();
         consumedSeen.Clear();
+        channeledSignal.OnNext(ImmutableHashSet<string>.Empty);
     }
 }
