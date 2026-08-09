@@ -35,8 +35,8 @@ namespace MeshWeaver.Query.Test;
 /// </summary>
 public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string SubscriberPath = $"{TestPartition}/Subscriber";
-    private const string SubjectsNamespace = $"{TestPartition}/Subjects";
+    private static readonly string SubscriberPath = $"{TestPartition}/Subscriber";
+    private static readonly string SubjectsNamespace = $"{TestPartition}/Subjects";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)

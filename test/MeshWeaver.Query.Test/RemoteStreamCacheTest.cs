@@ -33,7 +33,7 @@ namespace MeshWeaver.Query.Test;
 /// </summary>
 public class RemoteStreamCacheTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string TargetNamespace = $"{TestPartition}/RemoteCache";
+    private static readonly string TargetNamespace = $"{TestPartition}/RemoteCache";
 
     private static MeshNode MakeNode(string id, string name)
         => new(id, TargetNamespace)

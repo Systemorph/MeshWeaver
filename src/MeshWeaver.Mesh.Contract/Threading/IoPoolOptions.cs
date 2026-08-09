@@ -59,6 +59,26 @@ public static class IoPoolNames
     /// </summary>
     public const string AgentStore = "AgentStore";
 
+    /// <summary>
+    /// Silo-side message routing (<c>RoutingGrain.RouteMessage</c>), via
+    /// <see cref="IIoPool.SubscribeThroughPool{T}"/>. Exists so the routing SUBSCRIBE — path
+    /// resolution, the memory-stream post, the per-node grain hand-off and the DeliveryFailure
+    /// NACK — runs OFF the routing grain's activation thread.
+    ///
+    /// <para>🚨 This is the fix for issue #1028. <c>RoutingGrain</c> is <c>[StatelessWorker(1)]</c>
+    /// and NON-reentrant, so the silo has exactly ONE routing turn: any work the turn performs
+    /// inline is work the whole silo's routing waits on, and Orleans' request timeout does NOT
+    /// apply inside a turn. Prod (atioz, 2026-08-07) had a single <c>RouteMessage</c> turn
+    /// executing for <c>06:00:22</c> with <c>NonReentrancyQueueSize=541</c> — every other message
+    /// the silo needed to route was stuck behind it for 37 h. Routing work therefore never runs on
+    /// the turn; it runs here, where one stuck delivery costs one pool slot and nothing else.</para>
+    ///
+    /// <para>Generous cap: a drain hook + isolation boundary, not a throttle — the slot is held
+    /// only for the bounded subscribe window (see <see cref="IIoPool.SubscribeThroughPool{T}"/>),
+    /// and routing is the hottest path in the mesh.</para>
+    /// </summary>
+    public const string Routing = "Routing";
+
     /// <summary>CPU-bound compilation (Roslyn compile/script). Wave 3.</summary>
     public const string Compile = "Compile";
 
@@ -161,6 +181,15 @@ public sealed record IoPoolOptions
     /// </summary>
     public int AgentStore { get; init; } = 128;
 
+    /// <summary>
+    /// Concurrent silo-side routing subscribes (the <c>Routing</c> pool). A drain hook and an
+    /// isolation boundary, not a throttle — the slot is held only for the bounded subscribe
+    /// window — so the cap is generous (256): routing is the hottest path in the mesh and must
+    /// never queue behind itself. See <see cref="IoPoolNames.Routing"/> for why routing work is
+    /// not allowed on the routing grain's turn at all (issue #1028).
+    /// </summary>
+    public int Routing { get; init; } = 256;
+
     /// <summary>Concurrent compilations. CPU-bound; defaults to the processor count.</summary>
     public int Compile { get; init; } = Environment.ProcessorCount;
 
@@ -210,6 +239,7 @@ public sealed record IoPoolOptions
             IoPoolNames.Query => Query,
             IoPoolNames.Layout => Layout,
             IoPoolNames.AgentStore => AgentStore,
+            IoPoolNames.Routing => Routing,
             IoPoolNames.Compile => Compile,
             IoPoolNames.Process => Process,
             _ => Default,

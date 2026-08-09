@@ -66,7 +66,7 @@ public class McpCompileInFlightTruthTest(ITestOutputHelper output) : AITestBase(
     }
 
     private const string TypeName = "InFlightTruthType";
-    private const string RunningActivityPath =
+    private static readonly string RunningActivityPath =
         TestPartition + "/" + TypeName + "/_Activity/compile-inflight-under-test";
 
     [Fact(Timeout = 120000)]

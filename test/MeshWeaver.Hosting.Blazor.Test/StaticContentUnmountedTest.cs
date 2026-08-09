@@ -46,7 +46,7 @@ public class StaticContentUnmountedTest(ITestOutputHelper output) : MonolithMesh
     private const string UnpublishedCollection = "internal-store";
 
     /// <summary>Header the test pipeline reads to stamp the request's identity (see BuildPortal).</summary>
-    private const string UserHeader = "X-Test-User";
+    private static readonly string UserHeader = "X-Test-User";
 
     // The backing store, laid out exactly as production does it: the mesh-level "storage"
     // collection's BasePath, with each Space's content under content/{nodePath}/….
