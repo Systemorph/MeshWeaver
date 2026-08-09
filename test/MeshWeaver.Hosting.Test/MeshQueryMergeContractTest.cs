@@ -17,7 +17,7 @@ namespace MeshWeaver.Hosting.Test;
 /// gates on EVERY provider emitting one, so a provider whose observable COMPLETES without an
 /// Initial (an <c>Observable.Empty</c>-shaped branch, a swallowed fault, an early-disposed inner
 /// chain) used to starve the gate FOREVER — the consumer's <c>Take(1)</c>/<c>FirstAsync</c> never
-/// fired. Prod repro (prod 2026-07-03): every real-user unpinned structured search hung the full
+/// fired. Prod repro (2026-07-03): every real-user unpinned structured search hung the full
 /// 300s MCP window with PostgreSQL idle and no error logged anywhere.
 ///
 /// <para>The merge now counts a silent completion as an EMPTY Initial (loud warning naming the

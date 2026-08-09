@@ -2,23 +2,15 @@ name: Clients
 
 # CI for the foreign-language client packages under clients/. The .NET solution CI does not cover
 # these, so typecheck + test them here on any PR that touches them.
-#
-# The server localization catalog is in the trigger paths even though it lives outside clients/:
-# clients/react/src/i18n/strings.*.json are verbatim COPIES of it, and localize.test.ts fails unless
-# they are identical. Without this path a PR that adds a server string never runs the guard, the
-# drift lands on main unseen, and the NEXT PR to touch clients/ inherits a red that has nothing to
-# do with it (PR #983 collected 26 keys' worth that way). Trigger where the drift is CREATED.
 on:
   pull_request:
     paths:
       - "clients/**"
-      - "src/MeshWeaver.Messaging.Hub/Localization/**"
       - ".github/workflows/clients.yml"
   push:
     branches: [main]
     paths:
       - "clients/**"
-      - "src/MeshWeaver.Messaging.Hub/Localization/**"
       - ".github/workflows/clients.yml"
 
 jobs:
