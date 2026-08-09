@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Immutable;
-using System.Linq;
 using System.Reactive.Linq;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -127,16 +125,45 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
     {
         const string user = "charlie";
         const string nodePath = "charlie/doc";
+        const int concurrentTracks = 5;
 
         // ONBOARD-FIRST gate (HandleTrackActivity, commit 981a86c9e): activity tracking
         // never creates a partition ahead of onboarding. Seed the partition root so the
         // gate lets the concurrent creates through (production state when activity flows).
         await OnboardPartitionRoot(user);
 
+        var activityPath = $"{user}/_UserActivity/{nodePath.Replace("/", "_")}";
+
+        // 🚨 Wait for ALL FIVE detached writes, not for the first node to surface (issue #1036).
+        //
+        // The handler detaches each write, so the five Posts below return while five pipelines are
+        // still running. The previous shape waited for the first node to appear in the
+        // EVENTUALLY-CONSISTENT query index and then asserted the coalescing — so writes still in
+        // flight at that moment were simply not covered, and a duplicate-create regression could
+        // pass unnoticed. That is a FALSE PASS in a regression test, which is worse than a flake:
+        // it removes the guard without removing the green tick.
+        //
+        // WhenSettled(path) alone cannot close it either: it completes on the FIRST ENTER→LEAVE
+        // cycle, and five posts need not overlap — post 1 can finish before post 2 begins. The
+        // COUNTED overload spans every cycle: it completes only once five writes for this path have
+        // each been through ENTER→LEAVE. Five writes, ONE node — the tracker counts the writes
+        // (each accepted request registers exactly one Begin, whichever branch it takes: create,
+        // update-fold, or the create→already-exists race fold), and the coalescing into a single
+        // node is precisely what the assertions below check.
+        //
+        // Subscribe BEFORE the Posts: the signal counts the ENTERs it observes, so a subscription
+        // that attaches after a write already finished can never count it (it then times out loudly
+        // — the opposite of Drain(), which completes immediately on an idle tracker and would be a
+        // deterministic false pass here).
+        var tracker = Mesh.GetActivityTrackingHub()
+            .ServiceProvider.GetRequiredService<ActivityWriteTracker>();
+        var settled = tracker.WhenSettled(activityPath, writes: concurrentTracks).Replay(1);
+        using var settledSubscription = settled.Connect();
+
         // Fire 5 requests for the SAME path. Under the buggy probe-and-fork
         // shape, all 5 see the path-not-found probe before any of them succeeds
         // in writing → all 5 attempt CreateNode → 4 throw "Node already exists".
-        for (var i = 0; i < 5; i++)
+        for (var i = 0; i < concurrentTracks; i++)
         {
             Mesh.Post(new TrackActivityRequest(
                 NodePath: nodePath,
@@ -146,11 +173,33 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
                 Namespace: user));
         }
 
-        var node = await PollForFirst($"namespace:{user}/_UserActivity nodeType:UserActivity");
-        node.Should().NotBeNull("at least one concurrent TrackActivityRequest must land a node");
+        await settled.Should().Within(TimeSpan.FromSeconds(15)).Emit(
+            "all five detached activity writes must run to completion before their combined " +
+            "result can be asserted — see the MeshWeaver.Graph.ActivityTracking trace for the " +
+            "stage a stalled write last reached");
 
-        // After settling, exactly one record per (user, encodedPath) — concurrent
-        // tracks merge into the same record's AccessCount, not duplicate records.
+        // Read AUTHORITATIVELY — the writes have terminated, so the node either exists or the
+        // handler skipped/failed every create. No eventual consistency in this assertion.
+        var node = await ReadNode(activityPath).Should().Match(n => n is not null,
+            "the concurrent TrackActivityRequests must land a UserActivity node at the shared path");
+        node!.NodeType.Should().Be("UserActivity");
+
+        // 🚨 The coalescing itself, and the assertion that actually pins the "Node already exists"
+        // race: all five tracks folded their increment into the ONE record. Pre-fix, four of the
+        // five CreateNodes threw and their increments were lost, leaving AccessCount = 1 — while
+        // the node COUNT stayed 1 either way (the path is the storage key), so a count-only
+        // assertion never saw the bug it was written for. Read off the authoritative node, not the
+        // query index. The tracking hub's JSON options are the ones that know UserActivityRecord.
+        var record = node.ContentAs<UserActivityRecord>(
+            Mesh.GetActivityTrackingHub().JsonSerializerOptions);
+        record.Should().NotBeNull("the UserActivity node must carry a typed UserActivityRecord");
+        record!.AccessCount.Should().Be(concurrentTracks,
+            "every concurrent track must fold its increment onto the live record — a lost increment " +
+            "means a write raced 'Node already exists' instead of coalescing via stream.Update");
+
+        // …and exactly one record per (user, encodedPath): they merged into one node rather than
+        // race-creating siblings. A listing is a legitimate query use; it is only sound because
+        // every write has already terminated above.
         var all = (await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{user}/_UserActivity nodeType:UserActivity"))
@@ -189,21 +238,4 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
         // confirm persistence before posting activity so the create branch isn't skipped.
         await ReadNode(user).Should().Match(n => n is { State: MeshNodeState.Active });
     }
-
-    /// <summary>
-    /// Folds the live query's deltas into a running list and returns the first
-    /// node the moment at least one matches — race-free replacement for the old
-    /// <c>Observable.Interval</c> re-query poll. The activity handler's
-    /// asynchronous create/update surfaces through the same change feed.
-    /// </summary>
-    private async Task<MeshNode?> PollForFirst(string query)
-        => await MeshQuery
-            .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
-            .Scan(ImmutableList<MeshNode>.Empty, (acc, c) =>
-                c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset
-                    ? c.Items.ToImmutableList()
-                    : acc.AddRange(c.Items))
-            .Where(list => list.Count > 0)
-            .Select(list => list[0])
-            .Should().Within(TimeSpan.FromSeconds(15)).Emit();
 }
