@@ -255,8 +255,15 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
         messages = resolution.MergedMembers.Aggregate(messages, (acc, member) => acc.Add(
             new LogMessage($"'{member}' was merged — both writes' content survives.", LogLevel.Information)));
 
+        // 🚨 The id is keyed on the DURABLE version alone, never on the losing writer's. One record
+        // per durable revision is the right granularity ("this revision had a conflict") AND it is
+        // what bounds the litter: a wedged owner mints an INCREASING version on every retry
+        // (834, 835, 836 … against a stuck 2423 — the #725/#872 fork shape), so a stale-version-keyed
+        // id would accumulate one satellite per retry, forever. Re-recording overwrites the same node
+        // at Version = 1, which the store's equal-version rule accepts, so this can never conflict
+        // with itself. Which losing version lost is in the message text.
         var activityNamespace = $"{path}/_Activity";
-        var id = $"write-conflict-{staleVersion}-{latestVersion}";
+        var id = $"write-conflict-{latestVersion}";
         var activity = new MeshNode(id, activityNamespace)
         {
             Name = $"Write conflict on {path}",

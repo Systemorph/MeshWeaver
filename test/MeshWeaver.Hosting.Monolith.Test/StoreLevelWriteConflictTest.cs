@@ -151,7 +151,9 @@ public class StoreLevelWriteConflictTest(ITestOutputHelper output) : MonolithMes
         // 🚨 The load-bearing half. Latest-wins is acceptable; latest-wins INVISIBLY is the defect
         // (#968 was an acked write that rolled a row back with no error anywhere). The dropped member
         // must leave a durable, user-visible trace.
-        var activityPath = $"{path}/_Activity/write-conflict-{staleVersion}-{durableVersion}";
+        // Keyed on the DURABLE version alone — one record per durable revision, so a wedged writer
+        // retrying at an ever-increasing version cannot litter one satellite per attempt.
+        var activityPath = $"{path}/_Activity/write-conflict-{durableVersion}";
         var activity = await ReadDurable(activityPath).Should().Within(30.Seconds()).Emit();
         activity.Should().NotBeNull(
             "a conflict whose resolution DROPPED a value must record it in the activity log — a "
