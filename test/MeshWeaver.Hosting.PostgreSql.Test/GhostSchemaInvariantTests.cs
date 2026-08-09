@@ -8,7 +8,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
-/// Regression guard for the atioz 45-ghost-schema DB corruption. The storage router
+/// Regression guard for the prod 45-ghost-schema DB corruption. The storage router
 /// (<see cref="PostgreSqlPathRoutingAdapter"/>) must <b>NEVER</b> lazily <c>CREATE SCHEMA</c>
 /// on a write to an arbitrary path segment — schema creation is gated to partition-owning
 /// creates via <see cref="PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned"/>

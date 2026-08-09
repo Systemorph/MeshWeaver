@@ -243,7 +243,7 @@ public static class DelegationTool
                         // "Error" prefix, so the failure lands as a failed tool-call
                         // entry on the parent thread's output cell instead of telling
                         // the parent agent the delegation "produced nothing" (the
-                        // 2026-06-26 atioz wedge: a stuck sub-thread init resolved as
+                        // 2026-06-26 prod wedge: a stuck sub-thread init resolved as
                         // empty success while the wedged sub-hub stormed path-resolution
                         // until the portal GC-thrashed and liveness wedged).
                         WaitForDelegationResult(
@@ -398,7 +398,7 @@ public static class DelegationTool
     /// <see cref="ThreadExecution.ExtractToolResult"/> keys <c>IsSuccess</c> off the
     /// <c>"Error"</c> prefix, so the failed delegation lands as a failed tool-call
     /// entry on the parent thread's output cell instead of telling the parent agent
-    /// the delegation "produced nothing" (the 2026-06-26 atioz wedge: a stuck
+    /// the delegation "produced nothing" (the 2026-06-26 prod wedge: a stuck
     /// sub-thread init resolved as empty success while the wedged sub-hub stormed
     /// path-resolution until the portal GC-thrashed and liveness wedged).</para>
     ///

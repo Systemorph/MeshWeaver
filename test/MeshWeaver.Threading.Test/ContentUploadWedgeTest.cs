@@ -11,7 +11,7 @@ using Xunit;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
-/// Regression for the 2026-06-14 atioz upload wedge. <see cref="MeshOperations.Upload"/> asks the
+/// Regression for the 2026-06-14 prod upload wedge. <see cref="MeshOperations.Upload"/> asks the
 /// owning node hub for its collection config via <c>hub.Observe(GetDataRequest(ContentCollectionReference))</c>.
 /// That request is answered ONLY by <c>HandleCollectionConfigRequest</c>, which is registered ONLY by
 /// <c>AddContentCollections()</c>. A target node hub WITHOUT it never answers — and the <c>Take(1)</c> had

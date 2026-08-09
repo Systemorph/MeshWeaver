@@ -289,7 +289,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
                                 // 🚨 A bound stream that FAULTS must be SURFACED, never swallowed: a
                                 // Subscribe with no onError leaves the fault unobserved, the property
                                 // never gets a value, and the control spins forever — the "gui is just
-                                // hanging" symptom (atioz 2026-06-21, when the data stream OnError'd from
+                                // hanging" symptom (prod 2026-06-21, when the data stream OnError'd from
                                 // the AccessContext storm). Mirror the node-bound branch above: log it,
                                 // then render the DEFAULT value on the UI thread so the control draws
                                 // (empty/zeroed) instead of hanging. ObjectDisposedException is a benign

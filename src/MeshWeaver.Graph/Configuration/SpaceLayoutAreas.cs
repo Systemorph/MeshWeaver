@@ -749,7 +749,7 @@ public static class SpaceLayoutAreas
                 || logoTrimmed.Contains('.')))
         {
             // A real image (URL / content-ref / data-URI). Natural-aspect, never cropped: a wide banner
-            // logo (e.g. ATIOZ) and a square avatar both render whole via max-box + auto sizing.
+            // logo and a square avatar both render whole via max-box + auto sizing.
             return $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(logoTrimmed)}\" alt=\"\" "
                    + $"style=\"{boxStyle} width: auto; height: auto; object-fit: contain;\" />";
         }

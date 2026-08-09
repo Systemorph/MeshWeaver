@@ -9,7 +9,7 @@ merge to main ─▶ "Build and Test" (green) ─▶ images job builds+pushes  m
                                                                               │
         ┌─────────────────────────────────────────────────────────────────────┼──────────────── … every install in the world
         ▼                                   ▼                                   ▼
-   memex install                       atioz install                      external install
+   memex install                       prod install                      external install
    SelfUpdateHostedService polls ACR (its OWN workload identity) every 6h, per its OWN Admin/UpdatePolicy,
    and PATCHes its OWN portal+migration Deployments via its OWN in-cluster ServiceAccount token.
 ```
@@ -72,13 +72,13 @@ annotation/label/env. The gaps are operational:
    (`deploy/aks/infra/modules/portal-identity.bicep`, default-on via `main.bicep`), and grant it
    **AcrPull** on the registry (cross-RG, out-of-band — see `DEPLOY-RUNBOOK.md`):
    ```bash
-   PORTAL_MI=$(az identity show -g memex-aks-rg -n memexaks-portal-mi --query principalId -o tsv)
+   PORTAL_MI=$(az identity show -g <aks-resource-group> -n <portal-identity> --query principalId -o tsv)
    az role assignment create --assignee-object-id "$PORTAL_MI" --assignee-principal-type ServicePrincipal \
      --role AcrPull --scope "$(az acr show -n meshweaver --query id -o tsv)"
    ```
 2. **Set `selfUpdate.azureClientId`** to the UAMI client id in each env's (git-ignored) values overlay,
    then **`helm upgrade`** the env. This both wires workload identity AND (for envs whose live
-   Deployment predates the chart's SA — e.g. **atioz**, currently on the `default` SA) creates the SA +
+   Deployment predates the chart's SA — e.g. **prod**, currently on the `default` SA) creates the SA +
    RBAC and sets `serviceAccountName`. Manual fallback without re-helm:
    ```bash
    kubectl -n <ns> apply -f <SA + Role + RoleBinding from the chart>

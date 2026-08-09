@@ -102,7 +102,7 @@ internal class RoutingGrain(
                         // dropped stream post has NO downstream response/DeliveryFailure path. WITHOUT
                         // surfacing it here the sender's Observe parks FOREVER → its hub action block
                         // hangs → /healthz stops responding → liveness SIGKILLs the pod. That is the
-                        // atioz wedge ("Failed to forward message → messagehub/{partition}" then a
+                        // prod wedge ("Failed to forward message → messagehub/{partition}" then a
                         // silent ~10-min hang). NACK the sender so it fails fast instead. See /storm.
                         logger.LogWarning(t.Exception,
                             "[ROUTE] Stream-routed forward to {Address} faulted — surfacing DeliveryFailure to sender {Sender}",
@@ -124,7 +124,7 @@ internal class RoutingGrain(
         // or an access/activation failure). The sender's hub matches the DeliveryFailure to
         // its Observe(...) subject by RequestId and fires OnError. Without this the caller's
         // callback parks until its client-side timeout and the GUI re-issues the request →
-        // the routing NotFound/Failed STORM (the 2026-06-08 atioz event storm).
+        // the routing NotFound/Failed STORM (the 2026-06-08 prod event storm).
         void PostFailureToSender(string failureMessage, ErrorType errorType)
         {
             if (delivery.Sender == null) return;
@@ -192,7 +192,7 @@ internal class RoutingGrain(
                 // branch pushed the delivery onto a memory stream that has NO subscriber (per-node grain
                 // hubs aren't stream-registered — those return at the StreamRoutedAddressTypes check above),
                 // so the SubscribeRequest never got a response, the cache hub timed out after 60 s, and the
-                // node wedged on "Subscribing to {path}…" until a portal restart (atioz 2026-06-24).
+                // node wedged on "Subscribing to {path}…" until a portal restart (prod 2026-06-24).
                 DeliverToGrainWithRetry(
                     () => grainFactory.GetGrain<IMessageHubGrain>(grainKey).DeliverMessage(delivery),
                     grainKey, addressPath, delivery.Id, PostFailureToSender, logger,
@@ -233,7 +233,7 @@ internal class RoutingGrain(
     /// new instance once the prior one finished its bounded (≤5 s) deactivation. The default retry window
     /// (~10 s) outlasts that deactivation yet finishes well inside the caller's 60 s SubscribeRequest
     /// timeout, so the request succeeds and the <c>MeshNodeStreamCache</c> never caches a faulted entry —
-    /// the atioz "Subscribing to {path}…" wedge.
+    /// the prod "Subscribing to {path}…" wedge.
     ///
     /// <para>On a NON-transient grain fault, or once transient retries are exhausted, NACKs the sender via
     /// <paramref name="postFailureToSender"/> so its <c>Observe(...)</c> fires a fast, deterministic

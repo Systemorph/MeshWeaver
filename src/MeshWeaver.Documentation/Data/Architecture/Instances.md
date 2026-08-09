@@ -1,39 +1,39 @@
 ---
 Name: Instances
 Category: Architecture
-Description: Inventory of the running MeshWeaver instances — who each one is for, the infrastructure it runs on, its database, and how it is versioned, created, and deleted
+Description: What a MeshWeaver instance is, how its running version is read, how self-update works, and how instances are created and deleted
 Icon: Server
 ---
 
 # Running Instances
 
 An **instance** is one MeshWeaver portal: its own domain, its own database, and its own sign-in,
-served by a dedicated **Kubernetes namespace** on the shared AKS cluster. All prod instances share
-one cluster, one container registry, and one PostgreSQL server — only the namespace, domain, and
-database differ. This page is the living inventory; keep it in sync when an instance is added or
-removed.
+served by a dedicated **Kubernetes namespace**. Instances typically share one cluster, one container
+registry and one PostgreSQL server — only the namespace, domain and database differ, so a code change
+merged to `main` reaches all of them via self-update. They differ in data, branding, sign-in
+configuration, and who may log in.
 
-## Inventory
+## Where the inventory lives
 
-| Instance | Namespace | Owner / purpose | Access | Database | Version channel |
-|---|---|---|---|---|---|
-| **memex.systemorph.com** | `memex` | **Systemorph company instance** — PartnerRe & client work, infra control, accounting | Private — Roland & Markus only | `memex` | Continuous self-update |
-| **memex.meshweaver.cloud** | `memex-cloud` | **Public** instance — collaboration, showcase, demos | Public sign-in (Microsoft / Google / LinkedIn) | `memexcloud` | Continuous self-update |
-| **atioz** *(customer domain in the env's git-ignored config)* | `atioz` | **Customer** portal (atioz) | Customer sign-in | `atioz` | Continuous self-update |
-| **memex-local** | *(local k3s)* | Local dev — prod-like memex on a Mac (Colima k3s, arm64) | localhost only | local pgvector container | `autoroll` (host launchd) |
+**Not here.** Which instances exist, who each is for, what they are named and which database each
+uses is operational detail about live services — it belongs with whoever runs them.
 
-> The three cloud instances are **the same image** — a code change merged to `main` reaches all of
-> them via self-update (below). They differ only in data (separate databases), branding, sign-in
-> config, and who can log in.
+- **Running an instance of your own?** Nothing on this page needs changing. Read it for the model
+  (below): how versions are read, how self-update works, and how instances are created and deleted.
+- **Operating an installation Systemorph runs?** The inventory is in the private
+  [Systemorph/Memex](https://github.com/Systemorph/Memex) repo — `docs/deployments.md` for what runs
+  where, `deployments/aks/` for each one's configuration.
+
+The rest of this page is the mechanism, and applies to any installation.
 
 ## Shared platform (all cloud instances)
 
 | Piece | Value |
 |---|---|
-| AKS cluster | `memexaks-cluster` (RG `memex-aks-rg`, **swedencentral**) — **private** cluster; `kubectl` only via `az aks command invoke` |
+| AKS cluster | `<aks-cluster>` (RG `<aks-resource-group>`, **swedencentral**) — **private** cluster; `kubectl` only via `az aks command invoke` |
 | Container registry | `meshweaver.azurecr.io` (ACR), multi-arch images (amd64 + arm64) |
-| Database server | `memexaks-pg` — **private** Azure PG **Flexible Server 16** + pgvector, VNet-injected (one **database per instance**) |
-| Workload identity | One shared UAMI `memexaks-portal-mi`, one federated credential per namespace, `AcrPull` on the ACR |
+| Database server | `<pg-server>` — **private** Azure PG **Flexible Server 16** + pgvector, VNet-injected (one **database per instance**) |
+| Workload identity | One shared UAMI `<portal-identity>`, one federated credential per namespace, `AcrPull` on the ACR |
 | App stack | .NET 10 · Blazor Server · Orleans · Microsoft.Extensions.AI |
 | Backups | Managed PITR (14 days) + geo-redundant — see [DatabaseBackups.md](/Doc/Architecture/DatabaseBackups) |
 
@@ -43,7 +43,7 @@ Each instance runs the ACR image tag its in-pod self-updater last rolled to — 
 `ci.<N>`. To see what a namespace is actually running:
 
 ```bash
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl -n memex get deployment memex-portal-deployment \
    -o jsonpath='{.spec.template.spec.containers[0].image}'"
 # → meshweaver.azurecr.io/memex-portal-ai:ci.<N>
@@ -71,7 +71,7 @@ provisioned with the deploy tooling, not from the running app — the company in
 
 1. Add the namespace to `portalNamespaces` in `deploy/aks/infra/main.bicep` (creates its federated
    credential + AcrPull) and redeploy the identity module.
-2. Create the instance's **database** on the shared `memexaks-pg` server.
+2. Create the instance's **database** on the shared `<pg-server>` server.
 3. Author `deploy/aks/envs/<env>/values.<env>.yaml` (git-ignored: host, `MEMEX_DATABASENAME`, TLS
    secret, AI + auth config, `selfUpdate.azureClientId`).
 4. `deploy/aks/envs/<env>/deploy.sh` — helm install + PVCs + KV `SecretProviderClass` + ingress + TLS.
@@ -81,7 +81,7 @@ provisioned with the deploy tooling, not from the running app — the company in
 
 1. `helm uninstall` the release in its namespace, then delete the namespace (removes pods, PVCs,
    ingress, secrets).
-2. Drop (or archive-then-drop) the instance's **database** on `memexaks-pg` — this is the only place
+2. Drop (or archive-then-drop) the instance's **database** on `<pg-server>` — this is the only place
    its data lives, so **back it up first** ([DatabaseBackups.md](/Doc/Architecture/DatabaseBackups)).
 3. Remove the namespace from `portalNamespaces` (drops its federated credential) and delete its
    DNS record + TLS cert + git-ignored `envs/<env>/` config.
@@ -96,7 +96,7 @@ provisioned with the deploy tooling, not from the running app — the company in
 domain, namespace, running version (image tag), replica health — with per-instance Grafana/Loki log
 deep links and a guided create-instance **plan** generator (commands only; nothing deploys itself).
 
-The tab exists **only on memex.systemorph.com**, doubly gated:
+The tab exists **only on portal.example.com**, doubly gated:
 
 - **`Instances:Enabled`** (config, default `false`) — the Settings menu item is not even created on
   an install that doesn't set it. In the Helm chart, `instancesAdmin.clusterRead` drives BOTH this

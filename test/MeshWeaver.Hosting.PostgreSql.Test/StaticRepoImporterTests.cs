@@ -28,7 +28,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 ///   <item>materializes every source node (children + satellites) through the SINGLE canonical
 ///     verb <c>CreateOrUpdateNodeRequest</c> — content + prerender persisted, round-tripped through PG;</item>
 ///   <item>creates a proper <c>Space</c> partition root as a standard step (welcome page);</item>
-///   <item>provisions ONLY the lowercased schema (no verbatim/capital ghost — the atioz regression);</item>
+///   <item>provisions ONLY the lowercased schema (no verbatim/capital ghost — the prod regression);</item>
 ///   <item>is idempotent (re-run with unchanged source = no-op);</item>
 ///   <item>on a CHANGED source, <b>updates existing nodes and increments their Version</b> (the bug the
 ///     old stream-<c>Overwrite</c> path hit: re-asserting the same Version was dropped as not-newer);</item>
@@ -124,7 +124,7 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
         (page.Content as MarkdownContent)!.Content.Should().Contain("A page.");
         page.PreRenderedHtml.Should().NotBeNullOrWhiteSpace("markdown prerender must round-trip from PG");
 
-        // Only the lowercased schema — never the verbatim capital one (atioz ghost).
+        // Only the lowercased schema — never the verbatim capital one (prod ghost).
         await SchemaCount(_partition.ToLowerInvariant(), ct).Should().Within(30.Seconds()).Be(1L);
         await SchemaCount(_partition, ct).Should().Within(30.Seconds()).Be(0L);
 
@@ -153,7 +153,7 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
     /// <c>ImpersonateAsSystem</c> AsyncLocal was absent, so the writes hit the never-null AccessContext
     /// guard and FAILED CLOSED — nothing landed, yet the parent kept the <c>LastCompilationActivityPath</c>
     /// / activity reference → progress readers subscribed to a non-existent node → the
-    /// "NotFound for …/_Activity/import…" resubscribe storm (atioz 2026-06-18).
+    /// "NotFound for …/_Activity/import…" resubscribe storm (prod 2026-06-18).
     /// </summary>
     [Fact(Timeout = 120000)]
     public async Task Import_WithNoUserIdentity_StillPersists_BecauseImportHubIsSystem()
@@ -340,7 +340,7 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
     /// later source change (new fingerprint → full re-import) must leave the root's claim intact AND
     /// must NOT overwrite an admin's edits to children. Before the EnsureRoot fix, EnsureRoot
     /// re-materialised the root from the static source on every import → reset SyncBehavior back to
-    /// <see cref="SyncBehavior.Include"/> → re-enabled sync → clobbered admin edits (the atioz
+    /// <see cref="SyncBehavior.Include"/> → re-enabled sync → clobbered admin edits (the prod
     /// <c>Provider/Anthropic</c> key reset, 2026-06-25).
     /// </summary>
     [Fact(Timeout = 120000)]
@@ -430,7 +430,7 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
     /// CONTENT nodes are later dropped (a cross-partition prune, a manual delete, a botched migration)
     /// while the <c>_Activity/import-*</c> marker survives, the old marker short-circuit skipped the
     /// re-import and left the partition's content MISSING FOREVER ("a user didn't see the core app
-    /// skills", atioz). The importer now verifies a CONTENT sentinel before skipping; a missing
+    /// skills", prod). The importer now verifies a CONTENT sentinel before skipping; a missing
     /// sentinel forces a full (idempotent) re-import EVEN THOUGH the fingerprint is unchanged.
     /// </summary>
     [Fact(Timeout = 120000)]

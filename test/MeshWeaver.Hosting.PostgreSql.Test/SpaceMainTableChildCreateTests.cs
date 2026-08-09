@@ -19,7 +19,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
-/// 🚨 Repro for the 2026-06-11 atioz silent create-loss: an MCP-shaped
+/// 🚨 Repro for the 2026-06-11 prod silent create-loss: an MCP-shaped
 /// <c>CreateNodeRequest</c> for a MAIN-TABLE child of an existing Space
 /// (`AgenticPension/ProbeCreate` — plain Markdown, no satellite segment) was
 /// acked "Created: …" yet never landed in <c>{space}.mesh_nodes</c> — the path
@@ -67,7 +67,7 @@ public class SpaceMainTableChildCreateTests(PostgreSqlFixture fixture, ITestOutp
         var workspace = Mesh.GetWorkspace();
         var ct = TestContext.Current.CancellationToken;
 
-        // 1. Create the Space (provisions the partition; same as AgenticPension on atioz).
+        // 1. Create the Space (provisions the partition; same as AgenticPension on prod).
         var space = await meshService.CreateNode(new MeshNode(spaceId)
         {
             NodeType = SpaceNodeType.NodeType,
@@ -77,7 +77,7 @@ public class SpaceMainTableChildCreateTests(PostgreSqlFixture fixture, ITestOutp
         }).Should().Within(45.Seconds()).Emit();
         space.Path.Should().Be(spaceId);
 
-        // 2. The MCP-create shape that vanished on atioz: a PLAIN (main-table)
+        // 2. The MCP-create shape that vanished on prod: a PLAIN (main-table)
         //    child — nodeType Markdown, no satellite segment, no Content needed.
         var childPath = $"{spaceId}/ProbeCreate";
         var child = await meshService.CreateNode(new MeshNode("ProbeCreate", spaceId)
@@ -95,9 +95,9 @@ public class SpaceMainTableChildCreateTests(PostgreSqlFixture fixture, ITestOutp
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
         readBack.Should().NotBeNull(
-            "an acked main-table create under a Space must be readable — on atioz this was NotFound while the ack said Created");
+            "an acked main-table create under a Space must be readable — on prod this was NotFound while the ack said Created");
 
-        // 4. … and has a PHYSICAL row in the partition's main table (the atioz
+        // 4. … and has a PHYSICAL row in the partition's main table (the prod
         //    failure left zero rows while still acking Success).
         var rows = await CountRowsAsync(spaceId, "ProbeCreate", ct).ToObservable()
             .Should().Within(20.Seconds()).Emit();

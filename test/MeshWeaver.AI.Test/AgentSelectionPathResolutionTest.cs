@@ -18,7 +18,7 @@ namespace MeshWeaver.AI.Test;
 /// Reproduces bug (b): selecting an agent from the chat composer's mesh-node picker
 /// silently mis-resolves / fails when the picked agent path is SPACE-scoped and its
 /// last path segment COLLIDES with a built-in agent of the same name, or when the
-/// picked path is UNKNOWN (the atioz Loki scenario:
+/// picked path is UNKNOWN (the prod Loki scenario:
 /// <c>AgentName = "AgenticPension/Agent/Datenextraktion"</c> that no longer resolves).
 ///
 /// <para>The picker stores the node's FULL PATH. Resolution used to collapse that to the
@@ -153,7 +153,7 @@ public class AgentSelectionPathResolutionTest : AITestBase
     }
 
     /// <summary>
-    /// An UNKNOWN / mismatched agent path (the atioz Loki scenario: a stale
+    /// An UNKNOWN / mismatched agent path (the prod Loki scenario: a stale
     /// <c>AgenticPension/Agent/Datenextraktion</c> that no longer resolves) must degrade
     /// gracefully — the client surfaces a clean "no agent found" message instead of
     /// silently routing to an arbitrary built-in agent or throwing.

@@ -174,8 +174,8 @@ assert next(iter(r.values())).shape == (1, 1500, 1280)            # encoder outp
 zip -r ggml-swiss-german-turbo-encoder.mlmodelc.zip ggml-swiss-german-turbo-encoder.mlmodelc
 
 # Upload alongside the ggml model on the AKS static-assets share (same Speech/ folder):
-key=$(az storage account keys list -n memexaksfiles57ymot2ons3 -g memex-aks-rg --query "[0].value" -o tsv)
-az storage file upload --account-name memexaksfiles57ymot2ons3 --account-key "$key" \
+key=$(az storage account keys list -n <aks>files57ymot2ons3 -g <aks-resource-group> --query "[0].value" -o tsv)
+az storage file upload --account-name <aks>files57ymot2ons3 --account-key "$key" \
     --share-name static-assets --source ggml-swiss-german-turbo-encoder.mlmodelc.zip \
     --path "Speech/ggml-swiss-german-turbo-encoder.mlmodelc.zip"
 ```
@@ -193,7 +193,7 @@ The GGML model is a **runtime artifact, NOT committed to git** (too large). It l
 | Location | Path | Purpose |
 |---|---|---|
 | **Device (this dev box)** | `%LOCALAPPDATA%\User Name\com.companyname.memex.client\Data\models\ggml-swiss-german-turbo-q5_0.bin` | what the running Windows app loads |
-| **AKS file share** | storage account `memexaksfiles57ymot2ons3`, share `static-assets`, path `Speech/ggml-swiss-german-turbo-q5_0.bin` (the 1.5 GB `…-f16.bin` is there too) | the source other machines/iOS download from |
+| **AKS file share** | storage account `<aks>files57ymot2ons3`, share `static-assets`, path `Speech/ggml-swiss-german-turbo-q5_0.bin` (the 1.5 GB `…-f16.bin` is there too) | the source other machines/iOS download from |
 | **Content URL (catalog target)** | `https://memex.meshweaver.cloud/api/content/MeshWeaver/static/Speech/ggml-swiss-german-turbo-q5_0.bin` | the `VoiceModelCatalog.SwissGerman` download URL |
 
 🩹 **Serving caveat:** the content URL only returns the model once the `static-assets` share is **mounted
@@ -246,8 +246,8 @@ Copy-Item out\ggml-swiss-german-turbo-q5_0.bin `
     "$env:LOCALAPPDATA\User Name\com.companyname.memex.client\Data\models\"
 
 # AKS static-assets share (the host other devices download from):
-$key = az storage account keys list -n memexaksfiles57ymot2ons3 -g memex-aks-rg --query "[0].value" -o tsv
-az storage file upload --account-name memexaksfiles57ymot2ons3 --account-key $key `
+$key = az storage account keys list -n <aks>files57ymot2ons3 -g <aks-resource-group> --query "[0].value" -o tsv
+az storage file upload --account-name <aks>files57ymot2ons3 --account-key $key `
     --share-name static-assets --source out\ggml-swiss-german-turbo-q5_0.bin `
     --path "Speech/ggml-swiss-german-turbo-q5_0.bin"
 ```

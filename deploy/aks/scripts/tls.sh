@@ -3,12 +3,12 @@
 # (HTTP-01 via the app-routing nginx). The ingress 'memex-portal' must already exist and the
 # host must resolve publicly to the ingress IP (Let's Encrypt validates over the internet).
 #
-#   export LE_EMAIL=you@example.com INGRESS_HOST=memex.systemorph.com
+#   export LE_EMAIL=you@example.com INGRESS_HOST=portal.example.com
 #   az aks command invoke -g <rg> -n <cluster> --command "LE_EMAIL=$LE_EMAIL INGRESS_HOST=$INGRESS_HOST bash tls.sh" --file tls.sh
 set -uo pipefail
 NS=memex
 : "${LE_EMAIL:?set LE_EMAIL for the Let's Encrypt account}"
-HOST="${INGRESS_HOST:-memex.systemorph.com}"
+HOST="${INGRESS_HOST:-portal.example.com}"
 
 helm repo add jetstack https://charts.jetstack.io >/dev/null 2>&1 || true
 helm repo update >/dev/null 2>&1

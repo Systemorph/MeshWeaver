@@ -14,7 +14,7 @@ namespace MeshWeaver.AI.Test;
 /// <c>MeshOperations.Get</c> on a node whose PATH contains a UCR keyword as an interior segment.
 /// Document nodes live at <c>{collection}/_Documents/{slug}</c> and content collections are
 /// conventionally named <c>content</c> — a UCR keyword — so the unified (UCR) interpretation
-/// hijacks the path into collection-file resolution. Prod repro (atioz 2026-07-02): <c>get</c> on
+/// hijacks the path into collection-file resolution. Prod repro (prod 2026-07-02): <c>get</c> on
 /// an existing Document node returned "Error: Content collection '_Documents' not found" instead
 /// of the node. The node namespace is authoritative: an existing node at the full path must win.
 /// </summary>

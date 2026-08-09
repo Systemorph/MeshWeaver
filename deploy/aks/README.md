@@ -36,8 +36,8 @@ markdown only** — no application code changes.
                        └───────────────────────┬─────────────────────────┘
                                                │ P2S tunnel (172.16.201.0/24)
                   ┌────────────────────────────▼──────────────────────────┐
-                  │  VNet 10.42.0.0/16                                      │
-                  │  ┌── GatewaySubnet ──┐  ┌── aks-nodes 10.42.0.0/20 ──┐ │
+                  │  VNet 10.0.0.0/16                                      │
+                  │  ┌── GatewaySubnet ──┐  ┌── aks-nodes 10.0.0.0/20 ──┐ │
                   │  │  VPN Gateway      │  │  AKS node pool (3x, zonal)  │ │
                   │  └───────────────────┘  │   ├ memex-portal x3 (RWX)   │ │
                   │  privatelink.<rgn>.      │   ├ memex-postgres (PVC)    │ │
@@ -159,16 +159,16 @@ az deployment sub show --name memex-aks-infra \
 | Parameter | Default | Notes |
 |---|---|---|
 | `location` | `westeurope` | drives the private DNS zone name |
-| `namePrefix` | `memexaks` | ≤ 12 chars, prefixes every resource |
+| `namePrefix` | `<aks>` | ≤ 12 chars, prefixes every resource |
 | `systemNodeVmSize` / `systemNodeCount` | `Standard_D8s_v3` / 3 | 8 vCPU / **32 GiB** nodes, autoscales 3→6. (Pick a family with quota in your region — DSv5 was 0 in this subscription's westeurope, DSv3 had 100 vCPU.) |
 | `availabilityZones` | `["1","2","3"]` | zonal spread for HA |
-| `vnetAddressSpace` | `10.42.0.0/16` | must not collide with peered nets |
+| `vnetAddressSpace` | `10.0.0.0/16` | must not collide with peered nets |
 | `deployVpnGateway` | `true` | the P2S kubectl path |
 | `vpnClientAddressPool` | `172.16.201.0/24` | **must not overlap the VNet** |
 | `vpnClientRootCertData` | `""` | base64 root public cert (can add later) |
 | `deployBackupStorage` | `false` | self-managed pgBackRest blob; **off** because we use the managed private Flexible Server instead |
 | `deployPortalIdentity` | `true` | portal Workload Identity (UAMI + one federated credential per `portalNamespaces` entry) for the in-pod self-updater's **ACR polling**. Output `portalIdentityClientId` → `selfUpdate.azureClientId`. |
-| `portalNamespaces` | `["memex","atioz","memex-cloud"]` | namespaces that run the portal; one federated credential each (subject `system:serviceaccount:<ns>:memex-portal-sa`). Add a namespace here for a new env. |
+| `portalNamespaces` | `["memex","prod","memex-cloud"]` | namespaces that run the portal; one federated credential each (subject `system:serviceaccount:<ns>:memex-portal-sa`). Add a namespace here for a new env. |
 | `grantSharedAcrPull` | `false` | author the portal UAMI's AcrPull on the **shared** cross-RG ACR in-bicep (needs UAA on `meshweaver-shared`); default = grant out-of-band like the kubelet. A per-deployment ACR is granted in-bicep regardless. |
 | `sharedAcrResourceGroup` | `meshweaver-shared` | RG of the shared ACR; used only when `grantSharedAcrPull=true`. |
 | `deployContentFileShares` | `true` | Azure Files account + named shares for **static** PV binding (dynamic provisioning needs no shares) |
@@ -706,9 +706,9 @@ replicas** (the `portal-ha-patch.yaml` already sets 3).
 
 | Provider | Config keys (env: `Authentication__<P>__*`) | Redirect URI to register |
 |---|---|---|
-| **Microsoft / Entra (HOME)** | `TenantId` (Systemorph tenant GUID), `ClientId`, `ClientSecret` | `https://memex.systemorph.com/signin-microsoft` |
-| **Google** | `ClientId`, `ClientSecret` | `https://memex.systemorph.com/signin-google` |
-| **LinkedIn** | `ClientId`, `ClientSecret` | `https://memex.systemorph.com/signin-linkedin` |
+| **Microsoft / Entra (HOME)** | `TenantId` (Systemorph tenant GUID), `ClientId`, `ClientSecret` | `https://portal.example.com/signin-microsoft` |
+| **Google** | `ClientId`, `ClientSecret` | `https://portal.example.com/signin-google` |
+| **LinkedIn** | `ClientId`, `ClientSecret` | `https://portal.example.com/signin-linkedin` |
 
 - Setting `Authentication__Microsoft__TenantId` to a **real tenant GUID** (not
   `common`) makes that AAD the **home** directory. This subscription's tenant is
@@ -719,7 +719,7 @@ replicas** (the `portal-ha-patch.yaml` already sets 3).
 - **You still must create the app registrations / OAuth clients** and fill the
   `CHANGE_ME_*` `ClientId`s (config) + `ClientSecret`s (secrets) — those are real
   credentials this repo does not contain. Register each redirect URI above.
-- Host is `memex.systemorph.com` (ingress + TLS). Point a DNS A/CNAME at the
+- Host is `portal.example.com` (ingress + TLS). Point a DNS A/CNAME at the
   ingress controller's IP and issue the `memex-tls` cert (cert-manager or a
   pre-created secret).
 

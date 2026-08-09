@@ -17,7 +17,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Repro + contract for the atioz <c>_Activity/compile-*</c> resubscribe / re-route storm.
+/// Repro + contract for the prod <c>_Activity/compile-*</c> resubscribe / re-route storm.
 ///
 /// <para><b>The storm.</b> <see cref="NodeTypeCompilationHelpers.RunCompile"/> used to create the
 /// compile activity at <c>{nodeTypePath}/_Activity/compile-&lt;ts&gt;</c> <i>fire-and-forget</i>
