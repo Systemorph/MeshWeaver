@@ -277,6 +277,12 @@ public static class MemexConfiguration
         // identity or roles, so it can never be replayed as its owner against the mesh API.
         services.AddSingleton<MeshWeaverInstanceService>();
         services.AddSingleton<OAuthCodeStore>();
+        // Draws the fallback Open Graph card for public pages that authored no image. Singleton
+        // because it decodes its embedded font once and holds the typeface as an instance field.
+        services.AddSingleton(sp => new Memex.Portal.Shared.Seo.OgCardRenderer(
+            sp.GetRequiredService<IConfiguration>()["Portal:SiteName"]
+            ?? sp.GetRequiredService<IConfiguration>()["Portal:InstanceName"]
+            ?? "Memex"));
         // Automatic, token-based MCP back-connection for the co-hosted Claude Code / Copilot CLIs.
         // The chat clients resolve this at spawn to mint/reuse the per-user MCP ApiToken + URL.
         services.AddSingleton<MeshWeaver.AI.Connect.IMcpBackConnection, McpBackConnectionService>();

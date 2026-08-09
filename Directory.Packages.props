@@ -141,6 +141,13 @@
     <PackageVersion Include="Serilog.Settings.Configuration" Version="10.0.1" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageVersion Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <!-- Share-card rendering (OgCardRenderer). SkiaSharp is MIT; the NoDependencies native build
+         deliberately drops the fontconfig/libfreetype link, so the portal image needs NO apt
+         packages and the base image stays as it is — the font is supplied from an embedded
+         resource instead. linux-x64 AND linux-arm64 natives ship in the package, which the
+         multi-arch portal image requires. -->
+    <PackageVersion Include="SkiaSharp" Version="3.116.1" />
+    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.116.1" />
     <PackageVersion Include="System.Collections.Immutable" Version="10.0.7" />
     <PackageVersion Include="System.CommandLine" Version="2.0.10" />
     <PackageVersion Include="System.CommandLine.NamingConventionBinder" Version="2.0.0-beta5.25306.1" />
