@@ -4,16 +4,20 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown.Export.Configuration;
+using MeshWeaver.Markdown.Export.Messaging;
 using MeshWeaver.Markdown.Export.Pixel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using UglyToad.PdfPig;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -90,9 +94,9 @@ public class DeckAssetInliningTest(ITestOutputHelper output) : MonolithMeshTestB
     {
         var (space, _, slidePath) = await CreateDeck("![logo](logo.png)");
         var logo = Payload(1);
-        // Where the portal puts a node's image: the partition root's `content` collection, at the
-        // node-relative path. Written through the SAME resolution the reader uses, so the test
-        // cannot quietly agree with itself about a layout the product does not use.
+        // Where the portal puts a node's image: the node's default `content` collection. Written
+        // through the SAME resolution the reader uses, so the test cannot quietly agree with itself
+        // about a layout the product does not use.
         await StoreAsset($"{slidePath}/logo.png", logo);
 
         var inlining = await Inline(space, slidePath, "![logo](logo.png)");
@@ -173,6 +177,79 @@ public class DeckAssetInliningTest(ITestOutputHelper output) : MonolithMeshTestB
                  })
             inlining.Html.Should().Contain($"data:image/png;base64,{Convert.ToBase64String(payload)}",
                 because: $"the {label} shape must reach the document as its own bytes");
+
+        await NodeFactory.DeleteNode(space).Should().Emit();
+    }
+
+    /// <summary>
+    /// The whole path, through the mesh: a real <c>ExportDocumentRequest</c> with
+    /// <see cref="ExportFidelity.Pixel"/> against a deck whose slide references a stored image.
+    ///
+    /// <para>Never skipped. The pixel branch needs a headless browser and whether one exists is a
+    /// property of the machine, so this asks the renderer's own probe and asserts the contract that
+    /// applies: with a browser, a PDF that actually carries an embedded image; without one, the
+    /// actionable refusal. The inlining assertion — that the activity reported no unresolved asset
+    /// — is checked whenever the export ran at all.</para>
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task The_export_embeds_the_stored_image_or_refuses_clearly()
+    {
+        var (space, deck, slidePath) = await CreateDeck("# Cover\n\n![logo](logo.png)");
+        await StoreAsset($"{slidePath}/logo.png", Payload(7));
+
+        var request = new ExportDocumentRequest(deck, new DocumentExportOptions
+        {
+            Format = ExportFormat.Pdf,
+            Fidelity = ExportFidelity.Pixel,
+            CoverPage = false,
+            TableOfContents = false
+        });
+
+        var dispatch = await Mesh
+            .Observe<ExportDocumentResponse>(request, o => o.WithTarget(new Address(deck)))
+            .Should().Within(30.Seconds()).Emit();
+        dispatch.Message.Error.Should().BeNullOrEmpty("the export should start successfully");
+
+        var workspace = GetClient(c => c.AddData()).GetWorkspace();
+        var terminal = await workspace
+            .GetMeshNodeStream(dispatch.Message.ActivityPath)
+            .Select(node => node?.Content as ActivityLog)
+            .Should().Within(2.Minutes())
+            .Match(log => log is not null && log.Status != ActivityStatus.Running);
+
+        // Ask the SAME probe the export asked, so the expectation can never disagree with what the
+        // script actually found.
+        var renderer = Mesh.ServiceProvider.GetRequiredService<IPixelPdfRenderer>();
+        var executable = await renderer.Probe().FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        Output.WriteLine($"Pixel renderer executable: {executable ?? "<none>"}");
+
+        var messages = string.Join("\n  ", terminal!.Messages.Select(m => $"[{m.LogLevel}] {m.Message}"));
+
+        if (executable is null)
+        {
+            terminal.Status.Should().Be(ActivityStatus.Failed,
+                because: "pixel fidelity without a browser must refuse, never quietly downgrade. "
+                         + $"Messages:\n  {messages}");
+            messages.Should().Contain("headless Chromium");
+            await NodeFactory.DeleteNode(space).Should().Emit();
+            return;
+        }
+
+        terminal.Status.Should().Be(ActivityStatus.Succeeded, because: $"Messages:\n  {messages}");
+        messages.Should().Contain("Inlined 1/1 slide assets",
+            because: $"the deck's one stored image had to be inlined. Messages:\n  {messages}");
+        messages.Should().NotContain("blank image",
+            because: $"nothing may have been left unresolved. Messages:\n  {messages}");
+
+        var rendered = terminal.ReturnValue!.Value.Deserialize<RenderedDocument>(Mesh.JsonSerializerOptions);
+        rendered!.Content.Should().NotBeNull().And.NotBeEmpty();
+
+        using var pdf = PdfDocument.Open(rendered.Content);
+        var images = pdf.GetPages().SelectMany(p => p.GetImages()).ToList();
+        Output.WriteLine($"pages={pdf.NumberOfPages} images={images.Count}");
+        images.Should().NotBeEmpty(
+            "the stored PNG must reach the printed page — the CSP denies every other way it could, "
+            + "so an empty page here IS the blank-image defect this test exists to catch");
 
         await NodeFactory.DeleteNode(space).Should().Emit();
     }
