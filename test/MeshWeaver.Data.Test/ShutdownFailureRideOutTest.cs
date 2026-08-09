@@ -48,7 +48,10 @@ public class ShutdownFailureRideOutTest(ITestOutputHelper output) : HubTestBase(
     {
         var ct = TestContext.Current.CancellationToken;
         var host = GetHost();
-        var stream = new SynchronizationStream<Empty>(
+        // `using`: the stream owns a hosted sub-hub on the host, so it must be released
+        // deterministically — including when an assertion below throws — rather than left for the
+        // host's teardown cascade to collect.
+        using var stream = new SynchronizationStream<Empty>(
             new StreamIdentity(host.Address, null),
             host,
             new EntityReference("X", "Y"),
