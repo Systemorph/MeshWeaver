@@ -13,6 +13,17 @@ namespace MeshWeaver.Fixture;
 /// never see each other's helper (the parallel-safe replacement for the former
 /// process-wide <c>ConcurrentDictionary&lt;object, …&gt;</c>; see NoStaticState.md). The
 /// value set in a test's ctor flows to its method and any awaited continuations.
+///
+/// <para>🚨 <b>Register from the CONSTRUCTOR, never from an <c>async</c> lifecycle hook.</b>
+/// An <see cref="AsyncLocal{T}"/> assignment made inside an <c>async</c> method lives in that
+/// method's copied <c>ExecutionContext</c> and is discarded the moment it returns — the caller
+/// never observes it. <c>TestBase.InitializeAsync</c> used to do the registration, and
+/// <c>MonolithMeshTestBase</c> overrides that hook as <c>async</c>; the registry was therefore
+/// EMPTY when xUnit ran <see cref="AutoTestLoggingAttribute.Before"/>, so
+/// <see cref="XUnitFileOutputHelper.SetCurrentTestMethod"/> was never called and
+/// <see cref="XUnitFileLogger"/> silently dropped every log record of every Monolith test.
+/// The constructor runs synchronously on the runner's own flow, so its write survives.
+/// Pinned by <c>TestOutputLoggingLifecycleTest</c>.</para>
 /// </summary>
 public static class XUnitFileOutputRegistry
 {
