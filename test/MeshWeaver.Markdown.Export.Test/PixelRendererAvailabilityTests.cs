@@ -62,5 +62,34 @@ public class PixelRendererAvailabilityTests : IDisposable
             .Should().BeNull();
     }
 
+    // ── The print-completion signal ──────────────────────────────────────────────────────────
+    // Chrome does not exit after --print-to-pdf (measured: still alive 25s after the PDF is
+    // complete, under every headless mode and every --disable-*-service flag). Its stderr
+    // announcement is therefore the completion signal the renderer waits on, which makes this
+    // parser load-bearing: too loose and a truncated PDF ships, too tight and every export hangs
+    // until the timeout.
+
+    [Fact]
+    public void The_completion_announcement_is_recognised_with_its_byte_count()
+    {
+        HeadlessChromiumPdfRenderer
+            .TryReadPrintCompletion("22910 bytes written to file /tmp/x/deck.pdf", "/tmp/x/deck.pdf", out var bytes)
+            .Should().BeTrue();
+
+        bytes.Should().Be(22910, "the count is what lets the caller verify the file rather than trust the message");
+    }
+
+    [Theory]
+    // Another file's announcement — a stale line must never complete OUR print.
+    [InlineData("22910 bytes written to file /tmp/other/deck.pdf")]
+    // Ordinary Chromium noise that happens to name our file.
+    [InlineData("[1:2:0809/140439.484408:ERROR:something.cc:291] /tmp/x/deck.pdf failed")]
+    // The phrase and the path, but no count to verify against.
+    [InlineData("bytes written to file /tmp/x/deck.pdf")]
+    [InlineData("")]
+    public void Anything_else_is_not_a_completion(string line)
+        => HeadlessChromiumPdfRenderer.TryReadPrintCompletion(line, "/tmp/x/deck.pdf", out _)
+            .Should().BeFalse();
+
     public void Dispose() => pools.Dispose();
 }

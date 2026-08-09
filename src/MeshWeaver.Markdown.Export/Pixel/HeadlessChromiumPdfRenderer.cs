@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Text;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 
@@ -114,47 +115,86 @@ public sealed class HeadlessChromiumPdfRenderer(
             using var process = new Process { StartInfo = psi };
             process.Start();
 
-            // Unsubscribe (or mesh teardown) kills the whole browser tree — a pool slot is never
-            // held by an orphaned renderer child.
-            using var registration = ct.Register(() =>
+            // 🚨 The completion signal is the FILE, not the process exit.
+            //
+            // `--print-to-pdf` contracts to write the PDF; it does NOT contract to exit afterwards,
+            // and a real desktop Chrome reliably does not — it keeps running its background service
+            // machinery (updater, GCM, sync) long after the print has finished. Measured on Chrome
+            // 151: the PDF is complete within ~1s and the process is still alive 25s later, under
+            // EVERY combination of --headless=new/old/plain and every --disable-*-service flag.
+            // Waiting for exit would make every export hang until the timeout and then fail — with
+            // a perfectly good PDF sitting on disk.
+            //
+            // So we wait for Chrome's own explicit announcement on stderr,
+            //     "<N> bytes written to file <path>"
+            // which is self-validating: it carries the byte count, and we accept the result only
+            // when the file on disk is exactly that long. A containerised Chromium that DOES exit
+            // cleanly ends the same loop at end-of-stream and takes the exit path. Either way we
+            // then stop the browser — the print is done, and its teardown is not our business.
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(options.Timeout);
+            using var registration = deadline.Token.Register(() =>
             {
                 try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
-                catch { /* already gone */ }
+                catch (InvalidOperationException) { /* already gone */ }
             });
 
-            // Drain both pipes before waiting: Chromium is chatty on stderr and a full pipe buffer
-            // would deadlock the wait.
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-            var stderrTask = process.StandardError.ReadToEndAsync(ct);
+            // Chrome says little on stdout, but an unread pipe can still fill and block it; drain
+            // it concurrently and observe the task at the end.
+            var stdoutDrain = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
 
-            var timedOut = !process.WaitForExit(ClampToInt(options.Timeout));
-            if (timedOut)
+            // Blocking line reads are exactly what InvokeBlocking's dedicated scheduler exists for.
+            // The deadline registration above kills the browser, which closes this stream, which
+            // ends the loop — so the read is bounded without any hand-woven signal.
+            long announcedBytes = -1;
+            var stderr = new StringBuilder();
+            string? line;
+            while ((line = process.StandardError.ReadLine()) is not null)
             {
-                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already gone */ }
+                if (stderr.Length < StderrCaptureLimit)
+                    stderr.AppendLine(line);
+                if (TryReadPrintCompletion(line, pdfPath, out announcedBytes))
+                    break;
             }
 
-            // Observe BOTH drains on every path — a read that was cancelled by the kill above must
-            // not surface later as an unobserved task exception. Their failure is never the error
-            // we report; the exit code / missing output below is.
-            var stderr = DrainOrEmpty(stderrTask);
-            _ = DrainOrEmpty(stdoutTask);
+            var completed = announcedBytes >= 0;
+            if (!process.HasExited)
+            {
+                try { process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { /* already gone */ }
+            }
 
-            if (timedOut)
-                throw new PixelRenderException(
-                    $"The headless browser did not finish printing within {options.Timeout.TotalSeconds:N0}s and was stopped. "
-                    + Summarize(stderr));
+            _ = DrainOrEmpty(stdoutDrain);
+            var diagnostics = Summarize(stderr.ToString());
 
-            if (process.ExitCode != 0)
-                throw new PixelRenderException(
-                    $"The headless browser exited with code {process.ExitCode}. {Summarize(stderr)}");
+            if (!completed)
+            {
+                if (ct.IsCancellationRequested)
+                    throw new OperationCanceledException(ct);
+
+                if (deadline.IsCancellationRequested)
+                    throw new PixelRenderException(
+                        $"The headless browser did not finish printing within {options.Timeout.TotalSeconds:N0}s "
+                        + $"and was stopped. {diagnostics}");
+
+                // Stream ended with no announcement — the browser exited by itself. That is the
+                // well-behaved containerised case, and the file is then the proof of success.
+                if (!File.Exists(pdfPath))
+                    throw new PixelRenderException(
+                        $"The headless browser produced no PDF. {diagnostics}");
+            }
 
             if (!File.Exists(pdfPath))
-                throw new PixelRenderException(
-                    $"The headless browser produced no PDF. {Summarize(stderr)}");
+                throw new PixelRenderException($"The headless browser produced no PDF. {diagnostics}");
 
             var bytes = File.ReadAllBytes(pdfPath);
             if (bytes.Length == 0)
                 throw new PixelRenderException("The headless browser produced an empty PDF.");
+
+            // The announcement carries the byte count, so a partial read cannot slip through.
+            if (completed && bytes.Length != announcedBytes)
+                throw new PixelRenderException(
+                    $"The headless browser announced a {announcedBytes}-byte PDF but wrote {bytes.Length} bytes.");
 
             logger?.LogDebug("Pixel export: produced {Bytes} PDF bytes", bytes.Length);
             return bytes;
@@ -202,11 +242,34 @@ public sealed class HeadlessChromiumPdfRenderer(
     }
 
     /// <summary>
-    /// Milliseconds for <see cref="Process.WaitForExit(int)"/>, clamped so an absurdly large
-    /// configured timeout cannot overflow into a negative (= immediate) wait.
+    /// Recognises Chromium's print-completion announcement — <c>"&lt;N&gt; bytes written to file
+    /// &lt;path&gt;"</c> — for OUR output file, and yields the byte count it reports.
+    ///
+    /// <para>Matching is deliberately narrow on three independent things at once: the phrase, our
+    /// exact output path, and a parsable leading count. A line that satisfies all three is the
+    /// browser telling us the print is finished, and the count then lets the caller verify the file
+    /// rather than trust the message.</para>
     /// </summary>
-    private static int ClampToInt(TimeSpan timeout) =>
-        timeout.TotalMilliseconds is var ms && ms >= int.MaxValue ? int.MaxValue : (int)Math.Max(ms, 0);
+    public static bool TryReadPrintCompletion(string line, string pdfPath, out long bytes)
+    {
+        bytes = -1;
+        if (!line.Contains(PrintCompletionPhrase, StringComparison.Ordinal))
+            return false;
+        if (!line.Contains(pdfPath, StringComparison.Ordinal))
+            return false;
+
+        var digits = line.AsSpan().TrimStart();
+        var end = 0;
+        while (end < digits.Length && char.IsAsciiDigit(digits[end]))
+            end++;
+
+        return end > 0 && long.TryParse(digits[..end], out bytes);
+    }
+
+    private const string PrintCompletionPhrase = "bytes written to file";
+
+    /// <summary>How much stderr to keep for diagnostics — Chromium can be extremely chatty.</summary>
+    private const int StderrCaptureLimit = 8192;
 
     /// <summary>
     /// Observes a pipe-drain task. Cancellation (we killed the browser) and a broken pipe are
