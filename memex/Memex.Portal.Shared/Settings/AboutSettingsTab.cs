@@ -9,16 +9,21 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using MeshWeaver.Utils;
+using Memex.Portal.Shared.SelfUpdate;
 
 namespace Memex.Portal.Shared.Settings;
 
 /// <summary>
 /// Global settings "About" tab — the ONE page that identifies what this portal is running:
 /// the platform build (version + the git commit it was built from, linking straight to GitHub),
-/// the runtime, and the live installed-plugin inventory with each plugin's version. Ungated:
-/// visible to every user — plugins are part of the build identity, and the inventory is
-/// read-only (browsing and provisioning packages is the Store's job; the old admin-only
-/// "Plugin Catalog" settings tab is retired in favour of this page).
+/// <b>whether that build is current</b>, the runtime, and the live installed-plugin inventory with
+/// each plugin's version. Ungated: visible to every user — plugins are part of the build identity,
+/// and the inventory is read-only (browsing and provisioning packages is the Store's job; the old
+/// admin-only "Plugin Catalog" settings tab is retired in favour of this page).
+///
+/// <para>The "is it current?" line comes from <see cref="PlatformUpdateStatus"/> — a two-state verdict
+/// projected out of the platform-admin-only <c>Admin/UpdatePolicy</c> node, so an ordinary user can
+/// answer the question without being handed the update policy itself.</para>
 ///
 /// <para>Build identity comes from the assembly attributes baked in by
 /// <c>Directory.Build.props</c> (<see cref="ShippedReleaseSeed.InstalledPlatformVersion"/> /
@@ -60,6 +65,15 @@ public static class AboutSettingsTab
 
         stack = stack.WithView(Controls.Markdown(BuildInfoMarkdown(host)));
 
+        // ── "Is that build current?" — the derived verdict, for EVERY user. ──
+        // The comparison (running vs newest known) lives on Admin/UpdatePolicy, which only platform
+        // admins can read, so PlatformUpdateStatus.Observe reads it as System and lets ONLY the
+        // verdict out. Unknown (no self-update wired / checks off / read failed) renders nothing —
+        // an unfounded "up to date" would be worse than no line.
+        stack = stack.WithView((h, _) => PlatformUpdateStatus.Observe(h.Hub)
+            .Select(status => (UiControl?)UpdateStatusView(h, status))
+            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
+
         // ── Installed plugins — the live inventory, one row per install record. ──
         stack = stack.WithView(Controls.H3(host.Localize("about.plugins.title")).WithStyle("margin: 16px 0 4px 0;"));
         stack = stack.WithView((h, _) => CatalogLayoutAreas.ObserveInstalledManifests(h)
@@ -87,6 +101,30 @@ public static class AboutSettingsTab
             $"**{host.Localize("about.repository")}:** [Systemorph/MeshWeaver]({ShippedReleaseSeed.RepositoryUrl})\n\n" +
             $"**{host.Localize("about.runtime")}:** .NET {Environment.Version}";
     }
+
+    /// <summary>
+    /// The update-status line: a language-neutral glyph plus one translated phrase. Returns an empty
+    /// stack for <see cref="PlatformUpdateAvailability.Unknown"/> so nothing renders.
+    /// </summary>
+    private static UiControl UpdateStatusView(LayoutAreaHost host, PlatformUpdateStatus status) =>
+        UpdateStatusMarkdown(status, key => host.Localize(key)) is { } markdown
+            ? Controls.Markdown(markdown)
+            : Controls.Stack.WithWidth("100%");
+
+    /// <summary>
+    /// The update-status markdown, or <c>null</c> when there is nothing to say. Takes the localizer as
+    /// a function so the wording is unit-testable without a hub.
+    /// </summary>
+    internal static string? UpdateStatusMarkdown(PlatformUpdateStatus status, Func<string, string> localize) =>
+        status.Availability switch
+        {
+            PlatformUpdateAvailability.UpdateAvailable =>
+                $"**{localize("about.updateStatus")}:** ⬆️ {localize("about.updateAvailable")} — " +
+                $"`{status.LatestVersion}`",
+            PlatformUpdateAvailability.UpToDate =>
+                $"**{localize("about.updateStatus")}:** ✅ {localize("about.upToDate")}",
+            _ => null,
+        };
 
     /// <summary>
     /// The inventory grid — a <see cref="DataGridControl"/> over plain rows (the framework's ONE

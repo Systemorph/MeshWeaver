@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
@@ -54,11 +56,32 @@ namespace MeshWeaver.Hosting.Persistence;
 /// <c>MonotonicWriteGuardWindowTest</c>. A claim left high by a write that then fails is
 /// harmless by the paragraph above — a too-high mark only costs one verification read.</para>
 ///
-/// <para><b>Refuse, loudly — never throw.</b> A refusal logs at <c>Error</c> with both
-/// versions and the path, and emits the STORED (winning) node so the caller's "what is
-/// durable now" contract still holds. Throwing would turn a data-integrity save into a
-/// faulted create/flush chain on paths that are not written to handle it (the create
-/// pipeline, the dispose-time flush) — trading silent loss for a different outage.</para>
+/// <para>🚨 <b>The in-process mark is a FILTER, never the durable guarantee (#971).</b> A second
+/// replica starts with an empty mark table, so its FIRST write to a path has nothing to compare
+/// against and takes the fast path unverified. The durable half of the invariant therefore lives in
+/// the STORE: every backend that can express the condition makes its upsert conditional on
+/// <see cref="MeshNode.Version"/> (Postgres <c>ON CONFLICT … DO UPDATE … WHERE
+/// target.version &lt;= EXCLUDED.version</c>, Snowflake's <c>WHEN MATCHED AND …</c>, the in-memory
+/// store's version-keeping <c>AddOrUpdate</c>) and reports a refusal by emitting the STORED node
+/// instead of the written one. This decorator treats that emission exactly like its own verification
+/// read: as a confirmed conflict to resolve. Without it, monotonicity on a fresh replica's first
+/// write was enforced by nothing at all — not the empty mark, not the unconditional upsert.</para>
+///
+/// <para><b>Resolve by merging — never refuse the caller (#971).</b> A confirmed conflict is NOT
+/// bounced back to the writer: callers of <c>stream.Update</c> do not write conflict-retry loops and
+/// must not have to. The durable row is re-read and the losing write is reconciled into it by
+/// <see cref="MeshNodeConflictMerge"/> — non-strings latest-wins, strings merged where one side is a
+/// superset, anything not auto-resolvable latest-wins. Nothing throws: turning a data-integrity save
+/// into a faulted create/flush chain on paths not written to handle it (the create pipeline, the
+/// dispose-time flush) would trade silent loss for a different outage.</para>
+///
+/// <para>🚨 <b>Latest-wins is acceptable; latest-wins INVISIBLY is the bug.</b> Every member the
+/// merge could not auto-resolve is logged at <c>Warning</c> AND recorded as an <c>ActivityLog</c>
+/// MeshNode satellite at <c>{path}/_Activity/write-conflict-{latestVersion}</c>. The defect this
+/// component was built for (#826) was an acked write that rolled a row back with no error anywhere —
+/// so a resolution that drops a value must leave a durable, user-visible trace. The id is keyed on the
+/// DURABLE version alone, which bounds the record to one per revision no matter how many losing
+/// attempts land against it (see <see cref="RecordConflictActivity"/>).</para>
 ///
 /// <para><b>Equal versions pass.</b> The guard rejects STRICT regressions only. A re-write at
 /// the same version is a legitimate, common shape: static/never-mutated nodes sit at their
@@ -143,19 +166,130 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
                         return WriteAndRecord(node, options);
                     }
 
-                    // Confirmed backward write against live durable state. Refuse.
+                    // Confirmed backward write against live durable state.
                     ResetMark(path, stored.Version);
-                    logger?.LogError(
-                        "[MonotonicWriteGuard] REFUSED a backward write to {Path}: incoming Version={IncomingVersion} "
-                        + "is BELOW the stored Version={StoredVersion}. MeshNode.Version is the owner's monotonic "
-                        + "persistence clock (MeshNode.NextVersion floors every mint at current+1), so a regressing "
-                        + "write is a STALE snapshot about to destroy acknowledged data — not a newer state. The "
-                        + "stored node is kept. Find the writer that adopted a stale own-node snapshot; do not relax "
-                        + "this guard.",
-                        path, node.Version, stored.Version);
-                    return Observable.Return<MeshNode?>(stored);
+                    return ResolveConflict(node, stored, options);
                 });
         });
+    }
+
+    /// <summary>
+    /// Reconciles a write that lost the version race, and returns what is durable afterwards.
+    ///
+    /// <para>Reached from BOTH conflict detectors — this decorator's own verification read, and a
+    /// store whose version-conditional upsert refused the write and handed back the row it kept.
+    /// They are the same event, so they resolve the same way (#971).</para>
+    ///
+    /// <para>🚨 <b>One attempt, never a retry loop.</b> The merged node is written once. If the row
+    /// moved again in between, the second refusal is LOGGED and the newer row is returned — a
+    /// re-merge loop here would be an unbounded spin against a hot path, and the write it is spinning
+    /// for is by construction older than what is already durable.</para>
+    /// </summary>
+    private IObservable<MeshNode?> ResolveConflict(MeshNode stale, MeshNode latest, JsonSerializerOptions options)
+    {
+        var path = latest.Path;
+        var resolution = MeshNodeConflictMerge.Merge(latest, stale, options);
+
+        logger?.LogWarning(
+            "[MonotonicWriteGuard] CONFLICT on {Path}: a write at Version={IncomingVersion} lost the race against "
+            + "the durable Version={StoredVersion}. MeshNode.Version is the owner's monotonic persistence clock "
+            + "(MeshNode.NextVersion floors every mint at current+1), so the losing write is a STALE snapshot, not a "
+            + "newer state. Resolved by merging into the durable row: merged={MergedMembers}; "
+            + "latest-wins (stale values DROPPED)={OverwrittenMembers}. Find the writer that adopted a stale "
+            + "own-node snapshot; do not relax this guard.",
+            path, stale.Version, latest.Version,
+            Describe(resolution.MergedMembers), Describe(resolution.OverwrittenMembers));
+
+        RecordConflictActivity(path, stale.Version, latest.Version, resolution, options);
+
+        if (resolution.IsLatestUnchanged)
+            return Observable.Return<MeshNode?>(latest);   // nothing salvageable — the durable row already IS the answer
+
+        Observe(resolution.Node);
+        return inner.Write(resolution.Node, options)
+            .Select(written =>
+            {
+                if (written is not null && written.Version > resolution.Node.Version)
+                {
+                    logger?.LogWarning(
+                        "[MonotonicWriteGuard] the merged resolution for {Path} was itself refused — the row advanced "
+                        + "to Version={StoredVersion} while the merge ran. Keeping the newer row; NOT re-merging (a "
+                        + "retry loop here spins against a hot path for a write that is older than durable truth).",
+                        path, written.Version);
+                    return written;
+                }
+                return written ?? resolution.Node;
+            });
+    }
+
+    private static string Describe(System.Collections.Immutable.ImmutableList<string> members)
+        => members.IsEmpty ? "(none)" : string.Join(", ", members);
+
+    /// <summary>
+    /// Writes the durable, user-visible trace of a resolved conflict: an <c>ActivityLog</c> MeshNode
+    /// satellite at <c>{path}/_Activity/write-conflict-{latestVersion}</c>, carrying one
+    /// <see cref="LogLevel.Warning"/> message per member whose value was dropped (and an informational
+    /// line for what was merged).
+    ///
+    /// <para>Best effort by contract — a failure to record the trace must never fail the resolution it
+    /// describes, so it is logged rather than propagated. It is also skipped for paths already inside an
+    /// <c>_Activity</c> namespace, so a conflict on a trace can never write a trace about a trace.</para>
+    /// </summary>
+    private void RecordConflictActivity(
+        string path, long staleVersion, long latestVersion,
+        MeshNodeConflictResolution resolution, JsonSerializerOptions options)
+    {
+        if (string.IsNullOrEmpty(path)
+            || path.Contains("/_Activity/", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var messages = ImmutableList<LogMessage>.Empty
+            .Add(new LogMessage(
+                $"A write at Version={staleVersion} lost the race against the durable Version={latestVersion} "
+                + $"on '{path}' and was merged into it.",
+                LogLevel.Information));
+        messages = resolution.OverwrittenMembers.Aggregate(messages, (acc, member) => acc.Add(
+            new LogMessage(
+                $"'{member}' was not auto-resolvable — the newer value was kept and the losing write's value dropped.",
+                LogLevel.Warning)));
+        messages = resolution.MergedMembers.Aggregate(messages, (acc, member) => acc.Add(
+            new LogMessage($"'{member}' was merged — both writes' content survives.", LogLevel.Information)));
+
+        // 🚨 The id is keyed on the DURABLE version alone, never on the losing writer's. One record
+        // per durable revision is the right granularity ("this revision had a conflict") AND it is
+        // what bounds the litter: a wedged owner mints an INCREASING version on every retry
+        // (834, 835, 836 … against a stuck 2423 — the #725/#872 fork shape), so a stale-version-keyed
+        // id would accumulate one satellite per retry, forever. Re-recording overwrites the same node
+        // at Version = 1, which the store's equal-version rule accepts, so this can never conflict
+        // with itself. Which losing version lost is in the message text.
+        var activityNamespace = $"{path}/_Activity";
+        var id = $"write-conflict-{latestVersion}";
+        var activity = new MeshNode(id, activityNamespace)
+        {
+            Name = $"Write conflict on {path}",
+            NodeType = "ActivityLog",
+            MainNode = path,
+            State = MeshNodeState.Active,
+            Version = 1,
+            LastModified = DateTimeOffset.UtcNow,
+            Content = new ActivityLog(ActivityCategory.WriteConflict)
+            {
+                Id = id,
+                HubPath = path,
+                AffectedPaths = [path],
+                End = DateTime.UtcNow,
+                Status = resolution.OverwrittenMembers.IsEmpty
+                    ? ActivityStatus.Succeeded
+                    : ActivityStatus.Warning,
+                Messages = messages
+            }
+        };
+
+        inner.Write(activity, options).Subscribe(
+            _ => { },
+            ex => logger?.LogWarning(ex,
+                "[MonotonicWriteGuard] could not record the write-conflict activity for {Path}; the conflict itself "
+                + "was resolved and is reported in the preceding warning.", path));
     }
 
     /// <summary>
@@ -164,14 +298,23 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
     /// before the row is mutated" note on the class. Observing only the completed write left the
     /// mark trailing the row for the whole duration of that write (including the change-feed
     /// fan-out it performs from inside itself), and a stale writer landing in that window skipped
-    /// verification and rolled the store back. The trailing <c>Do(Observe)</c> is retained: the
-    /// backend may return a node whose version differs from the one we handed it (a partition
-    /// adapter, a conditional upsert), and the mark must track what is actually durable.</para>
+    /// verification and rolled the store back.</para>
+    ///
+    /// <para>🚨 A backend emission carrying a version ABOVE the one we handed it is the store
+    /// reporting that its version-conditional upsert REFUSED the write and kept the row it already
+    /// had (#971) — the cross-replica half of the invariant, and the only thing standing between a
+    /// fresh replica's first write and a silent rollback. It is a confirmed conflict, so it resolves
+    /// through exactly the same merge as the verification-read branch. The trailing
+    /// <c>Do(Observe)</c> then tracks whatever is actually durable.</para>
     /// </summary>
     private IObservable<MeshNode?> WriteAndRecord(MeshNode node, JsonSerializerOptions options)
     {
         Observe(node);
-        return inner.Write(node, options).Do(Observe);
+        return inner.Write(node, options)
+            .SelectMany(written => written is not null && written.Version > node.Version
+                ? ResolveConflict(node, written, options)
+                : Observable.Return(written))
+            .Do(Observe);
     }
 
     /// <summary>

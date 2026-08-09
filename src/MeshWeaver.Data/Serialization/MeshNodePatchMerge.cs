@@ -110,6 +110,149 @@ public static class MeshNodePatchMerge
     }
 
     /// <summary>
+    /// TWO-WAY sibling of <see cref="Apply"/>, for the one caller that has no base to rebase against: a
+    /// write that lost a version race AT THE STORE. There the write-integrity chain holds only the two
+    /// full objects — the durable row and the refused write — and no common ancestor, because the losing
+    /// writer never shipped one (issue #971).
+    ///
+    /// <para><b>Why the three-way <see cref="Apply"/> cannot serve this.</b> Its whole classification
+    /// turns on <c>live == base</c>. Handed <c>baseValues: null</c> it takes the "no conflict signal"
+    /// branch and applies the patch WHOLESALE — i.e. the stale snapshot would overwrite the newer row,
+    /// which is exactly the defect. There is no argument shape that makes <see cref="Apply"/> behave
+    /// two-way, so the entry point is separate; the SEMANTICS are shared (same recursion, same
+    /// <see cref="StringDelta"/>, same array-identity merge) so the two can never drift on the parts that
+    /// are genuinely common.</para>
+    ///
+    /// <para><b>Resolution order</b> (the project's stated conflict policy): equal → nothing; nested
+    /// object → recurse; array → UNION by element identity (<see cref="MergeArray"/> with an empty base,
+    /// so no element is ever dropped — RFC&#160;7396's replace-the-array is what silently loses them);
+    /// string where one side is a single-splice SUPERSET of the other → keep the superset, both writers'
+    /// text survives; everything else (numbers, bools, dates, shape changes, and strings that diverged on
+    /// both sides) → LATEST wins and <paramref name="onOverwritten"/> is called. That callback is the
+    /// load-bearing half: latest-wins is acceptable, latest-wins invisibly is the bug.</para>
+    ///
+    /// <para>🚨 A key ABSENT from <paramref name="latest"/> is never adopted from <paramref name="stale"/>.
+    /// The serializer suppresses defaults, so absence is ambiguous between "the newer writer removed it"
+    /// and "its value is the default" — and under both readings the newer state is the one to keep.</para>
+    /// </summary>
+    /// <param name="latest">The durable object. Mutated IN PLACE into the merged result.</param>
+    /// <param name="stale">The losing write's object.</param>
+    /// <param name="prefix">Dotted member prefix used when reporting (e.g. <c>Content</c>).</param>
+    /// <param name="onMerged">Called with the member path for each leaf where BOTH writers' content survived.</param>
+    /// <param name="onOverwritten">Called with the member path for each leaf that was NOT auto-resolvable.</param>
+    public static void ApplyTwoWay(
+        JsonObject latest,
+        JsonObject stale,
+        string prefix,
+        Action<string>? onMerged = null,
+        Action<string>? onOverwritten = null)
+    {
+        foreach (var (key, staleVal) in stale.ToArray())
+        {
+            // Absent on the newer side → the newer state stands (see the default-suppression note).
+            if (!latest.TryGetPropertyValue(key, out var liveVal))
+                continue;
+            if (JsonNode.DeepEquals(liveVal, staleVal))
+                continue;
+
+            var member = string.IsNullOrEmpty(prefix) ? key : $"{prefix}.{key}";
+
+            if (liveVal is JsonObject liveObj && staleVal is JsonObject staleObj)
+            {
+                ApplyTwoWay(liveObj, staleObj, member, onMerged, onOverwritten);
+                continue;
+            }
+
+            if (liveVal is JsonArray liveArr && staleVal is JsonArray staleArr)
+            {
+                // Union by element identity — MergeArray with an EMPTY base, which is precisely
+                // "neither side can be shown to have removed anything, so keep every element".
+                var union = MergeArray(liveArr, staleArr, []);
+                if (!JsonNode.DeepEquals(union, liveVal))
+                {
+                    latest[key] = union;
+                    onMerged?.Invoke(member);
+                }
+                continue;
+            }
+
+            if (TryGetString(liveVal, out var liveStr) && TryGetString(staleVal, out var staleStr))
+            {
+                if (TryMergeTwoWay(liveStr, staleStr, out var resolved))
+                {
+                    if (!string.Equals(resolved, liveStr, StringComparison.Ordinal))
+                    {
+                        latest[key] = JsonValue.Create(resolved);
+                        onMerged?.Invoke(member);
+                    }
+                }
+                else
+                {
+                    onOverwritten?.Invoke(member);
+                }
+                continue;
+            }
+
+            if (liveVal is null)
+            {
+                // An explicit JSON null on the newer side carries no content the stale writer could
+                // have destroyed, so adopting its value keeps strictly more data.
+                latest[key] = staleVal?.DeepClone();
+                onMerged?.Invoke(member);
+                continue;
+            }
+
+            onOverwritten?.Invoke(member);
+        }
+    }
+
+    /// <summary>
+    /// The base-less string rule, shared by <see cref="ApplyTwoWay"/> and the MeshNode-level members it
+    /// cannot see (Name, Description, …). Returns <c>true</c> when the two strings auto-resolved, with
+    /// <paramref name="resolved"/> set to the value to keep; <c>false</c> when they diverged on BOTH
+    /// sides and the caller must apply latest-wins plus a warning.
+    ///
+    /// <para><see cref="StringDelta.Compute"/> reduces the pair to ONE splice (common prefix + common
+    /// suffix stripped). A splice that only INSERTS means <paramref name="stale"/> contains
+    /// <paramref name="latest"/> in full — take the superset and nothing is lost. A splice that only
+    /// REMOVES means the reverse — keep latest, again nothing is lost. A splice that does both is a
+    /// genuine divergence: with no common ancestor there is no way to tell an insertion by one writer
+    /// from a deletion by the other, so it is not auto-resolvable.</para>
+    ///
+    /// <para>The superset case can resurrect text the newer writer deleted. That is accepted
+    /// deliberately: the alternative silently destroys text an acked write added, which is the failure
+    /// mode of record. Resurrection is visible in the content and reported; destruction is not.</para>
+    /// </summary>
+    public static bool TryMergeTwoWay(string? latest, string? stale, out string? resolved)
+    {
+        if (string.Equals(latest, stale, StringComparison.Ordinal) || string.IsNullOrEmpty(stale))
+        {
+            resolved = latest;
+            return true;
+        }
+        if (string.IsNullOrEmpty(latest))
+        {
+            resolved = stale;               // latest carries nothing here — adopting loses nothing
+            return true;
+        }
+
+        var delta = StringDelta.Compute(latest, stale);
+        if (delta.Inserted.Length == 0)
+        {
+            resolved = latest;              // latest ⊃ stale
+            return true;
+        }
+        if (delta.RemovedLength == 0)
+        {
+            resolved = stale;               // stale ⊃ latest — take the union
+            return true;
+        }
+
+        resolved = latest;                  // diverged on both sides — caller warns
+        return false;
+    }
+
+    /// <summary>
     /// Three-way array merge by whole-element value identity:
     /// <c>result = live − (base∖patch) + (patch∖base)</c> — keep every LIVE element the writer did NOT
     /// remove (in live order), then append the writer's additions (in patch order); de-duplicated. Lands
