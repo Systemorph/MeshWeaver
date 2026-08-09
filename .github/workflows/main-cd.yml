@@ -242,6 +242,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ steps.target.outputs.sha }}
+          REASON: ${{ steps.target.outputs.reason }}
         run: |
           set -euo pipefail
           # Latest run of the required check on this SHA (a re-run appends another).
@@ -255,8 +256,13 @@ jobs:
                   | "\(.status // "absent") \(.conclusion // "none")"')
           # How long CI has had. Distinguishes "no check YET" (a merge seconds ago) from "no check
           # EVER" (AGENTS.md trap #1) without a timer that retries anything.
-          committed=$(gh api "repos/${{ github.repository }}/commits/$SHA" --jq '.commit.committer.date')
-          age_min=$(( ( $(date -u +%s) - $(date -u -d "$committed" +%s) ) / 60 ))
+          # RECONCILE ONLY, deliberately: the push path does not use it, and this is the step every
+          # delivery depends on — no reason to put an extra API call and a `date -d` on that path.
+          age_min=0
+          if [ "$REASON" = "reconcile" ]; then
+            committed=$(gh api "repos/${{ github.repository }}/commits/$SHA" --jq '.commit.committer.date')
+            age_min=$(( ( $(date -u +%s) - $(date -u -d "$committed" +%s) ) / 60 ))
+          fi
           echo "Required check 'Consolidate test results' on $SHA → $status/$concl (commit is ${age_min} min old)"
           echo "run conclusion (umbrella, informational) → ${{ github.event.workflow_run.conclusion }}"
           echo "green=$([ "$status" = "completed" ] && [ "$concl" = "success" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
