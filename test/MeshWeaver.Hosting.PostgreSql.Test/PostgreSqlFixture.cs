@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Threading;
@@ -32,6 +34,52 @@ public class PostgreSqlFixture : IAsyncLifetime
     // batches pushed past max_connections=100 even with MaxPoolSize=1.
     private readonly System.Collections.Concurrent.ConcurrentBag<NpgsqlDataSource>
         _trackedSchemaDataSources = new();
+
+    // Names of the partition schemas CreateSchemaAdapterAsync created. Dropped by
+    // CleanDataAsync together with their data sources (#977): nothing else ever removed
+    // them, so every partition a test left behind stayed in the container for the rest of
+    // the run and every LATER test paid for it — see MaxTablesPerCleanupBatch.
+    private readonly System.Collections.Concurrent.ConcurrentBag<string> _trackedSchemas = new();
+
+    /// <summary>
+    /// Schemas <see cref="InitializeAsync"/> provisions once per container (mirroring the prod
+    /// migration) plus the catalog schemas. A test may legitimately build an adapter over one of
+    /// them; dropping it would take the whole container's framework state with it, so they are
+    /// never dropped even when tracked.
+    /// </summary>
+    private static readonly System.Collections.Immutable.ImmutableHashSet<string> UndroppableSchemas =
+        System.Collections.Immutable.ImmutableHashSet.Create(
+            StringComparer.OrdinalIgnoreCase,
+            "public", "auth", "system_access", "information_schema");
+
+    /// <summary>
+    /// Upper bound on the number of <c>(schema, table)</c> DELETEs <see cref="CleanDataAsync"/>
+    /// puts into ONE transaction — the fix for #977.
+    ///
+    /// <para>Npgsql sends a multi-statement command as a single implicit transaction, so the old
+    /// "one batched DELETE over every pair in the container" held a lock on every targeted table
+    /// AND every one of its indexes simultaneously (<c>mesh_nodes</c> alone carries 11 indexes →
+    /// ~12 locks per pair). PostgreSQL's lock table is a fixed shared-memory array of
+    /// <c>max_locks_per_transaction × (max_connections + max_prepared_transactions)</c> slots —
+    /// 6400 at the container's defaults — so the cost of cleanup grew with every partition schema
+    /// any earlier test left behind until it tipped over into
+    /// <c>Npgsql.PostgresException 53200: out of shared memory</c>. The victim was whichever test
+    /// happened to run at the tipping point (observed: the four NodeAuthorshipPersistenceTests),
+    /// which is why it read as an unrelated regression, and it only ever reproduced on CI because
+    /// only a full-suite container accumulates that many schemas.</para>
+    ///
+    /// <para>Chunking makes the lock footprint per transaction a CONSTANT (~20 pairs × ~12 locks)
+    /// instead of a function of accumulated schemas. Raising the Postgres bound instead would only
+    /// move the tipping point.</para>
+    /// </summary>
+    public const int MaxTablesPerCleanupBatch = 20;
+
+    /// <summary>
+    /// Upper bound on schemas dropped per transaction. <c>DROP SCHEMA … CASCADE</c> takes an
+    /// ACCESS EXCLUSIVE lock on every object it removes (~90 per partition schema: 10 tables plus
+    /// their indexes), so the drop is chunked for exactly the reason the DELETEs are.
+    /// </summary>
+    public const int MaxSchemasPerDropBatch = 4;
 
     public async ValueTask InitializeAsync()
     {
@@ -98,9 +146,10 @@ public class PostgreSqlFixture : IAsyncLifetime
     public async Task<(NpgsqlDataSource SchemaDataSource, PostgreSqlStorageAdapter Adapter)>
         CreateSchemaAdapterAsync(string schemaName, PartitionDefinition? partitionDef = null, CancellationToken ct = default)
     {
-        // Create schema
-        await using (var cmd = DataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{schemaName}\""))
+        // Create schema — and remember it, so CleanDataAsync can drop it again (#977).
+        await using (var cmd = DataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{Quote(schemaName)}\""))
             await cmd.ExecuteNonQueryAsync(ct);
+        _trackedSchemas.Add(schemaName);
 
         // Create per-schema data source with a SINGLE-connection pool. Default
         // MaxPoolSize=100 multiplied across ~30 per-test schema activations
@@ -192,18 +241,25 @@ public class PostgreSqlFixture : IAsyncLifetime
     /// (low-level PG ops) stay async inside.
     /// </summary>
     public IObservable<Unit> CleanData()
-        => IoPool.Unbounded.Invoke(async _ => { await CleanDataAsync(); return Unit.Default; });
+        => IoPool.Unbounded.Invoke(async ct => { await CleanDataAsync(ct); return Unit.Default; });
 
     /// <summary>
     /// Cleans all data tables for test isolation.
     /// </summary>
-    public async Task CleanDataAsync()
+    public async Task CleanDataAsync(CancellationToken ct = default)
     {
         // Release per-schema pool connections first so the DELETE statements
         // don't compete with leaked schema adapters. Async-dispose so the physical
         // connections actually return to the server (sync Dispose can leave them
         // pending → 53300: too many clients under the sharded run).
         await DisposeTrackedSchemaDataSourcesAsync();
+
+        // …and drop the schemas those data sources belonged to. The fixture created them, so
+        // the fixture removes them: this is where the #977 accumulation is stopped AT THE SOURCE
+        // rather than paid for by every later test. It is safe at exactly this point because
+        // DisposeTrackedSchemaDataSourcesAsync has already made every adapter handed out for
+        // those schemas unusable — no test can be holding a live one across a CleanData.
+        await DropTrackedSchemasAsync(ct);
 
         // 7 DELETEs in one round-trip. TRUNCATE looks tempting but is ~3× slower
         // here: tests use tiny tables (a handful of rows each), so DELETE's
@@ -221,7 +277,7 @@ public class PostgreSqlFixture : IAsyncLifetime
             DELETE FROM group_members;
             DELETE FROM node_type_permissions;
             """);
-        await cmd.ExecuteNonQueryAsync();
+        await cmd.ExecuteNonQueryAsync(ct);
 
         // Per-partition schemas (orga, orgb, testorg, …) carry their own mesh_nodes +
         // satellite tables that survive prior tests in the same collection (threads in
@@ -232,39 +288,118 @@ public class PostgreSqlFixture : IAsyncLifetime
         // and every test got slower as the suite progressed — QuerySyntaxTests measured
         // 0.12s/test early vs 2.5s/test late (20×), which is most of the full suite's
         // wall-clock. Instead: ONE catalog query resolves all (schema, data-table) pairs,
-        // then a single batched DELETE. Same tables, same isolation, O(1) catalog probing.
+        // then a batched DELETE. Same tables, same isolation, O(1) catalog probing.
         // DELETE on the tiny/empty tables is ~free — the per-schema probing was the cost.
-        var perSchemaTables = new[]
+        //
+        // 🚨 #977: the batch is CHUNKED. One command per chunk = one implicit transaction per
+        // chunk, so PostgreSQL releases the relation + index locks between chunks and the lock
+        // footprint stops being a function of how many schemas the run has accumulated. See
+        // MaxTablesPerCleanupBatch; CleanupLockFootprintTests measures both shapes.
+        var targets = await DiscoverPerSchemaCleanupTargetsAsync(ct);
+        foreach (var batch in BuildCleanupBatches(targets))
         {
-            "mesh_nodes", "threads", "activities", "user_activities", "access",
-            "annotations", "notifications", "code", "partition_objects",
-            "user_effective_permissions"
-        };
+            await using var del = DataSource.CreateCommand(batch);
+            await del.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    /// <summary>The per-partition data tables <see cref="CleanDataAsync"/> empties between tests.</summary>
+    private static readonly System.Collections.Immutable.ImmutableArray<string> PerSchemaTables =
+    [
+        "mesh_nodes", "threads", "activities", "user_activities", "access",
+        "annotations", "notifications", "code", "partition_objects",
+        "user_effective_permissions"
+    ];
+
+    /// <summary>
+    /// ONE catalog query resolving every <c>(schema, table)</c> pair the per-schema cleanup has to
+    /// empty. Ordered so the batching in <see cref="BuildCleanupBatches"/> — and therefore the lock
+    /// footprint it produces — is deterministic and measurable.
+    /// </summary>
+    public async Task<IReadOnlyList<(string Schema, string Table)>> DiscoverPerSchemaCleanupTargetsAsync(
+        CancellationToken ct = default)
+    {
         var targets = new List<(string Schema, string Table)>();
-        await using (var listTables = DataSource.CreateCommand(
+        await using var listTables = DataSource.CreateCommand(
             """
             SELECT table_schema, table_name
             FROM information_schema.tables
             WHERE table_name = ANY($1)
               AND table_schema NOT IN ('public', 'pg_catalog', 'information_schema', 'pg_toast')
               AND table_schema NOT LIKE 'pg\_%'
-            """))
+            ORDER BY table_schema, table_name
+            """);
+        listTables.Parameters.AddWithValue(PerSchemaTables.ToArray());
+        await using var rdr = await listTables.ExecuteReaderAsync(ct);
+        while (await rdr.ReadAsync(ct))
+            targets.Add((rdr.GetString(0), rdr.GetString(1)));
+        return targets;
+    }
+
+    /// <summary>
+    /// Splits <paramref name="targets"/> into DELETE batches of at most
+    /// <paramref name="maxTablesPerBatch"/> tables each. Each returned string is executed as its
+    /// OWN command — i.e. its own implicit transaction — which is what bounds the lock count
+    /// (#977). Pure and deterministic so a test can measure the footprint it produces.
+    /// </summary>
+    public static IReadOnlyList<string> BuildCleanupBatches(
+        IReadOnlyList<(string Schema, string Table)> targets,
+        int maxTablesPerBatch = MaxTablesPerCleanupBatch)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxTablesPerBatch, 1);
+        var batches = new List<string>((targets.Count + maxTablesPerBatch - 1) / maxTablesPerBatch);
+        for (var offset = 0; offset < targets.Count; offset += maxTablesPerBatch)
         {
-            listTables.Parameters.AddWithValue(perSchemaTables);
-            await using var rdr = await listTables.ExecuteReaderAsync();
-            while (await rdr.ReadAsync())
-                targets.Add((rdr.GetString(0), rdr.GetString(1)));
+            var end = Math.Min(offset + maxTablesPerBatch, targets.Count);
+            var sb = new System.Text.StringBuilder((end - offset) * 48);
+            for (var i = offset; i < end; i++)
+                sb.Append("DELETE FROM \"").Append(Quote(targets[i].Schema))
+                  .Append("\".\"").Append(Quote(targets[i].Table)).Append("\";\n");
+            batches.Add(sb.ToString());
         }
-        if (targets.Count > 0)
+        return batches;
+    }
+
+    /// <summary>
+    /// Drops every schema <see cref="CreateSchemaAdapterAsync"/> created since the last call, and
+    /// de-registers it from <c>public.searchable_schemas</c> so no cross-schema fan-out is left
+    /// pointing at a schema that no longer exists.
+    ///
+    /// <para>This is the source-side half of the #977 fix: without it the container ends a full
+    /// suite carrying every partition schema every test ever asked for, which is what made the
+    /// cleanup cost — and the cross-schema UNION fan-outs — grow all run long.</para>
+    /// </summary>
+    public async Task DropTrackedSchemasAsync(CancellationToken ct = default)
+    {
+        var schemas = new SortedSet<string>(StringComparer.Ordinal);
+        while (_trackedSchemas.TryTake(out var schema))
+            if (!UndroppableSchemas.Contains(schema))
+                schemas.Add(schema);
+        if (schemas.Count == 0)
+            return;
+
+        // De-register FIRST: a searchable_schemas row naming a dropped schema would send the
+        // cross-schema UNION into a missing relation. One tiny statement, one table, unbounded
+        // only in parameter count.
+        await using (var deregister = DataSource.CreateCommand(
+            "DELETE FROM public.searchable_schemas WHERE schema_name = ANY($1)"))
         {
-            var sb = new System.Text.StringBuilder(targets.Count * 48);
-            foreach (var (schema, table) in targets)
-                sb.Append("DELETE FROM \"").Append(schema.Replace("\"", "\"\""))
-                  .Append("\".\"").Append(table.Replace("\"", "\"\"")).Append("\";\n");
-            await using var del = DataSource.CreateCommand(sb.ToString());
-            await del.ExecuteNonQueryAsync();
+            deregister.Parameters.AddWithValue(schemas.ToArray());
+            await deregister.ExecuteNonQueryAsync(ct);
+        }
+
+        foreach (var chunk in schemas.Chunk(MaxSchemasPerDropBatch))
+        {
+            var sb = new System.Text.StringBuilder(chunk.Length * 48);
+            foreach (var schema in chunk)
+                sb.Append("DROP SCHEMA IF EXISTS \"").Append(Quote(schema)).Append("\" CASCADE;\n");
+            await using var drop = DataSource.CreateCommand(sb.ToString());
+            await drop.ExecuteNonQueryAsync(ct);
         }
     }
+
+    /// <summary>Escapes a SQL identifier for use inside double quotes.</summary>
+    private static string Quote(string identifier) => identifier.Replace("\"", "\"\"");
 }
 
 /// <summary>
