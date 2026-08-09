@@ -1,8 +1,9 @@
 ---
 Name: Executable code cells keep their Run button on file-backed meshes
-Category: What's New
+Category: Fix
 Description: Executable Code nodes no longer lose their executable flag and execution history when persisted to file, blob or git storage.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Executable code cells keep their Run button on file-backed meshes

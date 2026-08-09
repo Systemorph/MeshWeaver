@@ -1,8 +1,9 @@
 ---
 Name: Exporting a page or deck no longer requires being an admin
-Category: What's New
+Category: Fix
 Description: Export to PDF, Export to DOCX and Copy node tree now run for any signed-in user — they previously failed with an access-denied error unless you happened to be an administrator.
 Icon: Sparkle
+Order: -20260809
 ---
 
 # Exporting a page or deck no longer requires being an admin

@@ -1,8 +1,9 @@
 ---
 Name: Version numbers now count your edits — and saving nothing no longer makes a version
-Category: What's New
+Category: Fix
 Description: A node's version used to jump by unrelated amounts (3 → 47) and could climb even when nothing was edited. It is now a plain revision counter: +1 per real change, and untouched by a save that changes nothing.
 Icon: Sparkle
+Order: -20260731
 ---
 
 # Version numbers now count your edits

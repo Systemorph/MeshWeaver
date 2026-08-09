@@ -1,8 +1,9 @@
 ---
 Name: A compile problem now tells you whether it is your code or a timeout
-Category: What's New
+Category: Fix
 Description: The "this page can't be displayed" overlay now says whether the compiler rejected your code or a lookup simply timed out — and links the full compile log.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # A compile problem now tells you whether it is your code or a timeout

@@ -1,8 +1,9 @@
 ---
 Name: Local models that don't support tools now just work
-Category: What's New
+Category: Fix
 Description: Ollama/OpenAI-compatible models are checked for tool support so a completion-only model no longer errors the chat.
 Icon: Sparkle
+Order: -20260715
 ---
 
 # Local models that don't support tools now just work

@@ -1,8 +1,9 @@
 ---
 Name: A sync or install no longer reverts a type's compile state
-Category: What's New
+Category: Feature
 Description: Importing, syncing or installing a NodeType keeps whatever the mesh most recently compiled, instead of stamping an older verdict back over it.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # A sync or install no longer reverts a type's compile state

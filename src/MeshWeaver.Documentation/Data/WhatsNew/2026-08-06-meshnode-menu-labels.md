@@ -1,8 +1,9 @@
 ---
 Name: Clearer MeshNode menu labels
-Category: What's New
+Category: Fix
 Description: The mesh menu spells out Create / Import / Export MeshNode, and the AI and GitHub menu tooltips now read consistently.
 Icon: Sparkle
+Order: -20260806
 ---
 
 # Clearer MeshNode menu labels

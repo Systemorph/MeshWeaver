@@ -1,8 +1,9 @@
 ---
 Name: Reliable MCP sign-in on scaled deployments
-Category: What's New
+Category: Fix
 Description: Connecting an MCP client (Claude Code, Copilot, IDEs) now works reliably on portals running multiple replicas.
 Icon: Sparkle
+Order: -20260723
 ---
 
 # Reliable MCP sign-in on scaled deployments

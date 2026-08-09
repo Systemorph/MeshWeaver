@@ -1,8 +1,9 @@
 ---
 Name: Chat input stays typeable during replies
-Category: What's New
+Category: Fix
 Description: Fixes a Safari issue where the chat composer could stop accepting keystrokes while a reply was streaming.
 Icon: Sparkle
+Order: -20260715
 ---
 
 # Chat input stays typeable during replies

@@ -1,8 +1,9 @@
 ---
 Name: Buttons can be styled again
-Category: What's New
+Category: Fix
 Description: A button's style and class now reach the rendered control, so a page can paint its call-to-action in its own colours instead of the default accent.
 Icon: PaintBrush
+Order: -20260806
 ---
 
 # Buttons can be styled again

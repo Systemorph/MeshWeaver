@@ -1,8 +1,9 @@
 ---
 Name: Embedded sections no longer show comment controls
-Category: What's New
+Category: Fix
 Description: "@@ embeds render clean content — comment highlights, the selection Comment button, and the Add Comment footer now appear only on a node's own page."
 Icon: Sparkle
+Order: -20260719
 ---
 
 # Embedded sections no longer show comment controls
