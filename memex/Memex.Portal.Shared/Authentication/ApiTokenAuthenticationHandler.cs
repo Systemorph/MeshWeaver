@@ -104,20 +104,30 @@ public class ApiTokenAuthenticationHandler(
         // not apply for MCP requests, even though the same user logging in
         // through the browser would see them. Live mesh query, bounded so a
         // wedged data source can't slow auth.
-        try
+        //
+        // 🚨 This used to be wrapped in a bare `catch { }` "best-effort" (issue #637): a
+        // stalled role read authenticated the caller with a SILENTLY REDUCED role set, and
+        // every later request they made was refused with "Access denied" — an availability
+        // failure reported as an authorization failure, and one the caller cannot act on.
+        // The read now classifies itself, and an unavailable one takes the SAME retryable
+        // 503 path as an unavailable token validation. A resolved-but-empty set is
+        // unchanged: it means the user genuinely has no extra grants.
+        var dbRoles = await UserRoleResolver.LoadDbRolesAsync(serviceProvider, apiToken.UserId);
+        if (dbRoles.UnavailableReason is { } rolesReason)
         {
-            var dbRoles = await UserRoleResolver.LoadDbRolesAsync(serviceProvider, apiToken.UserId);
-            foreach (var role in dbRoles)
-            {
-                if (string.IsNullOrEmpty(role)) continue;
-                if (claims.Any(c => c.Type == ClaimTypes.Role && c.Value == role))
-                    continue;
-                claims.Add(new Claim(ClaimTypes.Role, role));
-            }
+            Logger.LogWarning(
+                "API token role resolution UNAVAILABLE for user {UserId} ({Reason}) — retryable infrastructure fault; answering 503 + Retry-After rather than authenticating with a silently reduced role set",
+                apiToken.UserId, rolesReason);
+            Context.Items[ValidationUnavailableItemKey] = rolesReason;
+            return AuthenticateResult.Fail("Role resolution is temporarily unavailable (retryable)");
         }
-        catch
+
+        foreach (var role in dbRoles.Value ?? Array.Empty<string>())
         {
-            // Role enrichment is best-effort; the token's own Roles still apply.
+            if (string.IsNullOrEmpty(role)) continue;
+            if (claims.Any(c => c.Type == ClaimTypes.Role && c.Value == role))
+                continue;
+            claims.Add(new Claim(ClaimTypes.Role, role));
         }
 
         var identity = new ClaimsIdentity(claims, SchemeName);

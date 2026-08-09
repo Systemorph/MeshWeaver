@@ -2572,12 +2572,60 @@ internal static class ThreadExecution
                             errorToolCalls = toolCallLog;
                             errorNodeChanges = nodeChangeLog;
                         }
+                        // 🪙 #476 — LEGIBLE PROVIDER FAILURE. When the round dies on the provider
+                        // rather than on our own code, `ex.Message` is a raw transport dump: Azure /
+                        // System.ClientModel render "Status: 429 (Too Many Requests) ErrorCode:
+                        // RateLimitReached" plus the response body plus the COMPLETE HTTP header
+                        // block. Pasting that into the cell is what #476 reports — an unreadable,
+                        // English-only blob standing in for the thread's account of why it failed.
+                        //
+                        // Same presentation/condition split as the NO_USABLE_MODEL branch above: the
+                        // classifier names the condition, the prose is built HERE from the round's own
+                        // AccessContext (explicit locale — never ambient CultureInfo, a round hops
+                        // schedulers), and the raw provider text stays on the LogError(ex, …) a few
+                        // lines up. Nothing is swallowed; the operator still sees everything.
+                        //
+                        // An unclassified exception (our bug, a tool fault) keeps reporting its own
+                        // message verbatim — that text is the diagnosis, and replacing it would be
+                        // the actual information loss.
+                        var servingModel = actualModel ?? effectiveModel ?? request.ModelName;
+                        var providerStatus = ProviderFailureClassifier.TryGetProviderStatus(ex);
+                        var providerMessage = providerStatus switch
+                        {
+                            429 => LocalizationCatalog.Get(
+                                "chat.modelRateLimited", userAccessContext?.Locale,
+                                servingModel ?? "(default)"),
+                            >= 500 and < 600 => LocalizationCatalog.Get(
+                                "chat.modelProviderError", userAccessContext?.Locale,
+                                servingModel ?? "(default)", providerStatus.Value),
+                            _ => null
+                        };
+                        if (providerMessage is not null)
+                        {
+                            // 🔎 The swap is SILENT on a healthy round (directive 2026-07-13 — an
+                            // unusable pin is not something the user can act on mid-thread), but a
+                            // FAILED round is exactly the case #476 opens with: the failure names a
+                            // model the user never picked, and nothing on screen says why it was in
+                            // play. Name it, once, on the terminal error only.
+                            if (!string.IsNullOrEmpty(substitutedFrom)
+                                && !string.IsNullOrEmpty(servingModel))
+                            {
+                                providerMessage += " " + LocalizationCatalog.Get(
+                                    "chat.modelSubstitutionNote", userAccessContext?.Locale,
+                                    substitutedFrom, servingModel);
+                            }
+                            logger.LogWarning(
+                                "[ThreadExec] PROVIDER_REFUSED threadPath={ThreadPath} responseId={ResponseId} "
+                                + "status={Status} serving={Serving} requested={Requested}",
+                                threadPath, responseMsgId, providerStatus,
+                                servingModel ?? "(default)", substitutedFrom ?? "(not substituted)");
+                        }
                         // A CLI harness that isn't logged in (e.g. Claude Code "Not logged in · Please
                         // run /login") surfaces as AuthRequiredException — render an actionable "/login"
                         // affordance instead of the cryptic "exit code 1" the SDK throws.
                         var errorText = (ex is AuthRequiredException authEx
                             ? errorTextBase + "\n\n" + authEx.ToMarkdown()
-                            : errorTextBase + $"\n\n*Error: {ex.Message}*").Trim();
+                            : errorTextBase + $"\n\n*Error: {providerMessage ?? ex.Message}*").Trim();
                         // 🚨 NO await on hub-touching observables in src/. Subscribe-
                         // continuation: push the error cell, then flip Idle, then notify.
                         // (Previous `.ToTask()` bridge would deadlock the action block —
@@ -2591,7 +2639,7 @@ internal static class ThreadExecution
                         // limit. Stamp what actually answered — and carry the requested id alongside
                         // it as RequestedModelName so the swap is visible on the failed round too.
                         var pushErrorObs = PushToResponseMessage(errorText, errorToolCalls, errorNodeChanges,
-                            request.AgentName, actualModel ?? effectiveModel ?? request.ModelName,
+                            request.AgentName, servingModel,
                             inputTokens: inputTokens, outputTokens: outputTokens,
                             totalTokens: totalTokens,
                             completedAt: DateTime.UtcNow,
@@ -2613,7 +2661,7 @@ internal static class ThreadExecution
                         // usage to the model that actually answered, not the one it asked for.
                         TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                             AgentPickerProjection.PartitionOf(threadPath),
-                            actualModel ?? effectiveModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
+                            servingModel, inputTokens, outputTokens, execLogger,
                             cacheReadTokens, cacheWriteTokens)
                         .Subscribe(
                             _ => { },
@@ -2633,9 +2681,12 @@ internal static class ThreadExecution
                             },
                             () =>
                             {
-                                // Summary invariant for the Error path — non-empty.
+                                // Summary invariant for the Error path — non-empty. #476: when the
+                                // provider is what refused, the fallback names the CLASSIFIED
+                                // condition, never the raw transport dump (which the LogError above
+                                // already carries in full).
                                 var errorSummary = string.IsNullOrEmpty(errorTextLocal)
-                                    ? $"Error: {ex.Message}"
+                                    ? providerMessage ?? $"Error: {ex.Message}"
                                     : errorTextLocal;
                                 // (RecordUsage for the errored round runs as an independent side
                                 // effect in the catch body ABOVE — not here, so a faulted cell

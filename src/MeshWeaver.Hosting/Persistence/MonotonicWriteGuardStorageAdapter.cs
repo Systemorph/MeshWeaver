@@ -33,6 +33,27 @@ namespace MeshWeaver.Hosting.Persistence;
 /// never refuse a legitimate write — it only costs one extra read, after which the mark is
 /// corrected.</para>
 ///
+/// <para>🚨 <b>The mark is CLAIMED BEFORE the row is mutated — never after (#826).</b> The filter
+/// is only sound while the mark is at-or-above every version this process has already committed.
+/// Recording it AFTER the inner write completed left a window in which the row already carried
+/// the NEW version while the mark still advertised the OLD one — and that window is not
+/// theoretical: every backend publishes <see cref="IStorageAdapter.Changes"/> from INSIDE the
+/// write (<c>InMemoryStorageAdapter.Write</c>: <c>_nodes[path] = node</c> then
+/// <c>_changes.OnNext(...)</c>), and the framework's own topology puts writers on that feed —
+/// every per-node hub reconciles its own node from it
+/// (<c>MeshDataSourceExtensions.SubscribeToOwnDeletion</c>). A stale snapshot presented in that
+/// window carries a version at-or-below the STALE mark, so it skipped verification entirely and
+/// OVERWROTE the newer row. The store was then genuinely behind, and the next write — minted one
+/// above the rolled-back row — was accepted by this guard for the perfectly good reason that its
+/// verification read confirmed the row really was older. That is the whole causal chain behind
+/// the post-recycle write-rollback flake (<c>StaleActivationSeedRollbackTest</c>:
+/// <c>Expected 2 to be greater than 7000</c>; <c>StaleActivationDurableFirstSeedTest</c>: an
+/// ACKED advance to 9000 read back as <c>1</c>). Claiming first makes the window inert: a writer
+/// that checks after our claim is verified against durable truth, and one that checks before it
+/// commits BEFORE us and is overwritten by our (newer) row. Pinned by
+/// <c>MonotonicWriteGuardWindowTest</c>. A claim left high by a write that then fails is
+/// harmless by the paragraph above — a too-high mark only costs one verification read.</para>
+///
 /// <para><b>Refuse, loudly — never throw.</b> A refusal logs at <c>Error</c> with both
 /// versions and the path, and emits the STORED (winning) node so the caller's "what is
 /// durable now" contract still holds. Throwing would turn a data-integrity save into a
@@ -137,8 +158,21 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
         });
     }
 
+    /// <summary>
+    /// Claims the path's high-water mark for <paramref name="node"/> and THEN writes it.
+    /// <para>🚨 The claim happens BEFORE <c>inner.Write</c> is subscribed — see the "claimed
+    /// before the row is mutated" note on the class. Observing only the completed write left the
+    /// mark trailing the row for the whole duration of that write (including the change-feed
+    /// fan-out it performs from inside itself), and a stale writer landing in that window skipped
+    /// verification and rolled the store back. The trailing <c>Do(Observe)</c> is retained: the
+    /// backend may return a node whose version differs from the one we handed it (a partition
+    /// adapter, a conditional upsert), and the mark must track what is actually durable.</para>
+    /// </summary>
     private IObservable<MeshNode?> WriteAndRecord(MeshNode node, JsonSerializerOptions options)
-        => inner.Write(node, options).Do(Observe);
+    {
+        Observe(node);
+        return inner.Write(node, options).Do(Observe);
+    }
 
     /// <summary>
     /// Raises the per-path high-water mark from any node this process saw as durable —

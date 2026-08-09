@@ -94,6 +94,21 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     };
 
     /// <summary>
+    /// True when <paramref name="schema"/> belongs in <c>public.searchable_schemas</c> — the SAME
+    /// predicate the discovery sync applies, exposed so the ONE place that provisions a partition
+    /// (<see cref="PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned"/>) can register
+    /// the new schema in the registry immediately instead of waiting for the throttled poll.
+    ///
+    /// <para>🚨 It must stay the same predicate, not a second copy: registering an EXCLUDED schema
+    /// (notably <c>auth</c>, the access-object mirror) would surface every access object twice in
+    /// the cross-schema UNION until the next sync deleted it again.</para>
+    /// </summary>
+    internal static bool IsSearchableSchema(string? schema)
+        => !string.IsNullOrEmpty(schema)
+           && !ExcludedSchemas.Contains(schema)
+           && !schema.EndsWith("_versions", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Syncs the searchable_schemas table by querying information_schema for
     /// schemas that contain a <c>mesh_nodes</c> table. Same SQL the legacy
     /// factory's <c>DiscoverPartitionsAsync</c> ran; inlined here so this
@@ -198,6 +213,37 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             """);
         cmd.Parameters.AddWithValue(tableName);
         cmd.Parameters.AddWithValue(schemas.ToArray());
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            present.Add(reader.GetString(0));
+        return present;
+    }
+
+    /// <summary>
+    /// The subset of <paramref name="candidates"/> that actually own <paramref name="tableName"/>.
+    ///
+    /// <para>Deliberately NOT <see cref="GetSchemasWithTableAsync"/>: that one starts from
+    /// <c>public.searchable_schemas</c> and so can only ever return REGISTERED partitions. The
+    /// fan-out's partition-pinned fast path builds a one-element schema list without consulting
+    /// that registry, so intersecting with it silently classifies a perfectly good partition as
+    /// "not access-controlled" and drops it from the union — granted cross-partition nodes vanish.
+    /// Ask about exactly the schemas in play.</para>
+    /// </summary>
+    internal async Task<IReadOnlyList<string>> GetSchemasHavingTableAsync(
+        IReadOnlyList<string> candidates, string tableName, CancellationToken ct = default)
+    {
+        if (candidates.Count == 0 || string.IsNullOrEmpty(tableName))
+            return [];
+        var present = new List<string>(candidates.Count);
+        await using var cmd = _dataSource.CreateCommand(
+            """
+            SELECT DISTINCT table_schema
+            FROM information_schema.tables
+            WHERE table_name = $1
+              AND table_schema = ANY($2)
+            """);
+        cmd.Parameters.AddWithValue(tableName);
+        cmd.Parameters.AddWithValue(candidates.ToArray());
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
             present.Add(reader.GetString(0));
@@ -550,9 +596,23 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             ? activityUserId!.ToLowerInvariant().Replace("\"", "\"\"")  // quoted-identifier escape
             : null;
 
+        // Which of THESE schemas actually carry `user_effective_permissions` — the only per-schema
+        // relation the access clause names. A schema without it (a partition provisioned by an
+        // older/foreign path, a static content import) turns the clause into a reference to a
+        // missing relation, Postgres fails to PLAN the whole UNION with 42P01, and the reader below
+        // absorbs 42P01 as "no rows" — so ONE such partition returned an empty result for every
+        // authenticated user's unscoped query. Resolved directly against the schemas in play (NOT
+        // via GetSchemasWithTableAsync, which intersects `searchable_schemas` and so would drop the
+        // pinned fast path, whose schema is never registered there).
+        var accessControlledSchemas = string.IsNullOrEmpty(userId)
+            ? null
+            : await GetSchemasHavingTableAsync(schemas, "user_effective_permissions", ct)
+                .ConfigureAwait(false);
+
         var generator = new PostgreSqlSqlGenerator();
         var (sql, parameters) = generator.GenerateCrossSchemaSelectQuery(
-            query, schemas, userId, tableName, activityUserId, contentSchemas, activityUserSchema);
+            query, schemas, userId, tableName, activityUserId, contentSchemas, activityUserSchema,
+            accessControlledSchemas);
 
         _logger?.LogInformation(
             "[CrossSchema] Satellite query: table={Table}, schemas={Count}, contentSchemas={ContentCount}, userId={User}, source={Source}",
