@@ -58,6 +58,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// <c>MeshWeaver.Hosting.Test.ActivityControlPlaneResubscribeTest</c>. This probe's job is
 /// DISCOVERY — naming a root nobody knew about — not verification.</para>
 /// </summary>
+[Collection(GcReachabilityCollection.Name)]
 public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
