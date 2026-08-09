@@ -29,7 +29,7 @@ namespace MeshWeaver.Threading.Test;
 /// </summary>
 public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string ContextPath = "User/Roland";
+    private static readonly string ContextPath = "User/Roland";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)

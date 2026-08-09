@@ -20,7 +20,7 @@ namespace MeshWeaver.ContentCollections.Indexing.Graph.Test;
 /// </summary>
 public class MeshDocumentSinkTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string Collection = TestPartition + "/MyContent";
+    private static readonly string Collection = TestPartition + "/MyContent";
 
     /// <summary>Register the Document NodeType (+ MeshDocumentSink) on the test mesh.</summary>
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
