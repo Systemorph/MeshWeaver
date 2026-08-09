@@ -595,7 +595,16 @@ public sealed class InstanceAutoRegistrationService(
         }).SelectMany(_ => sources
             .Select(source => source.Source.ListPackages(source.GitRef)
                 .Take(1)
+                // 🚨 Stamp the source name HERE, not only in the registry's HTTP merge. Source-
+                // scoped matching reads PackageManifest.Source, and until now only
+                // PluginRegistryEndpoints set it — so a REGISTRY instance, which reads its own
+                // configured sources directly with no HTTP hop, saw Source == null on every
+                // package and matched nothing. The result was a healthy deploy that installed
+                // zero plugins while reporting a green boot. The lister always knows which source
+                // it read from, so that is where the stamp belongs; an already-stamped value
+                // (arriving over the wire) is left alone.
                 .Select(packages => packages
+                    .Select(p => string.IsNullOrEmpty(p.Source) ? p with { Source = source.Name } : p)
                     .Where(p => (baseline && p.PreInstalled)
                                 || wanted.Any(w => w.Matches(p.Source ?? "", p.Id)))
                     .Select(p => new InstallCandidate(source, p))
