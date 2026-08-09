@@ -33,11 +33,12 @@ public static partial class LogLineParser
     /// <summary>How much of a normalized message survives into the fingerprint. Long messages
     /// (a serialized payload, a wall of SQL) differ in their tails far more often than in the
     /// part that identifies the fault, so the tail is deliberately not fingerprinted.</summary>
-    private const int FingerprintMessageLength = 300;
-
     /// <summary>The parsed head of a red log burst.</summary>
     /// <param name="Severity">Error or Critical.</param>
     /// <param name="Category">The .NET log category.</param>
+    /// <param name="EventId">The event id from the console header (<c>Category[0]</c>) — the log
+    /// SITE the code assigns, and the discriminator the incident identity leans on for bursts that
+    /// carry no exception or stack frame.</param>
     /// <param name="Message">The message as logged (volatile parts intact).</param>
     /// <param name="NormalizedMessage">The message with volatile parts masked.</param>
     /// <param name="ExceptionType">The exception type name, when present.</param>
