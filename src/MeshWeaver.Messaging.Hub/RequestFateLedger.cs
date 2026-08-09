@@ -33,8 +33,9 @@ namespace MeshWeaver.Messaging;
 /// instance owned by the mesh and dies with it — no static state, no <c>Clear()</c> for test
 /// isolation. It holds ONLY ids with a live <c>Observe</c> callback (tracked when the response
 /// subject is registered, untracked the moment it resolves, is cancelled, or its subscription is
-/// disposed), so its size is bounded by the number of in-flight requests, and each entry is capped
-/// at <see cref="MaxStagesPerRequest"/> stages so a delivery that bounces cannot grow it. The
+/// disposed), so its size is bounded by the number of in-flight requests, and each entry keeps at
+/// most <see cref="HeadStages"/> + <see cref="TailStages"/> stages so a delivery that bounces
+/// between hubs cannot grow it. The
 /// per-delivery cost on the message hot path is one <see cref="ConcurrentDictionary{TKey,TValue}"/>
 /// lookup that short-circuits on <see cref="ConcurrentDictionary{TKey,TValue}.IsEmpty"/>; stage
 /// strings are only formatted once a lookup has HIT, so an untracked delivery allocates nothing.</para>
@@ -42,12 +43,22 @@ namespace MeshWeaver.Messaging;
 internal sealed class RequestFateLedger
 {
     /// <summary>
-    /// Per-request stage cap. A request that legitimately completes records a handful of stages;
-    /// a delivery that bounces between hubs could otherwise append without bound while its caller
-    /// waits. Past the cap the trail keeps its HEAD (the stages that explain how the delivery
-    /// started out) and records that it was truncated — the head is what names the mechanism.
+    /// Stages kept from the START of a trail — how the delivery entered the mesh and where it was
+    /// routed. A request that legitimately completes records a handful of stages; one that bounces
+    /// between hubs could otherwise append without bound while its caller waits.
     /// </summary>
-    private const int MaxStagesPerRequest = 16;
+    private const int HeadStages = 10;
+
+    /// <summary>
+    /// Stages kept from the END of a trail.
+    ///
+    /// <para>🚨 A head-only cap would be actively harmful here: the stages that decide the VERDICT
+    /// — <c>HANDLER_EXIT</c>, <c>RESPONSE_POSTED</c>, <c>*_COMPLETED_EMPTY</c>, a fault — are always
+    /// the LAST ones, and a cross-hub request already spends ~12 stages on routing hops before a
+    /// handler is entered at all. Truncating the tail would drop exactly the evidence the trail
+    /// exists to carry, and would do it silently. So the MIDDLE is what gets suppressed.</para>
+    /// </summary>
+    private const int TailStages = 8;
 
     private readonly ConcurrentDictionary<string, RequestFate> tracked = new();
 
@@ -104,7 +115,8 @@ internal sealed class RequestFateLedger
     {
         private readonly Lock gate = new();
         private readonly long startedTicks = Stopwatch.GetTimestamp();
-        private ImmutableList<string> stages = ImmutableList<string>.Empty;
+        private ImmutableList<string> head = ImmutableList<string>.Empty;
+        private ImmutableList<string> tail = ImmutableList<string>.Empty;
         private int dropped;
 
         internal RequestFate(string requestType, Address requester, Address? target)
@@ -130,14 +142,22 @@ internal sealed class RequestFateLedger
         public void Add(string stage, Address hub)
         {
             var elapsedMs = (long)((Stopwatch.GetTimestamp() - startedTicks) * 1000.0 / Stopwatch.Frequency);
+            var entry = $"{stage}@{hub}(+{elapsedMs}ms)";
             lock (gate)
             {
-                if (stages.Count >= MaxStagesPerRequest)
+                if (head.Count < HeadStages)
                 {
-                    dropped++;
+                    head = head.Add(entry);
                     return;
                 }
-                stages = stages.Add($"{stage}@{hub}(+{elapsedMs}ms)");
+                // Sliding tail: the newest TailStages stages always survive, so the terminal
+                // evidence the verdict reads can never be the part that gets dropped.
+                tail = tail.Add(entry);
+                if (tail.Count > TailStages)
+                {
+                    tail = tail.RemoveAt(0);
+                    dropped++;
+                }
             }
         }
 
@@ -145,19 +165,23 @@ internal sealed class RequestFateLedger
         /// <returns>The trail, or a marker when no stage was ever recorded.</returns>
         public string Render()
         {
-            ImmutableList<string> snapshot;
+            ImmutableList<string> headSnapshot, tailSnapshot;
             int truncated;
             lock (gate)
             {
-                snapshot = stages;
+                headSnapshot = head;
+                tailSnapshot = tail;
                 truncated = dropped;
             }
-            if (snapshot.Count == 0)
+            if (headSnapshot.Count == 0)
                 return "<never reached any hub in this tree: posted but no RECEIVED stage was recorded>";
-            var line = string.Join(" → ", snapshot);
+            var line = string.Join(" → ", headSnapshot);
             if (truncated > 0)
-                line += $" … (+{truncated} more stage(s) suppressed)";
-            return $"{line}{Environment.NewLine}      ⇒ {Verdict(snapshot)}";
+                line += $" → …(+{truncated} middle stage(s) suppressed)…";
+            if (tailSnapshot.Count > 0)
+                line += " → " + string.Join(" → ", tailSnapshot);
+            // The verdict reads head AND tail: the terminal stages it keys on live in the tail.
+            return $"{line}{Environment.NewLine}      ⇒ {Verdict(headSnapshot.AddRange(tailSnapshot))}";
         }
 
         /// <summary>

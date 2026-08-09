@@ -198,6 +198,29 @@ Three things to know before trusting it:
 - **It cannot see a reply sent under the WRONG correlation.** That case reads as
   `HANDLER_EXIT` with no `RESPONSE_POSTED` — same as a handler that replied to nothing. If you
   suspect it, look for a spurious `RESPONSE_POSTED` on a *different* request's trail.
+- **A long trail keeps its head and its TAIL**, suppressing the middle. The terminal stages decide
+  the verdict, so they are never the part that gets dropped.
+
+### When the handler replies from work it detached
+
+`HANDLER_ENTER` / `HANDLER_EXIT` bound the **rule chain** only. The canonical mesh handlers return
+`request.Processed()` immediately and owe their reply from a composed observable they subscribed and
+let run — so for those, `HANDLER_EXIT state=Processed` tells you nothing about whether a reply is
+coming. A handler that answers in 3 s, one that faults silently, and one whose chain completes EMPTY
+all look identical from the pipeline.
+
+Only the handler can split them, so it records its own terminal arms:
+
+```csharp
+hub.NoteRequestStage(request.Id, $"CREATE_CHAIN_EMITTED mode={mode}");   // produced a result
+hub.NoteRequestStage(request.Id, $"CREATE_CHAIN_ERROR {ex.GetType().Name}");
+hub.NoteRequestStage(request.Id, "CREATE_CHAIN_COMPLETED_EMPTY …");      // ← the silent one
+```
+
+`NoteRequestStage` is a no-op unless something is awaiting that id, so it is free to call
+unconditionally. **Add the `onCompleted` arm**: a chain that completes empty posts nothing, and
+without a stage there it is indistinguishable from one that is still running. `HandleCreateNodeRequest`
+is the worked example.
 
 The same block is printed by `[STALE-CALLBACK]` (every 5 s, for callbacks older than
 `MESHWEAVER_STALE_CALLBACK_MS`, default 30 s) — that is the one that fires while the mesh is still
