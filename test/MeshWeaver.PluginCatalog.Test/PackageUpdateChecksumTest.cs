@@ -53,8 +53,14 @@ public class PackageUpdateChecksumTest(ITestOutputHelper output) : MonolithMeshT
         first.Written.Should().Be(2);
         first.Unchanged.Should().Be(0);
 
-        var aV1 = (await Read("ChecksumTest/A")).Version;
-        var bV1 = (await Read("ChecksumTest/B")).Version;
+        // 🚨 Take the baseline off the SETTLED node, not off whatever snapshot the stream happens
+        // to be replaying. GetMeshNodeStream replays its cached value, so a bare FirstAsync() right
+        // after an install can hand back the node as it was BEFORE the install's write landed. That
+        // baseline is then too low, and step 2's "must not bump" fails against the settled version —
+        // the intermittent red on this test. Waiting for the installed body makes the baseline the
+        // version the install actually produced.
+        var aV1 = (await ReadWhen("ChecksumTest/A", "# A one")).Version;
+        var bV1 = (await ReadWhen("ChecksumTest/B", "# B one")).Version;
 
         // 2) Re-install the IDENTICAL files → nothing written, no version churn.
         var second = await PackageInstaller.Install(Mesh, Manifest, Files("# A one", "# B one"), "HEAD")
@@ -69,8 +75,13 @@ public class PackageUpdateChecksumTest(ITestOutputHelper output) : MonolithMeshT
             .FirstAsync().ToTask();
         third.Written.Should().Be(1, "only the changed file should be written");
         third.Unchanged.Should().Be(1);
+
+        // Wait for the CHANGED node to land before asserting on either version. Ordering matters:
+        // once A's new body is observable the install has been applied, so B's "unchanged" is a
+        // statement about a settled mesh rather than about a snapshot that has not moved YET.
+        var aV2 = (await ReadWhen("ChecksumTest/A", "# A CHANGED")).Version;
+        Assert.True(aV2 > aV1, "the changed node must bump its version");
         (await Read("ChecksumTest/B")).Version.Should().Be(bV1, "the untouched node must not bump its version");
-        Assert.True((await Read("ChecksumTest/A")).Version > aV1, "the changed node must bump its version");
     }
 
     [Fact(Timeout = 120000)]
@@ -115,5 +126,21 @@ public class PackageUpdateChecksumTest(ITestOutputHelper output) : MonolithMeshT
     private async Task<MeshNode> Read(string path) =>
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n?.Content is not null)
+            .FirstAsync().Timeout(30.Seconds()).ToTask();
+
+    /// <summary>
+    /// The node once its body IS <paramref name="body"/> — i.e. once the install that wrote it has
+    /// actually landed.
+    ///
+    /// <para>🚨 <see cref="Read"/> is a bare <c>FirstAsync</c> on a REPLAYING stream: it returns the
+    /// currently cached snapshot, which right after an install may still be the pre-write node. Any
+    /// version captured from it is a version from before the write, and every later comparison
+    /// against it is then wrong in a way that only shows up under load. Wait for the state, then
+    /// read the version.</para>
+    /// </summary>
+    private async Task<MeshNode> ReadWhen(string path, string body) =>
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n?.Content is MeshWeaver.Markdown.MarkdownContent m
+                        && m.Content.Contains(body, System.StringComparison.Ordinal))
             .FirstAsync().Timeout(30.Seconds()).ToTask();
 }
