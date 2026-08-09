@@ -157,7 +157,7 @@ public class ScriptTemplateExecuteAccessTest(ITestOutputHelper output) : Monolit
             "the Templates grant is scoped to Templates — it must confer nothing at ROOT");
 
         // A partition the user has no business in stays closed.
-        var elsewhere = await EffectivePermissions(MonolithMeshTestBase.TestPartition);
+        var elsewhere = await EffectivePermissions(TestPartition);
         elsewhere.Should().NotHaveFlag(Permission.Read,
             "an ungranted partition must stay unreadable — the Templates grant must not widen it");
     }
