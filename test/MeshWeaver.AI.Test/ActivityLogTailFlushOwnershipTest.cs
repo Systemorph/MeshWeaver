@@ -4,8 +4,10 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Threading.Tasks;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Kernel.Hub;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -35,6 +37,24 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class ActivityLogTailFlushOwnershipTest(ITestOutputHelper output) : HubTestBase(output)
 {
+    /// <summary>
+    /// The logger publishes by posting a <c>DataChangeRequest</c> to the activity's address —
+    /// its own hub, as <c>KernelExecutor</c> does by default. Accept it and register the payload
+    /// types so the run leaves no DeliveryFailure or auto-short-name warnings behind: in
+    /// production the activity hub handles this message, and a test should not pay CI log volume
+    /// to prove otherwise.
+    /// </summary>
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration)
+            .WithTypes(
+                typeof(DataChangeRequest),
+                typeof(UpdateOptions),
+                typeof(MeshNode),
+                typeof(ActivityLog),
+                typeof(LogMessage),
+                typeof(UserInfo))
+            .WithHandler<DataChangeRequest>((_, delivery) => delivery.Processed());
+
     /// <summary>
     /// Arm the throttled tail flush, then dispose the hub the logger posts to: the pending
     /// flush must go down with it.
