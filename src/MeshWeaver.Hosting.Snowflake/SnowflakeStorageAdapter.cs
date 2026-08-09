@@ -464,7 +464,16 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => _ioPool.Invoke<MeshNode?>(async ct =>
         {
-            await WriteAsyncCore(node, options, ct).ConfigureAwait(false);
+            var applied = await WriteAsyncCore(node, options, ct).ConfigureAwait(false);
+            if (!applied)
+            {
+                // Refused by the version condition (#971): emit the STORED row — that is what the
+                // write-integrity chain merges the losing write into — and publish NOTHING, because
+                // nothing changed and a notification carrying the losing node would hand every
+                // subscriber the stale state the store just rejected.
+                var stored = await ReadAsyncCore(node.Path, options, ct).ConfigureAwait(false);
+                return stored ?? node;
+            }
             // Fire the in-process Changes feed so same-process synced-query subscribers re-emit
             // without waiting for the change-feed poller round-trip. The poller's origin-id
             // filter drops this silo's own event-log echoes, so there is no double-fire.
@@ -484,7 +493,11 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
     /// try/catch-guarded: a projection/mirror failure logs a warning but never fails the node
     /// write (mirroring PG's fail-safe trigger guards).
     /// </summary>
-    private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
+    /// <returns>
+    /// <c>true</c> when the row was written; <c>false</c> when the version-conditional upsert kept a
+    /// NEWER durable row and left everything (including the trigger-replacement steps) untouched.
+    /// </returns>
+    private async Task<bool> WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
         var ns = node.Namespace ?? "";
 
@@ -569,9 +582,30 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
             SnowflakeConnectionSource.AddParam(cmd, "id", node.Id, DbType.String);
         }
 
+        void BindNodeKeyAndVersion(DbCommand cmd)
+        {
+            BindNodeKey(cmd);
+            SnowflakeConnectionSource.AddParam(cmd, "version", node.Version, DbType.Int64);
+        }
+
         await using var connection = await _source.OpenAsync(ct).ConfigureAwait(false);
-        await UpsertAsync(connection, table, columns, BindNodeParams, BindNodeKey, capabilities, ct)
+        var applied = await UpsertAsync(
+                connection, table, columns, BindNodeParams, BindNodeKey, capabilities, ct,
+                versionConditional: true, bindKeyAndVersion: BindNodeKeyAndVersion)
             .ConfigureAwait(false);
+        if (!applied)
+        {
+            // The version condition refused the write: the durable row is newer (#971). Nothing was
+            // mutated, so none of the trigger-replacement steps below may run either — they all derive
+            // from a row that was NOT written. The caller reads durable truth back and merges into it.
+            _logger?.LogWarning(
+                "[SnowflakeStorageAdapter] write to {Path} at Version={IncomingVersion} was REFUSED by the version "
+                + "condition — the durable row is newer. MeshNode.Version is the owner's monotonic persistence "
+                + "clock, so the losing write is a stale snapshot; it is merged into durable truth by the "
+                + "write-integrity chain, never applied over it.",
+                path, node.Version);
+            return false;
+        }
 
         // ── Trigger replacement ────────────────────────────────────────────────────────────
         // PG performs the next three steps in DB triggers on mesh_nodes / access. Snowflake has
@@ -630,6 +664,8 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         {
             await RebuildProjectionGuardedAsync(connection, path, ct).ConfigureAwait(false);
         }
+
+        return true;
     }
 
     /// <summary>
@@ -645,14 +681,31 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
     /// <param name="bindKey">Binds ONLY the <c>:ns</c>/<c>:id</c> key parameters — the fallback DELETE references nothing else, and unused binds must not be sent.</param>
     /// <param name="capabilities">The capabilities snapshot for this operation.</param>
     /// <param name="ct">Cancellation token.</param>
-    private static async Task UpsertAsync(
+    /// <param name="versionConditional">
+    /// When true the upsert is CONDITIONAL on <c>version</c>: an existing row whose <c>version</c> is
+    /// strictly HIGHER than the incoming one is left untouched, and the method returns <c>false</c>
+    /// (#971). This is Snowflake's half of the cross-replica "a node's durable state never moves
+    /// backward" invariant — the in-process high-water filter in
+    /// <c>MonotonicWriteGuardStorageAdapter</c> is empty on a freshly started replica, so it cannot be
+    /// the guarantee. Passed <c>false</c> by the auth MIRROR, which is a derived projection of a row
+    /// that has already passed the gate on the way in; gating it again would strand the mirror behind
+    /// its source whenever the two carry different version lineages.
+    /// </param>
+    /// <param name="bindKeyAndVersion">
+    /// Binds <c>:ns</c>/<c>:id</c>/<c>:version</c> — the parameters the conditional fallback DELETE
+    /// references. Required when <paramref name="versionConditional"/> is true.
+    /// </param>
+    /// <returns><c>true</c> when the row was written; <c>false</c> when a newer row was kept.</returns>
+    private static async Task<bool> UpsertAsync(
         DbConnection connection,
         string table,
         IReadOnlyList<(string Column, string Expr)> columns,
         Action<DbCommand> bind,
         Action<DbCommand> bindKey,
         SnowflakeCapabilities capabilities,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool versionConditional = false,
+        Action<DbCommand>? bindKeyAndVersion = null)
     {
         if (capabilities.SupportsMerge)
         {
@@ -663,33 +716,48 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
                     .Select(c => $"{SnowflakeIdentifiers.Quote(c.Column)} = s.{SnowflakeIdentifiers.Quote(c.Column)}"));
             var insertColumns = string.Join(", ", columns.Select(c => SnowflakeIdentifiers.Quote(c.Column)));
             var insertValues = string.Join(", ", columns.Select(c => $"s.{SnowflakeIdentifiers.Quote(c.Column)}"));
+            // The version gate rides the MATCHED branch, so a newer row simply does not match and the
+            // MERGE reports zero affected rows — the Snowflake spelling of Postgres's
+            // `ON CONFLICT … DO UPDATE … WHERE target.version <= EXCLUDED.version`.
+            var matched = versionConditional
+                ? "WHEN MATCHED AND t.\"version\" <= s.\"version\" THEN UPDATE SET "
+                : "WHEN MATCHED THEN UPDATE SET ";
 
             await using var merge = connection.CreateCommand();
             merge.CommandText = $"""
                 MERGE INTO {table} AS t
                 USING (SELECT {sourceSelect}) AS s
                 ON t."namespace" = s."namespace" AND t."id" = s."id"
-                WHEN MATCHED THEN UPDATE SET {updateSet}
+                {matched}{updateSet}
                 WHEN NOT MATCHED THEN INSERT ({insertColumns}) VALUES ({insertValues})
                 """;
             bind(merge);
-            await merge.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            return;
+            return await merge.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
         }
 
+        // Emulator fallback: DELETE + INSERT on the same connection (same cap-1 write-pool slot, so
+        // the pair is effectively atomic within this silo). The version gate becomes a conditional
+        // DELETE plus a NOT-EXISTS guard on the INSERT: a newer row survives the DELETE and then
+        // blocks the INSERT, so the pair leaves durable state untouched and reports zero rows.
         await using (var delete = connection.CreateCommand())
         {
-            delete.CommandText = $"DELETE FROM {table} WHERE \"namespace\" = :ns AND \"id\" = :id";
-            bindKey(delete);
+            delete.CommandText = versionConditional
+                ? $"DELETE FROM {table} WHERE \"namespace\" = :ns AND \"id\" = :id AND \"version\" <= :version"
+                : $"DELETE FROM {table} WHERE \"namespace\" = :ns AND \"id\" = :id";
+            (versionConditional ? bindKeyAndVersion ?? bindKey : bindKey)(delete);
             await delete.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         await using var insert = connection.CreateCommand();
-        insert.CommandText =
+        var insertSelect =
             $"INSERT INTO {table} ({string.Join(", ", columns.Select(c => SnowflakeIdentifiers.Quote(c.Column)))}) " +
             $"SELECT {string.Join(", ", columns.Select(c => c.Expr))}";
+        insert.CommandText = versionConditional
+            ? insertSelect
+              + $" WHERE NOT EXISTS (SELECT 1 FROM {table} WHERE \"namespace\" = :ns AND \"id\" = :id)"
+            : insertSelect;
         bind(insert);
-        await insert.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return await insert.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
     }
 
     /// <summary>

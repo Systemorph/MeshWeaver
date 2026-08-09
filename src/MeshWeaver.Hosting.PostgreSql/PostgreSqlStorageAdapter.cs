@@ -435,7 +435,23 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => _ioPool.Invoke<MeshNode?>(async ct =>
         {
-            await WriteAsyncCore(node, options, ct).ConfigureAwait(false);
+            var applied = await WriteAsyncCore(node, options, ct).ConfigureAwait(false);
+            if (!applied)
+            {
+                // The version-conditional upsert left the row alone: it already carries a HIGHER
+                // MeshNode.Version (#971). Emit the STORED row — that is what the write-integrity
+                // chain merges the losing write into — and publish NOTHING, because nothing changed
+                // and a notification carrying the losing node would hand every subscriber the stale
+                // state the store just rejected.
+                var stored = await ReadAsyncCore(node.Path, options, ct).ConfigureAwait(false);
+                _logger?.LogWarning(
+                    "[PostgreSqlStorageAdapter] write to {Path} at Version={IncomingVersion} was REFUSED by the "
+                    + "version condition; the durable row is at Version={StoredVersion}. MeshNode.Version is the "
+                    + "owner's monotonic persistence clock, so the losing write is a stale snapshot — it is merged "
+                    + "into durable truth by the write-integrity chain, never applied over it.",
+                    node.Path, node.Version, stored?.Version);
+                return stored ?? node;
+            }
             // Fire the in-process Changes feed so same-process synced-query
             // subscribers re-emit without waiting for the PG NOTIFY round-trip.
             // PostgreSqlChangeListener still publishes for cross-process; the
@@ -495,12 +511,18 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             // there, every per-node hub and synced-query subscriber still believes it is not, and
             // nothing forces a refresh. So the committed set is ANNOUNCED on both paths.
             var committed = new HashSet<string>(StringComparer.Ordinal);
+            // Paths whose version-conditional upsert was REFUSED (#971) — the durable row already
+            // carries a higher MeshNode.Version. They are neither committed nor a failure: the batch
+            // succeeded, this node's write simply did not apply, so it must not be announced on the
+            // change feed and the caller must be handed the DURABLE row rather than the loser.
+            var refused = new List<MeshNode>();
             try
             {
                 foreach (var window in built.GroupBy(b => b.Table, StringComparer.Ordinal))
                 {
                     await using var batch = _dataSource.CreateBatch();
-                    foreach (var item in window)
+                    var items = window.ToList();
+                    foreach (var item in items)
                     {
                         var command = new NpgsqlBatchCommand(item.Sql);
                         foreach (var value in item.Parameters)
@@ -508,8 +530,13 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                         batch.BatchCommands.Add(command);
                     }
                     await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-                    foreach (var item in window)
-                        committed.Add(item.Node.Path);
+                    for (var i = 0; i < items.Count; i++)
+                    {
+                        if (batch.BatchCommands[i].Rows > 0)
+                            committed.Add(items[i].Node.Path);
+                        else
+                            refused.Add(items[i].Node);
+                    }
                 }
             }
             catch
@@ -519,7 +546,21 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             }
 
             PublishChanges(ordered, committed);
-            return ordered;
+            if (refused.Count == 0)
+                return ordered;
+
+            _logger?.LogWarning(
+                "[PostgreSqlStorageAdapter] {Count} node(s) in a batch write were REFUSED by the version "
+                + "condition — the durable rows are newer: {Paths}. The stored rows are returned so the "
+                + "write-integrity chain merges into durable truth instead of overwriting it.",
+                refused.Count, string.Join(", ", refused.Select(n => $"{n.Path}@v{n.Version}")));
+
+            // Hand back durable truth for the refused paths, in the caller's original order.
+            var stored = new Dictionary<string, MeshNode>(StringComparer.Ordinal);
+            await foreach (var durable in ReadManyAsyncCore(
+                               [.. refused.Select(n => n.Path)], options, ct).ConfigureAwait(false))
+                stored[durable.Path] = durable;
+            return [.. ordered.Select(n => stored.TryGetValue(n.Path, out var d) ? d : n)];
         });
     }
 
@@ -540,13 +581,18 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         }
     }
 
-    private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
+    /// <summary>
+    /// Runs the one-node upsert and reports whether it APPLIED. The upsert is version-conditional
+    /// (see <see cref="BuildUpsertAsync"/>), so a row count of zero is not an error — it is the store
+    /// refusing a write whose <see cref="MeshNode.Version"/> is below the durable row's (#971).
+    /// </summary>
+    private async Task<bool> WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
         var (sql, parameters) = await BuildUpsertAsync(node, options).ConfigureAwait(false);
         await using var cmd = _dataSource.CreateCommand(sql);
         foreach (var value in parameters)
             cmd.Parameters.AddWithValue(value);
-        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
     }
 
     /// <summary>
@@ -588,9 +634,19 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         var excludeInsertCol = writeSync ? ", exclude_from_context" : "";
         var excludeInsertVal = writeSync ? ", $20" : "";
         var excludeUpdate = writeSync ? ",\n                exclude_from_context = EXCLUDED.exclude_from_context" : "";
+        // 🚨 `AS target` + the trailing WHERE make this a version-CONDITIONAL upsert (#971): the row is
+        // left untouched when it already carries a HIGHER MeshNode.Version than the incoming node.
+        // MeshNode.Version is the owner's forward-only revision counter, so a regressing write is a
+        // stale snapshot about to destroy acknowledged data — and this predicate is the ONLY thing that
+        // stops it cross-replica. The in-process high-water filter in MonotonicWriteGuardStorageAdapter
+        // is empty on a freshly started pod, so that pod's FIRST write to a path used to be guarded by
+        // nothing at all: not the empty mark, not the (previously unconditional) UPDATE. Equal versions
+        // still apply — re-persisting an unchanged node is a legitimate, common shape. The alias is
+        // required: inside ON CONFLICT DO UPDATE the target row is referenced by its range-table name,
+        // and `{table}` is schema-qualified.
         var sql =
             $"""
-            INSERT INTO {table} (namespace, id, name, description, node_type, category, icon, display_order,
+            INSERT INTO {table} AS target (namespace, id, name, description, node_type, category, icon, display_order,
                                     last_modified, version, state, content, desired_id, embedding, main_node{syncInsertCol}{authorInsertCol}{excludeInsertCol})
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15{syncInsertVal}{authorInsertVal}{excludeInsertVal})
             ON CONFLICT (namespace, id) DO UPDATE SET
@@ -607,6 +663,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 desired_id = EXCLUDED.desired_id,
                 embedding = EXCLUDED.embedding,
                 main_node = EXCLUDED.main_node{syncUpdate}{authorUpdate}{excludeUpdate}
+            WHERE target.version <= EXCLUDED.version
             """;
 
         var parameters = new List<object>(20)
