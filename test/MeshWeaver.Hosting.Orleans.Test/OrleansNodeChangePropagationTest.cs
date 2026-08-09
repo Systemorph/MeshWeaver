@@ -107,125 +107,125 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         var siloHub = ((InProcessSiloHandle)Fixture.Cluster.Silos[0]).SiloHost.Services
             .GetRequiredService<IMessageHub>();
         Fixture.ChatFactory.SetInner(new NodeChangeTestChatClientFactory(siloHub));
-    var client = GetClient();
+        var client = GetClient();
 
-    // 1. Create thread Ã¢â‚¬â€ exactly like ThreadChatView.SendMessageAsync does
-    var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "NodeChange propagation test", "TestUser");
-    var threadPath = await CreateNode(client, threadNode, "TestUser");
-    Output.WriteLine($"Thread created: {threadPath}");
+        // 1. Create thread Ã¢â‚¬â€ exactly like ThreadChatView.SendMessageAsync does
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "NodeChange propagation test", "TestUser");
+        var threadPath = await CreateNode(client, threadNode, "TestUser");
+        Output.WriteLine($"Thread created: {threadPath}");
 
-    // 2. Messages observed reactively after submit (live replaying stream).
+        // 2. Messages observed reactively after submit (live replaying stream).
 
-    // 3. Submit message Ã¢â‚¬â€ triggers the ToolCallDelegatingChatClient which:
-    //    Turn 1: calls Create (creates a Markdown node)
-    //    Turn 2: calls delegate_to_agent (Executor)
-    //    Turn 3: returns summary text after delegation completes
-    Output.WriteLine("Posting ThreadInput.AppendUserInput (Create + Delegate chain)...");
-    client.SubmitMessage(
-        threadPath,
-        "Create a doc and delegate updates to Executor",
-        contextPath: "TestUser");
-        Output.WriteLine("ThreadInput.AppendUserInput succeeded Ã¢â‚¬â€ submission queued");
+        // 3. Submit message Ã¢â‚¬â€ triggers the ToolCallDelegatingChatClient which:
+        //    Turn 1: calls Create (creates a Markdown node)
+        //    Turn 2: calls delegate_to_agent (Executor)
+        //    Turn 3: returns summary text after delegation completes
+        Output.WriteLine("Posting ThreadInput.AppendUserInput (Create + Delegate chain)...");
+        client.SubmitMessage(
+            threadPath,
+            "Create a doc and delegate updates to Executor",
+            contextPath: "TestUser");
+            Output.WriteLine("ThreadInput.AppendUserInput succeeded Ã¢â‚¬â€ submission queued");
 
-    // 4. Wait for message IDs (live replaying stream — observe after submit)
-    var msgIds = await ObserveThreadMessages(client, threadPath)
-        .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
-    msgIds.Should().HaveCount(2);
-    Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
+        // 4. Wait for message IDs (live replaying stream — observe after submit)
+        var msgIds = await ObserveThreadMessages(client, threadPath)
+            .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
+        msgIds.Should().HaveCount(2);
+        Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
 
-    // 5. Wait for execution to complete Ã¢â‚¬â€ poll response message
-    //    If the delegation chain deadlocks, this times out.
-    var responsePath = $"{threadPath}/{msgIds[1]}";
-    // Wait until the response cell has tool calls AND text AND the propagated
-    // node change. UpdatedNodes is populated by SEPARATE async writes from the
-    // terminal-text write: the sub-thread's Patch reaches the parent via
-    // client.ForwardNodeChange (ThreadExecution.cs:915), which can fire AFTER
-    // the snapshot that first satisfies ToolCalls+Text (see the
-    // "UpdateDelegationStatus can still fire after the await foreach exits"
-    // note at ThreadExecution.cs:1361). Waiting only on ToolCalls+Text and then
-    // asserting UpdatedNodes on that captured snapshot races the propagation and
-    // intermittently observes an empty list — so wait on the actual asserted
-    // state (the doc change present) instead of a proxy.
-    //
-    // Same reasoning applies to the delegation's DelegationPath: it is stamped onto the
-    // delegate_to tool-call entry by the asynchronous Dispatched event (AgentChatClient
-    // delegation lifecycle) and re-persisted via PushToResponseMessage's MergeToolCallEntries,
-    // which can land in a LATER write than the doc-change propagation. Asserting it on the
-    // snapshot that merely satisfies UpdatedNodes races that stamp and intermittently reads a
-    // null path (the Delegation_NodeChanges_PropagateFromSubThread red). Wait on the actual
-    // asserted state — the delegate entry carrying its sub-thread path — not a proxy.
-    var responseMsg = await GetContent<ThreadMessage>(client, responsePath)
-        .Should().Within(45.Seconds()).Match(m =>
-            m?.ToolCalls is { Count: >= 2 }
-            && !string.IsNullOrEmpty(m.Text)
-            && m.UpdatedNodes.Any(e => e.Path.Contains("test-doc-nodechange"))
-            && m.ToolCalls.Any(t => t.Name?.Contains("delegate") == true
-                && !string.IsNullOrEmpty(t.DelegationPath)));
-    Output.WriteLine($"Response: text len={responseMsg!.Text?.Length ?? 0}, toolCalls={responseMsg.ToolCalls.Count}, updatedNodes={responseMsg.UpdatedNodes.Count}");
+        // 5. Wait for execution to complete Ã¢â‚¬â€ poll response message
+        //    If the delegation chain deadlocks, this times out.
+        var responsePath = $"{threadPath}/{msgIds[1]}";
+        // Wait until the response cell has tool calls AND text AND the propagated
+        // node change. UpdatedNodes is populated by SEPARATE async writes from the
+        // terminal-text write: the sub-thread's Patch reaches the parent via
+        // client.ForwardNodeChange (ThreadExecution.cs:915), which can fire AFTER
+        // the snapshot that first satisfies ToolCalls+Text (see the
+        // "UpdateDelegationStatus can still fire after the await foreach exits"
+        // note at ThreadExecution.cs:1361). Waiting only on ToolCalls+Text and then
+        // asserting UpdatedNodes on that captured snapshot races the propagation and
+        // intermittently observes an empty list — so wait on the actual asserted
+        // state (the doc change present) instead of a proxy.
+        //
+        // Same reasoning applies to the delegation's DelegationPath: it is stamped onto the
+        // delegate_to tool-call entry by the asynchronous Dispatched event (AgentChatClient
+        // delegation lifecycle) and re-persisted via PushToResponseMessage's MergeToolCallEntries,
+        // which can land in a LATER write than the doc-change propagation. Asserting it on the
+        // snapshot that merely satisfies UpdatedNodes races that stamp and intermittently reads a
+        // null path (the Delegation_NodeChanges_PropagateFromSubThread red). Wait on the actual
+        // asserted state — the delegate entry carrying its sub-thread path — not a proxy.
+        var responseMsg = await GetContent<ThreadMessage>(client, responsePath)
+            .Should().Within(45.Seconds()).Match(m =>
+                m?.ToolCalls is { Count: >= 2 }
+                && !string.IsNullOrEmpty(m.Text)
+                && m.UpdatedNodes.Any(e => e.Path.Contains("test-doc-nodechange"))
+                && m.ToolCalls.Any(t => t.Name?.Contains("delegate") == true
+                    && !string.IsNullOrEmpty(t.DelegationPath)));
+        Output.WriteLine($"Response: text len={responseMsg!.Text?.Length ?? 0}, toolCalls={responseMsg.ToolCalls.Count}, updatedNodes={responseMsg.UpdatedNodes.Count}");
 
-    // 6. Verify response message has tool calls
-    responseMsg.Should().NotBeNull("response message should exist after execution");
-    responseMsg!.ToolCalls.Should().NotBeEmpty("agent should have made tool calls");
+        // 6. Verify response message has tool calls
+        responseMsg.Should().NotBeNull("response message should exist after execution");
+        responseMsg!.ToolCalls.Should().NotBeEmpty("agent should have made tool calls");
 
-    var createCall = responseMsg.ToolCalls.FirstOrDefault(t => t.Name == "Create");
-    createCall.Should().NotBeNull("agent should have called Create tool");
-    createCall!.IsSuccess.Should().BeTrue("Create tool should succeed");
-    Output.WriteLine($"Create tool call: success={createCall.IsSuccess}, args={createCall.Arguments?[..Math.Min(60, createCall.Arguments?.Length ?? 0)]}");
+        var createCall = responseMsg.ToolCalls.FirstOrDefault(t => t.Name == "Create");
+        createCall.Should().NotBeNull("agent should have called Create tool");
+        createCall!.IsSuccess.Should().BeTrue("Create tool should succeed");
+        Output.WriteLine($"Create tool call: success={createCall.IsSuccess}, args={createCall.Arguments?[..Math.Min(60, createCall.Arguments?.Length ?? 0)]}");
 
-    var delegateCall = responseMsg.ToolCalls.FirstOrDefault(t => t.Name?.Contains("delegate") == true);
-    delegateCall.Should().NotBeNull("agent should have called delegate_to_agent");
-    delegateCall!.DelegationPath.Should().NotBeNullOrEmpty("delegation should have a sub-thread path");
-    Output.WriteLine($"Delegation: path={delegateCall.DelegationPath}, success={delegateCall.IsSuccess}");
+        var delegateCall = responseMsg.ToolCalls.FirstOrDefault(t => t.Name?.Contains("delegate") == true);
+        delegateCall.Should().NotBeNull("agent should have called delegate_to_agent");
+        delegateCall!.DelegationPath.Should().NotBeNullOrEmpty("delegation should have a sub-thread path");
+        Output.WriteLine($"Delegation: path={delegateCall.DelegationPath}, success={delegateCall.IsSuccess}");
 
-    // 7. Verify the Markdown node was created by the Create tool.
-    // Use the silo's workspace-side MeshNodeStream (NOT Query) — per
-    // `feedback_cqrs_no_query_for_content.md`: Query is eventually-
-    // consistent against an in-memory index that's separate from the
-    // storage adapter's commit. After 27 in-flight DataChangeRequests
-    // stack up on the response message hub during delegation streaming,
-    // the index update can lag past the 10 s budget — the storage value
-    // is already there but the query stream hasn't emitted Added yet.
-    // GetMeshNodeStream reads the authoritative per-node stream directly.
-    var siloWorkspace = siloHub.GetWorkspace();
-    var createdNode = await siloWorkspace
-        .GetMeshNodeStream("TestUser/test-doc-nodechange")
-        .Should().Within(10.Seconds()).Match(n => n is not null);
-    createdNode.Should().NotBeNull("Create tool should have created the Markdown node");
-    Output.WriteLine($"Created node: {createdNode.Path}, name={createdNode.Name}");
+        // 7. Verify the Markdown node was created by the Create tool.
+        // Use the silo's workspace-side MeshNodeStream (NOT Query) — per
+        // `feedback_cqrs_no_query_for_content.md`: Query is eventually-
+        // consistent against an in-memory index that's separate from the
+        // storage adapter's commit. After 27 in-flight DataChangeRequests
+        // stack up on the response message hub during delegation streaming,
+        // the index update can lag past the 10 s budget — the storage value
+        // is already there but the query stream hasn't emitted Added yet.
+        // GetMeshNodeStream reads the authoritative per-node stream directly.
+        var siloWorkspace = siloHub.GetWorkspace();
+        var createdNode = await siloWorkspace
+            .GetMeshNodeStream("TestUser/test-doc-nodechange")
+            .Should().Within(10.Seconds()).Match(n => n is not null);
+        createdNode.Should().NotBeNull("Create tool should have created the Markdown node");
+        Output.WriteLine($"Created node: {createdNode.Path}, name={createdNode.Name}");
 
-    // 8. Verify sub-thread exists and completed
-    var subThreadPath = delegateCall.DelegationPath!;
-    var subThread = await GetContent<MeshThread>(client, subThreadPath)
-        .Should().Within(45.Seconds()).Match(t => (t?.Messages.Count ?? 0) >= 2);
-    subThread.Should().NotBeNull("sub-thread should exist");
-    subThread!.Messages.Should().HaveCount(2, "sub-thread should have user + response messages");
-    Output.WriteLine($"Sub-thread: {subThreadPath}, messages={subThread.Messages.Count}");
+        // 8. Verify sub-thread exists and completed
+        var subThreadPath = delegateCall.DelegationPath!;
+        var subThread = await GetContent<MeshThread>(client, subThreadPath)
+            .Should().Within(45.Seconds()).Match(t => (t?.Messages.Count ?? 0) >= 2);
+        subThread.Should().NotBeNull("sub-thread should exist");
+        subThread!.Messages.Should().HaveCount(2, "sub-thread should have user + response messages");
+        Output.WriteLine($"Sub-thread: {subThreadPath}, messages={subThread.Messages.Count}");
 
-    // 9. Verify sub-thread response has Patch tool call
-    var subResponsePath = $"{subThreadPath}/{subThread.Messages[1]}";
-    var subResponseMsg = await GetContent<ThreadMessage>(client, subResponsePath)
-        .Should().Within(45.Seconds()).Match(m => m?.ToolCalls is { Count: > 0 });
-    subResponseMsg.Should().NotBeNull("sub-thread response should exist");
-    var patchCall = subResponseMsg!.ToolCalls.FirstOrDefault(t => t.Name == "Patch");
-    patchCall.Should().NotBeNull("sub-agent should have called Patch tool");
-    Output.WriteLine($"Sub-thread Patch: success={patchCall!.IsSuccess}, args={patchCall.Arguments?[..Math.Min(60, patchCall.Arguments?.Length ?? 0)]}");
+        // 9. Verify sub-thread response has Patch tool call
+        var subResponsePath = $"{subThreadPath}/{subThread.Messages[1]}";
+        var subResponseMsg = await GetContent<ThreadMessage>(client, subResponsePath)
+            .Should().Within(45.Seconds()).Match(m => m?.ToolCalls is { Count: > 0 });
+        subResponseMsg.Should().NotBeNull("sub-thread response should exist");
+        var patchCall = subResponseMsg!.ToolCalls.FirstOrDefault(t => t.Name == "Patch");
+        patchCall.Should().NotBeNull("sub-agent should have called Patch tool");
+        Output.WriteLine($"Sub-thread Patch: success={patchCall!.IsSuccess}, args={patchCall.Arguments?[..Math.Min(60, patchCall.Arguments?.Length ?? 0)]}");
 
-    // 10. Verify NodeChangeEntry propagated to parent response
-    responseMsg.UpdatedNodes.Should().NotBeEmpty(
-        "parent response should have aggregated UpdatedNodes from both Create and sub-thread Patch");
-    Output.WriteLine($"UpdatedNodes on parent response: {responseMsg.UpdatedNodes.Count} entries");
-    foreach (var entry in responseMsg.UpdatedNodes)
-        Output.WriteLine($"  {entry.Operation}: {entry.Path} v{entry.VersionBefore}Ã¢â€ â€™v{entry.VersionAfter}");
+        // 10. Verify NodeChangeEntry propagated to parent response
+        responseMsg.UpdatedNodes.Should().NotBeEmpty(
+            "parent response should have aggregated UpdatedNodes from both Create and sub-thread Patch");
+        Output.WriteLine($"UpdatedNodes on parent response: {responseMsg.UpdatedNodes.Count} entries");
+        foreach (var entry in responseMsg.UpdatedNodes)
+            Output.WriteLine($"  {entry.Operation}: {entry.Path} v{entry.VersionBefore}Ã¢â€ â€™v{entry.VersionAfter}");
 
-    // The same node (test-doc-nodechange) was Created by parent and Patched by sub-thread.
-    // Aggregation should give: min(VersionBefore), max(VersionAfter)
-    var docChanges = responseMsg.UpdatedNodes.Where(e => e.Path.Contains("test-doc-nodechange")).ToList();
-    docChanges.Should().ContainSingle(
-        "changes to same node should be aggregated into one entry");
-    var docChange = docChanges[0];
-    (docChange.VersionAfter ?? 0).Should().BeGreaterThan(docChange.VersionBefore ?? 0,
-        "aggregated version should show progression from create to patch");
-    Output.WriteLine($"Aggregated: {docChange.Path} {docChange.Operation} v{docChange.VersionBefore}Ã¢â€ â€™v{docChange.VersionAfter}");
+        // The same node (test-doc-nodechange) was Created by parent and Patched by sub-thread.
+        // Aggregation should give: min(VersionBefore), max(VersionAfter)
+        var docChanges = responseMsg.UpdatedNodes.Where(e => e.Path.Contains("test-doc-nodechange")).ToList();
+        docChanges.Should().ContainSingle(
+            "changes to same node should be aggregated into one entry");
+        var docChange = docChanges[0];
+        (docChange.VersionAfter ?? 0).Should().BeGreaterThan(docChange.VersionBefore ?? 0,
+            "aggregated version should show progression from create to patch");
+        Output.WriteLine($"Aggregated: {docChange.Path} {docChange.Operation} v{docChange.VersionBefore}Ã¢â€ â€™v{docChange.VersionAfter}");
     }
 
     // Resubmit_AfterExecution_DoesNotDeadlock was split out into its own class
