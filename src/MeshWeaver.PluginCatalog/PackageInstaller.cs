@@ -1342,6 +1342,17 @@ public static class PackageInstaller
                     // is-invisible incident) until someone manually recycles it. Dispose is the
                     // recycle idiom (RecycleLayoutArea): fire-and-forget, next access re-activates
                     // with the final type. Only when the placeholder dance actually ran.
+                    //
+                    // 🚨 This recycle is NECESSARY but was not SUFFICIENT: the identical symptom
+                    // recurred 2026-08-09 because PathResolutionService PINNED a fabricated
+                    // partition-root placeholder (no NodeType → the root's hub binds the mesh
+                    // DEFAULT configuration), so every re-activation after this Dispose re-read
+                    // the same fabrication. Partition provisioning runs BEFORE the root write, so
+                    // any routed touch inside that window fabricated it. Fixed at the source —
+                    // synthesized resolutions are never cached, and a fill that lands after its
+                    // own invalidation is discarded (PathResolutionCachePoisonTest). If this
+                    // symptom ever reappears, check BOTH: is the hub recycled, and is the
+                    // resolution for the bare root path serving a real node?
                     .Select(rest =>
                     {
                         if (placeholderRoot is not null && root is not null)
