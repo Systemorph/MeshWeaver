@@ -131,32 +131,53 @@ public class AutoRouterDispatchTest(ITestOutputHelper output) : AITestBase(outpu
     }
 
     /// <summary>
-    /// The other half of the same contract, and the reason coldness above is a CHOICE rather than
-    /// luck: the very same resolver becomes readable the moment its owner asks it to. Warming is an
-    /// explicit act — <see cref="ChatClientCredentialResolver.EnsureSubscription"/> — never a side
-    /// effect of a lookup, which is what let a background emission end the pre-warm window between two
-    /// adjacent assertions.
+    /// 🔒 What makes the cold-catalog test above a CHOICE rather than luck, pinned without a sleep and
+    /// without a timing window: a resolver warms when its OWNER asks it to, never as a side effect of
+    /// being read.
+    ///
+    /// <para>The proof is a positive signal, not an absence: warm the mesh's SHARED resolver and wait
+    /// until the catalog is demonstrably readable through it. At that instant the private resolver —
+    /// which has been read repeatedly and never asked to subscribe — must STILL read empty. Against
+    /// the previous behaviour (<c>ReadSnapshot</c> opening the subscription on first read) this fails
+    /// deterministically: the private resolver would have been warming since its first read and would
+    /// be readable by the time the shared one is.</para>
+    ///
+    /// <para>Then one explicit <see cref="ChatClientCredentialResolver.EnsureSubscription"/> makes it
+    /// readable — so the pre-warm window is a state the owner holds, not one it is stuck in.</para>
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task TheTestOwnsTheWarmUp_ColdUntilItAsks()
+    public async Task ReadingNeverWarms_OnlyTheOwnerDoes()
     {
-        using var resolver = new ChatClientCredentialResolver(Mesh);
+        using var mine = new ChatClientCredentialResolver(Mesh);
 
-        // Reading — repeatedly, and every shape of read — cannot warm it.
+        // Every shape of read, several times over — none of them may subscribe.
         for (var i = 0; i < 5; i++)
         {
-            resolver.ReadTierCandidates().Should().BeEmpty();
-            resolver.ReadTiers().Should().BeEmpty();
-            resolver.ResolveDefaultModelId().Should().BeNull();
-            resolver.HasReadableCatalog.Should().BeFalse();
+            mine.ReadTierCandidates().Should().BeEmpty();
+            mine.ReadTiers().Should().BeEmpty();
+            mine.ResolveDefaultModelId().Should().BeNull();
+            mine.HasReadableCatalog.Should().BeFalse();
         }
 
-        // …and one explicit ask makes it readable: the shipped router is in the live catalog.
-        resolver.EnsureSubscription();
+        // The catalog IS readable — proven through a resolver whose owner DID ask.
+        var shared = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        shared.EnsureSubscription();
         await Observable.Interval(TimeSpan.FromMilliseconds(50))
-            .Select(_ => resolver.ReadTierCandidates())
+            .Select(_ => shared.ReadTierCandidates())
             .Should().Within(30.Seconds()).Match(c => c.Any(m => m.IsRouter));
-        resolver.HasReadableCatalog.Should().BeTrue();
+
+        // …and mine is still cold at that same moment: reads did not warm it, and nothing else holds it.
+        mine.ReadTierCandidates().Should().BeEmpty(
+            "the catalog is readable — so an unasked resolver reading empty can only mean reads do "
+            + "not subscribe; this is the assertion that fails against warm-on-read");
+        mine.HasReadableCatalog.Should().BeFalse();
+
+        // One explicit ask, and the same instance warms.
+        mine.EnsureSubscription();
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .Select(_ => mine.ReadTierCandidates())
+            .Should().Within(30.Seconds()).Match(c => c.Any(m => m.IsRouter));
+        mine.HasReadableCatalog.Should().BeTrue();
     }
 
     /// <summary>
