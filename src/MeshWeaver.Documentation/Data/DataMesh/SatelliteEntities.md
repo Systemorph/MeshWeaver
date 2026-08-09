@@ -83,7 +83,7 @@ Each satellite entity links back to its parent via the `MainNode` property, whic
 var threadNode = new MeshNode(threadId, $"{contextPath}/_Thread")
 {
     NodeType = "Thread",
-    MainNode = contextPath,  // e.g. "Acme/AiConsulting" — the real entity
+    MainNode = contextPath,  // e.g. "ACME/AiConsulting" — the real entity
     Content = new Thread()
 };
 
@@ -93,7 +93,7 @@ var threadNode = new MeshNode(threadId, $"{contextPath}/_Thread")
     NodeType = "Thread",
     Content = new Thread()
 };
-// MainNode defaults to "Acme/AiConsulting/_Thread/threadId" — not a real entity
+// MainNode defaults to "ACME/AiConsulting/_Thread/threadId" — not a real entity
 ```
 
 # Sub-Namespace Conventions
