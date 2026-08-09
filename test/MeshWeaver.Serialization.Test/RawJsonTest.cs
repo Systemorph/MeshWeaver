@@ -69,7 +69,7 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
-    /// Regression repro for the 2026-06-23 atioz restart loop: a large opaque <see cref="RawJson"/>
+    /// Regression repro for the 2026-06-23 prod restart loop: a large opaque <see cref="RawJson"/>
     /// payload (a mesh-wide AI search result is exactly this shape) is read on every cross-grain
     /// Orleans deep-copy of the delivery. The old converter inflated it into a full mutable
     /// <c>JsonNode</c> DOM (one heap object per array element) and re-serialized it, producing a Gen0
@@ -109,7 +109,7 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         // copies the slice out once (~1x payload); the old JsonNode.Parse(...).ToJsonString() allocated
         // many multiples. 5x leaves head-room for the new path while still failing the old one.
         allocated.Should().BeLessThan((long)rawBytes * 5,
-            "RawJsonConverter.Read must capture the raw slice, not build a JsonNode DOM (the atioz OOM restart loop)");
+            "RawJsonConverter.Read must capture the raw slice, not build a JsonNode DOM (the prod OOM restart loop)");
     }
 
     [Fact]

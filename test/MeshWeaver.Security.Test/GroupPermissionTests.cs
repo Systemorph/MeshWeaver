@@ -61,8 +61,8 @@ public class GroupPermissionTests(ITestOutputHelper output) : MonolithMeshTestBa
         // The group + its membership live under one root; the grant lives under a DIFFERENT root.
         // The group set is resolved GLOBALLY, so the grant still reaches the member.
         await MeshService.CreateNode(
-            AssignmentNodeFactory.UserRole("PartnerRe/Cohort", "Viewer", "Course")).Should().Emit();
-        await MeshService.CreateNode(Membership("carol", "PartnerRe/Cohort")).Should().Emit();
+            AssignmentNodeFactory.UserRole("Acme/Cohort", "Viewer", "Course")).Should().Emit();
+        await MeshService.CreateNode(Membership("carol", "Acme/Cohort")).Should().Emit();
 
         await Mesh.GetEffectivePermissions("Course/Module", "carol")
             .Should().Match(p => p.HasFlag(Permission.Read));

@@ -44,10 +44,10 @@ spec:
   # For AGIC use: ingressClassName: azure-application-gateway
   tls:
     - hosts:
-        - memex.systemorph.com
+        - portal.example.com
       secretName: memex-tls
   rules:
-    - host: memex.systemorph.com
+    - host: portal.example.com
       http:
         paths:
           - path: /

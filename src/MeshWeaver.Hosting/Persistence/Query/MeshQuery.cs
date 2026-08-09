@@ -605,7 +605,7 @@ public class MeshQuery : IMeshQueryCore
                     // early-disposed inner chain) used to starve the gate FOREVER: the
                     // consumer's Take(1)/FirstAsync never fired and the caller hung until
                     // its transport timeout (prod: every real-user unpinned search on
-                    // atioz hung 300s — DB idle, no error anywhere). The contract is
+                    // prod hung 300s — DB idle, no error anywhere). The contract is
                     // documented at every provider ("returning Observable.Empty would
                     // hang the consumer") — ENFORCE it here: count the silent completion
                     // as an empty Initial so the merge proceeds, and log LOUDLY naming

@@ -11,7 +11,7 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 
 | Route | Target | How | Doc |
 |---|---|---|---|
-| **AKS** | Shared cluster `memexaks-cluster` — the `memex` portal namespace | Build images → `az aks command invoke` `kubectl set image` + rollout | [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
+| **AKS** | Shared cluster `<aks-cluster>` — the `memex` portal namespace | Build images → `az aks command invoke` `kubectl set image` + rollout | [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
 | **Azure Container Apps** | .NET Aspire `test` / `prod` modes (ACA, Sweden Central) | `tools/deploy.sh prod\|test` (wraps `aspire deploy` + migration-exit + db-version gate) | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
 
 **Which doc do I need?**
@@ -26,7 +26,7 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 | Understand the private-AKS-cluster architecture & operations behind the shared portal | [MemexCloudDeployment.md](/Doc/Architecture/MemexCloudDeployment) |
 | Add a **new tenant environment** on the existing shared AKS platform | [OnboardingNewEnvironment.md](/Doc/Architecture/OnboardingNewEnvironment) |
 | Run a **prod-like memex locally on a Mac** (Colima k3s, arm64) | [LocalColimaMac.md](/Doc/Architecture/LocalColimaMac) |
-| Instance-specific configuration options (`memex.systemorph.com`) | [DeploymentOptions.md](/Doc/Architecture/DeploymentOptions) |
+| Instance-specific configuration options (`portal.example.com`) | [DeploymentOptions.md](/Doc/Architecture/DeploymentOptions) |
 | Reclaim space — delete old ACR images / prune local Docker, safely | [ImageCleanup.md](/Doc/Architecture/ImageCleanup) |
 | Turn production errors into tickets automatically — deploy the red-log watcher, route incidents to repositories, or work out why nothing is being reported | [LogWatchTriage.md](/Doc/Architecture/LogWatchTriage) |
 

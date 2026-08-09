@@ -9,7 +9,7 @@ Category: Architecture
 
 This guide explains how to stand up the Memex portal on a **private** Azure Kubernetes Service cluster — with everything except the portal itself kept off the public internet. It covers what runs where, how each layer is provisioned, and how to operate it in production.
 
-> **Conventions.** Examples use placeholder names — domain `memex.systemorph.com`, registry `meshweaver`, resource group `memex-aks-rg`. Substitute your own values. **Sensitive values** (IP addresses, tenant/app GUIDs, passwords, client secrets) appear as `<placeholders>`; never commit real ones — keep them in Key Vault.
+> **Conventions.** Examples use placeholder names — domain `portal.example.com`, registry `meshweaver`, resource group `<aks-resource-group>`. Substitute your own values. **Sensitive values** (IP addresses, tenant/app GUIDs, passwords, client secrets) appear as `<placeholders>`; never commit real ones — keep them in Key Vault.
 >
 > The exact, ordered command sequence lives in `deploy/aks/DEPLOY-RUNBOOK.md` (in the repository). This document is the architecture and operations layer around it.
 

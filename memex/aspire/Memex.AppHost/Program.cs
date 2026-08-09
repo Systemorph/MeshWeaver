@@ -246,7 +246,7 @@ var portal = builder
     // Static-repo → DB sync: materialize the embedded docs, built-in agents, and model catalog
     // into their DB partitions on boot (served from PG — the distributed/Orleans routing does not
     // consult the in-memory embedded adapter, so without this /Doc pages hang). Mirrors the Helm
-    // default and values.atioz.yaml.
+    // default and values.prod.yaml.
     .WithEnvironment("Features__StaticRepoSync__Partitions__0", "Doc")
     .WithEnvironment("Features__StaticRepoSync__Partitions__1", "Agent")
     .WithEnvironment("Features__StaticRepoSync__Partitions__2", "Model")

@@ -14,7 +14,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Pins the catalog-search re-render storm (atioz, 2026-06-22). The new top-bar AI menu opens
+/// Pins the catalog-search re-render storm (prod, 2026-06-22). The new top-bar AI menu opens
 /// <c>/search?q=nodeType:Thread&amp;groupBy=Namespace</c> (and Models / Agents / Skills) — an
 /// UNSCOPED query with no <c>namespace:</c> filter, so the search view subscribes to EVERY
 /// partition's live change feed. The legacy <c>MeshSearchView.LoadResults</c> re-ran the full

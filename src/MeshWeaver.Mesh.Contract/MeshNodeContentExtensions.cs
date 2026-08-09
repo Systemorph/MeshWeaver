@@ -65,7 +65,7 @@ public static class MeshNodeContentExtensions
                 // Content is a typed object, but not OUR T. Recover ONLY when the runtime type has the
                 // SAME short name as T: the same class compiled into a different dynamic node assembly
                 // (@@-included copies), or a same-short-named type another hub's registry resolved when
-                // the node crossed the query/message boundary. The silent null here was the atioz
+                // the node crossed the query/message boundary. The silent null here was the prod
                 // "BalanceSheet dashboards render empty" outage (agentic-pensions#12): 200 fact nodes
                 // arrived typed with the fact NodeType's own assembly and the dashboard's loader
                 // dropped every one.

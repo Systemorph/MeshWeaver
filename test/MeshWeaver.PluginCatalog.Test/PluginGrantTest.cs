@@ -82,14 +82,14 @@ public class PluginGrantTest
     {
         // The customer portal gets MeshWeaver.Plugins and nothing else — in particular none of the
         // reinsurance plugins and none of the paid course content.
-        var atioz = new PluginGrant
+        var prod = new PluginGrant
         {
-            InstanceId = "atioz",
+            InstanceId = "prod",
             Entries = [new PluginGrantEntry { Source = "Plugins", PackageId = PluginGrantEntry.AllPackages }],
         };
-        Assert.True(atioz.Allows("Plugins", "Store"));
-        Assert.False(atioz.Allows("Reinsurance", "UWDeepfield"));
-        Assert.False(atioz.Allows("Education", "AgenticEngineering"));
+        Assert.True(prod.Allows("Plugins", "Store"));
+        Assert.False(prod.Allows("Reinsurance", "UWDeepfield"));
+        Assert.False(prod.Allows("Education", "AgenticEngineering"));
     }
 
     [Fact]

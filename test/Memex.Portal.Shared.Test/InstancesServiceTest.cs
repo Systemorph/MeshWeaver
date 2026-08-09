@@ -24,7 +24,7 @@ public class InstancesServiceTest
           "status": { "readyReplicas": 2 }
         },
         {
-          "metadata": { "name": "memex-portal-deployment", "namespace": "atioz" },
+          "metadata": { "name": "memex-portal-deployment", "namespace": "prod" },
           "spec": {
             "replicas": 1,
             "template": { "spec": { "containers": [
@@ -41,8 +41,8 @@ public class InstancesServiceTest
     private const string IngressesJson = """
     {
       "items": [
-        { "metadata": { "namespace": "memex" }, "spec": { "rules": [ { "host": "memex.systemorph.com" } ] } },
-        { "metadata": { "namespace": "atioz" }, "spec": { "rules": [ { "host": "portal.atioz.example" } ] } }
+        { "metadata": { "namespace": "memex" }, "spec": { "rules": [ { "host": "portal.example.com" } ] } },
+        { "metadata": { "namespace": "prod" }, "spec": { "rules": [ { "host": "portal.prod.example" } ] } }
       ]
     }
     """;
@@ -54,18 +54,18 @@ public class InstancesServiceTest
 
         Assert.Equal(2, instances.Length);
 
-        // Ordered by namespace (case-insensitive): atioz before memex.
-        var atioz = instances[0];
-        Assert.Equal("atioz", atioz.Namespace);
-        Assert.Equal("portal.atioz.example", atioz.Domain);
+        // Ordered by namespace (case-insensitive): prod before memex.
+        var prod = instances[0];
+        Assert.Equal("prod", prod.Namespace);
+        Assert.Equal("portal.prod.example", prod.Domain);
         // Picks the memex-portal container's image, NOT the gate container's.
-        Assert.Equal("ci.610", atioz.Version);
-        Assert.Equal(0, atioz.ReadyReplicas);
-        Assert.Equal(1, atioz.DesiredReplicas);
+        Assert.Equal("ci.610", prod.Version);
+        Assert.Equal(0, prod.ReadyReplicas);
+        Assert.Equal(1, prod.DesiredReplicas);
 
         var memex = instances[1];
         Assert.Equal("memex", memex.Namespace);
-        Assert.Equal("memex.systemorph.com", memex.Domain);
+        Assert.Equal("portal.example.com", memex.Domain);
         Assert.Equal("ci.612", memex.Version);
         Assert.Equal(2, memex.ReadyReplicas);
         Assert.Equal(2, memex.DesiredReplicas);

@@ -7,7 +7,7 @@
 # Grafana is private (ClusterIP), so run this INSIDE the cluster via command-invoke,
 # uploading the script + the dashboards alongside it:
 #
-#   az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+#   az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
 #     --command "bash import-dashboards.sh" \
 #     --file deploy/aks/scripts/import-dashboards.sh \
 #     --file deploy/aks/dashboards/<dashboard>.json

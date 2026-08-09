@@ -13,7 +13,7 @@ The deployed clusters (`prod`, `test`) provision **Azure Postgres Flexible Serve
 
 | Mode | FQDN |
 |---|---|
-| prod | `memexpostgres-d272wxvys4nvo.postgres.database.azure.com` |
+| prod | `<pg-server>.postgres.database.azure.com` |
 | test | look up: `az postgres flexible-server list -g test-memex --query "[].fullyQualifiedDomainName" -o tsv` |
 
 ```bash
@@ -25,7 +25,7 @@ az account show --query "user.name" -o tsv
 PGPASSWORD=$(az account get-access-token \
   --resource-type oss-rdbms --query accessToken -o tsv)
 
-psql "host=memexpostgres-d272wxvys4nvo.postgres.database.azure.com \
+psql "host=<pg-server>.postgres.database.azure.com \
       port=5432 dbname=memex user=$(az account show --query user.name -o tsv) \
       sslmode=require"
 ```
@@ -45,7 +45,7 @@ using Azure.Core;
 using Azure.Identity;
 using Npgsql;
 
-const string Host = "memexpostgres-d272wxvys4nvo.postgres.database.azure.com";
+const string Host = "<pg-server>.postgres.database.azure.com";
 const string Db   = "memex";
 const string User = "rbuergi@systemorph.com"; // your AAD UPN
 
@@ -126,7 +126,7 @@ If migration crashed mid-run, you'll see the `Unhandled exception` at the bottom
 | Resource | Value |
 |---|---|
 | Resource Group | `prod-memex` |
-| Server | `memexpostgres-d272wxvys4nvo.postgres.database.azure.com` |
+| Server | `<pg-server>.postgres.database.azure.com` |
 | Database | `memex` |
 | Auth | Azure AD only (password disabled) |
 | Tenant | `3a01d7ac-3330-444d-942d-975eb491b5d6` |

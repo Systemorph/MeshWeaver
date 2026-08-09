@@ -31,9 +31,9 @@ public class PathUtilsTest
         // to the main entity's namespace, not the thread path.
         var result = PathUtils.ResolveRelativePath(
             "FinalReport",
-            "PartnerRe/AIConsulting/_Thread/we-will-now-work-on-97af/d75effc1");
+            "Acme/AIConsulting/_Thread/we-will-now-work-on-97af/d75effc1");
 
-        result.Should().Be("PartnerRe/AIConsulting/FinalReport");
+        result.Should().Be("Acme/AIConsulting/FinalReport");
     }
 
     [Fact]
@@ -49,12 +49,12 @@ public class PathUtilsTest
     [Fact]
     public void ResolveRelativePath_ParentTraversal_InThreadContext()
     {
-        // "../OtherProject" from PartnerRe/AIConsulting/_Thread/... should go up from AIConsulting
+        // "../OtherProject" from Acme/AIConsulting/_Thread/... should go up from AIConsulting
         var result = PathUtils.ResolveRelativePath(
             "../OtherProject",
-            "PartnerRe/AIConsulting/_Thread/slug/msgId");
+            "Acme/AIConsulting/_Thread/slug/msgId");
 
-        result.Should().Be("PartnerRe/OtherProject");
+        result.Should().Be("Acme/OtherProject");
     }
 
     [Fact]
@@ -62,9 +62,9 @@ public class PathUtilsTest
     {
         var result = PathUtils.ResolveRelativePath(
             "./FinalReport",
-            "PartnerRe/AIConsulting/_Thread/slug/msgId");
+            "Acme/AIConsulting/_Thread/slug/msgId");
 
-        result.Should().Be("PartnerRe/AIConsulting/FinalReport");
+        result.Should().Be("Acme/AIConsulting/FinalReport");
     }
 
     // ---------- ResolveRelativePath (non-satellite, existing behavior) ----------
@@ -116,35 +116,35 @@ public class PathUtilsTest
     {
         // Simulate rendering markdown in a thread message bubble.
         // The currentNodePath is the thread message's full path.
-        var threadMsgPath = "PartnerRe/AIConsulting/_Thread/thread-slug/msgId";
+        var threadMsgPath = "Acme/AIConsulting/_Thread/thread-slug/msgId";
         var pipeline = new MarkdownPipelineBuilder()
             .Use(new LinkUrlCleanupExtension(threadMsgPath))
             .Build();
 
         var html = Markdig.Markdown.ToHtml("[Final Report](FinalReport)", pipeline);
 
-        html.Should().Contain("href=\"/PartnerRe/AIConsulting/FinalReport\"",
+        html.Should().Contain("href=\"/Acme/AIConsulting/FinalReport\"",
             "relative link in thread should resolve to main entity path");
     }
 
     [Fact]
     public void LinkCleanup_ThreadContext_AbsoluteLinkUnchanged()
     {
-        var threadMsgPath = "PartnerRe/AIConsulting/_Thread/slug/msgId";
+        var threadMsgPath = "Acme/AIConsulting/_Thread/slug/msgId";
         var pipeline = new MarkdownPipelineBuilder()
             .Use(new LinkUrlCleanupExtension(threadMsgPath))
             .Build();
 
-        var html = Markdig.Markdown.ToHtml("[Report](/PartnerRe/AIConsulting/FinalReport)", pipeline);
+        var html = Markdig.Markdown.ToHtml("[Report](/Acme/AIConsulting/FinalReport)", pipeline);
 
-        html.Should().Contain("href=\"/PartnerRe/AIConsulting/FinalReport\"",
+        html.Should().Contain("href=\"/Acme/AIConsulting/FinalReport\"",
             "absolute links should remain unchanged");
     }
 
     [Fact]
     public void LinkCleanup_ThreadContext_AtPrefixedLinkResolvesToMainEntity()
     {
-        var threadMsgPath = "PartnerRe/AIConsulting/_Thread/slug/msgId";
+        var threadMsgPath = "Acme/AIConsulting/_Thread/slug/msgId";
         var pipeline = new MarkdownPipelineBuilder()
             .Use(new LinkUrlCleanupExtension(threadMsgPath))
             .Build();
@@ -152,7 +152,7 @@ public class PathUtilsTest
         // @SiblingDoc — after stripping '@', should resolve relative to main entity
         var html = Markdig.Markdown.ToHtml("[doc](@SiblingDoc)", pipeline);
 
-        html.Should().Contain("href=\"/PartnerRe/AIConsulting/SiblingDoc\"",
+        html.Should().Contain("href=\"/Acme/AIConsulting/SiblingDoc\"",
             "@-prefixed relative link in thread should resolve to main entity path");
     }
 

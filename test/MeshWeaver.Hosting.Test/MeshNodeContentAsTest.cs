@@ -33,7 +33,7 @@ namespace MeshWeaver.Hosting.Test
     /// arrives TYPED with a different CLR type of the same shape — the same class compiled into two
     /// dynamic node assemblies, or a same-short-named type resolved by another hub's registry at the
     /// query boundary. Pre-fix the default branch returned a SILENT null, so every projection filtering
-    /// on <c>Content is not null</c> dropped the whole result set: the atioz "BalanceSheet dashboards
+    /// on <c>Content is not null</c> dropped the whole result set: the prod "BalanceSheet dashboards
     /// render empty" outage (agentic-pensions#12) — 200 fact nodes arrived typed with the fact
     /// NodeType's own assembly and the dashboard's loader (holding its @@-included copy) kept none.
     /// </summary>
