@@ -1,3 +1,4 @@
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
@@ -31,7 +32,16 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     private List<MeshNode> _results = new();
     private List<MeshNode>? _cachedResults;
     private CancellationTokenSource? _loadCts;
-    private IDisposable? _debounceSub;
+    // 🚨 #995 — the pending debounce timer is owned by the COMPONENT, not by the next keystroke.
+    // A SerialDisposable keeps the original semantics (assigning cancels the previous pending
+    // timer) and, because it is registered ONCE in BlazorView.Disposables (see OnInitialized),
+    // DisposeAsync cancels the LAST one too. Before this the field was assigned but disposed
+    // only by the *next* OnSearchInput, so a user who typed and then navigated away left a
+    // 200 ms Observable.Timer on the process-wide TimerQueue — a strong GC root holding the
+    // tick closure → this component → the injected IMeshService → the mesh services, past
+    // component teardown. Holding a subscription in a field looks like ownership to a static
+    // analyzer, which is exactly why this one survived the #996 sweep.
+    private readonly SerialDisposable _debounceSub = new();
     private int _inputKey;
     private const int DebounceMs = 200;
 
@@ -67,6 +77,19 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     // Compact "thin" rendering + open-upward dropdown, driven by the control's Layout/Open.
     private bool IsThin => ViewModel?.Layout == MeshNodePickerLayout.Thin;
     private bool OpensUp => ViewModel?.Open == MeshNodePickerOpenDirection.Up;
+
+    /// <summary>
+    /// Puts the debounce timer under the component's own disposal (<c>BlazorView.Disposables</c>,
+    /// released by <c>DisposeAsync</c>) so the last pending search cannot outlive the component.
+    /// Registered here — once per component — rather than in <c>BindData</c>, which re-runs on
+    /// every binding-relevant parameter change and would both duplicate the entry and drop a
+    /// debounce the user is still mid-typing.
+    /// </summary>
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        Disposables.Add(_debounceSub);
+    }
 
     /// <summary>
     /// Binds the pre-loaded <c>Items</c> collection from the view-model and delegates to the
@@ -225,11 +248,12 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
 
         // Debounce remote queries. Do NOT call StateHasChanged here — typing must never
         // trigger a component re-render. LoadResultsAsync will render when results arrive.
-        // Reactive debounce: each keystroke disposes the prior pending Observable.Timer
-        // and arms a new one — same semantics as the old CTS-cancel + Task.Delay loop,
-        // but stays on Rx scheduling rather than ad-hoc CancellationTokenSource churn.
-        _debounceSub?.Dispose();
-        _debounceSub = Observable.Timer(TimeSpan.FromMilliseconds(DebounceMs))
+        // Reactive debounce: assigning into the SerialDisposable cancels the prior pending
+        // Observable.Timer and arms a new one — same semantics as the old CTS-cancel +
+        // Task.Delay loop, but on Rx scheduling rather than ad-hoc CancellationTokenSource
+        // churn, and the handle is the component's (registered in OnInitialized), so teardown
+        // cancels the last one too rather than leaving it to the next keystroke (#995).
+        _debounceSub.Disposable = Observable.Timer(TimeSpan.FromMilliseconds(DebounceMs))
             .Subscribe(_ => LoadResultsAsync());
     }
 

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -57,6 +58,29 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
     private long _lastPublishTicks;
     private int _publishScheduled;
 
+    // 🚨 #995 — OWNERSHIP of the tail-flush timer. `Observable.Timer` parks its entry on the
+    // process-wide TimerQueue, which is a strong GC root: while the timer is pending it holds
+    // the tick closure → THIS logger → the primary-ctor `hub` it posts to. The old code
+    // DISCARDED the Subscribe result, so nothing could cancel a flush that was still pending
+    // when the hub tore down and the hub stayed rooted past its own disposal (same shape as
+    // the four watcher timers fixed in #996, 10× shorter window).
+    //
+    // Holding it in a SerialDisposable registered on the hub closes that: hub teardown
+    // disposes the composite, which cancels the pending timer. Assignment also disposes the
+    // previous entry, which is either a spent (self-detached) sink or nothing — `_publishScheduled`
+    // guarantees at most one timer is ever pending, so a live flush can never be clobbered.
+    // The registration itself retains only this SerialDisposable (~32 B): a FIRED Rx timer
+    // subscription no longer reaches its callback closure (measured), so a settled logger and
+    // its message list stay collectable while the hub lives on.
+    private readonly SerialDisposable pendingFlush = RegisterPendingFlush(hub);
+
+    private static SerialDisposable RegisterPendingFlush(IMessageHub hub)
+    {
+        var pending = new SerialDisposable();
+        hub.RegisterForDisposal(pending);
+        return pending;
+    }
+
     IDisposable? ILogger.BeginScope<TState>(TState state) => null;
 
     public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
@@ -113,7 +137,10 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
             // timer-queue one-shot: no immediate dispatch, no parked thread, no await.
             if (Interlocked.CompareExchange(ref _publishScheduled, 1, 0) == 0)
             {
-                Observable.Timer(TimeSpan.FromMilliseconds(ThrottleMs))
+                // Held, not discarded — see `pendingFlush` (#995). Once the hub is disposed the
+                // SerialDisposable is disposed too, so this assignment kills the new timer on
+                // the spot and a dead hub can never be woken by a tail flush.
+                pendingFlush.Disposable = Observable.Timer(TimeSpan.FromMilliseconds(ThrottleMs))
                     .Subscribe(_ =>
                     {
                         Interlocked.Exchange(ref _publishScheduled, 0);
