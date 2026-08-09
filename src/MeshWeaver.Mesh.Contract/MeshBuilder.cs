@@ -256,6 +256,33 @@ public record MeshBuilder
     }
 
     /// <summary>
+    /// Adds each node whose <see cref="MeshNode.Path"/> is not already seeded on this builder.
+    ///
+    /// <para>For PARTITION-LEVEL GOVERNANCE that several independent modules must each be able to
+    /// guarantee on their own. The motivating case is the <c>Templates</c> partition's access
+    /// grant (<see cref="ScriptTemplates.PublicExecuteGrant"/>): <c>AddGraph()</c> seeds
+    /// <c>Templates/Import/*</c> and <c>AddMarkdownExport()</c> seeds <c>Templates/Export/*</c>,
+    /// and either call ALONE must land the grant while both together must land it ONCE. Plain
+    /// <see cref="AddMeshNodes"/> appends unconditionally, so the two would seed a duplicate.</para>
+    ///
+    /// <para>State lives on this builder instance only — no static registry, nothing process-wide
+    /// (AGENTS.md → "No static collections").</para>
+    /// </summary>
+    /// <param name="nodes">The mesh nodes to add if their path is not already present.</param>
+    /// <returns>The builder for method chaining.</returns>
+    public MeshBuilder AddMeshNodesIfAbsent(params IEnumerable<MeshNode> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            if (MeshNodes.Any(existing =>
+                    string.Equals(existing.Path, node.Path, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            MeshNodes.Add(node);
+        }
+        return this;
+    }
+
+    /// <summary>
     /// Registers a type on the mesh-level TypeRegistry for cross-hub serialization.
     /// Use this to register content types that need to be serialized across hub boundaries.
     /// </summary>

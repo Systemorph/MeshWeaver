@@ -57,6 +57,31 @@ public interface IStorageAdapter
     /// accepted the path; emits <c>null</c> when the path isn't owned here
     /// so the try-then-claim chain in <c>PersistenceService.Write</c> moves
     /// on to the next writable provider.
+    ///
+    /// <para>🚨 <b>The write is CONDITIONAL on <see cref="MeshNode.Version"/> wherever the backend can
+    /// express the condition (#971).</b> <c>MeshNode.Version</c> is the node's forward-only revision
+    /// counter — every mint goes through <see cref="MeshNode.NextVersion"/> (<c>current + 1</c>) and an
+    /// unchanged node is re-persisted at the version it already carries — so a correctly-produced write
+    /// is ALWAYS at or above the version already stored. A backend that can compare therefore MUST
+    /// leave the row untouched when <c>node.Version</c> is strictly BELOW the durable row's, and MUST
+    /// report that by emitting the STORED (winning) node instead of the one it was handed. Equal
+    /// versions still apply: re-persisting an unchanged node is a legitimate, common shape.</para>
+    ///
+    /// <para>Why this belongs in the store and not only in a decorator: the in-process high-water
+    /// filter in <c>MonotonicWriteGuardStorageAdapter</c> is empty on a freshly started replica, so
+    /// that replica's FIRST write to any path has nothing to compare against. Monotonicity is a
+    /// property of the ROW, and only the store can enforce it across replicas — a rollout briefly
+    /// running two pods, a KEDA scale-out, a restarted replica. The emitted stored node is what lets
+    /// the decorator turn the refusal into a MERGE (see <c>MeshNodeConflictMerge</c>) rather than
+    /// bouncing a conflict back at a caller that has no retry loop.</para>
+    ///
+    /// <para>A backend that CANNOT express the condition (single-process file system, a store with no
+    /// conditional upsert) simply emits the written node as before; the in-process guard remains its
+    /// only protection, which is sound because such backends are not multi-replica.</para>
+    ///
+    /// <para>A refused write must NOT publish <see cref="Changes"/> — nothing changed, and a
+    /// notification carrying the losing node would hand every subscriber the stale state the store
+    /// just rejected.</para>
     /// </summary>
     IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options);
 
