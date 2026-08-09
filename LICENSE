@@ -1,21 +1,25 @@
-The MIT License (MIT)
+MeshWeaver is dual-licensed. You may use it under EITHER:
 
-Copyright (c) 2024 Systemorph
+  * The Apache License, Version 2.0  — see LICENSE-APACHE  (the preferred licence)
+  * The MIT License                  — see LICENSE-MIT
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+SPDX-License-Identifier: Apache-2.0 OR MIT
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+You may choose either licence; you are not required to comply with both.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+WHY BOTH
+  Apache-2.0 is the preferred licence and the one new contributions are made
+  under. It carries an express PATENT GRANT — real protection for a platform
+  that compiles and executes user-authored code — and its section 5 states
+  plainly that a contribution is offered under the same terms, so inbound
+  contributions need no separate paperwork.
+
+  MIT stays on offer because Apache-2.0 is incompatible with GPLv2, and MIT is
+  not. Keeping both means a downstream GPLv2 project can still build on this.
+
+  Neither licence obliges anyone to publish source. That is deliberate: packages
+  may ship source-partial, and nothing here turns that into a disclosure duty.
+
+CONTRIBUTIONS
+  Unless you state otherwise, any contribution you submit for inclusion is
+  licensed as above (Apache-2.0 OR MIT), per Apache-2.0 section 5.
