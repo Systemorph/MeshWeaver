@@ -245,12 +245,18 @@ jobs:
           echo "run conclusion (umbrella, informational) → ${{ github.event.workflow_run.conclusion }}"
           echo "green=$([ "$concl" = "success" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           echo "conclusion=$concl" >> "$GITHUB_OUTPUT"
-      # The reconcile path only. Everything below is skipped on a push, which always publishes.
+      # The reconcile path only — a push always publishes and never needs to ask the registry.
+      #
+      # 🚨 Deliberately NOT also gated on the required check being green. The registry answer is
+      # what separates "nothing is wrong" from "main's HEAD cannot ship AND has no images", and the
+      # second one has to be said out loud: if Build-and-Test never ran on HEAD (a CI incident, a
+      # stalled queue — AGENTS.md's trap #1), the check reads `missing`, nothing can publish that
+      # commit, and without this the reconciler would go quiet about it every 3 h forever.
       - name: Ensure Azure CLI
-        if: steps.target.outputs.reason == 'reconcile' && steps.required.outputs.green == 'true'
+        if: steps.target.outputs.reason == 'reconcile'
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
-        if: steps.target.outputs.reason == 'reconcile' && steps.required.outputs.green == 'true'
+        if: steps.target.outputs.reason == 'reconcile'
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -258,7 +264,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: "Does main's HEAD already have a complete image set?"
         id: acr
-        if: steps.target.outputs.reason == 'reconcile' && steps.required.outputs.green == 'true'
+        if: steps.target.outputs.reason == 'reconcile'
         run: |
           set -uo pipefail
           if .github/scripts/check-image-set.sh "${{ steps.target.outputs.short_sha }}"; then
@@ -294,17 +300,52 @@ jobs:
         run: |
           set -euo pipefail
           decision() { echo "publish=$1" >> "$GITHUB_OUTPUT"; echo "### $2" >> "$GITHUB_STEP_SUMMARY"; echo "$2"; }
+          # How many comments on issue $1 carry the marker $2 — the whole state store for the
+          # attempt budget and for the one-shot reports. Markers are HTML comments, so they are
+          # invisible in the rendered issue but exact to match.
+          count_marker() {
+            gh issue view "$1" --repo "$GITHUB_REPOSITORY" --json comments \
+              --jq "[.comments[] | select(.body | contains(\"$2\"))] | length"
+          }
 
-          if [ "$GREEN" != "true" ]; then
-            decision false "⛔ \`Consolidate test results\` on $SHORT is \`$CONCL\` — nothing will be built"
-            exit 0
-          fi
           if [ "$REASON" = "push" ]; then
-            decision true "✅ Required check green — publishing the full image set for \`$SHORT\`"
+            if [ "$GREEN" = "true" ]; then
+              decision true "✅ Required check green — publishing the full image set for \`$SHORT\`"
+            else
+              decision false "⛔ \`Consolidate test results\` on $SHORT is \`$CONCL\` — nothing will be built"
+            fi
             exit 0
           fi
+
+          # ── reconcile ────────────────────────────────────────────────────────────────────────
+          # Registry first: a complete set means nothing is wrong, whatever the check says. This is
+          # the overwhelmingly common tick and it ends here, having cost ~40 s and said nothing.
           if [ "$COMPLETE" = "true" ]; then
             decision false "✅ main \`$SHORT\` already has a complete image set — nothing to reconcile"
+            exit 0
+          fi
+
+          gh label create ci-failure --repo "$GITHUB_REPOSITORY" \
+            --description "A main-branch CD run failed - no deployable image was published" \
+            --color B60205 --force >/dev/null
+          issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+
+          # 🚨 UNHEALABLE, and it must not be silent. HEAD has no complete image set AND its
+          # required check is not green — most often because Build-and-Test never ran on the merge
+          # commit at all. No amount of reconciling fixes that from here; only CI going green on
+          # HEAD does (a `gh workflow run "MeshWeaver Build and Test" --ref main` is enough — this
+          # reconciler reads the CHECK on the commit, not the event that produced it, so unlike the
+          # old push-gated CD it WILL pick that up on its next tick). Said ONCE per commit, then
+          # quiet — same discipline as the exhausted budget below.
+          if [ "$GREEN" != "true" ]; then
+            if [ -n "$issue" ] && [ "$(count_marker "$issue" "<!-- cd-blocked:$SHORT -->")" -eq 0 ]; then
+              gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$(printf '%s\n\n%s\n\n%s' \
+                "<!-- cd-blocked:$SHORT -->" \
+                "🚧 **main \`$SHORT\` cannot be published**: it has no complete image set AND its required check \`Consolidate test results\` is \`$CONCL\`." \
+                "The reconciler will not attempt it — CD must never publish an untested tree. This clears itself the moment Build-and-Test goes green on HEAD (\`gh workflow run \"MeshWeaver Build and Test\" --ref main\` is enough; the reconciler reads the check on the commit, not the event that produced it), or when the next merge moves HEAD.")"
+            fi
+            decision false "🚧 \`Consolidate test results\` on $SHORT is \`$CONCL\` and the image set is incomplete — cannot publish"
             exit 0
           fi
 
@@ -320,11 +361,8 @@ jobs:
             exit 0
           fi
 
-          gh label create ci-failure --repo "$GITHUB_REPOSITORY" \
-            --description "A main-branch CD run failed - no deployable image was published" \
-            --color B60205 --force >/dev/null
-          issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
-            --limit 1 --json number --jq '.[0].number // empty')
+          # The ledger has to exist before an attempt is recorded — an attempt that is not written
+          # down is an attempt that can be repeated forever.
           if [ -z "$issue" ]; then
             # `gh issue create` prints the issue URL (it has no --json); the number is its tail.
             url=$(gh issue create --repo "$GITHUB_REPOSITORY" --label ci-failure \
@@ -333,13 +371,9 @@ jobs:
             issue="${url##*/}"
           fi
 
-          count_marker() {
-            gh issue view "$issue" --repo "$GITHUB_REPOSITORY" --json comments \
-              --jq "[.comments[] | select(.body | contains(\"$1\"))] | length"
-          }
-          attempts=$(count_marker "<!-- cd-heal:$SHORT -->")
+          attempts=$(count_marker "$issue" "<!-- cd-heal:$SHORT -->")
           if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then
-            if [ "$(count_marker "<!-- cd-heal-stopped:$SHORT -->")" -eq 0 ]; then
+            if [ "$(count_marker "$issue" "<!-- cd-heal-stopped:$SHORT -->")" -eq 0 ]; then
               gh label create cd-unhealed --repo "$GITHUB_REPOSITORY" \
                 --description "CD could not publish a complete image set and has stopped retrying" \
                 --color 5319E7 --force >/dev/null
