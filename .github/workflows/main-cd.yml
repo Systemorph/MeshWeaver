@@ -500,6 +500,90 @@ jobs:
           docker push ${{ env.ACR }}/memex-portal-next:${{ steps.vars.outputs.sha }}
           docker push ${{ env.ACR }}/memex-portal-next:main
 
+  # ─────────────────────────── DID IT ACTUALLY SHIP? ──────────────────────────
+  # Assert the IMAGES exist, never the green tick. Each image job pushes independently, so ONE leg
+  # failing leaves main with a PARTIAL release — 4f0c35cfc shipped memex-portal-ai:3.0.0-rc1.ci.2470
+  # with no memex-bake:ci.2470 (issue #1026), i.e. a portal increment the NodeType bake gate never
+  # certified, while the self-updater happily picks the newest version tag. A per-job red says "CD
+  # failed"; it does not say WHICH image is missing, and nothing was checking that a given main
+  # commit ends up with the full set.
+  #
+  # `if: always()` on purpose: this runs whether the legs passed, failed or were cancelled, so the
+  # run's LAST word is a named list of what is missing from the registry rather than a stack trace
+  # from whichever leg died. That is the difference between "CD is red, go read four job logs" and
+  # "memex-bake:<sha> is missing".
+  #
+  # It also catches what a per-job red CANNOT: a leg that reports success while pushing nothing
+  # (Microsoft.NET.Build.Containers swallows a cancelled push as a warning and returns true — see
+  # the guard in the root Directory.Build.props), and an index that lost an architecture.
+  #
+  # Every leg pushes the short-SHA tag, so that is the one identity all five images share.
+  verify-images:
+    name: "Verify every image shipped"
+    needs: [gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image]
+    if: always() && needs.gate.outputs.green == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Compute the commit tag every leg pushes
+        id: vars
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      # Reads manifests through ARM (no `az acr login` needed — that one is for docker/push creds).
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Every image for this commit must exist in ACR
+        env:
+          SHA: ${{ steps.vars.outputs.sha }}
+        run: |
+          # No `-e`: every repository must be REPORTED, so one miss cannot hide the next.
+          set -uo pipefail
+          fail=0
+          report() { echo "::error::$1"; echo "- ❌ $1" >> "$GITHUB_STEP_SUMMARY"; fail=1; }
+          ok()     { echo "$1";         echo "- ✅ $1" >> "$GITHUB_STEP_SUMMARY"; }
+
+          echo "### Images for main \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
+
+          # The four .NET legs publish an OCI/Docker image INDEX over both linux architectures.
+          # Asserting the architectures — not just the tag — is what makes this more than a
+          # restatement of the job status: an index that lost a leg still resolves for one arch.
+          # `az acr manifest show` is an Azure-CLI PREVIEW command group (it prints a warning on
+          # stderr, discarded here). If it is ever withdrawn, the equivalent is
+          # `docker buildx imagetools inspect --raw <acr>/<repo>:<tag>` after `az acr login`.
+          for repo in memex-portal-ai memex-migration memex-bake mw-plugin-test; do
+            if ! m=$(az acr manifest show --registry meshweaver --name "$repo:$SHA" -o json 2>/dev/null); then
+              report "$repo:$SHA is MISSING from ACR — main $SHA shipped an INCOMPLETE release"
+              continue
+            fi
+            arches=$(printf '%s' "$m" | jq -r '[(.manifests // [])[] | select(.platform.os == "linux") | .platform.architecture] | sort | join(",")')
+            if [ "$arches" != "amd64,arm64" ]; then
+              report "$repo:$SHA is not a linux amd64+arm64 image index (architectures: '${arches:-<single-arch manifest>}')"
+            else
+              ok "$repo:$SHA (linux/amd64 + linux/arm64)"
+            fi
+          done
+
+          # portal-next is amd64-only BY DESIGN (every AKS node is amd64) — existence is the check.
+          if ! az acr manifest show --registry meshweaver --name "memex-portal-next:$SHA" -o json >/dev/null 2>&1; then
+            report "memex-portal-next:$SHA is MISSING from ACR — main $SHA shipped an INCOMPLETE release"
+          else
+            ok "memex-portal-next:$SHA (linux/amd64)"
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::main $SHA did NOT ship a complete image set. Every self-updating install stays on the previous image until a CD run publishes all of them. Fix the failing leg and merge again — a manual re-run of Build-and-Test cannot ship (main-cd gates on workflow_run.event == 'push')."
+            exit 1
+          fi
+          echo "All five images exist in ACR for $SHA."
+
   # ───────────────────────────── FAILURE ALERTING ────────────────────────────
   # A red CD after a green merge is otherwise INVISIBLE (nobody watches the Actions tab), and the
   # consequence is severe: the merged commit never gets a deployable image, so every pull-based
@@ -508,11 +592,13 @@ jobs:
   # files (or comments on) a GitHub issue labeled `ci-failure`.
   # - `if: failure()` with `needs`: fires only when at least one image job actually FAILED —
   #   not when they were skipped (PR-triggered workflow_run) and not on cancellation.
+  #   `verify-images` is in that list so a registry that is MISSING an image alerts too, even in
+  #   the case where every publish leg reported success.
   # - Idempotent: one open `ci-failure` issue collects repeat failures as comments; a new issue is
   #   only created when none is open (close the issue once CD is green again).
   alert-on-failure:
     name: "Alert: CD failed on main"
-    needs: [portal-image, migration-image, bake-image, plugin-test-image, portal-next-image]
+    needs: [portal-image, migration-image, bake-image, plugin-test-image, portal-next-image, verify-images]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
