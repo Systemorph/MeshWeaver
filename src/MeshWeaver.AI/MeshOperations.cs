@@ -2683,7 +2683,21 @@ public class MeshOperations
                 allNodes
                     .Select(n => permissionHub
                         .CheckPermission(n.Path, callerUserId, Permission.Export)
-                        .Take(1)
+                        // 🚨 TakeDecisionOutsideGate, NOT a bare Take(1) — issue #899/#978. Everything
+                        //    downstream of this decision is REAL WORK: stage 3 posts GetDataRequest to
+                        //    each permitted node's address (ACTIVATING those hubs), mutates the shared
+                        //    IContentService config registry, reads files and builds the zip. A bare
+                        //    Take(1) runs all of that inside PermissionEvaluator's CombineLatest gate —
+                        //    which, on a warm cache, emits synchronously during Subscribe — and inside
+                        //    Rx Merge's own _gate, taken while subscribing each inner. Two hubs entering
+                        //    {own fold gate, shared gate} in opposite orders wedge with NO error and NO
+                        //    emission, and the sibling Timeout timers' OnError block on the same Merge
+                        //    gate, so not even the bounds can report. That is exactly the observed
+                        //    ExportImportAccessControlTest signature: "emitted nothing at all" for 60s
+                        //    with not one log line — and it only ever hit the tests with at least one
+                        //    PERMITTED node, because the zero-permitted path short-circuits below into
+                        //    pool.InvokeBlocking and hops off the gate before doing any work.
+                        .TakeDecisionOutsideGate()
                         .Timeout(TimeSpan.FromSeconds(30))
                         .Catch((Exception ex) =>
                         {
@@ -3096,8 +3110,11 @@ public class MeshOperations
         // target so a read-only caller can't bounce other partitions' hubs. With no RLS
         // wired, the default evaluator grants All and behavior is unchanged. Fail closed
         // on evaluator errors/timeouts.
+        // 🚨 TakeDecisionOutsideGate, NOT a bare Take(1) — issue #899. RecycleCore disposes the
+        //    target's hub and forces re-initialization; running that inside the evaluator's
+        //    CombineLatest gate is the same lock-order inversion Export hit above.
         return hub.CheckPermission(resolvedPath, MeshWeaver.Mesh.Security.Permission.Update)
-            .Take(1)
+            .TakeDecisionOutsideGate()
             .Timeout(TimeSpan.FromSeconds(10))
             .Catch((Exception ex) =>
             {

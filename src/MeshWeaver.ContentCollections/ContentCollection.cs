@@ -1,4 +1,5 @@
-﻿using System.Reactive;
+﻿using System.Collections.Concurrent;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -290,6 +291,32 @@ public class ContentCollection : IDisposable
     private readonly Lazy<IObservable<InstanceCollection>> initialized;
 
     /// <summary>
+    /// Monotonic trigger counter for <see cref="IngestContentFile"/>, and the highest trigger
+    /// already APPLIED per article key. Instance state (never static): the lifetime is the
+    /// collection's, so it dies with the hub. See the claim note in <see cref="IngestContentFile"/>.
+    /// </summary>
+    private long ingestSequence;
+    private readonly ConcurrentDictionary<string, long> appliedIngest = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The <see cref="InstanceCollection"/> key an article path maps to (the path minus its <c>.md</c> suffix).</summary>
+    private static string ArticleKey(string path)
+        => path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? path[..^3] : path;
+
+    /// <summary>
+    /// Records <paramref name="sequence"/> as the newest ingest applied for <paramref name="key"/>
+    /// and reports whether this ingest may proceed. <c>false</c> means a LATER-triggered read of
+    /// the same file already landed, so this (older) snapshot must be dropped rather than
+    /// overwrite it — the article-level twin of <c>MonotonicWriteGuardStorageAdapter</c>'s
+    /// high-water mark for mesh nodes.
+    /// </summary>
+    private bool ClaimIngest(string key, long sequence)
+    {
+        var applied = appliedIngest.AddOrUpdate(
+            key, sequence, (_, current) => current > sequence ? current : sequence);
+        return applied == sequence;
+    }
+
+    /// <summary>
     /// Parses every markdown file in the backing store into the synchronization stream and
     /// attaches the change monitor. Promise-cached: the first subscriber kicks the parse off on
     /// <see cref="Pool"/>, every later subscriber replays the cached completion — the store is
@@ -343,6 +370,22 @@ public class ContentCollection : IDisposable
             return;
         }
 
+        // 🚨 Claim this ingest's TRIGGER ORDER before the read starts (#978). The same file is
+        // ingested from several independent triggers that legitimately overlap: the watcher's
+        // Created event (which inotify delivers the instant the file is CREATED — while it is
+        // still 0 bytes), the watcher's Changed event, and SaveFile's own read-your-writes
+        // ingest. Reads are deliberately share-tolerant (FileShare.ReadWrite|Delete against a
+        // FileShare.Read|Delete write — see FileSystemStreamProvider.WriteStreamAsync), so a
+        // Created-triggered read is ALLOWED to observe a half-written file. That is fine; what
+        // is not fine is which one WINS. Without this claim the merge below was
+        // last-COMPLETION-wins, so a torn read of the just-created file could land after the
+        // complete one and stick — the collection then served an article with empty Content and
+        // empty PrerenderedHtml forever, which is the CollectionNamedArea flake's exact
+        // signature (MarkdownControl { Markdown = , Html = } as the last emission). Ordering by
+        // trigger is the correct rule because every read observes the file at-or-after its own
+        // trigger: a LATER trigger can therefore never carry OLDER content.
+        var sequence = Interlocked.Increment(ref ingestSequence);
+
         // The file read + parse is the IO leaf — pooled OFF the hub; only the parsed
         // in-memory article flows into the (synchronous) stream Update. The stream's
         // UpdateStreamRequest handler is await-free by contract.
@@ -358,9 +401,9 @@ public class ContentCollection : IDisposable
                 {
                     if (article is null)
                         return;
-                    var key = article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
-                        ? article.Path[..^3]
-                        : article.Path;
+                    var key = ArticleKey(article.Path);
+                    if (!ClaimIngest(key, sequence))
+                        return;   // a later-triggered read of this file already landed — drop this one
                     using var _ = caller is null ? null : AccessService?.SwitchAccessContext(caller);
                     markdownStream.Update(
                         x => new ChangeItem<InstanceCollection>(x!.SetItem(key, article), markdownStream.StreamId, Hub.Version),
