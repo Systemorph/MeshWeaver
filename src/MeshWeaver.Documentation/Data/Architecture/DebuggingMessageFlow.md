@@ -173,8 +173,14 @@ trail is printed whenever a pending callback is reported.
       → HANDLER_EXIT state=Processed@host/1(+1ms)
 ```
 
-Each trail ends in a **verdict line** (`⇒ …`) that names which failure shape it is, so you do not
-have to infer it from the stages. The stages remain above it as the evidence.
+Each trail ends in a **verdict** (`⇒ …`) naming which failure shape it is, so you do not have to
+infer it from the stages. Verdict and stages share **one line**, deliberately: these records are
+read out of `/tmp/meshweaver-test-trace.log` with `grep`, and a newline before the verdict would let
+`grep <messageId>` return the evidence while hiding the conclusion.
+
+The first stage is always `AWAITING …`, written when the callback is registered. That guarantees a
+trail is never empty — so "`AWAITING` and nothing else" is a positive statement (nothing was ever
+posted under this correlation), not an absence of evidence.
 
 Read it by what is **missing**:
 

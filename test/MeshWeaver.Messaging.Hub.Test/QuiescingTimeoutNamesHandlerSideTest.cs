@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
@@ -143,6 +144,43 @@ public class QuiescingTimeoutNamesHandlerSideTest(ITestOutputHelper output) : Hu
         summary.Should().Contain("a reply WAS posted for this correlation and the callback is STILL pending",
             "this is the 'reply lost on the way home' shape, and it must be told apart from a "
             + "handler that never replied");
+    }
+
+    /// <summary>
+    /// Each trail — stages AND verdict — must occupy exactly ONE line.
+    ///
+    /// <para>These records are read out of <c>/tmp/meshweaver-test-trace.log</c> with <c>grep</c>;
+    /// that file is shared by every test host in a CI shard and is the one artifact that survives a
+    /// killed run. A newline before the verdict splits a record in two, so <c>grep &lt;messageId&gt;</c>
+    /// returns the stages and hides the conclusion — handing the reader evidence without the answer,
+    /// which is precisely the failure this instrumentation exists to remove.</para>
+    /// </summary>
+    [Fact]
+    public async Task EachTrailIsOneGreppableLine_StagesAndVerdictTogether()
+    {
+        var host = GetHost();
+
+        using var subscription = host
+            .Observe<SwallowedResponse>(new SwallowedRequest(), o => o.WithTarget(CreateHostAddress()))
+            .Subscribe(_ => { }, _ => { });
+
+        await handlerRan.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        host.Dispose();
+        await host.DisposalCompleted.FirstAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(20));
+
+        var summary = host.GetQuiescingTimeoutSummary();
+        Output.WriteLine(summary);
+
+        var trailLines = summary
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Where(l => l.Contains("HANDLER_ENTER", StringComparison.Ordinal))
+            .ToArray();
+
+        trailLines.Should().NotBeEmpty("the trail must be present at all");
+        trailLines.Should().OnlyContain(l => l.Contains("⇒", StringComparison.Ordinal),
+            "the verdict must sit on the SAME line as the stages it explains — a grep for the "
+            + "request id has to return the answer, not just the evidence");
     }
 
     /// <summary>
