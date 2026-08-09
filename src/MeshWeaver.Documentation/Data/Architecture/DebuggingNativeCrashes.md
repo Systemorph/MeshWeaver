@@ -281,36 +281,43 @@ collectible NodeType assemblies loading and unloading, and 48 gen2 GCs in 75 s.
 🚨 **Do not "fix" this by turning off concurrent GC** in the test host. That hides the fault without
 changing anything about why it happens, and the same workload runs in prod.
 
-### 2026-08-09: the same fault, independently reproduced — the verdict is not a one-off
+### 2026-08-09: reproduced twice more — the verdict is not a one-off, and `+0x5cb1e1` is its fingerprint
 
-`MeshWeaver.FutuRe.Test exit=139` on **`main` @ `8a5c8bf57`** (run `31309378803`, shard 2, dump
-`dotnet-3032.dmp`) resolves to the identical fault, three days and many merges later:
+Both `exit=139`s of 2026-08-09 resolve to the **identical** fault, days and many merges after the
+original analysis. On runtime `10.0.10` the whole comparison collapses to one number: **RVA
+`0x5cb1e1`**, `WKS::gc_heap::background_sweep()+0xa61`. Compare that first on any recurrence.
 
-| | 2026-08-06 (run `31083356138`) | 2026-08-09 (run `31309378803`) |
-|---|---|---|
-| `si_signo` / `si_code` / `si_addr` | 11 / 1 / — | 11 / 1 (`SEGV_MAPERR`) / **`0x0`** |
-| faulting frame | `WKS::gc_heap::background_sweep()` | **`WKS::gc_heap::background_sweep()`** (RVA `0x5cb1e1`, `+0xa61`) |
-| instruction | `mov ecx, [rax]`, `rax == 0` | **`8b 08` = `mov ecx, [rax]`, `RAX = 0x0`** |
-| `TRAPNO` / `ERR` / `CR2` | 14 / `0x4` / `0x0` | **14 / `0x4` / `0x0`** |
-| phase | mid-run, 44 ms into a fresh fixture | **mid-run, ~476 ms into a fresh fixture** |
-| gen2 GCs | 48 in 75 s | **34 in 35 s** |
+| | 2026-08-06 (`31083356138`) | 2026-08-09 06:59Z (`31299547995`) | 2026-08-09 11:05Z (`31309378803`) |
+|---|---|---|---|
+| `si_signo`/`si_code`/`si_addr` | 11 / 1 / — | 11 / 1 (`SEGV_MAPERR`) / **`0x0`** | 11 / 1 / **`0x0`** |
+| faulting RVA | `background_sweep()` | **`0x5cb1e1` (+`0xa61`)** | **`0x5cb1e1` (+`0xa61`)** |
+| instruction | `mov ecx,[rax]`, `rax == 0` | **`8b 08` = `mov ecx,[rax]`, `RAX=0x0`** | **`8b 08`, `RAX=0x0`** |
+| `TRAPNO`/`ERR`/`CR2` | 14 / `0x4` / `0x0` | **14 / `0x4` / `0x0`** | **14 / `0x4` / `0x0`** |
+| mutator phase | 44 ms into a fresh fixture | **96 ms into a `Mesh.Dispose()`** | **476 ms into a fresh fixture** |
+| dump | — | `dotnet-3050.dmp` | `dotnet-3032.dmp` |
 
-Two things this second sighting settles, both of which had been re-litigated in #613:
+**The mutator phase varies while the faulting instruction does not — and that is the point.** One
+lands mid-teardown, two land inside a fresh test. A background-GC sweep runs *concurrently* with
+whatever the mutator is doing, so an identical fault at three different phases is what this
+diagnosis predicts, and it is the opposite of what a teardown-ordering defect would produce (those
+reproduce at one phase, by construction). Do not read the phase of any single sighting as evidence
+about the cause; read the RVA.
 
-- **It is not fixed by, and has nothing to do with, the teardown work.** The crashing tree contains
-  both #967 (node ALCs unload at the *end* of teardown) and #996 (pending Rx timers no longer root
-  disposed hubs). The process's own `_meshweaver-test-trace.log` shows **all 22** `DISPOSE_DONE`
-  records reading `teardown clean — all pooled I/O joined, async dispose queue drained`, **zero**
-  `DISPOSE_QUIESCE_LEAK`, **zero** `DISPOSE_DIRTY_TEARDOWN`, and the straggler log holds two
-  first-chance records, both in a *different* project's process.
-- **It is not a teardown crash at all.** The last trace record is `INIT_MEM` for a *newly
-  constructed* fixture whose predecessor had just torn down cleanly. "Teardown SIGSEGV" is the
-  wrong frame for this failure; it dies inside a fresh test, under gen2 pressure of roughly one
-  collection per second.
+Two further things these sightings settle, both re-litigated at length in #613:
+
+- **The teardown work neither caused nor cured it.** The 11:05Z tree contains #967 (node ALCs unload
+  at the *end* of teardown) and #996 (pending Rx timers no longer root disposed hubs) — it crashed
+  87 minutes after the latter merged. Across both processes' `_meshweaver-test-trace.log`, **all 22
+  and all 44** `DISPOSE_DONE` records read `teardown clean — all pooled I/O joined, async dispose
+  queue drained`, with **zero** `DISPOSE_QUIESCE_LEAK` and **zero** `DISPOSE_DIRTY_TEARDOWN`.
+- **It is not the quiescing-leak family (#981).** Over 18 failing shard-job logs across those two
+  days, the signal death and the `left Observe subscriptions pending past the Quiescing budget`
+  failure each occur twice and **never co-occur** — not in a run, a shard, or a job. In one job
+  `FutuRe.Test` ran 69 s to `exit=0` while the quiescing leak fired in `Hosting.Monolith.Test`.
 
 **Check the trace log's completeness before reasoning from it** (see the `FAULT-BUDGET` note above):
-here all four suppression windows belonged to a later project's pid, so the crashing process's
-record was whole — which is what makes "zero quiesce leaks" evidence rather than an absence.
+in the 11:05Z file all four suppression windows belonged to a *later* project's pid, so the crashing
+process's record was whole — which is what makes "zero quiesce leaks" evidence rather than an absence.
 
 ## Reading the result honestly
 
