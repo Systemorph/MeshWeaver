@@ -1,8 +1,9 @@
 ---
 Name: Button styles now apply
-Category: What's New
+Category: Fix
 Description: A style set on a button — or on an icon, badge, checkbox or menu — now reaches the page instead of being silently discarded.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Button styles now apply

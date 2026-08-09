@@ -1,8 +1,9 @@
 ---
 Name: Videos, presenter mode and menu labels in the React portal
-Category: What's New
+Category: Fix
 Description: The React portal now plays videos, drives slide decks from the keyboard, and shows navigation menu titles and icons.
 Icon: Sparkle
+Order: -20260726
 ---
 
 # Videos, presenter mode and menu labels in the React portal

@@ -1,8 +1,9 @@
 ---
 Name: Long agent responses no longer time out, and the side panel scrolls content
-Category: What's New
+Category: Fix
 Description: Model calls are no longer cut off after 100 seconds, and node content shown in the side panel is now scrollable.
 Icon: Sparkle
+Order: -20260801
 ---
 
 # Long agent responses no longer time out, and the side panel scrolls content

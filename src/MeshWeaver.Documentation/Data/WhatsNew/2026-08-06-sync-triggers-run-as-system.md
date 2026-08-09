@@ -1,8 +1,9 @@
 ---
 Name: GitHub sync triggers work again on system-owned Spaces
-Category: What's New
+Category: Fix
 Description: Check, update and commit on a GitSynced Space no longer demand write permissions nobody holds — your click authorizes the operation, and the platform executes it.
 Icon: ArrowSync
+Order: -20260806
 ---
 
 Triggering a Space's GitHub sync — Check branch, Update to latest, or Sync now — works again for
