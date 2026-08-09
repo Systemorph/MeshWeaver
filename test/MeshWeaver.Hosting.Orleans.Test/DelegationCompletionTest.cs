@@ -217,58 +217,51 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         const string visibleBody = "Hello! How can I help you today?";
         var streamedResponse = $"{visibleBody} <summary>{expectedSummary}</summary>";
 
-        // Swap the cluster's chat client factory to one that streams our crafted
-        // response. SwappableFactory is process-wide — restore the default
-        // FakeChatClientFactory in a try/finally so subsequent tests aren't affected.
-        SharedOrleansFixture.SwappableFactory.SetInner(new SteerableFakeChatClientFactory(streamedResponse));
-        try
-        {
-            var client = GetClient();
-            var workspace = client.GetWorkspace();
+        // Swap THIS cluster's chat client factory to one that streams our crafted response.
+        // Fixture.ChatFactory is a per-cluster instance discarded with the fixture, so there
+        // is nothing to restore afterwards.
+        Fixture.ChatFactory.SetInner(new SteerableFakeChatClientFactory(streamedResponse));
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
 
-            var createResp = await client
-                .Observe(new CreateNodeRequest(
-                    ThreadNodeType.BuildThreadNode("TestUser", "Summary block test", "TestUser")),
-                    o => o.WithTarget(new Address("TestUser")))
-                .Should().Within(45.Seconds()).Emit();
-            createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
-            var threadPath = createResp.Message.Node!.Path!;
+        var createResp = await client
+            .Observe(new CreateNodeRequest(
+                ThreadNodeType.BuildThreadNode("TestUser", "Summary block test", "TestUser")),
+                o => o.WithTarget(new Address("TestUser")))
+            .Should().Within(45.Seconds()).Emit();
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
+        var threadPath = createResp.Message.Node!.Path!;
 
-            client.SubmitMessage(
-                threadPath,
-                "Hi",
-                contextPath: "TestUser");
+        client.SubmitMessage(
+            threadPath,
+            "Hi",
+            contextPath: "TestUser");
 
-            var threadAtIdle = await workspace.GetMeshNodeStream(threadPath)
-                .Select(node => node?.Content as MeshThread)
-                .Should().Within(45.Seconds()).Match(t => t is { Status: MeshWeaver.AI.ThreadExecutionStatus.Idle }
-                            && !string.IsNullOrEmpty(t.Summary));
+        var threadAtIdle = await workspace.GetMeshNodeStream(threadPath)
+            .Select(node => node?.Content as MeshThread)
+            .Should().Within(45.Seconds()).Match(t => t is { Status: MeshWeaver.AI.ThreadExecutionStatus.Idle }
+                        && !string.IsNullOrEmpty(t.Summary));
 
-            threadAtIdle!.Summary.Should().Be(expectedSummary,
-                "ExecuteMessageAsync must parse <summary>...</summary> from the agent " +
-                "response and write the inner text as Thread.Summary atomically with Status=Idle.");
+        threadAtIdle!.Summary.Should().Be(expectedSummary,
+            "ExecuteMessageAsync must parse <summary>...</summary> from the agent " +
+            "response and write the inner text as Thread.Summary atomically with Status=Idle.");
 
-            // Response cell carries the same Summary and clean Text (marker stripped).
-            var responseMsgId = threadAtIdle.Messages.Last();
-            var responsePath = $"{threadPath}/{responseMsgId}";
-            var responseMsg = await workspace.GetMeshNodeStream(responsePath)
-                .Select(node => node?.Content as ThreadMessage)
-                .Should().Within(45.Seconds()).Match(m => m is { Status: ThreadMessageStatus.Completed } && !string.IsNullOrEmpty(m.Summary));
-            responseMsg!.Summary.Should().Be(expectedSummary,
-                "ThreadMessage.Summary on the response cell must match Thread.Summary");
-            responseMsg.Text.Should().NotContain("<summary>",
-                "the <summary> marker must be stripped from the user-visible Text");
-            responseMsg.Text.Should().NotContain(expectedSummary,
-                "the summary inner text must be stripped from Text too (lives only in Summary)");
-            responseMsg.Text.Should().Contain(visibleBody.Trim(),
-                "the agent's user-visible response body must survive the strip");
+        // Response cell carries the same Summary and clean Text (marker stripped).
+        var responseMsgId = threadAtIdle.Messages.Last();
+        var responsePath = $"{threadPath}/{responseMsgId}";
+        var responseMsg = await workspace.GetMeshNodeStream(responsePath)
+            .Select(node => node?.Content as ThreadMessage)
+            .Should().Within(45.Seconds()).Match(m => m is { Status: ThreadMessageStatus.Completed } && !string.IsNullOrEmpty(m.Summary));
+        responseMsg!.Summary.Should().Be(expectedSummary,
+            "ThreadMessage.Summary on the response cell must match Thread.Summary");
+        responseMsg.Text.Should().NotContain("<summary>",
+            "the <summary> marker must be stripped from the user-visible Text");
+        responseMsg.Text.Should().NotContain(expectedSummary,
+            "the summary inner text must be stripped from Text too (lives only in Summary)");
+        responseMsg.Text.Should().Contain(visibleBody.Trim(),
+            "the agent's user-visible response body must survive the strip");
 
-            Output.WriteLine($"Verified: Summary='{threadAtIdle.Summary}', Text='{responseMsg.Text}'");
-        }
-        finally
-        {
-            SharedOrleansFixture.SwappableFactory.Reset();
-        }
+        Output.WriteLine($"Verified: Summary='{threadAtIdle.Summary}', Text='{responseMsg.Text}'");
     }
 }
 
