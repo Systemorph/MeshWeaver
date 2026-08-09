@@ -33,11 +33,12 @@ public static partial class LogLineParser
     /// <summary>How much of a normalized message survives into the fingerprint. Long messages
     /// (a serialized payload, a wall of SQL) differ in their tails far more often than in the
     /// part that identifies the fault, so the tail is deliberately not fingerprinted.</summary>
-    private const int FingerprintMessageLength = 300;
-
     /// <summary>The parsed head of a red log burst.</summary>
     /// <param name="Severity">Error or Critical.</param>
     /// <param name="Category">The .NET log category.</param>
+    /// <param name="EventId">The event id from the console header (<c>Category[0]</c>) — the log
+    /// SITE the code assigns, and the discriminator the incident identity leans on for bursts that
+    /// carry no exception or stack frame.</param>
     /// <param name="Message">The message as logged (volatile parts intact).</param>
     /// <param name="NormalizedMessage">The message with volatile parts masked.</param>
     /// <param name="ExceptionType">The exception type name, when present.</param>
@@ -45,6 +46,7 @@ public static partial class LogLineParser
     public record ParsedBurst(
         LogSeverity Severity,
         string Category,
+        int EventId,
         string Message,
         string NormalizedMessage,
         string? ExceptionType,
@@ -72,10 +74,15 @@ public static partial class LogLineParser
         if (lines.Count == 0 || !IsRedHeader(lines[0], out var severity))
             return null;
 
-        // "fail: Category.Name[42]" → category without the event id.
+        // "fail: Category.Name[42]" → the category AND the event id. The id was previously thrown
+        // away; it is the identity the code assigns to a log SITE, which is what the incident key
+        // now leans on instead of the message text.
         var header = lines[0][5..].Trim();
         var bracket = header.LastIndexOf('[');
         var category = (bracket > 0 ? header[..bracket] : header).Trim();
+        var eventId = 0;
+        if (bracket > 0 && header.EndsWith(']'))
+            _ = int.TryParse(header[(bracket + 1)..^1], out eventId);
 
         var body = lines.Skip(1).Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
 
@@ -95,6 +102,7 @@ public static partial class LogLineParser
         return new ParsedBurst(
             severity,
             category,
+            eventId,
             message,
             Normalize(message),
             exceptionType,
@@ -154,33 +162,13 @@ public static partial class LogLineParser
     }
 
     /// <summary>
-    /// The stable identity of a fault: a short hash over category, exception type, normalized
-    /// message (head only) and top frame.
-    ///
-    /// <para>The <b>exception type is part of the identity</b>: the same log message can precede
-    /// entirely different failures (an <c>InvalidOperationException</c> and a
-    /// <c>NullReferenceException</c> under one "Update failed" line are two bugs), and folding them
-    /// into one incident would hide the second behind the first's already-filed ticket.</para>
-    ///
-    /// <para>Deliberately EXCLUDES namespace and pod — the same defect on two pods is ONE ticket,
-    /// and the pods are recorded on the incident instead.</para>
+    /// The stable identity of a fault. Delegates to <see cref="StructuralLogIncidentIdentity"/> —
+    /// there is ONE definition of "the same incident", and it lives behind
+    /// <see cref="ILogIncidentIdentity"/> so a Code node can replace it without a redeploy.
     /// </summary>
-    public static string Fingerprint(
-        string category, string normalizedMessage, string? topFrame, string? exceptionType = null)
-    {
-        var head = normalizedMessage.Length > FingerprintMessageLength
-            ? normalizedMessage[..FingerprintMessageLength]
-            : normalizedMessage;
-        var payload = $"{category}\n{exceptionType ?? ""}\n{head}\n{topFrame ?? ""}";
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
-        // 16 hex chars ≈ 64 bits — collision-free at any realistic incident count, and short
-        // enough to read in a node path and an issue title.
-        return Convert.ToHexStringLower(hash.AsSpan(0, 8));
-    }
-
-    /// <summary>Fingerprints an already-parsed burst.</summary>
-    public static string Fingerprint(ParsedBurst burst) =>
-        Fingerprint(burst.Category, burst.NormalizedMessage, burst.TopFrame, burst.ExceptionType);
+    public static string Fingerprint(ParsedBurst burst) => StructuralLogIncidentIdentity.Compute(
+        new LogBurst(burst.Category, burst.EventId, burst.Severity, burst.Message,
+            burst.NormalizedMessage, burst.ExceptionType, burst.TopFrame));
 
     [GeneratedRegex(@"^(?<type>[A-Z][\w.]*(?:Exception|Error))(?::|\s*$)", RegexOptions.CultureInvariant)]
     private static partial Regex ExceptionLine();
