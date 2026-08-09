@@ -398,9 +398,9 @@ helm_deploy() {
   #    instance comes up with an empty catalog.
   #    Add more repos by listing them in MEMEX_PLUGIN_REPOS (colon-separated paths); each folder's
   #    basename becomes the SOURCE NAME an instance is granted (e.g. …/education → "education").
-  local plugin_args=() idx=0 repo_path repo_name
+  local plugin_args=() idx=0 repo_path repo_name install_names=()
   for repo_path in $(plugin_repo_paths); do
-    repo_name="$(basename "$repo_path" | sed 's/^MeshWeaver\.//')"
+    repo_name="$(plugin_source_name "$repo_path")"
     plugin_args+=(
       --set "pluginCatalog.localRepoMounts[$idx].name=$repo_name"
       --set "pluginCatalog.localRepoMounts[$idx].hostPath=$repo_path"
@@ -410,10 +410,23 @@ helm_deploy() {
       --set "pluginCatalog.sources[$idx].format=node-repo"
       --set "pluginCatalog.defaultGrants[$idx]=$repo_name/*"
     )
+    install_names+=("$repo_name")
     info "serving plugin repo '$repo_name' from $repo_path (granted to every new instance)"
     idx=$((idx + 1))
   done
   [ "$idx" -eq 0 ] && info "no local plugin repo found — the catalog will be empty (set MEMEX_PLUGIN_REPOS)"
+
+  # 🚨 InstallByDefault must name the sources we ACTUALLY configured. The chart ships
+  # ["Plugins/*"], which is right for the cloud registry but silently installs NOTHING here the
+  # moment a local source is named anything else — the matcher is source-scoped and fails closed
+  # by design, so the mismatch is invisible (an empty catalog, no error). Observed for real: a
+  # worktree at /Users/me/code/MWP-main produced source "MWP-main" against InstallByDefault
+  # "Plugins/*", and a fresh instance installed nothing at all.
+  local n i=0
+  for n in "${install_names[@]}"; do
+    plugin_args+=(--set "pluginCatalog.installByDefault[$i]=$n/*")
+    i=$((i + 1))
+  done
 
   helm upgrade --install "$RELEASE" "$chart" \
     -f "$chart/values.yaml" \
@@ -545,6 +558,22 @@ readonly LOCAL_BOOTSTRAP_SECRET="${MEMEX_BOOTSTRAP_SECRET:-memex-local-bootstrap
 # The plugin repos this local registry serves. Defaults to a MeshWeaver.Plugins checkout beside
 # MEMEX_REPO; override/extend with MEMEX_PLUGIN_REPOS (colon-separated absolute paths). Each
 # folder's basename (minus a "MeshWeaver." prefix) becomes the source name.
+# The SOURCE NAME a plugin checkout is served under. Taken from the git REMOTE, not the folder:
+# a checkout may live in a worktree named anything (MWP-main, plugins-tmp, a dated clone) while the
+# source name is an identity that grants and install-defaults are written against. Deriving it from
+# the directory silently renames the source when someone works in a worktree — which then matches
+# no grant and no install default. Falls back to the basename for a directory with no remote.
+plugin_source_name() {
+  local path="$1" url name
+  url="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+  if [ -n "$url" ]; then
+    name="$(basename "$url" .git)"
+  else
+    name="$(basename "$path")"
+  fi
+  printf '%s' "${name#MeshWeaver.}"
+}
+
 plugin_repo_paths() {
   if [ -n "${MEMEX_PLUGIN_REPOS:-}" ]; then
     printf '%s\n' "$MEMEX_PLUGIN_REPOS" | tr ':' '\n' | while read -r p; do
@@ -1349,6 +1378,11 @@ cmd_update() {
     case "$1" in
       --from-acr|--acr) image_source="acr" ;;
       --build) image_source="build" ;;
+      # Re-apply CONFIG only, reusing the images already in Colima's store. `up` has had this
+      # since the start; `update` did not, so re-rendering the chart after a values/flag change
+      # forced a full ~10-minute rebuild of images that were already current — or tempted you
+      # into hand-patching the live Deployment, which the next helm upgrade silently reverts.
+      --skip-image) image_source="skip" ;;
       --tag) shift; acr_tag="${1:?--tag needs a value}" ;;
       *) die "update: unknown flag '$1'" ;;
     esac
@@ -1362,6 +1396,7 @@ cmd_update() {
   case "$image_source" in
     build) image_build_local; portal_next_build_local ;;   # §3 Option B — portal + migration, then the /next React GUI
     acr)   image_pull_acr "$acr_tag" ;;          # §3 Option A — retags onto the chart's image names
+    skip)  info "reusing the images already in Colima's store — config re-apply only" ;;
   esac
 
   # Migration runs on EVERY update. The Job is named memex-migration-<.Release.Revision>
@@ -1498,7 +1533,7 @@ COMMANDS:
   status          colima / pods / ingress / port-forward / health.
   logs [--migration|--postgres] [--tail N] [--no-follow]
                   Tail logs (portal by default). Log level: $LOG_LEVEL.
-  update [--build|--from-acr] [--tag T]
+  update [--build|--from-acr|--skip-image] [--tag T]
                   Roll portal+migration to a newer image, then refresh forward.
   autoroll <up|down|status>
                   Auto-redeploy the portal whenever a fresh local image is built
