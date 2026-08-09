@@ -147,6 +147,13 @@ with every attempt and the final give-up written to the `ci-failure` issue. So:
 - **Publication is all-or-nothing**: each leg pushes only a non-selectable `staging-<sha>-<run_id>`
   tag, and the `promote` job applies the real tags only after all five legs succeed, ending with
   `memex-portal-ai:<version>` — the single write the self-updater acts on.
+- **Promotion also requires every NODE REPO to compile against the candidate** (`candidate-gate`,
+  gate 1 of the Candidate Release Protocol). Green CI does not mean the mesh compiles, and the node
+  repos pin core by digest, so nothing used to re-run them when core moved — that is how a deleted
+  `AddTracking` reached production. A broken closure publishes `preview-<sha>` instead and names
+  every break on the `ci-failure` issue; the images exist, the version tag does not. Full wiring,
+  including the cross-repo token it needs to be ARMED at all:
+  [CandidateReleaseGate.md](src/MeshWeaver.Documentation/Data/Architecture/CandidateReleaseGate.md).
 
 **Before believing something is deployed, check the IMAGE, never the green tick:**
 
