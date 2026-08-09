@@ -257,7 +257,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
     }
 
     /// <summary>
-    /// Regression for the atioz first-user bug: the platform-admin grant
+    /// Regression for the prod first-user bug: the platform-admin grant
     /// (<c>UserOnboardingService.GrantPlatformAdmin</c>) must produce a ROOT-scope
     /// AccessAssignment — namespace <c>_Access</c>, <c>MainNode=""</c> — so the first user
     /// passes <c>AdminMenuGate</c>'s root check (<c>GetEffectivePermissions("").HasFlag(All)</c>,

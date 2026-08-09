@@ -241,7 +241,7 @@
             {
               "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
               "apiVersion": "2024-01-01",
-              "name": "[format('{0}/{1}/{2}', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default', take(format('sharesvolumesmemexpostgres0-{0}', uniqueString(resourceGroup().id)), 63))]",
+              "name": "[format('{0}/{1}/{2}', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default', take(format('sharesvolumes<pg-server>0-{0}', uniqueString(resourceGroup().id)), 63))]",
               "properties": {
                 "enabledProtocols": "SMB",
                 "shareQuota": 1024
@@ -253,19 +253,19 @@
             {
               "type": "Microsoft.App/managedEnvironments/storages",
               "apiVersion": "2025-07-01",
-              "name": "[format('{0}/{1}', take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24), take(format('managedstoragevolumesmemexpostgres{0}', uniqueString(resourceGroup().id)), 24))]",
+              "name": "[format('{0}/{1}', take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24), take(format('managedstoragevolumes<pg-server>{0}', uniqueString(resourceGroup().id)), 24))]",
               "properties": {
                 "azureFile": {
                   "accountName": "[take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24)]",
                   "accountKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24)), '2024-01-01').keys[0].value]",
                   "accessMode": "ReadWrite",
-                  "shareName": "[take(format('sharesvolumesmemexpostgres0-{0}', uniqueString(resourceGroup().id)), 63)]"
+                  "shareName": "[take(format('sharesvolumes<pg-server>0-{0}', uniqueString(resourceGroup().id)), 63)]"
                 }
               },
               "dependsOn": [
                 "[resourceId('Microsoft.App/managedEnvironments', take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24))]",
                 "[resourceId('Microsoft.Storage/storageAccounts', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24))]",
-                "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default', take(format('sharesvolumesmemexpostgres0-{0}', uniqueString(resourceGroup().id)), 63))]"
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default', take(format('sharesvolumes<pg-server>0-{0}', uniqueString(resourceGroup().id)), 63))]"
               ]
             },
             {
@@ -332,7 +332,7 @@
           "outputs": {
             "volumes_memex_postgres_0": {
               "type": "string",
-              "value": "[take(format('managedstoragevolumesmemexpostgres{0}', uniqueString(resourceGroup().id)), 24)]"
+              "value": "[take(format('managedstoragevolumes<pg-server>{0}', uniqueString(resourceGroup().id)), 24)]"
             },
             "volumes_memex_portal_0": {
               "type": "string",

@@ -10,7 +10,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Pins where node CRUD is TARGETED. The mesh hub is the router: running create/delete/move on its
-/// action block starves real routing traffic and wedges the portal (atioz 2026-06-11 —
+/// action block starves real routing traffic and wedges the portal (prod 2026-06-11 —
 /// "11× CreateOrUpdateNodeRequest + 3× CreateNodeRequest@mesh/&lt;self&gt; stale &gt;60s"). So a hub that
 /// declared itself an execution target must serve its own writes, and everything else keeps falling
 /// back to the router exactly as before.

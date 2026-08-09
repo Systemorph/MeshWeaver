@@ -29,7 +29,7 @@ import asyncio
 import meshweaver as mw
 
 async def main():
-    async with await mw.Mesh.connect("https://atioz.meshweaver.cloud", token="mw_...") as mesh:
+    async with await mw.Mesh.connect("https://memex.meshweaver.cloud", token="mw_...") as mesh:
         stories = await mesh.search("nodeType:Story namespace:ACME")   # mesh -> python
         # ... native Python does the work (pandas, numpy, your model) ...
         await mesh.patch("ACME/Stories/42", {"content": {"processed": True}})  # python -> mesh
@@ -46,7 +46,7 @@ over the bridge to a connected **Python worker** — this package is that worker
 script and writes the result onto the run's Activity node, so Python runs surface exactly like C# ones.
 
 ```bash
-python -m meshweaver.worker --url https://atioz.meshweaver.cloud --token mw_… --address py/python-kernel
+python -m meshweaver.worker --url https://memex.meshweaver.cloud --token mw_… --address py/python-kernel
 ```
 
 `execute_python(code, inputs)` is the pure execution core (captures stdout + the trailing expression's

@@ -8,7 +8,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
-/// Repro + contract for the atioz compile-activity resubscribe storm (2026-06-10):
+/// Repro + contract for the prod compile-activity resubscribe storm (2026-06-10):
 /// <c>ActivityControlPlaneExtensions.WatchControlPlane</c>/<c>WatchSubmission</c> subscribe
 /// to the hub's OWN node; when that node is gone/unroutable the read faults with a routing
 /// <see cref="ErrorType.NotFound"/>, and the OLD code re-established every 1 s forever — a

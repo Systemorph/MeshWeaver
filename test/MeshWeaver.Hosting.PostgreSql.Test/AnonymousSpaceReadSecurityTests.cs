@@ -34,7 +34,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// identity (<c>"system-security"</c>) under <c>ImpersonateAsSystem()</c>, and
 /// <c>PermissionEvaluator</c> grants System <see cref="Permission.All"/> — so the Read gate
 /// passes and anonymous reads private content. (Confirmed live: anyone can open
-/// <c>https://atioz.meshweaver.cloud/AgenticPension/</c> unauthenticated.)</para>
+/// <c>https://memex.meshweaver.cloud/AgenticPension/</c> unauthenticated.)</para>
 ///
 /// <para>The first assertion shows the access LOGIC is correct
 /// (<c>GetEffectivePermissions(space, Anonymous) == None</c>) — proving the leak is purely

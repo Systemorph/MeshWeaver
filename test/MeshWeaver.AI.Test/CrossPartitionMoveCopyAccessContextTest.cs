@@ -15,7 +15,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Regression guard for the production failure (memex.systemorph.com): a cross-partition
+/// Regression guard for the production failure (portal.example.com): a cross-partition
 /// <c>move</c>/<c>copy</c> of a node SUBTREE fails with
 /// <c>"AccessContext must never be null for an application post … message=CreateNodeRequest"</c>.
 ///
@@ -31,7 +31,7 @@ namespace MeshWeaver.AI.Test;
 /// <para><b>Why cross-partition.</b> A same-partition move/copy can route the child creates through
 /// the local data source without a fresh cross-hub post; the routed cross-partition
 /// <c>CreateNodeRequest</c> is what surfaces the lost identity — exactly the production shape
-/// (<c>PartnerRe/AIConsulting -&gt; ClientPartnerRe/AIConsulting</c>).</para>
+/// (<c>Acme/AIConsulting -&gt; ClientAcme/AIConsulting</c>).</para>
 ///
 /// <para><b>Why we do NOT lean on DevLogin's persistent context.</b> <see cref="TestUsers.DevLogin"/>
 /// stamps the Admin identity via <see cref="AccessService.SetCircuitContext"/>, which also writes the

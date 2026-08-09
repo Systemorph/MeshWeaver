@@ -80,7 +80,7 @@ by `streamId`), `Deliver` sends each delivery. Wire it in with [`src/live.ts`](s
 
 ```ts
 // App.tsx
-const LIVE: LiveOptions = { url: "https://atioz.meshweaver.cloud", token: "mw_…", address: "@app/Home", area: "main" };
+const LIVE: LiveOptions = { url: "https://memex.meshweaver.cloud", token: "mw_…", address: "@app/Home", area: "main" };
 ```
 
 `createLiveSource` connects over gRPC-web and feeds a `GrpcAreaSource`; left `null`, `StaticAreaSource` drives

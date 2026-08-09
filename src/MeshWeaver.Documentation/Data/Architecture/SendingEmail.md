@@ -29,7 +29,7 @@ registered sender and sends — no DI lookup, no SDK types:
 Mesh.SendEmail(
         "alice@example.com",
         "Your export is ready",
-        "<p>Hi Alice — your nightly export finished. <a href='https://memex.systemorph.com/...'>Open it</a>.</p>")
+        "<p>Hi Alice — your nightly export finished. <a href='https://portal.example.com/...'>Open it</a>.</p>")
     .Subscribe(
         ok => Log.LogInformation("Email sent: {Ok}", ok),
         ex => Log.LogError(ex, "Email send failed"));

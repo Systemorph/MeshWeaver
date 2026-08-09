@@ -12,7 +12,7 @@ public record InstancesOptions
 {
     /// <summary>Whether the platform-admin Instances tab is available on this install AT ALL.
     /// Default <c>false</c> — the tab is meant ONLY for the company/control instance
-    /// (memex.systemorph.com), which is also the only install whose service account gets the
+    /// (portal.example.com), which is also the only install whose service account gets the
     /// cluster-read RBAC (<c>instancesAdmin.clusterRead</c> in the Helm chart plumbs both). On every
     /// other instance the menu item never appears. Set via <c>Instances:Enabled</c>.</summary>
     public bool Enabled { get; init; }
@@ -42,13 +42,13 @@ public record InstancesOptions
     // ── Displayed / used for the guided create-instance command generation (Instances.md) ──
 
     /// <summary>AKS cluster name (display + generated commands).</summary>
-    public string ClusterName { get; init; } = "memexaks-cluster";
+    public string ClusterName { get; init; } = "the AKS cluster";
 
     /// <summary>Azure resource group of the cluster + PG server (generated commands).</summary>
-    public string ResourceGroup { get; init; } = "memex-aks-rg";
+    public string ResourceGroup { get; init; } = "the AKS resource group";
 
     /// <summary>Shared PostgreSQL Flexible Server name (generated commands).</summary>
-    public string PostgresServer { get; init; } = "memexaks-pg";
+    public string PostgresServer { get; init; } = "the Postgres server";
 
     /// <summary>DNS zone new instance hosts live under (generated commands / display).</summary>
     public string DnsZone { get; init; } = "meshweaver.cloud";

@@ -28,7 +28,7 @@ namespace MeshWeaver.Hosting.PostgreSql;
 ///     route to the per-schema adapter. If the partition was never provisioned the schema
 ///     does not exist and the write faults with Postgres <c>42P01</c> — the "no partition,
 ///     no write" refusal. The router does NOT lazily CREATE SCHEMA for an arbitrary path
-///     segment (that was the atioz 45-ghost-schema DB-corruption root cause).</item>
+///     segment (that was the prod 45-ghost-schema DB-corruption root cause).</item>
 ///   <item><b>Reads</b> route straight to the per-schema adapter, which
 ///     <i>tolerates an absent schema</i>: each read catches Postgres
 ///     <c>42P01</c> (undefined table/schema) and returns the empty result
@@ -118,7 +118,7 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
         // user/space, the first path segment) becomes a Postgres SCHEMA, so it must be a
         // simple identifier. A URL- or query-string-shaped segment
         // (`login?error=auth_failed`, `search?q=agent&hq=scope%3adescendants`) must NEVER
-        // be lazily CREATE SCHEMA'd. Prod 2026-06-05: the atioz DB filled with exactly
+        // be lazily CREATE SCHEMA'd. Prod 2026-06-05: the prod DB filled with exactly
         // these garbage schemas (request URLs routed as mesh paths) and corrupted itself.
         // → null so no schema is created; the write falls through to the next provider.
         // The charset rule is the shared PartitionDefinition.IsValidPartitionSegment —
@@ -192,7 +192,7 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
     /// router only routes. A write whose partition was never provisioned routes to a
     /// non-existent schema and faults with Postgres <c>42P01</c> (the "no partition, no
     /// write" refusal) rather than lazily conjuring a ghost schema for an arbitrary path
-    /// segment (the atioz 45-ghost-schema corruption). Path resolution is pure; the
+    /// segment (the prod 45-ghost-schema corruption). Path resolution is pure; the
     /// no-op observable is returned when the segment isn't a routable partition.
     /// </summary>
     private IObservable<T> RouteWrite<T>(

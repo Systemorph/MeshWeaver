@@ -42,7 +42,7 @@ export function instanceIdentity(inst: MeshInstance): InstanceIdentity {
       ? { icon: "🖥️", color: "#2ea043", kind: "Local · SQLite", tone: "local" }
       : u.includes("memex.localhost")
         ? { icon: "☸", color: "#d29922", kind: "Local · k8s", tone: "k8s" }
-        : u.includes("atioz")
+        : u.includes("prod")
           ? { icon: "🏢", color: "#a371f7", kind: "Client", tone: "client" }
           : u.includes("meshweaver.cloud")
             ? { icon: "☁️", color: "#4c8dff", kind: "Prod", tone: "prod" }
@@ -70,7 +70,6 @@ const SEED_VERSION = 1;
 export const KNOWN_INSTANCES: MeshInstance[] = [
   { name: "memex.localhost (k8s)", url: "https://memex.localhost:8443", token: "", local: false, icon: "☸", color: "#d29922", kind: "Local · k8s" },
   { name: "memex", url: "https://memex.meshweaver.cloud", token: "", local: false, icon: "☁️", color: "#4c8dff", kind: "Prod" },
-  { name: "atioz", url: "https://atioz.meshweaver.cloud", token: "", local: false, icon: "🏢", color: "#a371f7", kind: "Client" },
 ];
 
 /**

@@ -33,7 +33,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// cross-hub merge apply (DataExtensions.NextMeshNodeVersion). So a write made while the hub clock sits far below the node
 /// version still lands a Version strictly ABOVE it — the authoritative <c>get</c> never regresses.
 /// Crucially the fix does NOT touch <c>Hub.Version</c> (re-seeding that shared clock backward is
-/// what dropped live layout Fulls, the atioz 2026-06-18 "cannot find pinned doc" wedge), and it
+/// what dropped live layout Fulls, the prod 2026-06-18 "cannot find pinned doc" wedge), and it
 /// does NOT retie the sync-stream FRAME version to the content Version (that version is absent on a
 /// partial cross-hub patch frame, so the frame would flap and drop legitimate mid-stream updates —
 /// it broke the activity/export relay). The residual cross-SILO mirror-drop after a recycle (the

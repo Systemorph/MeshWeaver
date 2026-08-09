@@ -33,7 +33,7 @@ routes every send through `Deliver`. Callers see the same three primitives as th
 ```ts
 import { connect } from "@meshweaver/client-web";
 
-const mesh = await connect("https://atioz.meshweaver.cloud", { token: "mw_…" });
+const mesh = await connect("https://memex.meshweaver.cloud", { token: "mw_…" });
 
 // request / response — correlated by RequestId
 const resp = await mesh.observe("mesh/main", "QueryRequest", { query: "nodeType:Story" });

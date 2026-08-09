@@ -72,7 +72,7 @@ public class ContentUploadTest(ITestOutputHelper output) : MonolithMeshTestBase(
             "call1", "UploadContent",
             new System.Collections.Generic.Dictionary<string, object?>
             {
-                ["nodePath"] = "@PartnerRe/AiConsulting",
+                ["nodePath"] = "@Acme/AiConsulting",
                 ["filePath"] = "architecture-diagram.svg"
             });
 

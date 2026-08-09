@@ -101,7 +101,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
 
     /// <summary>
     /// Tests the exact production scenario: nested path with content: reference.
-    /// Replicates: PartnerRe/AIConsulting/Interviews/content:Input_Markus.txt
+    /// Replicates: Acme/AIConsulting/Interviews/content:Input_Markus.txt
     /// </summary>
     [Fact]
     public async Task Get_ContentReference_NestedPath_ReturnsFileContent()

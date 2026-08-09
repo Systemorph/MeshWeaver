@@ -31,7 +31,7 @@ public class PostgreSqlTransientRetryTest
     [Fact]
     public void NpgsqlConnectFailure_IsTransient() =>
         Assert.True(PostgreSqlStorageAdapter.IsTransientConnectionFault(
-            new NpgsqlException("Failed to connect to 10.42.18.4:5432")));
+            new NpgsqlException("Failed to connect to the PG private IP:5432")));
 
     [Fact]
     public void TimeoutException_IsTransient() =>

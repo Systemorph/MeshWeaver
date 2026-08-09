@@ -254,7 +254,7 @@ inbound adds the subscription block. The client secret comes from Key Vault in p
 | `Email:TenantId` / `Email:ClientId` / `Email:ClientSecret` | app-only Graph credential (`Mail.Send` + `Mail.ReadWrite`) |
 | `Email:UseManagedIdentity` | use a managed identity instead of a client secret (prod) |
 | `Email:InboundEnabled` | turn on the inbound channel (Graph subscription + webhook) |
-| `Email:WebhookBaseUrl` | public base URL Graph calls back (e.g. `https://memex.systemorph.com`) |
+| `Email:WebhookBaseUrl` | public base URL Graph calls back (e.g. `https://portal.example.com`) |
 | `Email:SubscriptionClientState` | shared secret echoed on each inbound notification (webhook validation) |
 | `ModelTier:Light` | the cheap model the triage agent runs on (a cheap-yet-capable Azure model, e.g. a `*-mini`/`*-nano` deployment) |
 

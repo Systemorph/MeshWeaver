@@ -21,7 +21,7 @@ namespace MeshWeaver.Hosting.Test;
 /// hub's <c>ContentAs&lt;T&gt;</c> — where <c>T</c> is its OWN compiled copy — then hit the
 /// <c>default:</c> branch (not <c>T</c>, not <see cref="JsonElement"/>) and silently returned
 /// null: every content-filtered loader row vanished and the dashboards rendered their empty
-/// state (atioz: <c>AgenticPension/Dashboard</c> EntryNode = 0 of 200, ExtraktionsReview
+/// state (prod: <c>AgenticPension/Dashboard</c> EntryNode = 0 of 200, ExtraktionsReview
 /// "Noch keine Bilanzwerte geladen"), while metadata-only collections kept working.</para>
 ///
 /// <para>The contract (per the ContentAs xmldoc): the read site owns recovery into its target

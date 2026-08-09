@@ -16,7 +16,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Regression repro for the atioz <c>get @Thread</c> failure. The <c>Thread</c> NodeType node is a real
+/// Regression repro for the prod <c>get @Thread</c> failure. The <c>Thread</c> NodeType node is a real
 /// per-node hub (its <c>NodeTypeDefinition</c> is not definition-only) that runs thread execution; on
 /// cold activation its <c>SetThreadHubIdentity</c> initializer self-read its own node via
 /// <c>hub.GetMeshNode(hub.Address.ToString())</c>. The old <c>GetMeshNode</c> posted a

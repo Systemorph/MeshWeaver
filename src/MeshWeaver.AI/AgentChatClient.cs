@@ -1820,7 +1820,7 @@ public class AgentChatClient : IAgentChat
 
         // 🩹 Self-heal a stale / deleted pinned model. The composer can carry a model id that no
         // longer resolves to a live LanguageModel (catalog refactor, deleted provider) — building a
-        // chat client for it 404s the WHOLE thread (atioz sglauser / rsalzmann threads). When the
+        // chat client for it 404s the WHOLE thread (prod sglauser / rsalzmann threads). When the
         // selected model doesn't resolve, fall back to the DEFAULT available model so the thread runs
         // on the default instead of crashing.
         ApplyStaleModelFallback();

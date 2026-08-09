@@ -18,7 +18,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// a subscriber that RECEIVES the owner's writes through its own subscription must NOT
 /// resubscribe when the change feed announces those same writes — on prod one hot ApiToken node
 /// (written per request, version 8939 in a day) made all 85 of its subscriber streams resubscribe
-/// on every write, starving the hubs (atioz 2026-07-02). A subscriber that is BEHIND the
+/// on every write, starving the hubs (prod 2026-07-02). A subscriber that is BEHIND the
 /// announced version (orphaned by a recycled owner grain — see
 /// <see cref="ResubscribeOnOwnerDisposeTest"/> for the full dispose flow) must still refresh.
 /// </summary>

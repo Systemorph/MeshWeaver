@@ -139,7 +139,7 @@ public class LanguageModelNodeTypeTest
 
         // The seeder emits a _Policy for the Provider partition AND one for the legacy Model
         // partition (the picker / model resolution read `model` under the user's identity, so it
-        // also needs PublicRead — restored after the catalog refactor, atioz 2026-06-23). Target
+        // also needs PublicRead — restored after the catalog refactor, prod 2026-06-23). Target
         // the Provider partition's policy specifically.
         var policy = nodes.Should().ContainSingle(n => n.NodeType == "PartitionAccessPolicy"
             && n.Namespace == ModelProviderNodeType.RootNamespace).Subject;

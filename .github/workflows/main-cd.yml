@@ -3,7 +3,7 @@ name: Continuous Delivery (main)
 # CONTINUOUS-channel delivery: every merge to main that PASSES the test suite ships a
 # fresh deployment image and rolls it out to every environment.
 #
-#   push main ─▶ "MeshWeaver Build and Test" (existing) ─▶ [THIS] images ─▶ deploy (memex, atioz, memex-cloud)
+#   push main ─▶ "MeshWeaver Build and Test" (existing) ─▶ [THIS] images ─▶ deploy (memex, prod, memex-cloud)
 #
 # Why workflow_run (and not push: branches:[main]): we want the image+deploy to fire ONLY
 # after the full test suite is green on the merged commit — never ship an image that failed
@@ -46,8 +46,8 @@ concurrency:
 
 env:
   ACR: meshweaver.azurecr.io
-  AKS_RG: memex-aks-rg
-  AKS_CLUSTER: memexaks-cluster
+  AKS_RG: <aks-resource-group>
+  AKS_CLUSTER: <aks-cluster>
 
 jobs:
   # ─────────────────────────── BUILD + PUSH IMAGES ───────────────────────────
@@ -362,7 +362,7 @@ jobs:
   # signal that it hadn't. A feature-flagged surface that silently stops receiving updates is worse
   # than one that is switched off, because it looks live.
   #
-  # amd64 ONLY, on purpose: every AKS node in memexaks-cluster is amd64, and the runner is amd64,
+  # amd64 ONLY, on purpose: every AKS node in <aks-cluster> is amd64, and the runner is amd64,
   # so this builds natively with no QEMU emulation. memex-local builds its own arm64 image into
   # Colima's Docker store for local dev (see clients/portal-next/DEPLOY.md), so nothing needs the
   # arm64 variant from ACR.
@@ -487,7 +487,7 @@ jobs:
 
   # ─────────────────────────────── NO DEPLOY JOB ─────────────────────────────
   # Deployment is PULL-BASED, not push. CI's job ends at "publish the image to ACR" (the image
-  # jobs above). Each installation — memex / atioz / memex-cloud AND every external install in the
+  # jobs above). Each installation — memex / prod / memex-cloud AND every external install in the
   # world that prod knows nothing about — runs the in-portal self-updater
   # (memex/Memex.Portal.Shared/SelfUpdate): it polls ACR with its OWN workload identity, and, per its
   # own Admin/UpdatePolicy (Continuous/Stable/None + the CI-green gate), patches its OWN portal +

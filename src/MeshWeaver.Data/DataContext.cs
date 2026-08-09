@@ -133,7 +133,7 @@ public sealed record DataContext : IDisposable
     /// <see cref="OpenInitializationGate"/>. A data-source init that HANGS (e.g. a
     /// stuck NodeType/scope Roslyn compile, or a dependency that never initialises)
     /// trips this and drives the hub to a terminal FAILED state instead of leaving
-    /// <see cref="InitializationGateName"/> closed forever (the 2026-06-26 atioz
+    /// <see cref="InitializationGateName"/> closed forever (the 2026-06-26 prod
     /// wedge). Defaults to <c>120s</c> — the same budget top-level hubs get via
     /// <c>MessageHub.DefaultInitializationTimeout</c> — and is overridable per
     /// context via <see cref="WithInitializationTimeout"/> (tests set it short).
@@ -280,7 +280,7 @@ public sealed record DataContext : IDisposable
         // init (Task.WhenAll never completing) had NO such bound: the gate never
         // opened and every subsequent message deferred → NACKed → resubscribed
         // forever, a path-resolution storm that GC-thrashed the portal (2026-06-26
-        // atioz wedge). Time-box it so a hang reaches the SAME terminal failed state
+        // prod wedge). Time-box it so a hang reaches the SAME terminal failed state
         // as a fault — mirroring MessageHub.HandleInitialize's .Timeout(StartupTimeout).
         Task.WhenAny(allInit, Task.Delay(InitializationTimeout))
             .ContinueWith(_ =>

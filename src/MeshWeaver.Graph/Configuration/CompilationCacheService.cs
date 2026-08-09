@@ -606,7 +606,7 @@ internal class CompilationCacheService(
         // NodeAssemblyLoadContext.LoadNodeAssembly, which was never MVID-keyed.
         //
         // 🚨 The framework's per-image CONTENT identity (for cross-image / cross-silo cache keying —
-        // the atioz BadImageFormatException-on-deploy fix) is the Graph assembly MVID, but it is
+        // the prod BadImageFormatException-on-deploy fix) is the Graph assembly MVID, but it is
         // carried as a STRING by NodeTypeCompilationHelpers.FrameworkVersion → stamped into
         // CompiledFrameworkVersion (HasUsableBuild equality) and baked into the FileSystemAssemblyStore
         // filename/glob. Those are the mechanisms that defeat reproducible-build timestamp

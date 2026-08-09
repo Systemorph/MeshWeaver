@@ -102,7 +102,7 @@ public class BuiltInLanguageModelProviderTest
         // IStaticRepoSource). If GetStaticNodes is NON-deterministic across calls, the fingerprint
         // changes on every enumeration → the importer's "already imported" short-circuit never
         // matches → the catalog re-imports in a loop → the Provider/{name} Create/Delete/Update
-        // write storm that wedged atioz (2026-06-25). The classic culprit was CreatedAt =
+        // write storm that wedged prod (2026-06-25). The classic culprit was CreatedAt =
         // DateTimeOffset.UtcNow stamped per enumeration. Two enumerations MUST serialize identically.
         var provider = Build(new Dictionary<string, string?>
         {

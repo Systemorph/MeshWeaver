@@ -49,7 +49,7 @@ public class ModelProviderEmissionTest
     }
 
     /// <summary>
-    /// 🚨 Regression (atioz 2026-06-23, non-admin chat crash): the catalog source must seed a
+    /// 🚨 Regression (prod 2026-06-23, non-admin chat crash): the catalog source must seed a
     /// PublicRead <c>PartitionAccessPolicy</c> for BOTH catalog partitions — <c>Provider</c>
     /// (ModelProvider) AND <c>Model</c> (LanguageModel). Chat / the model picker / model
     /// resolution read the <c>Model</c> partition UNDER THE USER'S IDENTITY

@@ -10,7 +10,7 @@ using MeshWeaver.Fixture;
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
-/// Pins the chat agent/model/skill picker "empty for a real user" bug (atioz 2026-06-20).
+/// Pins the chat agent/model/skill picker "empty for a real user" bug (prod 2026-06-20).
 /// The per-partition registry query is a single string with a <c>namespace:A|B|C</c>
 /// alternation (parsed as a <c>namespace IN (...)</c> filter). Reproduced live:
 /// <c>namespace:Agent</c> → 11 results, but <c>namespace:rbuergi/Agent|Agent</c> → 0 — i.e.
@@ -77,7 +77,7 @@ public class MultiNamespaceInFanOutTests
     }
 
     /// <summary>
-    /// THE agent-picker-empty bug (atioz 2026-06-20): the platform <c>agent</c> catalog schema
+    /// THE agent-picker-empty bug (prod 2026-06-20): the platform <c>agent</c> catalog schema
     /// was in <see cref="PostgreSqlCrossSchemaQueryProvider"/>'s <c>ExcludedSchemas</c> denylist
     /// (a legacy reserved-word). Since the per-partition agent-registry migration the <c>agent</c>
     /// schema is a real public catalog (like <c>skill</c>/<c>model</c>), so excluding it kept it out

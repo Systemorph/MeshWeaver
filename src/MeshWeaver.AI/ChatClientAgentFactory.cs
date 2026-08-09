@@ -631,7 +631,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             // Self-disposing watch: the sub-thread sync subscription is released
                             // the moment the sub-thread reaches a terminal state. Without this it
                             // stays subscribed for the life of the PROCESS — one leaked sync/ hub
-                            // per delegation, which accumulates until the portal wedges (the atioz
+                            // per delegation, which accumulates until the portal wedges (the prod
                             // 2026-06-25 wedge: ~1778 leaked sync hubs). See the /storm skill.
                             IDisposable? subThreadWatch = null;
                             subThreadWatch = workspace.GetMeshNodeStream(subThreadPath).Subscribe(
