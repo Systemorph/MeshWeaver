@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Threading;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -25,8 +26,15 @@ namespace MeshWeaver.Mesh.Services;
 /// <para>Instance-only state (a <see cref="ConcurrentDictionary{TKey,TValue}"/> — the lifetime is the
 /// mesh singleton's, never <c>static</c>; see NoStaticState.md). TTL-bounded so the map can't grow
 /// unbounded, and cleared on a legitimate re-create so a same-id recreate persists normally.</para>
+///
+/// <para>It is also the mesh's <see cref="IAddressTombstones"/>: the message pipeline reads it to
+/// tell "this hub is going down because its node was DELETED" (the address is gone for good) from
+/// "this hub is recycling / restarting" (it will reactivate), which decides whether an abandoned
+/// delivery is NACKed as an authoritative NotFound or as the transient
+/// <c>ErrorType.ShuttingDown</c>. See <see cref="IAddressTombstones"/> for why that distinction is
+/// load-bearing.</para>
 /// </summary>
-public sealed class RecentlyDeletedRegistry
+public sealed class RecentlyDeletedRegistry : IAddressTombstones
 {
     // Long enough to cover the full delete → (deactivate) → re-activate → debounced-flush window
     // under CI load (the resurrecting save fires ~200 ms after the delete; the guard must outlive
@@ -86,6 +94,15 @@ public sealed class RecentlyDeletedRegistry
         }
         return true;
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The pipeline-facing name for <see cref="IsRecentlyDeleted"/>: same tombstone, same TTL,
+    /// same "a re-create clears it" semantics. Kept as a separate member so the message pipeline
+    /// depends on the intent (<see cref="IAddressTombstones"/> — "is this address gone for good?")
+    /// rather than on this class, which lives above it in the reference graph.
+    /// </remarks>
+    public bool IsDeleted(string? path) => IsRecentlyDeleted(path);
 
     // ─── Active subtree deletions ────────────────────────────────────────────
     //
