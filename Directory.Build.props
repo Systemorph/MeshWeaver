@@ -137,7 +137,12 @@
        failure, names the RID and both registries, and — on the SINGLE-RID path, where there is no
        CreateImageIndex downstream — it is the ONLY thing standing between a swallowed cancellation and
        a publish that reports success while pushing nothing at all.
-       Inert on every healthy publish (the metadata is populated) and on archive/local-daemon flows. -->
+       Inert on every healthy publish (the metadata is populated) and on archive/local-daemon flows.
+
+       It lives in the PROPS, next to the rest of the multi-arch container block, deliberately: a new
+       root Directory.Build.targets would be shadowed outright by the existing test/Directory.Build.targets
+       (MSBuild imports only the NEAREST one), so splitting this off would scatter the container reasoning
+       across two files for no gain. AfterTargets is resolved after evaluation, so an early import is fine. -->
   <Target Name="_MeshWeaverGuardContainerLegProducedAnImage"
           AfterTargets="_PublishSingleContainer"
           Condition="'$(ContainerRegistry)' != '' and '$(ContainerArchiveOutputPath)' == ''">
