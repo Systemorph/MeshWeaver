@@ -282,9 +282,10 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// actually resolve (so the fallback is never ANOTHER broken model).
     ///
     /// <para><b>Routers are excluded</b> (<see cref="ModelDefinition.IsRouter"/>): the Auto entry
-    /// dispatches to a real model rather than serving a round, so it must never become the default —
-    /// not even when it deliberately sorts first in the picker at a very low Order. Auto is reachable
-    /// only by an explicit pick.</para>
+    /// dispatches to a real model rather than serving a round, so it must never be what this returns —
+    /// not even though it deliberately sorts first in the picker at a very low Order. Auto being the
+    /// composer's default SELECTION is a different thing from being the model that RUNS: this method
+    /// is one of the rungs Auto dispatches INTO, so returning Auto here would resolve Auto to Auto.</para>
     ///
     /// Mirrors
     /// <c>AgentPickerProjection.ObserveDefaultComposer</c>'s "lowest Order wins" rule, read from the
@@ -292,22 +293,74 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// catalog resolves (e.g. a deployment whose models bypass the catalog entirely).
     /// </summary>
     public string? ResolveDefaultModelId() =>
-        ModelSizeCatalog.Default(ReadSizeCandidates(), HasUsableCredential);
+        ModelTierCatalog.Default(ReadTierCandidates(), HasUsableCredential);
 
     /// <summary>
-    /// The model an agent asking for a SIZE should run on — the lowest-Order model whose node carries
-    /// that <see cref="ModelDefinition.Size"/> label, else the deployment default. Accepts the legacy
-    /// tier vocabulary too (<c>utility</c>/<c>light</c>/<c>standard</c>/<c>heavy</c>).
+    /// THE tier resolution — the model an agent asking for <paramref name="tier"/> should run on,
+    /// plus which rung answered so the caller can log a fallback instead of absorbing it.
     ///
-    /// <para>A size nobody carries is a MISS, not a failure: it falls through to
-    /// <see cref="ResolveDefaultModelId"/>, which is what lets an environment label only the models
-    /// it cares about. Routers (the Auto entry) are excluded — resolving a size to Auto would hand
-    /// the round to something that dispatches rather than answers.</para>
+    /// <para>Rungs: the <see cref="ModelDefinition.Tier"/> label on a model node → the deprecated
+    /// <c>ModelTier:*</c> config section (only for a model whose credentials actually resolve) → the
+    /// deployment default. A tier nobody carries is a MISS, never a failure, which is what lets an
+    /// environment label only the models it cares about — or none at all. Routers (the Auto entry)
+    /// are excluded from every rung: resolving a tier to Auto would hand the round to something that
+    /// dispatches rather than answers.</para>
+    ///
+    /// <para>Tiers are matched against the deployment's OWN registry (<see cref="ReadTiers"/>), so a
+    /// renamed or added tier resolves; the shipped tiers stand in when none is visible.</para>
     /// </summary>
-    /// <param name="sizeOrTier">"S"/"M"/"L"/"XL", or a legacy tier name. Null/unknown → the default.</param>
+    /// <param name="tier">A tier id or alias (<c>utility</c>/<c>chat</c>/<c>reasoning</c>/<c>coding</c>,
+    /// or a legacy tier/size spelling). Null/unknown → straight to the deployment default.</param>
+    /// <returns>The resolution; <see cref="ModelTierResolution.IsExhausted"/> when nothing is usable.</returns>
+    public ModelTierResolution ResolveForTier(string? tier) =>
+        ModelTierCatalog.Resolve(
+            tier,
+            ReadTierCandidates(),
+            ReadTiers(),
+            HasUsableCredential,
+            ModelTierConfiguration.From(hub.ServiceProvider.GetService<IConfiguration>()).Resolve);
+
+    /// <summary>
+    /// <see cref="ResolveForTier"/> reduced to just the model id, for callers that do not report the rung.
+    /// </summary>
+    /// <param name="tier">The tier label; null/unknown → the deployment default.</param>
     /// <returns>The model id, or <c>null</c> when nothing in the catalog is usable.</returns>
-    public string? ResolveModelIdForSize(string? sizeOrTier) =>
-        ModelSizeCatalog.ResolveOrDefault(sizeOrTier, ReadSizeCandidates(), HasUsableCredential);
+    public string? ResolveModelIdForTier(string? tier) => ResolveForTier(tier).ModelId;
+
+    /// <summary>
+    /// The deployment's TIER registry — every <c>nodeType:ModelTier</c> node in the warm snapshot,
+    /// ranked. Empty when a deployment has none yet (cold snapshot, or every tier node deleted);
+    /// <see cref="ModelTierCatalog.Known"/> then falls back to <see cref="ModelTierDefaults.All"/>,
+    /// so tier resolution never depends on a node being there.
+    /// </summary>
+    /// <returns>The tier definitions, cheapest first.</returns>
+    public IReadOnlyList<ModelTierDefinition> ReadTiers() =>
+        ReadSnapshot()
+            .Where(n => string.Equals(n.NodeType, ModelTierNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
+            .Select(n => ExtractContent<ModelTierDefinition>(n.Content))
+            .Where(t => t is not null && !string.IsNullOrWhiteSpace(t.Id))
+            .Select(t => t!)
+            .OrderBy(t => t.Rank)
+            .ThenBy(t => t.Id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    /// <summary>
+    /// True when <paramref name="modelNameOrPath"/> selects the ROUTER (the Auto pseudo-model) rather
+    /// than a model that can serve a round. Accepts a bare id or the full LanguageModel node PATH (the
+    /// form the composer persists). The caller must DISPATCH such a selection to a real model before
+    /// any factory sees it — Auto has no wire API of its own.
+    /// </summary>
+    /// <param name="modelNameOrPath">The selected model id or node path.</param>
+    /// <returns>True when the selection is a router.</returns>
+    public bool IsRouterSelection(string? modelNameOrPath)
+    {
+        if (string.IsNullOrEmpty(modelNameOrPath)) return false;
+        var snapshot = ReadSnapshot();
+        if (modelNameOrPath.Contains('/')
+            && FindDefinitionByNodePath(snapshot, modelNameOrPath) is { } byPath)
+            return byPath.IsRouter == true;
+        return FindModelDefinitions(snapshot, modelNameOrPath).Any(d => d.IsRouter == true);
+    }
 
     /// <summary>
     /// Projects the warm snapshot's <c>LanguageModel</c> nodes into the flat shape the selection
@@ -318,16 +371,17 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// that set only <see cref="ModelDefinition.Order"/> ranked 0 here while ranking correctly in
     /// the picker.
     /// </summary>
-    public IReadOnlyList<ModelSizeCandidate> ReadSizeCandidates() =>
+    /// <returns>One candidate per catalog model, in snapshot order.</returns>
+    public IReadOnlyList<ModelTierCandidate> ReadTierCandidates() =>
         ReadSnapshot()
             .Where(n => string.Equals(n.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
             .Select(n =>
             {
                 var def = ExtractContent<ModelDefinition>(n.Content);
-                return new ModelSizeCandidate(
+                return new ModelTierCandidate(
                     def?.Id ?? string.Empty,
                     n.Order ?? (def?.Order ?? 0),
-                    def?.Size,
+                    def?.Tier,
                     def?.IsRouter == true);
             })
             .Where(c => !string.IsNullOrEmpty(c.Id))
@@ -610,7 +664,7 @@ public sealed class ChatClientCredentialResolver : IDisposable
         // subscription below, so no per-source impersonation is needed.
         if (!shared.IsEmpty)
         {
-            var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}";
+            var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}|{ModelTierNodeType.NodeType}";
             foreach (var path in shared)
             {
                 var sharedQuery = $"namespace:{path} nodeType:{typeFilter} scope:selfAndDescendants{AgentPickerProjection.RegistryProjection}";
@@ -681,7 +735,7 @@ public sealed class ChatClientCredentialResolver : IDisposable
         var queries = new List<string>(BuildModelQueries(partitions));
         if (!shared.IsEmpty)
         {
-            var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}";
+            var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}|{ModelTierNodeType.NodeType}";
             foreach (var path in shared)
                 queries.Add($"namespace:{path} nodeType:{typeFilter} scope:selfAndDescendants");
         }
@@ -749,7 +803,7 @@ public sealed class ChatClientCredentialResolver : IDisposable
         if (partitions.IsEmpty)
             return AgentPickerProjection.BuildModelQueries();
 
-        var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}";
+        var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}|{ModelTierNodeType.NodeType}";
         var queries = new List<string>
         {
             $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants{AgentPickerProjection.RegistryProjection}",

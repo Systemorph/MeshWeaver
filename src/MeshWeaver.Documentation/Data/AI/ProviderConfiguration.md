@@ -111,9 +111,12 @@ Two things select a model, at two different layers. **A deployment** advertises 
 
 Which model a conversation actually runs on resolves in this order (see `ChatClientAgentFactory.ResolveTierModel` and the concrete factories):
 
-1. **The chat composer selection** (`ThreadComposer.ModelName` → `CurrentModelName`) — the user's explicit pick always wins.
-2. **The agent's `AgentConfiguration.ModelTier`** — a strictly **optional** hint (`"heavy"` / `"standard"` / `"light"` / `"utility"`), resolved through the `ModelTier:*` config (Aspire parameters `ModelTier__Heavy/Standard/Light/Utility`). It only fills the gap where nobody picked a model — headless flows like notification triage and the icon/description/thread-naming micro-jobs. Only the built-in background micro-agents declare it; interactive agents leave it unset. With no tier declared or no `ModelTier:*` config, this step is a no-op.
-3. **The provider's first configured model** — the last-resort default.
+1. **The chat composer selection** (`ThreadComposer.ModelName` → `CurrentModelName`) — the user's explicit pick always wins. The one exception is **Auto**, the default selection for a new thread: Auto is a router, so it is *dispatched* rather than served (see below).
+2. **The agent's `AgentConfiguration.ModelTier`** — a USAGE tier (`utility` / `chat` / `reasoning` / `coding`), resolved against the `tier` label on the model NODES. This is also what **Auto** dispatches on. Optional: with no tier declared, or a tier no model carries, it falls through. See [Model Tiers](/Doc/AI/ModelTiers).
+3. **The deprecated `ModelTier:*` config** (`ModelTier__Heavy/Standard/Light/Utility`) — still read so an existing deployment keeps its mapping, and only ever consulted for a tier no model node carries.
+4. **The deployment default** — the lowest-`order` model whose credentials resolve.
+
+Every step after the first skips models with no usable credential, and skips the router. Resolution never fails: the only outcome with no model is an entirely-unusable catalog, which fails the round audibly.
 
 ---
 

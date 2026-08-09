@@ -34,16 +34,19 @@ public static class AiCatalogLayoutAreas
     public const string ProvidersArea = "AiProviders";
     /// <summary>Area name for the scope-tabbed Models catalog. Menu href: <c>/Provider/AiModels</c>.</summary>
     public const string ModelsArea = "AiModels";
+    /// <summary>Area name for the scope-tabbed model-Tiers catalog. Menu href: <c>/Provider/AiModelTiers</c>.</summary>
+    public const string TiersArea = "AiModelTiers";
 
-    /// <summary>Registers the four AI catalog areas on a layout definition.</summary>
+    /// <summary>Registers the AI catalog areas on a layout definition.</summary>
     public static LayoutDefinition AddAiCatalogLayoutAreas(this LayoutDefinition layout)
         => layout
             .WithView(AgentsArea, AgentsCatalog)
             .WithView(SkillsArea, SkillsCatalog)
             .WithView(ProvidersArea, ProvidersCatalog)
-            .WithView(ModelsArea, ModelsCatalog);
+            .WithView(ModelsArea, ModelsCatalog)
+            .WithView(TiersArea, TiersCatalog);
 
-    /// <summary>Registers the four AI catalog areas on a hub configuration.</summary>
+    /// <summary>Registers the AI catalog areas on a hub configuration.</summary>
     public static MessageHubConfiguration AddAiCatalogLayoutAreas(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout.AddAiCatalogLayoutAreas());
 
@@ -60,6 +63,20 @@ public static class AiCatalogLayoutAreas
         // Models live UNDER the "Provider" partition (LanguageModelNodeType remark), so the global
         // scope roots at ModelProviderNodeType.RootNamespace ("Provider"), not "Model".
         => BuildScopeCatalog(host, "models", LanguageModelNodeType.NodeType, globalNamespace: ModelProviderNodeType.RootNamespace);
+
+    private static UiControl TiersCatalog(LayoutAreaHost host, RenderingContext _)
+        // Tiers are a PLATFORM registry, not a per-space one — deliberately the ONE catalog here
+        // without scope tabs. A model node in any partition points at a tier by ID, so a space-local
+        // tier set would make the same label mean different things in different spaces. One flat list
+        // rooted at Provider/Tier, with the same "+" create button as every other catalog, so an
+        // operator can add or edit a rung without leaving the page.
+        => Controls.Tabs.WithSkin(s => s.WithWidth("100%"))
+            .WithMeshSearch("Global",
+                @namespace: ModelTierNodeType.RootNamespace, scope: "descendants",
+                nodeType: ModelTierNodeType.NodeType,
+                createNodeType: ModelTierNodeType.NodeType,
+                createNamespace: ModelTierNodeType.RootNamespace,
+                placeholder: "Search model tiers…", configure: ScopeSearch);
 
     /// <summary>
     /// Builds a <see cref="Controls.Tabs"/> catalog with the This-space / User / Global scope tabs

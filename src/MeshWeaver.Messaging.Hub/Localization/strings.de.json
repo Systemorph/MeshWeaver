@@ -268,6 +268,8 @@
   "menu.newThread": "Neuer Thread",
   "menu.newThreadTooltip": "Eine neue Unterhaltung beginnen",
   "menu.threadsTooltip": "Threads aus allen Namespaces",
+  "menu.modelTiers": "Stufen",
+  "menu.modelTiersTooltip": "Modellstufen — wofür welches Modell verwendet wird",
   "menu.models": "Modelle",
   "menu.modelsTooltip": "Sprachmodelle — global, Space und Benutzer",
   "menu.agents": "Agents",
