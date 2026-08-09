@@ -10,7 +10,7 @@ namespace MeshWeaver.Graph.Test;
 /// Unit tests for the disk-emit self-heal
 /// (<see cref="MeshNodeCompilationService.EmitToDiskWithRetry"/>).
 ///
-/// Reproduces the atioz <c>AgenticPension/Datenpunkt</c> failure (2026-06-22): a Roslyn emit
+/// Reproduces the prod <c>AgenticPension/Datenpunkt</c> failure (2026-06-22): a Roslyn emit
 /// reports success but the assembly is missing on disk afterward (the ephemeral container
 /// <c>/tmp</c> cache evicted the just-written file). That used to poison the NodeType with a
 /// permanent "Compilation succeeded but DLL not found" error that no recompile could clear.

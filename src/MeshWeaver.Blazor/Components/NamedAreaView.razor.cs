@@ -50,7 +50,7 @@ public partial class NamedAreaView
     /// Resolves a URL-valued meta tag against the REQUEST's own origin, so layout code can supply
     /// a site-relative path (<c>/api/content/…</c>) and still emit the absolute URL a scraper needs.
     /// This is the right seam for it: a plugin's layout area cannot know the public host it is
-    /// being served under (the same content runs on memex, systemorph, atioz and localhost), while
+    /// being served under (the same content runs on memex, systemorph, prod and localhost), while
     /// the component rendering the page knows exactly. Non-URL keys and already-absolute values
     /// pass through untouched.
     /// </summary>

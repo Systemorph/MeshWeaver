@@ -19,7 +19,7 @@ namespace MeshWeaver.Mesh.Security;
 /// </summary>
 public record MeshWeaverInstance
 {
-    /// <summary>Stable logical App ID, e.g. <c>atioz</c>. Lowercase slug, unique across the mesh —
+    /// <summary>Stable logical App ID, e.g. <c>prod</c>. Lowercase slug, unique across the mesh —
     /// it is the identity grants are written against, so it must not be reused after deletion.</summary>
     public string InstanceId { get; init; } = "";
 
@@ -29,7 +29,7 @@ public record MeshWeaverInstance
     /// <summary>What this installation is, in the owner's words. Free text.</summary>
     public string Description { get; init; } = "";
 
-    /// <summary>The installation's base URL (e.g. <c>https://atioz.meshweaver.cloud</c>). Advisory —
+    /// <summary>The installation's base URL (e.g. <c>https://memex.meshweaver.cloud</c>). Advisory —
     /// used for display and support, never for authentication.</summary>
     public string HomeUrl { get; init; } = "";
 

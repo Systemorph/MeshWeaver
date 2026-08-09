@@ -64,7 +64,7 @@ approval gate**, never the agent's — you approve it on the PR page. This is de
 
 ## Why "green before merge" is absolute
 
-Deployment is **pull-based**: every installation (memex, atioz, memex-cloud, and any external
+Deployment is **pull-based**: every installation (memex, prod, memex-cloud, and any external
 install) runs an in-portal self-updater that polls the registry and rolls `main`'s image per its
 own update policy. A **red `main` wedges every install's rollout**. So a PR's CI must be green
 before it is merged, and the agent makes it green **locally first** — a Debug build passes while CI

@@ -28,7 +28,7 @@ codegen step. Override the path with the `MESHWEAVER_PROTO` env var.
 ```ts
 import { Mesh } from "@meshweaver/client";
 
-const mesh = await Mesh.connect("https://atioz.meshweaver.cloud", { token: "mw_..." });
+const mesh = await Mesh.connect("https://memex.meshweaver.cloud", { token: "mw_..." });
 const stories = await mesh.search("nodeType:Story namespace:ACME");  // mesh -> JS
 mesh.patch("ACME/Stories/42", { content: { processed: true } });     // JS -> mesh
 for await (const node of mesh.watch("ACME/Backlog")) handle(node);   // live stream (AsyncIterable)

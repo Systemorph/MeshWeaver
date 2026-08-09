@@ -27,7 +27,7 @@ namespace Memex.Portal.Shared;
 ///
 /// <para><b>Why:</b> a shipped partition's NodeTypes otherwise compile ON-DEMAND the first time a
 /// user navigates to them — and that on-demand compile path (its <c>_Activity/compile-*</c> writes)
-/// is exactly what storm-failed on atioz 2026-06-18 when the activity write ran without a writer
+/// is exactly what storm-failed on prod 2026-06-18 when the activity write ran without a writer
 /// identity. Pre-building the releases at provision/deploy time as System means the runtime path is
 /// always a cache hit: no on-demand compile, no phantom <c>_Activity/compile-*</c> subscribe storm.
 /// Several shipped partitions (<c>Doc</c>) are read-only — only a System-credentialed compile can
@@ -359,7 +359,7 @@ public sealed class ShippedReleaseSeedHostedService(
         // storm on a loaded mesh, and the lazy compile-on-first-access path already covers
         // correctness. When disabled, only the explicitly configured extra partitions
         // (ShippedRelease:ExtraPreseedPartitions) are seeded — a deployment naming a partition
-        // there has asked for exactly that pre-build (e.g. atioz: AgenticPension; set
+        // there has asked for exactly that pre-build (e.g. prod: AgenticPension; set
         // PER-DEPLOYMENT, never hardcode a customer's space name into framework source). The
         // platform-version anchor + boot activity below run regardless — they touch one Admin
         // node, not the mesh. Pre-build is async (never blocks host startup).

@@ -14,7 +14,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
 /// Tests that Space partition root nodes are visible in queries.
-/// When an Space "PartnerRe" is created, a MeshNode at path "PartnerRe"
+/// When an Space "Acme" is created, a MeshNode at path "Acme"
 /// must be queryable so it appears in the namespace picker (context:create)
 /// and in autocomplete results.
 /// </summary>
@@ -42,15 +42,15 @@ public class SpaceNamespaceVisibilityTests
         var ac = _fixture.AccessControl;
 
         // Seed Space node at root path (same as partition namespace)
-        await adapter.Write(new MeshNode("PartnerRe")
+        await adapter.Write(new MeshNode("Acme")
         {
-            Name = "PartnerRe AG",
+            Name = "Acme AG",
             NodeType = "Space",
             Content = new Space()
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Seed a child node under the Space
-        await adapter.Write(new MeshNode("AiConsulting", "PartnerRe")
+        await adapter.Write(new MeshNode("AiConsulting", "Acme")
         {
             Name = "AI Consulting",
             NodeType = "Group"
@@ -60,8 +60,8 @@ public class SpaceNamespaceVisibilityTests
         // root and its children visible, which is what production always relied on.
 
         // Grant authenticated user access
-        await ac.Grant("PartnerRe", "alice", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
-        await ac.Grant("PartnerRe", "alice", "Create", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
+        await ac.Grant("Acme", "alice", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
+        await ac.Grant("Acme", "alice", "Create", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
     }
 
     [Fact]
@@ -70,11 +70,11 @@ public class SpaceNamespaceVisibilityTests
         await SeedSpace();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        var request = MeshQueryRequest.FromQuery("path:PartnerRe", "alice");
+        var request = MeshQueryRequest.FromQuery("path:Acme", "alice");
         var results = await Query(query, request);
 
         results.Should().HaveCount(1, "Space root node should be queryable by path");
-        results[0].Name.Should().Be("PartnerRe AG");
+        results[0].Name.Should().Be("Acme AG");
         results[0].NodeType.Should().Be("Space");
     }
 
@@ -87,7 +87,7 @@ public class SpaceNamespaceVisibilityTests
         var request = MeshQueryRequest.FromQuery("nodeType:Space", "alice");
         var results = await Query(query, request);
 
-        results.Should().Contain(n => n.Path == "PartnerRe",
+        results.Should().Contain(n => n.Path == "Acme",
             "Space root node should appear in nodeType:Space queries");
     }
 
@@ -101,7 +101,7 @@ public class SpaceNamespaceVisibilityTests
         var request = MeshQueryRequest.FromQuery("namespace:", "alice");
         var results = await Query(query, request);
 
-        results.Should().Contain(n => n.Path == "PartnerRe",
+        results.Should().Contain(n => n.Path == "Acme",
             "Space root node should appear in root namespace query (namespace picker)");
     }
 
@@ -111,10 +111,10 @@ public class SpaceNamespaceVisibilityTests
         await SeedSpace();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        var request = MeshQueryRequest.FromQuery("path:PartnerRe scope:descendants", "alice");
+        var request = MeshQueryRequest.FromQuery("path:Acme scope:descendants", "alice");
         var results = await Query(query, request);
 
-        results.Should().Contain(n => n.Path == "PartnerRe/AiConsulting",
+        results.Should().Contain(n => n.Path == "Acme/AiConsulting",
             "Children under Space should be visible as descendants");
     }
 
@@ -125,13 +125,13 @@ public class SpaceNamespaceVisibilityTests
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         // The RoutingMeshQueryProvider scopes fan-out queries as:
-        //   DefaultPath=PartnerRe, Query="context:create scope:subtree is:main"
+        //   DefaultPath=Acme, Query="context:create scope:subtree is:main"
         // scope:subtree includes the root node itself (not just descendants).
         var request = MeshQueryRequest.FromQuery(
-            "context:create scope:subtree is:main", "alice") with { DefaultPath = "PartnerRe" };
+            "context:create scope:subtree is:main", "alice") with { DefaultPath = "Acme" };
         var results = await Query(query, request);
 
-        results.Should().Contain(n => n.Path == "PartnerRe",
+        results.Should().Contain(n => n.Path == "Acme",
             "Space root node must appear in context:create queries â€” " +
             "otherwise the namespace picker won't show it");
     }

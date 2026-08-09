@@ -137,7 +137,7 @@ public static class LanguageModelNodeType
             // 🚨 Gate the IStaticNodeProvider (feeds FindStaticNode) on !dbSynced, same as the
             // partition provider below — leaving it registered while the model-catalog partition is
             // DB-synced made the importer's inner CreateNode see the built-in catalog/Provider
-            // nodes as already-present and fail "Node already exists" (atioz 2026-06-11: imported
+            // nodes as already-present and fail "Node already exists" (prod 2026-06-11: imported
             // 4 / failed 2, incl. Provider/_Policy + Provider/Anthropic). The
             // BuiltInLanguageModelProvider singleton stays (the import source wraps it); the
             // LanguageModel/ModelProvider NodeType defs stay via AddMeshNodes. See AddAgentType.

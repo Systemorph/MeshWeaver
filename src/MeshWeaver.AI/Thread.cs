@@ -21,7 +21,7 @@ public record ThreadExecutionContext
     public required string ResponseMessageId { get; init; }
 
     /// <summary>
-    /// The original content node path (e.g., "PartnerRe/AiConsulting").
+    /// The original content node path (e.g., "Acme/AiConsulting").
     /// Propagated through all delegation levels so sub-threads always
     /// know the root context for namespace resolution and agent initialization.
     /// </summary>

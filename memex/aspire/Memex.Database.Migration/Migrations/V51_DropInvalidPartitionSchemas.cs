@@ -9,7 +9,7 @@ namespace Memex.Database.Migration.Migrations;
 /// <para>Bug: before the partition router learned to reject malformed first segments and
 /// before schema creation was gated to partition-owning creates, navigating to (or probing)
 /// an arbitrary top-level URL lazily provisioned a real schema + tables. memex and
-/// memexcloud accumulated querystring-shaped junk like
+/// the cloud database accumulated querystring-shaped junk like
 /// <c>search?q=query%20syntax&amp;hq=scope%3adescendants</c> (nine variants) and
 /// <c>login?returnurl=https%3a%2f%2f…</c>. <see cref="V03_DropRogueSchemas"/> only dropped a
 /// hardcoded bare-word list, which cannot match these.</para>

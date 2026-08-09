@@ -378,7 +378,7 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         // (lowercased). The router already refuses to ROUTE malformed segments, but a
         // deliberate top-level create — or any future caller — must never reach
         // public.ensure_partition_schema with a URL-shaped id (`search?q=…`,
-        // `login?returnurl=…`: the junk schemas that filled the memex/memexcloud DBs).
+        // `login?returnurl=…`: the junk schemas that filled the memex/the cloud database DBs).
         // Fail BEFORE the promise-cache so the rejection is loud (OnError naming the
         // offending id), never a cached silent no-op the caller mistakes for success.
         // A `_`-prefixed namespace is rejected like any other malformed name: global

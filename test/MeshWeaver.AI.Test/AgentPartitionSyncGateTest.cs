@@ -9,7 +9,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Regression for the atioz 2026-06-11 secondary finding (surfaced by the import-hub fix's per-file
+/// Regression for the prod 2026-06-11 secondary finding (surfaced by the import-hub fix's per-file
 /// activity logging): a partition that is BOTH sync-enabled (<c>Features:StaticRepoSync</c>) AND
 /// served by an in-memory <see cref="IStaticNodeProvider"/> could never MATERIALIZE into the DB.
 ///
@@ -17,7 +17,7 @@ namespace MeshWeaver.AI.Test;
 /// (<see cref="BuiltInAgentProvider"/>) which feeds <c>serviceProvider.FindStaticNode(path)</c>. The
 /// importer upserts each source node via <c>CreateOrUpdateNodeRequest</c>; persistence is empty →
 /// inner <c>CreateNodeRequest</c> → its <c>FindStaticNode</c> fallback finds the built-in agent →
-/// fails <c>"Node already exists at path: Agent/X"</c>. On atioz <c>Agent</c> imported 4 / FAILED 8
+/// fails <c>"Node already exists at path: Agent/X"</c>. On prod <c>Agent</c> imported 4 / FAILED 8
 /// (<c>ImportedWithErrors</c>) while <c>Doc</c> — which has no <c>IStaticNodeProvider</c> — imported
 /// 161/0.</para>
 ///
@@ -27,7 +27,7 @@ namespace MeshWeaver.AI.Test;
 /// <c>AddAI(serveFromPartition)</c> — called ONCE with the sync set in production — and asserts the
 /// gate directly: when the partition is DB-synced, its agents are NOT FindStaticNode-discoverable,
 /// so the importer materializes them (served from PG) instead of colliding. (End-to-end
-/// materialization needs a PG backend — covered by <c>OrleansStaticRepoImportTest</c> + atioz; the
+/// materialization needs a PG backend — covered by <c>OrleansStaticRepoImportTest</c> + prod; the
 /// monolith has no PG to back a synced partition, so this verifies the gate, not the write.)</para>
 /// </summary>
 public class AgentPartitionSyncGateTest(ITestOutputHelper output) : MonolithMeshTestBase(output)

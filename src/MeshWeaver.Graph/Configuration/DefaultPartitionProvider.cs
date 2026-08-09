@@ -59,7 +59,7 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
         // token to its user-scoped token node at validation time. Not an OwnsPartition type and the
         // router no longer lazy-creates schemas, so it must be provisioned eagerly — at portal boot
         // from this definition AND explicitly in SchemaInitialization (migration). Restores the
-        // pre-0ceba04ce `apitoken` schema that fresh DBs (e.g. atioz) otherwise never get, which
+        // pre-0ceba04ce `apitoken` schema that fresh DBs (e.g. prod) otherwise never get, which
         // 401'd every freshly-minted manual/OAuth token.
         yield return CreatePartition("ApiToken", "apitoken",
             "API token validation index — ApiToken/{hashPrefix} ApiTokenIndex nodes mapping a "

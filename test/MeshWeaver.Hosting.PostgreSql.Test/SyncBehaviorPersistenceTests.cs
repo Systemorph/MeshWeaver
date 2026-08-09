@@ -7,7 +7,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
-/// Regression for the atioz <c>Provider/Anthropic</c> key revert: a node's
+/// Regression for the prod <c>Provider/Anthropic</c> key revert: a node's
 /// <see cref="MeshNode.SyncBehavior"/> — the static-repo "Not synced" decouple claim — must
 /// survive a round-trip through the Postgres storage adapter.
 ///

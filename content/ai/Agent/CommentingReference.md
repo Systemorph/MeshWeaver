@@ -48,7 +48,7 @@ A tracked change is a satellite entity in the `_Tracking` partition — like a c
 
 ## Important Notes
 
-- **`documentPath` is a path, not a name.** Pass the canonical node path (`@/PartnerRe/AIConsulting/FinalReport`, or `@FinalReport` if relative to the current context). Passing the node's display name ("Final Report – AI Readiness Assessment & 100-Day Plan") will silently fail — the request routes to a non-existent grain. If you only know the display name, `Search('name:"..."')` first and use the `path` field of the match.
+- **`documentPath` is a path, not a name.** Pass the canonical node path (`@/Acme/AIConsulting/FinalReport`, or `@FinalReport` if relative to the current context). Passing the node's display name ("Final Report – AI Readiness Assessment & 100-Day Plan") will silently fail — the request routes to a non-existent grain. If you only know the display name, `Search('name:"..."')` first and use the `path` field of the match.
 - Same `@/<path>` = absolute, `@<path>` = relative-to-context rule as every other tool (see Tools Reference → Path Rules).
 - The `selectedText` / `originalText` must be an **exact match** of text in the document.
 - Use `Get` first to retrieve the document and verify the text exists.

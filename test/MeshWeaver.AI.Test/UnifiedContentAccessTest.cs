@@ -392,10 +392,10 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
 
     #endregion
 
-    #region Slash-format and spaced-filename repro (PartnerRe / .docx symptom)
+    #region Slash-format and spaced-filename repro (Acme / .docx symptom)
 
-    // The prod symptom was: AI agent calls Get("@/PartnerRe/AIConsulting/content/Diskussion Thomas Final Report.docx").
-    // MeshOperations.TryResolveUnifiedPathAsync splits the path into addressPart="PartnerRe/AIConsulting"
+    // The prod symptom was: AI agent calls Get("@/Acme/AIConsulting/content/Diskussion Thomas Final Report.docx").
+    // MeshOperations.TryResolveUnifiedPathAsync splits the path into addressPart="Acme/AIConsulting"
     // and remainder="content/Diskussion Thomas Final Report.docx", then posts
     //   GetDataRequest(new UnifiedReference("content/Diskussion Thomas Final Report.docx"))
     // to the address. The user observed a 10-second AwaitResponse timeout â€” symptom said
@@ -478,7 +478,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     [Fact]
     public async Task GetDataRequest_ContentSlashFormat_MissingDefaultCollection_ReturnsErrorNotTimeout()
     {
-        // The prod hub for /PartnerRe/AIConsulting may not have AddContentCollections() registered
+        // The prod hub for /Acme/AIConsulting may not have AddContentCollections() registered
         // under the default "content" name. The handler must return a clear error response â€” not
         // hang and force AwaitResponse to time out.
         GetHost(); // baseline host with NO file content provider configured

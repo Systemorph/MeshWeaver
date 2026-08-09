@@ -543,7 +543,7 @@ public static class JsonSynchronizationStream
                     // observe's Rx .Timeout completed the OBSERVABLE but left the underlying callback
                     // pending on THIS (cache) hub. Across many live sync streams those leaked
                     // HeartBeatEvent callbacks piled up (hundreds pending >30 s — the [STALE-CALLBACK]
-                    // scan) until the hub's action block/liveness probe stalled: the doc-crawl / atioz
+                    // scan) until the hub's action block/liveness probe stalled: the doc-crawl / prod
                     // cache-hub wedge. The heartbeat has no ack to consume and needs none — its only job
                     // is to keep the owner grain alive, which the Post itself does. An undeliverable
                     // heartbeat is [CanBeIgnored], so routing DROPS it without a NACK (RoutingServiceBase
@@ -594,7 +594,7 @@ public static class JsonSynchronizationStream
             // 🚨 VERSION-GATED resubscribe for MeshNode streams. The change feed fires one event
             // per owner write; a HEALTHY subscriber receives that same write through its own
             // subscription, so resubscribing on it is pure churn — at scale it is the storm that
-            // starved atioz's hubs (one hot ApiToken node written per request reached version
+            // starved prod's hubs (one hot ApiToken node written per request reached version
             // 8939 in a day with 85 subscriber streams, each resubscribing on every write).
             // But the event is also the SOLE recycled-grain detector: a subscriber orphaned by a
             // disposed owner grain receives NOTHING, and the post-recycle write's feed event is

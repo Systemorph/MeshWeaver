@@ -61,7 +61,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         // MISS into the global creation lock — and hub CONSTRUCTION also ran
         // inside that lock — so any creation burst (post-deploy enrichment,
         // prerender sync hubs) convoyed every routed stream message behind it.
-        // dotnet-stack proof, twice on 2026-06-12 atioz: the hottest frame was
+        // dotnet-stack proof, twice on 2026-06-12 prod: the hottest frame was
         // Monitor.Enter_Slowpath ← GetHub ← RouteStreamMessage ← DrainOne,
         // once pegging the drain thread at 99.9% CPU (10k-hub storm) and once
         // burning an Orleans grain turn for minutes (the AgenticPension space

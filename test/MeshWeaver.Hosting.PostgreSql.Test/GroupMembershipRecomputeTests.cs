@@ -356,7 +356,7 @@ public class GroupMembershipRecomputeTests
 
     /// <summary>
     /// THE cross-partition case: a group and its memberships live in partition A (like
-    /// <c>PartnerRe/AgenticEngineering0726</c>); the group is licensed on a course in partition B
+    /// <c>Acme/AgenticEngineering0726</c>); the group is licensed on a course in partition B
     /// (like <c>AgenticEngineering</c>). Because memberships resolve GLOBALLY (auth-mirrored) and
     /// the recompute trigger fans out to every schema that grants the group, a member of the A-group
     /// must gain Read in the B partition — and membership add/remove in A must recompute B.
@@ -368,7 +368,7 @@ public class GroupMembershipRecomputeTests
         await _fixture.CleanDataAsync();
 
         const string schemaA = "xpgroupsrc";
-        const string spaceA = "XpGroupSrc";       // the group's home partition (like PartnerRe)
+        const string spaceA = "XpGroupSrc";       // the group's home partition (like Acme)
         const string schemaB = "xpcourse";
         const string spaceB = "XpCourse";         // the licensed course, a DIFFERENT partition
         var groupPath = $"{spaceA}/Cohort";

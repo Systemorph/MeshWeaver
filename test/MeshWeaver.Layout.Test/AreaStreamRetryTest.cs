@@ -8,7 +8,7 @@ namespace MeshWeaver.Layout.Test;
 
 /// <summary>
 /// Pins the bounded, throttled, fully-reactive retry that protects layout-area
-/// subscriptions from the inexistent-address message storm (the atioz wedge,
+/// subscriptions from the inexistent-address message storm (the prod wedge,
 /// 2026-06-14): "wedging usually means uncaught exception and endless messages,
 /// especially with inexistent addresses". The contract:
 ///   * a retryable (transient) error is retried at most <c>maxRetries</c> times with

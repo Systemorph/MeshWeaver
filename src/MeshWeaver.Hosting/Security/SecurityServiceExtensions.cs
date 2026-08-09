@@ -51,7 +51,7 @@ public static class SecurityServiceExtensions
                 // The ONE place a partition schema is created: creating a top-level
                 // instance of an OwnsPartition NodeType (User, Space) eagerly provisions
                 // its schema BEFORE the root write. Mandatory now that the storage router
-                // no longer lazily CREATE SCHEMAs on arbitrary writes (the atioz ghost-
+                // no longer lazily CREATE SCHEMAs on arbitrary writes (the prod ghost-
                 // schema fix). See Doc/Architecture/PartitionStorageRouting.md.
                 services.AddScoped<INodeValidator, OwnsPartitionProvisioningValidator>();
                 // Makes a USER partition root undeletable by an interactive caller — the

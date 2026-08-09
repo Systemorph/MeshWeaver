@@ -254,10 +254,10 @@ public class SatelliteQueryTests : IAsyncLifetime
             "source:activity should return main nodes with activity satellites");
     }
 
-    // ── Path resolution over satellite tables (atioz NotFound-storm wedge) ──
+    // ── Path resolution over satellite tables (prod NotFound-storm wedge) ──
 
     /// <summary>
-    /// Reproduces the atioz wedge: a SubscribeRequest to a satellite path
+    /// Reproduces the prod wedge: a SubscribeRequest to a satellite path
     /// <c>{owner}/_Activity/{id}</c> went through <see cref="MeshWeaver.Hosting.PathResolutionService"/>,
     /// which issues the multi-prefix resolution query
     /// <c>path:"{deepest}"|...|"{root}"</c>. Before satellite-aware routing,

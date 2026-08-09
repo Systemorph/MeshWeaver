@@ -20,7 +20,7 @@ public class SignalRMultiRemoteSelectionTest
     public void Each_target_routes_to_its_owning_remote()
     {
         var a = Portal("memex");
-        var b = Portal("atioz");
+        var b = Portal("prod");
         var remotes = new Address?[] { a, b };
 
         SignalRRemoteConnections.SelectIndex(remotes, NodeOn(a)).Should().Be(0);
@@ -31,13 +31,13 @@ public class SignalRMultiRemoteSelectionTest
     public void A_target_that_is_a_remote_itself_selects_it()
     {
         var a = Portal("memex");
-        SignalRRemoteConnections.SelectIndex(new Address?[] { Portal("atioz"), a }, a).Should().Be(1);
+        SignalRRemoteConnections.SelectIndex(new Address?[] { Portal("prod"), a }, a).Should().Be(1);
     }
 
     [Fact]
     public void A_target_owned_by_no_connected_remote_selects_none()
     {
-        var remotes = new Address?[] { Portal("memex"), Portal("atioz") };
+        var remotes = new Address?[] { Portal("memex"), Portal("prod") };
         SignalRRemoteConnections.SelectIndex(remotes, NodeOn(Portal("other"))).Should().BeNull();
     }
 
@@ -63,7 +63,7 @@ public class SignalRMultiRemoteSelectionTest
         // What ConnectToMesh does at runtime: Add(remote, connection); the route then Selects per target.
         var registry = new SignalRRemoteConnections();
         var a = Portal("memex");
-        var b = Portal("atioz");
+        var b = Portal("prod");
         Task<HubConnection> connA = new TaskCompletionSource<HubConnection>().Task; // placeholder; never awaited
         Task<HubConnection> connB = new TaskCompletionSource<HubConnection>().Task;
 

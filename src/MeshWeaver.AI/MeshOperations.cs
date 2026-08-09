@@ -2074,7 +2074,7 @@ public class MeshOperations
             // AddContentCollections(). A target node hub WITHOUT it never answers this
             // GetDataRequest, so an un-timed Take(1) hangs FOREVER — and since the MCP/REST
             // boundary does ops.Upload(...).FirstAsync().ToTask(), that wedges the calling
-            // request (the 2026-06-14 atioz upload wedge). On timeout the TimeoutException
+            // request (the 2026-06-14 prod upload wedge). On timeout the TimeoutException
             // falls through to the .Catch below and surfaces as a clean "Error: …" string.
             return hub.Observe(
                 new GetDataRequest(new ContentCollectionReference([collectionName])),
@@ -3444,7 +3444,7 @@ public class MeshOperations
                         // even when the caller has no Update right on the target partition (the
                         // read-only Doc partition is the canonical case). Under the caller's identity
                         // this write was denied → "UpdateMeshNode failed" → the compile never ran and
-                        // the cache stayed empty (atioz on-demand-compile failure on Doc). The
+                        // the cache stayed empty (prod on-demand-compile failure on Doc). The
                         // RunCompile watcher + Release-node creation already run as System; this entry
                         // write was the straggler still on the caller's identity.
                         var accessService = hub.ServiceProvider.GetService<AccessService>();

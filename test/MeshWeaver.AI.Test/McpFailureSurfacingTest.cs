@@ -16,7 +16,7 @@ namespace MeshWeaver.AI.Test;
 /// human-readable <c>"Error…"</c> string when a mutation cannot be performed — they never return
 /// a success line for a node that was not actually created/updated.
 ///
-/// <para>Motivation: on atioz an MCP <c>create</c> of a node with an unregistered NodeType returned
+/// <para>Motivation: on prod an MCP <c>create</c> of a node with an unregistered NodeType returned
 /// <c>"Created"</c> while the node landed as a bare row (no nodeType / no content). The agent then
 /// believed the node existed. These tests pin every failure mode at the MCP boundary so a silent
 /// success can never regress unnoticed. DB-free (in-memory monolith), so they run in CI without
