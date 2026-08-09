@@ -1,6 +1,7 @@
 ---
 Name: Decks can now export exactly as they look
-Category: What's New
+Category: Feature
+Order: -20260809
 Description: A new pixel-faithful option on Export to PDF renders a deck in a browser, so gradient and image backgrounds, slides written in raw HTML, and CSS layout land in the PDF exactly as they appear on the stage.
 Icon: Sparkle
 ---
