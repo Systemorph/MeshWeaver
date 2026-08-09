@@ -20,10 +20,69 @@ name: Continuous Delivery (main)
 # the same runner — a free ~5 min off every merge-to-deployed cycle. Each job is
 # self-contained (checkout → az login → publish); the duplicated setup (~3 min) runs
 # concurrently so it costs no wall-clock.
+#
+# ══════════════════════════ ALL-OR-NOTHING PUBLICATION ══════════════════════════
+# 🚨 NO image in the set carries a consumer-visible tag unless EVERY image built.
+#
+# Each leg builds and pushes its layers under a per-run STAGING tag that nothing can select
+# (`staging-<sha>-<run_id>` — VersionSelect.PlatformVersionTag requires `^\d+\.\d+\.\d+`, so a
+# staging tag is invisible to every self-updater by construction). Only after all five legs
+# succeed does the `promote` job apply the real tags, and promotion is a MANIFEST-ONLY operation
+# (`docker buildx imagetools create`) — the layers are already in ACR, so it costs seconds.
+#
+# Why this shape and not "build to a tarball, push later": the bytes have to reach the registry
+# for a push to happen at all, and pushing them to a staging tag costs exactly what pushing them
+# to the real tag costs. The only thing worth withholding is the TAG, because the tag IS the
+# entire consumer contract. Publishing to an archive instead (ContainerArchiveOutputPath) would
+# move multi-GB tarballs — full base layers included, x2 architectures — through GitHub artifact
+# storage between jobs, and `docker load` cannot even load a multi-arch OCI archive on the
+# runner's classic image store. Same guarantee, an order of magnitude more machinery.
+#
+# Cost, measured on runs 31324251944 / 31326034137 (job wall clocks: bake 15m21s / 14m29s — the
+# pole; plugin-test 13m27s; portal-ai 13m6s; migration 9m58s; portal-next 2m23s):
+#   * full set available: 15m30s → ~16m30s (+~1 min, the promote job's own runner acquisition
+#     and ~15 s of manifest PUTs). The CD critical path grows by that one job and nothing else.
+#   * memex-portal-ai's version tag specifically: 13m6s → ~16m30s (+~3.4 min) — the portal now
+#     waits for bake. That IS the policy: 4f0c35c shipped a portal increment the NodeType bake
+#     gate never certified (#1026), and 3 minutes is what not doing that costs.
+#   * registry traffic: unchanged (same layers, pushed once). Accumulating tags per run per .NET
+#     repo go DOWN, 6 → 5: today version+sha indexes plus four RID-suffixed variants; now the
+#     staging index + its two RID variants plus the version and sha indexes.
+#
+# ═══════════════════════════ SELF-HEALING (RECONCILE) ═══════════════════════════
+# 🚨 A failed CD run used to be TERMINAL. Nothing re-attempted it, so the commit simply never got
+# an image and the hole was only ever closed incidentally, by the next merge — which publishes
+# the LATER commit, so the failed commit's set was never completed, just superseded. That is how
+# #1026 went unnoticed.
+#
+# The `schedule` trigger below closes that. It is a RECONCILER, not a retry: it asks "does main's
+# current HEAD have a complete image set in ACR?" — observed state — and only when the answer is
+# no does it drive a publish, saying out loud on the `ci-failure` issue what was missing. It
+# never wraps a failing operation in a retry and never suppresses the original failure signal.
+#
+# It heals to HEAD, never to the failed commit. Re-publishing a superseded commit is not merely
+# low-value, it is UNSOUND: the version tag comes from the BUILDING run's number, so republishing
+# older code would mint a higher `-ci.<n>` for it and every install would roll "forward" onto
+# older code — breaking the monotonic-build-number invariant VersionSelect documents in red.
+#
+# `workflow_dispatch` is the manual door to the same reconciler (`gh workflow run main-cd.yml`).
+# 🚨 Neither new trigger weakens the push gate. `workflow_run` still requires
+# `event == 'push' && head_branch == 'main'` — that is what stops a FORK's pull_request run
+# (whose head_branch can also be "main") from publishing untrusted code with this repo's
+# secrets. The reconcile paths never read the event payload at all: they resolve the target
+# commit server-side as the tip of THIS repo's main and re-check the required test check on it,
+# which a fork's code can never be.
 on:
   workflow_run:
     workflows: ["MeshWeaver Build and Test"]
     types: [completed]
+  # Reconcile cadence. Off the hour on purpose (the top of the hour is GitHub's most contended
+  # scheduling slot). 3 h sits comfortably inside the installs' 6 h self-update poll, so a healed
+  # image is picked up on the very next poll. A healthy tick is ONE ~40 s job — ~5 min of runner
+  # time a day — because `gate` stops the moment ACR says the set is complete.
+  schedule:
+    - cron: "23 */3 * * *"
+  workflow_dispatch:
 
 # id-token: write is required for OIDC federated login to Azure (no stored client secret).
 permissions:
@@ -86,11 +145,12 @@ jobs:
   # registries named, so a recurrence is one line to attribute — see issue #1026 for the
   # full trace (CD run 31322066110, bake's linux-arm64 leg, 16:01:03.9 → 16:01:34.1).
   #
-  # 🚨 Each image job pushes INDEPENDENTLY: a leg that dies this way leaves a PARTIAL
-  # release — 4f0c35cfc shipped memex-portal-ai:3.0.0-rc1.ci.2470 with no memex-bake:ci.2470,
-  # i.e. a portal version the NodeType bake gate never certified. Do NOT paper that over by
-  # retrying the publish, dropping a RID or `continue-on-error`; if CD should refuse to ship a
-  # partial set, that is a delivery-policy change to make deliberately.
+  # 🚨 A leg that dies this way can no longer leave a PARTIAL release — that was 4f0c35cfc,
+  # which shipped memex-portal-ai:3.0.0-rc1.ci.2470 with no memex-bake (#1026), i.e. a portal
+  # version the NodeType bake gate never certified. Every leg now pushes only a STAGING tag and
+  # the `promote` job applies the real tags after ALL of them succeed. Do NOT paper a failing leg
+  # over by retrying the publish, dropping a RID or `continue-on-error`: a genuine build failure
+  # must fail CD loudly and completely, and the reconciler will re-attempt HEAD on its own.
   # ─────────────────────────────── DELIVERY GATE ───────────────────────────────
   # 🚨 Gate on the REQUIRED CHECK, not on the workflow run's umbrella conclusion.
   # A run's conclusion is `failure` if ANY job ends cancelled — including a job that
@@ -105,21 +165,76 @@ jobs:
   # be green if tests actually ran (or a proven green-tree marker was reused). So it is
   # both necessary and sufficient — and strictly stronger than the umbrella conclusion,
   # which a starved job can poison in either direction.
+  #
+  # This job is ALSO the reconciler's brain and the single source of the target commit. Three
+  # entry shapes, one output contract (`publish` / `sha` / `short_sha` / `staging_tag` / `reason`):
+  #
+  #   workflow_run  → target = the event's head_sha. The `if:` below keeps the ORIGINAL push gate
+  #                   verbatim; nothing about the trusted path changed. Always publishes when the
+  #                   required check is green (a new merge always earns a new increment).
+  #   schedule /    → target = the tip of THIS repo's main, resolved through the API, never from
+  #   dispatch        the event payload. Publishes ONLY when ACR is missing part of that commit's
+  #                   set — i.e. driven by observed state, which is what makes it a reconciler
+  #                   rather than a retry.
+  #
+  # Every downstream job takes its commit from here, so a push run and a heal run are literally
+  # the same pipeline with a different target and a different reason.
   gate:
-    name: "Verify the required check is green"
+    name: "Resolve the target commit and decide whether to publish"
+    # The push gate, unchanged, for the ONLY path that trusts the event payload. Schedule and
+    # workflow_dispatch carry no workflow_run object at all, so they fall through to the
+    # reconcile branch below — which trusts nothing but the API and the registry.
     if: >-
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main'
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    # Job-level permissions REPLACE the workflow-level map, so every one this job needs is here:
+    # contents (checkout, for the shared check script), id-token (OIDC → ACR read), issues (the
+    # heal ledger — see "attempt budget" below).
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
     outputs:
-      green: ${{ steps.required.outputs.green }}
+      publish: ${{ steps.decide.outputs.publish }}
+      sha: ${{ steps.target.outputs.sha }}
+      short_sha: ${{ steps.target.outputs.short_sha }}
+      staging_tag: ${{ steps.target.outputs.staging_tag }}
+      reason: ${{ steps.target.outputs.reason }}
     steps:
+      - uses: actions/checkout@v6
+      - name: "Resolve the target commit"
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            sha="${{ github.event.workflow_run.head_sha }}"
+            reason="push"
+          else
+            # 🚨 Server-side truth, not the event payload. A fork can push anything to a branch
+            # called "main" in its own repo; it can never be the tip of THIS repo's main.
+            sha=$(gh api "repos/${{ github.repository }}/commits/main" --jq '.sha')
+            reason="reconcile"
+          fi
+          # 🚨 The ONE definition of the short SHA — every job, and the image-set check, use this
+          # output. `git rev-parse --short` uses core.abbrev=auto, which can hand out 8 characters
+          # for an ambiguous prefix; a promote that tagged 7 while verify looked for 8 would be a
+          # silent, unreproducible miss. A fixed cut cannot drift.
+          short=$(printf '%s' "$sha" | cut -c1-7)
+          echo "sha=$sha"                                     >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short"                             >> "$GITHUB_OUTPUT"
+          echo "reason=$reason"                               >> "$GITHUB_OUTPUT"
+          echo "staging_tag=staging-$short-$GITHUB_RUN_ID"    >> "$GITHUB_OUTPUT"
+          echo "Target: $sha ($short), entered via $reason (event ${{ github.event_name }})."
       - name: "Read the required check for this commit"
         id: required
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
+          SHA: ${{ steps.target.outputs.sha }}
         run: |
           set -euo pipefail
           # Latest run of the required check on this SHA (a re-run appends another).
@@ -128,42 +243,156 @@ jobs:
                   | sort_by(.completed_at) | last | .conclusion // "missing"')
           echo "Required check 'Consolidate test results' on $SHA → $concl"
           echo "run conclusion (umbrella, informational) → ${{ github.event.workflow_run.conclusion }}"
-          if [ "$concl" = "success" ]; then
-            echo "green=true" >> "$GITHUB_OUTPUT"
-            echo "### ✅ Required check green — shipping images" >> "$GITHUB_STEP_SUMMARY"
+          echo "green=$([ "$concl" = "success" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "conclusion=$concl" >> "$GITHUB_OUTPUT"
+      # The reconcile path only. Everything below is skipped on a push, which always publishes.
+      - name: Ensure Azure CLI
+        if: steps.target.outputs.reason == 'reconcile' && steps.required.outputs.green == 'true'
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        if: steps.target.outputs.reason == 'reconcile' && steps.required.outputs.green == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: "Does main's HEAD already have a complete image set?"
+        id: acr
+        if: steps.target.outputs.reason == 'reconcile' && steps.required.outputs.green == 'true'
+        run: |
+          set -uo pipefail
+          if .github/scripts/check-image-set.sh "${{ steps.target.outputs.short_sha }}"; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
           else
-            echo "green=false" >> "$GITHUB_OUTPUT"
-            echo "### ⛔ Required check is \`$concl\` — no image will be built" >> "$GITHUB_STEP_SUMMARY"
+            echo "complete=false" >> "$GITHUB_OUTPUT"
           fi
+      # ── The decision, and (reconcile only) the ATTEMPT BUDGET ──────────────────────────────
+      # A reconciler that cannot succeed must not grind forever. Persistent failure here means
+      # main's HEAD genuinely does not build an image — a human has to act — and re-attempting
+      # every 3 h would burn ~75 min of runner time a tick and drip identical comments onto an
+      # issue nobody would keep reading. So the budget is 3 attempts PER COMMIT, and the ledger
+      # is the `ci-failure` issue itself: the surface a human already watches, no new state store.
+      #
+      #   * The slot is consumed when an attempt STARTS, not when it fails — a run that dies
+      #     without reporting must not buy an infinite supply of retries.
+      #   * A new HEAD resets the budget naturally (the marker carries the SHA).
+      #   * On exhaustion it stops attempting, says so ONCE, and labels the issue `cd-unhealed`.
+      #     Later ticks then cost ~40 s and print nothing — loud once, then quiet, which is the
+      #     opposite of a repeating alarm nobody reads. Closing the issue is a deliberate human
+      #     act and legitimately grants a fresh budget.
+      - name: "Decide"
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHORT: ${{ steps.target.outputs.short_sha }}
+          REASON: ${{ steps.target.outputs.reason }}
+          GREEN: ${{ steps.required.outputs.green }}
+          CONCL: ${{ steps.required.outputs.conclusion }}
+          COMPLETE: ${{ steps.acr.outputs.complete }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MAX_ATTEMPTS: "3"
+        run: |
+          set -euo pipefail
+          decision() { echo "publish=$1" >> "$GITHUB_OUTPUT"; echo "### $2" >> "$GITHUB_STEP_SUMMARY"; echo "$2"; }
+
+          if [ "$GREEN" != "true" ]; then
+            decision false "⛔ \`Consolidate test results\` on $SHORT is \`$CONCL\` — nothing will be built"
+            exit 0
+          fi
+          if [ "$REASON" = "push" ]; then
+            decision true "✅ Required check green — publishing the full image set for \`$SHORT\`"
+            exit 0
+          fi
+          if [ "$COMPLETE" = "true" ]; then
+            decision false "✅ main \`$SHORT\` already has a complete image set — nothing to reconcile"
+            exit 0
+          fi
+
+          # 🚨 Never race an in-flight publish for the same commit. A CD run's head_sha IS the
+          # commit it targets, so this is an observed-state check, not a lock: if someone's merge
+          # is already building $SHORT, there is nothing to reconcile yet.
+          inflight=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow main-cd.yml --limit 50 \
+            --json databaseId,headSha,status \
+            --jq "[.[] | select(.headSha[0:7]==\"$SHORT\" and (.status==\"in_progress\" or .status==\"queued\")
+                                and (.databaseId|tostring) != \"$GITHUB_RUN_ID\")] | length")
+          if [ "$inflight" -gt 0 ]; then
+            decision false "⏳ a CD run for \`$SHORT\` is already in flight — reconcile skipped"
+            exit 0
+          fi
+
+          gh label create ci-failure --repo "$GITHUB_REPOSITORY" \
+            --description "A main-branch CD run failed - no deployable image was published" \
+            --color B60205 --force >/dev/null
+          issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+          if [ -z "$issue" ]; then
+            # `gh issue create` prints the issue URL (it has no --json); the number is its tail.
+            url=$(gh issue create --repo "$GITHUB_REPOSITORY" --label ci-failure \
+              --title "CD: main \`$SHORT\` has an incomplete image set" \
+              --body "main's HEAD \`$SHORT\` is missing part of its deployment image set in ACR, so every self-updating install stays on the previous image. The CD reconciler will attempt to publish it; this issue collects those attempts. Close it once CD is green again.")
+            issue="${url##*/}"
+          fi
+
+          count_marker() {
+            gh issue view "$issue" --repo "$GITHUB_REPOSITORY" --json comments \
+              --jq "[.comments[] | select(.body | contains(\"$1\"))] | length"
+          }
+          attempts=$(count_marker "<!-- cd-heal:$SHORT -->")
+          if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then
+            if [ "$(count_marker "<!-- cd-heal-stopped:$SHORT -->")" -eq 0 ]; then
+              gh label create cd-unhealed --repo "$GITHUB_REPOSITORY" \
+                --description "CD could not publish a complete image set and has stopped retrying" \
+                --color 5319E7 --force >/dev/null
+              gh issue edit "$issue" --repo "$GITHUB_REPOSITORY" --add-label cd-unhealed >/dev/null
+              # printf, not a multi-line string literal: this whole step is a YAML block scalar,
+              # so a body line starting at column 1 would end the block — and indenting it would
+              # bury the text in a markdown code fence.
+              gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$(printf '%s\n\n%s\n\n%s' \
+                "<!-- cd-heal-stopped:$SHORT -->" \
+                "🛑 **Automatic healing STOPPED for \`$SHORT\`** after $MAX_ATTEMPTS attempts." \
+                "main's HEAD still has no complete image set, so **no install will ever roll forward** until a human acts: fix whatever fails in the image jobs of the linked runs and merge, or close this issue to grant the reconciler a fresh budget. The 3-hourly reconcile will not attempt \`$SHORT\` again.")"
+            fi
+            decision false "🛑 heal budget exhausted for \`$SHORT\` ($MAX_ATTEMPTS attempts) — not retrying"
+            exit 0
+          fi
+
+          n=$((attempts + 1))
+          gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$(printf '%s\n\n%s\n\n%s' \
+            "<!-- cd-heal:$SHORT -->" \
+            "🔁 **CD reconcile attempt $n/$MAX_ATTEMPTS for \`$SHORT\`** ([run]($RUN_URL))." \
+            "main's HEAD is missing part of its image set in ACR (that run's annotations name which repositories), so this run is publishing the full set for \`$SHORT\`. The commit whose CD run originally failed is NOT re-published — it is superseded by HEAD on purpose: the version tag comes from the BUILDING run's number, so re-publishing older code would mint a higher \`-ci.<n>\` for it and roll every install backwards.")"
+          decision true "🔁 reconcile attempt $n/$MAX_ATTEMPTS — publishing the full image set for \`$SHORT\`"
 
   portal-image:
     name: "Build + push portal-ai image"
-    # Gate: only a SUCCESSFUL test run, from a PUSH (not a PR), on main.
+    # Gate: a commit whose required check is green, resolved by `gate` (push OR reconcile).
     needs: gate
-    if: needs.gate.outputs.green == 'true'
+    if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
           # Build the EXACT commit the tests passed on — not whatever main is now.
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ needs.gate.outputs.sha }}
       # The SDK container build + the publish output overflow the runner's ~14 GB; reclaim the
       # ~25 GB of preinstalled tooling a .NET build never touches (same as the test workflow).
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
-      # The image is tagged with the VERSION (3.0.0-ci.<run#>) AND the short SHA AND the moving `main`.
-      # The version tag is what each install's self-updater (ReleaseStrategy.md) compares to decide a
-      # rollout — so it MUST be the monotonic $(Version) (Directory.Build.props derives the .ci.<n>
-      # suffix from $GITHUB_RUN_NUMBER). -getProperty:Version prints the computed version without
-      # building; CIRun=true so it matches the version baked into the published binaries below.
-      - name: Compute image tags (version + short SHA)
+      # The VERSION (3.0.0-rc1.ci.<run#>) is what each install's self-updater (ReleaseStrategy.md)
+      # compares to decide a rollout — so it MUST be the monotonic $(Version) (Directory.Build.props
+      # derives the .ci.<n> suffix from $GITHUB_RUN_NUMBER). -getProperty:Version prints the computed
+      # version without building; CIRun=true so it matches the version baked into the binaries below.
+      # It is NOT applied here: this job only pushes the staging tag, and `promote` applies this
+      # version (job output) once every leg has succeeded.
+      - name: Compute image version
         id: vars
         run: |
           set -euo pipefail
-          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           VERSION=$(dotnet msbuild memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
             -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -206,7 +435,11 @@ jobs:
       # "linux-x64;linux-arm64" and fails (OutputPath MSB4115 / NETSDK1083). The '"…"' form (the SDK's own
       # documented Bash escaping) keeps the value one CLI switch while letting MSBuild split the real `;` into a
       # 2-item list. Applies to ContainerRuntimeIdentifiers AND ContainerImageTags (every `-p:` whose value is a `;`-list).
-      - name: Build + push portal-ai
+      #
+      # 🚨 STAGING TAG ONLY — this is the all-or-nothing gate. The layers land in ACR (they have to;
+      # that IS what pushing costs) but under a name no consumer can select, so this leg succeeding
+      # ships NOTHING on its own. `promote` applies version/sha/main once every leg has succeeded.
+      - name: Build + push portal-ai (staging tag)
         run: >
           dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
@@ -214,19 +447,21 @@ jobs:
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-portal-ai
-          -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
+          -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
           -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
 
   migration-image:
     name: "Build + push migration image"
     needs: gate
-    if: needs.gate.outputs.green == 'true'
+    if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ needs.gate.outputs.sha }}
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
@@ -234,11 +469,13 @@ jobs:
       # Same $(Version) computation as the portal leg: both jobs run inside ONE
       # workflow run, so GITHUB_RUN_NUMBER — and therefore the computed
       # 3.0.0-ci.<n> tag — is identical across the two legs by construction.
-      - name: Compute image tags (version + short SHA)
+      # 🚨 This one is load-bearing beyond tidiness: the self-updater patches the portal AND the
+      # migration Deployment to the SAME tag (SelfUpdateOptions.MigrationImage), so a portal
+      # version tag without a matching migration version tag is an ImagePullBackOff on rollout.
+      - name: Compute image version
         id: vars
         run: |
           set -euo pipefail
-          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           VERSION=$(dotnet msbuild memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj \
             -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -255,7 +492,7 @@ jobs:
         run: az acr login --name meshweaver
       # migration — lean image on the standard (already multi-arch) aspnet base; same multi-arch publish.
       # <RuntimeIdentifiers> lives in Memex.Database.Migration.csproj (project-local, same reason as above).
-      - name: Build + push migration
+      - name: Build + push migration (staging tag)
         run: >
           dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
@@ -263,7 +500,7 @@ jobs:
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration
-          -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
+          -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
 
   # nodetype-bake — compiles every dynamic NodeType against THIS build into the shared assembly
   # cache before the portal rolls onto it, and fails the release on a regression. It must be
@@ -280,24 +517,25 @@ jobs:
   bake-image:
     name: "Build + push nodetype-bake image"
     needs: gate
-    if: needs.gate.outputs.green == 'true'
+    if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ needs.gate.outputs.sha }}
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
       # Same $(Version) computation as every other leg — GITHUB_RUN_NUMBER is shared across the
       # run, so the 3.0.0-ci.<n> tag matches the migration/portal images by construction.
-      - name: Compute image tags (version + short SHA)
+      - name: Compute image version
         id: vars
         run: |
           set -euo pipefail
-          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           VERSION=$(dotnet msbuild memex/aspire/Memex.NodeType.Bake/Memex.NodeType.Bake.csproj \
             -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -312,7 +550,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
         run: az acr login --name meshweaver
-      - name: Build + push nodetype-bake
+      - name: Build + push nodetype-bake (staging tag)
         run: >
           dotnet publish memex/aspire/Memex.NodeType.Bake/Memex.NodeType.Bake.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
@@ -320,7 +558,7 @@ jobs:
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-bake
-          -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
+          -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
 
   # The MeshWeaver.Plugins PR gate image: `mw-plugin-test` (tools/MeshWeaver.PluginTester)
   # imports a node-repo checkout into a fresh in-process mesh, asserts every NodeType compiles,
@@ -330,24 +568,25 @@ jobs:
   plugin-test-image:
     name: "Build + push mw-plugin-test image"
     needs: gate
-    if: needs.gate.outputs.green == 'true'
+    if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ needs.gate.outputs.sha }}
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
       # Same $(Version) computation as the other legs — GITHUB_RUN_NUMBER is shared across the
       # run, so the 3.0.0-ci.<n> tag matches the portal/migration images by construction.
-      - name: Compute image tags (version + short SHA)
+      - name: Compute image version
         id: vars
         run: |
           set -euo pipefail
-          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           VERSION=$(dotnet msbuild tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj \
             -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -364,8 +603,9 @@ jobs:
         run: az acr login --name meshweaver
       # Lean console image on the standard multi-arch base; <RuntimeIdentifiers> lives in the
       # csproj (project-local — a global -p:RuntimeIdentifiers breaks referenced libs, see above).
-      # `latest` rides along so the plugins repo can pin MW_TEST_IMAGE=…/mw-plugin-test:latest.
-      - name: Build + push mw-plugin-test (ACR)
+      # `latest` (the tag the plugins repo pins as MW_TEST_IMAGE) and the GHCR mirror both moved
+      # to `promote`: they are consumer-visible, so they must not appear until every leg is green.
+      - name: Build + push mw-plugin-test (staging tag, ACR)
         run: >
           dotnet publish tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
@@ -373,40 +613,7 @@ jobs:
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=mw-plugin-test
-          -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main;latest"'
-
-      # ALSO publish to GHCR. The MeshWeaver.Plugins CI runs its `test-repos` gate INSIDE this
-      # image, and that repo has no ACR credentials — it used to gate the whole job on a repo
-      # variable nobody had set, so the gate reported "skipping" on every PR and every plugin's
-      # `Tests` area was compiled but never executed. Publishing here gives that repo a registry
-      # it can reach with a GitHub token, so the gate runs by default.
-      - name: Lowercase image namespace (GHCR requires lowercase)
-        run: echo "IMAGE_NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      # MIRROR the ACR index to GHCR — do NOT publish a second time.
-      #
-      # 🚨 A second `dotnet publish` is not just slow (measured 411 s on top of the ACR leg's
-      # 637 s, run 31269491065), it is WRONG: two independent builds of the same commit are two
-      # independent compilations, so the bits the plugins repo gates on from GHCR were never
-      # provably the bits we validated in ACR. `imagetools create` copies the already-pushed
-      # multi-arch index blob-for-blob, so both registries serve a byte-identical image by
-      # construction — and the whole GHCR leg collapses to a manifest copy.
-      #
-      # Auth: `az acr login` (above) and docker/login-action both write ~/.docker/config.json,
-      # so buildx reads source and target credentials from the one store.
-      - name: Mirror mw-plugin-test to GHCR (no rebuild)
-        run: >
-          docker buildx imagetools create
-          --tag ghcr.io/$IMAGE_NS/mw-plugin-test:${{ steps.vars.outputs.version }}
-          --tag ghcr.io/$IMAGE_NS/mw-plugin-test:${{ steps.vars.outputs.sha }}
-          --tag ghcr.io/$IMAGE_NS/mw-plugin-test:main
-          --tag ghcr.io/$IMAGE_NS/mw-plugin-test:latest
-          ${{ env.ACR }}/mw-plugin-test:${{ steps.vars.outputs.version }}
+          -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
 
   # ─────────────────────────── portal-next (Next.js) ─────────────────────────
   # The React/Next.js portal. It is NOT a .NET project, so it cannot use the
@@ -426,19 +633,26 @@ jobs:
   # so this builds natively with no QEMU emulation. memex-local builds its own arm64 image into
   # Colima's Docker store for local dev (see clients/portal-next/DEPLOY.md), so nothing needs the
   # arm64 variant from ACR.
+  #
+  # 🚨 Gated on `gate`, like every other leg — it used to gate on
+  # `workflow_run.conclusion == 'success'` instead. That is the umbrella conclusion the DELIVERY
+  # GATE block above exists to reject: one starved job that never ran a step poisons it, and this
+  # leg alone would then be SKIPPED while the other four shipped — silently, the exact
+  # partial-release shape of #1026. Under all-or-nothing that inconsistency would also be the one
+  # way a skipped-but-not-failed leg could block the whole set, so the two gates must agree.
   portal-next-image:
     name: "Build + push portal-next image"
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main'
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
           # Build the EXACT commit the tests passed on — not whatever main is now.
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ needs.gate.outputs.sha }}
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -460,13 +674,18 @@ jobs:
           npm --prefix clients/grpc-web install --no-audit --no-fund
           npm --prefix clients/grpc-web run gen
           test -f clients/grpc-web/src/gen/mesh_pb.ts
-      # Same tag triple as the other legs, computed the same way, so a given main commit's
-      # portal-ai and portal-next images always carry matching tags.
-      - name: Compute image tags (version + short SHA)
+      # ⚠️ PRE-EXISTING DRIFT, deliberately left alone here: this hand-writes `3.0.0-ci.<n>` while
+      # every .NET leg computes `$(Version)` = `3.0.0-rc1.ci.<n>` (Directory.Build.props takes
+      # PlatformVersion=3.0.0-rc1 as the prefix). So portal-next's version tag has never matched
+      # its siblings'. Nothing selects it — SelfUpdateOptions only ever reads memex-portal-ai, and
+      # deployments pin portal-next explicitly — and changing a published tag shape would break
+      # whatever is pinned today, so it is reported, not silently "fixed" inside this change. The
+      # cross-image identity every leg DOES share is the short SHA, which is what verify-images
+      # and the reconciler assert on.
+      - name: Compute image version
         id: vars
         run: |
           set -euo pipefail
-          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           echo "version=3.0.0-ci.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
@@ -482,31 +701,159 @@ jobs:
       # relies on Dockerfile.dockerignore (a per-Dockerfile ignore, a BuildKit-only feature) to keep
       # node_modules/.next/dist out of the context. Without BuildKit that ignore is silently not
       # applied and the stale host artefacts get copied into the image.
-      - name: Build + push portal-next
+      #
+      # 🚨 Staging tag only, same as the .NET legs. Building locally and pushing later is not an
+      # option ACROSS jobs — the runner's image store dies with the job — so "hold the push" here
+      # means "push under a name nothing can select" exactly as it does everywhere else.
+      - name: Build portal-next
         env:
           DOCKER_BUILDKIT: "1"
         run: >
           docker build
           --platform linux/amd64
           -f clients/portal-next/Dockerfile
-          -t ${{ env.ACR }}/memex-portal-next:${{ steps.vars.outputs.version }}
-          -t ${{ env.ACR }}/memex-portal-next:${{ steps.vars.outputs.sha }}
-          -t ${{ env.ACR }}/memex-portal-next:main
+          -t ${{ env.ACR }}/memex-portal-next:${{ needs.gate.outputs.staging_tag }}
           clients/
-      - name: Push tags
+      - name: Push staging tag
+        run: docker push ${{ env.ACR }}/memex-portal-next:${{ needs.gate.outputs.staging_tag }}
+
+  # ──────────────────────── PROMOTE (the all-or-nothing act) ───────────────────
+  # Nothing above this line is visible to any consumer. Every leg pushed its layers under the
+  # per-run staging tag; this job — and ONLY if all five legs succeeded — applies the tags that
+  # deployments and self-updaters actually resolve.
+  #
+  # 🚨 NO `if:` beyond the gate check. The default job condition IS the policy: a job with `needs`
+  # and no always()/!cancelled() runs only when every need SUCCEEDED, and a need that was skipped
+  # or failed skips this job. Adding always()/!cancelled()/continue-on-error here would reinstate
+  # exactly the partial publish this exists to prevent.
+  #
+  # Manifest-only. `docker buildx imagetools create --tag X --tag Y <src>` re-points tags at
+  # already-pushed content — no layer moves, no rebuild, seconds per repository. (The same
+  # primitive already mirrored mw-plugin-test to GHCR, so it is proven with these credentials.
+  # `az acr import` would also work server-side, but importImage/action is NOT in the AcrPush
+  # role this identity is known to hold, and discovering that on main is not a good trade.)
+  #
+  # ── ORDERING IS THE ROLLBACK STORY ────────────────────────────────────────────────────────────
+  # Tagging five repositories is not one atomic act, so the design makes a mid-flight failure
+  # UNOBSERVABLE instead of adding a compensating delete that can fail on its own (and cannot
+  # restore a moving pointer anyway — untagging `latest` destroys it rather than reverting it,
+  # and needs AcrDelete, which this identity may not have).
+  #
+  #   Phase A — identity tags (<version>, <sha>) on every repo EXCEPT memex-portal-ai's version.
+  #   Phase B — moving pointers: `main` everywhere, `latest` on mw-plugin-test, the GHCR mirror.
+  #   Phase C — memex-portal-ai:<version>. ONE registry PUT, and the LAST thing this pipeline does.
+  #
+  # Phase C is the arming write and nothing else is: SelfUpdateHostedService lists tags for
+  # memex-portal-ai ONLY, picks the newest tag matching ^\d+\.\d+\.\d+, and patches the portal AND
+  # migration Deployments to it. So:
+  #   * a failure in A or B leaves NO consumer-visible partial release — no install can select a
+  #     version that was never written. The residue is inert identity/pointer tags on a commit
+  #     that did not ship; they are superseded by the next run and nothing resolves them.
+  #   * a failure IN C is a single PUT that either happened or did not — there is no half-armed
+  #     state to unwind.
+  #   * whatever the failure, `verify-images` below still fails and `alert-on-failure` still
+  #     files the issue, and the 3-hourly reconciler re-drives HEAD.
+  # Deliberately NOT here: a cleanup pass that untags staging. It would buy nothing — accumulating
+  # tags per .NET repo per run go DOWN, 6 → 5 (staging index + its two RID variants + version +
+  # sha, versus today's version/sha indexes plus four RID-suffixed variants) — and it would add a
+  # delete permission and a second failure mode to the one job that must not have either.
+  promote:
+    name: "Promote: tag the full set (all-or-nothing)"
+    needs: [gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      STAGING: ${{ needs.gate.outputs.staging_tag }}
+      SHA: ${{ needs.gate.outputs.short_sha }}
+      V_PORTAL: ${{ needs.portal-image.outputs.version }}
+      V_MIGRATION: ${{ needs.migration-image.outputs.version }}
+      V_BAKE: ${{ needs.bake-image.outputs.version }}
+      V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
+      V_NEXT: ${{ needs.portal-next-image.outputs.version }}
+    steps:
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # buildx reads registry credentials from ~/.docker/config.json, which is what both of these
+      # logins write — one store, both registries.
+      - name: ACR login
+        run: az acr login --name meshweaver
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: "Phase A — identity tags (everything except the portal's version)"
         run: |
           set -euo pipefail
-          docker push ${{ env.ACR }}/memex-portal-next:${{ steps.vars.outputs.version }}
-          docker push ${{ env.ACR }}/memex-portal-next:${{ steps.vars.outputs.sha }}
-          docker push ${{ env.ACR }}/memex-portal-next:main
+          promote() { # promote <repo> <tag>...
+            local repo="$1"; shift
+            local args=()
+            for t in "$@"; do args+=(--tag "${{ env.ACR }}/$repo:$t"); done
+            echo "→ $repo: $*"
+            docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/$repo:$STAGING"
+          }
+          promote memex-bake        "$V_BAKE"      "$SHA"
+          promote memex-migration   "$V_MIGRATION" "$SHA"
+          promote mw-plugin-test    "$V_PLUGIN"    "$SHA"
+          promote memex-portal-next "$V_NEXT"      "$SHA"
+          # The portal's SHA tag, but NOT its version tag — see phase C.
+          promote memex-portal-ai   "$SHA"
+      - name: "Phase B — moving pointers (main, latest, GHCR mirror)"
+        run: |
+          set -euo pipefail
+          for repo in memex-bake memex-migration memex-portal-next memex-portal-ai; do
+            echo "→ $repo: main"
+            docker buildx imagetools create --tag "${{ env.ACR }}/$repo:main" "${{ env.ACR }}/$repo:$STAGING"
+          done
+          # `latest` is what MeshWeaver.Plugins pins as MW_TEST_IMAGE.
+          docker buildx imagetools create \
+            --tag "${{ env.ACR }}/mw-plugin-test:main" \
+            --tag "${{ env.ACR }}/mw-plugin-test:latest" \
+            "${{ env.ACR }}/mw-plugin-test:$STAGING"
+          # MIRROR the ACR index to GHCR — never a second `dotnet publish`. Two independent builds
+          # of one commit are two independent compilations, so the bits the plugins repo gates on
+          # from GHCR would not provably be the bits validated in ACR (and it measured 411 s on top
+          # of the ACR leg's 637 s, run 31269491065). imagetools copies the index by digest.
+          NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          docker buildx imagetools create \
+            --tag "ghcr.io/$NS/mw-plugin-test:$V_PLUGIN" \
+            --tag "ghcr.io/$NS/mw-plugin-test:$SHA" \
+            --tag "ghcr.io/$NS/mw-plugin-test:main" \
+            --tag "ghcr.io/$NS/mw-plugin-test:latest" \
+            "${{ env.ACR }}/mw-plugin-test:$STAGING"
+      - name: "Phase C — arm the release: memex-portal-ai:<version>"
+        run: |
+          set -euo pipefail
+          # 🚨 THE LAST WRITE IN CD. Until this single PUT lands, no install can see this commit:
+          # SelfUpdateHostedService reads memex-portal-ai's tags and rolls the portal AND the
+          # migration Deployment to the newest ^\d+\.\d+\.\d+ one. Everything it will need — the
+          # matching memex-migration:$V_MIGRATION, the bake image that certifies these NodeTypes —
+          # is already tagged by phase A. Do not move this step, and do not add anything after it.
+          echo "→ memex-portal-ai: $V_PORTAL  (arming the self-updater)"
+          docker buildx imagetools create \
+            --tag "${{ env.ACR }}/memex-portal-ai:$V_PORTAL" \
+            "${{ env.ACR }}/memex-portal-ai:$STAGING"
+          {
+            echo "### Promoted \`$SHA\` → $V_PORTAL"
+            echo "- memex-portal-ai \`$V_PORTAL\`, \`$SHA\`, \`main\`"
+            echo "- memex-migration \`$V_MIGRATION\`, \`$SHA\`, \`main\`"
+            echo "- memex-bake \`$V_BAKE\`, \`$SHA\`, \`main\`"
+            echo "- mw-plugin-test \`$V_PLUGIN\`, \`$SHA\`, \`main\`, \`latest\` (ACR + GHCR)"
+            echo "- memex-portal-next \`$V_NEXT\`, \`$SHA\`, \`main\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ─────────────────────────── DID IT ACTUALLY SHIP? ──────────────────────────
-  # Assert the IMAGES exist, never the green tick. Each image job pushes independently, so ONE leg
-  # failing leaves main with a PARTIAL release — 4f0c35cfc shipped memex-portal-ai:3.0.0-rc1.ci.2470
-  # with no memex-bake:ci.2470 (issue #1026), i.e. a portal increment the NodeType bake gate never
-  # certified, while the self-updater happily picks the newest version tag. A per-job red says "CD
-  # failed"; it does not say WHICH image is missing, and nothing was checking that a given main
-  # commit ends up with the full set.
+  # Belt and braces: `promote` PREVENTS a partial set, this CONFIRMS one landed. Assert the
+  # IMAGES, never the green tick — 4f0c35cfc shipped memex-portal-ai:3.0.0-rc1.ci.2470 with no
+  # memex-bake (#1026) while every job it had reported success.
   #
   # `if: always()` on purpose: this runs whether the legs passed, failed or were cancelled, so the
   # run's LAST word is a named list of what is missing from the registry rather than a stack trace
@@ -515,22 +862,23 @@ jobs:
   #
   # It also catches what a per-job red CANNOT: a leg that reports success while pushing nothing
   # (Microsoft.NET.Build.Containers swallows a cancelled push as a warning and returns true — see
-  # the guard in the root Directory.Build.props), and an index that lost an architecture.
+  # the guard in the root Directory.Build.props), an index that lost an architecture, and a
+  # promotion that stopped between phases.
   #
-  # Every leg pushes the short-SHA tag, so that is the one identity all five images share.
+  # The assertion itself lives in .github/scripts/check-image-set.sh because `gate` asks the SAME
+  # question to decide whether HEAD needs reconciling; the two must never disagree.
   verify-images:
     name: "Verify every image shipped"
-    needs: [gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image]
-    if: always() && needs.gate.outputs.green == 'true'
+    needs: [gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image, promote]
+    if: always() && needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
     steps:
       - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-      - name: Compute the commit tag every leg pushes
-        id: vars
-        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       # Reads manifests through ARM (no `az acr login` needed — that one is for docker/push creds).
@@ -541,48 +889,20 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: Every image for this commit must exist in ACR
+        run: .github/scripts/check-image-set.sh "${{ needs.gate.outputs.short_sha }}"
+      # A heal that WORKED has to say so on the same issue that recorded the attempt, or the
+      # ledger only ever grows and nobody can tell a fixed hole from an open one.
+      - name: Report a successful heal
+        if: needs.gate.outputs.reason == 'reconcile' && needs.promote.result == 'success'
         env:
-          SHA: ${{ steps.vars.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          # No `-e`: every repository must be REPORTED, so one miss cannot hide the next.
-          set -uo pipefail
-          fail=0
-          report() { echo "::error::$1"; echo "- ❌ $1" >> "$GITHUB_STEP_SUMMARY"; fail=1; }
-          ok()     { echo "$1";         echo "- ✅ $1" >> "$GITHUB_STEP_SUMMARY"; }
-
-          echo "### Images for main \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
-
-          # The four .NET legs publish an OCI/Docker image INDEX over both linux architectures.
-          # Asserting the architectures — not just the tag — is what makes this more than a
-          # restatement of the job status: an index that lost a leg still resolves for one arch.
-          # `az acr manifest show` is an Azure-CLI PREVIEW command group (it prints a warning on
-          # stderr, discarded here). If it is ever withdrawn, the equivalent is
-          # `docker buildx imagetools inspect --raw <acr>/<repo>:<tag>` after `az acr login`.
-          for repo in memex-portal-ai memex-migration memex-bake mw-plugin-test; do
-            if ! m=$(az acr manifest show --registry meshweaver --name "$repo:$SHA" -o json 2>/dev/null); then
-              report "$repo:$SHA is MISSING from ACR — main $SHA shipped an INCOMPLETE release"
-              continue
-            fi
-            arches=$(printf '%s' "$m" | jq -r '[(.manifests // [])[] | select(.platform.os == "linux") | .platform.architecture] | sort | join(",")')
-            if [ "$arches" != "amd64,arm64" ]; then
-              report "$repo:$SHA is not a linux amd64+arm64 image index (architectures: '${arches:-<single-arch manifest>}')"
-            else
-              ok "$repo:$SHA (linux/amd64 + linux/arm64)"
-            fi
-          done
-
-          # portal-next is amd64-only BY DESIGN (every AKS node is amd64) — existence is the check.
-          if ! az acr manifest show --registry meshweaver --name "memex-portal-next:$SHA" -o json >/dev/null 2>&1; then
-            report "memex-portal-next:$SHA is MISSING from ACR — main $SHA shipped an INCOMPLETE release"
-          else
-            ok "memex-portal-next:$SHA (linux/amd64)"
-          fi
-
-          if [ "$fail" -ne 0 ]; then
-            echo "::error::main $SHA did NOT ship a complete image set. Every self-updating install stays on the previous image until a CD run publishes all of them. Fix the failing leg and merge again — a manual re-run of Build-and-Test cannot ship (main-cd gates on workflow_run.event == 'push')."
-            exit 1
-          fi
-          echo "All five images exist in ACR for $SHA."
+          set -euo pipefail
+          issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+          [ -n "$issue" ] || exit 0
+          gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "✅ **Healed \`${{ needs.gate.outputs.short_sha }}\`** ([run]($RUN_URL)) — main's HEAD now has the complete image set (portal \`${{ needs.portal-image.outputs.version }}\`), verified against ACR. Installs pick it up on their next 6 h self-update poll. Close this issue if nothing else is outstanding."
 
   # ───────────────────────────── FAILURE ALERTING ────────────────────────────
   # A red CD after a green merge is otherwise INVISIBLE (nobody watches the Actions tab), and the
@@ -590,15 +910,20 @@ jobs:
   # self-updating install silently stays on the previous image (2026-07-22: prod ran a leaky build
   # for 20h because run 29929207634 failed unnoticed). This job makes a failed main CD loud: it
   # files (or comments on) a GitHub issue labeled `ci-failure`.
-  # - `if: failure()` with `needs`: fires only when at least one image job actually FAILED —
-  #   not when they were skipped (PR-triggered workflow_run) and not on cancellation.
-  #   `verify-images` is in that list so a registry that is MISSING an image alerts too, even in
-  #   the case where every publish leg reported success.
+  # - `if: failure()` with `needs`: fires only when at least one job actually FAILED — not when
+  #   they were skipped (PR-triggered workflow_run, or a reconcile tick that found nothing to do)
+  #   and not on cancellation.
+  # - 🚨 EVERY job in this workflow is in `needs`. A job missing from this list fails SILENTLY,
+  #   which is the whole failure mode this alerting exists to prevent: `gate` (a broken decision
+  #   ships nothing), `promote` (the all-or-nothing act — if it dies, the legs are green and the
+  #   release is unarmed), and `verify-images` (a registry MISSING an image, even when every
+  #   publish leg reported success).
   # - Idempotent: one open `ci-failure` issue collects repeat failures as comments; a new issue is
-  #   only created when none is open (close the issue once CD is green again).
+  #   only created when none is open (close the issue once CD is green again). The reconciler
+  #   writes its attempt ledger to the same issue, so the whole story is in one place.
   alert-on-failure:
     name: "Alert: CD failed on main"
-    needs: [portal-image, migration-image, bake-image, plugin-test-image, portal-next-image, verify-images]
+    needs: [gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image, promote, verify-images]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
