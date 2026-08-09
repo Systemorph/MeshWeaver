@@ -82,17 +82,31 @@ public static class WellKnownLicenses
     public static string PathFor(string spdxId) => $"{Partition}/{spdxId}";
 
     /// <summary>
-    /// The platform's own terms: <b>MIT OR Apache-2.0</b> — the recipient chooses either.
+    /// The platform's own terms: <b>Apache-2.0 OR MIT</b> — the recipient chooses either.
     ///
-    /// <para>Dual licensing is what lets both audiences be served without compromise: Apache-2.0
-    /// carries an explicit patent grant (real protection for a platform that executes user code),
-    /// while MIT stays compatible with GPLv2, which Apache-2.0 is not. Offering both means a
-    /// downstream GPLv2 project can still use this, and an enterprise still gets the patent grant.
-    /// Neither obliges anyone to publish source, which is the property that matters here: packages
-    /// may ship source-partial, and nothing in either license turns that into a disclosure duty.</para>
+    /// <para>Apache-2.0 is named FIRST because it is the preferred licence and the one new work is
+    /// made under: it carries an express patent grant (real protection for a platform that compiles
+    /// and executes user-authored code), and its section 5 makes an inbound contribution offered
+    /// under the same terms without separate paperwork — which MIT does not address at all.</para>
+    ///
+    /// <para>MIT stays on offer because Apache-2.0 is incompatible with GPLv2 and MIT is not, so a
+    /// downstream GPLv2 project can still build on this. Neither obliges anyone to publish source —
+    /// the property that matters here, since packages may ship source-partial.</para>
     /// </summary>
-    public const string PlatformSpdxExpression = "MIT OR Apache-2.0";
+    public const string PlatformSpdxExpression = "Apache-2.0 OR MIT";
 
-    /// <summary>Ids of the licenses shipped in the catalog.</summary>
+    /// <summary>
+    /// The licence assumed for first-party content that declares none.
+    ///
+    /// <para>🚨 A fallback is only ever legitimate for content whose copyright holder has ALREADY
+    /// licensed it — it records an existing grant, it cannot create one. It is therefore configured
+    /// PER SOURCE (a source's <c>DefaultLicense</c>, set from that repo's own LICENSE file) and must
+    /// never be a platform-wide default: assuming a licence for a third-party repo would assert a
+    /// grant its author never made. A source with no declared default leaves the package's licence
+    /// UNSPECIFIED, which is the honest answer.</para>
+    /// </summary>
+    public const string FirstPartyFallback = "MIT";
+
+    /// <summary>Ids of the licenses shipped in the catalog, preferred first.</summary>
     public static readonly ImmutableArray<string> Shipped = ["Apache-2.0", "MIT"];
 }

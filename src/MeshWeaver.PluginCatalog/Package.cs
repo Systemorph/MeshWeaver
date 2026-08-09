@@ -79,6 +79,19 @@ public record PackageManifest
     public string? Source { get; init; }
 
     /// <summary>
+    /// The licence this package is offered under, as an SPDX id or expression
+    /// (<c>Apache-2.0</c>, <c>Apache-2.0 OR MIT</c>). Authored on the plugin root's
+    /// <c>content.license</c>; when absent it is filled from the SOURCE's declared default (a
+    /// repo's own LICENSE, recorded once in <c>PluginCatalog:Sources:N:DefaultLicense</c>).
+    ///
+    /// <para>🚨 Null means UNSPECIFIED, and must stay null rather than defaulting to anything.
+    /// A fallback records a grant the copyright holder already made; inventing one for a
+    /// third-party repo would assert a licence its author never gave. Surfacing "unspecified" is
+    /// the honest answer, and it is what lets a UI ask before installing.</para>
+    /// </summary>
+    public string? License { get; init; }
+
+    /// <summary>
     /// For <see cref="PackageKind.Code"/> packages only: the NodeType configuration lambda source
     /// (e.g. <c>"config =&gt; config.WithContentType&lt;Widget&gt;().AddLayout(...)"</c>). The installer
     /// synthesizes a <c>NodeType</c> node with this configuration and imports the package's
