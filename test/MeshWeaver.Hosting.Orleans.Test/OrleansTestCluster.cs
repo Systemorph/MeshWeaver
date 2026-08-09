@@ -45,10 +45,21 @@ internal sealed class OrleansTestBackingStore
     // per-node hub's workspace stream and works without a shared notifier.
     private readonly ConcurrentDictionary<string, List<object>> partitionObjects = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Points a host's <see cref="InMemoryStorageAdapter"/> at this cluster's dictionaries.</summary>
+    /// <summary>
+    /// Points a host's <see cref="InMemoryStorageAdapter"/> at this cluster's dictionaries.
+    ///
+    /// <para>What is shared is the STORE, not the change feed: each host still constructs its
+    /// own adapter, so each has its own <see cref="IStorageAdapter.Changes"/> Subject. That
+    /// mirrors prod, where every silo has a per-process Subject fed by PG LISTEN/NOTIFY —
+    /// a cross-silo signal is delivered through <c>IMeshChangeFeed</c>, not through this store.</para>
+    /// </summary>
     public IServiceCollection Register(IServiceCollection services)
     {
-        services.Replace(ServiceDescriptor.Singleton(new InMemoryStorageAdapter(nodes, partitionObjects)));
+        services.Replace(ServiceDescriptor.Singleton<InMemoryStorageAdapter>(sp =>
+            new InMemoryStorageAdapter(
+                nodes,
+                partitionObjects,
+                sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>())));
         return services;
     }
 
