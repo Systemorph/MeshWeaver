@@ -73,6 +73,24 @@ jobs:
   # Measured cost of the round trip: ~143 s per image job, ~9.5 min of runner time per CD run.
   # If a leg ever genuinely runs out of disk it will fail loudly with ENOSPC — reclaim
   # selectively THEN, against a measurement, rather than pre-emptively on every job.
+  #
+  # 🚨 TRIAGE: "Cannot create image index because provided images are invalid" is NOT an
+  # image-index defect and NOT a defect in the failing project. It means one per-RID leg
+  # produced no image, because Microsoft.NET.Build.Containers' CreateNewImage catches a
+  # cancellation, logs the bare warning "The operation was canceled." and STILL returns
+  # success. The cancellation is that library's hard-coded 30 s
+  # SocketsHttpHandler.ConnectTimeout on a stalled connect to the base registry
+  # (mcr.microsoft.com) or to ACR — its inner TimeoutException is dropped, so nothing in the
+  # log names a host. Read the ~30 s gap in the timestamps before the warning, not the error.
+  # Root Directory.Build.props now fails the leg AT that point (error MW1026) with both
+  # registries named, so a recurrence is one line to attribute — see issue #1026 for the
+  # full trace (CD run 31322066110, bake's linux-arm64 leg, 16:01:03.9 → 16:01:34.1).
+  #
+  # 🚨 Each image job pushes INDEPENDENTLY: a leg that dies this way leaves a PARTIAL
+  # release — 4f0c35cfc shipped memex-portal-ai:3.0.0-rc1.ci.2470 with no memex-bake:ci.2470,
+  # i.e. a portal version the NodeType bake gate never certified. Do NOT paper that over by
+  # retrying the publish, dropping a RID or `continue-on-error`; if CD should refuse to ship a
+  # partial set, that is a delivery-policy change to make deliberately.
   # ─────────────────────────────── DELIVERY GATE ───────────────────────────────
   # 🚨 Gate on the REQUIRED CHECK, not on the workflow run's umbrella conclusion.
   # A run's conclusion is `failure` if ANY job ends cancelled — including a job that
