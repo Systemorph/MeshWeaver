@@ -37,7 +37,14 @@ public class DeckPixelExportScriptRelayTest(ITestOutputHelper output) : Monolith
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            .AddMarkdownExport();
+            .AddMarkdownExport(cfg => cfg.PixelRendering = cfg.PixelRendering with
+            {
+                // The same choice a Linux container deployment has to make, made explicitly here.
+                // Chromium's sandbox needs unprivileged user namespaces, which Ubuntu 24.04 (and
+                // therefore the CI runner) restricts by default — without this the browser is found
+                // but cannot start, which is neither of the two contracts this test is about.
+                NoSandbox = OperatingSystem.IsLinux(),
+            });
 
     [Fact(Timeout = 180000)]
     public async Task DeckExport_PixelFidelity_RendersInABrowser_OrRefusesClearly()
