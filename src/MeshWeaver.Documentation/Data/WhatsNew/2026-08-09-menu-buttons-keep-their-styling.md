@@ -3,6 +3,7 @@ Name: Dropdown buttons keep the styling they were given
 Category: Fix
 Description: A button with a dropdown now honours the appearance its page asked for, instead of quietly falling back to the default look.
 Icon: Sparkle
+Order: -20260809
 ---
 
 # Dropdown buttons keep the styling they were given
