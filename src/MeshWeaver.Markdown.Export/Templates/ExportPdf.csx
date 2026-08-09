@@ -15,6 +15,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -25,9 +26,11 @@ using MeshWeaver.Markdown.Export.Branding;
 using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Markdown.Export.Messaging;
 using MeshWeaver.Markdown.Export.Pdf;
+using MeshWeaver.Markdown.Export.Pixel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 if (!Inputs.TryGetValue("sourcePath", out var sourcePathEl) || sourcePathEl.ValueKind != JsonValueKind.String)
     throw new InvalidOperationException("Inputs.sourcePath is required");
@@ -105,6 +108,51 @@ if (rootNode.NodeType == DeckNodeType.NodeType)
     }
 
     Log.LogInformation("Deck export: {Count} slides", slideNodes.Count);
+
+    // ── Pixel-faithful branch ───────────────────────────────────────────────────
+    // A deck whose meaning lives in CSS (gradient/image backgrounds, a raw-HTML body,
+    // CSS layout, transforms) cannot survive the document-model renderer — it has no
+    // notion of any of that. Compose the slides into ONE self-contained HTML document
+    // carrying the same stage CSS the live Slide view uses, and let a headless browser
+    // print it. Everything below the composer is ordinary reactive C#; the browser is
+    // the only leaf, and it is bounded by the Process I/O pool.
+    if (options.Fidelity == ExportFidelity.Pixel)
+    {
+        var renderer = Mesh.ServiceProvider.GetRequiredService<IPixelPdfRenderer>();
+        var executable = await renderer.Probe().FirstAsync().ToTask(Ct);
+        if (executable is null)
+            throw new InvalidOperationException(
+                "Pixel-faithful export needs a headless Chromium on the server, and this deployment has none. "
+                + "Export with content fidelity instead, or configure MarkdownExport → PixelRendering → "
+                + "ExecutablePath (or set the CHROME_BIN environment variable).");
+
+        Log.LogInformation("Pixel-faithful deck export using {Executable}", executable);
+
+        // The slide's own path is BOTH the markdown pipeline's node path (relative links) and its
+        // content collection (relative image hrefs) — exactly what the live MarkdownView passes.
+        var printSlides = slideNodes
+            .Select(s => new PrintSlide(s.ContentAs<SlideContent>(jsonOptions), s.Path, s.Path))
+            .ToList();
+        if (printSlides.Count == 0)
+            printSlides.Add(new PrintSlide(new SlideContent { Content = "*This deck has no slides yet.*" }));
+
+        var html = SlidePrintComposer.Compose(title, printSlides);
+
+        // Images live behind the access-controlled api/content route, which a file:// document
+        // cannot fetch. Resolve them here — under the exporting user's identity — and inline them
+        // so the print document is genuinely self-contained.
+        html = await InlineSlideAssets(html, Mesh, Log, Ct);
+
+        var pixelBytes = await renderer.Render(html).FirstAsync().ToTask(Ct);
+        Log.LogInformation("Rendered {Bytes} bytes (pixel-faithful)", pixelBytes.Length);
+
+        return new RenderedDocument(
+            ExportFormat.Pdf,
+            Sanitize(title) + ".pdf",
+            "application/pdf",
+            pixelBytes);
+    }
+
     chapters = slideNodes
         .Select(s => (s.Name ?? s.Id, ExtractSlideMarkdown(s, jsonOptions)))
         .ToList();
@@ -117,6 +165,10 @@ if (rootNode.NodeType == DeckNodeType.NodeType)
 else
 {
     // ── Markdown → PDF: the node's own body plus optional descendant chapters ───
+    if (options.Fidelity == ExportFidelity.Pixel)
+        Log.LogWarning(
+            "Pixel-faithful fidelity applies to Deck → PDF only; {Path} is a {NodeType}. "
+            + "Exporting content-faithful.", sourcePath, rootNode.NodeType);
     title = explicitTitle ?? options.Title ?? rootNode.Name ?? rootNode.Id;
     effectiveOptions = options;
     chapters = new List<(string, string)>
@@ -168,6 +220,61 @@ return new RenderedDocument(
     Sanitize(title) + ".pdf",
     "application/pdf",
     bytes);
+
+// Resolves every `api/content/{collection}/{path}` reference the composed print document carries
+// and rewrites it to a data: URI, so the headless browser — which prints from a local file with no
+// network and no session — still sees the deck's images. An asset that cannot be read is left as a
+// link and logged: a missing picture must not fail the whole export, it renders broken exactly as
+// it would on screen.
+static async Task<string> InlineSlideAssets(
+    string html, IMessageHub mesh, ILogger log, CancellationToken ct)
+{
+    var references = SlidePrintComposer.CollectAssetReferences(html);
+    if (references.Length == 0)
+        return html;
+
+    var contentService = mesh.ServiceProvider.GetService<IContentService>();
+    if (contentService is null)
+    {
+        log.LogWarning("No content service available; {Count} slide asset(s) stay as links", references.Length);
+        return html;
+    }
+
+    var inlined = new Dictionary<string, string>(StringComparer.Ordinal);
+    foreach (var reference in references)
+    {
+        var parsed = SlidePrintComposer.ParseAssetReference(reference);
+        if (parsed is null)
+            continue;
+
+        try
+        {
+            var stream = await contentService
+                .GetContent(parsed.Value.Collection, parsed.Value.Path)
+                .FirstAsync()
+                .ToTask(ct);
+            if (stream is null)
+            {
+                log.LogWarning("Slide asset {Reference} not found; leaving it as a link", reference);
+                continue;
+            }
+
+            using (stream)
+            {
+                using var buffer = new MemoryStream();
+                await stream.CopyToAsync(buffer, ct);
+                inlined[reference] = SlidePrintComposer.ToDataUri(parsed.Value.Path, buffer.ToArray());
+            }
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Could not inline slide asset {Reference}; leaving it as a link", reference);
+        }
+    }
+
+    log.LogInformation("Inlined {Inlined}/{Total} slide assets", inlined.Count, references.Length);
+    return SlidePrintComposer.InlineAssets(html, inlined);
+}
 
 static string ExtractMarkdown(MeshNode node)
 {

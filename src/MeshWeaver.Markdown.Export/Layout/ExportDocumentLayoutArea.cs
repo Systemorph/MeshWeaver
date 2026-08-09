@@ -2,10 +2,13 @@ using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Data;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Markdown.Export.Pixel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Markdown.Export.Layout;
 
@@ -75,13 +78,29 @@ public static class ExportDocumentLayoutArea
                 {
                     if (d.Message is GetDataResponse resp && resp.Data is MeshNode node)
                     {
-                        subject.OnNext(new ExportDocumentControl
+                        // Pixel fidelity is a DECK feature and needs a browser on this deployment.
+                        // Probe reactively (promise-cached in the renderer) and enrich the control
+                        // when the answer lands — the dialog is already usable meanwhile, it just
+                        // shows no fidelity picker until (and unless) the capability is confirmed.
+                        var enriched = new ExportDocumentControl
                         {
                             SourcePath = hubPath,
                             NodeName = node.Name,
                             DefaultFormat = defaultFormat,
                             HasDescendants = false
-                        });
+                        };
+                        subject.OnNext(enriched);
+
+                        if (node.NodeType != DeckNodeType.NodeType)
+                            return;
+
+                        var renderer = host.Hub.ServiceProvider.GetService<IPixelPdfRenderer>();
+                        renderer?.Probe()
+                            .Take(1)
+                            .Subscribe(
+                                executable => subject.OnNext(
+                                    enriched with { PixelFidelityAvailable = executable is not null }),
+                                _ => { /* no browser resolvable ⇒ capability stays off */ });
                     }
                 },
                 _ => { /* leave seed control in place on failure */ });

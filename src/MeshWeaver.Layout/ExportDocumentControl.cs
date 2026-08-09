@@ -24,4 +24,12 @@ public record ExportDocumentControl()
     /// Whether the node has descendants (drives the "Include children" toggle visibility).
     /// </summary>
     public bool HasDescendants { get; init; }
+
+    /// <summary>
+    /// Whether this export can offer PIXEL fidelity — true only for a Deck on a deployment that
+    /// actually has a headless browser. The capability is resolved server-side and travels on the
+    /// control, so the dialog never shows a choice that would fail: a portal without a browser
+    /// simply doesn't render the fidelity picker.
+    /// </summary>
+    public bool PixelFidelityAvailable { get; init; }
 }

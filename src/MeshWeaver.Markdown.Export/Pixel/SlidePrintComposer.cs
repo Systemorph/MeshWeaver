@@ -121,6 +121,37 @@ public static partial class SlidePrintComposer
     }
 
     /// <summary>
+    /// Builds the <c>data:</c> URI that replaces an asset reference, picking the media type from
+    /// the file extension. Immutable lookup — a constant, not a cache.
+    /// </summary>
+    public static string ToDataUri(string path, byte[] bytes) =>
+        $"data:{MediaTypeFor(path)};base64,{Convert.ToBase64String(bytes)}";
+
+    /// <summary>Media type for an asset path; <c>application/octet-stream</c> when unknown.</summary>
+    public static string MediaTypeFor(string path) =>
+        MediaTypes.TryGetValue(Path.GetExtension(path), out var mediaType)
+            ? mediaType
+            : "application/octet-stream";
+
+    private static readonly ImmutableDictionary<string, string> MediaTypes =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [".png"] = "image/png",
+            [".jpg"] = "image/jpeg",
+            [".jpeg"] = "image/jpeg",
+            [".gif"] = "image/gif",
+            [".webp"] = "image/webp",
+            [".avif"] = "image/avif",
+            [".bmp"] = "image/bmp",
+            [".svg"] = "image/svg+xml",
+            [".ico"] = "image/x-icon",
+            [".woff"] = "font/woff",
+            [".woff2"] = "font/woff2",
+            [".ttf"] = "font/ttf",
+            [".otf"] = "font/otf",
+        }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Splits an asset reference into its collection name and collection-relative path, or null
     /// when it is not a content-collection route.
     /// </summary>

@@ -38,6 +38,29 @@
                 </small>
             </div>
 
+            @* Fidelity picker — shown only when the server confirmed this deployment can do it
+               (a Deck AND a headless browser present). No browser ⇒ no choice to get wrong. *@
+            @if (PixelFidelityAvailable)
+            {
+                <div>
+                    <label><strong>@Access.Localize("export.fidelity")</strong></label>
+                    <FluentRadioGroup Name="export-fidelity"
+                                      Value="@_fidelity"
+                                      ValueChanged="@((ExportFidelity v) => _fidelity = v)"
+                                      TValue="ExportFidelity"
+                                      Orientation="Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical">
+                        <FluentRadio Value="@ExportFidelity.Content">@Access.Localize("export.fidelityContent")</FluentRadio>
+                        <FluentRadio Value="@ExportFidelity.Pixel">@Access.Localize("export.fidelityPixel")</FluentRadio>
+                    </FluentRadioGroup>
+                    @if (_fidelity == ExportFidelity.Pixel)
+                    {
+                        <small style="color: var(--neutral-foreground-hint);">
+                            @Access.Localize("export.fidelityPixelHint")
+                        </small>
+                    }
+                </div>
+            }
+
             <FluentCheckbox Value="_coverPage" ValueChanged="@((bool v) => _coverPage = v)" Label="@Access.Localize("export.brandedCover")" />
             <FluentCheckbox Value="_toc" ValueChanged="@((bool v) => _toc = v)" Label="@Access.Localize("export.tableOfContents")" />
             <FluentCheckbox Value="_pbH1" ValueChanged="@((bool v) => _pbH1 = v)" Label="@Access.Localize("export.pageBreakSection")" />
@@ -112,6 +135,9 @@
     private string? SourcePath;
     private string? NodeName;
     private bool HasDescendants;
+    private bool PixelFidelityAvailable;
+
+    private ExportFidelity _fidelity = ExportFidelity.Content;
 
     private string _title = "";
     private string _brandNodePath = "";
@@ -140,6 +166,12 @@
         SourcePath = ViewModel?.SourcePath;
         NodeName = ViewModel?.NodeName;
         HasDescendants = ViewModel?.HasDescendants ?? false;
+        // Capability, not a user edit — it arrives on a LATER emission than the seed control
+        // (the browser probe is async), so it is refreshed on every bind, never gated on
+        // _initialized. When it turns false again the picker disappears and Content is used.
+        PixelFidelityAvailable = ViewModel?.PixelFidelityAvailable ?? false;
+        if (!PixelFidelityAvailable)
+            _fidelity = ExportFidelity.Content;
 
         // Only set defaults on first bind — avoid overwriting user edits on subsequent reactive updates.
         if (!_initialized)
@@ -164,6 +196,7 @@
         var options = new DocumentExportOptions
         {
             Format = _format,
+            Fidelity = _fidelity,
             Title = string.IsNullOrWhiteSpace(_title) ? null : _title,
             BrandNodePath = string.IsNullOrWhiteSpace(_brandNodePath) ? null : _brandNodePath,
             CoverPage = _coverPage,
