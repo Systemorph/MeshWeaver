@@ -66,13 +66,47 @@ internal static class OrleansClusterDisposal
         // Ordered: client stop → silo stop → dispose. Each leg runs on the I/O pool (off the
         // teardown thread, ConfigureAwait(false) inside the pool); each Catch-swallows its own
         // stop-race so a failed leg can't skip the ones that follow. SelectMany sequences them.
-        var drain =
+        Enqueue(
             RunVoid(cluster.StopClusterClientAsync)
                 .SelectMany(_ => RunVoid(cluster.StopAllSilosAsync))
-                .SelectMany(_ => RunVoid(() => cluster.DisposeAsync().AsTask()));
+                .SelectMany(_ => RunVoid(() => cluster.DisposeAsync().AsTask())));
+    }
 
-        // Make it hot NOW so the disposal drains concurrently with the next class booting, and
-        // replay its terminal notification to the (later) synchronous drain. Connect starts it.
+    /// <summary>
+    /// Same ordered drain for a cluster whose Orleans client host is owned by
+    /// <see cref="OrleansTestClusterHost"/> rather than by <c>TestCluster</c> (see
+    /// <see cref="OrleansTestCluster.DeployAsync"/>). The ordering rationale above is
+    /// unchanged — the client stops initiating BEFORE the silos stop and BEFORE anything is
+    /// disposed, so no connection pump is resolving a codec out of a torn-down container.
+    /// Here the graceful client stop is a plain <c>IHost.StopAsync</c>, which is strictly
+    /// better than <c>TestCluster.StopClusterClientAsync</c>: the host's own
+    /// <c>DisposeAsync</c> never runs <c>StopAsync</c>, and this path always does.
+    /// </summary>
+    public static void DisposeInBackground(OrleansTestClusterHost? host)
+    {
+        if (host is null)
+            return;
+
+        var cluster = host.Cluster;
+        var clientHost = host.ClientHost;
+
+        Enqueue(
+            RunVoid(() => clientHost is null ? Task.CompletedTask : clientHost.StopAsync())
+                .SelectMany(_ => RunVoid(cluster.StopAllSilosAsync))
+                .SelectMany(_ => RunVoid(() =>
+                {
+                    clientHost?.Dispose();
+                    return Task.CompletedTask;
+                }))
+                .SelectMany(_ => RunVoid(() => cluster.DisposeAsync().AsTask())));
+    }
+
+    /// <summary>
+    /// Makes an ordered drain hot NOW so the disposal proceeds concurrently with the next
+    /// class booting, and replays its terminal notification to the (later) synchronous drain.
+    /// </summary>
+    private static void Enqueue(IObservable<Unit> drain)
+    {
         var replayed = drain.Replay(1);
         replayed.Connect();
         Pending.Add(replayed);

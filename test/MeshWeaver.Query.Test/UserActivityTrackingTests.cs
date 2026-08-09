@@ -2,6 +2,8 @@ using System;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
+using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
@@ -54,6 +56,16 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
         // always has it (onboarding ran first); reproduce that precondition here.
         await OnboardPartitionRoot(user);
 
+        var activityPath = $"{user}/_UserActivity/{nodePath.Replace("/", "_")}";
+
+        // 🚨 Same shape as ActivityTrackingHubTest (#993): the handler DETACHES its write, so wait
+        // on the write's own completion rather than polling the eventually-consistent query index,
+        // then read authoritatively. Subscribe before the Post — WhenSettled needs the ENTER.
+        var tracker = Mesh.GetActivityTrackingHub()
+            .ServiceProvider.GetRequiredService<ActivityWriteTracker>();
+        var settled = tracker.WhenSettled(activityPath).Replay(1);
+        using var settledSubscription = settled.Connect();
+
         Mesh.Post(new TrackActivityRequest(
             NodePath: nodePath,
             UserId: user,
@@ -61,10 +73,12 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
             NodeType: "Markdown",
             Namespace: "alice"));
 
-        var node = await PollForFirst($"namespace:{user}/_UserActivity nodeType:UserActivity");
+        await settled.Should().Within(TimeSpan.FromSeconds(15)).Emit(
+            "the detached activity write must run to completion");
 
-        node.Should().NotBeNull("a UserActivity node must be created at {user}/_UserActivity after a TrackActivityRequest");
-        node!.Path.Should().Be($"{user}/_UserActivity/{nodePath.Replace("/", "_")}");
+        var node = await ReadNode(activityPath).Should().Match(n => n is not null,
+            "a UserActivity node must be created at {user}/_UserActivity after a TrackActivityRequest");
+        node!.Path.Should().Be(activityPath);
         node.NodeType.Should().Be("UserActivity");
     }
 

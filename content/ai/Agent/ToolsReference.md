@@ -38,7 +38,7 @@ When the user asks "what type is this?", "open the type", or "show me the model"
 
 ## Path Rules
 
-**Every tool argument that expects a node reference MUST be the node's `path` property — never its `name`, `id`, or any human-readable label.** When `Get` / `Search` returns a MeshNode, you will see both `name` ("Final Report – AI Readiness Assessment & 100-Day Plan") and `path` ("Acme/AIConsulting/FinalReport"). **Use the `path` value.** Passing the name instead routes the request to a non-existent grain and the operation silently fails (no error shown to the user). If you only know the display name, call `Search('name:"...the name..."')` first and read the `path` field off the match.
+**Every tool argument that expects a node reference MUST be the node's `path` property — never its `name`, `id`, or any human-readable label.** When `Get` / `Search` returns a MeshNode, you will see both `name` ("Final Report – AI Readiness Assessment & 100-Day Plan") and `path` ("ACME/AIConsulting/FinalReport"). **Use the `path` value.** Passing the name instead routes the request to a non-existent grain and the operation silently fails (no error shown to the user). If you only know the display name, call `Search('name:"...the name..."')` first and read the `path` field off the match.
 
 **The `@` prefix is a reference marker — the character after it determines absolute vs. relative:**
 
@@ -55,14 +55,14 @@ Every user message carries a **"Current Application Context"** header. **You DO 
 
 ```json
 {
-  "address": "Acme/AIConsulting",   // owner (main-node) address of what the user is viewing
+  "address": "ACME/AIConsulting",   // owner (main-node) address of what the user is viewing
   "area": "Overview",                     // layout area, if any
   "areaId": "…",                          // layout area id, if any
   "path": "Tasks/123",                    // remaining path after the node, if any
   "parameters": { "from": "5" },          // optional ?k=v query params on the URL
   "node": {                               // the current node — IDENTITY only (content via Get)
-    "path": "Acme/AIConsulting/FinalReport",
-    "namespace": "Acme/AIConsulting",
+    "path": "ACME/AIConsulting/FinalReport",
+    "namespace": "ACME/AIConsulting",
     "id": "FinalReport",
     "nodeType": "Markdown",
     "name": "Final Report – …"
@@ -72,9 +72,9 @@ Every user message carries a **"Current Application Context"** header. **You DO 
 
 `node.path` (== `namespace`/`id`) **is the canonical path to use when resolving `@...` relative references** and to act on the current node. It is IDENTITY only — load the node's CONTENT on demand with the `Get` tool. Examples:
 
-- Context = `Acme/AIConsulting`, agent calls `Get('@FinalReport')` → resolves to `@/Acme/AIConsulting/FinalReport`.
-- Context = `Acme/AIConsulting`, agent calls `Get('@/OrgA/Docs/other')` → resolves to `@/OrgA/Docs/other` (absolute — context ignored).
-- Context = `Acme/AIConsulting`, agent calls `Get('@content/report.docx')` → resolves to `@/Acme/AIConsulting/content/report.docx`.
+- Context = `ACME/AIConsulting`, agent calls `Get('@FinalReport')` → resolves to `@/ACME/AIConsulting/FinalReport`.
+- Context = `ACME/AIConsulting`, agent calls `Get('@/OrgA/Docs/other')` → resolves to `@/OrgA/Docs/other` (absolute — context ignored).
+- Context = `ACME/AIConsulting`, agent calls `Get('@content/report.docx')` → resolves to `@/ACME/AIConsulting/content/report.docx`.
 - Context = none, agent calls `Get('@FinalReport')` → no context to prepend; lookup will fail — use an absolute path instead.
 
 ### Output links
@@ -208,11 +208,11 @@ Queries consist of space-separated terms. Each term can be:
 
 #### Field Filters
 
-**Equality:** `nodeType:Organization`, `name:Acme`, `status:Active`
+**Equality:** `nodeType:Organization`, `name:ACME`, `status:Active`
 
 **Negation:** `-status:Archived`
 
-**Wildcard Patterns:** `name:*claims*` (contains), `name:Acme*` (starts with), `name:*Corp` (ends with)
+**Wildcard Patterns:** `name:*claims*` (contains), `name:ACME*` (starts with), `name:*Corp` (ends with)
 
 **Comparison Operators:** `price:>100`, `price:<50`, `price:>=100`, `price:<=50`
 
