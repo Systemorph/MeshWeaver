@@ -19,7 +19,7 @@ Satellite entities — Comments, Threads, Tracked Changes — are secondary node
   </defs>
   <rect x="270" y="20" width="220" height="64" rx="10" fill="#1e88e5"/>
   <text x="380" y="46" font-family="sans-serif" font-size="14" font-weight="bold" fill="#fff" text-anchor="middle">Content Node</text>
-  <text x="380" y="66" font-family="sans-serif" font-size="11" fill="#bbdefb" text-anchor="middle">Doc/MyDoc  ·  PartnerRe/AiConsulting</text>
+  <text x="380" y="66" font-family="sans-serif" font-size="11" fill="#bbdefb" text-anchor="middle">Doc/MyDoc  ·  Acme/AiConsulting</text>
   <rect x="20" y="168" width="180" height="72" rx="10" fill="#5c6bc0"/>
   <text x="110" y="192" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">Thread</text>
   <text x="110" y="210" font-family="sans-serif" font-size="10" fill="#c5cae9" text-anchor="middle">ns: Doc/MyDoc/_Thread</text>
@@ -193,14 +193,14 @@ meshService.CreateNode(node)
 
 > **Every satellite node MUST set `MainNode` to the content entity it belongs to.** Without this, access control fails because the hub uses the node's own path as its identity — a path that has no permissions attached.
 
-For example, a thread under `PartnerRe/AiConsulting` must carry `MainNode = "PartnerRe/AiConsulting"`, not the thread's own path. The same requirement applies to sub-threads, thread messages, comments, and tracked changes.
+For example, a thread under `Acme/AiConsulting` must carry `MainNode = "Acme/AiConsulting"`, not the thread's own path. The same requirement applies to sub-threads, thread messages, comments, and tracked changes.
 
 ```csharp
 // CORRECT: MainNode points to the owning content entity
 var threadNode = new MeshNode(threadId, ns)
 {
     NodeType = "Thread",
-    MainNode  = contextPath,   // e.g., "PartnerRe/AiConsulting"
+    MainNode  = contextPath,   // e.g., "Acme/AiConsulting"
     Content   = new Thread()
 };
 
@@ -213,7 +213,7 @@ var msgNode = new MeshNode(msgId, threadPath)
 
 // WRONG: MainNode defaults to the node's own path — no permissions, access denied
 var node = new MeshNode(id, threadPath) { NodeType = "ThreadMessage" };
-// MainNode = "PartnerRe/.../threadId/msgId" — not a real entity; has no permissions
+// MainNode = "Acme/.../threadId/msgId" — not a real entity; has no permissions
 ```
 
 This applies to all satellite types: `Thread`, `ThreadMessage`, `Comment`, `Approval` (and the legacy, no-longer-written `TrackedChange`).

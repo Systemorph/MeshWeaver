@@ -69,7 +69,7 @@ The EA reuses the portal's **sign-in** app registration (the `Authentication:Mic
 
 1. Add the **delegated** Microsoft Graph permissions: `Mail.ReadWrite`, `Mail.Send`,
    `Calendars.ReadWrite`, `offline_access`.
-2. Add the redirect URI **`{BaseUrl}/auth/ea/callback`** (e.g. `https://memex.systemorph.com/auth/ea/callback`).
+2. Add the redirect URI **`{BaseUrl}/auth/ea/callback`** (e.g. `https://portal.example.com/auth/ea/callback`).
 3. No admin pre-consent is required — each user consents for themselves on first use (that's the point).
 
 No application-wide Graph permission is needed for the EA (the standing `Calendars.ReadWrite` *application*

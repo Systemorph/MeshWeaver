@@ -200,7 +200,7 @@ public static class ActivityControlPlaneExtensions
     ///     <see cref="ErrorType.NotFound"/> <see cref="DeliveryFailureException"/>: the node
     ///     this watcher exists to observe is gone / unroutable. Re-establishing then just
     ///     re-issues a doomed cross-hub <c>SubscribeRequest</c> every second forever — the
-    ///     atioz compile-activity storm of 2026-06-10 (4999 NotFound round-trips through the
+    ///     prod compile-activity storm of 2026-06-10 (4999 NotFound round-trips through the
     ///     single RoutingGrain in 14 min, starving unrelated subscriptions). That is the
     ///     exact "resubscribe to recover from a state that shouldn't happen" pattern the
     ///     deleted 2026-06-08 watchdog was. STOP; the orphaned hub idle-disposes.</description></item>

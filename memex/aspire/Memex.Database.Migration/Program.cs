@@ -120,7 +120,7 @@ var finalVersion = await runner.RunAsync(ctx);
 // ── Partition-access reconcile (always runs): rebuild {schema}.user_effective_permissions +
 // public.partition_access from the access satellites across every partition schema. The V35
 // one-shot healed this drift once, but it RECURRED on databases already past v35 (memex.local +
-// atioz, 2026-07-03: grants present, materialization empty → permissions silently wedge and
+// prod, 2026-07-03: grants present, materialization empty → permissions silently wedge and
 // spaces vanish from search, no error anywhere). Idempotent and cheap (one function call per
 // schema); any future drift self-heals on the next roll, and detected drift is logged at
 // Warning as the evidence trail for the still-unidentified wiper. Runs AFTER the versioned

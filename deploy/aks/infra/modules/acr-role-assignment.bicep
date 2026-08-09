@@ -6,7 +6,7 @@
 //
 // Used as the opt-in IaC alternative to the out-of-band `az role assignment
 // create` for the cross-RG shared registry (meshweaver.azurecr.io lives in RG
-// meshweaver-shared, separate from memex-aks-rg). It grants the PORTAL UAMI
+// meshweaver-shared, separate from <aks-resource-group>). It grants the PORTAL UAMI
 // AcrPull so the in-pod self-updater can list image tags. The deploying
 // principal must have User Access Administrator (or Owner) on the registry's
 // resource group for this to succeed — that is why it is opt-in (default off):

@@ -360,7 +360,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
                 // `search?q=…`, `login?returnurl=…` — must resolve to NotFound (a clean
                 // 404), NOT a synthetic root. The synthetic activated a grain that queried
                 // the never-provisioned `<segment>.mesh_nodes` schema → Npgsql 42P01, and
-                // the bogus segment leaked into a junk partition schema (atioz log storm).
+                // the bogus segment leaked into a junk partition schema (prod log storm).
                 // Existence is a global OR across the WRITABLE providers: synthesize unless
                 // a provider that could own it definitively says it is absent (some `false`,
                 // none `true`). `true`/`null` (indeterminate, InMemory test, probe hiccup)

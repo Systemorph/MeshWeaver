@@ -153,7 +153,7 @@ public static class StaticRepoImporter
         // 🚨 The bulk create/upsert traffic of an import MUST NOT run on the ROOT MESH HUB's
         // action block. The mesh hub is the irreplaceable router; flooding it with
         // CreateOrUpdateNodeRequest (each fanning out an inner self-posted CreateNodeRequest)
-        // stalls ALL routing → every node op 60s-times-out → portal-wide wedge (atioz 2026-06-11:
+        // stalls ALL routing → every node op 60s-times-out → portal-wide wedge (prod 2026-06-11:
         // 11× CreateOrUpdateNodeRequest + 3× CreateNodeRequest@mesh/<self> stale >60s while real
         // user SubscribeRequests starved). Run the whole import on a DEDICATED reachable hub
         // instead — see CreateImportHub. Its own single-threaded action block serialises the
@@ -505,7 +505,7 @@ public static class StaticRepoImporter
                 // different thread from the caller's ImpersonateAsSystem scope, so that AsyncLocal
                 // does NOT reach here. Declare the hub System so its own node/partition/activity
                 // writes carry the system-security identity instead of failing closed under the
-                // never-null guard (the import-activity phantom + NotFound storm, atioz 2026-06-18).
+                // never-null guard (the import-activity phantom + NotFound storm, prod 2026-06-18).
                 .WithPostingIdentity(PostingIdentity.System)
                 .AddData()
                 .WithNodeOperationExecution()
@@ -689,7 +689,7 @@ public static class StaticRepoImporter
                 // (which tolerates a stale "already exists"). This RECLAIMS a dead lock left by a
                 // crashed/raced prior import (Status=Running that never finished — e.g. a rollout
                 // briefly running two pods, or a materialization fault) instead of skipping forever
-                // ("AlreadyRunning", 0 nodes): the atioz Agent/Harness/Command wedge. Under System
+                // ("AlreadyRunning", 0 nodes): the prod Agent/Harness/Command wedge. Under System
                 // (Upsert wraps AsSystem) so the lock write authorizes on read-only-_Policy partitions.
                 IObservable<StaticRepoImportResult> Reimport() =>
                     // 1. Stamp the MARKER Running (deterministic id, repair-capable Upsert). This
@@ -751,7 +751,7 @@ public static class StaticRepoImporter
                 // 🚨 SELF-HEAL CONTENT, not just governance. A Succeeded marker means "imported once" —
                 // but the content NODES can be dropped after the fact (a cross-partition prune, a manual
                 // delete, a botched migration) while the marker + _Policy survive, leaving the partition's
-                // skills MISSING FOREVER ("a user didn't see the core app skills", atioz). Cheaply verify
+                // skills MISSING FOREVER ("a user didn't see the core app skills", prod). Cheaply verify
                 // a CONTENT sentinel is still present; if it's gone, fall through to the full idempotent
                 // re-import instead of skipping. Eventually-consistent query: a stale miss re-imports
                 // idempotently — wasteful, not wrong, which is the same property that lets two replicas
@@ -1227,7 +1227,7 @@ public static class StaticRepoImporter
     /// <see cref="SyncBehavior.ExcludeThisAndChildren"/> ("sync: none"). Uses the authoritative
     /// single-node read (<c>GetMeshNodeStream</c>), NOT <c>meshService.Query</c>: the
     /// eventually-consistent query LAGS a just-set claim, so a freshly decoupled partition would be
-    /// silently re-synced on the next import (the atioz Provider key clobber, 2026-06-25). EnsureRoot
+    /// silently re-synced on the next import (the prod Provider key clobber, 2026-06-25). EnsureRoot
     /// has already ensured each root exists, so each read resolves promptly.
     /// </summary>
     private static IObservable<string[]> ReadClaimedRoots(IMessageHub hub, string[] partitions)
@@ -1698,7 +1698,7 @@ public static class StaticRepoImporter
             // "Node already exists" is SUCCESS for an idempotent upsert: the node is present, which IS
             // the goal. CreateOrUpdate emits it when its eventually-consistent exists-check lags a
             // recent create and falls through to CreateNode — e.g. re-importing a partition whose
-            // root Space was left by a partial prior run (the atioz Harness/Command "Upsert of
+            // root Space was left by a partial prior run (the prod Harness/Command "Upsert of
             // 'Harness' failed: Node already exists" wedge). Treat it as done; a later consistent run
             // updates changed content. Any OTHER error still faults.
             .SelectMany(resp => resp.Success

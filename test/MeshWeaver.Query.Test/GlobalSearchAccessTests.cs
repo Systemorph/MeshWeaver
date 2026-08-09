@@ -61,8 +61,8 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
             Output.WriteLine($"  {r.Path} ({r.NodeType})");
 
         // Assert: Partition metadata nodes excluded from search, content nodes included.
-        // The actual PartnerRe content (on its own partition) should be visible via fan-out,
-        // but the Admin/Partition/PartnerRe metadata node should NOT clutter search.
+        // The actual Acme content (on its own partition) should be visible via fan-out,
+        // but the Admin/Partition/Acme metadata node should NOT clutter search.
         results.Should().NotContain(n => n.NodeType == "Partition",
             "Partition metadata nodes should be excluded from search context");
         results.Select(n => n.Name).Should().Contain("Test Document");

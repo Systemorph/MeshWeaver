@@ -13,7 +13,7 @@ namespace MeshWeaver.NodeOperations.Test;
 /// Pins the fail-closed contract of <c>HandleCreateNodeRequest</c>: a hub with
 /// node-operation handlers but NO <c>IStorageAdapter</c> must REFUSE the create.
 /// The old behaviour acked Success while persisting nothing — on the 2026-06-11
-/// atioz portal every MCP create was answered "Created: …" and silently lost
+/// prod portal every MCP create was answered "Created: …" and silently lost
 /// (no row in PG, path unroutable). Storage-less meshes are not a supported
 /// mode (in-memory setups register <c>AddInMemoryPersistence</c>), so a null
 /// adapter is always a wiring defect and the response must say so.

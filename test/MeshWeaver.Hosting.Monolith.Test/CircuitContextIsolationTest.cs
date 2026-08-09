@@ -6,7 +6,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Pins the cross-user contamination ROOT CAUSE behind the 2026-06-24 atioz "boom" wedge:
+/// Pins the cross-user contamination ROOT CAUSE behind the 2026-06-24 prod "boom" wedge:
 /// <see cref="AccessService.CircuitContext"/> falls back to the process-wide instance field
 /// <c>persistentCircuitContext</c> (AccessService.cs:44/69) whenever the <c>circuitContext</c>
 /// AsyncLocal is null — which is the case on ANY scheduler / Rx hop. <see cref="AccessService.SetCircuitContext"/>

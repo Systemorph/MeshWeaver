@@ -802,7 +802,7 @@ public static class MemexConfiguration
                 // Ship compiled releases WHEREVER we ship code NodeTypes — Doc AND the sample
                 // partitions (ACME, FutuRe, Northwind, Cornerstone, MeshWeaver). Pre-build every
                 // shipped code NodeType's release at boot, as System, so the runtime path is a
-                // cache hit and no user navigation ever triggers an on-demand compile (the atioz
+                // cache hit and no user navigation ever triggers an on-demand compile (the prod
                 // 2026-06-18 phantom _Activity/compile-* storm). Idempotent (skips already-built
                 // types); off the thread pool so it never blocks startup.
                 .ConfigureServices(services =>
@@ -1047,7 +1047,7 @@ public static class MemexConfiguration
         // no circuit ever disposes). At readiness-probe cadence (5 s) the portal
         // accumulated 10,000+ leaked MessageHubs in ~25 minutes, the hosted-hub
         // collection lock became the hot path of every routed stream message,
-        // and the instance wedged at 100% CPU — the 2026-06-12 atioz outage.
+        // and the instance wedged at 100% CPU — the 2026-06-12 prod outage.
         // Point ALL probes here; the endpoint answers without touching identity,
         // the mesh, or the renderer.
         app.Use((ctx, next) =>

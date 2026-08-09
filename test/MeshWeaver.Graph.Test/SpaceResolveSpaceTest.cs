@@ -106,7 +106,7 @@ public class SpaceResolveSpaceTest
     // UWDeepfield shape) — the node is still a Space to the viewer, and its authored home
     // page lives in NodeTypeDefinition.Body. ResolveSpace must recover it; without this,
     // no content edit can ever replace the welcome placeholder on such a root (verified
-    // live on memex.systemorph.com 2026-07-23: a stored body was rendered-inert).
+    // live on portal.example.com 2026-07-23: a stored body was rendered-inert).
 
     [Fact]
     public void ForeignTypedContent_WithBody_RecoveredAsSpaceBody()
