@@ -39,6 +39,14 @@ public partial class NamedAreaView
 
     [Inject] private NavigationManager Navigation { get; set; } = default!;
 
+    /// <summary>
+    /// Resolves the viewer's language for the placeholder copy this view renders itself (the
+    /// availability + node-gone cards). Localization is resolved off <c>AccessContext.Locale</c>
+    /// via this service — never from ambient <c>CultureInfo</c>, which does not survive the hub
+    /// scheduler hop and would show one viewer another viewer's language.
+    /// </summary>
+    [Inject] private AccessService Access { get; set; } = default!;
+
     /// <summary>Open Graph keys are emitted as <c>property=</c>; everything else as <c>name=</c>.</summary>
     private static bool IsOpenGraph(string key) => key.StartsWith("og:", StringComparison.OrdinalIgnoreCase);
 
@@ -292,6 +300,37 @@ public partial class NamedAreaView
                                     RootControl = new MarkdownControl(
                                         "**This view is no longer available.** It may have been removed, or its "
                                         + "interactive session ended. Reload the page to retry.");
+                                    RequestStateChange();
+                                }
+                                catch (ObjectDisposedException) { /* renderer gone */ }
+                            });
+                        }
+                        catch (ObjectDisposedException) { /* renderer gone */ }
+                        return;
+                    }
+
+                    // 🚨 NO VERDICT (issue #974). A permission check or a read could not run, so
+                    // the mesh does not know whether this user may see this area — and must not
+                    // pretend it does. Rendering the raw failure here would put "Access denied" in
+                    // front of a correctly-entitled user and send them to ask an admin for rights
+                    // they already hold. Show the honest, localized "temporarily unavailable"
+                    // copy, and log at Error (below) because this IS an engineering signal.
+                    if (AreaErrorClassifier.IsAvailabilityFailure(error))
+                    {
+                        Logger.LogError(error,
+                            "Area {Area} could not be authorized or read — NO VERDICT was reached; "
+                            + "rendering the unavailable placeholder (this is NOT an access denial)",
+                            AreaToBeRendered);
+                        try
+                        {
+                            InvokeAsync(() =>
+                            {
+                                if (IsViewDisposed) return;
+                                try
+                                {
+                                    RootControl = new MarkdownControl(
+                                        $"**{Access.Localize("error.checkUnavailable")}**\n\n"
+                                        + Access.Localize("error.checkUnavailableHint"));
                                     RequestStateChange();
                                 }
                                 catch (ObjectDisposedException) { /* renderer gone */ }

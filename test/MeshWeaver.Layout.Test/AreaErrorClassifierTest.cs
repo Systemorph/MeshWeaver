@@ -239,4 +239,67 @@ public class AreaErrorClassifierTest
     [InlineData(null, "AgenticEngineering/Cover", false)]
     public void IsSafeRedirect_LoopGuard(string? deniedPath, string? redirectPath, bool expected)
         => AreaErrorClassifier.IsSafeRedirect(deniedPath, redirectPath).Should().Be(expected);
+
+    // ── NO VERDICT (issue #974). ErrorType.Unavailable means the mesh could not decide —
+    //    neither "you may not" nor "it isn't there". The GUI must render the honest
+    //    "temporarily unavailable" copy for it, never an access-denied card. ──
+
+    [Fact]
+    public void IsAvailabilityFailure_TrueForTheUnavailableErrorType()
+        => AreaErrorClassifier.IsAvailabilityFailure(
+                Failure("Permission check unavailable for user 'x' on 'y' — no verdict was reached",
+                    ErrorType.Unavailable))
+            .Should().BeTrue();
+
+    [Fact]
+    public void IsAvailabilityFailure_MatchesNestedFailures()
+        => AreaErrorClassifier.IsAvailabilityFailure(
+                new InvalidOperationException("wrapped", Failure("no verdict", ErrorType.Unavailable)))
+            .Should().BeTrue();
+
+    [Theory]
+    [InlineData(ErrorType.Unauthorized)]
+    [InlineData(ErrorType.Forbidden)]
+    [InlineData(ErrorType.NotFound)]
+    [InlineData(ErrorType.Failed)]
+    public void IsAvailabilityFailure_FalseForEveryDecidedOutcome(ErrorType type)
+        // A real verdict — in either direction — is not an availability failure. Without this the
+        // fix would swallow genuine denials and 404s into a "retry shortly" card.
+        => AreaErrorClassifier.IsAvailabilityFailure(Failure("decided", type)).Should().BeFalse();
+
+    [Fact]
+    public void IsAvailabilityFailure_FalseForAPlainException()
+        => AreaErrorClassifier.IsAvailabilityFailure(new InvalidOperationException("boom")).Should().BeFalse();
+
+    [Fact]
+    public void AnUnavailableFailure_IsNotAUserActionFailure_EvenThoughItSaysPermission()
+    {
+        // 🚨 The trap this short-circuit exists for. The honest message is "Permission check
+        // unavailable …", and IsExpectedUserActionFailure matches the bare substring "permission".
+        // Without the typed check winning first, an infrastructure fault would be filed as "user
+        // clicked a thing they couldn't do" and logged at Warning — exactly the wrong level for
+        // the one condition an operator most needs to see.
+        var unavailable = Failure(
+            "Permission check unavailable for user 'x' on 'y' (Read) — no verdict was reached",
+            ErrorType.Unavailable);
+
+        AreaErrorClassifier.IsExpectedUserActionFailure(unavailable).Should().BeFalse();
+    }
+
+    [Fact]
+    public void AnUnavailableFailure_IsNotMistakenForAGoneNode()
+        // "no verdict" must not route into the "this view is no longer available" placeholder,
+        // which tells the user the thing is gone.
+        => AreaErrorClassifier.IsNodeGoneNotFound(
+                Failure("Permission check unavailable — no verdict was reached", ErrorType.Unavailable))
+            .Should().BeFalse();
+
+    [Fact]
+    public void AnUnavailableFailure_CarriesNoAccessDeniedPath_SoItCannotTriggerAPaywallRedirect()
+        // TryGetAccessDeniedPath drives "no access ⇒ redirect to the public cover". Firing that on
+        // a fold that never ran would bounce an entitled viewer to a sign-up page.
+        => AreaErrorClassifier.TryGetAccessDeniedPath(
+                Failure("Permission check unavailable for user 'x' on 'AgenticEngineering/Intro' (Read)",
+                    ErrorType.Unavailable))
+            .Should().BeNull();
 }

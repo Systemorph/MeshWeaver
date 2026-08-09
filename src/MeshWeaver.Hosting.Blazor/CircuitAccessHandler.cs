@@ -237,8 +237,19 @@ public class CircuitAccessHandler : CircuitHandler
             // still resolves to the correct partition.
             if (!string.IsNullOrEmpty(email))
             {
-                var meshUser = TryLoadMeshUser(email);
-                if (meshUser != null)
+                var lookup = TryLoadMeshUser(email);
+                if (lookup.IsUnavailable)
+                    // 🚨 NOT "this user has no node" (#974). On this leg the circuit keeps the
+                    // email-local-part ObjectId AND silently falls back to UTC + English, because
+                    // TimeZoneId/Locale are read off the profile below. Naming the condition is
+                    // what lets an operator see why a German user got an English portal for the
+                    // first seconds after a restart, instead of hunting a phantom profile bug.
+                    _logger.LogWarning(
+                        "CircuitAccessHandler: mesh user index UNAVAILABLE for {Email} ({Reason}) — "
+                        + "using the email local-part for the partition key and default time zone / "
+                        + "language. This is NOT evidence the user is unknown.",
+                        email, lookup.UnavailableReason);
+                if (lookup.Node is { } meshUser)
                 {
                     // Resolve the viewer's display time zone from their profile ONCE here,
                     // where the context is built. It then rides on the AccessContext to every
@@ -301,17 +312,26 @@ public class CircuitAccessHandler : CircuitHandler
     /// lookup never bridges back to <c>Task</c> — <c>await FirstAsync()</c> on a
     /// hub-touching observable deadlocks the hub pump.
     /// </summary>
-    private MeshNode? TryLoadMeshUser(string email)
+    private MeshWeaver.Blazor.Infrastructure.UserIdentityLookup TryLoadMeshUser(string email)
     {
         try
         {
             var cache = _hub.ServiceProvider.GetService<MeshWeaver.Blazor.Infrastructure.UserIdentityCache>();
-            return cache?.TryGetByEmail(email);
+            // No cache registered at all is a static configuration fact — there is nothing to
+            // resolve from — not a transient outage, so it is Unknown, not Unavailable. Same
+            // distinction UserRoleResolver draws for "no role source at all" (#970).
+            return cache is null
+                ? MeshWeaver.Blazor.Infrastructure.UserIdentityLookup.Unknown
+                : cache.Lookup(email);
         }
         catch (Exception ex)
         {
+            // 🚨 SWEEP (#974): the service-provider resolve throws on a hub mid-disposal. That is
+            // an availability condition; returning `null` here made it indistinguishable from
+            // "this user has no mesh node".
             _logger.LogWarning(ex, "Failed to load mesh user for email {Email}", email);
-            return null;
+            return MeshWeaver.Blazor.Infrastructure.UserIdentityLookup.Unavailable(
+                $"user index lookup faulted: {ex.GetType().Name}: {ex.Message}");
         }
     }
 }

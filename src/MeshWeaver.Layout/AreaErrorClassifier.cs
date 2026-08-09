@@ -104,6 +104,14 @@ public static class AreaErrorClassifier
     /// </summary>
     public static bool IsExpectedUserActionFailure(Exception? ex)
     {
+        // 🚨 An availability failure is NOT a user action (issue #974) — nobody clicked anything
+        // they were not allowed to; a check or read could not run. It must land at Error so
+        // dashboards SEE it, and it must not be filed under "user clicked a thing they couldn't
+        // do". This short-circuit is also load-bearing for a subtler reason: the honest message
+        // ("Permission check unavailable …") contains the word "permission", which the substring
+        // rules below would otherwise match — the typed check has to win over the text.
+        if (IsAvailabilityFailure(ex)) return false;
+
         for (var e = ex; e != null; e = e.InnerException)
         {
             if (e is UnauthorizedAccessException) return true;
@@ -119,6 +127,31 @@ public static class AreaErrorClassifier
                 if (msg.Contains("not allowed", StringComparison.OrdinalIgnoreCase)) return true;
                 if (msg.Contains("permission", StringComparison.OrdinalIgnoreCase)) return true;
             }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// True when the failure carries <see cref="ErrorType.Unavailable"/> — the mesh reached NO
+    /// VERDICT (issue #974). Nothing was decided about the caller's rights and nothing about the
+    /// target's existence, so this must never be rendered as "Access denied" or "not found".
+    ///
+    /// <para>Matched on the TYPED <see cref="DeliveryFailure.ErrorType"/>, never on wording. That
+    /// is the whole point of the enum member: the producer classifies once, where the condition is
+    /// known, and every consumer reads the classification instead of guessing from a string that
+    /// drifts. Contrast <see cref="IsTransientHubFailure"/>, which still has to sniff Orleans'
+    /// opaque reject text because that text is all the runtime gives us.</para>
+    ///
+    /// <para>Deliberately NOT wired into <see cref="ShouldRetryArea"/>: the condition is retryable
+    /// by nature, but auto-resubscribing is a separate decision with its own storm risk, and
+    /// naming the condition is what this predicate is for.</para>
+    /// </summary>
+    public static bool IsAvailabilityFailure(Exception? ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e is DeliveryFailureException { Failure.ErrorType: ErrorType.Unavailable })
+                return true;
         }
         return false;
     }

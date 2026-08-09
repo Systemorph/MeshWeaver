@@ -125,16 +125,31 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             //      anonymous. The OnboardingMiddleware / dev login will
             //      provision the User node on a follow-up request and the
             //      cache picks it up.
+            var identityIndexUnavailable = false;
             if (!string.IsNullOrEmpty(userContext.Email))
             {
-                var meshUser = TryLoadMeshUser(userContext.Email, hub);
-                if (meshUser is not null)
+                var lookup = TryLoadMeshUser(userContext.Email, hub);
+                identityIndexUnavailable = lookup.IsUnavailable;
+                if (lookup.Node is { } meshUser)
                 {
                     userContext = userContext with
                     {
                         ObjectId = meshUser.Id,
                         Name = meshUser.Name ?? meshUser.Id
                     };
+                }
+                else if (identityIndexUnavailable)
+                {
+                    // 🚨 NOT "this user has no node" (#974). The index could not answer, so we
+                    // fall through to the local-part heuristic below WITHOUT concluding anything
+                    // about this user. Logged at Warning because it is an availability signal an
+                    // operator should see — a cold or faulted index degrades Name/TimeZone/Locale
+                    // resolution for every request until it fills.
+                    logger.LogWarning(
+                        "UserContextMiddleware: mesh user index UNAVAILABLE for {Email} ({Reason}) — "
+                        + "falling back to the email local-part for the partition key. This is NOT "
+                        + "evidence that the user is unknown, and must never drive onboarding.",
+                        userContext.Email, lookup.UnavailableReason);
                 }
             }
 
@@ -143,12 +158,18 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             // etc.), refuse to set it. Better anonymous than mis-partitioned.
             if (LooksLikeEmail(userContext.ObjectId))
             {
+                // The reason clause is derived from what we actually established (#974): the old
+                // text asserted "no mesh User node found yet" even when the index had simply not
+                // answered — stating as fact something we never checked.
                 logger.LogWarning(
                     "UserContextMiddleware: refusing email-shaped ObjectId '{ObjectId}' "
-                    + "for email {Email} (no mesh User node found yet). Treating as "
+                    + "for email {Email} ({Reason}). Treating as "
                     + "anonymous so the request can't create a parallel "
                     + "<email> partition. The cache will populate on the next request.",
-                    userContext.ObjectId, userContext.Email);
+                    userContext.ObjectId, userContext.Email,
+                    identityIndexUnavailable
+                        ? "the mesh user index could not answer — whether a User node exists is UNKNOWN"
+                        : "no mesh User node carries this email");
                 // Never null — treat as Anonymous (least privilege) rather than
                 // null, which would fail-close the request at the never-null guard.
                 userService.SetContext(AnonymousContext);
@@ -416,10 +437,18 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                 return AnonymousContext;
             if (!string.IsNullOrEmpty(ctx.Email))
             {
-                var meshUser = services.GetService<UserIdentityCache>()
-                    ?.TryGetByEmail(ctx.Email);
-                if (meshUser is not null)
+                var lookup = services.GetService<UserIdentityCache>()?.Lookup(ctx.Email)
+                             ?? UserIdentityLookup.Unknown;
+                if (lookup.Node is { } meshUser)
                     ctx = ctx with { ObjectId = meshUser.Id, Name = meshUser.Name ?? meshUser.Id };
+                else if (lookup.IsUnavailable)
+                    // Named as an availability failure, not a missing user (#974). The claims
+                    // context still stands — this only means the mesh Id/Name could not be
+                    // substituted for the claim-derived ones on THIS request.
+                    logger?.LogWarning(
+                        "ResolveHttpCaller: mesh user index UNAVAILABLE for {Email} ({Reason}) — "
+                        + "keeping the claim-derived identity; this is NOT evidence the user is unknown.",
+                        ctx.Email, lookup.UnavailableReason);
             }
             if (LooksLikeEmail(ctx.ObjectId))
             {
@@ -437,17 +466,26 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         }
     }
 
-    private MeshNode? TryLoadMeshUser(string email, IMessageHub hub)
+    /// <summary>
+    /// Classified email → mesh User lookup (issue #974). Returns the cache's tri-state so the
+    /// caller can tell "no such user" from "the index cannot answer" — the two used to be the
+    /// same <c>null</c>, and "user unknown" is the input that drives onboarding.
+    /// </summary>
+    private UserIdentityLookup TryLoadMeshUser(string email, IMessageHub hub)
     {
         try
         {
             var cache = hub.ServiceProvider.GetRequiredService<UserIdentityCache>();
-            return cache.TryGetByEmail(email);
+            return cache.Lookup(email);
         }
         catch (Exception ex)
         {
+            // 🚨 SWEEP (#974): resolving the cache out of the hub's service provider throws on a
+            // hub mid-disposal — an availability condition that used to leave here as `null`,
+            // i.e. as "this user does not exist". Classify it instead of collapsing it.
             logger.LogWarning(ex, "Failed to load mesh user for email {Email}", email);
-            return null;
+            return UserIdentityLookup.Unavailable(
+                $"user index lookup faulted: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
