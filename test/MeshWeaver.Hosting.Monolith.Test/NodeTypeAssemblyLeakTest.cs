@@ -40,6 +40,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// fire or a second managed reference (e.g. a TypeRegistry that outlives the node)
 /// still pins the generated type.</para>
 /// </summary>
+[Collection(GcReachabilityCollection.Name)]
 public class NodeTypeAssemblyLeakTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
