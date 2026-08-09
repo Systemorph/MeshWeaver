@@ -689,7 +689,13 @@ public class MessageService : IMessageService
             {
                 logger.LogWarning("Routing loop detected for {MessageType} (ID: {MessageId}) in {Address} targeting {Target} - failing message",
                     name, delivery.Id, Address, delivery.Target);
-                return Observable.Return(delivery.Failed($"Routing loop: no hub found for target {delivery.Target}"));
+                // 🚨 REPORT it. A routing loop is terminal — the message will never reach a target —
+                // so the requester must get a DeliveryFailure. Returning the Failed delivery alone
+                // dropped it (the not-on-target path never inspected the state) and the caller's
+                // hub.Observe(...) waited indefinitely.
+                return Observable.Return(ReportRoutingFailure(
+                    delivery.Failed($"Routing loop: no hub found for target {delivery.Target}",
+                        ErrorType.RoutingLoop)));
             }
             // On-target re-visit is legitimate (e.g. deferred messages)
         }
@@ -840,7 +846,40 @@ public class MessageService : IMessageService
             return deliveryPipeline.Invoke(delivery, cancellationToken);
         }
 
-        return Observable.Return(delivery);
+        // 🚨 NOT on target — and the routing above may have FAILED the delivery. This used to
+        // `return Observable.Return(delivery)` unconditionally, so a Failed state here was dropped
+        // in total silence: no DeliveryFailure was posted and the requester's hub.Observe(...) never
+        // resolved. That is the "wedges to zero" violation behind #981 — a request dequeued and
+        // handled, every queue empty, nothing wedged, and a caller waiting for a reply that no one
+        // owes any more. The on-target branch has always reported its Failed deliveries (above);
+        // this makes the routing branch keep the same promise.
+        return Observable.Return(ReportRoutingFailure(delivery));
+    }
+
+    /// <summary>
+    /// Reports a delivery that ROUTING failed, so no caller is left waiting on a reply that will
+    /// never come. Non-failed deliveries pass through untouched.
+    ///
+    /// <para>Two things the failing site tells us, both carried on the delivery rather than
+    /// re-derived from its message text:</para>
+    /// <list type="bullet">
+    ///   <item><see cref="IMessageDelivery.SenderWasNacked"/> — the site already answered the
+    ///     sender itself (the routing services' NotFound NACK). Reporting again would DOUBLE every
+    ///     NotFound in the mesh, which is a traffic multiplier on a known storm-prone path.</item>
+    ///   <item><see cref="IMessageDelivery.GetFailureErrorType"/> — the verdict. Every current
+    ///     unanswered site is a disposal race and says <see cref="ErrorType.ShuttingDown"/>, which
+    ///     consumers with their own recovery machinery (<c>SynchronizationStream</c>'s resubscribe
+    ///     latch) ride out instead of tearing down. An unclassified site falls back to
+    ///     <see cref="ErrorType.Unavailable"/> — "no verdict was reached, retry" — which is the
+    ///     honest answer when we do not know, and never a denial or an absence.</item>
+    /// </list>
+    /// </summary>
+    private IMessageDelivery ReportRoutingFailure(IMessageDelivery delivery)
+    {
+        if (delivery.State != MessageDeliveryState.Failed || delivery.SenderWasNacked)
+            return delivery;
+
+        return ReportFailure(delivery, delivery.GetFailureErrorType(ErrorType.Unavailable));
     }
 
     private static string GetMessageType(IMessageDelivery delivery)
@@ -932,7 +971,9 @@ public class MessageService : IMessageService
             return deliveryPipeline.Invoke(delivery, cancellationToken);
         }
 
-        return Observable.Return(delivery);
+        // Same contract as NotifyAsync's routing tail — a gate-deferred message that fails routing
+        // once the gate opens must not vanish either.
+        return Observable.Return(ReportRoutingFailure(delivery));
     }
 
     private volatile CancellationTokenSource cancellationTokenSource = new();
