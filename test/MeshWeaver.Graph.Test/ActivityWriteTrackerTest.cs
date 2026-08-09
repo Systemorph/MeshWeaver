@@ -177,4 +177,99 @@ public class ActivityWriteTrackerTest
         tracker.Count.Should().Be(0, "every write released — a torn subject would leave a residue");
         await tracker.Drain().Timeout(TimeSpan.FromSeconds(3)).FirstAsync();
     }
+
+    /// <summary>
+    /// 🚨 The #993 signal. A caller that has just triggered a detached write needs "THIS write
+    /// finished" — and must get it without polling an eventually-consistent query for the node the
+    /// write produces. WhenSettled completes on the ENTER→LEAVE transition of that one path.
+    /// </summary>
+    [Fact]
+    public async Task WhenSettled_CompletesWhenThatPathsWriteEndsAndNotBefore()
+    {
+        var tracker = new ActivityWriteTracker();
+        // Subscribed BEFORE the write starts — the documented usage.
+        var settled = tracker.WhenSettled("alice/_UserActivity/Doc_Page").FirstAsync().ToTask();
+
+        var early = await Task.WhenAny(settled, Task.Delay(200));
+        early.Should().NotBe(settled, "the write has not even started — completing here is the false pass");
+
+        var write = tracker.Begin("alice/_UserActivity/Doc_Page");
+
+        var stillRunning = await Task.WhenAny(settled, Task.Delay(200));
+        stillRunning.Should().NotBe(settled, "the write is in flight — settling now would be a lie");
+
+        write.Dispose();
+
+        await settled.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    /// <summary>
+    /// The exact trap that makes <see cref="ActivityWriteTracker.Drain"/> unusable as a
+    /// "did my write finish" signal: Drain completes IMMEDIATELY when nothing is in flight, so a
+    /// caller who subscribes right after Post wins the race against the handler's Begin and gets a
+    /// deterministic FALSE PASS. WhenSettled must not have that property.
+    /// </summary>
+    [Fact]
+    public async Task WhenSettled_DoesNotCompleteOnAnIdleTracker_WhereDrainWould()
+    {
+        var tracker = new ActivityWriteTracker();
+
+        // Drain: completes at once on an idle tracker — correct for shutdown, wrong as a write signal.
+        await tracker.Drain().Timeout(TimeSpan.FromSeconds(2)).FirstAsync();
+
+        var settled = tracker.WhenSettled("alice/_UserActivity/NeverStarted").FirstAsync().ToTask();
+        var raced = await Task.WhenAny(settled, Task.Delay(300));
+        raced.Should().NotBe(settled,
+            "an unstarted write must never report settled — that is the whole difference from Drain");
+    }
+
+    /// <summary>
+    /// One user's write must not settle another's. The signal is per-path because the caller is
+    /// waiting for the specific node it caused to be written.
+    /// </summary>
+    [Fact]
+    public async Task WhenSettled_IgnoresOtherPaths()
+    {
+        var tracker = new ActivityWriteTracker();
+        var settled = tracker.WhenSettled("alice/_UserActivity/Mine").FirstAsync().ToTask();
+
+        var other = tracker.Begin("bob/_UserActivity/Theirs");
+        other.Dispose();
+
+        var raced = await Task.WhenAny(settled, Task.Delay(300));
+        raced.Should().NotBe(settled, "bob's write says nothing about alice's");
+
+        tracker.Begin("alice/_UserActivity/Mine").Dispose();
+        await settled.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    /// <summary>
+    /// Same-path concurrency is the documented create-vs-update race: the caller's write is not
+    /// settled until the LAST outstanding write for that path has ended, or it would read a node
+    /// another write is still mutating.
+    /// </summary>
+    [Fact]
+    public async Task WhenSettled_WaitsForEveryConcurrentWriteToTheSamePath()
+    {
+        var tracker = new ActivityWriteTracker();
+        var settled = tracker.WhenSettled("alice/_UserActivity/Same").FirstAsync().ToTask();
+
+        var first = tracker.Begin("alice/_UserActivity/Same");
+        var second = tracker.Begin("alice/_UserActivity/Same");
+        first.Dispose();
+
+        var raced = await Task.WhenAny(settled, Task.Delay(300));
+        raced.Should().NotBe(settled, "the second write to the same path is still running");
+
+        second.Dispose();
+        await settled.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    /// <summary>An empty or whitespace path is a caller bug, same contract as <c>Begin</c>.</summary>
+    [Fact]
+    public void WhenSettled_RejectsAnEmptyPath()
+    {
+        var tracker = new ActivityWriteTracker();
+        Assert.Throws<ArgumentException>(() => tracker.WhenSettled(" "));
+    }
 }
