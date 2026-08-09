@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<!-- Print document skeleton for the pixel-faithful deck export.
+     SlidePrintComposer fills the three placeholders below: the title (HTML-encoded), the
+     stylesheet (SlidePrint.css with its theme tokens resolved), and one section per slide
+     (SlidePrintSection.html). The document is self-contained by construction — the headless
+     browser prints it from a file:// URL with no network.
+     NB: never spell a placeholder token inside a comment — substitution is a plain string
+     replace and would fill the comment too, duplicating the whole deck. -->
+<html lang="en">
+<head>
+    <!-- 🚨 SECURITY: this document runs INSIDE the server's trust boundary.
+         Slide bodies are user-authored and pass raw HTML through verbatim, so without a policy a
+         deck could make the portal's own browser fetch anything the portal can reach — an internal
+         service, a cloud metadata endpoint — or pull local files in over file://. Neither is
+         reachable from the author's own browser; both are reachable from this one. That is the
+         server-side-rendering hazard, and this policy is the fix.
+         'none' by default; the only subresources a pixel-faithful print legitimately needs are
+         assets the composer has ALREADY inlined as data: URIs, plus the inline stylesheet and the
+         slides' own style="" attributes. Scripts, connections, frames, objects and every remote or
+         file: origin are denied. Must stay the FIRST element in <head> — a policy declared after
+         content does not govern it. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'" />
+    <meta charset="utf-8" />
+    <title>{{TITLE}}</title>
+    <style>
+{{STYLES}}
+    </style>
+</head>
+<body>
+{{SLIDES}}
+</body>
+</html>

@@ -15,6 +15,12 @@
          inside the assembly with no file-system lookup at runtime. -->
     <EmbeddedResource Include="Templates\ExportPdf.csx" />
     <EmbeddedResource Include="Templates\ExportDocx.csx" />
+
+    <!-- Pixel-faithful print templates. Markup and stylesheet stay real .html/.css files
+         (never interpolated strings in C#) and travel inside the assembly. -->
+    <EmbeddedResource Include="Pixel\SlidePrint.html" />
+    <EmbeddedResource Include="Pixel\SlidePrint.css" />
+    <EmbeddedResource Include="Pixel\SlidePrintSection.html" />
   </ItemGroup>
 
   <ItemGroup>

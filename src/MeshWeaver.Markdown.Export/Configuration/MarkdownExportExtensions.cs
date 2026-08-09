@@ -84,6 +84,12 @@ public static class MarkdownExportExtensions
 
         builder.ConfigureServices(services => services
             .AddSingleton(cfg)
+            .AddSingleton(cfg.PixelRendering)
+            // Pixel-faithful renderer: a mesh-scoped singleton so its promise-cached browser probe
+            // lives (and dies) with the mesh — never static, never bleeding across test meshes.
+            // Registering it costs nothing when no browser is installed: Probe() then emits null
+            // and the fidelity option is simply not offered.
+            .AddSingleton<Pixel.IPixelPdfRenderer, Pixel.HeadlessChromiumPdfRenderer>()
             .AddTransient<ExportTemplateResolver>()
             .AddTransient<BrandingResolver>()
             // Make this assembly visible to kernel scripts. Without this the

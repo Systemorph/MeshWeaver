@@ -28,44 +28,74 @@
                 <FluentTextField @bind-Value="_title" Style="width: 100%;" />
             </div>
 
-            <div>
-                <label><strong>@Access.Localize("export.corporateIdentity")</strong></label>
-                <FluentTextField @bind-Value="_brandNodePath"
-                                 Placeholder="Brand/Systemorph"
-                                 Style="width: 100%;" />
-                <small style="color: var(--neutral-foreground-hint);">
-                    Path to a <code>CorporateIdentity</code> node. Leave empty for portal default.
-                </small>
-            </div>
-
-            <FluentCheckbox Value="_coverPage" ValueChanged="@((bool v) => _coverPage = v)" Label="@Access.Localize("export.brandedCover")" />
-            <FluentCheckbox Value="_toc" ValueChanged="@((bool v) => _toc = v)" Label="@Access.Localize("export.tableOfContents")" />
-            <FluentCheckbox Value="_pbH1" ValueChanged="@((bool v) => _pbH1 = v)" Label="@Access.Localize("export.pageBreakSection")" />
-            <FluentCheckbox Value="_pbH2" ValueChanged="@((bool v) => _pbH2 = v)" Label="@Access.Localize("export.pageBreakSubsection")" />
-
-            @if (HasDescendants)
+            @* Fidelity picker — shown only when the server confirmed this deployment can do it
+               (a Deck AND a headless browser present). No browser ⇒ no choice to get wrong. *@
+            @if (PixelFidelityAvailable)
             {
-                <FluentCheckbox Value="_includeChildren"
-                                ValueChanged="@((bool v) => _includeChildren = v)"
-                                Label="@Access.Localize("export.includeChildren")" />
-                @if (_includeChildren)
-                {
-                    <FluentCheckbox Value="_pbChildren"
-                                    ValueChanged="@((bool v) => _pbChildren = v)"
-                                    Label="@Access.Localize("export.pageBreakChildren")"
-                                    Style="margin-left: 24px;" />
-                }
+                <div>
+                    <label><strong>@Access.Localize("export.fidelity")</strong></label>
+                    <FluentRadioGroup Name="export-fidelity"
+                                      Value="@_fidelity"
+                                      ValueChanged="@((ExportFidelity v) => _fidelity = v)"
+                                      TValue="ExportFidelity"
+                                      Orientation="Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical">
+                        <FluentRadio Value="@ExportFidelity.Content">@Access.Localize("export.fidelityContent")</FluentRadio>
+                        <FluentRadio Value="@ExportFidelity.Pixel">@Access.Localize("export.fidelityPixel")</FluentRadio>
+                    </FluentRadioGroup>
+                    @if (_fidelity == ExportFidelity.Pixel)
+                    {
+                        <small style="color: var(--neutral-foreground-hint);">
+                            @Access.Localize("export.fidelityPixelHint")
+                        </small>
+                    }
+                </div>
             }
 
-            <div>
-                <label><strong>@Access.Localize("export.headerText")</strong></label>
-                <FluentTextField @bind-Value="_header" Style="width: 100%;" />
-            </div>
+            @* A pixel-faithful export IS the slides — the browser prints the deck's own stage, so
+               there is no document model to hang a cover page, a table of contents, page-break
+               rules or a running header on. Hide those rather than leave controls on screen that
+               would silently do nothing. *@
+            @if (_fidelity != ExportFidelity.Pixel)
+            {
+                <div>
+                    <label><strong>@Access.Localize("export.corporateIdentity")</strong></label>
+                    <FluentTextField @bind-Value="_brandNodePath"
+                                     Placeholder="Brand/Systemorph"
+                                     Style="width: 100%;" />
+                    <small style="color: var(--neutral-foreground-hint);">
+                        @Access.Localize("export.corporateIdentityHint")
+                    </small>
+                </div>
 
-            <div>
-                <label><strong>@Access.Localize("export.footerText")</strong></label>
-                <FluentTextField @bind-Value="_footer" Style="width: 100%;" />
-            </div>
+                <FluentCheckbox Value="_coverPage" ValueChanged="@((bool v) => _coverPage = v)" Label="@Access.Localize("export.brandedCover")" />
+                <FluentCheckbox Value="_toc" ValueChanged="@((bool v) => _toc = v)" Label="@Access.Localize("export.tableOfContents")" />
+                <FluentCheckbox Value="_pbH1" ValueChanged="@((bool v) => _pbH1 = v)" Label="@Access.Localize("export.pageBreakSection")" />
+                <FluentCheckbox Value="_pbH2" ValueChanged="@((bool v) => _pbH2 = v)" Label="@Access.Localize("export.pageBreakSubsection")" />
+
+                @if (HasDescendants)
+                {
+                    <FluentCheckbox Value="_includeChildren"
+                                    ValueChanged="@((bool v) => _includeChildren = v)"
+                                    Label="@Access.Localize("export.includeChildren")" />
+                    @if (_includeChildren)
+                    {
+                        <FluentCheckbox Value="_pbChildren"
+                                        ValueChanged="@((bool v) => _pbChildren = v)"
+                                        Label="@Access.Localize("export.pageBreakChildren")"
+                                        Style="margin-left: 24px;" />
+                    }
+                }
+
+                <div>
+                    <label><strong>@Access.Localize("export.headerText")</strong></label>
+                    <FluentTextField @bind-Value="_header" Style="width: 100%;" />
+                </div>
+
+                <div>
+                    <label><strong>@Access.Localize("export.footerText")</strong></label>
+                    <FluentTextField @bind-Value="_footer" Style="width: 100%;" />
+                </div>
+            }
 
             <div style="margin-top: 16px;">
                 <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
@@ -112,6 +142,9 @@
     private string? SourcePath;
     private string? NodeName;
     private bool HasDescendants;
+    private bool PixelFidelityAvailable;
+
+    private ExportFidelity _fidelity = ExportFidelity.Content;
 
     private string _title = "";
     private string _brandNodePath = "";
@@ -140,6 +173,12 @@
         SourcePath = ViewModel?.SourcePath;
         NodeName = ViewModel?.NodeName;
         HasDescendants = ViewModel?.HasDescendants ?? false;
+        // Capability, not a user edit — it arrives on a LATER emission than the seed control
+        // (the browser probe is async), so it is refreshed on every bind, never gated on
+        // _initialized. When it turns false again the picker disappears and Content is used.
+        PixelFidelityAvailable = ViewModel?.PixelFidelityAvailable ?? false;
+        if (!PixelFidelityAvailable)
+            _fidelity = ExportFidelity.Content;
 
         // Only set defaults on first bind — avoid overwriting user edits on subsequent reactive updates.
         if (!_initialized)
@@ -164,6 +203,7 @@
         var options = new DocumentExportOptions
         {
             Format = _format,
+            Fidelity = _fidelity,
             Title = string.IsNullOrWhiteSpace(_title) ? null : _title,
             BrandNodePath = string.IsNullOrWhiteSpace(_brandNodePath) ? null : _brandNodePath,
             CoverPage = _coverPage,
