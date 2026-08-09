@@ -206,9 +206,16 @@ def poll(state: dict, workflow: str, token: str, poll_seconds: int) -> dict:
     repo, baseline = state["repo"], state["baseline"]
     run = None
     while True:
-        # `or run` keeps the last sighting when a listing call hiccups — losing the run to one
-        # flaky read would report a green repo as "never appeared", the worst kind of wrong.
-        run = find_run(repo, workflow, baseline, state["candidate_id"], token) or run
+        if run is None:
+            run = find_run(repo, workflow, baseline, state["candidate_id"], token)
+        else:
+            # Identity is PINNED on first sighting: from here we re-read that run by id rather
+            # than re-searching. A search could hand back a different (newer) dispatch run mid-
+            # poll and we would report its verdict as ours; and a transient read failure leaves
+            # the previous snapshot in place instead of losing the run entirely.
+            status, payload = api(f"/repos/{repo}/actions/runs/{run['id']}", token)
+            if status == 200 and isinstance(payload, dict):
+                run = payload
         if run and run.get("status") == "completed":
             break
         if time.time() >= state["deadline"]:
