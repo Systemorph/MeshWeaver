@@ -44,6 +44,20 @@ public partial class CollaborativeMarkdownView
     private bool BoundCanEdit;
     private bool BoundHideAnnotations;
 
+    // The declared comparison. Null From = no redline at all — reading a document is not reviewing
+    // it, so "what changed" is never on by default; the version feature turns it on by naming the
+    // two versions. Null To (with a From) = compare against the LIVE document, which is the only
+    // shape where reverting a hunk is meaningful.
+    private long? BoundCompareFrom;
+    private long? BoundCompareTo;
+
+    // True when this render is a version comparison rather than the document's own page.
+    private bool IsComparing => BoundCompareFrom.HasValue;
+
+    // A comparison PINNED to a historical snapshot: the text on screen is not the live document, so
+    // it never re-binds to the node stream, carries no comment surface, and cannot be reverted into.
+    private bool IsPinnedComparison => BoundCompareFrom.HasValue && BoundCompareTo.HasValue;
+
     // The document node's current hub version — stamped onto new comments and used to decide
     // whether a comment's stored offsets are still valid or it must be re-anchored at render time.
     private long _docVersion;
@@ -148,9 +162,6 @@ public partial class CollaborativeMarkdownView
     // Changes resolved against the CURRENT text (effective ranges set), produced by ProcessContent.
     private IReadOnlyList<TrackedChange> _resolvedChanges = Array.Empty<TrackedChange>();
 
-    // History-derived changes drive the inline redline + the sidebar cards.
-    private bool HasAnnotations => _projectedChanges.Count > 0;
-
     private bool HasCommentAnnotations => commentNodes.Count > 0;
 
     // Comments shown in the side panel (anchored comments are sourced from the satellites, not from
@@ -186,9 +197,14 @@ public partial class CollaborativeMarkdownView
         BoundNodePath = ViewModel.NodePath;
         BoundHubAddress = ViewModel.HubAddress;
         BoundHideAnnotations = ViewModel.HideAnnotations;
+        BoundCompareFrom = ViewModel.CompareFromVersion;
+        BoundCompareTo = ViewModel.CompareToVersion;
         // Hidden annotations imply no commenting/reviewing — the flags never contradict each other.
-        BoundCanComment = ViewModel.CanComment && !BoundHideAnnotations;
-        BoundCanEdit = ViewModel.CanEdit && !BoundHideAnnotations;
+        // A comparison is a review surface, not the document's page: comments belong on the page and
+        // stay there, and a pinned historical comparison is read-only (there is no live text to
+        // revert INTO — that write would land on the current document, not the one on screen).
+        BoundCanComment = ViewModel.CanComment && !BoundHideAnnotations && !IsComparing;
+        BoundCanEdit = ViewModel.CanEdit && !BoundHideAnnotations && !IsPinnedComparison;
 
         // Resolve current user for comment metadata
         var accessService = Hub.ServiceProvider.GetService<AccessService>();
@@ -199,7 +215,11 @@ public partial class CollaborativeMarkdownView
         // call _cache.Update(BoundNodePath, fn) — writes go through the same
         // shared handle the read subscription is on, so every reader observes
         // the patch in order. See Doc/GUI/ItemTemplateMeshNodeStreamBinding.
-        if (!string.IsNullOrEmpty(BoundNodePath))
+        // A pinned comparison shows a HISTORICAL snapshot, so it must not bind to the live node —
+        // that would render today's text under a redline computed for a past pair of versions. The
+        // snapshot's text arrives as the control's Value, read by the layout area that knows which
+        // version was asked for.
+        if (!string.IsNullOrEmpty(BoundNodePath) && !IsPinnedComparison)
         {
             try
             {
@@ -232,21 +252,24 @@ public partial class CollaborativeMarkdownView
         }
         else
         {
+            // The pinned snapshot's own version — new comments are never stamped against it (the
+            // comment surface is off here), but the change ranges resolve against it.
+            if (IsPinnedComparison)
+                _docVersion = BoundCompareTo!.Value;
             DataBind(ViewModel.Value, x => x.RawContent, defaultValue: "");
         }
 
         // Subscribe to comment nodes to track resolved/active status for filtering.
-        // Skipped entirely when annotations are hidden (@@ embeds): no comment/change data is
-        // loaded, so no highlights, sidebar, or toolbar can ever render. A REBIND may flip the
-        // flag on a live instance, so also drop any caches a previous annotated bind populated —
-        // ProcessContent decorates from these, and stale entries would resurrect the comment UI.
-        if (BoundHideAnnotations)
+        // Skipped entirely when annotations are hidden (@@ embeds) or when this render is a version
+        // comparison: no comment/change data is loaded, so no highlights, sidebar, or toolbar can
+        // ever render. A REBIND may flip either flag on a live instance, so also drop any caches a
+        // previous bind populated — ProcessContent decorates from these, and stale entries would
+        // resurrect the comment UI.
+        if (BoundHideAnnotations || IsComparing)
         {
             commentNodes = new();
             commentPaths = new();
-            _projectedChanges = Array.Empty<TrackedChange>();
             _resolvedComments = Array.Empty<Comment>();
-            _resolvedChanges = Array.Empty<TrackedChange>();
             activeAnnotationId = null;
             _showCommentInput = false;
             _showPageCommentInput = false;
@@ -254,41 +277,65 @@ public partial class CollaborativeMarkdownView
         else
         {
             SubscribeToCommentStatuses();
-            SubscribeToChanges();
         }
+
+        // The redline is OFF unless a comparison was declared. Clear whatever a previous bind
+        // projected — a rebind that drops the comparison must drop the redline with it.
+        _projectedChanges = Array.Empty<TrackedChange>();
+        _resolvedChanges = Array.Empty<TrackedChange>();
+        if (!BoundHideAnnotations && IsComparing)
+            SubscribeToChanges();
 
         ProcessContent();
     }
 
     /// <summary>
-    /// Projects the tracked changes from the node's VERSION HISTORY — nothing is stored and nothing
-    /// is queried for: the history already records author, timestamp and full content per version,
-    /// so "who changed what" is a computation over it (see <see cref="ChangeProjection"/>).
+    /// Projects the tracked changes for the DECLARED comparison from the node's VERSION HISTORY —
+    /// nothing is stored and nothing is queried for: the history already records author, timestamp
+    /// and full content per version, so "who changed what" is a computation over it (see
+    /// <see cref="ChangeProjection"/>). Only ever called once a comparison exists; the redline is
+    /// never derived on its own initiative.
     /// <para>
-    /// One bounded walk per document version: <c>DistinctUntilChanged</c> on the version keeps a
-    /// bare re-emission from re-reading history, and <c>Switch</c> cancels an in-flight walk when a
-    /// newer version arrives — so a burst of edits costs one projection, not one per tick.
+    /// Comparing to the LIVE document stays subscribed so the redline follows further edits: one
+    /// bounded walk per document version — <c>DistinctUntilChanged</c> on the version keeps a bare
+    /// re-emission from re-reading history, and <c>Switch</c> cancels an in-flight walk when a newer
+    /// version arrives, so a burst of edits costs one projection, not one per tick. Comparing to a
+    /// pinned version is a single walk: neither endpoint can move.
     /// </para>
     /// </summary>
     private void SubscribeToChanges()
     {
-        if (string.IsNullOrEmpty(BoundNodePath))
+        if (string.IsNullOrEmpty(BoundNodePath) || BoundCompareFrom is not { } fromVersion)
             return;
 
         // Null in a client that carries no version store (e.g. a pure SignalR front-end): the view
-        // then shows no tracked changes rather than storming a service that isn't there.
+        // then shows the text without a redline rather than storming a service that isn't there.
         var versionQuery = Hub.ServiceProvider.GetService<IVersionQuery>();
         if (versionQuery is null)
             return;
 
-        AddBinding(Hub.GetMeshNodeStream(BoundNodePath)
-            .Where(node => node is not null)
-            .DistinctUntilChanged(node => node!.Version)
-            .Select(node => ChangeProjection.FromHistory(versionQuery, node!, Hub.JsonSerializerOptions))
-            .Switch()
-            .Subscribe(changes =>
+        var options = Hub.JsonSerializerOptions;
+        var path = BoundNodePath;
+
+        // A pinned comparison re-reads the `to` snapshot rather than having it handed over with the
+        // text: it keeps the control's contract to a path plus two version numbers, and it means a
+        // client that cannot reach the version store degrades to "text, no redline" instead of a
+        // blank page. One extra historical read, on the pinned path only.
+        var changes = BoundCompareTo is { } toVersion
+            ? versionQuery.GetVersion(path, toVersion, options)
+                .Take(1)
+                .SelectMany(toNode => toNode is null
+                    ? Observable.Return<IReadOnlyList<TrackedChange>>(Array.Empty<TrackedChange>())
+                    : ChangeProjection.Between(versionQuery, toNode, fromVersion, options))
+            : Hub.GetMeshNodeStream(path)
+                .Where(node => node is not null)
+                .DistinctUntilChanged(node => node!.Version)
+                .Select(node => ChangeProjection.Between(versionQuery, node!, fromVersion, options))
+                .Switch();
+
+        AddBinding(changes.Subscribe(projected =>
             {
-                _projectedChanges = changes;
+                _projectedChanges = projected;
                 ProcessContent();
                 InvokeAsync(StateHasChanged);
             },
@@ -578,7 +625,10 @@ public partial class CollaborativeMarkdownView
     /// </summary>
     private void OnRevertChange(string changeId)
     {
-        if (string.IsNullOrEmpty(BoundNodePath))
+        // A pinned comparison is a view of two past versions; the write would land on the LIVE
+        // document, which is not what is on screen. The button is not rendered there — this is the
+        // belt to that braces.
+        if (string.IsNullOrEmpty(BoundNodePath) || IsPinnedComparison)
             return;
         var change = _projectedChanges.FirstOrDefault(c => c.MarkerId == changeId);
         if (change is null)
