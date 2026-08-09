@@ -26,22 +26,22 @@ public class SeoResolverContentTest
     [Fact]
     public void ExtractImage_UntypedJson_ReadsPosterThenThumbnail()
     {
-        Assert.Equal("/static/S/p.png", SeoResolver.ExtractImage(Node(Json(new { poster = "/static/S/p.png" }))));
-        Assert.Equal("/static/S/t.png", SeoResolver.ExtractImage(Node(Json(new { thumbnail = "/static/S/t.png" }))));
+        Assert.Equal("/api/content/S/p.png", SeoResolver.ExtractImage(Node(Json(new { poster = "/api/content/S/p.png" }))));
+        Assert.Equal("/api/content/S/t.png", SeoResolver.ExtractImage(Node(Json(new { thumbnail = "/api/content/S/t.png" }))));
     }
 
     [Fact]
     public void ExtractImage_TypedMarkdownContent_ReadsThumbnail()
     {
-        var content = new MarkdownContent { Content = "# page", Thumbnail = "/static/S/videos/x.poster.png" };
+        var content = new MarkdownContent { Content = "# page", Thumbnail = "/api/content/S/videos/x.poster.png" };
 
-        Assert.Equal("/static/S/videos/x.poster.png", SeoResolver.ExtractImage(Node(content)));
+        Assert.Equal("/api/content/S/videos/x.poster.png", SeoResolver.ExtractImage(Node(content)));
     }
 
     [Fact]
     public void ExtractImage_TypedContent_ReadsPoster()
     {
-        Assert.Equal("/static/S/og.png", SeoResolver.ExtractImage(Node(new FakePluginContent("/static/S/og.png", 900m))));
+        Assert.Equal("/api/content/S/og.png", SeoResolver.ExtractImage(Node(new FakePluginContent("/api/content/S/og.png", 900m))));
     }
 
     [Fact]
