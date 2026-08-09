@@ -39,7 +39,7 @@ namespace MeshWeaver.Threading.Test;
 public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string FakeResponseText = "This is a test response from the fake agent with enough words to verify streaming works correctly.";
-    private const string ContextPath = "User/Roland";
+    private static readonly string ContextPath = "User/Roland";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {

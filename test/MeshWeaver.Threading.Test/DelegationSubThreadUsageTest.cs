@@ -44,7 +44,7 @@ namespace MeshWeaver.Threading.Test;
 /// </summary>
 public class DelegationSubThreadUsageTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string ContextPath = "User/TestUser";
+    private static readonly string ContextPath = "User/TestUser";
 
     // A model that carries a built-in ModelPricing default ($1 / $5 per 1M) — so it prices to a
     // non-zero cost, in contrast to "(unknown)" which matches no ModelPricing entry → $0.

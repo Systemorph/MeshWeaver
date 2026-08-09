@@ -41,7 +41,7 @@ namespace MeshWeaver.Query.Test;
 public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
-    private const string Namespace = $"{TestPartition}/SyncedQueryCrossSilo";
+    private static readonly string Namespace = $"{TestPartition}/SyncedQueryCrossSilo";
 
     private static MeshNode MakeNode(string id, string name)
         => new(id, Namespace)

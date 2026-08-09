@@ -65,7 +65,7 @@ namespace MeshWeaver.Threading.Test;
 /// </summary>
 public class OrphanedStartingExecutionRecoveryTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string ContextPath = "User/TestUser";
+    private static readonly string ContextPath = "User/TestUser";
     private const string CreatedBy = "TestUser";
 
     // Captures Warning+ log lines so the test can assert the new orphaned-claim

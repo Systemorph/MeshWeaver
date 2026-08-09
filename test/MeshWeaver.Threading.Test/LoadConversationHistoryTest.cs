@@ -34,7 +34,7 @@ namespace MeshWeaver.Threading.Test;
 /// </summary>
 public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string ContextPath = "User/TestUser";
+    private static readonly string ContextPath = "User/TestUser";
     private const string FakeResponse = "Test response.";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)

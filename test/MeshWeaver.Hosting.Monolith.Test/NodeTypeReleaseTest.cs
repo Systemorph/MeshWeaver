@@ -37,7 +37,7 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
 {
     private const string ReleaseTestPartition = "TestRelease";
     private const string NodeTypeId = "Sample";
-    private const string NodeTypePath = $"{ReleaseTestPartition}/{NodeTypeId}";
+    private static readonly string NodeTypePath = $"{ReleaseTestPartition}/{NodeTypeId}";
 
     // This test drives TWO full cold Roslyn compiles end-to-end (the first-build kickoff
     // AND the explicit RequestedReleaseAt release), each up to ~60–90s on a 2-core CI Linux

@@ -31,7 +31,7 @@ namespace MeshWeaver.Threading.Test;
 /// </summary>
 public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string ContextPath = "User/TestUser";
+    private static readonly string ContextPath = "User/TestUser";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)

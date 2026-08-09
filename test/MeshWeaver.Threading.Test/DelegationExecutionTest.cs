@@ -32,7 +32,7 @@ namespace MeshWeaver.Threading.Test;
 public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string FakeResponse = "I found three relevant documents about the topic.";
-    private const string ContextPath = "User/TestUser";
+    private static readonly string ContextPath = "User/TestUser";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)

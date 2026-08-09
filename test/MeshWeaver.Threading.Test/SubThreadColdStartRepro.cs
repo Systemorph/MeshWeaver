@@ -38,7 +38,7 @@ namespace MeshWeaver.Threading.Test;
 /// </summary>
 public abstract class SubThreadHeartbeatTestBase(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    protected const string ContextPath = "User/TestUser";
+    protected static readonly string ContextPath = "User/TestUser";
 
     // Small, well-separated windows so both heartbeat branches fire in seconds.
     // FirstActivityBudget (5 s) ≫ HeartbeatTimeout (1 s): a sub-agent silent during
