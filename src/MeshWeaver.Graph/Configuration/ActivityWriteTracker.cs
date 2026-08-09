@@ -64,9 +64,10 @@ public sealed class ActivityWriteTracker
     // reasoning as MeshNodeStreamCache's eviction subject.
     //
     // The subject carries the WHOLE in-flight map, not just its total: Drain needs "is anything
-    // running", WhenSettled needs "is THIS path running", and deriving both from one notification
-    // keeps a single ordered channel (two subjects could interleave and let a per-path observer
-    // see a state the count never reported).
+    // running", WhenSettled needs "HOW MANY are running for THIS path" (from which it also derives
+    // how many have started — every notification moves one path by one), and deriving all of it
+    // from one notification keeps a single ordered channel (two subjects could interleave and let a
+    // per-path observer see a state the count never reported).
     private readonly BehaviorSubject<ImmutableDictionary<string, int>> stateSubject =
         new(ImmutableDictionary<string, int>.Empty);
     private readonly IObserver<ImmutableDictionary<string, int>> state;
@@ -153,21 +154,83 @@ public sealed class ActivityWriteTracker
     /// per-path counter only reaches zero when the last of them ends — the create-vs-update race
     /// stays covered). A later, NON-overlapping write for the same path is a separate cycle and
     /// needs its own subscription; this is a "my write finished" signal, not "no write will ever
-    /// run again".</para>
+    /// run again". 🚨 If you triggered SEVERAL writes and are going to assert on their combined
+    /// result, this overload is the wrong signal — it can return after the first one and leave you
+    /// asserting an incomplete set. Use <see cref="WhenSettled(string,int)"/> with the number of
+    /// writes you triggered.</para>
     /// </summary>
     /// <param name="activityPath">The activity node path passed to <see cref="Begin"/>.</param>
-    public IObservable<Unit> WhenSettled(string activityPath)
+    public IObservable<Unit> WhenSettled(string activityPath) => WhenSettled(activityPath, 1);
+
+    /// <summary>
+    /// Completes once <paramref name="writes"/> writes for <paramref name="activityPath"/> have EACH
+    /// been through ENTER→LEAVE — whether they overlapped or ran strictly one after another — and
+    /// nothing for that path is outstanding at that moment.
+    ///
+    /// <para>🚨 <b>Why the count is not optional when several writes are triggered.</b> The
+    /// one-argument <see cref="WhenSettled(string)"/> completes on the FIRST ENTER→LEAVE cycle. That
+    /// is exact for one write, and for writes that overlap (the per-path counter only reaches zero
+    /// when the last of them ends). It is WRONG for N triggered writes that may NOT all overlap: if
+    /// write 1 begins and ends before write 2 begins, it returns after write 1 while four more are
+    /// still to come, and a caller asserting on the RESULT of all five checks an incomplete set — a
+    /// silent FALSE PASS, not a flake (issue #1036). This overload spans every cycle: it counts the
+    /// ENTERs and only completes once <paramref name="writes"/> of them have been seen AND the path
+    /// is quiet.</para>
+    ///
+    /// <para><b>It counts WRITES, not the nodes they produce.</b> Each accepted
+    /// <c>TrackActivityRequest</c> registers exactly one <see cref="Begin"/> — whichever branch it
+    /// then takes (create, update-fold, or the create→already-exists race fold). So N concurrent
+    /// tracks for one path are N writes settling into ONE node; pass the number of requests you
+    /// posted, and read the node afterwards to assert the coalescing.</para>
+    ///
+    /// <para>🚨 <b>Subscribe BEFORE you trigger the writes</b>, same as the one-argument overload
+    /// and for the same reason: this counts ENTERs it OBSERVES. Writes that started before the
+    /// subscription are taken as the baseline — they count toward <paramref name="writes"/> (they
+    /// are genuine writes for this path, and the fold cannot reach zero until they end), which is
+    /// exactly what makes <see cref="WhenSettled(string)"/> the <c>writes: 1</c> case of this
+    /// method. Writes that ALREADY FINISHED before the subscription are unobservable and cannot be
+    /// counted — the signal then never completes and the caller's timeout reports a loud failure
+    /// rather than a quiet false pass. That asymmetry is deliberate: this must err toward waiting.
+    /// </para>
+    /// </summary>
+    /// <param name="activityPath">The activity node path passed to <see cref="Begin"/>.</param>
+    /// <param name="writes">How many writes for that path must complete. At least one.</param>
+    public IObservable<Unit> WhenSettled(string activityPath, int writes)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(activityPath);
+        ArgumentOutOfRangeException.ThrowIfLessThan(writes, 1);
         return states
-            .Select(s => s.ContainsKey(activityPath))
-            .DistinctUntilChanged()
-            // Drop the leading "not started yet" — SkipWhile begins forwarding at the first `true`,
-            // so the `false` that follows is unambiguously a LEAVE and never the initial state.
-            .SkipWhile(running => !running)
-            .Where(running => !running)
+            .Select(s => s.TryGetValue(activityPath, out var running) ? running : 0)
+            // Fold the per-path running count into "how many writes have STARTED, as seen from this
+            // subscription". Every notification is one Begin or one Release, so this path's count
+            // moves by at most one per emission and each ENTER is counted exactly once — no need
+            // for a second, separately-ordered channel of begin counts (the reason `states` carries
+            // the whole map is precisely so every derived signal reads one ordered stream).
+            .Scan(Progress.Unseeded, (progress, running) => progress.Observe(running))
+            .Where(p => p.Started >= writes && p.Running == 0)
             .Take(1)
             .Select(_ => Unit.Default);
+    }
+
+    /// <summary>
+    /// How far a <see cref="WhenSettled(string,int)"/> subscription has got: how many writes for
+    /// its path it has seen START, and how many are running right now. Both are needed — "started
+    /// enough" alone would complete mid-write, "nothing running" alone is <see cref="Drain"/>'s
+    /// idle-tracker false pass.
+    /// </summary>
+    private readonly record struct Progress(int? Running, int Started)
+    {
+        /// <summary>Before the first notification. <c>Running</c> is null, not 0: "nothing running"
+        /// is a state the fold must be able to OBSERVE (it is the completion half), so it cannot
+        /// double as "haven't looked yet".</summary>
+        public static readonly Progress Unseeded = new(null, 0);
+
+        public Progress Observe(int running) =>
+            Running is not { } previous
+                // Baseline: the BehaviorSubject's current state. Writes already in flight are
+                // counted as started — they are real writes for this path that must still end.
+                ? new Progress(running, running)
+                : new Progress(running, Started + Math.Max(0, running - previous));
     }
 
     /// <summary>
