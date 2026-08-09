@@ -94,7 +94,7 @@ public class OrleansGrainTeardownStragglerTest(ITestOutputHelper output) : Orlea
         Output.WriteLine("Hub disposal completed — waiting for the activation to leave the catalog...");
 
         var grainId = $"messagehub/{threadPath}";
-        var mgmt = Fixture.Cluster.Client.GetGrain<IManagementGrain>(0);
+        var mgmt = Fixture.ClusterClient.GetGrain<IManagementGrain>(0);
         await Observable.Interval(TimeSpan.FromMilliseconds(100))
             .StartWith(0L)
             .SelectMany(_ => mgmt.GetDetailedGrainStatistics().ToObservable())

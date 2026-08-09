@@ -40,50 +40,43 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
     [Fact]
     public async Task PortalFlow_CreateThread_CreateCells_Submit_ExecutionCompletes()
     {
-        SharedOrleansFixture.SwappableFactory.SetInner(new PortalFlowEchoChatClientFactory());
-        try
-        {
-            var ct = new CancellationTokenSource(60.Seconds()).Token;
-            var client = GetClient();
+        Fixture.ChatFactory.SetInner(new PortalFlowEchoChatClientFactory());
+        var ct = new CancellationTokenSource(60.Seconds()).Token;
+        var client = GetClient();
 
-            // Step 1: Create thread
-            var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Portal flow Orleans test", "TestUser");
-            var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
-            createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
-            var threadPath = createResp.Message.Node!.Path!;
-            Output.WriteLine($"Thread: {threadPath}");
+        // Step 1: Create thread
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Portal flow Orleans test", "TestUser");
+        var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
+        var threadPath = createResp.Message.Node!.Path!;
+        Output.WriteLine($"Thread: {threadPath}");
 
-            // Step 2: Submit via the GUI path + wait for the round to complete.
-            // ThreadFlow.SubmitAndWait returns the response message id â€”
-            // the server-allocated cell at Messages[^1] after IsExecuting flips
-            // back to false.
-            var responseMsgId = await ThreadFlow.SubmitAndWait(
-                client, threadPath, "Portal flow Orleans test",
-                contextPath: "TestUser",
-                timeout: 50.Seconds()).FirstAsync().ToTask(ct);
-            Output.WriteLine($"Round complete. Response cell: {responseMsgId}");
+        // Step 2: Submit via the GUI path + wait for the round to complete.
+        // ThreadFlow.SubmitAndWait returns the response message id â€”
+        // the server-allocated cell at Messages[^1] after IsExecuting flips
+        // back to false.
+        var responseMsgId = await ThreadFlow.SubmitAndWait(
+            client, threadPath, "Portal flow Orleans test",
+            contextPath: "TestUser",
+            timeout: 50.Seconds()).FirstAsync().ToTask(ct);
+        Output.WriteLine($"Round complete. Response cell: {responseMsgId}");
 
-            // Step 3: Verify the cells. Same workspace.GetMeshNodeStream
-            // primitive â€” read via ThreadFlow.ReadMessage.
-            var finalThread = await ThreadFlow.ReadThread(
-                client, threadPath,
-                t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
-            Output.WriteLine($"Messages: [{string.Join(", ", finalThread.Messages)}]");
+        // Step 3: Verify the cells. Same workspace.GetMeshNodeStream
+        // primitive â€” read via ThreadFlow.ReadMessage.
+        var finalThread = await ThreadFlow.ReadThread(
+            client, threadPath,
+            t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
+        Output.WriteLine($"Messages: [{string.Join(", ", finalThread.Messages)}]");
 
-            var userMsg = await ThreadFlow.ReadMessage(
-                client, threadPath, finalThread.Messages[0]).FirstAsync().ToTask(ct);
-            userMsg.Text.Should().Be("Portal flow Orleans test");
-            Output.WriteLine($"User cell: '{userMsg.Text}'");
+        var userMsg = await ThreadFlow.ReadMessage(
+            client, threadPath, finalThread.Messages[0]).FirstAsync().ToTask(ct);
+        userMsg.Text.Should().Be("Portal flow Orleans test");
+        Output.WriteLine($"User cell: '{userMsg.Text}'");
 
-            var responseMsg = await ThreadFlow.ReadMessage(
-                client, threadPath, finalThread.Messages[^1]).FirstAsync().ToTask(ct);
-            responseMsg.Text.Should().NotBeNullOrEmpty("agent must have written response");
-            Output.WriteLine($"Response: {responseMsg.Text[..Math.Min(100, responseMsg.Text.Length)]}");
-        }
-        finally
-        {
-            SharedOrleansFixture.SwappableFactory.Reset();
-        }
+        var responseMsg = await ThreadFlow.ReadMessage(
+            client, threadPath, finalThread.Messages[^1]).FirstAsync().ToTask(ct);
+        responseMsg.Text.Should().NotBeNullOrEmpty("agent must have written response");
+        Output.WriteLine($"Response: {responseMsg.Text[..Math.Min(100, responseMsg.Text.Length)]}");
     }
 
     /// <summary>
@@ -106,62 +99,55 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
     [Fact]
     public async Task RapidSubmits_PileUpAndAllIngest()
     {
-        SharedOrleansFixture.SwappableFactory.SetInner(new PortalFlowEchoChatClientFactory());
-        try
-        {
-            var ct = new CancellationTokenSource(60.Seconds()).Token;
-            var client = GetClient();
+        Fixture.ChatFactory.SetInner(new PortalFlowEchoChatClientFactory());
+        var ct = new CancellationTokenSource(60.Seconds()).Token;
+        var client = GetClient();
 
-            var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Rapid submits test", "TestUser");
-            var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
-            var threadPath = createResp.Message.Node!.Path!;
-            Output.WriteLine($"Thread: {threadPath}");
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Rapid submits test", "TestUser");
+        var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
+        var threadPath = createResp.Message.Node!.Path!;
+        Output.WriteLine($"Thread: {threadPath}");
 
-            // Rapid-fire three submits â€” mimics a user typing follow-ups
-            // without waiting for the agent. Submits 2 + 3 should land in
-            // PendingUserMessages while round 1 is still running, then
-            // drain into round 2 as a single multi-message round.
-            string[] userTexts = ["First question", "Second question", "Third question"];
-            foreach (var text in userTexts)
-                client.SubmitMessage(threadPath, text, contextPath: "TestUser");
-            Output.WriteLine($"Submitted {userTexts.Length} messages rapidly");
+        // Rapid-fire three submits â€” mimics a user typing follow-ups
+        // without waiting for the agent. Submits 2 + 3 should land in
+        // PendingUserMessages while round 1 is still running, then
+        // drain into round 2 as a single multi-message round.
+        string[] userTexts = ["First question", "Second question", "Third question"];
+        foreach (var text in userTexts)
+            client.SubmitMessage(threadPath, text, contextPath: "TestUser");
+        Output.WriteLine($"Submitted {userTexts.Length} messages rapidly");
 
-            // Wait for the thread to settle: Idle + all user messages ingested.
-            // Single workspace.GetMeshNodeStream subscription (via ThreadFlow)
-            // filters for the final state. Ingestion = UserMessageIds count
-            // matches IngestedMessageIds count and equals the submitted count.
-            var finalThread = await ThreadFlow.ReadThread(
-                    client, threadPath,
-                    t => !t.IsExecuting
-                         && t.UserMessageIds.Count >= userTexts.Length
-                         && t.IngestedMessageIds.Count >= userTexts.Length,
-                    timeout: 45.Seconds())
-                .FirstAsync().ToTask(ct);
+        // Wait for the thread to settle: Idle + all user messages ingested.
+        // Single workspace.GetMeshNodeStream subscription (via ThreadFlow)
+        // filters for the final state. Ingestion = UserMessageIds count
+        // matches IngestedMessageIds count and equals the submitted count.
+        var finalThread = await ThreadFlow.ReadThread(
+                client, threadPath,
+                t => !t.IsExecuting
+                     && t.UserMessageIds.Count >= userTexts.Length
+                     && t.IngestedMessageIds.Count >= userTexts.Length,
+                timeout: 45.Seconds())
+            .FirstAsync().ToTask(ct);
 
-            Output.WriteLine($"Settled. Messages: [{string.Join(", ", finalThread.Messages)}]");
-            Output.WriteLine($"UserMessageIds: [{string.Join(", ", finalThread.UserMessageIds)}]");
+        Output.WriteLine($"Settled. Messages: [{string.Join(", ", finalThread.Messages)}]");
+        Output.WriteLine($"UserMessageIds: [{string.Join(", ", finalThread.UserMessageIds)}]");
 
-            // Verify every submitted text is present in the satellite cells.
-            // Reactive Merge across the user-cell streams â€” each stream is the
-            // GUI primitive ThreadFlow.ReadMessage (workspace.GetMeshNodeStream
-            // + Where + Take(1)) which completes once the cell text is present.
-            // .ToList() aggregates after every stream completes; .FirstAsync()
-            // takes that aggregated list, .ToTask(ct) bridges at the test edge.
-            var userCells = await finalThread.UserMessageIds
-                .Select(id => ThreadFlow.ReadMessage(client, threadPath, id))
-                .Merge()
-                .ToList()
-                .FirstAsync()
-                .ToTask(ct);
+        // Verify every submitted text is present in the satellite cells.
+        // Reactive Merge across the user-cell streams â€” each stream is the
+        // GUI primitive ThreadFlow.ReadMessage (workspace.GetMeshNodeStream
+        // + Where + Take(1)) which completes once the cell text is present.
+        // .ToList() aggregates after every stream completes; .FirstAsync()
+        // takes that aggregated list, .ToTask(ct) bridges at the test edge.
+        var userCells = await finalThread.UserMessageIds
+            .Select(id => ThreadFlow.ReadMessage(client, threadPath, id))
+            .Merge()
+            .ToList()
+            .FirstAsync()
+            .ToTask(ct);
 
-            userCells.Should().HaveCount(userTexts.Length);
-            userCells.Select(c => c.Text).Should().BeEquivalentTo(userTexts, client.JsonSerializerOptions);
-            Output.WriteLine($"All {userTexts.Length} user submissions ingested with text");
-        }
-        finally
-        {
-            SharedOrleansFixture.SwappableFactory.Reset();
-        }
+        userCells.Should().HaveCount(userTexts.Length);
+        userCells.Select(c => c.Text).Should().BeEquivalentTo(userTexts, client.JsonSerializerOptions);
+        Output.WriteLine($"All {userTexts.Length} user submissions ingested with text");
     }
 
     #region Echo LLM

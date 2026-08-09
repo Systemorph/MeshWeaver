@@ -34,54 +34,60 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class TwoSiloCacheUpdateFixture : IAsyncLifetime
 {
-    public TestCluster Cluster { get; private set; } = null!;
+    private OrleansTestClusterHost host = null!;
+
+    public TestCluster Cluster => host.Cluster;
 
     /// <summary>
-    /// Per-process shared backing dictionaries — both silos' in-memory
-    /// adapters share the same store so a Write on one silo is visible to
-    /// the other silo's Read (mirrors prod, where every PostgreSQL silo
-    /// points at the same DB).
+    /// Backing store shared by BOTH silos' in-memory adapters, so a Write on one silo is
+    /// visible to the other silo's Read (mirrors prod, where every PostgreSQL silo points at
+    /// the same DB). An INSTANCE owned by this fixture — it dies with the cluster, so unlike
+    /// the process-wide statics it replaced there is nothing to clear before DeployAsync.
     /// </summary>
-    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, MeshNode> SharedNodes
-        = new(StringComparer.OrdinalIgnoreCase);
-    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Generic.List<object>> SharedPartitionObjects
-        = new(StringComparer.OrdinalIgnoreCase);
+    private readonly OrleansTestBackingStore backingStore = new();
 
-    // Note: each silo's IStorageAdapter has its own per-process Changes
-    // Subject (mirrors prod). Tests don't bridge them across silos —
-    // consumers that need live updates for a specific path use
-    // workspace.GetMeshNodeStream(path) (same primitive the GUI binds to),
-    // which routes through the owning per-node hub's workspace stream.
+    /// <summary>Read access to the store of record for tests that assert on durable rows.</summary>
+    internal OrleansTestBackingStore BackingStore => backingStore;
 
     public async ValueTask InitializeAsync()
     {
-        // Per-class isolation: these backing dicts are process-wide statics shared
-        // across every cluster (Orleans configurators are new()-instantiated, so the
-        // static is the only channel both silos' adapters can reach). Reset before
-        // DeployAsync so a prior class's leftover nodes don't bleed into this fresh
-        // two-silo cluster — same rationale as SharedOrleansFixture.ResetSharedState.
-        SharedNodes.Clear();
-        SharedPartitionObjects.Clear();
+        // No Orleans client: the test driver issues cache.Update directly against a silo's
+        // mesh hub. DeployAsync also seeds the default System circuit identity on both silos'
+        // mesh hubs so those direct posts carry an identity (never-null AccessContext
+        // invariant).
+        host = await OrleansTestCluster.DeployAsync(
+            builder =>
+            {
+                // TWO silos — Orleans hashes the per-node hub grain key onto one of
+                // them; cache.Update from the OTHER silo issues a cross-silo grain
+                // call. The realistic shape — a single silo can't test the
+                // cross-silo routing path.
+                builder.Options.InitialSilosCount = 2;
+                builder.AddSiloBuilderConfigurator<TwoSiloConfigurator>();
 
-        var builder = new TestClusterBuilder();
-        // TWO silos — Orleans hashes the per-node hub grain key onto one of
-        // them; cache.Update from the OTHER silo issues a cross-silo grain
-        // call. The realistic shape — a single silo can't test the
-        // cross-silo routing path.
-        builder.Options.InitialSilosCount = 2;
-        builder.AddSiloBuilderConfigurator<TwoSiloConfigurator>();
-        Cluster = builder.Build();
-        await Cluster.DeployAsync();
-        // Seed a default System circuit identity on both silos' mesh hubs so the
-        // test driver's direct CreateNodeRequest/cache.Update posts carry an
-        // identity (never-null AccessContext invariant). See OrleansTestIdentity.
-        OrleansTestIdentity.SeedDefaultIdentity(Cluster);
+                // 🚨 The ONE fixture that needs a per-cluster instance inside a SILO host.
+                // Everywhere else the silo's own DI singleton is already per-cluster and only
+                // the client has to be pointed at it; here TWO silos must share ONE store, and
+                // neither can be handed an object (Orleans new()s the configurator). Replacing
+                // CreateSiloAsync is TestCluster's only silo-host hook. It also replaces
+                // DefaultCreateSiloAsync, which is what wires the in-memory connection transport
+                // from a hub private to TestCluster — so the setter switches
+                // Options.ConnectionTransport to TcpSocket, matching what DeployAsync declares
+                // for every cluster whose client we own.
+                builder.CreateSiloAsync = async (siloName, configuration) =>
+                    await InProcessSiloHandle.CreateAsync(
+                        siloName,
+                        configuration,
+                        hostBuilder => hostBuilder.ConfigureServices(
+                            services => backingStore.Register(services)));
+            },
+            withClient: false);
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (Cluster is not null)
-            OrleansClusterDisposal.DisposeInBackground(Cluster);
+        OrleansClusterDisposal.DisposeInBackground(host);
+        return ValueTask.CompletedTask;
     }
 
     /// <summary>
@@ -117,22 +123,17 @@ internal sealed class TwoSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .ConfigurePortalMesh()
             .AddGraph()
             .AddAI()
-            .ConfigureServices(services =>
-            {
-                // Both silos' in-memory adapters share the same backing dicts
-                // (mirrors prod's shared PG schema) AND the same change-feed
-                // Subject (mirrors PG LISTEN/NOTIFY fanout). With the
-                // standalone IDataChangeNotifier service removed, every
-                // notification flows through IStorageAdapter.Changes; sharing
-                // the Subject across silos is the in-memory cluster's
-                // equivalent of PG NOTIFY.
-                services.Replace(ServiceDescriptor.Singleton<InMemoryStorageAdapter>(sp =>
-                    new InMemoryStorageAdapter(
-                        TwoSiloCacheUpdateFixture.SharedNodes,
-                        TwoSiloCacheUpdateFixture.SharedPartitionObjects,
-                        sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>())));
-                return services;
-            })
+            // Both silos' in-memory adapters share the same backing dictionaries, mirroring
+            // prod's shared PG schema — a Write on one silo is visible to the other's Read.
+            // They do NOT share a change-feed Subject: each adapter has its own, exactly as
+            // each prod silo has its own per-process Subject fed by PG LISTEN/NOTIFY. A
+            // cross-silo signal therefore travels through IMeshChangeFeed, which is what
+            // TwoSiloRecycleConvergenceTest delivers explicitly so the frame version is the
+            // only variable under test.
+            //
+            // The store is a per-cluster INSTANCE and so cannot be registered here (Orleans
+            // instantiates this configurator via new()) — TwoSiloCacheUpdateFixture passes it
+            // in through the CreateSiloAsync post-configure closure.
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 }

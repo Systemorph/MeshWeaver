@@ -44,65 +44,58 @@ public class OrleansChatHistoryTest(ITestOutputHelper output) : OrleansSharedTes
     public async Task ColdStart_AgentSeesAllPreviousMessages()
     {
         // Swap to echo factory
-        SharedOrleansFixture.SwappableFactory.SetInner(new EchoChatClientFactory());
-        try
-        {
-            var client = GetClient();
-            var workspace = client.GetWorkspace();
-            // Thread + 4 messages are pre-seeded in SharedOrleansFixture via the seed provider.
-            // This simulates a cold start: grains not yet activated, data in persistence.
-            Output.WriteLine("Thread pre-seeded with 4 messages");
+        Fixture.ChatFactory.SetInner(new EchoChatClientFactory());
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
+        // Thread + 4 messages are pre-seeded in SharedOrleansFixture via the seed provider.
+        // This simulates a cold start: grains not yet activated, data in persistence.
+        Output.WriteLine("Thread pre-seeded with 4 messages");
 
-            // Submit via the SAME entry point production uses (workspace.SubmitMessage
-            // -> ThreadInput.AppendUserInput -> stream.Update on the thread node).
-            Output.WriteLine("SubmitMessage (production entry point)...");
+        // Submit via the SAME entry point production uses (workspace.SubmitMessage
+        // -> ThreadInput.AppendUserInput -> stream.Update on the thread node).
+        Output.WriteLine("SubmitMessage (production entry point)...");
 
-            // The thread is pre-seeded with 4 messages. Wait for Messages.Count >= 6
-            // (4 seed + 1 user input cell + 1 agent response cell created by this
-            // submission). The agent response is the LAST id appended.
-            var messagesStream = workspace.GetMeshNodeStream(ThreadPath)
-                .Select(node =>
-                {
-                    
-                    return (node?.Content as MeshThread)?.Messages
-                           ?? (IReadOnlyList<string>)ImmutableList<string>.Empty;
-                });
+        // The thread is pre-seeded with 4 messages. Wait for Messages.Count >= 6
+        // (4 seed + 1 user input cell + 1 agent response cell created by this
+        // submission). The agent response is the LAST id appended.
+        var messagesStream = workspace.GetMeshNodeStream(ThreadPath)
+            .Select(node =>
+            {
+                
+                return (node?.Content as MeshThread)?.Messages
+                       ?? (IReadOnlyList<string>)ImmutableList<string>.Empty;
+            });
 
-            client.SubmitMessage(
-                ThreadPath,
-                "Third question - can you see history?",
-                contextPath: "TestUser");
-            Output.WriteLine("Append dispatched");
+        client.SubmitMessage(
+            ThreadPath,
+            "Third question - can you see history?",
+            contextPath: "TestUser");
+        Output.WriteLine("Append dispatched");
 
-            // Resolve message ids — last id is the new agent response cell.
-            var msgIds = await messagesStream.Should().Within(30.Seconds()).Match(ids => ids.Count >= 6);
-            var responseMsgId = msgIds[^1];
-            var responsePath = $"{ThreadPath}/{responseMsgId}";
-            Output.WriteLine($"Response cell: {responseMsgId} (full list: [{string.Join(",", msgIds)}])");
+        // Resolve message ids — last id is the new agent response cell.
+        var msgIds = await messagesStream.Should().Within(30.Seconds()).Match(ids => ids.Count >= 6);
+        var responseMsgId = msgIds[^1];
+        var responsePath = $"{ThreadPath}/{responseMsgId}";
+        Output.WriteLine($"Response cell: {responseMsgId} (full list: [{string.Join(",", msgIds)}])");
 
-            // Wait for the response cell text to fill in. The EchoChatClient's final
-            // streaming text always contains "received" once execution is done.
-            var responseMsg = await workspace.GetMeshNodeStream(responsePath)
-                .Select(node =>
-                {
-                    if (node?.Content is ThreadMessage tm) return tm;
-                    if (node?.Content is JsonElement cje) return cje.Deserialize<ThreadMessage>(client.JsonSerializerOptions);
-                    return null;
-                })
-                .Should().Within(30.Seconds())
-                .Match(m => m?.Text is { } text && text.Contains("received", StringComparison.OrdinalIgnoreCase));
+        // Wait for the response cell text to fill in. The EchoChatClient's final
+        // streaming text always contains "received" once execution is done.
+        var responseMsg = await workspace.GetMeshNodeStream(responsePath)
+            .Select(node =>
+            {
+                if (node?.Content is ThreadMessage tm) return tm;
+                if (node?.Content is JsonElement cje) return cje.Deserialize<ThreadMessage>(client.JsonSerializerOptions);
+                return null;
+            })
+            .Should().Within(30.Seconds())
+            .Match(m => m?.Text is { } text && text.Contains("received", StringComparison.OrdinalIgnoreCase));
 
-            Output.WriteLine($"Execution completed: text={responseMsg?.Text}");
-            responseMsg.Should().NotBeNull("response cell must be populated");
-            // The agent MUST see 6 separate messages (4 pre-seeded history + 1 new input cell + 1 new user).
-            // If this fails, the ChatClientAgent is flattening conversation turns into a single prompt.
-            responseMsg!.Text.Should().Contain("6 messages",
-                "agent must receive 6 separate ChatMessage objects, not a flattened prompt");
-        }
-        finally
-        {
-            SharedOrleansFixture.SwappableFactory.Reset();
-        }
+        Output.WriteLine($"Execution completed: text={responseMsg?.Text}");
+        responseMsg.Should().NotBeNull("response cell must be populated");
+        // The agent MUST see 6 separate messages (4 pre-seeded history + 1 new input cell + 1 new user).
+        // If this fails, the ChatClientAgent is flattening conversation turns into a single prompt.
+        responseMsg!.Text.Should().Contain("6 messages",
+            "agent must receive 6 separate ChatMessage objects, not a flattened prompt");
     }
 
     #region Echo LLM
