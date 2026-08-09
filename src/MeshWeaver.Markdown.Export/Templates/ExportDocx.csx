@@ -24,8 +24,13 @@ if (!Inputs.TryGetValue("sourcePath", out var sourcePathEl) || sourcePathEl.Valu
     throw new InvalidOperationException("Inputs.sourcePath is required");
 var sourcePath = sourcePathEl.GetString();
 
+// 🚨 Deserialize with the MESH's serializer options — the same ones ExportDocumentHandler
+// serialized these inputs with. The mesh writes camelCase; System.Text.Json's defaults are
+// case-SENSITIVE PascalCase, so a bare Deserialize<T>() bound nothing and every option the user
+// chose in the dialog was silently discarded.
 var options = Inputs.TryGetValue("options", out var optionsEl) && optionsEl.ValueKind == JsonValueKind.Object
-    ? (optionsEl.Deserialize<DocumentExportOptions>() ?? new DocumentExportOptions { Format = ExportFormat.Docx })
+    ? (optionsEl.Deserialize<DocumentExportOptions>(Mesh.JsonSerializerOptions)
+       ?? new DocumentExportOptions { Format = ExportFormat.Docx })
     : new DocumentExportOptions { Format = ExportFormat.Docx };
 
 var brandPath = Inputs.TryGetValue("brandNodePath", out var b) && b.ValueKind == JsonValueKind.String
