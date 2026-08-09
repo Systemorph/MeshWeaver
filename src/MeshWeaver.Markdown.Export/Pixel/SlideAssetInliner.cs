@@ -69,12 +69,14 @@ public static class SlideAssetInliner
                 [.. references.Select(r => new UnresolvedSlideAsset(r,
                     "this hub has no content service, so no collection can be read"))]));
 
-        // Independent reads, each on its collection's own I/O pool; Merge lets them overlap and
-        // ToArray waits for all of them. Order is restored from `references` below, so the result
-        // does not depend on which read finished first.
+        // One asset at a time. Concat subscribes the next read only after the previous one
+        // completes, so a deck with a hundred pictures cannot fan a hundred simultaneous
+        // GetDataRequests at their owning hubs — the reads are pooled at the I/O leaf, but the
+        // resolution hop in front of each one is not. The bytes are the cost here, not the
+        // round-trips, and they are the same either way.
         return references
             .Select(reference => Read(hub, contentService, reference))
-            .Merge()
+            .Concat()
             .ToArray()
             .Select(reads => Apply(html, references, reads));
     }
