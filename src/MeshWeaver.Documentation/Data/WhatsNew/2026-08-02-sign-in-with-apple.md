@@ -1,8 +1,9 @@
 ---
 Name: Sign in with Apple
-Category: What's New
+Category: Fix
 Description: The login page's Apple sign-in now works end to end — Apple's form_post callback and self-renewing client secret are handled properly.
 Icon: Sparkle
+Order: -20260802
 ---
 
 # Sign in with Apple

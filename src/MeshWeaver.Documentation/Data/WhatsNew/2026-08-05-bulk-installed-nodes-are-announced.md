@@ -1,8 +1,9 @@
 ---
 Name: A freshly installed plugin is fully there — no restart needed
-Category: What's New
+Category: Fix
 Description: Fixes an install landing a node that the running mesh could not see — the page reported "No node found" and the type never compiled until the portal restarted.
 Icon: Sparkle
+Order: -20260805
 ---
 
 # A freshly installed plugin is fully there

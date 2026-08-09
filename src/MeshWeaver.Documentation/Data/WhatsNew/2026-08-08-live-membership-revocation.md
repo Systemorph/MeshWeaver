@@ -1,8 +1,9 @@
 ---
 Name: Removing someone from a group takes effect immediately
-Category: What's New
+Category: Fix
 Description: Group membership changes now reach permissions in a running portal — a revoked member loses access at once instead of keeping it until the next restart.
 Icon: ShieldKeyhole
+Order: -20260808
 ---
 
 # Removing someone from a group takes effect immediately

@@ -1,8 +1,9 @@
 ---
 Name: New installations arrive with the plugins already installed
-Category: What's New
+Category: Feature
 Description: A fresh MeshWeaver installation now comes up with the platform plugins — the Store included — installed and tracking updates, instead of an empty catalog waiting for an administrator.
 Icon: Sparkle
+Order: -20260807
 ---
 
 # New installations arrive with the plugins already installed

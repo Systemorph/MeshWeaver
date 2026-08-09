@@ -1,8 +1,9 @@
 ---
 Name: New /thread skill — manage conversation threads without the guesswork
-Category: What's New
+Category: Feature
 Description: The chat assistant now has a built-in /thread skill that knows the thread lifecycle — mark threads Done (one or in bulk) with a single patch each, no schema exploration.
 Icon: Sparkle
+Order: -20260730
 ---
 
 # New /thread skill — manage conversation threads without the guesswork

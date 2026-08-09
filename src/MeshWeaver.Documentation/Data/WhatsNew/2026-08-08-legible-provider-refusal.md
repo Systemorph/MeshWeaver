@@ -1,8 +1,9 @@
 ---
 Name: A rate-limited model now says so, instead of dumping HTTP headers into your thread
-Category: What's New
+Category: Fix
 Description: When a provider refuses a round — out of quota, or a server error — the thread now shows the reason in your language and names the model that ran, instead of pasting the raw transport error.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # A rate-limited model now says so, instead of dumping HTTP headers into your thread

@@ -1,8 +1,9 @@
 ---
 Name: Sharing a node grants — and opens — that node
-Category: What's New
+Category: Fix
 Description: Invitations now name and link the node that was shared, and the access they grant applies to it rather than one level below.
 Icon: Sparkle
+Order: -20260726
 ---
 
 # Sharing a node grants — and opens — that node

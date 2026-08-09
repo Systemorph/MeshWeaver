@@ -1,8 +1,9 @@
 ---
 Name: Saved edits can no longer be rolled back
-Category: What's New
+Category: Fix
 Description: A stale copy of a node held by a component that is shutting down can no longer overwrite newer, already-saved content.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Saved edits can no longer be rolled back

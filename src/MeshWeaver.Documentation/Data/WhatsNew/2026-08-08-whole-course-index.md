@@ -1,8 +1,9 @@
 ---
 Name: The course index now shows the whole course and marks where you are
-Category: What's New
+Category: Feature
 Description: The collapsible left-hand index on a course page lists every module and lesson of the course, with your current page marked instead of the list pruned to it.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # The course index now shows the whole course and marks where you are
