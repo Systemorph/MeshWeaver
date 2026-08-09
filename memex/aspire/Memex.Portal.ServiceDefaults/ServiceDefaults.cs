@@ -169,12 +169,18 @@ public static class ServiceDefaults
     private static readonly JsonSerializerOptions VersionJsonOptions = new(JsonSerializerDefaults.Web);
 
     /// <summary>
-    /// The assembly that represents this build. Normally the entry assembly (the portal executable),
-    /// which <c>Directory.Build.props</c> stamps with both the version and the commit. When the
-    /// process was launched by a host that is NOT part of this build — a test runner, a generic
-    /// launcher — the entry assembly carries no <c>CommitHash</c>, and this assembly is used
-    /// instead: the SAME build stamps every assembly with the SAME commit, so the answer is
-    /// identical rather than a foreign host's version.
+    /// The assembly that represents this build. In the portal this is the entry assembly — the
+    /// executable — which the root <c>Directory.Build.props</c> stamps with both the platform
+    /// version and the commit (<c>memex/Directory.Build.props</c> imports the root, so every
+    /// portal project inherits the stamps). Reading the entry assembly is what keeps this endpoint
+    /// and the About tab reporting the same build.
+    ///
+    /// <para>When the process was launched by a host that is NOT part of this build, the entry
+    /// assembly carries no <c>CommitHash</c> and reading it would report the HOST's version — a
+    /// test runner's <c>1.0.0</c> with no commit. (<c>test/Directory.Build.props</c> deliberately
+    /// does not import the root props, so this is exactly the shape under test.) The fallback is
+    /// this assembly: the same build stamps every one of its assemblies with the same commit, so
+    /// the answer is the real one rather than a foreign host's.</para>
     /// </summary>
     internal static Assembly SelectBuildAssembly()
     {
