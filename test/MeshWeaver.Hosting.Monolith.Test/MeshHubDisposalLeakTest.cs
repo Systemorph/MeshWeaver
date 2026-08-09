@@ -35,6 +35,28 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// surviving hub it attaches ClrMD to the live process and prints the GC-root
 /// chain (root kind → type chain) that pins the disposed mesh — i.e. "who holds
 /// the references".</para>
+///
+/// <para>🚨 <b>A PASS HERE PINS NOTHING — this is a sampling probe, not a regression
+/// test.</b> Do not add a leak fix and treat a green run as proof, and do not read a
+/// green run as "no leak":</para>
+/// <list type="bullet">
+///   <item><description><b>It samples.</b> A root that is live only for a bounded window
+///     (#991: an uncancelled 1 s <c>Observable.Timer</c> on the process-wide
+///     <c>TimerQueue</c>) is caught only if the probe's forced GC lands inside that window.
+///     Fire first → collected → green, with the defect fully present.</description></item>
+///   <item><description><b>It cannot attribute.</b> It reports the FIRST
+///     <c>MessageHub</c> reachable from ANY non-stack root. A green run says "no hub was
+///     reached within the visit budget", not "root X is fixed"; a red run names whatever
+///     chain it happened to walk, which may be a different defect than the one you are
+///     chasing.</description></item>
+///   <item><description><b>It is inconclusive off Linux.</b> ClrMD snapshot-attach throws
+///     on macOS, so a surviving hub SKIPs (#674) — locally you learn nothing either
+///     way.</description></item>
+/// </list>
+/// <para>So: pin the specific root with a deterministic test next to the code that owns it,
+/// and prove it by reverting the fix and watching that test fail. #991's pin lives in
+/// <c>MeshWeaver.Hosting.Test.ActivityControlPlaneResubscribeTest</c>. This probe's job is
+/// DISCOVERY — naming a root nobody knew about — not verification.</para>
 /// </summary>
 public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
