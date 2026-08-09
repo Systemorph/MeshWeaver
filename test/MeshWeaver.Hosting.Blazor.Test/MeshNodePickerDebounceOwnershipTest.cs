@@ -84,8 +84,18 @@ public class MeshNodePickerDebounceOwnershipTest
             + "search path never writes to");
         debounce.IsDisposed.Should().BeFalse("the component is still alive");
 
+        // Swap the REAL timer the keystroke just armed for a stand-in. Its tick would call
+        // LoadResultsAsync → InvokeAsync, which needs a render handle this bare component does
+        // not have — so leaving it live would make the test depend on finishing inside 200 ms.
+        // The assignment cancels it, and the stand-in carries the same question to teardown.
+        var pendingCancelled = false;
+        debounce.Disposable = Disposable.Create(() => pendingCancelled = true);
+
         await probe.DisposeAsync();
 
+        pendingCancelled.Should().BeTrue(
+            "whatever debounce is pending when the component tears down must be cancelled by "
+            + "DisposeAsync releasing BlazorView.Disposables");
         debounce.IsDisposed.Should().BeTrue(
             "component teardown must cancel the debounce armed by the last keystroke; before "
             + "#995 only the NEXT keystroke disposed it, so typing and navigating away left a "
