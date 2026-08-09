@@ -41,7 +41,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task GlobalSearch_ReturnsOrganizationNode()
     {
         // Arrange: create an Organization at the root of its partition
-        // This mimics "PartnerRe" — namespace="" id="TestCorp" nodeType=Organization
+        // This mimics "Acme" — namespace="" id="TestCorp" nodeType=Organization
         var orgNode = new MeshNode("TestCorp")
         {
             Name = "Test Corporation",

@@ -256,7 +256,7 @@ public class PartitionRootBootstrapTest(ITestOutputHelper output) : MonolithMesh
     {
         const string partition = "BootstrapMainNode";
 
-        // Reproduce the construction bug behind the atioz 42P01: a node first built BARE
+        // Reproduce the construction bug behind the prod 42P01: a node first built BARE
         // (`new MeshNode("Datenextraktion")` → MainNode = "Datenextraktion") and only LATER given a
         // namespace via `with { … }`. Path is computed (follows the rebase) but MainNode is a STORED
         // property and stays the stale bare id. Persisted, that bare value flows

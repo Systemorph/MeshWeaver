@@ -51,7 +51,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
-    /// Repro for the atioz mesh-wide outage (2026-06-10). A <see cref="DisposeRequest"/>
+    /// Repro for the prod mesh-wide outage (2026-06-10). A <see cref="DisposeRequest"/>
     /// is a permission-gateless <c>[SystemMessage]</c>, so any sender — including an
     /// unauthenticated external/RawJson client — could route one to the root mesh hub's
     /// own address (<c>mesh/&lt;id&gt;</c>) and dispose the irreplaceable singleton. Once

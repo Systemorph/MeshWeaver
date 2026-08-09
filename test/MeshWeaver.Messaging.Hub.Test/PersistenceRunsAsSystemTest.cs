@@ -14,7 +14,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// off from the workspace emission scheduler, a background thread that has WIPED the ambient
 /// <see cref="AccessContext"/>.
 ///
-/// <para>Why this matters (atioz 2026-06-17): authorization happens ONCE at the user-facing
+/// <para>Why this matters (prod 2026-06-17): authorization happens ONCE at the user-facing
 /// write (RLS on the action block, user identity live). By the time the change reaches the
 /// persistence queue it is already approved — so the DB write runs as System and must never
 /// fail-closed on the wiped ambient context. A fail-closed persist silently drops the change;

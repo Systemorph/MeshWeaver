@@ -34,7 +34,7 @@ secrets:
     ConnectionStrings__memex: ""
     memex_postgres_password: "CHANGE_ME_strong_password"
     MEMEX_URI: ""
-    # ---- OAuth client SECRETS (memex.systemorph.com sign-in) ----------------
+    # ---- OAuth client SECRETS (portal.example.com sign-in) ----------------
     # Client SECRETS belong in the secret, not the configmap. Pass via
     # `--set secrets.memex_portal.Authentication__Microsoft__ClientSecret=...`
     # or (recommended) Key Vault via the CSI Secrets Store add-on. NEVER commit
@@ -75,7 +75,7 @@ config:
     # ---- Instance branding (per-env) ----------------------------------------
     # Large Safari bookmark / Start-Page / Add-to-Dock tile (apple-touch-icon, 180×180 PNG).
     # This base is the Systemorph-owned memex portal → the Systemorph mark. Other envs override
-    # (e.g. atioz → brand/atioz-180.png) at deploy; empty leaves Safari's letter-tile fallback.
+    # (e.g. prod → brand/prod-180.png) at deploy; empty leaves Safari's letter-tile fallback.
     Portal__AppleTouchIcon: "_content/Memex.Portal.Shared/brand/systemorph-180.png"
     Deployment__Backend: "Filesystem"
     # /data holds ONLY framework caches now: DataProtection keys
@@ -206,22 +206,22 @@ config:
     # Provider mode: setting any external-provider ClientId flips the portal into
     # multi-provider "Custom" mode automatically (HasExternalProviders == true) —
     # dev login is already disabled in the Distributed image (Program.cs). We set
-    # it explicitly for clarity. Public host = memex.systemorph.com.
+    # it explicitly for clarity. Public host = portal.example.com.
     Authentication__Provider: "Custom"
     Authentication__EnableDevLogin: "false"
     # -- Microsoft / Entra ID (HOME tenant = Systemorph) ----------------------
     # TenantId MUST be the Systemorph AAD tenant GUID (NOT "common"/"organizations")
     # so this AAD is the home directory. ClientId = the app registration's
-    # Application (client) ID. Add redirect URI https://memex.systemorph.com/signin-microsoft
+    # Application (client) ID. Add redirect URI https://portal.example.com/signin-microsoft
     # to that app registration. ClientSecret is in secrets.memex_portal above.
     # Systemorph AAD home tenant (the subscription's own tenant).
     Authentication__Microsoft__TenantId: "3a01d7ac-3330-444d-942d-975eb491b5d6"
     Authentication__Microsoft__ClientId: "CHANGE_ME_aad_application_client_id"
     # -- Google (other accounts) ----------------------------------------------
-    # Redirect URI: https://memex.systemorph.com/signin-google
+    # Redirect URI: https://portal.example.com/signin-google
     Authentication__Google__ClientId: "CHANGE_ME_google_oauth_client_id"
     # -- LinkedIn (other accounts) --------------------------------------------
-    # Redirect URI: https://memex.systemorph.com/signin-linkedin
+    # Redirect URI: https://portal.example.com/signin-linkedin
     Authentication__LinkedIn__ClientId: "CHANGE_ME_linkedin_oauth_client_id"
 
 # ===========================================================================
@@ -237,19 +237,19 @@ config:
 #
 # The value is the `portalIdentityClientId` output of infra/main.bicep (modules/portal-identity.bicep
 # provisions the shared portal UAMI + a federated credential per namespace). The SAME client id is
-# used for EVERY portal namespace (memex, atioz, memex-cloud) — one shared UAMI, one AcrPull grant.
+# used for EVERY portal namespace (memex, prod, memex-cloud) — one shared UAMI, one AcrPull grant.
 # Inject it at `helm upgrade` time rather than committing it: for the `memex` env put the real id in
 # the git-ignored values.deploy.yaml (see scripts/values.deploy.example.yaml) or pass
-# `--set selfUpdate.azureClientId=<portalIdentityClientId>`; for atioz / memex-cloud set it in their
+# `--set selfUpdate.azureClientId=<portalIdentityClientId>`; for prod / memex-cloud set it in their
 # git-ignored envs/<env>/values.<env>.yaml. See Doc/Architecture/DeploymentAKS → "Portal self-update".
 selfUpdate:
   azureClientId: ""   # set per-env from the portalIdentityClientId bicep output
 
 # --- Platform-admin Instances overview ---------------------------------------
-# memex.systemorph.com is the company/control instance — the ONE install that gets the Instances
+# portal.example.com is the company/control instance — the ONE install that gets the Instances
 # admin tab (Settings ▸ Administration ▸ Instances) and the cluster-scoped read RBAC behind it.
 # clusterRead drives BOTH: the RBAC grant and Instances__Enabled (the menu item's existence).
-# Customer/public envs (atioz, memex-cloud) must NOT set this — their overlays inherit the chart
+# Customer/public envs (prod, memex-cloud) must NOT set this — their overlays inherit the chart
 # default (false), so the tab does not exist there at all.
 instancesAdmin:
   clusterRead: true
@@ -260,7 +260,7 @@ instancesAdmin:
 # --- Container images -------------------------------------------------------
 # Default = pull straight from GHCR (no ACR needed). To use the private ACR,
 # `az acr import` the images (see README) and set registry to the ACR login
-# server, e.g. memexaksacrxxxx.azurecr.io. The chart currently hardcodes the
+# server, e.g. <aks>acrxxxx.azurecr.io. The chart currently hardcodes the
 # ghcr.io path; ./manifests/portal-ingress.yaml and the README's
 # `helm upgrade --set` examples show how to repoint it.
 image:
@@ -301,7 +301,7 @@ replicas:
 # --- KEDA autoscaling (portal) ---------------------------------------------
 # Event-driven autoscaling for the portal. Requires the KEDA operator — enable
 # the AKS managed add-on once per cluster:
-#   az aks update -g memex-aks-rg -n memexaks-cluster --enable-keda
+#   az aks update -g <aks-resource-group> -n <aks-cluster> --enable-keda
 # metrics-server is already present. Once the ScaledObject exists, its HPA owns
 # the replica count, so the fixed `replicas.portal` above and any env
 # portal-patch.json replica override become moot. min=2 keeps HA + seeds the
@@ -394,7 +394,7 @@ probes:
 ingress:
   enabled: true
   className: "webapprouting.kubernetes.azure.com"  # AKS app routing (managed nginx)
-  host: "memex.systemorph.com"
+  host: "portal.example.com"
   tls:
     enabled: true
     secretName: "memex-tls"
@@ -422,7 +422,7 @@ pgbackrest:
   enabled: true
   # Values from the storage.bicep outputs:
   azure:
-    account: "memexaksbkpXXXX"          # backupStorageAccount output
+    account: "<aks>bkpXXXX"          # backupStorageAccount output
     container: "pgbackrest"             # backupContainerName output
     # Workload Identity client id (backupIdentityClientId output). Keyless.
     workloadIdentityClientId: "00000000-0000-0000-0000-000000000000"

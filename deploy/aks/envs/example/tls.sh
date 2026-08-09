@@ -3,7 +3,7 @@
 # ingress (reuses the cluster-wide cert-manager + letsencrypt-prod issuer).
 # Run ONLY AFTER portal.example.com's DNS A-record points to the AKS ingress
 # IP (HTTP-01 validates over the internet) — i.e. at/after the DNS cutover.
-#   az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "bash tls.sh" --file tls.sh
+#   az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "bash tls.sh" --file tls.sh
 set -uo pipefail
 NS=example
 HOST="${INGRESS_HOST:-portal.example.com}"

@@ -6,7 +6,7 @@ namespace Memex.Database.Migration.Migrations;
 /// Robust re-run of <see cref="V36_MoveAgentsToPerPartitionAgentNamespace"/>: move each partition's own
 /// agents into a dedicated <c>{partition}/Agent</c> sub-namespace, but discover partitions from the
 /// actual Postgres <b>schemas</b> (every schema that owns a <c>mesh_nodes</c> table) instead of from
-/// <c>admin.mesh_nodes</c> MeshDataSource records — V36 found none for user-created Spaces (e.g. atioz's
+/// <c>admin.mesh_nodes</c> MeshDataSource records — V36 found none for user-created Spaces (e.g. prod's
 /// <c>AgenticPension</c>), so it moved 0 agents.
 ///
 /// <para>The new namespace is derived <b>per row</b> from the agent's own namespace prefix

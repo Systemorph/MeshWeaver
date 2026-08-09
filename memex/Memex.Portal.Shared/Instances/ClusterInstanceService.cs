@@ -16,7 +16,7 @@ public sealed record InstanceInfo
 {
     /// <summary>The Kubernetes namespace the portal runs in (e.g. <c>memex</c>, <c>memex-cloud</c>).</summary>
     public required string Namespace { get; init; }
-    /// <summary>The public host from the namespace's Ingress (e.g. <c>memex.systemorph.com</c>), or "" if none.</summary>
+    /// <summary>The public host from the namespace's Ingress (e.g. <c>portal.example.com</c>), or "" if none.</summary>
     public string Domain { get; init; } = string.Empty;
     /// <summary>The portal container's full image reference.</summary>
     public string Image { get; init; } = string.Empty;

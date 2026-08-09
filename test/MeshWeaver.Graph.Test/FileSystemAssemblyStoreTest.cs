@@ -144,7 +144,7 @@ public class FileSystemAssemblyStoreTest : IDisposable
     [Fact]
     public async Task Assembly_key_includes_framework_identity_so_cross_image_dlls_never_collide()
     {
-        // 🚨 Regression guard for the atioz 2026-06-20 deploy wedge. The assembly cache is keyed by
+        // 🚨 Regression guard for the prod 2026-06-20 deploy wedge. The assembly cache is keyed by
         // (path, MeshNode version), but the COMPILED bytes are bound to the framework's reference
         // assemblies — two DIFFERENT images compiling the same (path, version) produce INCOMPATIBLE
         // DLLs. Before the fix the key omitted the framework identity, so a freshly-deployed image's

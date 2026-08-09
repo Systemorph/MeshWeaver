@@ -6,7 +6,7 @@ namespace Memex.Database.Migration.Migrations;
 /// Fix <c>search_across_schemas</c> to enforce <c>partition_access</c>.
 ///
 /// Bug: <c>public_read</c> node types bypassed partition_access entirely, leaking
-/// cross-partition data in search (e.g., a meshweaver user could see PartnerRe content).
+/// cross-partition data in search (e.g., a meshweaver user could see Acme content).
 /// Fix: partition_access is now always required; <c>public_read</c> only skips node-level
 /// permission checks within accessible partitions.
 ///

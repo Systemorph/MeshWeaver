@@ -106,7 +106,7 @@ public class MeshDocumentSinkTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Pins the serialization boundary the in-memory store never crosses: on a JSON-backed store
     /// (Postgres jsonb) the Document content is serialized with the MESH hub's options (the write
     /// travels MeshDocumentSink → CreateOrUpdateNodeRequest → mesh hub → storage), NOT the
-    /// Document per-node hub's. Prod repro (atioz 2026-07-01): the mesh hub's TypeRegistry lacked
+    /// Document per-node hub's. Prod repro (prod 2026-07-01): the mesh hub's TypeRegistry lacked
     /// <c>Document</c>, content persisted WITHOUT a <c>$type</c> discriminator, and every reader got
     /// an untyped JsonElement ("stayed an untyped JsonElement (TypeRegistry lacks the $type
     /// discriminator)") — document pages rendered empty / not found.

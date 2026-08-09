@@ -4,7 +4,7 @@
 # auto-wired in Grafana). Run via az aks command invoke on the private cluster:
 #
 #   export GRAFANA_PW='<pick a strong password>'
-#   az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+#   az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
 #     --command "GRAFANA_PW=$GRAFANA_PW bash install-observability.sh" --file install-observability.sh
 set -uo pipefail
 : "${GRAFANA_PW:?set GRAFANA_PW (Grafana admin password)}"
@@ -17,7 +17,7 @@ helm upgrade --install loki grafana/loki-stack -n monitoring --create-namespace 
 kubectl -n monitoring get pods
 echo
 echo "Access (private cluster -> via the P2S VPN):"
-echo "  az aks get-credentials -g memex-aks-rg -n memexaks-cluster"
+echo "  az aks get-credentials -g <aks-resource-group> -n <aks-cluster>"
 echo "  kubectl -n monitoring port-forward svc/loki-grafana 3000:80"
 echo "  open http://localhost:3000   (user: admin / pass: \$GRAFANA_PW)"
 echo "Loki datasource is pre-wired; query e.g.  {namespace=\"memex\"}  in Grafana Explore."

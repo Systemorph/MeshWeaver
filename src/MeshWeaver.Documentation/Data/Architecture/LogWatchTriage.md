@@ -144,7 +144,7 @@ stored.
 ```bash
 # 1. One shared secret, both sides.
 TOKEN=$(openssl rand -hex 32)
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl -n monitoring create secret generic mw-log-watcher --from-literal=ingest-token=$TOKEN"
 #    …and set LogWatch__IngestToken to the same value on the portal (via its KeyVault secret).
 
@@ -154,7 +154,7 @@ dotnet publish tools/MeshWeaver.LogWatcher/MeshWeaver.LogWatcher.csproj -c Relea
   -p:ContainerRepository=memex-log-watcher -p:ContainerImageTag=<tag>
 
 # 3. Apply the Deployment + PVC.
-az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
   --command "kubectl apply -f log-watcher.yaml" \
   --file deploy/aks/manifests/observability/log-watcher.yaml
 ```
@@ -162,7 +162,7 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster \
 Verify end to end:
 
 ```bash
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl -n monitoring logs deploy/mw-log-watcher --tail=50"
 # Expect: "Loki: N red line(s) …" then "Reported <fingerprint> (<category>) — 200".
 ```

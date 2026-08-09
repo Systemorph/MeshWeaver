@@ -58,7 +58,7 @@ public class DefaultHarnessIsMeshWeaverTest(PortalFixture fixture)
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/default-harness.png", FullPage = true });
         isMeshWeaver.Should().BeTrue(
             "a fresh composer must default to the MeshWeaver harness so the / menu surfaces the nodeType:Skill " +
-            "catalog; defaulting to a CLI harness hides skills (the atioz 'no skills auto-expand' root cause)");
+            "catalog; defaulting to a CLI harness hides skills (the prod 'no skills auto-expand' root cause)");
     }
 
     private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout)

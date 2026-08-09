@@ -194,7 +194,7 @@ public class OAuthConnectController(
 
         // Refuse to issue a code with an unresolved or email-shaped userId — it
         // would mint the token into a parallel {email} partition that owns none
-        // of the user's data (the original atioz 401). A missing mesh identity
+        // of the user's data (the original prod 401). A missing mesh identity
         // means the User node isn't provisioned yet; the user should retry after
         // a normal browser login populates the identity cache.
         if (string.IsNullOrEmpty(userId) || userId.Contains('@'))

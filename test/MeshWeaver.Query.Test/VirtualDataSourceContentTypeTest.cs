@@ -37,7 +37,7 @@ namespace MeshWeaver.Query.Test.ConsumerCopy
 namespace MeshWeaver.Query.Test
 {
     /// <summary>
-    /// End-to-end regression for the atioz "BalanceSheet dashboards render empty" outage
+    /// End-to-end regression for the prod "BalanceSheet dashboards render empty" outage
     /// (agentic-pensions#12). The production corridor: fact nodes flow through the shared query
     /// pipeline with their Content TYPED as the fact NodeType's own compilation of the content class;
     /// the consuming NodeType's virtual-data-source loader projects them via
@@ -96,7 +96,7 @@ namespace MeshWeaver.Query.Test
         /// Fact nodes whose Content is typed with the OWNER's compilation must still populate the
         /// consumer's virtual collection. Pre-fix this stayed empty forever — the read below is the
         /// same grain-workspace read (<c>GetDataRequest</c> + <c>CollectionReference</c>) that showed
-        /// EntryNode at 0 of 200 on atioz while every query and probe reported healthy data.
+        /// EntryNode at 0 of 200 on prod while every query and probe reported healthy data.
         /// </summary>
         [Fact]
         public async Task TypedForeignContent_StillPopulatesVirtualCollection()
