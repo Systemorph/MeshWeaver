@@ -7,7 +7,11 @@ namespace MeshWeaver.Portal.E2E;
 /// <summary>
 /// Browser click-through tests for the collaborative-markdown stories — comments (in the markdown
 /// text AND at the bottom of the page), replies, and tracked changes ("who changed what": author +
-/// the inserted/deleted text, with accept/reject).
+/// the inserted/deleted text, with revert).
+///
+/// The redline is NOT on the document page: reading is not reviewing, so the tracked-change stories
+/// drive the version comparison (<c>/{path}/VersionDiff?version=…</c>), which is where a reader
+/// names what is being compared to what.
 ///
 /// Each test seeds its OWN markdown doc in the signed-in user's WRITABLE partition (not a read-only
 /// static Doc page), so the user can comment, reply, and have tracked changes created under it. Drives
@@ -89,10 +93,21 @@ public class CollaborativeMarkdownE2ETests(PortalFixture fixture)
             "{\"content\":{\"content\":" + body + "}}");
     }
 
-    private async Task<IPage> OpenDocAsync(IBrowserContext context, string docPath)
+    private Task<IPage> OpenDocAsync(IBrowserContext context, string docPath) =>
+        OpenAsync(context, docPath);
+
+    /// <summary>
+    /// Opens the version comparison — the ONE place the redline lives. With no parameters it
+    /// compares the previous version with the current document, which after a single seeded edit is
+    /// exactly that edit.
+    /// </summary>
+    private Task<IPage> OpenChangesAsync(IBrowserContext context, string docPath) =>
+        OpenAsync(context, $"{docPath}/VersionDiff");
+
+    private async Task<IPage> OpenAsync(IBrowserContext context, string route)
     {
         var page = await context.NewPageAsync();
-        await page.GotoAsync($"{fixture.BaseUrl}/{docPath}",
+        await page.GotoAsync($"{fixture.BaseUrl}/{route}",
             new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 60_000 });
         page.Url.Should().NotContain("/login");
         await page.Locator(".collab-md-content").WaitForAsync(
@@ -212,9 +227,36 @@ public class CollaborativeMarkdownE2ETests(PortalFixture fixture)
     }
 
     /// <summary>
-    /// "Who changed what": an edit that landed in the document's version history renders as a
-    /// tracked change — inline redline plus a card carrying the author and the inserted text.
-    /// Nothing was seeded into a <c>_Tracking</c> satellite; the card is projected from history.
+    /// The document's own page shows the document, not a review of it: an edit that landed in the
+    /// version history leaves NO redline there. The comparison view is where it shows up (next test).
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task DocPage_ShowsNoRedline_AfterAnEdit()
+    {
+        Assert.SkipUnless(fixture.Available, fixture.SkipReason);
+        await using var context = await fixture.NewAuthenticatedContextAsync();
+        var token = await fixture.MintTokenAsync(context);
+        var docPath = await SeedDocAsync(context, token);
+
+        var inserted = $"E2ECLEAN{Guid.NewGuid():N}"[..20];
+        await EditDocAsync(context, token, docPath, inserted);
+
+        var page = await OpenDocAsync(context, docPath);
+        // The edited text is there — the page is up to date, it just is not marked up.
+        await page.GetByText(inserted).First.WaitForAsync(
+            new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 30_000 });
+
+        (await page.Locator(".collab-md-content .track-insert").CountAsync())
+            .Should().Be(0, "reading a document is not reviewing it — the redline is off by default");
+        (await page.Locator(".annotation-card").CountAsync())
+            .Should().Be(0, "and no tracked-change card rides along with it");
+    }
+
+    /// <summary>
+    /// "Who changed what": in the version comparison, an edit that landed in the document's version
+    /// history renders as a tracked change — inline redline plus a card carrying the author and the
+    /// inserted text. Nothing was seeded into a <c>_Tracking</c> satellite; the card is projected
+    /// from history.
     /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task Change_WhoChangedWhat_RendersAuthorAndTextFromVersionHistory()
@@ -227,7 +269,7 @@ public class CollaborativeMarkdownE2ETests(PortalFixture fixture)
         var inserted = $"E2ETRACKED{Guid.NewGuid():N}"[..20];
         await EditDocAsync(context, token, docPath, inserted);
 
-        var page = await OpenDocAsync(context, docPath);
+        var page = await OpenChangesAsync(context, docPath);
 
         // The edit is rendered inline as a track-insert...
         var redline = page.Locator(".collab-md-content .track-insert")
@@ -259,7 +301,7 @@ public class CollaborativeMarkdownE2ETests(PortalFixture fixture)
         var inserted = $"E2EREVERT{Guid.NewGuid():N}"[..20];
         await EditDocAsync(context, token, docPath, inserted);
 
-        var page = await OpenDocAsync(context, docPath);
+        var page = await OpenChangesAsync(context, docPath);
         var card = page.Locator(".annotation-card").Filter(new LocatorFilterOptions { HasTextString = inserted }).First;
         await card.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 30_000 });
 

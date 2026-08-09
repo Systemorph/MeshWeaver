@@ -30,9 +30,10 @@ namespace MeshWeaver.Graph;
 public static class ChangeProjection
 {
     /// <summary>
-    /// The most historical versions the projection walks back, newest-first. Each costs one
-    /// historical read, so the walk is bounded rather than unbounded; older changes stay visible
-    /// through the Versions / VersionDiff surfaces. Stated, never silently exceeded.
+    /// The most versions the projection loads for ONE comparison. Each costs a historical read, so a
+    /// wide range is bounded rather than unbounded. A range holding more than this loads its
+    /// baseline alone and reports every change UNATTRIBUTED (see <see cref="Between"/>) — the
+    /// redline is the endpoint diff and is unaffected. Stated, never silently exceeded.
     /// </summary>
     public const int MaxSteps = 10;
 
@@ -177,12 +178,20 @@ public static class ChangeProjection
     /// entry is the baseline the diff is taken against; the last entry is the current state.
     /// Every returned change is already resolved (<c>Effective*</c> set) against
     /// <paramref name="currentClean"/>.
+    /// <para>
+    /// <paramref name="attribute"/> is false when <paramref name="steps"/> does NOT hold every
+    /// version in the range — the consecutive-pair diff would then treat one loaded step as the
+    /// author of every edit in the span it skipped over. The redline is unaffected (it is the
+    /// endpoint diff); the changes simply come back unattributed, which is this module's standing
+    /// rule: credit nobody rather than the wrong person.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<TrackedChange> Project(
         string? primaryNodePath,
         IReadOnlyList<VersionStep> steps,
         string? currentClean,
-        long currentVersion)
+        long currentVersion,
+        bool attribute = true)
     {
         var current = currentClean ?? "";
         if (steps.Count < 2)
@@ -192,7 +201,9 @@ public static class ChangeProjection
         if (hunks.Count == 0)
             return [];
 
-        var attribution = Attribute(steps, hunks);
+        var attribution = attribute
+            ? Attribute(steps, hunks)
+            : (IReadOnlyList<VersionStep?>)hunks.Select(_ => (VersionStep?)null).ToList();
         return hunks
             .Select((hunk, index) =>
             {
@@ -288,40 +299,67 @@ public static class ChangeProjection
     }
 
     /// <summary>
-    /// Reads up to <paramref name="maxSteps"/> historical versions of <paramref name="currentNode"/>
-    /// and projects the tracked changes that turned the oldest of them into the node's current text.
-    /// Cold and bounded: <c>1 + n</c> historical reads, run sequentially so a partition's single
-    /// pooled connection is never fanned out. Emits once, then completes — the caller re-subscribes
-    /// (e.g. with <c>Switch</c>) when the node's version moves.
+    /// Projects the tracked changes that turned version <paramref name="fromVersion"/> of the node
+    /// into <paramref name="toNode"/> — the node as the caller wants it compared, i.e. either its
+    /// LIVE state or a historical snapshot already loaded from <see cref="IVersionQuery"/>.
+    /// <para>
+    /// The reader states the range; nothing is guessed. The baseline snapshot plus every version
+    /// strictly between it and <paramref name="toNode"/> are loaded purely so each hunk can be
+    /// attributed to the step that introduced it — the redline itself is the endpoint-to-endpoint
+    /// diff and never depends on them.
+    /// </para>
+    /// <para>
+    /// A range holding more than <paramref name="maxSteps"/> versions loads the baseline ALONE and
+    /// comes back UNATTRIBUTED. Keeping a subset would be worse than keeping none: attribution
+    /// diffs consecutive loaded steps, so a surviving step separated from the baseline by omitted
+    /// versions would be credited with every edit made across that gap. The bound stays a bound on
+    /// reads, never a licence to name the wrong author.
+    /// </para>
+    /// Cold and bounded: <c>n</c> historical reads, run sequentially so a partition's single pooled
+    /// connection is never fanned out. Emits once, then completes — a caller comparing against the
+    /// live document re-subscribes (e.g. with <c>Switch</c>) when the node's version moves.
     /// </summary>
-    public static IObservable<IReadOnlyList<TrackedChange>> FromHistory(
+    /// <param name="versionQuery">The version store; <c>null</c> yields no changes.</param>
+    /// <param name="toNode">The node state the baseline is compared TO.</param>
+    /// <param name="fromVersion">The baseline version to compare FROM.</param>
+    /// <param name="options">Serializer options used to materialise historical snapshots.</param>
+    /// <param name="maxSteps">Upper bound on historical reads. See <see cref="MaxSteps"/>.</param>
+    public static IObservable<IReadOnlyList<TrackedChange>> Between(
         IVersionQuery? versionQuery,
-        MeshNode currentNode,
+        MeshNode toNode,
+        long fromVersion,
         JsonSerializerOptions options,
         int maxSteps = MaxSteps)
     {
-        if (versionQuery is null)
+        if (versionQuery is null || fromVersion >= toNode.Version)
             return Observable.Return<IReadOnlyList<TrackedChange>>([]);
 
-        var path = currentNode.Path;
-        var currentClean = CleanTextOf(currentNode);
-        var currentStep = new VersionStep(
-            currentNode.Version, currentNode.LastModifiedBy, currentNode.LastModified, currentClean);
+        var path = toNode.Path;
+        var toClean = CleanTextOf(toNode);
+        var toStep = new VersionStep(
+            toNode.Version, toNode.LastModifiedBy, toNode.LastModified, toClean);
 
         return versionQuery.GetVersions(path)
             .ToList()
             .SelectMany(all =>
             {
-                var older = all
-                    .Where(v => v.Version < currentNode.Version)
-                    .OrderByDescending(v => v.Version)
-                    .Take(maxSteps)
+                var inRange = all
+                    .Where(v => v.Version >= fromVersion && v.Version < toNode.Version)
+                    .DistinctBy(v => v.Version)
                     .OrderBy(v => v.Version)
                     .ToList();
-                if (older.Count == 0)
+                if (inRange.Count == 0 || inRange[0].Version != fromVersion)
                     return Observable.Return<IReadOnlyList<TrackedChange>>([]);
 
-                return older
+                // Over the cap: load the baseline only and report the changes unattributed. A
+                // partial set of steps would leave a version-gap after the baseline, and the
+                // consecutive-pair attribution would hand every edit across that gap to whoever
+                // happened to make the first step after it.
+                var attribute = inRange.Count <= maxSteps;
+                if (!attribute)
+                    inRange = [inRange[0]];
+
+                return inRange
                     .Select(summary => versionQuery
                         .GetVersion(path, summary.Version, options)
                         .Take(1)
@@ -339,10 +377,16 @@ public static class ChangeProjection
                     .Select(loaded =>
                     {
                         var steps = loaded.Where(s => s is not null).Select(s => s!).ToList();
-                        if (steps.Count == 0)
+                        // The baseline snapshot itself must have loaded — without it there is
+                        // nothing to diff against, and diffing from a LATER step would silently
+                        // report a narrower change set than the reader asked for.
+                        if (steps.Count == 0 || steps[0].Version != fromVersion)
                             return (IReadOnlyList<TrackedChange>)[];
-                        steps.Add(currentStep);
-                        return Project(path, steps, currentClean, currentNode.Version);
+                        steps.Add(toStep);
+                        // A step that failed to load leaves the same gap the cap does, so it drops
+                        // attribution for the whole range too rather than misattributing across it.
+                        return Project(path, steps, toClean, toNode.Version,
+                            attribute && steps.Count == inRange.Count + 1);
                     });
             });
     }
