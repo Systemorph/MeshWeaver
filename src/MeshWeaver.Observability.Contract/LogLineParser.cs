@@ -132,7 +132,8 @@ public static partial class LogLineParser
 
     /// <summary>
     /// Masks the volatile parts of a message so two occurrences of the same fault normalize to the
-    /// same text: guids, hex blobs, timestamps, quoted literals, paths, and bare numbers.
+    /// same text: guids, hex blobs, timestamps, quoted literals, paths, labelled identifiers, and
+    /// bare numbers.
     /// This is what keeps "node 7a2f… not found" and "node 91bc… not found" one incident.
     ///
     /// <para>Order matters. Guids and timestamps are masked FIRST so the path rule can then swallow
@@ -147,6 +148,7 @@ public static partial class LogLineParser
         masked = Path().Replace(masked, "{path}");
         masked = Quoted().Replace(masked, "'{value}'");
         masked = HexBlob().Replace(masked, "{hex}");
+        masked = LabelledIdentifier().Replace(masked, "${label}: {id}");
         masked = Number().Replace(masked, "{n}");
         return WhitespaceRun().Replace(masked, " ").Trim();
     }
@@ -205,6 +207,15 @@ public static partial class LogLineParser
 
     [GeneratedRegex(@"\b(?:0x)?[0-9a-fA-F]{16,}\b", RegexOptions.CultureInvariant)]
     private static partial Regex HexBlob();
+
+    // A bare identifier introduced by a known label — `target: Claims`, `sender: Edu`, `for: Foo`.
+    // These are the SUBJECT of a message, not the fault in it: one defect reported once per target
+    // produced one incident per target name until this masked them (66 incidents for ~3 real bugs,
+    // 2026-08-08). Only single tokens are masked, and only after these labels, so a genuine message
+    // like "Sequence contains no elements" is untouched.
+    [GeneratedRegex(@"\b(?<label>target|sender|for|from|to|node|hub|partition|user|area|space|type)\s*:\s*(?![{'""])[A-Za-z0-9_.\-/]+",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex LabelledIdentifier();
 
     [GeneratedRegex(@"(?<![A-Za-z_])\d+(?:\.\d+)?", RegexOptions.CultureInvariant)]
     private static partial Regex Number();
