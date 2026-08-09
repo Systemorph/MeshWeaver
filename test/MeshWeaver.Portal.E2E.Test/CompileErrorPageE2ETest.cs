@@ -7,7 +7,7 @@ namespace MeshWeaver.Portal.E2E;
 /// E2E: navigating to an INSTANCE of a NodeType whose source does NOT compile must
 /// serve the emergency compile-error PAGE — a real "this page can't be displayed,
 /// here's the compiler error, please correct the code" page — never a blank or an
-/// indefinite spinner (the 2026-06-26 atioz wedge). Proves the nice error page
+/// indefinite spinner (the 2026-06-26 prod wedge). Proves the nice error page
 /// actually renders in a real browser.
 ///
 /// <para>Gated like the rest of the suite: set <c>E2E_BASE_URL</c> (or

@@ -68,7 +68,7 @@
 
         @* LinkedIn publishing connect — only when LinkedIn publishing is actually configured
            (Social:LinkedIn:ClientId). Without creds, /connect/linkedin errors 500, so the button
-           must not show on environments (e.g. atioz) that don't set the Social LinkedIn client. *@
+           must not show on environments (e.g. prod) that don't set the Social LinkedIn client. *@
         @if (ShowLinkedInPublishing)
         {
             <div class="divider"><span>@Access.Localize("auth.publishing")</span></div>

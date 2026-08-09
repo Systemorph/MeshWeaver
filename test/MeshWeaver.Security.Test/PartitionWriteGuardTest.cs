@@ -144,7 +144,7 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 20000)]
     public async Task Validate_TopLevelUntypedNode_IsRejected_WithSpaceAndSchemaGuidance()
     {
-        // The memex.systemorph.com `BusinessModel` incident: a bare, UNTYPED node at the root ('')
+        // The portal.example.com `BusinessModel` incident: a bare, UNTYPED node at the root ('')
         // namespace. A top-level node IS a partition root, so it must be a partition-owning type
         // (Space). An untyped node owns no partition — FindStaticNode("") → null → not OwnsPartition.
         var node = new MeshNode("BusinessModel") { Name = "BusinessModel" }; // untyped, top-level (empty ns)
@@ -162,7 +162,7 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
     public async Task Validate_TopLevelNonPartitionType_IsRejected()
     {
         // A TYPED-but-non-partition node (Markdown) at the root is equally illegal — only User/Space
-        // own a partition (the atioz `HelloWorld` Markdown incident).
+        // own a partition (the prod `HelloWorld` Markdown incident).
         var node = new MeshNode("HelloWorld") { NodeType = "Markdown", Name = "Hello World" };
 
         var result = await Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();

@@ -97,7 +97,7 @@ public record DeliveryFailure(IMessageDelivery Delivery, string? Message = null)
 /// <see cref="NodeTypePath"/>, instead of being silently
 /// <c>Ignored()</c>. Without this, a typed request to a broken-type hub arrives
 /// as RawJson (type not in the hub's registry), fails the <c>IRequest&lt;&gt;</c>
-/// check, and the caller parks forever — the atioz wedge of 2026-06-12.</para>
+/// check, and the caller parks forever — the prod wedge of 2026-06-12.</para>
 /// </summary>
 public record UnhandledMessageNack(
     string Reason,

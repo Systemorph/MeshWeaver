@@ -154,7 +154,7 @@ public record PartitionDefinition
     /// path segment). A partition becomes a backing-store SCHEMA (Postgres/Snowflake), so it
     /// must be a simple identifier: start with a letter/digit, then only
     /// letters/digits/<c>. - _</c>. Rejects URL/query-string-shaped segments (containing
-    /// <c>? = &amp; % # :</c>, whitespace, …) — the atioz DB-corruption root cause
+    /// <c>? = &amp; % # :</c>, whitespace, …) — the prod DB-corruption root cause
     /// (2026-06-05, #714): request URLs routed as mesh paths materialised garbage schemas
     /// like <c>login?returnurl=…</c>.
     ///

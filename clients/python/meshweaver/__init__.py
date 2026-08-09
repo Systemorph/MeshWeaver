@@ -8,7 +8,7 @@ numpy, ...), write results back.
     import meshweaver as mw
 
     async def main():
-        mesh = await mw.Mesh.connect("https://atioz.meshweaver.cloud", token="...")
+        mesh = await mw.Mesh.connect("https://memex.meshweaver.cloud", token="...")
         stories = await mesh.search("nodeType:Story namespace:ACME")
         for s in stories:
             ...                                  # native Python does the work

@@ -16,7 +16,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// <see cref="MessageHub"/>'s <c>HandleInitialize</c>) that faulted used to propagate the error
 /// out of the <c>Observable.Concat</c>, so the <c>OpenGate(Initialize)</c> step never ran: the
 /// Initialize gate stayed closed forever and EVERY subsequent message deferred until the 30s
-/// deferral-timeout. To the user that is an unrecoverable hang — the atioz AgenticPension
+/// deferral-timeout. To the user that is an unrecoverable hang — the prod AgenticPension
 /// agent-select wedge (2026-06-16): selecting an agent triggered a hub whose init threw, and the
 /// whole node went unreachable behind 30s grain timeouts.</para>
 ///
@@ -81,7 +81,7 @@ public class InitializationErrorSurfacedTest(ITestOutputHelper output) : HubTest
 }
 
 /// <summary>
-/// Companion for the HANG case — the atioz recurring wedge. A BuildupAction that never emits/completes
+/// Companion for the HANG case — the prod recurring wedge. A BuildupAction that never emits/completes
 /// raises NO exception, so a plain try/catch can't catch it; without a bound the Initialize gate never
 /// opens and every message defers to the 30s deferral-timeout (the wedge). <c>HandleInitialize</c> now
 /// bounds the buildup with a Timeout (<c>Configuration.StartupTimeout</c>) → "never completes" becomes a

@@ -200,7 +200,7 @@ public static class ActivityControlPlaneExtensions
     ///     <see cref="ErrorType.NotFound"/> <see cref="DeliveryFailureException"/>: the node
     ///     this watcher exists to observe is gone / unroutable. Re-establishing then just
     ///     re-issues a doomed cross-hub <c>SubscribeRequest</c> every second forever — the
-    ///     atioz compile-activity storm of 2026-06-10 (4999 NotFound round-trips through the
+    ///     prod compile-activity storm of 2026-06-10 (4999 NotFound round-trips through the
     ///     single RoutingGrain in 14 min, starving unrelated subscriptions). That is the
     ///     exact "resubscribe to recover from a state that shouldn't happen" pattern the
     ///     deleted 2026-06-08 watchdog was. STOP; the orphaned hub idle-disposes.</description></item>
@@ -222,7 +222,9 @@ public static class ActivityControlPlaneExtensions
     /// release a single-flight guard a faulted in-flight dispatch may have left set.</param>
     /// <param name="scheduleReEstablish">Test seam for how a transient re-establish is
     /// scheduled. Production default is a 1 s <see cref="Observable.Timer(TimeSpan)"/>
-    /// off the action block.</param>
+    /// off the action block. Returns the <see cref="IDisposable"/> that CANCELS the pending
+    /// schedule — the returned watcher disposes it, so tearing the watcher down also drops
+    /// the timer off the process-wide <c>TimerQueue</c> (#991).</param>
     /// <param name="onPoisonedContent">Optional visible sink invoked (once, with the fault) when
     /// the watcher stops on poisoned own content — route it somewhere a user/operator can see
     /// (park registry, health surface), not just a log.</param>
@@ -233,10 +235,25 @@ public static class ActivityControlPlaneExtensions
         ILogger? logger,
         string faultLogContext,
         Action? onTransientFault = null,
-        Action<Action>? scheduleReEstablish = null,
+        Func<Action, IDisposable>? scheduleReEstablish = null,
         Action<Exception>? onPoisonedContent = null)
     {
         var serial = new System.Reactive.Disposables.SerialDisposable();
+        // 🚨 #991 — the PENDING re-establish must be cancellable, and cancelled by teardown.
+        // `Observable.Timer` parks its entry on the process-wide `TimerQueue`, which is a
+        // strong GC root: for as long as the timer is pending it holds the tick closure →
+        // the `Establish` delegate → THIS method's closure → `source` → whatever the caller's
+        // factory captured (in prod the per-NodeType hub, via NodeTypeCompilationHelpers).
+        // The old code DISCARDED the timer's IDisposable, so disposing the watcher only set
+        // `disposed` and killed `serial` — a hub whose stream faulted within the last second
+        // of its life stayed rooted past Mesh.Dispose() (the ClrMD chain on #991:
+        // TimerQueue → …ObservableImpl.Timer+Single+_ → Action<Int64> → DisplayClass2_1 →
+        // Action → DisplayClass2_0 → Func<IObservable<MeshNode>> → MessageHub[AccessAssignment]).
+        // Teardown at mesh disposal is exactly when that fault happens, which is why the leak
+        // sampled as an intermittent MeshHubDisposalLeakTest failure. Holding the schedule in a
+        // SerialDisposable also makes the dispose race safe: a schedule handed over after
+        // disposal is disposed on assignment.
+        var pendingReEstablish = new System.Reactive.Disposables.SerialDisposable();
         var disposed = false;
         var schedule = scheduleReEstablish
             ?? (reEstablish => Observable.Timer(TimeSpan.FromSeconds(1)).Subscribe(_ => reEstablish()));
@@ -276,13 +293,16 @@ public static class ActivityControlPlaneExtensions
                         faultLogContext, address);
                     onTransientFault?.Invoke();
                     if (!disposed)
-                        schedule(Establish);
+                        pendingReEstablish.Disposable = schedule(Establish);
                 });
         }
         Establish();
         return System.Reactive.Disposables.Disposable.Create(() =>
         {
             disposed = true;
+            // Drop the pending re-establish FIRST — that is the TimerQueue entry rooting
+            // this whole closure graph (#991); `serial` only holds the live subscription.
+            pendingReEstablish.Dispose();
             serial.Dispose();
         });
     }

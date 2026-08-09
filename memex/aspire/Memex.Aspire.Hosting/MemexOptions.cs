@@ -130,7 +130,7 @@ public sealed record MemexOptions
 
     /// <summary>Enable the inbound email→agent channel (Graph subscription + webhook). Needs Mail.ReadWrite + a public WebhookBaseUrl.</summary>
     public bool? EmailInboundEnabled { get; init; }
-    /// <summary>Public base URL Graph calls back for inbound notifications (e.g. <c>https://memex.systemorph.com</c>).</summary>
+    /// <summary>Public base URL Graph calls back for inbound notifications (e.g. <c>https://portal.example.com</c>).</summary>
     public string? EmailWebhookBaseUrl { get; init; }
     /// <summary>Shared secret echoed by Graph on each inbound notification (webhook validation).</summary>
     public string? EmailSubscriptionClientState { get; init; }

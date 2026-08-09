@@ -3,7 +3,7 @@ name: Continuous Delivery (main)
 # CONTINUOUS-channel delivery: every merge to main that PASSES the test suite ships a
 # fresh deployment image and rolls it out to every environment.
 #
-#   push main ─▶ "MeshWeaver Build and Test" (existing) ─▶ [THIS] images ─▶ deploy (memex, atioz, memex-cloud)
+#   push main ─▶ "MeshWeaver Build and Test" (existing) ─▶ [THIS] images ─▶ deploy (memex, prod, memex-cloud)
 #
 # Why workflow_run (and not push: branches:[main]): we want the image+deploy to fire ONLY
 # after the full test suite is green on the merged commit — never ship an image that failed
@@ -46,14 +46,33 @@ concurrency:
 
 env:
   ACR: meshweaver.azurecr.io
-  AKS_RG: memex-aks-rg
-  AKS_CLUSTER: memexaks-cluster
+  AKS_RG: <aks-resource-group>
+  AKS_CLUSTER: <aks-cluster>
 
 jobs:
   # ─────────────────────────── BUILD + PUSH IMAGES ───────────────────────────
   # Two parallel legs, one per image. No `dotnet workload restore` in either:
   # CI logs prove it installs nothing ("No workloads installed for this feature
   # band … Successfully updated workload(s): .") and burned ~75 s per run.
+  #
+  # 🚨 No `jlumbroso/free-disk-space` in ANY leg either — do not re-add it. It was removed
+  # 2026-08-09 after measuring what the runner actually has. From the free-disk-space step's
+  # OWN "BEFORE CLEAN-UP" output on run 31304347053:
+  #
+  #     /dev/root  145G  58G used  88G available  40% /
+  #
+  # It then spent 123 s reclaiming 21 GiB to reach 108G available — on a job whose entire
+  # publish needs a small fraction of the 88G that was already free. The "~14 GB runner"
+  # the old comment guarded against no longer exists; hosted runners ship 145G.
+  #
+  # It was not merely useless, it was NEGATIVE: `large-packages: true` purges `azure-cli`,
+  # so the very next step (`Ensure Azure CLI`, `command -v az || curl … | sudo bash`) found
+  # it missing and spent ~20 s apt-reinstalling what the previous step had just deleted.
+  # Removing the reclaim keeps az preinstalled, so that guard short-circuits to ~0 s.
+  #
+  # Measured cost of the round trip: ~143 s per image job, ~9.5 min of runner time per CD run.
+  # If a leg ever genuinely runs out of disk it will fail loudly with ENOSPC — reclaim
+  # selectively THEN, against a measurement, rather than pre-emptively on every job.
   # ─────────────────────────────── DELIVERY GATE ───────────────────────────────
   # 🚨 Gate on the REQUIRED CHECK, not on the workflow run's umbrella conclusion.
   # A run's conclusion is `failure` if ANY job ends cancelled — including a job that
@@ -113,16 +132,6 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
       # The SDK container build + the publish output overflow the runner's ~14 GB; reclaim the
       # ~25 GB of preinstalled tooling a .NET build never touches (same as the test workflow).
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          dotnet: false
-          android: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
@@ -200,16 +209,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          dotnet: false
-          android: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
@@ -270,16 +269,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          dotnet: false
-          android: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
@@ -330,16 +319,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          dotnet: false
-          android: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
@@ -425,7 +404,7 @@ jobs:
   # signal that it hadn't. A feature-flagged surface that silently stops receiving updates is worse
   # than one that is switched off, because it looks live.
   #
-  # amd64 ONLY, on purpose: every AKS node in memexaks-cluster is amd64, and the runner is amd64,
+  # amd64 ONLY, on purpose: every AKS node in <aks-cluster> is amd64, and the runner is amd64,
   # so this builds natively with no QEMU emulation. memex-local builds its own arm64 image into
   # Colima's Docker store for local dev (see clients/portal-next/DEPLOY.md), so nothing needs the
   # arm64 variant from ACR.
@@ -550,7 +529,7 @@ jobs:
 
   # ─────────────────────────────── NO DEPLOY JOB ─────────────────────────────
   # Deployment is PULL-BASED, not push. CI's job ends at "publish the image to ACR" (the image
-  # jobs above). Each installation — memex / atioz / memex-cloud AND every external install in the
+  # jobs above). Each installation — memex / prod / memex-cloud AND every external install in the
   # world that prod knows nothing about — runs the in-portal self-updater
   # (memex/Memex.Portal.Shared/SelfUpdate): it polls ACR with its OWN workload identity, and, per its
   # own Admin/UpdatePolicy (Continuous/Stable/None + the CI-green gate), patches its OWN portal +

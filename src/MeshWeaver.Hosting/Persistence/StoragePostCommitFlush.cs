@@ -46,7 +46,7 @@ internal sealed class StoragePostCommitFlush(IMessageHub hub) : IPostCommitFlush
     // emit-onstart — but Flush was ALSO what published the Updated event that evicts the
     // Workspace's _remoteStreamCache. Without this, a fresh subscriber after a cross-hub MeshNode
     // update reads a stale cached snapshot (WorkspaceCacheEviction.NewSubscriber_AfterUpdate).
-    // A plain Subject.OnNext — no IO, no re-entrancy — so it never reintroduces the atioz wedge.
+    // A plain Subject.OnNext — no IO, no re-entrancy — so it never reintroduces the prod wedge.
     public void PublishUpdated(object committed)
     {
         if (committed is not MeshNode node)

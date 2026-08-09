@@ -25,7 +25,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// DISTRIBUTED (Orleans + Postgres) repro for the atioz "top-level non-partition node" bug:
+/// DISTRIBUTED (Orleans + Postgres) repro for the prod "top-level non-partition node" bug:
 /// <c>rsalzmann</c> created a node at path <c>HelloWorld</c> (empty namespace ⇒ top-level)
 /// with <c>NodeType = "Markdown"</c>. A top-level node IS a partition root, and the only
 /// node types that may root a partition are the partition-owning ones (<c>User</c>,
@@ -44,7 +44,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// positively believes it is a real partition. Either way nothing checks that a top-level
 /// node's NodeType actually owns a partition.</para>
 ///
-/// <para>This test provisions the target schema up front (the ghost-schema state on atioz),
+/// <para>This test provisions the target schema up front (the ghost-schema state on prod),
 /// so the create reaches the storage write deterministically — isolating the missing
 /// structural check from any 42P01. A non-System user with root admin holds Create at
 /// every scope, so RLS is NOT the gate; the only thing that may reject the Markdown is the
@@ -78,7 +78,7 @@ public class OrleansTopLevelPartitionGuardTest(ITestOutputHelper output)
     /// <summary>
     /// THE BUG. A non-System user creates a top-level <c>Markdown</c> node (empty namespace).
     /// Markdown does not own a partition, so the create must be rejected. Pre-fix this
-    /// succeeds (the node persists at top level — the atioz "HelloWorld" state); post-fix the
+    /// succeeds (the node persists at top level — the prod "HelloWorld" state); post-fix the
     /// partition-type guard rejects it before the write.
     /// </summary>
     [Fact(Timeout = 120000)]
@@ -131,7 +131,7 @@ public class OrleansTopLevelPartitionGuardTest(ITestOutputHelper output)
 
             rejection.Should().NotBeNull(
                 "a top-level node must own a partition; Markdown does not, so the create must be rejected " +
-                "(pre-fix it is silently accepted — the atioz HelloWorld bug)");
+                "(pre-fix it is silently accepted — the prod HelloWorld bug)");
 
             // And nothing must have landed at the top level.
             NodeRows(schema, topLevelId).Should().Be(0,

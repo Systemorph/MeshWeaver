@@ -46,7 +46,7 @@ public sealed record EmailOptions
     /// </summary>
     public bool InboundEnabled { get; init; }
 
-    /// <summary>Public base URL Graph calls back for notifications (e.g. <c>https://memex.systemorph.com</c>); the webhook is <c>{WebhookBaseUrl}/api/email</c>.</summary>
+    /// <summary>Public base URL Graph calls back for notifications (e.g. <c>https://portal.example.com</c>); the webhook is <c>{WebhookBaseUrl}/api/email</c>.</summary>
     public string WebhookBaseUrl { get; init; } = "";
 
     /// <summary>Shared secret echoed by Graph on every notification; the webhook rejects mismatches. Generate a random value per deployment.</summary>

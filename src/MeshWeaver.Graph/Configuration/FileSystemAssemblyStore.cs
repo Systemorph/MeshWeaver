@@ -153,7 +153,7 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     // reference assemblies — two DIFFERENT images compiling the SAME (path, version) produce
     // INCOMPATIBLE DLLs. Without this tag a freshly-deployed image's lookup matched (and first-write-
     // wins RETURNED) the PREVIOUS image's DLL → System.BadImageFormatException on ALC load, which
-    // cascaded into failed grain activations and a portal-wide wedge on deploy (atioz 2026-06-20). The
+    // cascaded into failed grain activations and a portal-wide wedge on deploy (prod 2026-06-20). The
     // MVID (Graph module content hash) changes only when the framework bytes change, so a new image
     // misses the old DLLs (clean recompile) while an unchanged framework still hits the cache.
     private static readonly string FrameworkTag = NodeTypeCompilationHelpers.FrameworkVersion[..8];
