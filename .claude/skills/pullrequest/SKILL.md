@@ -185,8 +185,13 @@ newest-first; each entry is a normal doc node you can open.
 - **One file per PR** (`<YYYY-MM-DD>-<slug>.md`) — the date prefix drives newest-first ordering, and
   a distinct filename per PR means two concurrent PRs never conflict on the feed (the reason we do
   NOT prepend to a single rolling file).
-- **Front-matter**: `Name` (title shown in the list), `Category: What's New`, `Description`
-  (one-liner), `Icon` (a Fluent icon name, e.g. `Sparkle`). Body is plain-language user-facing prose.
+- **Front-matter**: `Name` (title shown in the list), `Category` — **`Feature` or `Fix`, nothing else**
+  (`feat/ perf/ chore/ docs/` → `Feature`, rendered in full; `fix/` → `Fix`, bundled into the day's
+  one-line summary) — `Description` (one-liner), `Icon` (a Fluent icon name, e.g. `Sparkle`), and
+  `Order: -YYYYMMDD` (a **negative** ship date, matching the filename's date) so the doc tree sorts
+  newest-first instead of alphabetically by title. Body is plain-language user-facing prose.
+  `WhatsNewEntryIntegrityTest` enforces all five — a wrong `Category` or a missing `Order` turns
+  **main** red, not just your PR, because the entry only reaches CI once it has merged.
 - **When to skip**: pure-internal PRs (refactors, tests, CI, dependency bumps) with no user-visible
   change don't need an entry — note the skip in the PR body so a reviewer knows it was deliberate.
 
