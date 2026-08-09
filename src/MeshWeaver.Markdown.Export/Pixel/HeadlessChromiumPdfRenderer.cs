@@ -220,6 +220,20 @@ public sealed class HeadlessChromiumPdfRenderer(
         yield return "--no-default-browser-check";
         // /dev/shm is tiny in most containers; without this Chromium crashes on larger decks.
         yield return "--disable-dev-shm-usage";
+        // ── Network denial, at the process level ────────────────────────────────────────────
+        // The document's CSP is the primary control and denies every remote and file: subresource.
+        // These two are the belt to that pair of braces: a print document is self-contained by
+        // construction (file:// + data: only), so the browser has no legitimate use for DNS or for
+        // an outbound socket, and taking both away means a CSP bypass still cannot reach an
+        // internal service or a cloud metadata endpoint.
+        //   • No name resolution at all.
+        yield return "--host-resolver-rules=MAP * ~NOTFOUND";
+        //   • Every http/https request through a proxy that is not listening. NB Chromium bypasses
+        //     loopback for a configured proxy, so this stops the routable targets that matter
+        //     (169.254.169.254, internal hostnames) and NOT 127.0.0.1 — which is deliberate: the
+        //     CSP test drives a loopback listener, and it must be the POLICY that blocks it, not
+        //     the proxy, or the test would prove nothing.
+        yield return "--proxy-server=http://127.0.0.1:1";
         // Own profile per print — see the scratch-dir note above.
         yield return $"--user-data-dir={Path.Combine(workDir, "profile")}";
         yield return $"--crash-dumps-dir={Path.Combine(workDir, "crash")}";

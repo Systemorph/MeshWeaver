@@ -45,6 +45,41 @@ public class SlidePrintComposerTests
     }
 
     [Fact]
+    public void The_document_denies_every_origin_it_does_not_need()
+    {
+        var html = SlidePrintComposer.Compose("Deck", [new PrintSlide(GradientSlide)]);
+
+        // The print document runs inside the SERVER's trust boundary, and slide bodies are
+        // user-authored with raw-HTML passthrough. Without a policy a deck could make the portal's
+        // own browser reach an internal service or a cloud metadata endpoint (SSRF) or pull local
+        // files in over file:// — neither reachable from the author's browser, both reachable from
+        // this one. PixelRenderIsolationTests proves the policy actually bites; this pins its shape.
+        html.Should().Contain("http-equiv=\"Content-Security-Policy\"");
+        html.Should().Contain("default-src 'none'");
+        // The only subresources a pixel print legitimately needs: assets the composer already
+        // inlined as data:, the inline stylesheet, and the slides' own style="" attributes.
+        html.Should().Contain("img-src data:");
+        html.Should().Contain("font-src data:");
+        html.Should().Contain("style-src 'unsafe-inline'");
+        // Nothing may widen the policy back out to the network or the filesystem.
+        html.Should().NotContain("img-src *").And.NotContain("default-src *");
+        html.Should().NotContain("http:").And.NotContain("https:");
+    }
+
+    [Fact]
+    public void The_policy_is_declared_before_any_content_it_must_govern()
+    {
+        var html = SlidePrintComposer.Compose("Deck", [new PrintSlide(GradientSlide)]);
+
+        // A CSP meta declared after content does not govern that content, so its position is part
+        // of the contract, not cosmetics: it must precede the stylesheet and every slide.
+        var policy = html.IndexOf("Content-Security-Policy", StringComparison.Ordinal);
+        policy.Should().BeGreaterThan(0);
+        policy.Should().BeLessThan(html.IndexOf("<style>", StringComparison.Ordinal));
+        policy.Should().BeLessThan(html.IndexOf("<body>", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Raw_html_and_inline_svg_pass_through_verbatim()
     {
         var slide = new SlideContent
