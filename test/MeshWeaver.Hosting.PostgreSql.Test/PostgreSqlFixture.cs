@@ -42,10 +42,14 @@ public class PostgreSqlFixture : IAsyncLifetime
     private readonly System.Collections.Concurrent.ConcurrentBag<string> _trackedSchemas = new();
 
     /// <summary>
-    /// Schemas <see cref="InitializeAsync"/> provisions once per container (mirroring the prod
-    /// migration) plus the catalog schemas. A test may legitimately build an adapter over one of
-    /// them; dropping it would take the whole container's framework state with it, so they are
-    /// never dropped even when tracked.
+    /// Backstop never-drop list: the schemas <see cref="InitializeAsync"/> provisions once per
+    /// container (mirroring the prod migration) plus the catalog schemas. Dropping one would take
+    /// the container's framework state with it.
+    ///
+    /// <para>Ownership tracking should already keep these safe — <see cref="CreateSchemaAdapterAsync"/>
+    /// only records a schema it actually CREATED, and these exist before any test runs. This list is
+    /// the second line of defence, not the first, because it can only ever cover names someone
+    /// thought of.</para>
     /// </summary>
     private static readonly System.Collections.Immutable.ImmutableHashSet<string> UndroppableSchemas =
         System.Collections.Immutable.ImmutableHashSet.Create(
@@ -146,10 +150,28 @@ public class PostgreSqlFixture : IAsyncLifetime
     public async Task<(NpgsqlDataSource SchemaDataSource, PostgreSqlStorageAdapter Adapter)>
         CreateSchemaAdapterAsync(string schemaName, PartitionDefinition? partitionDef = null, CancellationToken ct = default)
     {
-        // Create schema — and remember it, so CleanDataAsync can drop it again (#977).
-        await using (var cmd = DataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{Quote(schemaName)}\""))
+        // Create the schema, and take ownership ONLY if this call is what created it (#977).
+        //
+        // 🚨 Deliberately NOT `CREATE SCHEMA IF NOT EXISTS`. That form succeeds silently on a schema
+        // somebody else made — a partition the mesh provisioned, or one an earlier step in the same
+        // test set up — and tracking it would make CleanDataAsync DROP another owner's schema. The
+        // damage would be silent, destructive, and would only ever trigger once a test adapts a
+        // pre-existing partition, surfacing as cross-test bleed that looks like an unrelated defect.
+        // The bare CREATE is atomic: it either creates the schema (ours to drop) or raises 42P06
+        // duplicate_schema (someone else's — adapt it, never own it). The error is read as an
+        // ANSWER to "did I create this?", not swallowed: nothing else about it is suppressed.
+        var createdByUs = true;
+        try
+        {
+            await using var cmd = DataSource.CreateCommand($"CREATE SCHEMA \"{Quote(schemaName)}\"");
             await cmd.ExecuteNonQueryAsync(ct);
-        _trackedSchemas.Add(schemaName);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.DuplicateSchema)
+        {
+            createdByUs = false;
+        }
+        if (createdByUs)
+            _trackedSchemas.Add(schemaName);
 
         // Create per-schema data source with a SINGLE-connection pool. Default
         // MaxPoolSize=100 multiplied across ~30 per-test schema activations

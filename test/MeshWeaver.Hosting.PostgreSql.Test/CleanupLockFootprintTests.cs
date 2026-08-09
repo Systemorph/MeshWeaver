@@ -149,6 +149,49 @@ public class CleanupLockFootprintTests(PostgreSqlFixture fixture, ITestOutputHel
     }
 
     /// <summary>
+    /// 🚨 A schema the fixture did NOT create survives a clean, even when a test builds an adapter
+    /// over it. Ownership means "we created it", never "we have seen the name".
+    ///
+    /// <para><b>Why this is the sharpest edge of the drop.</b> <c>CREATE SCHEMA IF NOT EXISTS</c>
+    /// succeeds silently on a schema somebody else made, so tracking every adapted name would make
+    /// CleanData drop a partition the mesh provisioned — destructively, silently, and only once some
+    /// future test adapts a pre-existing partition. The blast radius is another test's data, which
+    /// surfaces as cross-test bleed that looks like an unrelated defect: exactly the confusion #977
+    /// cost time on in the first place.</para>
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task CleanData_LeavesAPreExistingSchemaStanding_WhenATestOnlyAdaptsIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var schema = "zzpre" + Guid.NewGuid().ToString("N")[..8];
+
+        // Provisioned by somebody else — the mesh's own partition DDL, exactly how a real partition
+        // arrives in the container.
+        await using (var provision = fixture.DataSource.CreateCommand(
+            "SELECT public.ensure_partition_schema($1)"))
+        {
+            provision.Parameters.AddWithValue(schema);
+            await provision.ExecuteNonQueryAsync(ct);
+        }
+        try
+        {
+            // A test now adapts it. The CREATE inside raises 42P06 — not ours.
+            await fixture.CreateSchemaAdapterAsync(schema, StandardPartition(schema), ct);
+
+            await fixture.CleanDataAsync(ct);
+
+            (await SchemaCountAsync(schema, ct)).Should()
+                .Be(1L, "the fixture did not create this schema, so it is not the fixture's to drop");
+        }
+        finally
+        {
+            await using var drop = fixture.DataSource.CreateCommand(
+                $"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE");
+            await drop.ExecuteNonQueryAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
     /// A framework schema <see cref="PostgreSqlFixture.InitializeAsync"/> provisions once per
     /// container survives a clean even when a test built an adapter over it — dropping it would
     /// take the container's framework state (the V27 access-object mirror) with it.
