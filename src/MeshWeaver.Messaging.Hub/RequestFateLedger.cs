@@ -71,7 +71,18 @@ internal sealed class RequestFateLedger
     /// <param name="requestType">The request's type name.</param>
     /// <param name="target">The address the request was addressed to, when known.</param>
     public void Track(string messageId, Address requester, string requestType, Address? target)
-        => tracked.TryAdd(messageId, new RequestFate(requestType, requester, target));
+    {
+        var fate = new RequestFate(requestType, requester, target);
+        // Seed the trail with the registration itself, so a trail can NEVER be empty. An empty
+        // trail was ambiguous in exactly the way this ledger exists to remove: it could mean the
+        // delivery was never posted, OR that the callback was registered after the delivery had
+        // already traversed the pipeline (the `Observe(delivery)` overload registers post-hoc), and
+        // the render could not tell those apart. With this stage present, "AWAITING and nothing
+        // else" is an unambiguous statement: the hub started awaiting a reply under this id and no
+        // delivery carrying it ever entered the pipeline.
+        if (tracked.TryAdd(messageId, fate))
+            fate.Add($"AWAITING {requestType}→{target?.ToString() ?? "<unset>"}", requester);
+    }
 
     /// <summary>
     /// Drops the trail for <paramref name="messageId"/> — the callback resolved, was cancelled, or
@@ -95,16 +106,21 @@ internal sealed class RequestFateLedger
     }
 
     /// <summary>
-    /// Renders the handler-side trail for <paramref name="messageId"/> as one line, or an explicit
-    /// "no trail" verdict — which is itself evidence: it means no hub in this tree ever saw the
-    /// request, so it was lost before routing or is being handled outside this tree.
+    /// Renders the handler-side trail for <paramref name="messageId"/> on ONE line (see
+    /// <see cref="RequestFate.Render"/> for why single-line is a requirement, not a preference), or
+    /// an explicit "not tracked here" verdict.
+    ///
+    /// <para>A tracked id ALWAYS has at least the seed stage <see cref="Track"/> writes, so the
+    /// fallback below means something specific: this ledger never tracked the id at all — the
+    /// awaiting hub belongs to a different tree, or the callback resolved and was untracked between
+    /// the pending-callback snapshot and this render.</para>
     /// </summary>
     /// <param name="messageId">The request delivery's id.</param>
     /// <returns>A human-readable, single-line trail.</returns>
     public string Describe(string messageId)
         => Find(messageId)?.Render()
-           ?? "<no trail: no hub in this tree ever recorded this request — it was never posted "
-              + "into the pipeline, or its owner hub belongs to another tree>";
+           ?? "<not tracked by this hub tree: the awaiting hub belongs to another tree, or the "
+              + "callback resolved between the pending-callback snapshot and this render>";
 
     /// <summary>
     /// One awaited request's ordered stage trail. Appended from the hub action blocks of every hub
@@ -161,8 +177,19 @@ internal sealed class RequestFateLedger
             }
         }
 
-        /// <summary>Renders the ordered trail as one arrow-separated line, plus a verdict.</summary>
-        /// <returns>The trail, or a marker when no stage was ever recorded.</returns>
+        /// <summary>
+        /// Renders the ordered trail and its verdict as ONE line — no embedded newline.
+        ///
+        /// <para>🚨 Single-line is a hard requirement, not a formatting preference. These records
+        /// are read out of <c>/tmp/meshweaver-test-trace.log</c>, a shared append-only file that
+        /// every test host in a CI shard writes to and that is collected as the one artifact
+        /// surviving a killed run. The access method there is <c>grep</c>. A newline before the
+        /// verdict splits one record into two lines, so <c>grep &lt;messageId&gt;</c> returns the
+        /// stages WITHOUT the verdict — i.e. it hands the reader the evidence and hides the
+        /// conclusion, which is the exact failure mode this instrumentation exists to fix. Human
+        /// readability of a long line loses to a diagnostic that greps out whole.</para>
+        /// </summary>
+        /// <returns>A single-line trail ending in <c>⇒ &lt;verdict&gt;</c>.</returns>
         public string Render()
         {
             ImmutableList<string> headSnapshot, tailSnapshot;
@@ -173,15 +200,13 @@ internal sealed class RequestFateLedger
                 tailSnapshot = tail;
                 truncated = dropped;
             }
-            if (headSnapshot.Count == 0)
-                return "<never reached any hub in this tree: posted but no RECEIVED stage was recorded>";
             var line = string.Join(" → ", headSnapshot);
             if (truncated > 0)
                 line += $" → …(+{truncated} middle stage(s) suppressed)…";
             if (tailSnapshot.Count > 0)
                 line += " → " + string.Join(" → ", tailSnapshot);
             // The verdict reads head AND tail: the terminal stages it keys on live in the tail.
-            return $"{line}{Environment.NewLine}      ⇒ {Verdict(headSnapshot.AddRange(tailSnapshot))}";
+            return $"{line}  ⇒ {Verdict(headSnapshot.AddRange(tailSnapshot))}";
         }
 
         /// <summary>
@@ -229,11 +254,23 @@ internal sealed class RequestFateLedger
                                   || s.StartsWith("DEFERRED", StringComparison.Ordinal)))
                 return "the receiving hub took the delivery and then PARKED or DISCARDED it — the "
                      + "last stage names the gate, breaker or shutdown check responsible.";
+            if (snapshot.Any(s => s.StartsWith("ROUTED", StringComparison.Ordinal)
+                                  && s.Contains("state=Failed", StringComparison.Ordinal)))
+                return "ROUTING FAILED and the failure was never reported back — the delivery left "
+                     + "its origin hub in state=Failed and nothing answered the requester. Look at "
+                     + "the not-on-target return path in MessageService.NotifyAsync, which drops a "
+                     + "post-routing Failed state without calling ReportFailure.";
             if (Has("RECEIVED"))
                 return "the delivery reached a hub but no handler was ever entered — it is still "
                      + "being routed, or it was accepted and never executed.";
-            return "the delivery never reached any hub in this tree — it was lost before routing, "
-                 + "or its target lives outside this tree.";
+            if (Has("POSTED"))
+                return "the delivery was posted and no hub in this tree ever received it — it was "
+                     + "lost between the post pipeline and routing, or its target lives outside "
+                     + "this tree.";
+            // Only the seed stage. See Track: this is unambiguous, not an absence of evidence.
+            return "the hub registered a callback and NO delivery carrying this id ever entered the "
+                 + "pipeline — nothing was posted under this correlation, so no reply was ever "
+                 + "possible. Look at the caller between Observe and Post, not at any handler.";
         }
     }
 }
