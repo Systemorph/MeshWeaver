@@ -142,7 +142,12 @@ data:
   # `default "false"`, never `default ""`. The `default ""` pattern above is only safe for keys
   # consumed as strings; an empty string fails Boolean.Parse and crashes host startup (issue #352).
   OpenAICompatible__DiscoverModels: "{{ .Values.config.memex_portal.OpenAICompatible__DiscoverModels | default "false" }}"
-  # Tier → concrete model id (agents that declare ModelTier resolve through these).
+  # 🕰️ DEPRECATED compatibility shim — kept templated so an existing deployment does NOT lose its
+  # model mapping on upgrade. Tiers are now `nodeType:ModelTier` NODES (Provider/Tier/*) referenced
+  # from each model node's `tier` field; these keys sit BELOW those labels and only answer a tier no
+  # model node carries. They map onto the tiers by rank: Heavy → coding, Standard → reasoning,
+  # Light → chat, Utility → utility. Label your model nodes and delete these.
+  # See Doc/AI/ModelTiers → "Migrating off the ModelTier:* config".
   ModelTier__Heavy: "{{ .Values.config.memex_portal.ModelTier__Heavy }}"
   ModelTier__Standard: "{{ .Values.config.memex_portal.ModelTier__Standard }}"
   ModelTier__Light: "{{ .Values.config.memex_portal.ModelTier__Light }}"

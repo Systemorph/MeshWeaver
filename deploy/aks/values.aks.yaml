@@ -177,9 +177,10 @@ config:
     # (no K3 in the catalog as of 2026-07; K2.7-Code exists for code-heavy use).
     # Deployment cap 20K TPM = the account's full Kimi-K2.6 quota.
     AzureFoundry__Models__3: "Kimi-K2.6"
-    # Tier → model (h/m/l + utility). Open-weight DeepSeek ladder, all deployed on
-    # s-meshweaver. Claude works very well but costs more — it's NOT wired via Helm
-    # here; add it node-based later and pin per-agent via PreferredModel when worth it.
+    # 🕰️ DEPRECATED tier → model keys. Open-weight DeepSeek ladder, all deployed on s-meshweaver.
+    # Still read (Heavy → coding, Standard → reasoning, Light → chat, Utility → utility) so this
+    # environment keeps its mapping, but they now sit BELOW the `tier` label on the model NODES —
+    # label the nodes (Doc/AI/ModelTiers) and these can go.
     ModelTier__Heavy: "DeepSeek-V4-Pro"
     ModelTier__Standard: "DeepSeek-V3-0324"
     ModelTier__Light: "DeepSeek-V4-Flash"

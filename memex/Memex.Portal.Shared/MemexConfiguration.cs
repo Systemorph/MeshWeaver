@@ -558,6 +558,12 @@ public static class MemexConfiguration
             Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ModelsArea}",
             Tooltip: "Language models — global, space, and user")
             { LabelKey = "menu.models", TooltipKey = "menu.modelsTooltip" },
+        // Tiers sit between Models and Providers on purpose: it is the third thing you configure when
+        // you set a deployment up — which models exist, what each one is FOR, and whose key pays.
+        new NodeMenuItemDefinition("Tiers", "AiModelTiers", Icon: "/static/NodeTypeIcons/task-list.svg", Order: 22,
+            Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.TiersArea}",
+            Tooltip: "Model tiers — what each model is used for")
+            { LabelKey = "menu.modelTiers", TooltipKey = "menu.modelTiersTooltip" },
         new NodeMenuItemDefinition("Providers", "AiProviders", Icon: "/static/NodeTypeIcons/key.svg", Order: 25,
             Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ProvidersArea}",
             Tooltip: "AI providers — endpoints + keys")

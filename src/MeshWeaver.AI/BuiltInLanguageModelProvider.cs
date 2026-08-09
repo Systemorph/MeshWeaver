@@ -71,6 +71,18 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var emitted = new List<MeshNode>();
 
+        // 🚦 Auto — the ROUTER, and the default selection for a new thread. Emitted unconditionally
+        // and independently of any provider: it belongs to the platform, and it works exactly as long
+        // as ANY model works, because it dispatches to one (AgentChatClient.ApplyStaleModelFallback)
+        // rather than calling an endpoint of its own. Reserving its id in `seen` keeps a provider that
+        // happens to list a model called "auto" from colliding with it.
+        seen.Add(LanguageModelNodeType.RouterModelId);
+        emitted.AddRange(RouterNodes());
+
+        // 🎚️ The tier registry — the usage rungs an agent asks for and a model node is labelled with.
+        // Seeded create-if-absent so an operator can rename, re-rank or extend them and keep the edit.
+        emitted.AddRange(TierNodes());
+
         foreach (var source in options.Sources)
         {
             string[]? configuredModels;
@@ -280,6 +292,99 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
 
         foreach (var node in emitted)
             yield return node;
+    }
+
+    /// <summary>
+    /// The shipped tier registry as ordinary mesh nodes at <c>Provider/Tier/{tierId}</c> — the rungs
+    /// an agent asks for (<see cref="AgentConfiguration.ModelTier"/>) and a model node is labelled
+    /// with (<see cref="ModelDefinition.Tier"/>).
+    ///
+    /// <para><see cref="SyncBehavior.ExcludeThisAndChildren"/> makes this create-if-absent: the
+    /// platform seeds each tier once and NEVER writes over it again, so an operator who renames a
+    /// tier, re-ranks the set, or rewrites a purpose keeps that edit through every redeploy. Same
+    /// contract as the credential-bearing provider nodes above, for the same reason — the node is
+    /// the user's to own.</para>
+    ///
+    /// <para>Deleting them all is survivable by design: <see cref="ModelTierCatalog.Known"/> falls back
+    /// to <see cref="ModelTierDefaults.All"/>, so resolution never depends on a node being present.</para>
+    /// </summary>
+    /// <returns>One node per shipped tier.</returns>
+    private static IEnumerable<MeshNode> TierNodes()
+    {
+        foreach (var tier in ModelTierDefaults.All)
+            yield return new MeshNode(tier.Id, ModelTierNodeType.RootNamespace)
+            {
+                NodeType = ModelTierNodeType.NodeType,
+                Name = tier.Label,
+                Description = tier.Purpose,
+                Category = "Tiers",
+                Order = tier.Rank,
+                Icon = "/static/NodeTypeIcons/task-list.svg",
+                // create-if-absent: seeded once, then the operator owns it.
+                SyncBehavior = SyncBehavior.ExcludeThisAndChildren,
+                Content = tier
+            };
+    }
+
+    /// <summary>
+    /// The <b>Auto</b> router: a credential-less pseudo-provider plus its single
+    /// <c>LanguageModel</c> child carrying <see cref="ModelDefinition.IsRouter"/>.
+    ///
+    /// <para>Two properties make it the default for a new thread without ever serving a round:
+    /// <see cref="LanguageModelNodeType.RouterOrder"/> sorts it ahead of every concrete model
+    /// (so <c>AgentPickerProjection.ObserveDefaultComposer</c> picks it), and <c>isRouter</c> excludes
+    /// it from every rung of tier resolution (so <see cref="ModelTierCatalog"/> can never resolve Auto
+    /// to Auto). It carries NO endpoint and NO key on purpose — there is nothing to call.</para>
+    ///
+    /// <para>Platform-owned: default <c>SyncBehavior</c> (unlike the credential-bearing provider nodes,
+    /// which are create-if-absent so an admin's key survives a redeploy), because there is nothing here
+    /// for an admin to own and a change to its order or label should ship.</para>
+    /// </summary>
+    /// <returns>The Auto provider node and its single router model node.</returns>
+    private static IEnumerable<MeshNode> RouterNodes()
+    {
+        yield return new MeshNode(LanguageModelNodeType.RouterProviderName, ModelProviderNodeType.RootNamespace)
+        {
+            NodeType = ModelProviderNodeType.NodeType,
+            Name = LanguageModelNodeType.RouterProviderName,
+            Category = "Providers",
+            Order = LanguageModelNodeType.RouterOrder,
+            Icon = "/static/NodeTypeIcons/sparkle.svg",
+            Content = new ModelProviderConfiguration
+            {
+                Provider = LanguageModelNodeType.RouterProviderName,
+                Label = LanguageModelNodeType.RouterProviderName,
+                // No ApiKey, no Endpoint — a router has nothing to authenticate against. This is also
+                // what keeps HasUsableCredential("auto") false, so no automatic rung can pick it even
+                // if the isRouter flag were ever lost.
+                ApiKey = null,
+                Endpoint = null,
+                // 🚨 DETERMINISTIC seed timestamp — see the provider loop above: a per-enumeration
+                // UtcNow changes the content fingerprint on every call and re-imports in a loop.
+                CreatedAt = default,
+                Models = ImmutableArray.Create(LanguageModelNodeType.RouterModelId)
+            }
+        };
+
+        yield return new MeshNode(
+            LanguageModelNodeType.RouterModelId,
+            $"{ModelProviderNodeType.RootNamespace}/{LanguageModelNodeType.RouterProviderName}")
+        {
+            NodeType = LanguageModelNodeType.NodeType,
+            Name = LanguageModelNodeType.RouterProviderName,
+            Category = "Models",
+            Order = LanguageModelNodeType.RouterOrder,
+            Icon = "/static/NodeTypeIcons/sparkle.svg",
+            Content = new ModelDefinition
+            {
+                Id = LanguageModelNodeType.RouterModelId,
+                DisplayName = LanguageModelNodeType.RouterProviderName,
+                Provider = LanguageModelNodeType.RouterProviderName,
+                ProviderRef = $"{ModelProviderNodeType.RootNamespace}/{LanguageModelNodeType.RouterProviderName}",
+                Order = LanguageModelNodeType.RouterOrder,
+                IsRouter = true
+            }
+        };
     }
 }
 
