@@ -115,9 +115,14 @@ public class DeckExportScriptRelayTest(ITestOutputHelper output) : MonolithMeshT
         text.Should().Contain("SOUTHREGION", "slide 2's second table row must render too");
         text.Should().Contain("GAMMAWIDGET", "slide 3's paragraph text must be in the PDF");
 
-        // One page per slide (page break between slides).
-        pdf.NumberOfPages.Should().BeGreaterThanOrEqualTo(3,
-            "each of the three slides starts on its own page");
+        // One page per slide (page break between slides) — and EXACTLY that, which also pins that
+        // the caller's options actually reached the script: CoverPage and TableOfContents were both
+        // switched off above, so either one leaking through would add a page. They did leak, for as
+        // long as this feature has existed: the template deserialized the options with
+        // System.Text.Json's case-sensitive defaults while the mesh serializes camelCase, so every
+        // choice silently reverted to its default. A `>=` assertion could never see it.
+        pdf.NumberOfPages.Should().Be(3,
+            "each of the three slides starts on its own page, and no cover or contents page was asked for");
 
         // Landscape orientation (16:9): A4 landscape is wider than tall.
         var firstPage = pdf.GetPage(1);
