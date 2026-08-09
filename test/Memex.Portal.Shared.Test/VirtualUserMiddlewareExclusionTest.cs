@@ -42,6 +42,10 @@ public class VirtualUserMiddlewareExclusionTest
     [InlineData("/ACME/Overview")]
     [InlineData("/User/Alice")]
     [InlineData("/")]
+    // /api/version is excluded EXACTLY, so a route that merely starts with the same text is not.
+    // A prefix match here would silently exempt future routes nobody meant to exempt.
+    [InlineData("/api/versioning")]
+    [InlineData("/api/version/history")]
     public async Task NonExcludedPaths_AttemptVirtualUserAssignment(string path)
     {
         RequestDelegate next = _ => Task.CompletedTask;
