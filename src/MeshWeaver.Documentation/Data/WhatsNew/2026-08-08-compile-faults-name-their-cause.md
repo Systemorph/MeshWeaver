@@ -1,8 +1,9 @@
 ---
 Name: A failed build now says what actually broke
-Category: What's New
+Category: Fix
 Description: When a build fails for an infrastructure reason rather than a mistake in your code, the failure now names the fault instead of showing a bare message with no cause.
 Icon: Bug
+Order: -20260808
 ---
 
 # A failed build now says what actually broke

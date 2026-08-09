@@ -1,8 +1,9 @@
 ---
 Name: A plugin's paywall is now part of its type
-Category: What's New
+Category: Feature
 Description: Gated plugins declare their public cover, marketing page and checkout once on the node type instead of having a policy and a deny row written for every child.
 Icon: LockClosed
+Order: -20260808
 ---
 
 # A plugin's paywall is now part of its type

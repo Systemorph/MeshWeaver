@@ -1,8 +1,9 @@
 ---
 Name: New installations get the platform plugins automatically
-Category: What's New
+Category: Feature
 Description: Registering a new MeshWeaver installation now grants it the platform plugin repo by default — no admin grant step before its Plugin Catalog fills.
 Icon: Sparkle
+Order: -20260807
 ---
 
 # New installations get the platform plugins automatically

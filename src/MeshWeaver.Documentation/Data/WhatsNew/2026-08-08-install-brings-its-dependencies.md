@@ -1,8 +1,9 @@
 ---
 Name: Installing a plugin brings its dependencies with it
-Category: What's New
+Category: Feature
 Description: Clicking Install on a plugin that depends on another now installs the dependency first, in declared order, instead of failing with a NodeType path you never asked about.
 Icon: Box
+Order: -20260808
 ---
 
 A plugin can declare what it needs — `requires: ["Store@^1.0.0"]` on its root — and clicking

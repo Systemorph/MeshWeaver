@@ -1,8 +1,9 @@
 ---
 Name: Onboarding works again for every new user, and platform-admin grants are correctly scoped
-Category: What's New
+Category: Fix
 Description: New users no longer hit a failed submit at the end of onboarding, the invitation gate holds again, and platform admins are scoped to the Admin partition instead of silently becoming data superusers.
 Icon: Sparkle
+Order: -20260801
 ---
 
 # Onboarding works again for every new user, and platform-admin grants are correctly scoped

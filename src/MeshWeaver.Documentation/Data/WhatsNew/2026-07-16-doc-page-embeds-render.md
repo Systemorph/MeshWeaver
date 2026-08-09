@@ -1,8 +1,9 @@
 ---
 Name: Documentation page embeds now render
-Category: What's New
+Category: Fix
 Description: Diagrams and inline examples embedded in documentation pages now display instead of "not found"
 Icon: Sparkle
+Order: -20260716
 ---
 
 # Documentation page embeds now render

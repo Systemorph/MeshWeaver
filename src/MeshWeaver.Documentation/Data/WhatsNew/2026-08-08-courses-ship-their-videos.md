@@ -1,8 +1,9 @@
 ---
 Name: Course videos now ship with the course
-Category: What's New
+Category: Feature
 Description: Installing or updating a course or plugin now publishes the videos, posters and images it commits, so a lesson's video plays straight after the install instead of after someone uploads it by hand.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Course videos now ship with the course

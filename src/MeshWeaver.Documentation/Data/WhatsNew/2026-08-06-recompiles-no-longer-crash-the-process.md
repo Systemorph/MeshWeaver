@@ -1,8 +1,9 @@
 ---
 Name: Recompiling a node no longer risks crashing the process
-Category: What's New
+Category: Fix
 Description: Repeated node recompiles could leave the portal open to a hard crash; the type registry now cleans up after each one.
 Icon: Sparkle
+Order: -20260806
 ---
 
 # Recompiling a node no longer risks crashing the process

@@ -1,8 +1,9 @@
 ---
 Name: Public covers for logged-out visitors, sign-in first everywhere else
-Category: What's New
+Category: Feature
 Description: A logged-out visitor can open pages with an explicit Anonymous grant (course covers, catalogs); every other page asks them to sign in first — and after sign-in, gated content leads to the partition's configured paywall page.
 Icon: Sparkle
+Order: -20260716
 ---
 
 # Public covers for logged-out visitors, sign-in first everywhere else

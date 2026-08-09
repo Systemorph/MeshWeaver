@@ -1,8 +1,9 @@
 ---
 Name: A node can no longer quietly revert to an older version
-Category: What's New
+Category: Fix
 Description: Concurrent edits from different servers are merged instead of overwriting each other, and anything that could not be merged is recorded in the activity log.
 Icon: Sparkle
+Order: -20260809
 ---
 
 # A node can no longer quietly revert to an older version

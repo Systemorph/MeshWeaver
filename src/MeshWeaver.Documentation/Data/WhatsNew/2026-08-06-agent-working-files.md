@@ -1,8 +1,9 @@
 ---
 Name: Agents can keep working files, and they live in the mesh
-Category: What's New
+Category: Feature
 Description: An agent can now write notes, plans and intermediate results to a durable working area — stored as ordinary mesh content, so you can read it, and it survives the conversation.
 Icon: DocumentBulletList
+Order: -20260806
 ---
 
 An agent working on something long — researching, drafting, reconciling a set of numbers — can now

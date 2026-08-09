@@ -1,8 +1,9 @@
 ---
 Name: The platform version is now 3.0.0-rc1
-Category: What's New
+Category: Feature
 Description: Builds carry a release-candidate version, so portals always update to the newest one.
 Icon: Sparkle
+Order: -20260807
 ---
 
 # The platform version is now 3.0.0-rc1
