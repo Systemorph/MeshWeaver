@@ -154,6 +154,54 @@ Find the **last** `MESSAGE_FLOW:` line that fired and look at what should have h
 
 ---
 
+## The handler-side fate trail — read it before reconstructing the table above by hand
+
+The table above is a manual reconstruction from `Trace`-level `MESSAGE_FLOW:` lines, which are off by
+default and invisible in CI. For a request **someone is still awaiting**, the framework now keeps that
+reconstruction for you: `RequestFateLedger` records the stages the delivery actually reached, and the
+trail is printed whenever a pending callback is reported.
+
+```
+[QUIESCE-TIMEOUT] client/475b…: 1 callback(s) still pending after 0.3s.
+  Pending: 0iFBGDmtTUyOnOgbHS3ezQ=SwallowedRequest@host/1(302ms)
+  handler-side fate (what happened to the delivery):
+    0iFBGDmtTUyOnOgbHS3ezQ=SwallowedRequest:
+      POSTED target=host/1@client/475b…(+0ms) → RECEIVED runLevel=Started@client/475b…(+0ms)
+      → ENQUEUED@client/475b…(+0ms) → RECEIVED runLevel=Started@mesh/1(+1ms)
+      → ROUTED onTarget=False state=Forwarded@mesh/1(+1ms) → RECEIVED runLevel=Started@host/1(+1ms)
+      → ROUTED onTarget=True state=Submitted@host/1(+1ms) → HANDLER_ENTER@host/1(+1ms)
+      → HANDLER_EXIT state=Processed@host/1(+1ms)
+```
+
+Read it by what is **missing**:
+
+| The trail shows | Verdict |
+|---|---|
+| No `RECEIVED` anywhere | Never delivered — a routing or post-pipeline problem, not a handler problem |
+| `RECEIVED` but no `ROUTED onTarget=True` | It kept being forwarded — no hub ever accepted it as its own |
+| `DEFERRED` / `DROPPED_*` / `SHED_AGGREGATE` as the last stage | The receiver took it and then parked or discarded it; the stage names which gate or breaker |
+| `HANDLER_EXIT state=Ignored` + `NO_HANDLER_MATCHED` | Delivered, but no handler matched the type |
+| `HANDLER_EXIT state=Processed` and **no** `RESPONSE_POSTED` | A handler ran and produced no reply for this correlation — the caller will wait forever |
+| `RESPONSE_POSTED` but the callback is still pending | The reply was posted and lost on the way home — chase the response delivery, not the handler |
+
+Three things to know before trusting it:
+
+- **It only covers awaited requests.** Entries exist for exactly the ids with a live `Observe`
+  callback and are dropped the moment one resolves — that is what keeps the ledger bounded. A
+  fire-and-forget post leaves no trail by design.
+- **It is scoped to one hub TREE.** The root hub creates the ledger and hosted hubs inherit it, so a
+  request that leaves the tree (another silo, another grain) records `POSTED` and then goes quiet.
+  That silence means "left this tree", not "vanished".
+- **It cannot see a reply sent under the WRONG correlation.** That case reads as
+  `HANDLER_EXIT` with no `RESPONSE_POSTED` — same as a handler that replied to nothing. If you
+  suspect it, look for a spurious `RESPONSE_POSTED` on a *different* request's trail.
+
+The same block is printed by `[STALE-CALLBACK]` (every 5 s, for callbacks older than
+`MESHWEAVER_STALE_CALLBACK_MS`, default 30 s) — that is the one that fires while the mesh is still
+live, so a repro run that dials the env var down gets the handler side before teardown is involved.
+
+---
+
 ## The Cross-Hub Border — `JsonSynchronizationStream`
 
 `workspace.GetRemoteStream<TReduced, TReference>(addr, ref)` subscribes via a `SubscribeRequest` posted to the owning hub. If the owning hub has no handler for `SubscribeRequest` — or no matching reducer — the subscription receives a `DeliveryFailure` instead of a `SubscribeResponse`, and the `SynchronizationStream` errors out:

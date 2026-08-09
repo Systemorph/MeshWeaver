@@ -303,9 +303,15 @@ public sealed class MessageHub : IMessageHub
             if (pending.Length == 0) return;
             var stale = pending.Where(p => p.AgeMs > thresholdMs).ToArray();
             if (stale.Length == 0) return;
+            // Handler-side trail on the LIVE-mesh path too (#981). The teardown capture only ever
+            // sees a stall that survived to disposal; this one fires while the mesh is still
+            // serving, which is where the #981 callbacks actually go unanswered (measured ~3.1 s
+            // before Dispose() was even invoked). Dial MESHWEAVER_STALE_CALLBACK_MS down on a
+            // repro run and this line, not the teardown one, names the handler side first.
             TryLog(LogLevel.Warning,
-                "[STALE-CALLBACK] {Address}: {Count} callback(s) pending > {ThresholdMs}ms: {Detail}",
-                Address, stale.Length, thresholdMs, FormatPendingCallbacks(stale));
+                "[STALE-CALLBACK] {Address}: {Count} callback(s) pending > {ThresholdMs}ms: {Detail}{Fates}",
+                Address, stale.Length, thresholdMs, FormatPendingCallbacks(stale),
+                FormatPendingCallbackFates(stale));
         }
         catch (Exception ex)
         {
@@ -1700,7 +1706,11 @@ public sealed class MessageHub : IMessageHub
         var pending = SnapshotPendingCallbacks();
         if (pending.Length > 0)
             sb.Append(" PendingCallbacks=").Append(pending.Length)
-              .Append('[').Append(FormatPendingCallbacks(pending)).Append(']');
+              .Append('[').Append(FormatPendingCallbacks(pending)).Append(']')
+              // …and the handler side (#981). This snapshot is what the test base writes on a
+              // DISPOSE_TIMEOUT — the case where the hub never even reached its quiescing
+              // timeout, so the enriched QuiescingTimeoutDetail does not exist yet.
+              .Append(FormatPendingCallbackFates(pending));
         sb.AppendLine();
 
         var hosted = hostedHubs.Hubs.ToArray();

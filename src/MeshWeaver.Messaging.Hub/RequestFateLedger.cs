@@ -47,7 +47,7 @@ internal sealed class RequestFateLedger
     /// waits. Past the cap the trail keeps its HEAD (the stages that explain how the delivery
     /// started out) and records that it was truncated — the head is what names the mechanism.
     /// </summary>
-    private const int MaxStagesPerRequest = 24;
+    private const int MaxStagesPerRequest = 16;
 
     private readonly ConcurrentDictionary<string, RequestFate> tracked = new();
 
