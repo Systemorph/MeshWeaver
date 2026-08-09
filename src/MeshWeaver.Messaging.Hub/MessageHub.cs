@@ -2001,8 +2001,22 @@ public sealed class MessageHub : IMessageHub
                 // QuiescingTimedOut=true as a dispose failure. Forces visibility on leaked
                 // Observe subscriptions instead of silently extending dispose budgets.
                 QuiescingTimedOut = true;
-                QuiescingTimeoutDetail =
-                    $"{stuck.Length} pending callback(s) after {QuiesceTimeout.TotalSeconds:F2}s: {detail}{fates}";
+                QuiescingTimeoutDetail = stuck.Length == 0
+                    // 🚨 NOT the leaked-callback failure, and it must not read like one. The poll
+                    // said "not drained" and by the time the verdict was rendered the dictionary
+                    // was EMPTY — every callback resolved inside the hand-off between the last
+                    // poll tick and this line. There is nothing outstanding and so nothing to name;
+                    // a report that says "0 pending callback(s): <none>" looks like the diagnostic
+                    // failed to collect evidence, which sends an investigation hunting for a leak
+                    // that is not there. 26 of the 30 quiesce-leak records in a local trace were
+                    // this shape (TodoDataChangeWorkflowTest, TodoGraphIntegrationTest,
+                    // TodoViewsTest) — all indistinguishable, at a glance, from issue #981.
+                    ? $"drained DURING the {QuiesceTimeout.TotalSeconds:F2}s timeout hand-off: the poll "
+                      + "reported not-drained, but no callback was outstanding by the time the verdict "
+                      + "was rendered. Nothing leaked here — this is the detector racing its own "
+                      + "budget, NOT a pending callback. Do not confuse it with a report that names "
+                      + "a request and an age."
+                    : $"{stuck.Length} pending callback(s) after {QuiesceTimeout.TotalSeconds:F2}s: {detail}{fates}";
                 try { CancelCallbacks(); }
                 catch (Exception cancelEx)
                 {
