@@ -42,7 +42,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     private IMessageHub Client => _client ??= GetClient();
     private IMessageHub? _client;
 
-    private const string Root = TestPartition + "/delparent";
+    private static readonly string Root = TestPartition + "/delparent";
 
     // â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 

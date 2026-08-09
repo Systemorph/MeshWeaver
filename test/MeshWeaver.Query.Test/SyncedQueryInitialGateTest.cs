@@ -40,7 +40,7 @@ namespace MeshWeaver.Query.Test;
 public class SyncedQueryInitialGateTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
-    private const string SubjectsNamespace = $"{TestPartition}/InitialGateSubjects";
+    private static readonly string SubjectsNamespace = $"{TestPartition}/InitialGateSubjects";
 
     /// <summary>
     /// The exact query string of the gated synced query. The decorator delays ONLY
@@ -48,7 +48,7 @@ public class SyncedQueryInitialGateTest(ITestOutputHelper output)
     /// _Access walks, …) and this test's un-gated probe query (which appends
     /// <c>state:Active</c>) flow through undisturbed.
     /// </summary>
-    private const string GatedQuery = $"namespace:{SubjectsNamespace} scope:subtree nodeType:Markdown";
+    private static readonly string GatedQuery = $"namespace:{SubjectsNamespace} scope:subtree nodeType:Markdown";
 
     /// <summary>
     /// Test-controlled release for the held Initial. The decorator subscribes the

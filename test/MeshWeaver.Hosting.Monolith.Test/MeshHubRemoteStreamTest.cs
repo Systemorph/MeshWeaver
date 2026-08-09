@@ -42,7 +42,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string Namespace = $"{TestPartition}/MeshHubStream";
+    private static readonly string Namespace = $"{TestPartition}/MeshHubStream";
 
     /// <summary>
     /// The initial DataChangedEvent from the node hub must reach the mesh hub's

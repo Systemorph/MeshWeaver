@@ -29,7 +29,7 @@ public class DocumentBlocksAreaRenderTest(ITestOutputHelper output) : MonolithMe
 {
     // The collection segment is deliberately "content" — the production naming whose search hits
     // land on {collection}/_Documents/{slug} node paths.
-    private const string Collection = TestPartition + "/content";
+    private static readonly string Collection = TestPartition + "/content";
     private const string FilePath = "vertrag_2025.txt";
 
     /// <summary>Registers the full indexing pipeline with in-memory store + deterministic fakes.</summary>
