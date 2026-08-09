@@ -50,6 +50,15 @@ public class MessageService : IMessageService
 {
     private readonly ILogger<MessageService> logger;
     private readonly IMessageHub hub;
+
+    /// <summary>
+    /// The hub tree's handler-side trail for awaited requests (issue #981). Every stage recorded
+    /// below is guarded by <c>Find(id)</c> returning non-null — i.e. SOMEONE in this tree is
+    /// currently awaiting a reply to that delivery — so an ordinary fire-and-forget message costs
+    /// one dictionary lookup that short-circuits on an empty ledger and allocates nothing.
+    /// Null only for a hub implementation that is not <see cref="MessageHub"/> (never in practice).
+    /// </summary>
+    private readonly RequestFateLedger? requestFates;
     // Single-threaded turn loop (replaces the TPL Dataflow buffer/deferredBuffer/
     // deliveryAction). mainQueue is the inbox; deferredQueue holds gate-deferred turns
     // until the last gate opens. Exactly one turn drains at a time (the actor's single
@@ -183,6 +192,7 @@ public class MessageService : IMessageService
         ParentHub = parentHub;
         this.logger = logger;
         this.hub = hub;
+        requestFates = (hub as MessageHub)?.RequestFates;
 
         // Per-hub TaskScheduler. Default = TaskScheduler.Default (thread pool) so
         // hosted hubs are independent actors regardless of where they were created.
@@ -451,6 +461,11 @@ public class MessageService : IMessageService
         var typeName = delivery.Message?.GetType().Name ?? "(null)";
         MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} ScheduleNotify ENTER runLevel={hub.RunLevel}");
 
+        // Handler-side trail (#981): resolved ONCE per intake and reused by every stage below, so
+        // an awaited delivery costs one lookup here rather than one per stage.
+        var fate = requestFates?.Find(delivery.Id);
+        fate?.Add($"RECEIVED runLevel={hub.RunLevel}", Address);
+
         // During shutdown, only allow ShutdownRequest and DisposeRequest through.
         // All other messages (including DeliveryFailure) are dropped to prevent endless cascades.
         if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
@@ -504,6 +519,7 @@ public class MessageService : IMessageService
             // a NotFound NACK faulted the stream cache's shared Replay(1) with no re-probe
             // path, and ANY terminal treatment killed the sync stream's resubscribe latch —
             // each wedged every read of the mid-recycle NodeType.
+            fate?.Add($"DROPPED_SHUTTING_DOWN runLevel={hub.RunLevel}", Address);
             NackThroughParent(delivery,
                 $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — cannot process "
                 + $"{typeName}; the address may reactivate (recycle / restart). Rejecting now.");
@@ -522,6 +538,7 @@ public class MessageService : IMessageService
         if (stormBreaker.ShouldDrop(delivery))
         {
             MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} DROPPED_STORM");
+            fate?.Add("DROPPED_STORM_BREAKER", Address);
             return delivery.Ignored();
         }
 
@@ -536,6 +553,7 @@ public class MessageService : IMessageService
         if (stormBreaker.ShouldShedAggregate(delivery, inboundDepth))
         {
             MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} SHED_AGGREGATE depth={inboundDepth}");
+            fate?.Add($"SHED_AGGREGATE depth={inboundDepth}", Address);
             return delivery.Ignored();
         }
 
@@ -548,6 +566,7 @@ public class MessageService : IMessageService
         // based on whether the message is actually targeted at this hub
         EnqueueTurn(() => NotifyAsync(delivery, cancellationToken));
         MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} ENQUEUED");
+        fate?.Add("ENQUEUED", Address);
 
         return delivery.Forwarded();
     }
@@ -660,10 +679,13 @@ public class MessageService : IMessageService
         var traceEnabled = logger.IsEnabled(LogLevel.Trace);
         var name = GetMessageType(delivery);
         MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} NotifyAsync ENTER state={delivery.State}");
+        // Resolved once per turn and threaded through every stage below (#981).
+        var fate = requestFates?.Find(delivery.Id);
 
         if (delivery.State != MessageDeliveryState.Submitted)
         {
             MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} NotifyAsync EARLY_RETURN state={delivery.State}");
+            fate?.Add($"NOT_SUBMITTED state={delivery.State}", Address);
             return Observable.Return(delivery);
         }
 
@@ -689,13 +711,14 @@ public class MessageService : IMessageService
             {
                 logger.LogWarning("Routing loop detected for {MessageType} (ID: {MessageId}) in {Address} targeting {Target} - failing message",
                     name, delivery.Id, Address, delivery.Target);
+                fate?.Add($"ROUTING_LOOP target={delivery.Target}", Address);
                 // 🚨 REPORT it. A routing loop is terminal — the message will never reach a target —
                 // so the requester must get a DeliveryFailure. Returning the Failed delivery alone
                 // dropped it (the not-on-target path never inspected the state) and the caller's
                 // hub.Observe(...) waited indefinitely.
                 return Observable.Return(ReportRoutingFailure(
                     delivery.Failed($"Routing loop: no hub found for target {delivery.Target}",
-                        ErrorType.RoutingLoop)));
+                        ErrorType.RoutingLoop), fate));
             }
             // On-target re-visit is legitimate (e.g. deferred messages)
         }
@@ -730,6 +753,7 @@ public class MessageService : IMessageService
                 "MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
                 name, Address, delivery.Id, delivery.State);
         MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} routed state={delivery.State} isOnTarget={isOnTarget}");
+        fate?.Add($"ROUTED onTarget={isOnTarget} state={delivery.State}", Address);
 
         if (isOnTarget)
         {
@@ -826,11 +850,13 @@ public class MessageService : IMessageService
                                         + "the action block draining. Find and fix why the gate never opens.",
                                         Address, deferredDepth, string.Join(",", gates.Keys), MaxDeferredMessages);
                                 MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} DROPPED_GATE_STUCK depth={deferredDepth}");
+                                fate?.Add($"DROPPED_GATE_STUCK depth={deferredDepth}", Address);
                                 return Observable.Return(delivery.Ignored());
                             }
                             logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
                                 delivery.Message.GetType().Name, delivery.Id, Address);
                             MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} DEFERRED gates=[{string.Join(",", gates.Keys)}]");
+                            fate?.Add($"DEFERRED gates=[{string.Join(",", gates.Keys)}]", Address);
                             ScheduleDeferralTimeout(delivery);
                             lock (turnGate)
                                 deferredQueue.Enqueue(() => ProcessDeferredMessage(delivery, cancellationToken));
@@ -853,7 +879,7 @@ public class MessageService : IMessageService
         // handled, every queue empty, nothing wedged, and a caller waiting for a reply that no one
         // owes any more. The on-target branch has always reported its Failed deliveries (above);
         // this makes the routing branch keep the same promise.
-        return Observable.Return(ReportRoutingFailure(delivery));
+        return Observable.Return(ReportRoutingFailure(delivery, fate));
     }
 
     /// <summary>
@@ -874,12 +900,20 @@ public class MessageService : IMessageService
     ///     honest answer when we do not know, and never a denial or an absence.</item>
     /// </list>
     /// </summary>
-    private IMessageDelivery ReportRoutingFailure(IMessageDelivery delivery)
+    private IMessageDelivery ReportRoutingFailure(IMessageDelivery delivery, RequestFateLedger.RequestFate? fate = null)
     {
-        if (delivery.State != MessageDeliveryState.Failed || delivery.SenderWasNacked)
+        if (delivery.State != MessageDeliveryState.Failed)
             return delivery;
 
-        return ReportFailure(delivery, delivery.GetFailureErrorType(ErrorType.Unavailable));
+        if (delivery.SenderWasNacked)
+        {
+            fate?.Add("ROUTING_FAILED_ALREADY_NACKED", Address);
+            return delivery;
+        }
+
+        var errorType = delivery.GetFailureErrorType(ErrorType.Unavailable);
+        fate?.Add($"ROUTING_FAILED_REPORTED errorType={errorType}", Address);
+        return ReportFailure(delivery, errorType);
     }
 
     private static string GetMessageType(IMessageDelivery delivery)
@@ -941,8 +975,11 @@ public class MessageService : IMessageService
             logger.LogDebug(
                 "Dropping deferred message {MessageType} (ID: {MessageId}) in {Address} — deferral timeout already fired",
                 delivery.Message.GetType().Name, delivery.Id, Address);
+            requestFates?.Find(delivery.Id)?.Add("DEFERRAL_TIMEOUT_ALREADY_FIRED_DROPPED", Address);
             return Observable.Return(delivery.Ignored());
         }
+
+        requestFates?.Find(delivery.Id)?.Add("DEFERRED_DRAINED", Address);
 
         logger.LogDebug("Processing deferred message {MessageType} (ID: {MessageId}) in {Address}",
             delivery.Message.GetType().Name, delivery.Id, Address);
@@ -973,7 +1010,7 @@ public class MessageService : IMessageService
 
         // Same contract as NotifyAsync's routing tail — a gate-deferred message that fails routing
         // once the gate opens must not vanish either.
-        return Observable.Return(ReportRoutingFailure(delivery));
+        return Observable.Return(ReportRoutingFailure(delivery, requestFates?.Find(delivery.Id)));
     }
 
     private volatile CancellationTokenSource cancellationTokenSource = new();
@@ -1031,6 +1068,9 @@ public class MessageService : IMessageService
 
         var executionStopwatch = Stopwatch.StartNew();
         var isDisposing = hub.RunLevel >= MessageHubRunLevel.ShutDown;
+        // The stage that matters most for #981: did a handler actually RUN for this delivery, and
+        // with what outcome. Resolved once and reused by the Do/Catch arms below.
+        var fate = requestFates?.Find(delivery.Id);
         // Mark this handler as the currently-executing one so a disposal timeout
         // diagnostic can name it. Cleared in Finally below.
         currentlyExecutingMessageType = messageTypeName;
@@ -1043,32 +1083,49 @@ public class MessageService : IMessageService
             // by CancelExecution() — other handlers CAN be cancelled to unblock the pipeline.
             var token = delivery.Message is ShutdownRequest ? CancellationToken.None : cancellationTokenSource.Token;
             MessageTrace.Write($"hub={Address} msg={messageTypeName} id={delivery.Id} HandleMessageAsync ENTER");
+            fate?.Add("HANDLER_ENTER", Address);
+            // A rule chain that completes WITHOUT emitting is silent in every other diagnostic —
+            // no exit state, no fault — and reads exactly like a chain that is still running. That
+            // ambiguity is the one #981 needs resolved, so the empty completion gets its own stage.
+            var handlerEmitted = false;
             exec = hub.HandleMessageAsync(delivery, token)
                 .Do(handled =>
                 {
+                    handlerEmitted = true;
                     MessageTrace.Write($"hub={Address} msg={messageTypeName} id={handled.Id} HandleMessageAsync EXIT state={handled.State}");
+                    fate?.Add($"HANDLER_EXIT state={handled.State}", Address);
                     // Compare target without Host since Host tracks routing path
                     var ignoredTargetWithoutHost = handled.Target is not null ? handled.Target with { Host = null } : null;
                     if (!isDisposing && handled is { State: MessageDeliveryState.Ignored, Message: not DeliveryFailure }
                                             && (ignoredTargetWithoutHost == null || ignoredTargetWithoutHost.Equals(hub.Address))
                                             && !handled.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
+                    {
+                        fate?.Add("NO_HANDLER_MATCHED", Address);
                         ReportFailure(handled.WithProperty("Error", $"No handler found for delivery {handled.Message.GetType().FullName}: {handled.Message}"),
                             ErrorType.Ignored);
+                    }
                     if (traceEnabled)
                         logger.LogTrace("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
                             messageTypeName, Address, executionStopwatch.ElapsedMilliseconds);
+                },
+                () =>
+                {
+                    if (!handlerEmitted)
+                        fate?.Add("HANDLER_COMPLETED_WITHOUT_DELIVERY", Address);
                 });
         }
         else
         {
             var jsonMessage = JsonSerializer.Serialize(delivery, hub.JsonSerializerOptions);
             logger.LogWarning("Hub {Address} is disposing. Not processing message {Message}", hub.Address, jsonMessage);
+            fate?.Add($"NOT_PROCESSED_DISPOSING runLevel={hub.RunLevel}", Address);
             exec = Observable.Return(delivery);
         }
 
         return exec
             .Catch((Exception e) =>
             {
+                fate?.Add($"HANDLER_FAULT {e.GetType().Name}", Address);
                 // During disposal, cancellation timeouts are acceptable to prevent hangs.
                 if (e is OperationCanceledException && isDisposing)
                 {
@@ -1295,6 +1352,18 @@ public class MessageService : IMessageService
             Id = opt.MessageId
         };
 
+        // Handler-side trail (#981), both directions:
+        //  • the REQUEST leg — proves the delivery actually entered the pipeline, so an empty trail
+        //    later means "never posted", not "never recorded";
+        //  • the RESPONSE leg — a post carrying RequestId IS the answer to an awaited request, so
+        //    recording it on the REQUEST's trail is what tells "the handler never replied" apart
+        //    from "the handler replied and the reply never got home".
+        var postFate = requestFates?.Find(delivery.Id);
+        postFate?.Add($"POSTED target={opt.Target}", Address);
+        if (opt.Properties.TryGetValue(PostOptions.RequestId, out var correlatedRequestId))
+            requestFates?.Find(correlatedRequestId?.ToString())?.Add(
+                $"RESPONSE_POSTED type={message.GetType().Name} target={opt.Target}", Address);
+
         // Teardown guard — hoisted ahead of postPipeline.Invoke. ScheduleNotify already
         // DROPS every non-shutdown message once RunLevel >= DisposeHostedHubs, but it runs
         // AFTER the post pipeline. The pipeline (AccessContext stamping) resolves services
@@ -1305,7 +1374,10 @@ public class MessageService : IMessageService
         // uniformly teardown-safe with ZERO behavioral change for live hubs.
         if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
             && message is not ShutdownRequest and not DisposeRequest)
+        {
+            postFate?.Add($"POST_REFUSED_SHUTTING_DOWN runLevel={hub.RunLevel}", Address);
             return ((IMessageDelivery)delivery).Failed("Hub is shutting down");
+        }
 
         // TODO V10: Which cancellation token to pass here? (12.01.2025, Roland Bürgi)
         var posted = postPipeline.Invoke(delivery);
@@ -1321,7 +1393,10 @@ public class MessageService : IMessageService
         // hub.Observe(...) so it gets a clean OnError instead of parking until timeout.
         // DeliveryFailure is access-context-exempt, so this does not recurse.
         if (posted.State == MessageDeliveryState.Failed)
+        {
+            postFate?.Add("POST_PIPELINE_REJECTED", Address);
             return ReportFailure(posted);
+        }
 
         ScheduleNotify(posted, default);
         return delivery;
