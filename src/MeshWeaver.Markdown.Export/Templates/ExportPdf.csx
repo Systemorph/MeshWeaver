@@ -15,6 +15,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -36,8 +37,14 @@ if (!Inputs.TryGetValue("sourcePath", out var sourcePathEl) || sourcePathEl.Valu
     throw new InvalidOperationException("Inputs.sourcePath is required");
 var sourcePath = sourcePathEl.GetString();
 
+// 🚨 Deserialize with the MESH's serializer options — the same ones ExportDocumentHandler
+// serialized these inputs with. The mesh writes camelCase; System.Text.Json's defaults are
+// case-SENSITIVE PascalCase, so a bare Deserialize<T>() bound nothing, returned an all-default
+// object, and every option the user chose in the dialog (cover page, table of contents, page
+// breaks, include children, header/footer — and now fidelity) was silently discarded.
 var options = Inputs.TryGetValue("options", out var optionsEl) && optionsEl.ValueKind == JsonValueKind.Object
-    ? (optionsEl.Deserialize<DocumentExportOptions>() ?? new DocumentExportOptions { Format = ExportFormat.Pdf })
+    ? (optionsEl.Deserialize<DocumentExportOptions>(Mesh.JsonSerializerOptions)
+       ?? new DocumentExportOptions { Format = ExportFormat.Pdf })
     : new DocumentExportOptions { Format = ExportFormat.Pdf };
 
 var brandPath = Inputs.TryGetValue("brandNodePath", out var b) && b.ValueKind == JsonValueKind.String
