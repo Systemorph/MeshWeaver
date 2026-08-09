@@ -38,6 +38,15 @@ public record ModelInfo
     public int Order { get; init; }
 
     /// <summary>
+    /// True for the <b>Auto</b> router (<see cref="ModelDefinition.IsRouter"/>) — the entry that
+    /// dispatches to a real model instead of serving a round. Carried here because the composer
+    /// default must be able to PICK it: Auto has no provider credential of its own, so the
+    /// "lowest-Order model whose key resolves" rule would otherwise skip the one entry that is
+    /// meant to be the default for a new thread.
+    /// </summary>
+    public bool IsRouter { get; init; }
+
+    /// <summary>
     /// Display string showing provider and model.
     /// </summary>
     public string DisplayName => $"{Provider}: {Name}";

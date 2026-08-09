@@ -77,13 +77,23 @@ public record AgentConfiguration
     public string? ContextMatchPattern { get; init; }
 
     /// <summary>
-    /// OPTIONAL hint: abstract model tier this agent prefers — "heavy", "standard", "light",
-    /// or "utility". Never required: when unset (the normal case), or when the deployment has
-    /// no <c>ModelTier:*</c> config, model selection is entirely unaffected. When set AND
-    /// configured, it only fills the gap where nobody picked a model (headless flows like
-    /// notification triage or icon/description micro-jobs) — an explicit composer selection
-    /// always wins. Declared only on the built-in background micro-agents; interactive agents
-    /// should leave it unset.
+    /// The USAGE tier this agent's work belongs on — <c>utility</c>, <c>chat</c>, <c>reasoning</c> or
+    /// <c>coding</c> out of the box, plus whatever tiers this deployment added (see
+    /// <see cref="ModelTierNodeType"/>). Says how much model the work needs, not which model: the id
+    /// of the model that serves it is a deployment detail, and lives on the model NODE
+    /// (<see cref="ModelDefinition.Tier"/>).
+    ///
+    /// <para>Never required, and never fatal. Unset (the normal case for an interactive agent) leaves
+    /// model selection entirely unaffected; a tier nobody carries is a MISS that falls through to the
+    /// deployment default. An explicit composer selection always wins over it — the tier fills the gap
+    /// where nobody picked a model, including every headless flow (notification triage, icon and
+    /// description micro-jobs) and every round left on <b>Auto</b>, which dispatches on exactly this
+    /// value.</para>
+    ///
+    /// <para>The legacy <c>heavy</c>/<c>standard</c>/<c>light</c> and <c>S</c>/<c>M</c>/<c>L</c>/<c>XL</c>
+    /// spellings still resolve, through the shipped tiers' aliases — an existing agent needs no change.
+    /// <c>utility</c> additionally marks an agent a background GENERATOR, hidden from every
+    /// conversational surface (<c>AgentPickerProjection.IsUtilityAgent</c>).</para>
     /// </summary>
     public string? ModelTier { get; init; }
 
