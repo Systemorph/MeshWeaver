@@ -24,4 +24,12 @@ public class MarkdownExportConfig
     /// suffix to avoid clobbering prior exports.
     /// </summary>
     public bool Overwrite { get; set; } = true;
+
+    /// <summary>
+    /// Settings for pixel-faithful export (<see cref="ExportFidelity.Pixel"/>). Leave the default
+    /// and the renderer auto-detects an installed browser; set
+    /// <see cref="Pixel.PixelRenderingOptions.ExecutablePath"/> to point at a specific one.
+    /// When no browser is found the option is simply not offered — nothing else changes.
+    /// </summary>
+    public Pixel.PixelRenderingOptions PixelRendering { get; set; } = new();
 }

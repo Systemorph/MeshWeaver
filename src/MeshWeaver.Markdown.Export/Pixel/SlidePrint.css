@@ -1,0 +1,175 @@
+/* Stylesheet for the pixel-faithful deck print document.
+ *
+ * It mirrors the LIVE slide stage (MeshWeaver.Graph/SlideLayoutAreas.BuildStage): the same
+ * 16:9 box, the same padding ratios, the same base type scale, and the same theme tokens —
+ * which are injected at {{THEME_TOKENS}} straight from SlideLayoutAreas.ThemeTokens, so the
+ * printed deck and the on-screen deck can never drift apart.
+ *
+ * The page box is 13.333in x 7.5in — the standard 16:9 presentation page, exactly 1280x720
+ * CSS px at 96dpi. That matters twice over: it makes one slide one page with no scaling, and
+ * it makes `vw` units resolve to a 1280px viewport, so the `clamp(.., ..vw, ..)` type sizing
+ * the slide-authoring guide recommends behaves in print exactly as it does on the stage.
+ */
+
+@page {
+    size: 13.333in 7.5in;
+    margin: 0;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+}
+
+/* 🚨 THE line that makes gradients and background images survive. Chromium drops every
+ * background paint when printing unless colour adjustment is forced to exact — without this
+ * a gradient-backed deck prints as white pages and the whole feature is pointless. */
+* {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+
+.mw-slide {
+    /* Theme custom properties, verbatim from the live stage. */
+    {{THEME_TOKENS}}
+
+    width: 1280px;
+    height: 720px;
+    box-sizing: border-box;
+    overflow: hidden;
+    position: relative;
+
+    /* Same flex centring as the live stage. */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+
+    /* Live stage: padding 3.2% 6% in Present mode. */
+    padding: 3.2% 6%;
+
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    font-size: clamp(16px, 2.2vw, 34px);
+    line-height: 1.4;
+    color: var(--ae-fg);
+
+    /* One slide per page. */
+    break-after: page;
+    page-break-after: always;
+}
+
+.mw-slide:last-child {
+    break-after: auto;
+    page-break-after: auto;
+}
+
+/* The slide body sits DIRECTLY on the slide-owned backdrop — never on a white inner card.
+ * Same "one surface" rule the live stage enforces by overriding the markdown canvas. */
+.mw-slide-body {
+    width: 100%;
+    background: transparent;
+    color: inherit;
+}
+
+.mw-slide-body > :first-child {
+    margin-top: 0;
+}
+
+.mw-slide-body > :last-child {
+    margin-bottom: 0;
+}
+
+.mw-slide-body h1,
+.mw-slide-body h2,
+.mw-slide-body h3,
+.mw-slide-body h4 {
+    color: inherit;
+    line-height: 1.15;
+    margin: 0 0 0.4em;
+    font-weight: 650;
+}
+
+.mw-slide-body h1 { font-size: 1.9em; }
+.mw-slide-body h2 { font-size: 1.45em; }
+.mw-slide-body h3 { font-size: 1.15em; }
+
+.mw-slide-body p,
+.mw-slide-body ul,
+.mw-slide-body ol {
+    margin: 0 0 0.6em;
+}
+
+.mw-slide-body ul,
+.mw-slide-body ol {
+    padding-left: 1.4em;
+}
+
+.mw-slide-body li {
+    margin-bottom: 0.25em;
+}
+
+.mw-slide-body a {
+    color: var(--ae-accent);
+}
+
+.mw-slide-body strong {
+    color: inherit;
+    font-weight: 700;
+}
+
+.mw-slide-body blockquote {
+    margin: 0 0 0.6em;
+    padding-left: 0.8em;
+    border-left: 4px solid var(--ae-accent);
+    color: var(--ae-muted);
+}
+
+.mw-slide-body code {
+    font-family: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+    font-size: 0.85em;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 4px;
+    padding: 0.05em 0.3em;
+}
+
+.mw-slide-body pre {
+    background: rgba(0, 0, 0, 0.28);
+    border-radius: 8px;
+    padding: 0.6em 0.8em;
+    overflow: hidden;
+    margin: 0 0 0.6em;
+}
+
+.mw-slide-body pre code {
+    background: none;
+    padding: 0;
+}
+
+.mw-slide-body table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.8em;
+}
+
+.mw-slide-body th,
+.mw-slide-body td {
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    padding: 0.25em 0.5em;
+    text-align: left;
+}
+
+/* Author media must never overflow the stage — the live stage clips with overflow:hidden. */
+.mw-slide-body img,
+.mw-slide-body svg,
+.mw-slide-body video {
+    max-width: 100%;
+    max-height: 100%;
+    height: auto;
+}
+
+.mw-slide-body hr {
+    border: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.25);
+    margin: 0.6em 0;
+}

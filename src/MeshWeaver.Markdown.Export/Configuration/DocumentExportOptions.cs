@@ -10,6 +10,14 @@ public record DocumentExportOptions
     /// <summary>Output format.</summary>
     public ExportFormat Format { get; init; } = ExportFormat.Pdf;
 
+    /// <summary>
+    /// How faithfully the export reproduces the browser's rendering. Defaults to
+    /// <see cref="ExportFidelity.Content"/> — the fast, small, text-selectable, browser-free
+    /// artifact that suits most documents. <see cref="ExportFidelity.Pixel"/> applies to Deck →
+    /// PDF and requires a headless browser on the server.
+    /// </summary>
+    public ExportFidelity Fidelity { get; init; } = ExportFidelity.Content;
+
     /// <summary>Optional title; falls back to the markdown node name.</summary>
     public string? Title { get; init; }
 

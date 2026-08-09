@@ -72,7 +72,13 @@ public static class SlideLayoutAreas
     ///   <item><c>--ae-accent</c> — key words / links · <c>--ae-accent2</c> — secondary / illustration</item>
     /// </list>
     /// </summary>
-    internal const string ThemeTokens =
+    /// <remarks>
+    /// Public because it is the ONE declaration of the presentation theme, and the pixel-faithful
+    /// PDF export (<c>MeshWeaver.Markdown.Export.Pixel.SlidePrintComposer</c>) has to emit the same
+    /// tokens into its print stylesheet. Copying them there would let the printed deck and the
+    /// on-screen deck drift apart, which is exactly what that export exists to prevent.
+    /// </remarks>
+    public const string ThemeTokens =
         "--ae-bg: linear-gradient(135deg, #0b1d3a 0%, #3b1d6e 100%);" +
         "--ae-bg-solid: #0b1d3a;" +
         "--ae-fg: #f4f7ff;" +

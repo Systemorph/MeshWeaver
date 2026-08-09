@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<!-- Print document skeleton for the pixel-faithful deck export.
+     Placeholders are filled by SlidePrintComposer: {{TITLE}} (HTML-encoded node title),
+     {{STYLES}} (SlidePrint.css with its theme tokens resolved) and {{SLIDES}} (one
+     SlidePrintSection.html per slide). The document is self-contained by construction —
+     the headless browser prints it from a file:// URL with no network. -->
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>{{TITLE}}</title>
+    <style>
+{{STYLES}}
+    </style>
+</head>
+<body>
+{{SLIDES}}
+</body>
+</html>
