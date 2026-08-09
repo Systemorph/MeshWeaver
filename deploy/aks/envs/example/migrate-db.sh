@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # One-shot prod DB migration: dump portal.example.com's prod Postgres
 # (<prod-pg-server>, Entra-auth) and restore into the `exampledb`
-# database on the shared memexaks-pg Flexible Server.
+# database on the shared <pg-server> Flexible Server.
 #
 # Runs a postgres:16 pod inside the cluster (the only place with line-of-sight to
 # BOTH the prod PG public endpoint — via the AKS egress IP, firewall-allowed — and
-# the private memexaks-pg at <pg-private-ip>). Reads:
+# the private <pg-server> at <pg-private-ip>). Reads:
 #   TOKEN = an AAD access token for an Entra admin on the prod PG (<entra-admin@example.com>)
-#   PW    = the memexaks-pg `memexadmin` password
+#   PW    = the <pg-server> `memexadmin` password
 # both provided as env on the `az aks command invoke` that runs this file.
 set -uo pipefail
 : "${TOKEN:?set TOKEN to a prod-PG AAD access token}"
-: "${PW:?set PW to the memexaks-pg memexadmin password}"
+: "${PW:?set PW to the <pg-server> memexadmin password}"
 
 kubectl -n default delete pod pgmig --ignore-not-found >/dev/null 2>&1
 kubectl -n default delete secret pgmig-creds --ignore-not-found >/dev/null 2>&1

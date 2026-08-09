@@ -24,11 +24,11 @@ public class AgentContextPromptTest
     {
         var context = new AgentContext
         {
-            Address = new Address("PartnerRe", "AIConsulting"),
-            Context = "PartnerRe/AIConsulting",
+            Address = new Address("Acme", "AIConsulting"),
+            Context = "Acme/AIConsulting",
             Path = "Tasks/123",
             Parameters = new Dictionary<string, string> { ["from"] = "5", ["to"] = "8" },
-            Node = new MeshNode("FinalReport", "PartnerRe/AIConsulting")
+            Node = new MeshNode("FinalReport", "Acme/AIConsulting")
             {
                 Name = "Final Report",
                 NodeType = "Markdown",
@@ -45,8 +45,8 @@ public class AgentContextPromptTest
 
         // Node IDENTITY fully resolved: nodePath (path) + namespace + id + nodeType + name.
         var node = root.GetProperty("node");
-        Assert.Equal("PartnerRe/AIConsulting/FinalReport", node.GetProperty("path").GetString());
-        Assert.Equal("PartnerRe/AIConsulting", node.GetProperty("namespace").GetString());
+        Assert.Equal("Acme/AIConsulting/FinalReport", node.GetProperty("path").GetString());
+        Assert.Equal("Acme/AIConsulting", node.GetProperty("namespace").GetString());
         Assert.Equal("FinalReport", node.GetProperty("id").GetString());
         Assert.Equal("Markdown", node.GetProperty("nodeType").GetString());
         Assert.Equal("Final Report", node.GetProperty("name").GetString());
@@ -57,8 +57,8 @@ public class AgentContextPromptTest
     {
         var context = new AgentContext
         {
-            Address = new Address("PartnerRe", "AIConsulting"),
-            Context = "PartnerRe/AIConsulting",
+            Address = new Address("Acme", "AIConsulting"),
+            Context = "Acme/AIConsulting",
         };
 
         using var doc = JsonDocument.Parse(JsonSerializer.Serialize(context.ToPromptContext()));

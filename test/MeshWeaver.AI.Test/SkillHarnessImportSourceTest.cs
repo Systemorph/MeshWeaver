@@ -36,7 +36,7 @@ public class SkillHarnessImportSourceTest(ITestOutputHelper output) : MonolithMe
 
         // The partition's PublicRead _Policy MUST travel to the synced partition — without it the
         // partition has no read policy → its skills are unreadable → the chat finds no skills (the
-        // Harness wedge, atioz 2026-06-15).
+        // Harness wedge, prod 2026-06-15).
         var policy = nodes.SingleOrDefault(n => n.NodeType == "PartitionAccessPolicy");
         policy.Should().NotBeNull("the Skill partition PublicRead _Policy must be imported");
         ((MeshWeaver.Mesh.Security.PartitionAccessPolicy)policy!.Content!).PublicRead.Should().BeTrue();
@@ -74,7 +74,7 @@ public class SkillHarnessImportSourceTest(ITestOutputHelper output) : MonolithMe
 
         // The partition's PublicRead "_Policy" MUST be imported onto the synced DB partition. Without
         // it the partition has no read policy → Harness/MeshWeaver is unreadable → its hub init fails →
-        // the composer's harness picker can't load (atioz 2026-06-15; OrleansHarnessPartitionPublicReadTest).
+        // the composer's harness picker can't load (prod 2026-06-15; OrleansHarnessPartitionPublicReadTest).
         var policy = nodes.SingleOrDefault(n => n.NodeType == "PartitionAccessPolicy");
         policy.Should().NotBeNull("the partition PublicRead _Policy must travel to the synced partition");
         ((MeshWeaver.Mesh.Security.PartitionAccessPolicy)policy!.Content!).PublicRead.Should().BeTrue();

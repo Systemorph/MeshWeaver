@@ -147,7 +147,7 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 // per-enumeration UtcNow changed the content — and thus the fingerprint — on EVERY
                 // call, so the importer's "already imported" short-circuit never matched and the
                 // catalog re-imported in a loop → the Provider/{name} Create/Delete/Update write
-                // storm (atioz 2026-06-25 wedge). A fixed value keeps the fingerprint stable:
+                // storm (prod 2026-06-25 wedge). A fixed value keeps the fingerprint stable:
                 // import once, then short-circuit forever, so an admin's later (encrypted) key edit
                 // survives instead of being clobbered by the re-seed. See the /storm skill.
                 CreatedAt = default,
@@ -266,7 +266,7 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
         // the model picker / model resolution read this partition UNDER THE USER'S IDENTITY
         // (e.g. GetDataRequest hub=model). Without a PublicRead policy a non-admin is denied
         // "lacks Read permission on 'model'", which comes back as a DeliveryFailureException
-        // and crashes the chat round (atioz 2026-06-23, rsalzmann/Robert). The catalog source
+        // and crashes the chat round (prod 2026-06-23, rsalzmann/Robert). The catalog source
         // emitted only the Provider policy after the refactor; this restores the Model one.
         // Read-only + same lifted write CEILINGS as Provider (admins manage; non-admins hold
         // no write role here so they stay read-only).

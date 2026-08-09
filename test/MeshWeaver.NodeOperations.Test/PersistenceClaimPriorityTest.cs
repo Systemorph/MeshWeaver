@@ -18,7 +18,7 @@ namespace MeshWeaver.NodeOperations.Test;
 /// order. Without the priority sort, registration order decided — and
 /// <c>AddOrleansMeshServices</c> registers the in-memory wildcard before the
 /// host wires its real backend, so every node write on an Orleans portal was
-/// silently persisted into RAM (the 2026-06-11 atioz create-loss: every MCP
+/// silently persisted into RAM (the 2026-06-11 prod create-loss: every MCP
 /// create acked "Created: …", zero rows in Postgres, gone on pod restart).
 /// </summary>
 public class PersistenceClaimPriorityTest

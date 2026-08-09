@@ -364,7 +364,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         // — which a reading hub that registered the type under its short name (the standard
         // WithType(typeof(T), nameof(T)) shape) RESOLVES — instead of "MeshWeaver.AI.ThreadViewModel",
         // which mismatches the short-name registration → the value comes back as an untyped JsonElement
-        // (renders empty / reactive waits time out — the chat-vanish / atioz storm wedge class). This
+        // (renders empty / reactive waits time out — the chat-vanish / prod storm wedge class). This
         // cures the whole class at the default. Short-name collisions across namespaces are resolved by
         // registering the colliding types explicitly (full registration is still done on top of this).
         var mainTypeName = (mainType.Name ?? mainType.FullName!).Replace('\u002B', '.');

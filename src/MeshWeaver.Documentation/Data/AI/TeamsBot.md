@@ -100,7 +100,7 @@ Deploy parameters (`Memex.Deploy.AppHost`): `teams-enabled`, `teams-app-id`, `te
 1. **Create an Azure Bot resource** (Azure Portal → *Azure Bot*). Use a **multi-tenant** or
    **single-tenant** Microsoft App; note the **App ID** and create a **client secret**.
 2. **Messaging endpoint:** set it to **`{BaseUrl}/api/teams/messages`**
-   (e.g. `https://memex.systemorph.com/api/teams/messages`).
+   (e.g. `https://portal.example.com/api/teams/messages`).
 3. **Enable the Teams channel** on the Bot resource.
 4. **Teams app manifest:** create a Teams app whose `bots[0].botId` is the **App ID**, with the
    `personal` (and optionally `team`/`groupchat`) scopes, and sideload/publish it to your tenant so users

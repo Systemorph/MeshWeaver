@@ -18,7 +18,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// DISTRIBUTED (Orleans) repro for the atioz "/Doc shows no content" bug, on the STANDARD
+/// DISTRIBUTED (Orleans) repro for the prod "/Doc shows no content" bug, on the STANDARD
 /// in-memory Orleans fixture (<see cref="TestSiloConfigurator"/> via <see cref="OrleansTestBase{T}"/>)
 /// — the same wiring as the distributed portal (<c>ConfigurePortalMesh</c> + <c>AddDocumentation</c>
 /// + <c>AddRowLevelSecurity</c>), plus <c>AddSpaceType</c> and the fake static-repo source.
@@ -27,7 +27,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// exercises the real cross-hub create/update path on a silo. It asserts the canonical upsert
 /// (<c>CreateOrUpdateNodeRequest</c>) the importer uses (a) materializes the Space root + child
 /// content on first import and (b) REPAIRS a content-NULL node on re-import (the migration-backfill
-/// shadow that left atioz's pages blank).</para>
+/// shadow that left prod's pages blank).</para>
 /// </summary>
 public class OrleansStaticRepoImportTest(ITestOutputHelper output)
     : OrleansTestBase<OrleansStaticRepoImportTest.ImportConfigurator>(output)

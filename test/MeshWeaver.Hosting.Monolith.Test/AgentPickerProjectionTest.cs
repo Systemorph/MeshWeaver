@@ -181,7 +181,7 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// 🚨 The atioz "Space's own agent missing from /agent" regression, end-to-end.
+    /// 🚨 The prod "Space's own agent missing from /agent" regression, end-to-end.
     /// The picker issues the ONE canonical query
     /// (<c>namespace:{user}/Agent|{space}/Agent|Agent nodeType:Agent</c> —
     /// see <see cref="AgentPickerProjection.BuildAgentQuery"/>), which resolves to a
@@ -218,7 +218,7 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
 
         agents.Select(a => a.Path).Should().Contain(spaceAgentPath,
             "the agent in the space's /Agent namespace (ACME/Agent) is listed directly — 'in space'. "
-            + "This is the Space agent that was missing on atioz.");
+            + "This is the Space agent that was missing on prod.");
         agents.Select(a => a.Path).Should().Contain(userAgentPath,
             "the agent in the user's /Agent namespace (rbuergi/Agent) is listed directly — 'for the user'.");
         agents.Select(a => a.Name).Should().Contain("Assistant",

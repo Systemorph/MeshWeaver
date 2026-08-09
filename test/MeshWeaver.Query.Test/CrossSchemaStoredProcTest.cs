@@ -125,8 +125,8 @@ public class CrossSchemaStoredProcTest
     [Fact]
     public void ParsedQuery_NamespaceWithScope_Extracted()
     {
-        var parsed = _parser.Parse("namespace:PartnerRe scope:descendants");
-        parsed.Path.Should().Be("PartnerRe");
+        var parsed = _parser.Parse("namespace:Acme scope:descendants");
+        parsed.Path.Should().Be("Acme");
         parsed.Scope.Should().Be(QueryScope.Descendants);
     }
 
@@ -191,10 +191,10 @@ public class CrossSchemaStoredProcTest
         var config = new MeshConfiguration(
             System.Array.Empty<MeshNode>(), queryRoutingRules: rules);
 
-        var parsed = _parser.Parse("namespace:PartnerRe nodeType:Thread");
+        var parsed = _parser.Parse("namespace:Acme nodeType:Thread");
         var hints = config.ResolveRoutingHints(parsed);
 
-        hints.Partition.Should().Be("PartnerRe", "namespace resolves partition → single partition query");
+        hints.Partition.Should().Be("Acme", "namespace resolves partition → single partition query");
     }
 
     [Fact]

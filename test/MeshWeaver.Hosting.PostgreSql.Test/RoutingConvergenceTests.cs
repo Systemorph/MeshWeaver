@@ -20,11 +20,11 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
 /// Routing / query CONVERGENCE invariants — the property that broke onboarding on
-/// atioz (2026-06-05): a <c>SubscribeRequest</c> / query whose target node or
+/// prod (2026-06-05): a <c>SubscribeRequest</c> / query whose target node or
 /// partition does not exist must <b>converge</b> — emit an empty <c>Initial</c>
 /// (or a <c>null</c> resolution) promptly — and must <b>never hang</b>.
 ///
-/// <para>The atioz symptom was the opposite: <c>IMeshQueryCore.Query</c> for a path
+/// <para>The prod symptom was the opposite: <c>IMeshQueryCore.Query</c> for a path
 /// in an absent partition never emitted an <c>Initial</c>, so
 /// <c>PathResolutionService.ResolvePath</c> never emitted, the Orleans
 /// <c>RoutingGrain</c>'s <c>ResolvePath().Take(1).Subscribe(...)</c> never fired, and

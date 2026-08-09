@@ -5,7 +5,7 @@ namespace MeshWeaver.Portal.E2E;
 
 /// <summary>
 /// End-to-end guard for the chat composer's <c>/</c> slash-skill menu — the exact surface that broke in
-/// the atioz demo ("certain users got no auto-expand on skills"). Skills resolve as a per-partition
+/// the prod demo ("certain users got no auto-expand on skills"). Skills resolve as a per-partition
 /// <c>nodeType:Skill</c> union: the chatting user's <c>{user}/Skill</c> + the current space's partition
 /// subtree + the node type's partition subtree + the platform <c>Skill</c> catalog (the layered set
 /// <c>AgentPickerProjection.BuildSkillQueries</c> defines, which the agent framework also consumes).
@@ -13,7 +13,7 @@ namespace MeshWeaver.Portal.E2E;
 /// AccessContext through the Monaco completion JS-interop hop (where the circuit's AsyncLocal context is
 /// nulled). This test drives the REAL Monaco <c>/</c> suggest widget — the only way to exercise that hop.
 ///
-/// <para>It reproduces the atioz setup faithfully: a SECOND user owns the space, and the chatting user is
+/// <para>It reproduces the prod setup faithfully: a SECOND user owns the space, and the chatting user is
 /// granted <b>Editor</b> (not owner) on it. Then it asserts:
 /// <list type="bullet">
 ///   <item>In the space — the space skill, the user's own skill, AND a built-in all expand;</item>
@@ -100,7 +100,7 @@ public class SkillSlashMenuScopingTest(PortalFixture fixture)
 
         (await SkillRowVisibleAsync(page, SpaceSkill)).Should().BeTrue(
             "the space skill must appear in the / menu when chatting IN the space the user is an Editor of " +
-            "(this is the atioz regression: the GUI must forward the user's AccessContext to the RLS-gated " +
+            "(this is the prod regression: the GUI must forward the user's AccessContext to the RLS-gated " +
             "{space}/Skill read across the Monaco completion JS-interop hop)");
         (await SkillRowVisibleAsync(page, UserSkill)).Should().BeTrue(
             "the user's own {user}/Skill must appear in the / menu");

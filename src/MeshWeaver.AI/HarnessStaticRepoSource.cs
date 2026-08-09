@@ -31,7 +31,7 @@ public sealed class HarnessStaticRepoSource(BuiltInHarnessProvider provider) : I
     // importing it the Harness partition has NO read policy → every user (even admins — partitions are
     // not data-superuser readable) is denied Read → the Harness/MeshWeaver hub init throws
     // UnauthorizedAccessException → FAILED hub → the chat composer's harness picker can't load → the
-    // composer disappears (atioz 2026-06-15; Orleans repro: OrleansHarnessPartitionPublicReadTest).
+    // composer disappears (prod 2026-06-15; Orleans repro: OrleansHarnessPartitionPublicReadTest).
     // Only OTHER "_"-governance (e.g. per-user _Access grants) is dropped; the partition-level access
     // policy MUST travel to the DB partition.
     public IReadOnlyList<MeshNode> EnumerateSourceNodes() =>

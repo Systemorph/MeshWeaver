@@ -23,7 +23,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// created ONLY by provisioning a partition-owning object (User / Space) — modelled in these
 /// tests by <see cref="IPartitionStorageProvider.EnsurePartitionProvisioned"/>, exactly what
 /// <c>OwnsPartitionProvisioningValidator</c> calls. A write into a partition that was never
-/// provisioned is <b>refused</b> (faults), never lazily schema-created (the atioz ghost-schema
+/// provisioned is <b>refused</b> (faults), never lazily schema-created (the prod ghost-schema
 /// fix). Once provisioned, ordinary write / read / delete work. See
 /// <c>Doc/Architecture/PartitionStorageRouting.md</c>.
 /// </summary>
@@ -199,7 +199,7 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
     }
 
     /// <summary>
-    /// Regression (atioz, 2026-06-08): the global <c>apitoken</c> token-validation index
+    /// Regression (prod, 2026-06-08): the global <c>apitoken</c> token-validation index
     /// partition must be EAGERLY declared so portal boot
     /// (<see cref="PostgreSqlPartitionSubscriptionHostedService"/>) and the migration provision it
     /// — never lazily created. <c>ApiToken</c> is not an <c>OwnsPartition</c> type, and after the

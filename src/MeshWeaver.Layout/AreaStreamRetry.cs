@@ -13,7 +13,7 @@ namespace MeshWeaver.Layout;
 /// <list type="bullet">
 ///   <item><b>No retry</b> (the old GUI behaviour): a genuinely transient miss never
 ///   self-heals — the area stays blank until the user re-navigates.</item>
-///   <item><b>Unbounded retry</b> (the atioz wedge, 2026-06-14): resubscribing forever to
+///   <item><b>Unbounded retry</b> (the prod wedge, 2026-06-14): resubscribing forever to
 ///   an <i>inexistent</i> address produced an endless <c>[ROUTE] NotFound</c> message storm
 ///   that burned a core and wedged the partition's hub. "Wedging usually means uncaught
 ///   exception and endless messages, especially with inexistent addresses."</item>

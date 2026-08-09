@@ -99,7 +99,7 @@ public interface IPartitionStorageProvider
     /// <c>AddOrleansMeshServices</c> registers as a baseline — without this,
     /// registration order decided, and a host that wired its durable backend
     /// AFTER the Orleans defaults silently persisted every node into RAM
-    /// (the 2026-06-11 atioz create-loss: acked, searchable nowhere, gone on
+    /// (the 2026-06-11 prod create-loss: acked, searchable nowhere, gone on
     /// restart).
     /// </summary>
     int Priority => 0;

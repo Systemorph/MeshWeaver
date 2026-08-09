@@ -12,7 +12,7 @@ import { connect, type MeshWebConnection } from "@meshweaver/client-web";
 import { nativeStreamingFetch } from "./nativeFetch";
 
 export interface LiveOptions {
-  /** Portal base URL, e.g. https://atioz.meshweaver.cloud */
+  /** Portal base URL, e.g. https://memex.meshweaver.cloud */
   url: string;
   /** Bearer token (mw_…) — validated server-side; the server stamps the AccessContext, never the client. */
   token: string;

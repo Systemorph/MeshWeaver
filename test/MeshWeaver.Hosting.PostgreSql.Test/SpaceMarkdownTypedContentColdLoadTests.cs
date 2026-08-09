@@ -17,7 +17,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
-/// 🚨 Root-cause pin for the 2026-06-12 atioz "Markdown nodes under a Space render empty"
+/// 🚨 Root-cause pin for the 2026-06-12 prod "Markdown nodes under a Space render empty"
 /// incident (image catalog2-20260612, <c>AgenticPension/Overview</c>): the symptom looked
 /// like a load-path typing regression, but the COLD per-node-hub load path types content
 /// correctly (first test, green throughout — it falsifies the load-path hypothesis and
@@ -67,7 +67,7 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
         var spaceId = $"pgtyped{Guid.NewGuid():N}".ToLowerInvariant()[..16];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // 1. Space partition root — same shape as AgenticPension on atioz.
+        // 1. Space partition root — same shape as AgenticPension on prod.
         var space = await meshService.CreateNode(new MeshNode(spaceId)
         {
             NodeType = SpaceNodeType.NodeType,
@@ -89,7 +89,7 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
         child.Path.Should().Be(childPath);
 
         // 3. The persisted row must carry the polymorphic discriminator — pins that the
-        //    WRITE was correct (the atioz verification: $type present in PG). The save is
+        //    WRITE was correct (the prod verification: $type present in PG). The save is
         //    debounced (200 ms), so poll the row reactively until it lands.
         var discriminator = await Observable.Interval(TimeSpan.FromMilliseconds(250)).StartWith(0L)
             .SelectMany(_ => _fixture.DataSource.Probe(
@@ -139,13 +139,13 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
 
         reloaded!.Content.Should().BeOfType<MarkdownContent>(
             "a cold per-node-hub load must resolve the $type discriminator back to the registered " +
-            $"domain type; got '{reloaded.Content?.GetType().Name ?? "null"}' — the atioz symptom " +
+            $"domain type; got '{reloaded.Content?.GetType().Name ?? "null"}' — the prod symptom " +
             "was an untyped JsonElement that rendered the node empty");
         ((MarkdownContent)reloaded.Content!).Content.Should().Contain("Typed body.");
     }
 
     /// <summary>
-    /// 🚨 The ACTUAL atioz defect, pinned at its root: the write boundary ACCEPTED a
+    /// 🚨 The ACTUAL prod defect, pinned at its root: the write boundary ACCEPTED a
     /// Markdown-node create whose content carried the agent-invented discriminator
     /// <c>$type: "MarkdownConfiguration"</c> — a type that exists in NO registry (the
     /// registered Markdown content type is <see cref="MarkdownContent"/>). Once
@@ -170,7 +170,7 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
             Content = new Space(),
         }).Should().Within(45.Seconds()).Emit();
 
-        // The exact shape the atioz agent submitted (MCP create deserializes the
+        // The exact shape the prod agent submitted (MCP create deserializes the
         // node JSON on the hub; an unknown $type lands as a raw JsonElement).
         var agentShape = JsonSerializer.Deserialize<JsonElement>(
             """{"$type":"MarkdownConfiguration","markdown":"# Broken\n\nNever typeable."}""");
@@ -189,7 +189,7 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
         notification.Exception.Should().NotBeNull(
             "a Markdown create whose content discriminator resolves to NO registered type must fail " +
             "closed — accepting it persists an untyped blob that renders empty and cannot be edited " +
-            "(the atioz 2026-06-12 '$type: MarkdownConfiguration' regression)");
+            "(the prod 2026-06-12 '$type: MarkdownConfiguration' regression)");
         notification.Exception!.Message.Should().Contain("MarkdownConfiguration",
             "the rejection must name the unresolvable discriminator so the caller can fix the shape");
 

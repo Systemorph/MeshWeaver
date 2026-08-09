@@ -18,7 +18,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
-/// Prod repro (atioz 2026-07-02/03): an UNPINNED structured query (no <c>namespace:</c>, no
+/// Prod repro (prod 2026-07-02/03): an UNPINNED structured query (no <c>namespace:</c>, no
 /// <c>path:</c> — e.g. <c>nodeType:Document</c> / <c>nodeType:Markdown</c> from the MCP
 /// <c>search</c> tool) issued by a REAL user hung forever — the merged query stream never
 /// emitted its Initial, the caller's <c>Take(1)</c> waited indefinitely, and the MCP client
@@ -171,7 +171,7 @@ public class CrossPartitionRealUserQueryTests(PostgreSqlFixture fixture, ITestOu
     {
         var (nsA, _) = await SeedTwoPartitions();
 
-        // Liveness ONLY — the original claim. What this pins is the atioz repro: the query must
+        // Liveness ONLY — the original claim. What this pins is the prod repro: the query must
         // CONVERGE (emit a snapshot) rather than hang forever. Whether a non-admin sees these rows
         // is an RLS question this test deliberately does not assert; inventing a content claim here
         // risks a vacuous pass that looks like coverage.
@@ -197,7 +197,7 @@ public class CrossPartitionRealUserQueryTests(PostgreSqlFixture fixture, ITestOu
     /// </para>
     ///
     /// <para>
-    /// The liveness contract this class exists for (the atioz hang) is unchanged: the 20 s bound
+    /// The liveness contract this class exists for (the prod hang) is unchanged: the 20 s bound
     /// still fails the test if the query never converges.
     /// </para>
     /// </remarks>

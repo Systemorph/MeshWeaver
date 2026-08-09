@@ -2153,7 +2153,7 @@ public class MeshOperations
             // AddContentCollections(). A target node hub WITHOUT it never answers this
             // GetDataRequest, so an un-timed Take(1) hangs FOREVER — and since the MCP/REST
             // boundary does ops.Upload(...).FirstAsync().ToTask(), that wedges the calling
-            // request (the 2026-06-14 atioz upload wedge). On timeout the TimeoutException
+            // request (the 2026-06-14 prod upload wedge). On timeout the TimeoutException
             // falls through to the .Catch below and surfaces as a clean "Error: …" string.
             return hub.Observe(
                 new GetDataRequest(new ContentCollectionReference([collectionName])),
@@ -2762,7 +2762,21 @@ public class MeshOperations
                 allNodes
                     .Select(n => permissionHub
                         .CheckPermission(n.Path, callerUserId, Permission.Export)
-                        .Take(1)
+                        // 🚨 TakeDecisionOutsideGate, NOT a bare Take(1) — issue #899/#978. Everything
+                        //    downstream of this decision is REAL WORK: stage 3 posts GetDataRequest to
+                        //    each permitted node's address (ACTIVATING those hubs), mutates the shared
+                        //    IContentService config registry, reads files and builds the zip. A bare
+                        //    Take(1) runs all of that inside PermissionEvaluator's CombineLatest gate —
+                        //    which, on a warm cache, emits synchronously during Subscribe — and inside
+                        //    Rx Merge's own _gate, taken while subscribing each inner. Two hubs entering
+                        //    {own fold gate, shared gate} in opposite orders wedge with NO error and NO
+                        //    emission, and the sibling Timeout timers' OnError block on the same Merge
+                        //    gate, so not even the bounds can report. That is exactly the observed
+                        //    ExportImportAccessControlTest signature: "emitted nothing at all" for 60s
+                        //    with not one log line — and it only ever hit the tests with at least one
+                        //    PERMITTED node, because the zero-permitted path short-circuits below into
+                        //    pool.InvokeBlocking and hops off the gate before doing any work.
+                        .TakeDecisionOutsideGate()
                         .Timeout(TimeSpan.FromSeconds(30))
                         .Catch((Exception ex) =>
                         {
@@ -3175,6 +3189,15 @@ public class MeshOperations
         // target so a read-only caller can't bounce other partitions' hubs. With no RLS
         // wired, the default evaluator grants All and behavior is unchanged. Fail closed
         // on evaluator errors/timeouts.
+        // 🚨 A bare Take(1) here, deliberately — do NOT "fix" it to TakeDecisionOutsideGate.
+        //    Measured: that hop makes NodeTypeCompileParkTest.ParkedNodeType_RecycleRetry_
+        //    AfterFix_SettlesOkAndUnparks fail 91s-timeout (7s pass without it). Leaving the
+        //    fold's gate also leaves the HUB'S TURN — the caveat #899's own commit records for
+        //    WorkspaceCacheEvictionTest — and RecycleCore's DisposeRequest + cache-invalidation
+        //    broadcast must stay ordered against the caller's turn, or the recompile that
+        //    follows re-runs its source query against a half-invalidated state and matches zero
+        //    Code nodes. Export above is the opposite case: its continuation is genuinely
+        //    detached work that must leave the gate.
         return hub.CheckPermission(resolvedPath, MeshWeaver.Mesh.Security.Permission.Update)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
@@ -3536,7 +3559,7 @@ public class MeshOperations
                         // even when the caller has no Update right on the target partition (the
                         // read-only Doc partition is the canonical case). Under the caller's identity
                         // this write was denied → "UpdateMeshNode failed" → the compile never ran and
-                        // the cache stayed empty (atioz on-demand-compile failure on Doc). The
+                        // the cache stayed empty (prod on-demand-compile failure on Doc). The
                         // RunCompile watcher + Release-node creation already run as System; this entry
                         // write was the straggler still on the caller's identity.
                         var accessService = hub.ServiceProvider.GetService<AccessService>();

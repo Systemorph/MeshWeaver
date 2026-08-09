@@ -144,7 +144,7 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
     /// per-compile CLR identity) must NOT adopt the type into the hub's TypeRegistry. Pre-fix, the
     /// resolver's auto-registration poisoned the shared hub for the pod's lifetime: every later $type
     /// resolution (e.g. mesh-query row deserialization) yielded THAT foreign CLR type, and consumers
-    /// holding their OWN compilation of the class read Content as null — the atioz "BalanceSheet
+    /// holding their OWN compilation of the class read Content as null — the prod "BalanceSheet
     /// dashboards render empty" outage (agentic-pensions#12). The wire shape must be unchanged (short-name
     /// $type still written); reads on this hub degrade politely to JsonElement, which the consumer recovers.
     /// </summary>

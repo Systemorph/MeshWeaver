@@ -7,7 +7,7 @@ no in-process runtime there, so the mesh routes its ``SubmitCodeRequest`` to a c
 Activity node every subscriber already watches — so a Python Code node surfaces output exactly like a C#
 one.
 
-    python -m meshweaver.worker --url https://atioz.meshweaver.cloud --token mw_... --address py/python-kernel
+    python -m meshweaver.worker --url https://memex.meshweaver.cloud --token mw_... --address py/python-kernel
 
 Register a stable ``--address`` so the .NET kernel can target the worker. ``execute_python`` is a pure
 function (no mesh) — that's what the tests pin; the I/O around it is a thin shell.
@@ -185,7 +185,7 @@ async def _sleep_or_stop(stop: "asyncio.Event", seconds: float) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(prog="meshweaver.worker", description="Run a Python kernel on the mesh.")
-    p.add_argument("--url", required=True, help="portal gRPC endpoint, e.g. https://atioz.meshweaver.cloud")
+    p.add_argument("--url", required=True, help="portal gRPC endpoint, e.g. https://memex.meshweaver.cloud")
     p.add_argument("--token", default=None, help="MeshWeaver API token (validated server-side)")
     p.add_argument("--address", default=DEFAULT_WORKER_ADDRESS, help="stable worker address the kernel targets")
     p.add_argument("--reconnect", action="store_true",

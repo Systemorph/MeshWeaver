@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -102,7 +103,19 @@ public static class LanguageModelNodeType
             // is safe to register unconditionally.
             services.TryAddSingleton<IMasterKeyProvider, ConfigMasterKeyProvider>();
             services.TryAddSingleton<IProviderKeyProtector, ProviderKeyProtector>();
-            services.TryAddSingleton<ChatClientCredentialResolver>();
+            // 🧊 The mesh's SHARED resolver is warmed by whoever builds it — here. Reads are pure
+            // (they never open the catalog subscription), so warming is an owner's decision rather
+            // than a side effect of the first lookup. Every consumer resolves the resolver from DI,
+            // so every consumer still gets a warming snapshot; and a caller that constructs its OWN
+            // resolver keeps it in the pre-warm state for as long as it wants — which is what makes
+            // "cold catalog" a state a test can OWN instead of race
+            // (AutoRouterDispatchTest.RouterIsRecognisedAgainstAColdCatalog).
+            services.TryAddSingleton(sp =>
+            {
+                var resolver = new ChatClientCredentialResolver(sp.GetRequiredService<IMessageHub>());
+                resolver.EnsureSubscription();
+                return resolver;
+            });
             // Headless default chat client (for background one-shot model calls, e.g. the
             // content-indexing image describer). Resolves the lowest-Order resolvable LanguageModel
             // and its serving factory — no agent, no shared-state mutation.
@@ -124,7 +137,7 @@ public static class LanguageModelNodeType
             // 🚨 Gate the IStaticNodeProvider (feeds FindStaticNode) on !dbSynced, same as the
             // partition provider below — leaving it registered while the model-catalog partition is
             // DB-synced made the importer's inner CreateNode see the built-in catalog/Provider
-            // nodes as already-present and fail "Node already exists" (atioz 2026-06-11: imported
+            // nodes as already-present and fail "Node already exists" (prod 2026-06-11: imported
             // 4 / failed 2, incl. Provider/_Policy + Provider/Anthropic). The
             // BuiltInLanguageModelProvider singleton stays (the import source wraps it); the
             // LanguageModel/ModelProvider NodeType defs stay via AddMeshNodes. See AddAgentType.

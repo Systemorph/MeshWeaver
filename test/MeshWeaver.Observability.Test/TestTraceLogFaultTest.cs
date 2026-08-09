@@ -13,7 +13,8 @@ namespace MeshWeaver.Observability.Test;
 /// <c>ILogger.LogWarning(exception, …)</c> reached only xUnit's <c>ITestOutputHelper</c>
 /// (which the trx logger does not persist) and an opt-in per-method file that is off in CI.
 /// So a recurrence reported <c>Object reference not set to an instance of an object.</c> and
-/// nothing else. <see cref="TestTraceLog.AppendFault"/> is the sink that closes that gap.</para>
+/// nothing else. <see cref="TestTraceLog.AppendFault(string, LogLevel, string, Exception)"/>
+/// is the sink that closes that gap.</para>
 /// </summary>
 public class TestTraceLogFaultTest
 {
@@ -58,6 +59,83 @@ public class TestTraceLogFaultTest
         Assert.Contains(nameof(Thrown), contents, StringComparison.Ordinal);
         // The category and level, so a reader can tell which component faulted.
         Assert.Contains("MeshNodeCompilationService", contents, StringComparison.Ordinal);
+    }
+
+    private static string ReadTraceLog()
+    {
+        // Read with FileShare.ReadWrite: this file is append-only and shared by every test
+        // host in a shard, so another writer may hold it open.
+        using var stream = new FileStream(
+            TestTraceLog.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    /// <summary>
+    /// Issue #982: a fault the budget drops must leave the file SAYING so. The file is the only
+    /// diagnostic that survives a wedge, so a reader who cannot tell a truncated log from a
+    /// complete one draws the wrong conclusion from a silence that is really a discard.
+    ///
+    /// <para>Uses its own tiny <see cref="FaultRecordBudget"/> rather than the process-wide one:
+    /// exhausting the real budget here would suppress a genuine fault logged later in this same
+    /// test host — the test would create the defect it is pinning.</para>
+    /// </summary>
+    [Fact]
+    public void ASuppressedFault_IsAnnouncedInTheCollectedTraceFile()
+    {
+        var budget = new FaultRecordBudget(recordsPerWindow: 1, TimeSpan.FromMinutes(5));
+        var now = DateTime.UtcNow;
+        var kept = $"fault-kept-{Guid.NewGuid():N}";
+        var dropped = $"fault-dropped-{Guid.NewGuid():N}";
+
+        TestTraceLog.AppendFault(budget, now, "Probe", LogLevel.Warning, kept, Thrown(kept));
+        TestTraceLog.AppendFault(budget, now, "Probe", LogLevel.Warning, dropped, Thrown(dropped));
+
+        var contents = ReadTraceLog();
+
+        Assert.Contains(kept, contents, StringComparison.Ordinal);
+        // Really dropped — otherwise this test would pass on a sink that never suppresses.
+        Assert.DoesNotContain(dropped, contents, StringComparison.Ordinal);
+
+        // …and the drop is stated, in a line a reader can find with one grep. Asserted on the
+        // slice AFTER our own kept record so a notice written by another test in this shared
+        // file cannot stand in for the one this test is about.
+        var tail = contents[(contents.IndexOf(kept, StringComparison.Ordinal) + kept.Length)..];
+        Assert.Contains("[FAULT-BUDGET]", tail, StringComparison.Ordinal);
+        Assert.Contains("this log is NOT a complete record of faults",
+            tail, StringComparison.Ordinal);
+        // Tied to THIS test's budget by its distinctive bound, so a suppression notice from any
+        // other writer in this shared file cannot satisfy the assertion in its place.
+        Assert.Contains("budget of 1 fault record per 300s", tail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The other half of #982: the budget refills, so the fault that fires next to the wedge —
+    /// long after an earlier storm spent the allowance — still reaches the file. Under the
+    /// lifetime cap this record was dropped for the rest of the process.
+    /// </summary>
+    [Fact]
+    public void AFaultAfterAnEarlierStorm_StillReachesTheCollectedTraceFile()
+    {
+        var window = TimeSpan.FromSeconds(10);
+        var budget = new FaultRecordBudget(recordsPerWindow: 1, window);
+        var now = DateTime.UtcNow;
+        var late = $"fault-late-{Guid.NewGuid():N}";
+
+        TestTraceLog.AppendFault(budget, now, "Probe", LogLevel.Warning, "burst", Thrown("burst"));
+        for (var i = 0; i < 50; i++)
+            TestTraceLog.AppendFault(budget, now, "Probe", LogLevel.Warning, "burst", Thrown("burst"));
+
+        // The wedge, ten minutes later.
+        TestTraceLog.AppendFault(
+            budget, now + TimeSpan.FromMinutes(10), "Probe", LogLevel.Warning, late, Thrown(late));
+
+        var contents = ReadTraceLog();
+
+        Assert.Contains(late, contents, StringComparison.Ordinal);
+        // And the record that survived says how much of the burst was lost before it.
+        Assert.Contains("resuming fault records after suppressing 50 fault records",
+            contents, StringComparison.Ordinal);
     }
 
     /// <summary>

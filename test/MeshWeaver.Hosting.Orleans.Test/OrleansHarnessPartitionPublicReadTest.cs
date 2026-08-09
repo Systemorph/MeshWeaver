@@ -17,7 +17,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// DISTRIBUTED (Orleans) repro for the atioz 2026-06-15 "composer disappears on select" wedge.
+/// DISTRIBUTED (Orleans) repro for the prod 2026-06-15 "composer disappears on select" wedge.
 ///
 /// <para>When the <c>Harness</c> partition is DB-synced (the distributed/PG path), its built-in
 /// catalog is materialized by <see cref="HarnessStaticRepoSource"/> and the in-memory provider that

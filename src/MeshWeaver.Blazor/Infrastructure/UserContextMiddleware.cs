@@ -198,7 +198,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             // PostPipeline guard and fail-closes EVERY downstream application
             // post (reads, subscribes, layout-area syncs) → the visitor sees a
             // BLANK portal even for public content. This was a root of the
-            // atioz "portal down" wedge: an invalid/expired token resolves to
+            // prod "portal down" wedge: an invalid/expired token resolves to
             // no userContext, fell here, and the null context blanked the page.
             // Anonymous carries Permission.None by default; RLS still filters
             // reads to exactly what the Anonymous role is granted (public
@@ -372,7 +372,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         // is what it establishes). With no AccessContext the ValidateTokenRequest post is fail-closed
         // by the never-null guard, so it never reaches the ApiToken hub → validation returns null →
         // the user resolves as ANONYMOUS → RLS returns empty → blank "portal is down" for every
-        // authenticated user (chronic token-forwarding failure, atioz 2026-06-18). Run it as System
+        // authenticated user (chronic token-forwarding failure, prod 2026-06-18). Run it as System
         // (Permission.All — NOT ImpersonateAsHub, whose hub address has no Read on the token node).
         // Observable.Using holds the impersonation across the cold Observe's Subscribe.
         var accessService = hub.ServiceProvider.GetService<AccessService>();

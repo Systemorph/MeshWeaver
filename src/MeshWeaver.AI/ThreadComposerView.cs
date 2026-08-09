@@ -169,7 +169,7 @@ public static class ThreadComposerView
         // runs SERVER-SIDE on THIS layout hub. The per-partition agent registry query
         // (namespace:{user}/Agent|{space}/Agent|Agent) must NEVER be issued here: this hub is not the
         // chatting user, so per-user RLS strips the {user}/{space} namespaces (empty dropdown) and the
-        // cross-partition subscribe storms the portal (the 2026-06-17 atioz wedge). Per-partition agent
+        // cross-partition subscribe storms the portal (the 2026-06-17 prod wedge). Per-partition agent
         // selection is driven from the GUI instead — the /agent slash command (ThreadChatView.OpenPicker
         // → hub.GetQuery) runs in the user's Blazor circuit under the user's identity.
         foreach (var prop in SelectorProperties())

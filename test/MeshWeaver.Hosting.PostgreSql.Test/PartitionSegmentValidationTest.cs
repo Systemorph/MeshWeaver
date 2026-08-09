@@ -10,20 +10,20 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// provisioning boundary (<c>EnsurePartitionProvisioned</c> /
 /// <c>OwnsPartitionProvisioningValidator</c>) — must reject URL/query-string-shaped path
 /// segments so a garbage schema can neither be routed to NOR provisioned. Prod 2026-06-05:
-/// the atioz DB filled with schemas like <c>login?error=auth_failed</c> and
+/// the prod DB filled with schemas like <c>login?error=auth_failed</c> and
 /// <c>search?q=agent&amp;hq=scope%3adescendants</c> — request URLs routed as mesh paths —
 /// and corrupted itself; #714 found the same junk (query-string schemas, each with its own
-/// <c>mesh_nodes</c>) in the memex and memexcloud databases. Pure validation: no DB, no Docker.
+/// <c>mesh_nodes</c>) in the memex and memex-cloud databases. Pure validation: no DB, no Docker.
 /// </summary>
 public class PartitionSegmentValidationTest
 {
     [Theory]
-    [InlineData("login?error=auth_failed")]                  // the real atioz garbage schemas
+    [InlineData("login?error=auth_failed")]                  // the real prod garbage schemas
     [InlineData("search?q=agent&hq=scope%3adescendants")]
     [InlineData("search?q=coder&hq=scope%3adescendants")]
-    // The literal junk schema names found in the memex/memexcloud DBs (#714):
+    // The literal junk schema names found in the memex/the cloud database DBs (#714):
     [InlineData("search?q=query%20syntax&hq=scope%3adescendants")]
-    [InlineData("login?returnurl=https%3a%2f%2fmemex.systemorph.com%2fauthorize")]
+    [InlineData("login?returnurl=https%3a%2f%2fportal.example.com%2fauthorize")]
     [InlineData("a b")]                                       // whitespace
     [InlineData("ns:with:colons")]                            // colons
     [InlineData("path/with/slash")]                           // slash

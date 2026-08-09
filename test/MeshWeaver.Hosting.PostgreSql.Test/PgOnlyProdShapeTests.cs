@@ -232,7 +232,7 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
     /// <c>login?returnurl=…</c> — must resolve to NULL (a clean 404), NOT a synthetic partition
     /// root. The synthetic root used to activate a grain that queried the never-provisioned
     /// <c>&lt;segment&gt;.mesh_nodes</c> schema → <c>Npgsql 42P01: relation does not exist</c>,
-    /// and the bogus segment leaked into a junk partition schema (atioz log storm). With the
+    /// and the bogus segment leaked into a junk partition schema (prod log storm). With the
     /// existence gate, the writable PG provider's definitive <c>false</c> suppresses synthesis.
     /// </summary>
     [Fact(Timeout = 60000)]

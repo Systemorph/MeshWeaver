@@ -100,7 +100,7 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
                 // effect poisons that hub for the rest of the process: every later $type resolution on the
                 // hub (e.g. mesh-query row deserialization) then yields THAT foreign/stale CLR type, and a
                 // consumer holding its OWN compilation of the class (`Content is T` / `ContentAs<T>`) reads
-                // null — the atioz "BalanceSheet dashboards render empty" outage (agentic-pensions#12). It
+                // null — the prod "BalanceSheet dashboards render empty" outage (agentic-pensions#12). It
                 // also pins the collectible assembly, defeating unload. Format the discriminator WITHOUT
                 // registering: THIS serialization still writes the short-name $type; deserialization on
                 // this hub politely degrades to JsonElement, which ContentAs<T> recovers at the consumer.

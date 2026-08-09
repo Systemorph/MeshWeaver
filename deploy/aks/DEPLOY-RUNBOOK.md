@@ -1,6 +1,6 @@
-# Deploy Memex to AKS — the `memex.systemorph.com` runbook
+# Deploy Memex to AKS — the `portal.example.com` runbook
 
-This is the **exact, verified** sequence used to bring up `https://memex.systemorph.com` on a
+This is the **exact, verified** sequence used to bring up `https://portal.example.com` on a
 private AKS cluster in **swedencentral**. It is the reproducible template behind the sample in
 this folder (`infra/` Bicep, `values.aks.yaml`, `manifests/`) and the image-based Aspire
 AppHost at [`../aspire/Memex.Deploy.AppHost`](../aspire/Memex.Deploy.AppHost).
@@ -75,7 +75,7 @@ az deployment sub create --name memex-aks-infra-sc --location swedencentral \
 Outputs: cluster name, the Postgres FQDN, the shared-ACR login server. Grant the cluster kubelet
 **AcrPull** on the shared ACR (cross-RG, so done out-of-band):
 ```bash
-KUBELET=$(az aks show -g memex-aks-rg -n memexaks-cluster --query identityProfile.kubeletidentity.objectId -o tsv)
+KUBELET=$(az aks show -g <aks-resource-group> -n <aks-cluster> --query identityProfile.kubeletidentity.objectId -o tsv)
 az role assignment create --assignee-object-id $KUBELET --assignee-principal-type ServicePrincipal \
   --role AcrPull --scope $(az acr show -n meshweaver --query id -o tsv)
 ```
@@ -83,7 +83,7 @@ Same cross-RG grant for the **portal Workload Identity** (the shared UAMI the in
 to list ACR tags — provisioned by `infra/modules/portal-identity.bicep`, federated to
 `system:serviceaccount:<ns>:memex-portal-sa` for every portal namespace):
 ```bash
-PORTAL_MI=$(az identity show -g memex-aks-rg -n memexaks-portal-mi --query principalId -o tsv)
+PORTAL_MI=$(az identity show -g <aks-resource-group> -n <portal-identity> --query principalId -o tsv)
 az role assignment create --assignee-object-id $PORTAL_MI --assignee-principal-type ServicePrincipal \
   --role AcrPull --scope $(az acr show -n meshweaver --query id -o tsv)
 # Then wire its clientId into selfUpdate.azureClientId for each env (same value everywhere):
@@ -93,26 +93,26 @@ az deployment sub show --name memex-aks-infra-sc --query properties.outputs.port
 UAMI — needs User Access Administrator on `meshweaver-shared`. See [DeploymentAKS → Portal self-update](../../src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md).)
 > Postgres connection uses the **private IP + password + SSL** (the FQDN would trip the portal's
 > `database.azure.com` → Entra-token branch, which doesn't match a password server). Get it with:
-> `az network private-dns record-set a list -g memex-aks-rg -z <pg-private-zone> -o table`.
+> `az network private-dns record-set a list -g <aks-resource-group> -z <pg-private-zone> -o table`.
 
 ## 3. External sign-in (OAuth) apps
 - **Microsoft/Entra** (single-tenant home):
   ```bash
-  az ad app create --display-name "Memex Portal (memex.systemorph.com)" --sign-in-audience AzureADMyOrg \
-    --web-redirect-uris "https://memex.systemorph.com/signin-microsoft"
+  az ad app create --display-name "Memex Portal (portal.example.com)" --sign-in-audience AzureADMyOrg \
+    --web-redirect-uris "https://portal.example.com/signin-microsoft"
   az ad app credential reset --id <appId> --display-name aks --years 1   # => client secret
   ```
 - **Google** (Cloud Console) + **LinkedIn** (Developer portal): create web OAuth clients with
-  redirect URIs `https://memex.systemorph.com/signin-google` and `/signin-linkedin`.
+  redirect URIs `https://portal.example.com/signin-google` and `/signin-linkedin`.
 
 ## 4. Deploy the workload (private cluster → `az aks command invoke`)
 Copy `scripts/values.deploy.example.yaml` → `scripts/values.deploy.yaml`, fill in the **real**
 connection string, master key, and OAuth secrets (keep it OUT of git — `artifacts/`/Key Vault), then:
 ```bash
-az aks approuting enable -g memex-aks-rg -n memexaks-cluster          # managed nginx (public LB)
+az aks approuting enable -g <aks-resource-group> -n <aks-cluster>          # managed nginx (public LB)
 cd deploy/aks/scripts
 export MEMEX_PG_CONN='Host=<PG_PRIVATE_IP>;Port=5432;Username=memexadmin;Password=<PW>;Database=memex;SslMode=Require;Trust Server Certificate=true'
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "bash deploy.sh" --file .
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "bash deploy.sh" --file .
 ```
 `deploy.sh` does: namespace + RWX PVCs → `helm upgrade --install` (chart + `values.aks.yaml` +
 `values.deploy.yaml`) → scale the chart's in-cluster pg to 0 (we use the Flexible Server) →
@@ -125,16 +125,16 @@ OTLP traces/metrics (not needed for log shipping — Promtail scrapes stdout).
 
 ## 5. Public ingress + TLS + DNS
 ```bash
-IP=$(az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+IP=$(az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
   --command "kubectl get svc -n app-routing-system nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}'")
 az network dns record-set a add-record -g dns -z systemorph.com -n memex --ipv4-address $IP --ttl 300
 cd deploy/aks/scripts
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "bash tls.sh" --file tls.sh   # cert-manager + Let's Encrypt + ingress
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "bash tls.sh" --file tls.sh   # cert-manager + Let's Encrypt + ingress
 ```
 HTTP→HTTPS redirect is automatic once the ingress has TLS. Verify (bypassing DNS cache):
 ```bash
 curl -sS -o /dev/null -w "%{http_code} verify=%{ssl_verify_result}\n" \
-  --resolve memex.systemorph.com:443:$IP https://memex.systemorph.com/
+  --resolve portal.example.com:443:$IP https://portal.example.com/
 ```
 
 ---
@@ -148,7 +148,7 @@ Grafana + Prometheus, datasources auto-wired, Promtail ships every pod's logs to
 ```bash
 export GRAFANA_PW='<strong-password>'
 cd deploy/aks/scripts
-az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
   --command "GRAFANA_PW=$GRAFANA_PW bash install-observability.sh" --file install-observability.sh
 ```
 
@@ -159,11 +159,11 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster \
 #    $client = New-SelfSignedCertificate -Type Custom -DnsName MemexP2SChild -KeySpec Signature -Subject "CN=MemexP2SChildCert" -Signer $root -KeyExportPolicy Exportable -CertStoreLocation Cert:\CurrentUser\My -HashAlgorithm sha256 -KeyLength 2048 -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.2")
 #    [IO.File]::WriteAllText("root.txt",[Convert]::ToBase64String($root.RawData))
 #    NOTE: this az version reads --public-cert-data as a FILE PATH, so pass the path (NOT the inline string, NOT @file):
-#    az network vnet-gateway root-cert create -g memex-aks-rg --gateway-name memexaks-vpngw --name MemexP2SRootCert --public-cert-data root.txt
+#    az network vnet-gateway root-cert create -g <aks-resource-group> --gateway-name <vpn-gateway> --name MemexP2SRootCert --public-cert-data root.txt
 # 2. Download + install the VPN client, then connect:
-az network vnet-gateway vpn-client generate -g memex-aks-rg -n memexaks-vpngw -o tsv   # -> download URL (zip)
+az network vnet-gateway vpn-client generate -g <aks-resource-group> -n <vpn-gateway> -o tsv   # -> download URL (zip)
 # 3. With the VPN connected:
-az aks get-credentials -g memex-aks-rg -n memexaks-cluster
+az aks get-credentials -g <aks-resource-group> -n <aks-cluster>
 kubectl -n monitoring port-forward svc/loki-grafana 3000:80    # http://localhost:3000  (admin / $GRAFANA_PW)
 ```
 In Grafana → Explore → Loki, the portal logs are `{namespace="memex"}` (e.g. add
@@ -183,7 +183,7 @@ is throwing errors must not be hosted by the portal.
 ```bash
 # 1. ONE shared secret, both sides. The watcher presents it; the portal requires it.
 TOKEN=$(openssl rand -hex 32)
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl -n monitoring create secret generic mw-log-watcher --from-literal=ingest-token=$TOKEN"
 #    …then set LogWatch__IngestToken to the SAME value on the portal (KeyVault → its secret store).
 
@@ -204,7 +204,7 @@ dotnet publish tools/MeshWeaver.LogWatcher/MeshWeaver.LogWatcher.csproj -c Relea
   -p:ContainerRepository=memex-log-watcher -p:ContainerImageTag=<tag>
 
 # 4. Apply the Deployment + PVC (edit the image tag + watched namespaces in the manifest first).
-az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
   --command "kubectl apply -f log-watcher.yaml" \
   --file manifests/observability/log-watcher.yaml
 ```
@@ -212,7 +212,7 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster \
 **Verify — and know what each failure looks like:**
 
 ```bash
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl -n monitoring logs deploy/mw-log-watcher --tail=50"
 ```
 
@@ -246,7 +246,7 @@ az acr manifest show -r meshweaver -n memex-portal-ai:<tag> \
   | jq -r '.manifests[]?.platform | "\(.os)/\(.architecture)"'   # expect linux/amd64 AND linux/arm64
 
 # b) Roll.
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl set image deploy/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag> -n <env> \
    && kubectl rollout status deploy/memex-portal-deployment -n <env> --timeout=600s"
 

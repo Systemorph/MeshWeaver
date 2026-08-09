@@ -2,6 +2,8 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
@@ -405,5 +407,65 @@ public class InboxToolUnitTest
             "follow-up is no longer queued");
         afterPickup.IngestedMessageIds.Should().Contain("u2",
             "follow-up is marked ingested so the watcher doesn't dispatch a new round for it");
+    }
+
+    // ─── ThreadInboxChannel.Channeled — the hand-off signal ───
+
+    /// <summary>
+    /// 🚨 Pins the property that makes <c>Channeled</c> safe to WAIT on: a subscriber that
+    /// arrives AFTER the offer still observes it.
+    ///
+    /// <para>This exists because the guarantee is easy to destroy while optimising. The signal
+    /// deliberately carries <c>Unit</c> so the live submission path never materialises a snapshot
+    /// nobody is subscribed to — and the natural next step, "just emit on the subject", would drop
+    /// the already-landed state and silently turn every waiter (the #978 seed in
+    /// <c>InboxToolIntegrationTest</c>) back into a sampling race that only fails under CI load.
+    /// If this test goes red, the surface was weakened; do not relax it.</para>
+    /// </summary>
+    [Fact]
+    public async Task Channeled_ReplaysWhatAlreadyLanded_ToALateSubscriber()
+    {
+        var channel = new ThreadInboxChannel();
+        var thread = new MeshThread
+        {
+            Status = ThreadExecutionStatus.Executing,
+            ActiveMessageId = "r1",
+            UserMessageIds = ImmutableList.Create("u1"),
+            PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
+                .Add("u1", new ThreadMessage { Role = "user", Text = "only one" })
+        };
+
+        // Offer BEFORE anyone subscribes — the ordering that matters.
+        channel.OfferFromNode(thread);
+
+        var seen = await channel.Channeled.Should().Within(10.Seconds())
+            .Match(ids => ids.Contains("u1"),
+                "a subscriber arriving after the offer must still observe it — otherwise every "
+                + "waiter is a race that only loses under load");
+        seen.Should().Contain("u1");
+    }
+
+    /// <summary>Live half: an offer AFTER subscribe reaches an existing subscriber.</summary>
+    [Fact]
+    public async Task Channeled_EmitsToAnAlreadySubscribedWaiter()
+    {
+        var channel = new ThreadInboxChannel();
+        var thread = new MeshThread
+        {
+            Status = ThreadExecutionStatus.Executing,
+            ActiveMessageId = "r1",
+            UserMessageIds = ImmutableList.Create("u9"),
+            PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
+                .Add("u9", new ThreadMessage { Role = "user", Text = "later" })
+        };
+
+        // Subscribe first (it emits the current, empty set), then offer.
+        var waiter = channel.Channeled
+            .Where(ids => ids.Contains("u9"))
+            .Should().Within(10.Seconds()).Emit();
+
+        channel.OfferFromNode(thread);
+
+        (await waiter).Should().Contain("u9");
     }
 }

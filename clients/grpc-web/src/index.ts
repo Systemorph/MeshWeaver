@@ -7,7 +7,7 @@
 //   import { connect } from "@meshweaver/client-web";
 //   import { GrpcAreaSource } from "@meshweaver/react/core";
 //
-//   const mesh = await connect("https://atioz.meshweaver.cloud", { token: "mw_..." });
+//   const mesh = await connect("https://memex.meshweaver.cloud", { token: "mw_..." });
 //   const source = new GrpcAreaSource(mesh, "@app/MyAddress", { area: "main" });
 //   await source.start();   // folds the live area stream into the renderer
 //   // ... render <RenderArea> against `source` ...

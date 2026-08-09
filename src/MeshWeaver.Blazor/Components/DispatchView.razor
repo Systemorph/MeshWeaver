@@ -17,7 +17,7 @@ else if(ViewDescriptor != null)
            render-time exception. A control that throws inside BuildRenderTime (e.g. an enum
            property bound to an unparseable literal in DataGridView.RenderPropertyColumn) would
            otherwise escape the render, tear down the whole Blazor circuit, and hang the page
-           with no feedback (atioz 2026-06-21). The ErrorBoundary catches it, SURFACES the
+           with no feedback (prod 2026-06-21). The ErrorBoundary catches it, SURFACES the
            message in the control's own slot, and lets the rest of the page render. *@
         <ErrorBoundary>
             <ChildContent>

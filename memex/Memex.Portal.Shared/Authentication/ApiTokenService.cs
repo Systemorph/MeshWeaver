@@ -524,7 +524,7 @@ internal class ApiTokenService(
         //
         // Stamp at DISPLAY granularity, not per request. The UI renders "Last used" to the
         // minute; a per-request write turned a busy integration's token into the hottest node
-        // on the mesh (atioz 2026-07-02: version 8939 in one day, ~13 writes/min), and every
+        // on the mesh (prod 2026-07-02: version 8939 in one day, ~13 writes/min), and every
         // write fans out through the change feed to all of the node's subscriber streams.
         // Skip the write while the recorded LastUsedAt is fresh — the read above already
         // carries the current value.

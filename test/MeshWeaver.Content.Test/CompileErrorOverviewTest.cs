@@ -23,7 +23,7 @@ namespace MeshWeaver.Content.Test;
 /// CANNOT be resolved/compiled, its per-instance hub must still ACTIVATE under the emergency
 /// compilation-error overlay (<see cref="NodeTypeEnrichmentHelpers.WithCompilationErrorOverlay"/>),
 /// and its <b>Overview display area must come back</b> — within a bounded time — <b>SAYING it had a
-/// compilation error</b>. It must never hang / wedge / time out (the failure mode that took atioz down).
+/// compilation error</b>. It must never hang / wedge / time out (the failure mode that took prod down).
 ///
 /// <para>This is the integration-level companion to the pure
 /// <c>CompileErrorPageTest</c> (which unit-tests the NodeType Progress page builder): here we drive a

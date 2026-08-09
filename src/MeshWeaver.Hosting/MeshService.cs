@@ -100,7 +100,7 @@ internal sealed class MeshService(
         // the ambient context does not (CaptureContext inside the Defer below reads it at
         // Subscribe, which is exactly when it's lost). The owner's RlsNodeValidator reads
         // CreatedBy first, so a System write authorises against a read-only-_Policy partition.
-        // (atioz 2026-06-18: System compile/import writes posted as Anonymous → the Doc/_Policy
+        // (prod 2026-06-18: System compile/import writes posted as Anonymous → the Doc/_Policy
         // Create=false cap denied them → activities never landed → phantom-path NotFound storm.)
         var captured = CaptureContext();
         return Observable.Defer(() =>

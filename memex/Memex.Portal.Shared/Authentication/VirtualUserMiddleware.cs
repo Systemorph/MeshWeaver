@@ -81,7 +81,7 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
                 // cookie-less client minted a fresh node PER REQUEST — kube-probe
                 // alone created ~15 VUsers/minute (and any crawler does the same),
                 // leaking 10,000+ hubs until the portal wedged at 100% CPU
-                // (2026-06-12 atioz outage). A real visitor's node exists by
+                // (2026-06-12 prod outage). A real visitor's node exists by
                 // their second request — before the Blazor circuit needs it.
                 //
                 // 100% reactive, NO await: EnsureVUserNode composes
