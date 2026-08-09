@@ -102,12 +102,13 @@ public static class SocialMediaPostLayoutAreas
             ?? Observable.Return<PostNode[]?>(null);
 
         return postsStream.Select(posts => (UiControl?)BuildList(
+            host,
             (posts ?? Enumerable.Empty<PostNode>())
                 .Select(p => p.Node)
                 .ToImmutableList()));
     }
 
-    private static UiControl BuildList(ImmutableList<MeshNode> posts)
+    private static UiControl BuildList(LayoutAreaHost host, ImmutableList<MeshNode> posts)
     {
         var ordered = posts
             .OrderByDescending(p => GetDate(p, "scheduledAt") ?? DateTimeOffset.MinValue)
