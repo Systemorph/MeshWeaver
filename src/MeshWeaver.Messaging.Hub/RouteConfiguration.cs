@@ -43,10 +43,17 @@ public record RouteConfiguration(IMessageHub Hub)
     public RouteConfiguration RouteAddressToHub(string addressType, Func<Address, IMessageHub?> hubFactory)
         => RouteAddress(addressType, (routedAddress, d) =>
         {
-            // Check if the parent hub is disposing before attempting to create/route to hosted hubs
+            // Check if the parent hub is disposing before attempting to create/route to hosted hubs.
+            // CLASSIFIED and unanswered — MessageService's routing tail owes the sender the NACK
+            // (an unclassified Failed on the not-on-target path used to vanish; see #981), and it
+            // must be TRANSIENT because the hub may reactivate.
             if (Hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
             {
-                return d.Failed("Parent hub disposing");
+                return d.Failed(
+                    $"Cannot route {d.Message.GetType().Name} to {d.Target} — routing hub "
+                    + $"{Hub.Address} is disposing (RunLevel={Hub.RunLevel}). Retry to get the "
+                    + "authoritative answer.",
+                    ErrorType.ShuttingDown);
             }
 
             var hub = hubFactory.Invoke(routedAddress);
@@ -117,9 +124,14 @@ public record RouteConfiguration(IMessageHub Hub)
                 // Match when Target.Host.Type equals addressType - route to the Host hub first
                 if (delivery.Target?.Host?.Type == addressType)
                 {
+                    // Classified + unanswered, as in RouteAddressToHub above.
                     if (Hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
                     {
-                        return Observable.Return(delivery.Failed("Parent hub disposing"));
+                        return Observable.Return(delivery.Failed(
+                            $"Cannot route {delivery.Message.GetType().Name} to {delivery.Target} — "
+                            + $"routing hub {Hub.Address} is disposing (RunLevel={Hub.RunLevel}). "
+                            + "Retry to get the authoritative answer.",
+                            ErrorType.ShuttingDown));
                     }
 
                     var hub = GetOrCreateHub(delivery.Target.Host);

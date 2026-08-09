@@ -82,17 +82,25 @@ internal class MonolithRoutingService(
         logger.LogWarning("No route found for {MessageType} → {Address}. Node: {NodePath}, NodeType: {NodeType}, Sender: {Sender}, ShuttingDown: {ShuttingDown}",
             delivery.Message.GetType().Name, address, node?.Path, node?.NodeType, delivery.Sender, isShuttingDown);
 
-        if (delivery.Message is not DeliveryFailure && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+        var errorType = isShuttingDown ? ErrorType.Failed : ErrorType.NotFound;
+        var senderNacked = delivery.Message is not DeliveryFailure
+            && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs;
+        if (senderNacked)
         {
             Mesh.Post(
                 new DeliveryFailure(delivery)
                 {
-                    ErrorType = isShuttingDown ? ErrorType.Failed : ErrorType.NotFound,
+                    ErrorType = errorType,
                     Message = errorMessage
                 }, o => o.ResponseFor(delivery)
             );
         }
-        return delivery.Failed(errorMessage);
+        // Declare whether the sender was answered — MessageService now NACKs any unanswered Failed
+        // delivery it finishes, and this path is hot enough that a duplicate would multiply every
+        // NotFound in the mesh. See RoutingServiceBase.PostNotFound for the full rationale.
+        return senderNacked
+            ? delivery.FailedAndNacked(errorMessage)
+            : delivery.Failed(errorMessage, errorType);
     }
 
     /// <summary>
