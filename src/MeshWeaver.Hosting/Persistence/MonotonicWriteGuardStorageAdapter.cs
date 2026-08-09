@@ -77,11 +77,11 @@ namespace MeshWeaver.Hosting.Persistence;
 ///
 /// <para>🚨 <b>Latest-wins is acceptable; latest-wins INVISIBLY is the bug.</b> Every member the
 /// merge could not auto-resolve is logged at <c>Warning</c> AND recorded as an <c>ActivityLog</c>
-/// MeshNode satellite at <c>{path}/_Activity/write-conflict-{stale}-{latest}</c>. The defect this
+/// MeshNode satellite at <c>{path}/_Activity/write-conflict-{latestVersion}</c>. The defect this
 /// component was built for (#826) was an acked write that rolled a row back with no error anywhere —
-/// so a resolution that drops a value must leave a durable, user-visible trace. The satellite id is
-/// derived from the two versions, so re-presenting the SAME stale snapshot collapses onto one record
-/// instead of accumulating.</para>
+/// so a resolution that drops a value must leave a durable, user-visible trace. The id is keyed on the
+/// DURABLE version alone, which bounds the record to one per revision no matter how many losing
+/// attempts land against it (see <see cref="RecordConflictActivity"/>).</para>
 ///
 /// <para><b>Equal versions pass.</b> The guard rejects STRICT regressions only. A re-write at
 /// the same version is a legitimate, common shape: static/never-mutated nodes sit at their
@@ -227,7 +227,7 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
 
     /// <summary>
     /// Writes the durable, user-visible trace of a resolved conflict: an <c>ActivityLog</c> MeshNode
-    /// satellite at <c>{path}/_Activity/write-conflict-{staleVersion}-{latestVersion}</c>, carrying one
+    /// satellite at <c>{path}/_Activity/write-conflict-{latestVersion}</c>, carrying one
     /// <see cref="LogLevel.Warning"/> message per member whose value was dropped (and an informational
     /// line for what was merged).
     ///
