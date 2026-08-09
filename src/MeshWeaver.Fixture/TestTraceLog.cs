@@ -136,11 +136,16 @@ public static class TestTraceLog
         // The notice is what stops a truncated log from reading like a complete one, so it is
         // written whether or not the record itself survives — and it is tagged so a reader can
         // answer "did this file lose anything?" with one grep.
-        if (verdict.Notice is not null)
-            Append($"{now:HH:mm:ss.fff} pid={Environment.ProcessId} [FAULT-BUDGET] {verdict.Notice}");
+        var notice = verdict.Notice is null
+            ? null
+            : $"{now:HH:mm:ss.fff} pid={Environment.ProcessId} [FAULT-BUDGET] {verdict.Notice}";
 
         if (!verdict.WriteRecord)
+        {
+            if (notice is not null)
+                Append(notice);
             return;
+        }
 
         var detail = exception.ToString();
         if (detail.Length > MaxExceptionChars)
@@ -149,7 +154,14 @@ public static class TestTraceLog
         // pid on the header line for the same reason the phase trace carries it: every
         // test project in a shard appends to this one file, and a core dump is named
         // dotnet-<pid>.dmp.
-        Append($"{now:HH:mm:ss.fff} pid={Environment.ProcessId} [FAULT] "
-            + $"[{level}] [{category}] {message}{Environment.NewLine}{detail}");
+        var record = $"{now:HH:mm:ss.fff} pid={Environment.ProcessId} [FAULT] "
+            + $"[{level}] [{category}] {message}{Environment.NewLine}{detail}";
+
+        // ONE Append, so the notice and the record it explains cannot be split. Append releases
+        // the file lock per call and every test host in the shard writes to this file, so two
+        // calls would let another writer land between them — and a "resuming after suppressing
+        // N" line stranded from the record that resumed reintroduces exactly the ambiguity this
+        // whole change exists to remove.
+        Append(notice is null ? record : notice + Environment.NewLine + record);
     }
 }

@@ -104,6 +104,9 @@ public class TestTraceLogFaultTest
         Assert.Contains("[FAULT-BUDGET]", tail, StringComparison.Ordinal);
         Assert.Contains("this log is NOT a complete record of faults",
             tail, StringComparison.Ordinal);
+        // Tied to THIS test's budget by its distinctive bound, so a suppression notice from any
+        // other writer in this shared file cannot satisfy the assertion in its place.
+        Assert.Contains("budget of 1 fault record per 300s", tail, StringComparison.Ordinal);
     }
 
     /// <summary>
