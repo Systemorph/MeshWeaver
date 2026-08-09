@@ -188,6 +188,11 @@ internal static class ThreadExecution
         // round never dispatches (Status stuck at StartingExecution, IsExecuting
         // forever): the live-path "observer dies" deadlock. On fault, re-establish.
         IDisposable? sub = null;
+        // 🚨 #991 — hold the PENDING re-establish so teardown cancels it. An uncancelled
+        // `Observable.Timer` sits on the process-wide TimerQueue (a strong GC root) and
+        // roots `Establish` → this closure → the hub for the whole delay, so a stream that
+        // faults as the hub tears down keeps the hub alive past disposal.
+        var pendingReEstablish = new System.Reactive.Disposables.SerialDisposable();
         var disposed = false;
         // 🚨 Observe the PARENT thread hub's AUTHORITATIVE own MeshNode stream —
         // NOT the cross-hub IMeshNodeStreamCache. The cache opens a remote
@@ -273,12 +278,18 @@ internal static class ThreadExecution
                     logger?.LogWarning(ex,
                         "[ExecRoundWatcher] stream errored for {ThreadPath} — re-establishing", threadPath);
                     if (!disposed)
-                        System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1))
-                            .Subscribe(_ => Establish());
+                        pendingReEstablish.Disposable =
+                            System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1))
+                                .Subscribe(_ => Establish());
                 });
 
         Establish();
-        execHub.RegisterForDisposal(_ => { disposed = true; sub?.Dispose(); });
+        execHub.RegisterForDisposal(_ =>
+        {
+            disposed = true;
+            pendingReEstablish.Dispose();
+            sub?.Dispose();
+        });
     }
 
     /// <summary>
@@ -422,6 +433,11 @@ internal static class ThreadExecution
         // SIGABRT). The re-establish must stop when the hub is gone AND must hop off
         // the synchronous stack.
         var disposed = false;
+        // 🚨 #991 — hold the PENDING re-establish so teardown cancels it. An uncancelled
+        // `Observable.Timer` sits on the process-wide TimerQueue (a strong GC root) and
+        // roots `Establish` → this closure → the hub for the whole delay, so a stream that
+        // faults as the hub tears down keeps the hub alive past disposal.
+        var pendingReEstablish = new System.Reactive.Disposables.SerialDisposable();
         // Idempotency for the resume path: re-launch an interrupted round AT MOST
         // once per ActiveMessageId. The observation is self-healing (re-establishes
         // on fault), so without this a re-read of the same Executing state would
@@ -591,8 +607,9 @@ internal static class ThreadExecution
                     logger?.LogWarning(ex,
                         "[ThreadExec] Init observation faulted for {ThreadPath} — re-establishing recovery",
                         threadPath);
-                    System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1))
-                        .Subscribe(_ => { if (!disposed) Establish(); });
+                    pendingReEstablish.Disposable =
+                        System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1))
+                            .Subscribe(_ => { if (!disposed) Establish(); });
                 });
 
         Establish();
@@ -705,7 +722,13 @@ internal static class ThreadExecution
                 ex => logger?.LogWarning(ex,
                     "[ThreadExec] Init watchdog stream faulted for {ThreadPath}", threadPath));
 
-        hub.RegisterForDisposal(_ => { disposed = true; sub?.Dispose(); watchdog.Dispose(); });
+        hub.RegisterForDisposal(_ =>
+        {
+            disposed = true;
+            pendingReEstablish.Dispose();
+            sub?.Dispose();
+            watchdog.Dispose();
+        });
     }
 
     /// <summary>

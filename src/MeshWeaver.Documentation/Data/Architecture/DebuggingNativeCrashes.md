@@ -39,6 +39,24 @@ It arrives inside the **`testResults-shard<N>`** artifact under `collected-logs/
 alongside `_meshweaver-test-trace.log` and `_meshweaver-memory-delta.log`. **Retention is 15 days** —
 pull it before it expires.
 
+### 🚨 Ask the trace log whether it is complete before you reason from it
+
+`_meshweaver-test-trace.log` carries `[FAULT]` records — exception type, message and stack for
+everything logged at `Warning` or above with an exception. Its fault records are **rate-bounded**
+(100 per 10 s per process), so a storming process has records missing, and reasoning from an
+absence in a truncated log is how you conclude the wrong thing. The log always says when that
+happened:
+
+```bash
+grep FAULT-BUDGET collected-logs/_meshweaver-test-trace.log
+```
+
+Nothing back ⇒ every fault this process logged is in the file. Otherwise each hit names the
+running count of suppressed records, and a `resuming fault records after suppressing N` line
+states exactly how many were lost in that gap. A **budget never silences a later fault** — the
+window refills, so the fault next to a wedge is written even if an earlier storm saturated the
+allowance (issue #982).
+
 ```bash
 # find the shard artifact (the crashing shard's is the big one — the others are ~0MB)
 gh api repos/Systemorph/MeshWeaver/actions/runs/<RUN_ID>/artifacts \
