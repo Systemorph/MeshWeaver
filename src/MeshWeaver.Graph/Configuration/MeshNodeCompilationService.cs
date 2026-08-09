@@ -1732,7 +1732,7 @@ internal class MeshNodeCompilationService(
     /// deployed image: after <c>BakeMeshLocalFeed</c> was removed (#395) the mesh-local feed
     /// (<c>dist/packages</c>) is gone, so NuGet throws
     /// <c>"The local source '/app/dist/packages' doesn't exist"</c> and breaks every deployed scope
-    /// node still carrying the legacy <c>#r</c> (the atioz BalanceSheet failure). Behaviour is
+    /// node still carrying the legacy <c>#r</c> (the prod BalanceSheet failure). Behaviour is
     /// unchanged: the built-in generator still emits the <c>IScope&lt;,&gt;</c> implementations, and
     /// <see cref="RunSourceGenerators"/> already de-dups the generator itself (CS0101). When the
     /// built-in is somehow absent the <c>#r</c> is kept so the generator can still resolve via NuGet.
@@ -1776,7 +1776,7 @@ internal class MeshNodeCompilationService(
     /// <para>🩹 Self-heal: on container deployments the cache directory is an ephemeral
     /// <c>/tmp/...</c>; a "successful" Roslyn emit can leave NO file on disk when the just-written
     /// assembly is evicted before the next read. That used to poison the NodeType permanently with
-    /// a sticky "Compilation succeeded but DLL not found" error (atioz AgenticPension/Datenpunkt,
+    /// a sticky "Compilation succeeded but DLL not found" error (prod AgenticPension/Datenpunkt,
     /// 2026-06-22) — the grain never recompiled. We now re-emit the lost artifact (a genuine compile
     /// error is NOT retried) and, if it still cannot be persisted, surface a clear, loud failure
     /// instead of a silent poison. See <see cref="EmitToDiskWithRetry"/>.</para>

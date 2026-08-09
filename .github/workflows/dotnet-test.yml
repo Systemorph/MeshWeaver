@@ -100,6 +100,22 @@ env:
   CI_GREEN_PRUNE_SECONDS: 1209600  # 14 d
 
 jobs:
+  # 🚨 No `jlumbroso/free-disk-space` in any job — do not re-add it. Removed 2026-08-09 after
+  # measuring what the runner actually has. From the reclaim step's OWN "BEFORE CLEAN-UP" line
+  # on run 31306383220 (and identically on every CD job):
+  #
+  #     /dev/root  145G  58G used  88G available  40% /
+  #
+  # It then spent ~71 s in `build` and ~53 s in EVERY shard reclaiming ~15 GiB, to go from 88G
+  # free to ~103G free. Nothing here comes close to needing that: the whole test-bin tarball set
+  # is ~3.3 GB and the pgvector image is a couple more. The "default ~14 GB" the old comments
+  # guarded against is simply not what hosted runners ship any more.
+  #
+  # Cost of keeping it: ~71 s on the critical path in `build`, plus ~53 s on the long-pole shard,
+  # plus ~5 min of runner time per run across the six shards — to free space that was never scarce.
+  # If a job ever genuinely fills the disk it fails loudly with ENOSPC; reclaim selectively THEN,
+  # against a measurement, rather than pre-emptively everywhere.
+  #
   # ──────────────────────────── PRECHECK ───────────────────────────
   # Is the tree we are about to test ALREADY green? See the green-tree-reuse
   # section in the file header for why this exists and why it is safe.
@@ -206,28 +222,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
-    # The full-solution build outputs + the test-bin tarball overflow the
-    # default ~14 GB free. Reclaim the runner bloat a .NET build never touches.
-    # large-packages (the slowest removal, ~40-60 s of apt) is OFF since the
-    # artifact stopped carrying obj/ + the NuGet cache — the reclaimed space is
-    # no longer needed. Keep .NET + the hosted tool cache (setup-dotnet uses them).
-    - name: Free disk space
-      uses: jlumbroso/free-disk-space@main
-      with:
-        tool-cache: false
-        dotnet: false
-        android: true          # 11 GiB, the bulk of the reclaim
-        haskell: true          # 3.6 GiB
-        large-packages: false  # slowest removal (~40-60 s of apt), not needed
-        # docker-images OFF: it prunes the runner's PRE-BAKED images (node,
-        # buildpack-deps — 2 GiB), none of which is the pgvector image the
-        # Testcontainers tests then pull anyway. Pure cost.
-        docker-images: false
-        # swap-storage OFF: deleting the swapfile on a job that runs
-        # memory-heavy hosts is how you turn a slow test into an OOM kill
-        # (Persistence.Test already carries a memory watchdog). It reclaimed
-        # 0 B on the measured run.
-        swap-storage: false
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
@@ -340,25 +334,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
-    # Extracted test bins + the pgvector Testcontainers image + per-project test
-    # outputs don't fit the default ~14 GB. Same trimmed reclaim as the build job.
-    - name: Free disk space
-      uses: jlumbroso/free-disk-space@main
-      with:
-        tool-cache: false
-        dotnet: false
-        android: true          # 11 GiB, the bulk of the reclaim
-        haskell: true          # 3.6 GiB
-        large-packages: false  # slowest removal (~40-60 s of apt), not needed
-        # docker-images OFF: it prunes the runner's PRE-BAKED images (node,
-        # buildpack-deps — 2 GiB), none of which is the pgvector image the
-        # Testcontainers tests then pull anyway. Pure cost.
-        docker-images: false
-        # swap-storage OFF: deleting the swapfile on a job that runs
-        # memory-heavy hosts is how you turn a slow test into an OOM kill
-        # (Persistence.Test already carries a memory watchdog). It reclaimed
-        # 0 B on the measured run.
-        swap-storage: false
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:

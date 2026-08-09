@@ -143,7 +143,7 @@ public class MeshNodeStreamCacheNegativeClassifierTest
 
     // The verbatim shape the silo routing grain posts when the owner read hits a dead PG endpoint.
     private const string PgConnectFailureMessage =
-        "Delivery to 'AgenticEngineering' failed: Failed to connect to 10.42.18.4:5432";
+        "Delivery to 'AgenticEngineering' failed: Failed to connect to the PG private IP:5432";
 
     [Fact]
     public void PostgresConnectFailure_AsNack_IsTransient_NotMissingNode()
@@ -157,7 +157,7 @@ public class MeshNodeStreamCacheNegativeClassifierTest
     }
 
     [Theory]
-    [InlineData("Failed to connect to 10.42.18.4:5432")]
+    [InlineData("Failed to connect to the PG private IP:5432")]
     [InlineData("Timeout during connection attempt")]
     [InlineData("Exception while connecting: connection reset by peer")]
     [InlineData("server closed the connection unexpectedly")]
@@ -176,7 +176,7 @@ public class MeshNodeStreamCacheNegativeClassifierTest
     public void TransientDatabaseFault_WrappedAsInner_IsStillTransient()
     {
         var wrapped = new InvalidOperationException("owner read failed",
-            new Exception("Failed to connect to 10.42.18.4:5432"));
+            new Exception("Failed to connect to the PG private IP:5432"));
         MeshNodeStreamCache.IsTransientOwnerFailure(wrapped).Should().BeTrue(
             "the classifier walks the inner-exception chain");
     }

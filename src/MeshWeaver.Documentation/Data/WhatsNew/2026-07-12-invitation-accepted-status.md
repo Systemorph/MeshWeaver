@@ -1,8 +1,9 @@
 ---
 Name: Invitations now show whether they were accepted
-Category: What's New
+Category: Fix
 Description: The Invitations settings tab tracks each invitation through its life — when it was emailed and when the invitee signed up — instead of showing everything as Pending forever.
 Icon: Sparkle
+Order: -20260712
 ---
 
 The **Invitations** settings tab now tells you what actually happened to each invitation you sent. Every row shows when the invitation email went out and, once the invitee completes sign-up, an **Accepted** badge with the date — so you can see at a glance who is still outstanding and who is already on board.

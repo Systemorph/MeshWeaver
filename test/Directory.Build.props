@@ -67,15 +67,73 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     </ItemGroup>
-  <ItemGroup>
+  <!-- xunit.runner.json — the shared single-threaded default, UNLESS a project ships its own
+       next to its .csproj.
+
+       A per-project file is how a project opts INTO intra-project parallelism
+       (parallelizeTestCollections + maxParallelThreads > 1) once it has been measured
+       green that way. It is deliberately opt-in per project rather than a global flip:
+       parallel safety is a property of the tests, not of the runner, and the suite has
+       classes that share a Testcontainers instance ([Collection("PostgreSql")]) or assert
+       on process-global state.
+
+       The two includes are mutually exclusive on purpose. Two Content items both landing
+       `xunit.runner.json` in the same output directory is a duplicate-copy conflict whose winner
+       MSBuild picks without guaranteeing which — i.e. a project could silently get the shared
+       default back and quietly lose its parallelism, or worse, get parallelism it never opted into.
+
+       🚨 Both are `Content`, and the local one must NOT be written as `None Update`. This file is
+       imported by Microsoft.Common.props, which runs BEFORE the SDK's default item globs are
+       defined — so an `Update` here matches nothing and silently no-ops. The failure is not a
+       missing optimisation: with no xunit.runner.json in the output at all, xUnit falls back to
+       ITS OWN defaults, where parallelizeTestCollections is true and the thread count is the core
+       count. A silent no-op therefore hands the project unbounded parallelism nobody opted into.
+       `Content Include` works because the SDK's default None glob excludes @(Content), so the file
+       is not double-copied. -->
+  <ItemGroup Condition="!Exists('$(MSBuildProjectDirectory)/xunit.runner.json')">
     <Content Include="$(MSBuildThisFileDirectory)\xunit.runner.json">
       <Link>%(RecursiveDir)%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
-  <ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/xunit.runner.json')">
+    <Content Include="xunit.runner.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <!-- appsettings.json — EXACTLY the same two-mutually-exclusive-branches shape as
+       xunit.runner.json above, and for the same reason.
+
+       🚨 This used to be a single UNCONDITIONAL include of the shared file, linked to
+       `appsettings.json` in the output. Eleven test projects also ship their own
+       appsettings.json next to their .csproj, nine of which declared their own
+       `<Content Include="appsettings.json">`. Two Content items landing the same file name in
+       the same output directory is a duplicate-copy conflict whose winner MSBuild picks without
+       guaranteeing which — so those projects' logging configuration was decided by build order.
+
+       The cost was not hypothetical. test/MeshWeaver.Query.Test/appsettings.json raises
+       MeshWeaver.Graph / Hosting.Persistence / MeshNodeStreamCache to Debug specifically to
+       diagnose the ActivityTrackingHubTest.TrackActivity_InitiatedFromConnectionHub_LandsNode
+       flake (#993). Locally the project-local file wins and the channels are live; on CI run
+       31301311379 the failing test's captured Output was EMPTY for its full 15 s budget and the
+       whole run contained zero lines from any of those channels. The diagnostic added for that
+       flake had therefore never produced a single byte of evidence on the only platform where
+       the flake occurs.
+
+       Owning both branches here (rather than leaving the local copy to each .csproj) is what
+       makes them mutually exclusive; the per-project `<Content Include="appsettings.json">`
+       declarations were removed in the same change. The `VerifyXunitRunnerConfigCopied` target
+       in Directory.Build.targets guards BOTH files — despite its name it now errors if either
+       xunit.runner.json or appsettings.json fails to reach $(TargetDir), which is what stops
+       either two-branch selection from silently picking neither. -->
+  <ItemGroup Condition="!Exists('$(MSBuildProjectDirectory)/appsettings.json')">
     <Content Include="$(MSBuildThisFileDirectory)\appsettings.json">
       <Link>%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/appsettings.json')">
+    <Content Include="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

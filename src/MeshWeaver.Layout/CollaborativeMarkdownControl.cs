@@ -2,8 +2,8 @@ namespace MeshWeaver.Layout;
 
 /// <summary>
 /// A control that renders markdown content with collaborative annotation support
-/// (track changes, comments, view mode switching).
-/// Used in the read-only overview of markdown nodes.
+/// (comments, and — when a comparison is declared — track changes).
+/// Used in the read-only overview of markdown nodes and in the version comparison view.
 /// </summary>
 public record CollaborativeMarkdownControl()
     : UiControl<CollaborativeMarkdownControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
@@ -40,6 +40,33 @@ public record CollaborativeMarkdownControl()
     /// Default-false so only the non-default (true) value ever needs to serialize.
     /// </summary>
     public bool HideAnnotations { get; init; }
+
+    /// <summary>
+    /// The BASELINE version the redline is taken against. <c>null</c> — the default — means the
+    /// document renders WITHOUT any tracked-change redline: reading a page is not reviewing it, so
+    /// the "what changed" overlay is never on by default. It is switched on only by the version
+    /// feature, which is where a reader states which version they want diffed against which.
+    /// </summary>
+    public long? CompareFromVersion { get; init; }
+
+    /// <summary>
+    /// The version the redline is taken TO. <c>null</c> means "the live document": the view then
+    /// stays subscribed to the node stream, so the redline follows further edits and each change
+    /// can be reverted. A concrete version pins the view to that historical snapshot — a read-only
+    /// comparison of two points in the past, where reverting has no meaning.
+    /// <para>Only ever read when <see cref="CompareFromVersion"/> is set.</para>
+    /// </summary>
+    public long? CompareToVersion { get; init; }
+
+    /// <summary>
+    /// Turns the tracked-change redline ON for this render, diffing <paramref name="fromVersion"/>
+    /// against <paramref name="toVersion"/> (or against the live document when it is <c>null</c>).
+    /// </summary>
+    /// <param name="fromVersion">The baseline version the redline is taken against.</param>
+    /// <param name="toVersion">The version to compare to; <c>null</c> for the live document.</param>
+    /// <returns>A new <see cref="CollaborativeMarkdownControl"/> rendering the comparison.</returns>
+    public CollaborativeMarkdownControl WithComparison(long fromVersion, long? toVersion = null) =>
+        this with { CompareFromVersion = fromVersion, CompareToVersion = toVersion };
 
     /// <summary>Returns a copy with <paramref name="value"/> as the annotated markdown content.</summary>
     /// <param name="value">The markdown string (with annotation markers) to render.</param>

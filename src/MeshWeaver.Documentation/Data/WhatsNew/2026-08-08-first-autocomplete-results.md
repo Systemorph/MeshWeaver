@@ -1,8 +1,9 @@
 ---
 Name: First "@" suggestions are now correct
-Category: What's New
+Category: Fix
 Description: The first autocomplete popup after typing "@" in the chat composer now shows the results for what you actually typed — no more re-triggering to get the right list.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # First "@" suggestions are now correct

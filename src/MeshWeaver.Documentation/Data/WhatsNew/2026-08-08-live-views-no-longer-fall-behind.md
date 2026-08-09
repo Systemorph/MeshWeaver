@@ -1,8 +1,9 @@
 ---
 Name: Live views no longer quietly fall behind under heavy editing
-Category: What's New
+Category: Fix
 Description: A view watching a node that many people (or agents) were writing to at once could silently stop showing some of the newest entries; it now stays in step with the node.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Live views no longer quietly fall behind under heavy editing

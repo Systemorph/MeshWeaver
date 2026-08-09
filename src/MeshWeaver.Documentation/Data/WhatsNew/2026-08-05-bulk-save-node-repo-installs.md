@@ -1,8 +1,9 @@
 ---
 Name: Plugin installs are minutes faster — nodes now land in bulk
-Category: What's New
+Category: Feature
 Description: Installing a node-repo plugin (a course, a module) now writes its new nodes in a few transactional batches instead of one at a time.
 Icon: Sparkle
+Order: -20260805
 ---
 
 # Plugin installs are minutes faster

@@ -13,7 +13,7 @@ namespace MeshWeaver.Graph.Security;
 /// <see cref="MeshNode.Content"/> is a raw JSON object carrying a polymorphic
 /// <c>$type</c> discriminator that no registry will EVER resolve.
 ///
-/// <para><b>The defect this kills (atioz 2026-06-12, image catalog2-20260612):</b>
+/// <para><b>The defect this kills (prod 2026-06-12, image catalog2-20260612):</b>
 /// an agent created Markdown nodes under a Space with
 /// <c>content: {"$type": "MarkdownConfiguration", "markdown": "…"}</c> — a type
 /// name that exists nowhere (the registered Markdown content type is

@@ -69,7 +69,7 @@ public static class SchemaInitialization
         // index node (ApiTokenIndex → the user-scoped token node) into the `apitoken` schema, and
         // token validation reads it back by exact path on every bearer request. `ApiToken` is not
         // an OwnsPartition type and the router no longer lazily CREATE-SCHEMAs (0ceba04ce), so the
-        // schema must be created EXPLICITLY here — otherwise a fresh DB (e.g. atioz) never gets it
+        // schema must be created EXPLICITLY here — otherwise a fresh DB (e.g. prod) never gets it
         // and every freshly-minted token (manual AND OAuth) 401s on the next request. Uses the
         // single-source-of-truth per-partition DDL proc installed by InitializeAsync above; the
         // boot-time PostgreSqlPartitionSubscriptionHostedService also provisions it from
@@ -81,7 +81,7 @@ public static class SchemaInitialization
         // VUser (virtual-user) partition. VirtualUserMiddleware creates a VUser/{id} node for
         // every cookie-less request (bots, prefetchers, anonymous visitors); like ApiToken, VUser
         // is not an OwnsPartition type and the router never lazily CREATE-SCHEMAs, so without
-        // this explicit create a fresh DB (e.g. atioz 2026-06-11) has no `vuser` schema and every
+        // this explicit create a fresh DB (e.g. prod 2026-06-11) has no `vuser` schema and every
         // anonymous request fails its VUser create with `42P01: relation "vuser.mesh_nodes" does
         // not exist` (made loudly visible by the create fail-closed gate; before that the creates
         // were silently acked-and-lost). Same single-source-of-truth DDL proc as Space creation

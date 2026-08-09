@@ -33,7 +33,7 @@ List every image referenced by a live Deployment in **all** namespaces on the sh
 cluster is private — `kubectl` only via `az aks command invoke`.
 
 ```bash
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "\
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "\
   for ns in memex memex-cloud; do \
     echo \"[\$ns]\"; \
     kubectl -n \$ns get deploy -o jsonpath='{range .items[*]}{.spec.template.spec.containers[0].image}{\"\n\"}{end}'; \

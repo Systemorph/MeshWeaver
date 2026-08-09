@@ -35,7 +35,7 @@ namespace MeshWeaver.Graph.Security;
 ///   <item><b>Top-level ⟺ partition-owning.</b> A top-level node (empty namespace) IS a
 ///     partition root, so only a NodeType whose <see cref="NodeTypeDefinition.OwnsPartition"/>
 ///     is <c>true</c> (<c>User</c>, <c>Space</c>) may be created there. A top-level node of
-///     any other type — even from a global/platform admin — is rejected (the atioz
+///     any other type — even from a global/platform admin — is rejected (the prod
 ///     <c>HelloWorld</c> Markdown incident). Unlike rule 2 this is fail-CLOSED and does NOT
 ///     consult the existence probe, so a pre-existing ("ghost") schema cannot launder a
 ///     non-partition node into legitimacy. It is the converse of
@@ -162,7 +162,7 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
         // Rule 3 — a TOP-LEVEL node IS a partition root, so only a partition-OWNING
         // NodeType (NodeTypeDefinition.OwnsPartition: User, Space) may be created there.
         // Everything else at the root ('') is illegal — content belongs inside a partition,
-        // never as a bare top-level node (the atioz `HelloWorld` Markdown / `BadTypeProbe`
+        // never as a bare top-level node (the prod `HelloWorld` Markdown / `BadTypeProbe`
         // incident). This is fail-CLOSED and structural: it does NOT depend on the
         // existence probe below (a ghost schema must not be able to launder a non-partition
         // node into legitimacy). It is the converse of OwnsPartitionProvisioningValidator's

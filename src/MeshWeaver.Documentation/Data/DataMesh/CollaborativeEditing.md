@@ -5,7 +5,7 @@ Description: Real-time collaborative markdown editing with comments, track chang
 Icon: /static/DocContent/DataMesh/CollaborativeEditing/icon.svg
 ---
 
-Work together on documents in real time — comment on passages, edit freely, and see every change tracked (who, when, what) with a one-click revert, without ever leaving the document.
+Work together on documents in real time — comment on passages, edit freely, and, whenever you want to know what changed, open **Versions**, name the two versions you care about, and read the whole thing as a redline (who, when, what) with a one-click revert.
 
 ---
 
@@ -127,7 +127,9 @@ A reviewer might attach comments to:
 
 ## Making Suggestions (Track Changes)
 
-**Suggest Edit** (in the UI, or the agent tool of the same name) applies the edit to the document as a **normal versioned write**. There is no pending-proposal limbo: the edit lands, the version history records who made it and when, and every reader sees it as a tracked change with a one-click **Revert**. Reverting is itself a versioned write, so the whole review is auditable instead of a satellite quietly appearing and disappearing.
+**Suggest Edit** (in the UI, or the agent tool of the same name) applies the edit to the document as a **normal versioned write**. There is no pending-proposal limbo: the edit lands and the version history records who made it and when. Open **Versions** and the edit reads as a tracked change with a one-click **Revert**. Reverting is itself a versioned write, so the whole review is auditable instead of a satellite quietly appearing and disappearing.
+
+> **The redline is never on by default.** Reading a document is not reviewing it: the document page shows the document, comments and all, and nothing else. The redline appears only where a reader has *said* which two versions they want compared — see [Choosing what to compare](#choosing-what-to-compare) below. That is also why there is no "show changes" toggle to hunt for: the comparison IS the switch.
 
 ### Additions
 
@@ -148,6 +150,28 @@ Removed text shows struck through, reconstructed from the baseline version — t
 > 1. Expand into European markets
 > 2. Reallocate marketing spend to digital channels
 > 3. Improve customer retention rates
+
+---
+
+## Choosing what to compare
+
+Open **Versions**. The list of versions IS the picker — there is no separate dialog to fill in and no baseline to remember between clicks:
+
+| You want | Do this |
+|---|---|
+| What has happened since some version | **Compare with current** on that version's row — one click |
+| What changed between two specific versions | **From** on the older, **To** on the newer, then **Compare** |
+| To start over | **Clear selection** |
+
+A comparison needs two endpoints, so **Compare** stays inert until both are named — and says so rather than failing quietly when clicked. Claiming an endpoint that would invert the pair (a *From* at or after the current *To*) releases the other one instead of offering a backwards comparison: the picker cannot be driven into a state that Compare would have to refuse.
+
+**Compare with current** is on every row except the current version's, where it would compare a version with itself.
+
+### What the comparison shows
+
+Prose renders as the **redline**: every hunk introduced between the two versions marked up inline — insertions underlined, deletions struck through — with a card per change naming the author and the time, read straight off the version that introduced it. Non-prose content (and prose, via **Show the source diff**) renders as the side-by-side source diff instead, which is what you want for front matter or link syntax.
+
+Comparing against the **current** document keeps the view live: further edits appear as they land, and each change can be reverted. Comparing two *historical* versions pins the view to the document as it stood at the target version — there is nothing on screen to revert INTO, so revert is not offered there.
 
 ---
 

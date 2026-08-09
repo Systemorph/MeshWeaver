@@ -558,6 +558,12 @@ public static class MemexConfiguration
             Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ModelsArea}",
             Tooltip: "Language models — global, space, and user")
             { LabelKey = "menu.models", TooltipKey = "menu.modelsTooltip" },
+        // Tiers sit between Models and Providers on purpose: it is the third thing you configure when
+        // you set a deployment up — which models exist, what each one is FOR, and whose key pays.
+        new NodeMenuItemDefinition("Tiers", "AiModelTiers", Icon: "/static/NodeTypeIcons/task-list.svg", Order: 22,
+            Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.TiersArea}",
+            Tooltip: "Model tiers — what each model is used for")
+            { LabelKey = "menu.modelTiers", TooltipKey = "menu.modelTiersTooltip" },
         new NodeMenuItemDefinition("Providers", "AiProviders", Icon: "/static/NodeTypeIcons/key.svg", Order: 25,
             Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ProvidersArea}",
             Tooltip: "AI providers — endpoints + keys")
@@ -796,7 +802,7 @@ public static class MemexConfiguration
                 // Ship compiled releases WHEREVER we ship code NodeTypes — Doc AND the sample
                 // partitions (ACME, FutuRe, Northwind, Cornerstone, MeshWeaver). Pre-build every
                 // shipped code NodeType's release at boot, as System, so the runtime path is a
-                // cache hit and no user navigation ever triggers an on-demand compile (the atioz
+                // cache hit and no user navigation ever triggers an on-demand compile (the prod
                 // 2026-06-18 phantom _Activity/compile-* storm). Idempotent (skips already-built
                 // types); off the thread pool so it never blocks startup.
                 .ConfigureServices(services =>
@@ -1041,7 +1047,7 @@ public static class MemexConfiguration
         // no circuit ever disposes). At readiness-probe cadence (5 s) the portal
         // accumulated 10,000+ leaked MessageHubs in ~25 minutes, the hosted-hub
         // collection lock became the hot path of every routed stream message,
-        // and the instance wedged at 100% CPU — the 2026-06-12 atioz outage.
+        // and the instance wedged at 100% CPU — the 2026-06-12 prod outage.
         // Point ALL probes here; the endpoint answers without touching identity,
         // the mesh, or the renderer.
         app.Use((ctx, next) =>

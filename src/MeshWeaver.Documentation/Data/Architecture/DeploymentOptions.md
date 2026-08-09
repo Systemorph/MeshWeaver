@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "Deployment Options (AKS)"
-Abstract: "What can actually be done to configure and ship the memex.systemorph.com AKS deployment: live mesh-node config (no redeploy), the default static catalog via Helm, Key Vault + CSI secrets, code changes via CI-built images, and how to reach a PRIVATE AKS API server. Includes the master-key caveat that can silently break encrypted keys."
+Abstract: "What can actually be done to configure and ship the portal.example.com AKS deployment: live mesh-node config (no redeploy), the default static catalog via Helm, Key Vault + CSI secrets, code changes via CI-built images, and how to reach a PRIVATE AKS API server. Includes the master-key caveat that can silently break encrypted keys."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#0d47a1'/><path d='M12 3l7 4v6c0 4-3 6-7 8-4-2-7-4-7-8V7z' fill='none' stroke='white' stroke-width='1.8'/></svg>"
 Authors:
   - "Roland Buergi"
@@ -14,13 +14,13 @@ Tags:
 
 # Deployment Options (AKS)
 
-How to change what runs at **memex.systemorph.com**, from "instant, no redeploy" to "full image release". Each option below is independent — pick the lightest one that does the job. This page exists because several of the options have non-obvious constraints (a *private* API server, CI-only image builds, and a master key that must not be overwritten).
+How to change what runs at **portal.example.com**, from "instant, no redeploy" to "full image release". Each option below is independent — pick the lightest one that does the job. This page exists because several of the options have non-obvious constraints (a *private* API server, CI-only image builds, and a master key that must not be overwritten).
 
 ## The environment, in one table
 
 | Fact | Value | Consequence |
 |---|---|---|
-| Cluster | `memexaks-cluster` / rg `memex-aks-rg` (Sweden Central) | — |
+| Cluster | `<aks-cluster>` / rg `<aks-resource-group>` (Sweden Central) | — |
 | API server | **private** (`…privatelink…azmk8s.io`) | `kubectl`/`helm` from outside the VNet **cannot reach it** — use `az aks command invoke` or an in-VNet runner/VPN |
 | Key Vault CSI | `azureKeyvaultSecretsProvider` add-on **enabled** (identity clientId `6c9dcc8d-…`) | secrets can come from Key Vault, keyless |
 | Key Vault | `Systemorph` (`https://systemorph.vault.azure.net`) | holds `AzureFoundry-ApiKey` (set) |
@@ -39,7 +39,7 @@ The model picker reads `ModelProvider` + `LanguageModel` mesh nodes. Create/patc
 
 ## Option B — Default static catalog via Helm config (needs redeploy)
 
-`BuiltInLanguageModelProvider` materialises a **default** catalog at `Provider/{provider}` + nested model children from config (`{Section}:Models` / `:Endpoint`) — imported into the top-level `Provider` partition on boot and served from the DB. The tier→model map (`ModelTier:Heavy/Standard/Light/Utility`) also comes from config and is what agents resolve. The AKS overlay (`deploy/aks/values.aks.yaml`) sets:
+`BuiltInLanguageModelProvider` materialises a **default** catalog at `Provider/{provider}` + nested model children from config (`{Section}:Models` / `:Endpoint`) — imported into the top-level `Provider` partition on boot and served from the DB. The tier→model map now lives on the model NODES (`"tier": "coding"` — see [Model Tiers](/Doc/AI/ModelTiers)); the `ModelTier:Heavy/Standard/Light/Utility` keys below are the deprecated shim, still read so an existing deployment keeps its mapping. The AKS overlay (`deploy/aks/values.aks.yaml`) sets:
 
 ```text
 AzureFoundry__Endpoint = https://s-meshweaver.services.ai.azure.com/models
@@ -101,12 +101,12 @@ Anything in `.cs` (e.g. the Claude Code PTY fix, the static-catalog behaviour) o
 
 ```bash
 # config/manifest changes (works against the CURRENT image):
-az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
   --command "kubectl apply -f secretproviderclass.yaml && kubectl rollout restart deploy/memex-portal-deployment -n memex" \
   --file deploy/aks/manifests/secretproviderclass.yaml
 
 # helm upgrade (uploads the chart + values to the in-cluster run pod, which has helm):
-az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
   --command "helm upgrade memex ./helm -f ./helm/values.yaml -f values.aks.yaml -n memex" \
   --file deploy/helm --file deploy/aks/values.aks.yaml
 ```

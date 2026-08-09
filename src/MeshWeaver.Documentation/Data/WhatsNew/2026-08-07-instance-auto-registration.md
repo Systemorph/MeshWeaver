@@ -1,8 +1,9 @@
 ---
 Name: New installations register themselves on first startup
-Category: What's New
+Category: Feature
 Description: A registration key from the admin surface lets a fresh MeshWeaver installation register itself at the plugin registry on first boot — no token copying, plugins available immediately.
 Icon: Sparkle
+Order: -20260807
 ---
 
 # New installations register themselves on first startup

@@ -73,7 +73,7 @@ public static class GraphConfigurationExtensions
 
             // The static-repo importer runs its bulk create/upsert traffic on a DEDICATED
             // hub (import/{meshHubId}) so it never floods the root mesh hub's action block —
-            // the router must stay free (atioz 2026-06-11 wedge). Declare its address-type as
+            // the router must stay free (prod 2026-06-11 wedge). Declare its address-type as
             // stream-routed here, where the importer's module is enabled, so the silo's
             // RoutingGrain dispatches to it and its responses route back. See StaticRepoImporter.
             builder.AddStreamRoutedAddressType(StaticRepoImporter.ImportAddressType);
@@ -162,6 +162,15 @@ public static class GraphConfigurationExtensions
             // Doc/Architecture/AsynchronousCalls.md → "Static handlers compose".
             builder.AddMeshNodes(GraphImportTemplates.GetStaticNodes());
 
+            // …and the access grant that lets an ordinary (non-admin) user actually RUN them.
+            // ExecuteScriptRequest is gated on Permission.Execute on the template's own path, so
+            // without this every non-admin's node copy failed "lacks Execute permission on
+            // Templates/Import/NodeCopy" (issue #423). Seeded here, next to the nodes it guards,
+            // because those nodes are in-memory statics that never reach Postgres — so a
+            // migration could not cover them. IfAbsent: AddMarkdownExport() seeds the same
+            // partition-level grant, and either call alone must land it exactly once.
+            builder.AddMeshNodesIfAbsent(ScriptTemplates.PublicExecuteGrant());
+
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
             {
@@ -170,7 +179,7 @@ public static class GraphConfigurationExtensions
                 // built-in-NodeType node whose Content carries a '$type' discriminator no
                 // registry will ever resolve. Without it, such content persists verbatim
                 // and every later load degrades it to an untyped JsonElement — the node
-                // renders empty and cannot be edited (atioz 2026-06-12: agent-authored
+                // renders empty and cannot be edited (prod 2026-06-12: agent-authored
                 // Markdown nodes with '$type': 'MarkdownConfiguration'). Scoped, like the
                 // security validators: each hub scope resolves it with that hub's
                 // IMessageHub, so the registry checked is the validating hub's own chain.

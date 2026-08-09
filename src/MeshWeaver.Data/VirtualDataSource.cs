@@ -73,7 +73,7 @@ public record VirtualDataSource(object Id, IWorkspace Workspace)
         // enforcement is re-applied at the CONSUMER (SyncedQueryDataSourceExtensions.WrapWithPerUserRls).
         // Without an explicit identity the stream.Update below posts an UpdateStreamRequest with a
         // NULL AccessContext and the PostPipeline never-null guard fails it CLOSED → a
-        // DeliveryFailure storm (atioz 2026-06-21: ds/Skill at ~3/sec, OnError-ing the typed
+        // DeliveryFailure storm (prod 2026-06-21: ds/Skill at ~3/sec, OnError-ing the typed
         // content stream so the bound area hangs). Stamp System on these writes — the SAME rule and
         // fix as the resubscribe in JsonSynchronizationStream and the stale-patch refresh in
         // SynchronizationStream. (System on this WRITE does not collapse per-user READS the way the

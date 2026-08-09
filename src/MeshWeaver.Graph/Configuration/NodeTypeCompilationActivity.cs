@@ -51,7 +51,7 @@ internal static class NodeTypeCompilationActivity
         // never-null guard fails the CreateNode closed and the .Catch below SWALLOWS it → the activity
         // node never lands, yet the parent still gets stamped LastCompilationActivityPath → progress
         // readers subscribe to a non-existent node → "NotFound for …/_Activity/compile…" resubscribe
-        // storm (atioz 2026-06-18). Run the write as System so it always persists.
+        // storm (prod 2026-06-18). Run the write as System so it always persists.
         var accessService = hub.ServiceProvider.GetService<AccessService>();
 
         try
@@ -219,7 +219,7 @@ internal static class NodeTypeCompilationActivity
             // user (background recompile, grain activation) or a non-writer user (a compile
             // on a read-only partition). MarkSucceeded/MarkFailed route through here, so
             // this is the one place the System scope was missing from its Start/AppendLog/
-            // Complete siblings (atioz 2026-06-18 phantom-activity storm class).
+            // Complete siblings (prod 2026-06-18 phantom-activity storm class).
             var accessService = hub.ServiceProvider.GetService<AccessService>();
             using (accessService?.ImpersonateAsSystem())
                 hub.GetWorkspace().GetMeshNodeStream(activityPath!)

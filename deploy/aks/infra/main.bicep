@@ -27,14 +27,14 @@
 targetScope = 'subscription'
 
 @description('Resource group to create / deploy into.')
-param resourceGroupName string = 'memex-aks-rg'
+param resourceGroupName string = '<aks-resource-group>'
 
 @description('Azure region for all resources.')
 param location string = 'westeurope'
 
 @description('Short name prefix used across resources (lowercase, <= 12 chars).')
 @maxLength(12)
-param namePrefix string = 'memexaks'
+param namePrefix string = '<aks>'
 
 // --- ACR -------------------------------------------------------------------
 @description('Login server of an EXISTING shared ACR (e.g. meshweaver.azurecr.io). When set, NO per-RG ACR is created — images are pulled from this shared registry, and the cluster kubelet must be granted AcrPull on it out-of-band (cross-RG, see README). Leave empty to create a dedicated per-RG ACR.')
@@ -74,7 +74,7 @@ param availabilityZones array = [
 
 // --- Networking ------------------------------------------------------------
 @description('VNet address space.')
-param vnetAddressSpace string = '10.42.0.0/16'
+param vnetAddressSpace string = '10.0.0.0/16'
 
 // --- VPN -------------------------------------------------------------------
 @description('Deploy the P2S VPN Gateway (set false to use az aks command invoke / Bastion instead).')
@@ -106,10 +106,10 @@ param deployPortalIdentity bool = true
 @description('Name of the portal UAMI. Empty = "<namePrefix>-portal-mi".')
 param portalIdentityName string = ''
 
-@description('Kubernetes namespaces that run the portal. One federated credential (subject system:serviceaccount:<ns>:memex-portal-sa) is created per namespace. Keep in sync with the deployed environments (memex, atioz, memex-cloud).')
+@description('Kubernetes namespaces that run the portal. One federated credential (subject system:serviceaccount:<ns>:memex-portal-sa) is created per namespace. Keep in sync with the deployed environments (memex, prod, memex-cloud).')
 param portalNamespaces array = [
   'memex'
-  'atioz'
+  'prod'
   'memex-cloud'
 ]
 

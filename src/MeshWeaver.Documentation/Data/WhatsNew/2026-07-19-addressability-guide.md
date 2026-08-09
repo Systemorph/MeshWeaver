@@ -1,8 +1,9 @@
 ---
 Name: New guide — Addressability of Objects
-Category: What's New
+Category: Feature
 Description: A new documentation page explains how one addressable namespace lets an agent go from a plain-English ask to a precise, typed action
 Icon: Sparkle
+Order: -20260719
 ---
 
 # New guide — Addressability of Objects

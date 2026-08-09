@@ -1,8 +1,9 @@
 ---
 Name: Errors in production open their own tickets
-Category: What's New
+Category: Feature
 Description: A watcher reads the platform's error logs, an agent works out what broke, and each distinct fault gets exactly one GitHub issue.
 Icon: Bug
+Order: -20260807
 ---
 
 # Errors in production open their own tickets

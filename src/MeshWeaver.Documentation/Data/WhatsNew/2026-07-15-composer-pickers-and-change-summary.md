@@ -1,8 +1,9 @@
 ---
 Name: Smoother chat composer, cleaner change summaries
-Category: What's New
+Category: Fix
 Description: The composer's harness/model/agent pickers open on your current choice and close with Esc, and thread change summaries are read-only.
 Icon: Sparkle
+Order: -20260715
 ---
 
 # Smoother chat composer, cleaner change summaries

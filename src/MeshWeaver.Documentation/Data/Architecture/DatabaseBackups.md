@@ -7,9 +7,9 @@ Icon: CloudArrowUp
 
 # Database Backups & Disaster Recovery
 
-All portal instances on the shared AKS cluster (`memex`, `memex-cloud`, `atioz` — see
+All portal instances on the shared AKS cluster (`memex`, `memex-cloud`, `prod` — see
 [Instances.md](/Doc/Architecture/Instances)) store their data in **one private Azure Database for
-PostgreSQL Flexible Server** (`memexaks-pg`, swedencentral, PG 16 + pgvector). Backing up that one
+PostgreSQL Flexible Server** (`<pg-server>`, swedencentral, PG 16 + pgvector). Backing up that one
 server backs up **every database on it**, so the whole platform's data is covered by a single policy.
 
 ## What is backed up today
@@ -41,7 +41,7 @@ Any **newly provisioned** server (a fresh environment, or a rebuild) is geo-redu
 ### 🚨 Enabling geo-redundancy on the EXISTING live server is NOT an in-place flip
 
 `geoRedundantBackup` is **immutable after server creation** on Flexible Server. Re-running the bicep
-against the running `memexaks-pg` will **not** turn it on — ARM rejects the change. To make the
+against the running `<pg-server>` will **not** turn it on — ARM rejects the change. To make the
 *live* server geo-redundant you must create a **new** geo-redundant server from a restore and cut
 over. This is a disruptive prod operation — schedule a short maintenance window; it is **not** run
 as part of a normal code deploy.
@@ -52,26 +52,26 @@ Runbook (paired-region DR enablement for the live server):
 # 1. PITR-restore the live server into a NEW server WITH geo-redundancy enabled.
 #    (Restore is the only create path that lets you set a different backup option.)
 az postgres flexible-server restore \
-  --resource-group memex-aks-rg \
-  --name memexaks-pg-geo \
-  --source-server memexaks-pg \
+  --resource-group <aks-resource-group> \
+  --name <pg-server>-geo \
+  --source-server <pg-server> \
   --restore-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # 2. Turn geo-redundant backup on for the NEW server (settable because it's a create/restore).
 #    If the restore CLI does not accept --geo-redundant-backup on your version, pass it at restore
 #    time; otherwise recreate from a geo-restore. Verify:
-az postgres flexible-server show -g memex-aks-rg -n memexaks-pg-geo \
+az postgres flexible-server show -g <aks-resource-group> -n <pg-server>-geo \
   --query "backup.geoRedundantBackup"           # → "Enabled"
 # 3. Re-inject into the same delegated subnet + private DNS zone, re-apply pgvector allowlist
 #    (azure.extensions = VECTOR,UUID-OSSP), and re-create/verify each per-env database.
 # 4. Cut over: patch the connection string for EVERY portal namespace to the new FQDN, then restart.
-#    (memex, memex-cloud, atioz — one at a time; confirm HTTP 200 before the next.)
+#    (memex, memex-cloud, prod — one at a time; confirm HTTP 200 before the next.)
 # 5. Decommission the old server once the cutover is verified and a fresh geo-backup exists.
 ```
 
 Confirm current live setting before/after any change:
 
 ```bash
-az postgres flexible-server show -g memex-aks-rg -n memexaks-pg \
+az postgres flexible-server show -g <aks-resource-group> -n <pg-server> \
   --query "{geo:backup.geoRedundantBackup, retentionDays:backup.backupRetentionDays}"
 ```
 
@@ -79,9 +79,9 @@ az postgres flexible-server show -g memex-aks-rg -n memexaks-pg \
 
 ```bash
 az postgres flexible-server restore \
-  --resource-group memex-aks-rg \
-  --name memexaks-pg-restored \
-  --source-server memexaks-pg \
+  --resource-group <aks-resource-group> \
+  --name <pg-server>-restored \
+  --source-server <pg-server> \
   --restore-time "2026-07-08T09:00:00Z"
 ```
 

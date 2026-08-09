@@ -1,8 +1,9 @@
 ---
 Name: Send feedback right from chat with /feedback
-Category: What's New
+Category: Feature
 Description: A new /feedback skill files your feedback — with the page you were on and your name — privately for you, where only you and platform admins can see it.
 Icon: Sparkle
+Order: -20260711
 ---
 
 # Send feedback right from chat with /feedback

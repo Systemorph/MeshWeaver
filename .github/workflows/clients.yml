@@ -2,16 +2,52 @@ name: Clients
 
 # CI for the foreign-language client packages under clients/. The .NET solution CI does not cover
 # these, so typecheck + test them here on any PR that touches them.
+#
+# 🚨 The trigger must list every INPUT these jobs read, not just the tree they live in.
+# Several jobs deliberately reach ACROSS into src/ — the server is the single place a string, a
+# control mapping or a wire contract is authored, and the client copies are checked against it:
+#
+#   src/MeshWeaver.Messaging.Hub/Localization/**        → clients/react/src/i18n/localize.test.ts
+#                                                         (byte-identical catalog drift guard)
+#   src/MeshWeaver.Messaging.Contract/Localization/     → the same test scrapes Locales.Supported
+#     Locales.cs
+#   src/MeshWeaver.Blazor/BlazorViewRegistry.cs         → clients/react/src/render/parity.test.ts
+#                                                         + clients/react-native/src/parity.test.ts
+#                                                         (control/skin vocabulary is DERIVED from it)
+#   src/MeshWeaver.Hosting.Grpc/Protos/**               → the canonical mesh.proto the python,
+#                                                         grpc-web and typescript clients generate from
+#
+# Filtering on "clients/**" alone made every one of those guards blind to the side that actually
+# changes: a server-only PR adds a key (or a control, or a proto field), CI stays green because
+# nothing under clients/ moved, and the gap sits LATENT until some unrelated PR happens to touch the
+# client tree and inherits a red it did not cause. That is not hypothetical — it is issue #964:
+# c34bd01e6 and 18b3e2ee3 each added localization keys with ZERO files under clients/, both merged
+# green, and the 5 resulting orphan keys survived on main until this change. Keeping the trigger
+# aligned with the jobs' real inputs puts the cost back on the PR that created it.
+#
+# clients/react/src/ciTrigger.test.ts fails if a client test grows a NEW cross-tree read this list
+# does not cover, so the trigger and the tests' real inputs cannot drift apart again.
+#
+# The two lists are spelled out rather than shared through a YAML anchor — the Actions workflow
+# parser does not expand anchors/aliases. That same test asserts they stay identical.
 on:
   pull_request:
     paths:
       - "clients/**"
       - ".github/workflows/clients.yml"
+      - "src/MeshWeaver.Messaging.Hub/Localization/**"
+      - "src/MeshWeaver.Messaging.Contract/Localization/Locales.cs"
+      - "src/MeshWeaver.Blazor/BlazorViewRegistry.cs"
+      - "src/MeshWeaver.Hosting.Grpc/Protos/**"
   push:
     branches: [main]
     paths:
       - "clients/**"
       - ".github/workflows/clients.yml"
+      - "src/MeshWeaver.Messaging.Hub/Localization/**"
+      - "src/MeshWeaver.Messaging.Contract/Localization/Locales.cs"
+      - "src/MeshWeaver.Blazor/BlazorViewRegistry.cs"
+      - "src/MeshWeaver.Hosting.Grpc/Protos/**"
 
 jobs:
   react:

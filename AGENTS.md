@@ -4,7 +4,7 @@ This file provides guidance to AI agents working with this repository.
 
 ## Git Workflow
 
-**When the task's goal is reached, automatically follow the [`pullrequest` skill](.claude/skills/pullrequest/SKILL.md)** — What's New entry, commit, push, open the PR, wait for green CI, merge. "Goal reached" means the work is implemented, verified, and the touched projects build clean with CI's flags (`-c Release -warnaserror`); don't stop to ask permission for the PR flow at that point. Everything short of that stays manual: never commit or push half-done or unverified work, and the merge gate is absolute — never merge with CI red or pending.
+**When the task's goal is reached, automatically follow the [`pullrequest` skill](.claude/skills/pullrequest/SKILL.md)** — What's New entry (`Category: Fix` for a bug fix a user can notice, `Category: Feature` otherwise — fixes are the entries that go missing), commit, push, open the PR, wait for green CI, merge. "Goal reached" means the work is implemented, verified, and the touched projects build clean with CI's flags (`-c Release -warnaserror`); don't stop to ask permission for the PR flow at that point. Everything short of that stays manual: never commit or push half-done or unverified work, and the merge gate is absolute — never merge with CI red or pending.
 
 ### 🚨🚨🚨 ABSOLUTE: NEVER work on the primary checkout — it stays on `main`, untouched. EVERYONE creates a worktree.
 
@@ -135,7 +135,7 @@ Two ways that leaves a merged change undeployed, both of them SILENT:
 
 ```bash
 az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl get deploy -A -o custom-columns=NS:.metadata.namespace,IMAGE:.spec.template.spec.containers[0].image --no-headers | grep memex-portal-ai"
 ```
 
@@ -267,7 +267,7 @@ Full reference: [Localization.md](src/MeshWeaver.Documentation/Data/Architecture
 
 **🚨 Before any AKS deploy, read [DeploymentAKS.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md) end-to-end** — it is the source of truth for build → roll-out → verify AND for the **auto-baked mesh-local `#r` package feed** (the `BakeMeshLocalFeed` target packs `MeshWeaver.BusinessRules` + `.Generator` into the image so scope/`IScope` nodes compile offline in prod — Release publish only, no manual pack step). The commands inlined below are a quick reference, not a substitute for the doc.
 
-The `memex` portal runs on the shared **AKS cluster** `memexaks-cluster` (RG `memex-aks-rg`, swedencentral) — namespace `memex` — against the Postgres Flexible Server, images in ACR `meshweaver.azurecr.io`. **Private cluster: `kubectl` ONLY via `az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "…"`.**
+The `memex` portal runs on the shared **AKS cluster** `<aks-cluster>` (RG `<aks-resource-group>`, swedencentral) — namespace `memex` — against the Postgres Flexible Server, images in ACR `meshweaver.azurecr.io`. **Private cluster: `kubectl` ONLY via `az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "…"`.**
 
 **On AKS a code update = build image → set image → restart** (the AKS route does NOT use `tools/deploy.sh` or `aspire deploy` — those are the Container Apps route):
 
@@ -282,7 +282,7 @@ dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.cs
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
   -p:ContainerRepository=memex-migration -p:ContainerImageTag=<tag>
 # Roll out (NS = memex):
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "\
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "\
   kubectl -n <NS> set image deployment/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag>; \
   kubectl -n <NS> set image deployment/memex-migration-deployment memex-migration=meshweaver.azurecr.io/memex-migration:<tag>; \
   kubectl -n <NS> rollout restart deployment/memex-migration-deployment deployment/memex-portal-deployment; \

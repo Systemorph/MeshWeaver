@@ -79,7 +79,7 @@ data:
   # AppleTouchIcon is the LARGE Safari bookmark / Start-Page / Add-to-Dock tile (180×180 PNG) —
   # the favicon doesn't drive it, so with none set Safari draws its own letter tile. A URL or
   # app-relative path; empty = none. Per-install brand assets ship at
-  # _content/Memex.Portal.Shared/brand/{systemorph,atioz,local}-180.png (or a mesh asset / absolute URL).
+  # _content/Memex.Portal.Shared/brand/{systemorph,prod,local}-180.png (or a mesh asset / absolute URL).
   Portal__AppleTouchIcon: "{{ .Values.config.memex_portal.Portal__AppleTouchIcon | default "" }}"
 {{- if (.Values.instancesAdmin).clusterRead }}
   # ---- Platform-admin Instances overview (see .Values.instancesAdmin) -------
@@ -142,7 +142,12 @@ data:
   # `default "false"`, never `default ""`. The `default ""` pattern above is only safe for keys
   # consumed as strings; an empty string fails Boolean.Parse and crashes host startup (issue #352).
   OpenAICompatible__DiscoverModels: "{{ .Values.config.memex_portal.OpenAICompatible__DiscoverModels | default "false" }}"
-  # Tier → concrete model id (agents that declare ModelTier resolve through these).
+  # 🕰️ DEPRECATED compatibility shim — kept templated so an existing deployment does NOT lose its
+  # model mapping on upgrade. Tiers are now `nodeType:ModelTier` NODES (Provider/Tier/*) referenced
+  # from each model node's `tier` field; these keys sit BELOW those labels and only answer a tier no
+  # model node carries. They map onto the tiers by rank: Heavy → coding, Standard → reasoning,
+  # Light → chat, Utility → utility. Label your model nodes and delete these.
+  # See Doc/AI/ModelTiers → "Migrating off the ModelTier:* config".
   ModelTier__Heavy: "{{ .Values.config.memex_portal.ModelTier__Heavy }}"
   ModelTier__Standard: "{{ .Values.config.memex_portal.ModelTier__Standard }}"
   ModelTier__Light: "{{ .Values.config.memex_portal.ModelTier__Light }}"
@@ -155,7 +160,7 @@ data:
   # (MemexConfiguration: `if (features.Ai.Providers.Anthropic) AddAnthropic()`).
   # Default "true" (provider on) so existing envs are unchanged; set "false"
   # per-env to drop the provider entirely — no catalog source → it vanishes from
-  # the model picker and its Model/<id> nodes never seed. atioz sets this false
+  # the model picker and its Model/<id> nodes never seed. prod sets this false
   # (Claude there is per-user Claude Code, NOT a wired API provider).
   Features__Ai__Providers__Anthropic: "{{ .Values.config.memex_portal.Features__Ai__Providers__Anthropic | default "true" }}"
   # Same gate for the AzureFoundry (open-weight /models, e.g. DeepSeek) chat provider.

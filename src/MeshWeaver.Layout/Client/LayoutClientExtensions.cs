@@ -148,7 +148,7 @@ public static class LayoutClientExtensions
             // mis-cased (e.g. "center" vs Center) or unknown literal from a node's Source. A bare
             // Enum.Parse is case-sensitive and THROWS on a miss — and this runs inside a Blazor
             // BuildRenderTree (DataGridView.RenderPropertyColumn), so the throw escapes the render,
-            // kills the circuit, and hangs the whole page (atioz 2026-06-21: HorizontalAlignment
+            // kills the circuit, and hangs the whole page (prod 2026-06-21: HorizontalAlignment
             // "center"). TryParse(ignoreCase) resolves the common mis-cased case and falls back to
             // default for a genuinely unknown literal — never crash a render over one bad value.
             return Enum.TryParse(typeof(T), stringValue, ignoreCase: true, out var parsed)
@@ -453,7 +453,7 @@ public static class LayoutClientExtensions
         // The generic read-only property form (EditorExtensions) has no control for an IEnumerable<T> and
         // binds a NUMBER/BOOL scalar into a string-typed LabelControl; `Deserialize<string>("322.844")`
         // (or `"[...]"`/`"{...}"`) throws JsonException — the catch below then returns null, so the field
-        // renders BLANK until you click to edit (issue #322; the atioz Anthropic `models` array crash).
+        // renders BLANK until you click to edit (issue #322; the prod Anthropic `models` array crash).
         // Render the readable text form instead: a scalar array becomes "a, b, c", and a Number/True/False
         // token becomes its own text ("322.844"/"true"/"false"). This is the string-slot analogue of the
         // numeric edit control deserializing the CLR type fine. Only a genuine string target is affected;
@@ -501,7 +501,7 @@ public static class LayoutClientExtensions
     /// array becomes "a, b, c"; a Number/True/False/Object token becomes its raw JSON text ("322.844",
     /// "true", "false"); anything containing nested objects/arrays falls back to the raw JSON. Lets a
     /// numeric/boolean/collection property that the generic form bound to a Label/TextField DISPLAY
-    /// rather than throw a string-conversion JsonException (issue #322; the atioz `models` array crash).
+    /// rather than throw a string-conversion JsonException (issue #322; the prod `models` array crash).
     /// </summary>
     private static string JsonElementToDisplayString(JsonElement element)
     {
