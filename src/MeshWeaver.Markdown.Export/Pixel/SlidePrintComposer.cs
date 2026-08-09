@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 
@@ -152,19 +153,50 @@ public static partial class SlidePrintComposer
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Splits an asset reference into its collection name and collection-relative path, or null
-    /// when it is not a content-collection route.
+    /// Splits an asset reference into the collection name and collection-relative path a
+    /// server-side read needs, or null when it is not a content-collection route.
+    ///
+    /// <para>Normalisation goes through the framework's own reader,
+    /// <see cref="ContentPathReference.TryGetRelativePath"/> — which also folds out the
+    /// default-collection segment of <c>/api/content/{collection}/content/{path}</c> — and the
+    /// first-segment-names-the-collection split is the same one <c>BrandingResolver</c> uses for
+    /// exactly this job. One convention for reading content server-side, not two.</para>
+    ///
+    /// <para><b>Both segments are decoded, each with the decoder that matches how it was
+    /// encoded.</b> A collection name carries <c>/</c> as <c>~</c>
+    /// (<see cref="ContentCollectionsExtensions.EncodeCollectionName"/>), so leaving it encoded
+    /// asks the content service for a collection that does not exist and the asset silently stays
+    /// broken. Percent-escapes are then undone <b>per segment</b>
+    /// (<see cref="ContentCollectionsExtensions.DecodeCollectionPath"/>), never across the whole
+    /// string: that is deliberate, because a top-level segment IS a partition and the router
+    /// lowercases it. Per-segment decoding cannot introduce or remove a <c>/</c>, so it can never
+    /// split, merge or rename a segment — and therefore cannot create or mask a partition
+    /// collision. Nothing here case-folds; the value is passed through exactly as authored.</para>
     /// </summary>
     public static (string Collection, string Path)? ParseAssetReference(string reference)
     {
-        var match = AssetReferenceRegex().Match(reference);
-        if (!match.Success)
+        if (!AssetReferenceRegex().IsMatch(reference))
             return null;
-        var collection = match.Groups["collection"].Value;
-        var path = match.Groups["path"].Value;
+
+        // TryGetRelativePath matches on the rooted route prefix; our references are captured from
+        // markup and may be site-relative.
+        var rooted = reference.StartsWith('/') ? reference : "/" + reference;
+        var relative = ContentPathReference.TryGetRelativePath(rooted);
+        if (string.IsNullOrEmpty(relative))
+            return null;
+
+        relative = relative.Replace('\\', '/').TrimStart('/');
+        var slash = relative.IndexOf('/');
+        if (slash <= 0 || slash == relative.Length - 1)
+            return null;
+
+        var collection = ContentCollectionsExtensions.DecodeCollectionPath(
+            ContentCollectionsExtensions.DecodeCollectionName(relative[..slash]));
+        var path = ContentCollectionsExtensions.DecodeCollectionPath(relative[(slash + 1)..]);
+
         return string.IsNullOrEmpty(collection) || string.IsNullOrEmpty(path)
             ? null
-            : (collection, WebUtility.UrlDecode(path));
+            : (collection, path);
     }
 
     // api/content/{collection}/{path} — optionally leading '/', stopping at a quote, whitespace,

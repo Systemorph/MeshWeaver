@@ -222,7 +222,50 @@ public class SlidePrintComposerTests
         var parsed = SlidePrintComposer.ParseAssetReference("api/content/Space%2FDeck/images%2Fbg.png");
 
         parsed.Should().NotBeNull();
-        parsed!.Value.Collection.Should().Be("Space%2FDeck");
+        // The COLLECTION is decoded too, not just the path. Handing the content service a still-
+        // encoded name asks for a collection that does not exist, and the asset silently stays
+        // broken — which now means a missing image, since the print document's CSP denies the
+        // remote fetch that used to paper over it.
+        parsed!.Value.Collection.Should().Be("Space/Deck");
+        parsed.Value.Path.Should().Be("images/bg.png");
+    }
+
+    [Fact]
+    public void A_qualified_collection_name_is_decoded_from_its_tilde_form()
+    {
+        // EncodeCollectionName maps '/' to '~' precisely because ASP.NET Core decodes %2F before
+        // route matching — so '~' is the shape a qualified name actually arrives in.
+        var parsed = SlidePrintComposer.ParseAssetReference("api/content/Submissions@Microsoft~2026/logo.png");
+
+        parsed.Should().NotBeNull();
+        parsed!.Value.Collection.Should().Be("Submissions@Microsoft/2026");
+        parsed.Value.Path.Should().Be("logo.png");
+    }
+
+    [Fact]
+    public void Decoding_never_changes_how_many_segments_a_reference_has()
+    {
+        // A top-level segment IS a partition and the router lowercases it, so a decoder that could
+        // introduce or remove a '/' could split, merge or rename a partition — creating or masking
+        // exactly the Acme/ACME collision PR #983 hit. Per-segment decoding cannot: an escaped
+        // separator stays inside its own segment, and nothing here case-folds.
+        var parsed = SlidePrintComposer.ParseAssetReference("api/content/Acme/a%20folder/file%20name.png");
+
+        parsed.Should().NotBeNull();
+        parsed!.Value.Collection.Should().Be("Acme", "the partition segment is passed through verbatim");
+        parsed.Value.Path.Should().Be("a folder/file name.png");
+    }
+
+    [Fact]
+    public void The_default_collection_segment_is_folded_out_like_every_other_server_side_read()
+    {
+        // /api/content/{collection}/content/{path} is the shape the product renders; the framework's
+        // own reader folds the default-collection segment out, and this must agree with it rather
+        // than invent a second convention.
+        var parsed = SlidePrintComposer.ParseAssetReference("/api/content/Space/content/images/bg.png");
+
+        parsed.Should().NotBeNull();
+        parsed!.Value.Collection.Should().Be("Space");
         parsed.Value.Path.Should().Be("images/bg.png");
     }
 
