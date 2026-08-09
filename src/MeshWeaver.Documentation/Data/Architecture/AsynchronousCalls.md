@@ -260,6 +260,23 @@ The legacy `workspace.UpdateMeshNode(update)` extension is `[Obsolete]` and poin
 - `meshService.MoveNode(...)` / `meshService.CopyNode(...)` — cold; subscribe.
 - `remoteStream.Update(current => updated, ex => …)` — the `ex` callback fires on the stream's hub; the returned `void` IS the subscription.
 
+### …but a subscription that stays PENDING needs an owner
+
+Discarding the `IDisposable` from `stream.Update(...).Subscribe(...)` is fine — those observables complete promptly, and the handle of a *completed* sequence roots nothing (Rx detaches its observer on completion). A **timer** subscription is the opposite case: `Observable.Timer` / `Observable.Interval` / `Task.Delay` park an entry on the process-wide `TimerQueue`, which is a **strong GC root**, so while the timer is pending it holds the tick closure and everything that closure captured — past its owner's disposal.
+
+```csharp
+// ❌ The timer's IDisposable goes nowhere — nothing can cancel a flush still pending
+//    when the hub tears down, so the closure roots the hub for the whole delay.
+Observable.Timer(TimeSpan.FromMilliseconds(100)).Subscribe(_ => Publish());
+
+// ✅ The pending timer is the HUB's: teardown disposes the composite, cancelling it.
+pendingFlush.Disposable = Observable.Timer(TimeSpan.FromMilliseconds(100))
+    .Subscribe(_ => Publish());          // pendingFlush: a SerialDisposable passed to
+                                         // hub.RegisterForDisposal(...) at construction
+```
+
+Holding it in a field is **not** the same as owning it — the field has to be disposed by the owner's teardown, on every path. Full treatment, with both leak shapes, the measured truth table of which primitives actually root, and why there is deliberately no analyzer: [Subscription Ownership](/Doc/Architecture/SubscriptionOwnership).
+
 ---
 
 ## 🚨 `MeshNode.Content` is always typed at the `GetMeshNodeStream` boundary
