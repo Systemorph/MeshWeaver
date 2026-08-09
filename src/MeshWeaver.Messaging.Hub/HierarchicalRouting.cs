@@ -197,9 +197,14 @@ internal class HierarchicalRouting
         {
             logger.LogDebug("Cannot route to parent hub {ParentAddress} - parent is also disposing. Message: {MessageType}",
                 parentHub.Address, delivery.Message.GetType().Name);
+            // 🚨 The wording carries the "is shutting down" marker on purpose. Three classifiers —
+            // MeshNodeStreamCache.IsTransientOwnerFailure, AreaErrorClassifier.IsTransientHubFailure
+            // and SynchronizationStream's transient check — still recognise a transient hub reject by
+            // that substring, so a NACK phrased any other way would be filed as a PERMANENT owner
+            // failure and cached as one.
             return delivery.Failed(
-                $"Cannot route {delivery.Message.GetType().Name} to {delivery.Target} from {hub.Address} — "
-                + $"parent hub {parentHub.Address} is disposing (RunLevel={parentHub.RunLevel}). "
+                $"Hub {hub.Address} cannot route {delivery.Message.GetType().Name} to {delivery.Target} — "
+                + $"its parent hub {parentHub.Address} is shutting down (RunLevel={parentHub.RunLevel}). "
                 + "The address may reactivate (recycle / restart); retry to get the authoritative answer.",
                 ErrorType.ShuttingDown);
         }
