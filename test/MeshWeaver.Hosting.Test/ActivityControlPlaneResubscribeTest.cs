@@ -1,5 +1,6 @@
 using System;
 using System.Reactive.Linq;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -44,7 +45,11 @@ public class ActivityControlPlaneResubscribeTest
             new Address("mesh", "1"),
             logger: null,
             faultLogContext: "test",
-            scheduleReEstablish: reEstablish => { if (reEstablishes++ < 5) reEstablish(); });
+            scheduleReEstablish: reEstablish =>
+            {
+                if (reEstablishes++ < 5) reEstablish();
+                return System.Reactive.Disposables.Disposable.Empty;
+            });
 
         subscriptions.Should().Be(1,
             "a terminal NotFound on the own node must NOT trigger a resubscribe storm");
@@ -65,7 +70,11 @@ public class ActivityControlPlaneResubscribeTest
             new Address("mesh", "1"),
             logger: null,
             faultLogContext: "test",
-            scheduleReEstablish: reEstablish => { if (scheduled++ < 2) reEstablish(); });
+            scheduleReEstablish: reEstablish =>
+            {
+                if (scheduled++ < 2) reEstablish();
+                return System.Reactive.Disposables.Disposable.Empty;
+            });
 
         subscriptions.Should().Be(3,
             "a transient fault must re-establish (initial subscribe + 2 bounded re-establishes)");
@@ -92,13 +101,100 @@ public class ActivityControlPlaneResubscribeTest
             new Address("mesh", "1"),
             logger: null,
             faultLogContext: "test",
-            scheduleReEstablish: reEstablish => { if (reEstablishes++ < 5) reEstablish(); },
+            scheduleReEstablish: reEstablish =>
+            {
+                if (reEstablishes++ < 5) reEstablish();
+                return System.Reactive.Disposables.Disposable.Empty;
+            },
             onPoisonedContent: ex => { sinkCalls++; sunk = ex; });
 
         subscriptions.Should().Be(1,
             "poisoned content replays on every resubscribe — re-establishing is a poison loop");
         sinkCalls.Should().Be(1, "the fault must land in the visible sink exactly once");
         sunk.Should().BeSameAs(poison);
+    }
+
+    /// <summary>
+    /// #991 — deterministic contract half: disposing the watcher must CANCEL a re-establish
+    /// that is already scheduled. The old code discarded the schedule's <see cref="IDisposable"/>
+    /// entirely, so nothing could cancel it.
+    /// </summary>
+    [Fact]
+    public void Dispose_CancelsAPendingReEstablishSchedule()
+    {
+        var scheduleCancelled = false;
+
+        var watcher = ActivityControlPlaneExtensions.SubscribeWithReEstablish<int>(
+            () => Observable.Throw<int>(new InvalidOperationException("transient hub hiccup")),
+            _ => { },
+            new Address("mesh", "1"),
+            logger: null,
+            faultLogContext: "test",
+            // Stand-in for the production `Observable.Timer(1s).Subscribe(...)`: hands back the
+            // handle that cancels the pending schedule instead of dropping it on the floor.
+            scheduleReEstablish: _ => System.Reactive.Disposables.Disposable.Create(
+                () => scheduleCancelled = true));
+
+        scheduleCancelled.Should().BeFalse("the transient fault armed a re-establish that is still pending");
+
+        watcher.Dispose();
+
+        scheduleCancelled.Should().BeTrue(
+            "tearing the watcher down must cancel the pending re-establish — an uncancelled "
+            + "Observable.Timer parks on the process-wide TimerQueue (a strong GC root) and pins "
+            + "everything the source factory captured, including the owning hub (#991)");
+    }
+
+    /// <summary>
+    /// #991 — the leak itself, with the REAL production schedule (no seam): a watcher whose
+    /// stream faults arms a 1 s <c>Observable.Timer</c>. That timer lives on the process-wide
+    /// <c>TimerQueue</c>, a strong GC root, and the tick closure holds
+    /// <c>Establish</c> → the method closure → the caller's <c>source</c> factory → whatever it
+    /// captured. In production that last hop is the per-NodeType <c>MessageHub</c> (ClrMD chain
+    /// on #991: <c>TimerQueue → …Timer+Single+_ → Action&lt;Int64&gt; → DisplayClass2_1 →
+    /// Action → DisplayClass2_0 → Func&lt;IObservable&lt;MeshNode&gt;&gt; → MessageHub</c>), which
+    /// is why <c>MeshHubDisposalLeakTest</c> intermittently caught a hub surviving
+    /// <c>Mesh.Dispose()</c> — teardown is exactly when the watched stream faults.
+    /// </summary>
+    [Fact]
+    public void Dispose_ReleasesTheSourceFactory_SoAPendingTimerCannotRootIt()
+    {
+        var weak = ArmProductionTimerThenDispose();
+
+        // One blocking collection is all it takes: the leak holds the capture for a FULL second,
+        // far longer than this runs, so a surviving target here is the leak, not GC latency.
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+
+        weak.IsAlive.Should().BeFalse(
+            "after the watcher is disposed nothing may still reach what its source factory "
+            + "captured — a pending re-establish timer on the TimerQueue would root it (#991)");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference ArmProductionTimerThenDispose()
+    {
+        // Stands in for the hub the production source factory closes over.
+        var captured = new object();
+
+        IDisposable? watcher = ActivityControlPlaneExtensions.SubscribeWithReEstablish<int>(
+            () => Observable.Defer(() =>
+            {
+                GC.KeepAlive(captured);
+                return Observable.Throw<int>(new InvalidOperationException("transient hub hiccup"));
+            }),
+            _ => { },
+            new Address("mesh", "1"),
+            logger: null,
+            faultLogContext: "test");
+        // No scheduleReEstablish ⇒ the real 1 s Observable.Timer is now pending.
+
+        watcher.Dispose();
+        watcher = null;
+        GC.KeepAlive(watcher);
+
+        return new WeakReference(captured);
     }
 
     [Fact]
