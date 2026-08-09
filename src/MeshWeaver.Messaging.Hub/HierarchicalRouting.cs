@@ -131,7 +131,13 @@ internal class HierarchicalRouting
                         }, o => o.ResponseFor(delivery)
                     );
                 }
-                return isDisposing ? delivery.Failed("Hub disposing") : delivery.NotFound();
+                // While disposing no NACK is posted above, so the delivery leaves here classified
+                // and UNANSWERED — MessageService owes the sender a DeliveryFailure (a bare
+                // Failed(...) used to be dropped on the not-on-target path and the caller waited
+                // forever). TRANSIENT (ShuttingDown): the address may reactivate on the next probe.
+                return isDisposing
+                    ? delivery.Failed(errorMessage, ErrorType.ShuttingDown)
+                    : delivery.NotFound();
             }
         }
         else
@@ -171,15 +177,36 @@ internal class HierarchicalRouting
                     }, o => o.ResponseFor(delivery)
                 );
             }
-            return isDisposing ? delivery.Failed("Hub disposing") : delivery.NotFound();
+            // Same contract as the hosted-route branch above: the disposing arm posted no NACK, so
+            // it leaves CLASSIFIED and UNANSWERED for MessageService to report.
+            return isDisposing
+                ? delivery.Failed(errorMessage, ErrorType.ShuttingDown)
+                : delivery.NotFound();
         }
 
-        // Check if parent hub is also disposing before routing up
+        // Check if parent hub is also disposing before routing up.
+        //
+        // 🚨 Nothing has answered the sender at this point and nothing downstream will unless the
+        // failure is CLASSIFIED: a bare Failed(...) here is not on-target, so MessageService's
+        // routing tail used to return it unreported and the requester's hub.Observe(...) waited
+        // indefinitely. This is the teardown shape from #981 — a hosted hub quiescing AFTER its
+        // parent reached DisposeHostedHubs still posts to that parent, and the reply can never come.
+        // TRANSIENT (ShuttingDown), never terminal: the parent may reactivate, and long-lived
+        // consumers (SynchronizationStream's resubscribe latch) must ride it out rather than die.
         if (parentHub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
         {
             logger.LogDebug("Cannot route to parent hub {ParentAddress} - parent is also disposing. Message: {MessageType}",
                 parentHub.Address, delivery.Message.GetType().Name);
-            return delivery.Failed("Parent hub disposing");
+            // 🚨 The wording carries the "is shutting down" marker on purpose. Three classifiers —
+            // MeshNodeStreamCache.IsTransientOwnerFailure, AreaErrorClassifier.IsTransientHubFailure
+            // and SynchronizationStream's transient check — still recognise a transient hub reject by
+            // that substring, so a NACK phrased any other way would be filed as a PERMANENT owner
+            // failure and cached as one.
+            return delivery.Failed(
+                $"Hub {hub.Address} cannot route {delivery.Message.GetType().Name} to {delivery.Target} — "
+                + $"its parent hub {parentHub.Address} is shutting down (RunLevel={parentHub.RunLevel}). "
+                + "The address may reactivate (recycle / restart); retry to get the authoritative answer.",
+                ErrorType.ShuttingDown);
         }
 
         // Per-routed-message; gate to skip GetType().Name + boxing.
