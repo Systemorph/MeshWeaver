@@ -37,6 +37,9 @@
     <ItemGroup>
       <PackageReference Include="Microsoft.Orleans.TestingHost" />
       <PackageReference Include="Microsoft.Orleans.Sdk" />
+      <!-- TestScheduler: RoutingGrainStreamPostBoundTest drives the stream-post timeout
+           deterministically (issue #1028) instead of waiting on the wall clock. -->
+      <PackageReference Include="Microsoft.Reactive.Testing" />
     </ItemGroup>
 
 
