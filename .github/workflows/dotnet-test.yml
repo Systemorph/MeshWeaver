@@ -226,6 +226,28 @@ jobs:
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: 10.0.x
+    # Cache the NuGet global-packages folder. `Restore dependencies` below is the ONLY
+    # restore in this workflow (the shards consume prebuilt bins and never restore), and
+    # it cost a remarkably stable 40-41 s across runs 31309290210 / 31311680838 /
+    # 31313253809 — i.e. it re-downloads the same closure every single run.
+    #
+    # Key on the files that actually determine the closure. Central Package Management
+    # means every VERSION lives in Directory.Packages.props, so a csproj that adds a
+    # PackageReference without changing a version reuses the cache and restores only the
+    # delta — which is the behaviour we want, not a miss. nuget.config pins the sources,
+    # and global.json the SDK band, both of which can change what resolves.
+    #
+    # 🚨 The restore is NOT removed or made conditional — a cache miss (or a poisoned
+    # entry) must degrade to a slower restore, never to a wrong or absent one. That is
+    # also why there is a restore-keys fallback: a partial hit still beats a cold fetch,
+    # and `dotnet restore` reconciles whatever it finds against the lock of the graph.
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: nuget-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', 'nuget.config', 'global.json') }}
+        restore-keys: |
+          nuget-${{ runner.os }}-
     - name: Restore dependencies
       run: dotnet restore
     - name: Build
