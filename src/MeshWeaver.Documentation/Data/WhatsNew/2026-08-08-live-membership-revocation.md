@@ -33,6 +33,15 @@ was checked once against a list that did not include it and then never again. A 
 space now joins that list the moment it is created, so it participates in live
 results from its first second.
 
+A third problem hid behind the same symptom, and it was the widest: a single partition
+that carried no permission data of its own could silently empty every signed-in user's
+cross-partition results. Searching across partitions asks each one "may this person read
+this?", and a partition with nothing to answer from made the whole question unanswerable
+— so the answer came back as "nothing found", for every partition at once, however
+healthy the rest were. Such a partition is now left out of the question instead of
+ending it, which changes nothing about what you are allowed to see: a partition with no
+permission data never granted anyone access to begin with.
+
 If you worked around this by restarting the portal after changing group membership,
 or by granting people directly instead of through a group because group changes
 "didn't take", neither workaround is needed any more.
