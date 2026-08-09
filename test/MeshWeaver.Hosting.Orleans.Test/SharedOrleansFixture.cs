@@ -30,13 +30,15 @@ using Xunit;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// Shared Orleans TestCluster fixture. Boots ONCE per test assembly.
-/// All test classes that use [Collection(nameof(OrleansClusterCollection))]
-/// share this single cluster — no grain state leaks between test classes.
+/// Orleans TestCluster fixture. Despite the name it is no longer shared across the assembly:
+/// <see cref="OrleansSharedTestBase"/> constructs one per test class, so grain state is
+/// isolated by construction.
 ///
-/// Configuration: production-like (Graph + AI + RLS + memory persistence).
-/// Chat factory: FakeChatClientFactory by default. Tests that need a
-/// different factory should use TestChatFactoryScope to swap it temporarily.
+/// <para>Configuration: production-like (Graph + AI + RLS + memory persistence). The chat
+/// factory is a <see cref="SwappableChatClientFactory"/> owned by this cluster's silo container
+/// and reachable as <see cref="ChatFactory"/>; it starts on <c>FakeChatClientFactory</c> and a
+/// test that swaps it does NOT have to swap it back, because the factory dies with the
+/// cluster.</para>
 /// </summary>
 public class SharedOrleansFixture : IAsyncLifetime
 {
