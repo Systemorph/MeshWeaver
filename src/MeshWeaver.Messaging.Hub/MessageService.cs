@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Reflection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 // ReSharper disable InconsistentlySynchronizedField
 
@@ -325,12 +326,24 @@ public class MessageService : IMessageService
     /// drop — nobody awaits them, and NACKing them was pure disposal noise. Cascade-safe by
     /// the same exclusions <see cref="ReportFailure"/> applies.</para>
     ///
-    /// <para>🚨 The NACK is a TRANSIENT rejection — <see cref="ErrorType.ShuttingDown"/>, never
-    /// NotFound, never a generic terminal failure. A disposing hub cannot know whether its
-    /// address is gone for good (node deleted) or about to REACTIVATE (recycle / restart);
-    /// the sender's next probe gets the authoritative answer. Consumers with their own
-    /// recovery machinery ride it out (SynchronizationStream keeps the stream ALIVE on this
-    /// ErrorType so its change-feed resubscribe latch rehydrates after the reactivation).</para>
+    /// <para>🚨 The NACK is a TRANSIENT rejection — <see cref="ErrorType.ShuttingDown"/> — whenever
+    /// the address can still come back: a hub going down for a recycle / restart WILL reactivate,
+    /// and consumers with their own recovery machinery ride that out instead of tearing down
+    /// (SynchronizationStream keeps the stream ALIVE on this ErrorType so its change-feed
+    /// resubscribe latch rehydrates after the reactivation).</para>
+    ///
+    /// <para>🚨 …with exactly ONE exception, and it is the whole point of
+    /// <see cref="IAddressTombstones"/>: when this hub is going down because its NODE WAS DELETED,
+    /// the address is gone FOR GOOD and "transient, retry" is a lie the caller cannot act on. The
+    /// ride-out then parks the consumer forever — no reactivation, no change-feed announce, no
+    /// verdict — so a read that raced the teardown burns its whole budget and reports "unavailable"
+    /// for a node that is provably gone, while its keep-alive heartbeats a nonexistent owner every
+    /// interval (issue #1029; reproduced end-to-end by
+    /// <c>PostDeleteReadReachesVerdictTest</c>). For a tombstoned address the NACK is therefore the
+    /// AUTHORITATIVE <see cref="ErrorType.NotFound"/>, phrased so the mesh's existing classifiers
+    /// (<c>MeshNodeStreamCache.IsMissingNodeFailure</c>, the delete cascade's not-found
+    /// normalisation) recognise it — and deliberately phrased to avoid every marker
+    /// <c>IsTransientOwnerFailure</c> matches on, so it cannot be mistaken for a retryable miss.</para>
     /// </summary>
     private void NackThroughParent(IMessageDelivery delivery, string reason)
     {
@@ -348,10 +361,18 @@ public class MessageService : IMessageService
         // NACKs — exactly the case where a sender is still there to hear it.
         if (ParentHub is not { } parent || parent.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
             return;
+        // Gone for good (node deleted) ⇒ authoritative NotFound; anything else ⇒ transient.
+        // The delete source tombstones every planned path SYNCHRONOUSLY, before its response
+        // returns, so this lookup is already authoritative for a delivery that raced the teardown.
+        var (errorType, message) = IsAddressDeleted()
+            ? (ErrorType.NotFound,
+                $"No node found at '{Address.Path}' — the node was deleted, so this address "
+                + "will not reactivate.")
+            : (ErrorType.ShuttingDown, reason);
         try
         {
             parent.Post(
-                new DeliveryFailure(delivery) { ErrorType = ErrorType.ShuttingDown, Message = reason },
+                new DeliveryFailure(delivery) { ErrorType = errorType, Message = message },
                 o => o.ResponseFor(delivery));
         }
         catch (Exception ex)
@@ -359,6 +380,31 @@ public class MessageService : IMessageService
             logger.LogDebug(ex,
                 "Failed to NACK {MessageType} (ID: {MessageId}) abandoned by shutting-down hub {Address}",
                 delivery.Message.GetType().Name, delivery.Id, Address);
+        }
+    }
+
+    /// <summary>
+    /// True when this hub's address carries a live delete tombstone — i.e. it is going down
+    /// because its NODE WAS DELETED, not because it is recycling.
+    ///
+    /// <para>Defensive by design: we are mid-disposal, so a service-provider lookup can fault on a
+    /// container that has already gone. A failed lookup degrades to <c>false</c> — the historical
+    /// transient <see cref="ErrorType.ShuttingDown"/> classification — and never costs the sender
+    /// its NACK, which is the thing that must not be lost.</para>
+    /// </summary>
+    private bool IsAddressDeleted()
+    {
+        try
+        {
+            return hub.ServiceProvider.GetService<IAddressTombstones>()?.IsDeleted(Address.Path)
+                   ?? false;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex,
+                "Could not read the delete tombstone for {Address} while NACKing an abandoned "
+                + "delivery — classifying the rejection as transient", Address);
+            return false;
         }
     }
 
