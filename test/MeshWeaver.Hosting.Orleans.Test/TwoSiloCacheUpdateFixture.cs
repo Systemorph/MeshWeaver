@@ -123,14 +123,17 @@ internal sealed class TwoSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .ConfigurePortalMesh()
             .AddGraph()
             .AddAI()
-            // Both silos' in-memory adapters share the same backing dicts (mirrors prod's
-            // shared PG schema) AND the same change-feed Subject (mirrors PG LISTEN/NOTIFY
-            // fanout). With the standalone IDataChangeNotifier service removed, every
-            // notification flows through IStorageAdapter.Changes; sharing the Subject across
-            // silos is the in-memory cluster's equivalent of PG NOTIFY. That store is a
-            // per-cluster INSTANCE, so it cannot be registered here (Orleans instantiates this
-            // configurator via new()) — TwoSiloCacheUpdateFixture passes it in through
-            // OrleansTestCluster.DeployAsync's post-configure closure.
+            // Both silos' in-memory adapters share the same backing dictionaries, mirroring
+            // prod's shared PG schema — a Write on one silo is visible to the other's Read.
+            // They do NOT share a change-feed Subject: each adapter has its own, exactly as
+            // each prod silo has its own per-process Subject fed by PG LISTEN/NOTIFY. A
+            // cross-silo signal therefore travels through IMeshChangeFeed, which is what
+            // TwoSiloRecycleConvergenceTest delivers explicitly so the frame version is the
+            // only variable under test.
+            //
+            // The store is a per-cluster INSTANCE and so cannot be registered here (Orleans
+            // instantiates this configurator via new()) — TwoSiloCacheUpdateFixture passes it
+            // in through the CreateSiloAsync post-configure closure.
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 }
