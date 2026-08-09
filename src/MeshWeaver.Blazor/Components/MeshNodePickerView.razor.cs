@@ -248,11 +248,11 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
 
         // Debounce remote queries. Do NOT call StateHasChanged here — typing must never
         // trigger a component re-render. LoadResultsAsync will render when results arrive.
-        // Reactive debounce: each keystroke disposes the prior pending Observable.Timer
-        // and arms a new one — same semantics as the old CTS-cancel + Task.Delay loop,
-        // but stays on Rx scheduling rather than ad-hoc CancellationTokenSource churn.
-        // Assignment disposes the previous pending timer (SerialDisposable), and the component's
-        // Disposables entry disposes whatever is still pending at teardown (#995).
+        // Reactive debounce: assigning into the SerialDisposable cancels the prior pending
+        // Observable.Timer and arms a new one — same semantics as the old CTS-cancel +
+        // Task.Delay loop, but on Rx scheduling rather than ad-hoc CancellationTokenSource
+        // churn, and the handle is the component's (registered in OnInitialized), so teardown
+        // cancels the last one too rather than leaving it to the next keystroke (#995).
         _debounceSub.Disposable = Observable.Timer(TimeSpan.FromMilliseconds(DebounceMs))
             .Subscribe(_ => LoadResultsAsync());
     }
