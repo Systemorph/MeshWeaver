@@ -1601,7 +1601,10 @@ public static class PackageInstaller
             || ModuleManifest.IsManifestPath(file.RelativePath)
             // A `{package}/content/**` asset is NOT a node — its bytes go to the partition root's
             // content collection (SyncPackageContent), which is where the served
-            // `/static/{root}/content/…` URL resolves. Same split GitHubSyncService.ParseSnapshot
+            // `/api/content/{root}/content/…` URL resolves. (It used to be `/static/{root}/content/…`;
+            // #587 unmounted content from /static entirely, so that shape is now 404 for everyone —
+            // an authored asset URL must name the access-controlled route.) Same split
+            // GitHubSyncService.ParseSnapshot
             // makes, and the one NodePathForFile below has always asserted. Skipping it here also
             // silences the "No parser for …/videos/x.mp4" warning every course emitted per install.
             || ContentAssetMapper.IsContentPath(file.RelativePath))
