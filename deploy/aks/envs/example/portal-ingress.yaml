@@ -1,14 +1,14 @@
-# Ingress for memex.meshweaver.cloud (ns memex-cloud), cookie session affinity.
-#   kubectl apply -n memex-cloud -f portal-ingress.yaml
+# Ingress for portal.example.com (ns example), cookie session affinity.
+#   kubectl apply -n example -f portal-ingress.yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: memex-portal
-  namespace: memex-cloud
+  namespace: example
   annotations:
     nginx.ingress.kubernetes.io/affinity: "cookie"
     nginx.ingress.kubernetes.io/affinity-mode: "persistent"
-    nginx.ingress.kubernetes.io/session-cookie-name: "MEMEXCLOUD_AFFINITY"
+    nginx.ingress.kubernetes.io/session-cookie-name: "EXAMPLE_AFFINITY"
     nginx.ingress.kubernetes.io/session-cookie-max-age: "172800"
     nginx.ingress.kubernetes.io/session-cookie-samesite: "Lax"
     # Rollout resilience: re-pin the affinity cookie when the pinned pod goes away (without this,
@@ -23,10 +23,10 @@ metadata:
 spec:
   ingressClassName: webapprouting.kubernetes.azure.com
   tls:
-    - hosts: [memex.meshweaver.cloud]
-      secretName: memexcloud-tls
+    - hosts: [portal.example.com]
+      secretName: exampledb-tls
   rules:
-    - host: memex.meshweaver.cloud
+    - host: portal.example.com
       http:
         paths:
           - path: /
