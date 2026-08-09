@@ -1,8 +1,9 @@
 ---
 Name: Compiling a type scans its sources once, not three times
-Category: What's New
+Category: Fix
 Description: Type compiles now take a single source snapshot and reuse it, cutting the mesh reads a compile costs on a large portal.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Compiling a type scans its sources once, not three times

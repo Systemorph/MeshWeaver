@@ -1,8 +1,9 @@
 ---
 Name: A read grant can no longer be inherited from a node's type
-Category: What's New
+Category: Fix
 Description: The dormant node-type "public read" flag has been removed from the permission SQL — it granted nothing in practice, and connecting it would have opened paid course content and private conversations.
 Icon: ShieldError
+Order: -20260808
 ---
 
 # A read grant can no longer be inherited from a node's type

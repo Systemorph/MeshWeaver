@@ -1,6 +1,9 @@
 ---
-title: A storage blip no longer tells you that you have no account
-date: 2026-08-08
+Name: A storage blip no longer tells you that you have no account
+Category: Fix
+Description: A user record or permission lookup that cannot be read now says so, instead of redirecting a signed-in user to sign-up or answering "Access denied".
+Icon: ShieldCheckmark
+Order: -20260808
 ---
 
 # A storage blip no longer tells you that you have no account

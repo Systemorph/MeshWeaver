@@ -1,8 +1,9 @@
 ---
 Name: More reliable REST, MCP and gRPC access
-Category: What's New
+Category: Fix
 Description: API, MCP and gRPC calls now run on a proper portal session, so unauthenticated calls no longer stall and SDK clients keep their subscriptions across reconnects.
 Icon: Sparkle
+Order: -20260729
 ---
 
 # More reliable REST, MCP and gRPC access
