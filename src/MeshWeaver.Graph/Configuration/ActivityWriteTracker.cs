@@ -62,15 +62,21 @@ public sealed class ActivityWriteTracker
     // sides of this one are concurrent by construction: Begin runs on whichever hub handled the
     // request, Release runs on the detached pipeline's thread whenever that write ends. Same
     // reasoning as MeshNodeStreamCache's eviction subject.
-    private readonly BehaviorSubject<int> countSubject = new(0);
-    private readonly IObserver<int> count;
-    private readonly IObservable<int> counts;
+    //
+    // The subject carries the WHOLE in-flight map, not just its total: Drain needs "is anything
+    // running", WhenSettled needs "is THIS path running", and deriving both from one notification
+    // keeps a single ordered channel (two subjects could interleave and let a per-path observer
+    // see a state the count never reported).
+    private readonly BehaviorSubject<ImmutableDictionary<string, int>> stateSubject =
+        new(ImmutableDictionary<string, int>.Empty);
+    private readonly IObserver<ImmutableDictionary<string, int>> state;
+    private readonly IObservable<ImmutableDictionary<string, int>> states;
 
     /// <summary>Creates an empty tracker.</summary>
     public ActivityWriteTracker()
     {
-        count = Observer.Synchronize(countSubject, preventReentrancy: true);
-        counts = countSubject.AsObservable();
+        state = Observer.Synchronize(stateSubject, preventReentrancy: true);
+        states = stateSubject.AsObservable();
     }
 
     /// <summary>Paths currently being written — what a drain overrun names.</summary>
@@ -102,13 +108,13 @@ public sealed class ActivityWriteTracker
         // outside it would let a Release's "0" overtake a concurrent Begin's "1", and a drain
         // watching for zero would then complete while a write that had just started was still
         // running — the exact loss this class exists to prevent. Safe to hold `gate` across the
-        // notification: the observer is synchronized with preventReentrancy, and the only
-        // subscriber is Drain's Where/Take filter, which never calls back in here.
+        // notification: the observer is synchronized with preventReentrancy, and the subscribers
+        // are Drain's and WhenSettled's Where/Take filters, neither of which calls back in here.
         lock (gate)
         {
             inFlight = inFlight.SetItem(
                 activityPath, inFlight.TryGetValue(activityPath, out var c) ? c + 1 : 1);
-            count.OnNext(inFlight.Values.Sum());
+            state.OnNext(inFlight);
         }
         return new Registration(this, activityPath);
     }
@@ -119,8 +125,49 @@ public sealed class ActivityWriteTracker
         {
             if (inFlight.TryGetValue(activityPath, out var c))
                 inFlight = c <= 1 ? inFlight.Remove(activityPath) : inFlight.SetItem(activityPath, c - 1);
-            count.OnNext(inFlight.Values.Sum());
+            state.OnNext(inFlight);
         }
+    }
+
+    /// <summary>
+    /// Completes once the write for <paramref name="activityPath"/> has ENTERED and then LEFT the
+    /// in-flight set — the detached pipeline's own termination signal (success, error, or an
+    /// unsubscribe forced by disposal; <c>Begin</c>'s registration is cleared from a <c>Finally</c>,
+    /// so every ending counts).
+    ///
+    /// <para>🚨 <b>Subscribe BEFORE you trigger the write.</b> This deliberately does NOT complete
+    /// on a path that has never been in flight — that is the whole difference from
+    /// <see cref="Drain"/>, which "completes IMMEDIATELY when nothing is in flight" and therefore
+    /// races <see cref="Begin"/> when called right after a <c>Post</c>: it would return before the
+    /// write was even registered and turn a timing flake into a deterministic false pass. A
+    /// subscriber that attaches after the write already finished waits forever (by design — the
+    /// alternative is that false pass), so subscribe first, then post.</para>
+    ///
+    /// <para>This is the signal to wait on instead of polling a query for the node the write
+    /// produces: <c>IMeshService.Query</c> is eventually consistent, so a poll asserts "the index
+    /// caught up within N seconds" rather than "the write finished" (issue #993). Wait here, then
+    /// read the node authoritatively.</para>
+    ///
+    /// <para><b>Scope of the signal.</b> It completes the first time NO write for this path is
+    /// outstanding, having seen at least one. Writes that OVERLAP are therefore all awaited (the
+    /// per-path counter only reaches zero when the last of them ends — the create-vs-update race
+    /// stays covered). A later, NON-overlapping write for the same path is a separate cycle and
+    /// needs its own subscription; this is a "my write finished" signal, not "no write will ever
+    /// run again".</para>
+    /// </summary>
+    /// <param name="activityPath">The activity node path passed to <see cref="Begin"/>.</param>
+    public IObservable<Unit> WhenSettled(string activityPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(activityPath);
+        return states
+            .Select(s => s.ContainsKey(activityPath))
+            .DistinctUntilChanged()
+            // Drop the leading "not started yet" — SkipWhile begins forwarding at the first `true`,
+            // so the `false` that follows is unambiguously a LEAVE and never the initial state.
+            .SkipWhile(running => !running)
+            .Where(running => !running)
+            .Take(1)
+            .Select(_ => Unit.Default);
     }
 
     /// <summary>
@@ -140,8 +187,8 @@ public sealed class ActivityWriteTracker
                 "Activity drain: waiting for {Count} in-flight write(s) before disposal: {Paths}",
                 Count, string.Join(", ", InFlight));
 
-            return counts
-                .Where(n => n == 0)
+            return states
+                .Where(s => s.Count == 0)
                 .Take(1)
                 .Select(_ => Unit.Default)
                 .Timeout(DrainTimeout)

@@ -20,8 +20,8 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// class with <c>Delegation_NodeChanges_PropagateFromSubThread</c>.
 ///
 /// <para><b>Why a separate class.</b> Each Orleans test method already boots its
-/// OWN cluster + resets the process-wide statics (see
-/// <see cref="OrleansSharedTestBase"/> / <see cref="SharedOrleansFixture.ResetSharedState"/>),
+/// OWN cluster, and every piece of state that cluster needs is an instance owned by its
+/// fixture (see <see cref="OrleansSharedTestBase"/> / <see cref="OrleansTestBackingStore"/>),
 /// so thread ids and grain state never collide. What two <c>[Fact]</c>s in the
 /// SAME class still share is the <em>process</em>: the heavy delegation chain in
 /// <c>Delegation_NodeChanges_PropagateFromSubThread</c> leaves background async
