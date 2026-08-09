@@ -190,13 +190,20 @@ jobs:
        github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Job-level permissions REPLACE the workflow-level map, so every one this job needs is here:
-    # contents (checkout, for the shared check script), id-token (OIDC → ACR read), issues (the
-    # heal ledger — see "attempt budget" below).
+    # Job-level permissions REPLACE the workflow-level map, so EVERY one this job needs is here —
+    # an omission surfaces as a 403 at runtime, on main, in the job that decides whether anything
+    # ships at all:
+    #   contents  — checkout, for the shared check script
+    #   id-token  — OIDC → Azure, to read ACR manifests
+    #   issues    — the heal ledger (see "attempt budget" below)
+    #   checks    — `commits/$SHA/check-runs`, the required-check gate
+    #   actions   — `gh run list`, the in-flight-publish check
     permissions:
       contents: read
       id-token: write
       issues: write
+      checks: read
+      actions: read
     outputs:
       publish: ${{ steps.decide.outputs.publish }}
       sha: ${{ steps.target.outputs.sha }}
