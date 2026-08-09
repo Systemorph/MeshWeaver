@@ -23,22 +23,28 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
 {
     private const string CookieName = "meshweaver_virtual_user";
 
-    // 🚨 Anonymous, high-frequency infrastructure routes belong here. They are polled by machines
-    // that keep no cookie, so the VUser flow can only ever churn: it re-derives an id and stamps a
-    // guest context on EVERY request, and it is the path that produced the 2026-06-12 outage
-    // (~15 VUsers/minute from kube-probe alone, 10 000+ leaked hubs). /api/version is exactly that
-    // shape — an unauthenticated build-identity poll target that must stay answerable, and cheap,
-    // when the mesh is unhealthy.
     private static readonly string[] ExcludedPrefixes =
-    [
-        "/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico", "/mcp", "/bootstrap",
-        "/healthz", "/api/version"
-    ];
+        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico", "/mcp", "/bootstrap", "/healthz"];
+
+    // 🚨 Anonymous, high-frequency infrastructure routes. They are polled by machines that keep no
+    // cookie, so the VUser flow can only ever churn: it re-derives an id and stamps a guest context
+    // on EVERY request, and it is the path that produced the 2026-06-12 outage (~15 VUsers/minute
+    // from kube-probe alone, 10 000+ leaked hubs). /api/version is exactly that shape — an
+    // unauthenticated build-identity poll target that must stay answerable, and cheap, when the mesh
+    // is unhealthy.
+    //
+    // Matched EXACTLY, not as a prefix: these are leaf routes with no children, and a prefix match
+    // would silently exempt anything that merely starts with the same text (/api/versioning) from
+    // the VUser flow. An exclusion list that is broader than it reads is how routes end up skipping
+    // machinery nobody meant to skip. (The prefix list above is genuinely prefix-shaped — subtrees
+    // like /_content/… and /static/… — so it keeps StartsWith.)
+    private static readonly string[] ExcludedExactPaths = ["/api/version"];
 
     public async Task InvokeAsync(HttpContext context)
     {
         var path = context.Request.Path.Value ?? "";
-        if (ExcludedPrefixes.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+        if (ExcludedPrefixes.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase))
+            || ExcludedExactPaths.Any(p => string.Equals(path, p, StringComparison.OrdinalIgnoreCase)))
         {
             await next(context);
             return;
