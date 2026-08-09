@@ -101,6 +101,15 @@ public static class MarkdownExportExtensions
         // → "Operations as scripts". Stateless static helper, no DI provider.
         builder.AddMeshNodes(MarkdownExportTemplates.GetStaticNodes());
 
+        // …and the access grant that lets an ordinary (non-admin) user actually RUN them.
+        // ExecuteScriptRequest is gated on Permission.Execute on the template's own path, so
+        // without this every non-admin's export failed "lacks Execute permission on
+        // Templates/Export/Pdf" (issue #423 — the reopen reason). Seeded here, next to the nodes
+        // it guards, because those nodes are in-memory statics that never reach Postgres — so a
+        // migration could not cover them. IfAbsent: AddGraph() seeds the same partition-level
+        // grant, and either call alone must land it exactly once.
+        builder.AddMeshNodesIfAbsent(ScriptTemplates.PublicExecuteGrant());
+
         // Menu items, layout views, and the export request handler must live on the
         // node hubs (one per Markdown node) — that's where layout rendering runs and where
         // the user's click navigates. Registering on the mesh hub via ConfigureHub would
