@@ -102,7 +102,7 @@ public class BuiltInLanguageModelProviderTest
         // IStaticRepoSource). If GetStaticNodes is NON-deterministic across calls, the fingerprint
         // changes on every enumeration → the importer's "already imported" short-circuit never
         // matches → the catalog re-imports in a loop → the Provider/{name} Create/Delete/Update
-        // write storm that wedged atioz (2026-06-25). The classic culprit was CreatedAt =
+        // write storm that wedged prod (2026-06-25). The classic culprit was CreatedAt =
         // DateTimeOffset.UtcNow stamped per enumeration. Two enumerations MUST serialize identically.
         var provider = Build(new Dictionary<string, string?>
         {
@@ -151,8 +151,15 @@ public class BuiltInLanguageModelProviderTest
         var pro = models.Single(n => n.Name == "DeepSeek-V4-Pro");
         pro.Order.Should().Be(2, "a non-pinned model keeps its catalog source's Order");
 
-        // And DeepSeek-V4-Flash is the LOWEST-Order model → the one ResolveDefaultModelId would pick.
-        models.OrderBy(n => n.Order ?? 0).First().Name.Should().Be("DeepSeek-V4-Flash");
+        // And DeepSeek-V4-Flash is the lowest-Order model that can actually SERVE a round → the one
+        // ResolveDefaultModelId picks. The ROUTER (Auto) sorts ahead of it on purpose — it is the
+        // default SELECTION for a new thread — but it is excluded from every automatic rung, so it
+        // never becomes the default MODEL. Those are two different things and this pins both.
+        models.OrderBy(n => n.Order ?? 0).First().Name
+            .Should().Be(LanguageModelNodeType.RouterProviderName, "Auto is the default SELECTION");
+        models.Where(n => (n.Content as ModelDefinition)?.IsRouter != true)
+            .OrderBy(n => n.Order ?? 0).First().Name
+            .Should().Be("DeepSeek-V4-Flash", "…but the default MODEL is the pinned one");
     }
 
     [Fact]
@@ -190,5 +197,139 @@ public class BuiltInLanguageModelProviderTest
         info!.Path.Should().Be(node.Path,
             "the /model selection persists the node PATH onto the composer ModelName — without it the picker can't resolve the node (the 'dialog breaks' bug)");
         info.Name.Should().Be("claude-sonnet-4");
+    }
+
+    // ─── Auto (the router) + the tier registry ───
+
+    /// <summary>
+    /// Auto must ship with the platform, not with a provider: a deployment with NO catalog source
+    /// configured at all still gets the router, because Auto works exactly as long as ANY model
+    /// works — it dispatches to one rather than calling an endpoint of its own.
+    /// </summary>
+    [Fact]
+    public void RouterIsEmitted_EvenWithNoCatalogSourceAtAll()
+    {
+        var provider = Build(new Dictionary<string, string?>());
+
+        var router = ModelsOf(provider).SingleOrDefault(
+            n => n.Name == LanguageModelNodeType.RouterProviderName);
+
+        router.Should().NotBeNull("Auto is platform-owned — it must not depend on any provider being wired");
+        router!.Path.Should().Be(LanguageModelNodeType.RouterPath);
+        (router.Content as ModelDefinition)!.IsRouter.Should().BeTrue();
+        (router.Content as ModelDefinition)!.Id.Should().Be(LanguageModelNodeType.RouterModelId);
+        ProvidersOf(provider).Select(n => n.Name).Should().Contain(LanguageModelNodeType.RouterProviderName);
+    }
+
+    /// <summary>
+    /// The router carries no endpoint and no key ON PURPOSE — there is nothing to call. That is
+    /// also the belt-and-braces that keeps <c>HasUsableCredential("auto")</c> false, so no automatic
+    /// rung could pick it even if the <c>isRouter</c> flag were ever lost.
+    /// </summary>
+    [Fact]
+    public void RouterProviderCarriesNoCredential()
+    {
+        var provider = Build(new Dictionary<string, string?>());
+
+        var config = ProvidersOf(provider)
+            .Single(n => n.Name == LanguageModelNodeType.RouterProviderName).Content as ModelProviderConfiguration;
+
+        config.Should().NotBeNull();
+        config!.ApiKey.Should().BeNull();
+        config.Endpoint.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Auto must sort ahead of EVERY concrete model — including one a deployment deliberately pinned
+    /// at the <c>-1</c> "make this the default" convention — because it is the default selection for
+    /// a new thread. If it tied or lost, the composer default would silently be a concrete model.
+    /// </summary>
+    [Fact]
+    public void RouterOutranksEvenADeliberatelyPinnedDefault()
+    {
+        var provider = Build(new Dictionary<string, string?>
+        {
+            ["Azure:Models:0"] = "DeepSeek-V4-Flash", // ModelOrdering pins this one at -1
+            ["Azure:Endpoint"] = "https://x.openai.azure.com",
+            ["Azure:ApiKey"] = "sk-secret",
+        }, new LanguageModelCatalogSource("Azure", "Azure"));
+
+        var models = ModelsOf(provider);
+        var router = models.Single(n => n.Name == LanguageModelNodeType.RouterProviderName);
+
+        LanguageModelNodeType.RouterOrder.Should().BeLessThan(-1);
+        models.OrderBy(n => n.Order ?? 0).First().Should().BeSameAs(router);
+    }
+
+    /// <summary>
+    /// The shipped tiers arrive as ordinary nodes under <c>Provider/Tier</c> — that is what makes
+    /// them renameable/re-rankable without a code change — and create-if-absent, so an operator's
+    /// edit survives every redeploy.
+    /// </summary>
+    [Fact]
+    public void ShippedTiersAreSeededAsCreateIfAbsentNodes()
+    {
+        var provider = Build(new Dictionary<string, string?>());
+
+        var tiers = provider.GetStaticNodes()
+            .Where(n => string.Equals(n.NodeType, ModelTierNodeType.NodeType, System.StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        tiers.Select(n => (n.Content as ModelTierDefinition)!.Id).OrderBy(id => id)
+            .Should().Equal(ModelTierDefaults.All.Select(t => t.Id).OrderBy(id => id));
+        tiers.Should().OnlyContain(n => n.SyncBehavior == SyncBehavior.ExcludeThisAndChildren,
+            "an operator who renames or re-ranks a tier must keep that edit through every redeploy");
+        tiers.Should().OnlyContain(n => n.Path!.StartsWith(ModelTierNodeType.RootNamespace + "/"));
+        // Rank orders the registry cheap → capable, and `coding` is the top rung.
+        tiers.OrderBy(n => n.Order ?? 0).Last().Path
+            .Should().Be(ModelTierNodeType.PathFor(ModelTierDefaults.Coding));
+    }
+
+    /// <summary>
+    /// A provider that happens to list a model literally called "auto" must not collide with the
+    /// platform router — the router reserves its id first.
+    /// </summary>
+    [Fact]
+    public void AProviderModelNamedAutoDoesNotDisplaceTheRouter()
+    {
+        var provider = Build(new Dictionary<string, string?>
+        {
+            ["Rogue:Models:0"] = LanguageModelNodeType.RouterModelId,
+            ["Rogue:ApiKey"] = "sk-secret",
+        }, new LanguageModelCatalogSource("Rogue", "Rogue"));
+
+        var autos = ModelsOf(provider)
+            .Where(n => (n.Content as ModelDefinition)?.Id == LanguageModelNodeType.RouterModelId)
+            .ToList();
+
+        autos.Should().ContainSingle();
+        (autos[0].Content as ModelDefinition)!.IsRouter.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// <see cref="ModelInfo.IsRouter"/> has to survive the projection into the picker's bound list.
+    /// Without it the composer's "default to the lowest-Order model whose credentials resolve" rule
+    /// would skip Auto — which holds no credential of its own — i.e. it would skip the one entry
+    /// that is meant to be the default for a new thread.
+    /// </summary>
+    [Fact]
+    public void ToModelInfo_CarriesIsRouter_SoTheComposerCanDefaultToAuto()
+    {
+        var provider = Build(new Dictionary<string, string?>());
+        var routerNode = ModelsOf(provider).Single(n => n.Name == LanguageModelNodeType.RouterProviderName);
+
+        var info = AgentPickerProjection.ToModelInfo(routerNode, Json);
+
+        info.Should().NotBeNull();
+        info!.IsRouter.Should().BeTrue();
+        info.Path.Should().Be(LanguageModelNodeType.RouterPath);
+
+        // …and a normal model is NOT flagged, or the flag would wave everything through.
+        var plain = AgentPickerProjection.ToModelInfo(new MeshNode("m", "Provider/P")
+        {
+            NodeType = LanguageModelNodeType.NodeType,
+            Content = new ModelDefinition { Id = "m", Provider = "P" },
+        }, Json);
+        plain!.IsRouter.Should().BeFalse();
     }
 }

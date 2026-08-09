@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Linq;
 using MeshWeaver.AI;
 using MeshWeaver.Mesh;
@@ -34,7 +34,7 @@ public class ModelProviderEmissionTest
                 ["Anthropic:Endpoint"] = "https://api.anthropic.com/v1/messages"
             },
             new LanguageModelCatalogSource("Anthropic", "Anthropic", 1))
-            .GetStaticNodes()
+            .SourceNodes()
             .ToList();
 
         var providerNode = nodes.Should().ContainSingle(n => n.NodeType == ModelProviderNodeType.NodeType).Subject;
@@ -49,7 +49,7 @@ public class ModelProviderEmissionTest
     }
 
     /// <summary>
-    /// 🚨 Regression (atioz 2026-06-23, non-admin chat crash): the catalog source must seed a
+    /// 🚨 Regression (prod 2026-06-23, non-admin chat crash): the catalog source must seed a
     /// PublicRead <c>PartitionAccessPolicy</c> for BOTH catalog partitions — <c>Provider</c>
     /// (ModelProvider) AND <c>Model</c> (LanguageModel). Chat / the model picker / model
     /// resolution read the <c>Model</c> partition UNDER THE USER'S IDENTITY
@@ -67,7 +67,7 @@ public class ModelProviderEmissionTest
                 ["Anthropic:Endpoint"] = "https://api.anthropic.com/v1/messages"
             },
             new LanguageModelCatalogSource("Anthropic", "Anthropic", 1))
-            .GetStaticNodes()
+            .SourceNodes()
             .ToList();
 
         // Provider partition policy (pre-existing).
@@ -103,7 +103,7 @@ public class ModelProviderEmissionTest
                 ["Anthropic:Endpoint"] = "https://api.anthropic.com/v1/messages"
             },
             new LanguageModelCatalogSource("Anthropic", "Anthropic", 1))
-            .GetStaticNodes()
+            .SourceNodes()
             .ToList();
 
         var lmNodes = nodes.Where(n => n.NodeType == LanguageModelNodeType.NodeType).ToList();
@@ -131,7 +131,7 @@ public class ModelProviderEmissionTest
         var nodes = MakeProvider(
             new Dictionary<string, string?>(),
             new LanguageModelCatalogSource("Anthropic", "Anthropic", 1))
-            .GetStaticNodes()
+            .SourceNodes()
             .ToList();
 
         nodes.Should().ContainSingle(n => n.NodeType == ModelProviderNodeType.NodeType);
@@ -153,7 +153,7 @@ public class ModelProviderEmissionTest
                 ["Anthropic:Endpoint"] = "https://api.anthropic.com/v1/messages"
             },
             new LanguageModelCatalogSource("Anthropic", "Anthropic", 1))
-            .GetStaticNodes()
+            .SourceNodes()
             .ToList();
 
         nodes.Should().ContainSingle(n => n.NodeType == ModelProviderNodeType.NodeType);

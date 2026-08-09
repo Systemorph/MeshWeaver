@@ -4,7 +4,7 @@
 //   authenticate to ACR and list image tags KEYLESS.
 //
 // Mirrors the pgBackRest workload-identity wiring in storage.bicep, generalised
-// to the portal namespaces that share this one cluster (memex, atioz,
+// to the portal namespaces that share this one cluster (memex, prod,
 // memex-cloud — see .github/workflows/main-cd.yml). ONE user-assigned managed
 // identity, federated to
 //   system:serviceaccount:<ns>:memex-portal-sa
@@ -46,7 +46,7 @@ param oidcIssuerUrl string
 @description('Kubernetes namespaces that run the portal. One federated credential is created per namespace, each federating the memex-portal-sa service account in that namespace.')
 param namespaces array = [
   'memex'
-  'atioz'
+  'prod'
   'memex-cloud'
 ]
 

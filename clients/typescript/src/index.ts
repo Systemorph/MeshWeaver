@@ -3,7 +3,7 @@
 //
 //   import { Mesh } from "@meshweaver/client";
 //
-//   const mesh = await Mesh.connect("https://atioz.meshweaver.cloud", { token: "mw_..." });
+//   const mesh = await Mesh.connect("https://memex.meshweaver.cloud", { token: "mw_..." });
 //   const stories = await mesh.search("nodeType:Story namespace:ACME"); // mesh -> JS
 //   // ... native JS does the work ...
 //   mesh.patch("ACME/Stories/42", { content: { processed: true } });   // JS -> mesh

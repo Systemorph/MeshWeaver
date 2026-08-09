@@ -119,7 +119,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     /// <summary>
-    /// 🚨 Blast-radius regression (atioz 2026-06-22 "side-panel chat goes empty / stale until page
+    /// 🚨 Blast-radius regression (prod 2026-06-22 "side-panel chat goes empty / stale until page
     /// reload"). A fail-closed WRITE — an <c>UpdateStreamRequest</c> posted with no resolvable
     /// AccessContext (the infra <c>ds/Activity</c> / <c>sync/…</c> continuation write) — must surface
     /// ONLY to the writer's <c>exceptionCallback</c>. It must NOT terminally fault the shared READ
@@ -147,7 +147,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         using var sub = stream.Subscribe(_ => { }, ex => readerError = ex);
 
         // Infra continuation write loses identity → fail-closed (the ds/Activity sync write that
-        // faulted on atioz: "hub=sync/… message=UpdateStreamRequest … no AccessContext").
+        // faulted on prod: "hub=sync/… message=UpdateStreamRequest … no AccessContext").
         accessService.SetContext(null);
         accessService.SetCircuitContext(null);
         stream.Update(_ => (ChangeItem<EntityStore>?)null, _ => { });
@@ -157,7 +157,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         readerError.Should().BeNull(
             "a failed/fail-closed WRITE must surface to the writer's exceptionCallback — it must NOT " +
             "terminally fault the shared READ stream, which poisons every current and future subscriber " +
-            "(the 'side-panel chat goes empty / stale until page reload' bug, atioz 2026-06-22).");
+            "(the 'side-panel chat goes empty / stale until page reload' bug, prod 2026-06-22).");
 
         // A subscriber that binds AFTER the failed write (the post-submit side-panel re-bind) must
         // still receive the current state — never a replayed fault from the poisoned ReplaySubject.

@@ -1,4 +1,4 @@
-﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
@@ -46,7 +46,7 @@ public class LanguageModelNodeTypeTest
             },
             new LanguageModelCatalogSource("Anthropic", "Azure Claude", 1));
 
-        var modelNodes = provider.GetStaticNodes()
+        var modelNodes = provider.SourceNodes()
             .Where(n => n.NodeType == LanguageModelNodeType.NodeType)
             .ToList();
 
@@ -75,7 +75,7 @@ public class LanguageModelNodeTypeTest
             },
             new LanguageModelCatalogSource("Anthropic", "Azure Claude", 5));
 
-        var node = provider.GetStaticNodes()
+        var node = provider.SourceNodes()
             .Single(n => n.NodeType == LanguageModelNodeType.NodeType);
 
         var def = node.Content.Should().BeOfType<ModelDefinition>().Subject;
@@ -100,7 +100,7 @@ public class LanguageModelNodeTypeTest
             new LanguageModelCatalogSource("Anthropic", "Azure Claude", 1),
             new LanguageModelCatalogSource("Direct", "Direct Anthropic", 99));
 
-        var modelNodes = provider.GetStaticNodes()
+        var modelNodes = provider.SourceNodes()
             .Where(n => n.NodeType == LanguageModelNodeType.NodeType)
             .ToList();
 
@@ -116,7 +116,7 @@ public class LanguageModelNodeTypeTest
         // (empty) Provider catalog under every user identity; it is a governance node that the
         // picker queries (nodeType:LanguageModel|ModelProvider) filter out, so it pollutes nothing.
         var nodes = MakeProvider(new Dictionary<string, string?>())
-            .GetStaticNodes()
+            .SourceNodes()
             .ToList();
 
         nodes.Should().NotContain(n => n.NodeType == LanguageModelNodeType.NodeType
@@ -135,11 +135,11 @@ public class LanguageModelNodeTypeTest
             new Dictionary<string, string?> { ["Anthropic:Models:0"] = "claude-sonnet-4-6" },
             new LanguageModelCatalogSource("Anthropic", "Azure Claude", 1));
 
-        var nodes = withModels.GetStaticNodes().ToList();
+        var nodes = withModels.SourceNodes().ToList();
 
         // The seeder emits a _Policy for the Provider partition AND one for the legacy Model
         // partition (the picker / model resolution read `model` under the user's identity, so it
-        // also needs PublicRead — restored after the catalog refactor, atioz 2026-06-23). Target
+        // also needs PublicRead — restored after the catalog refactor, prod 2026-06-23). Target
         // the Provider partition's policy specifically.
         var policy = nodes.Should().ContainSingle(n => n.NodeType == "PartitionAccessPolicy"
             && n.Namespace == ModelProviderNodeType.RootNamespace).Subject;
@@ -173,7 +173,7 @@ public class LanguageModelNodeTypeTest
             },
             new LanguageModelCatalogSource("Anthropic", "Azure Claude", 1));
 
-        var ids = provider.GetStaticNodes()
+        var ids = provider.SourceNodes()
             .Where(n => n.NodeType == LanguageModelNodeType.NodeType)
             .Select(n => n.Id)
             .ToList();
@@ -190,7 +190,7 @@ public class LanguageModelNodeTypeTest
             new Dictionary<string, string?>(),
             new LanguageModelCatalogSource("MissingProvider", "Missing", 1));
 
-        var nodes = provider.GetStaticNodes()
+        var nodes = provider.SourceNodes()
             .Where(n => n.NodeType == LanguageModelNodeType.NodeType)
             .ToList();
 

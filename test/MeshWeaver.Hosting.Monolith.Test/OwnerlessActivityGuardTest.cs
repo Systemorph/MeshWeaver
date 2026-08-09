@@ -15,7 +15,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Repro + contract for the atioz <c>_Activity/*</c> resubscribe / re-route storm caused by an
+/// Repro + contract for the prod <c>_Activity/*</c> resubscribe / re-route storm caused by an
 /// <b>Activity MeshNode anchored at a top-level / ownerless path</b>.
 ///
 /// <para><b>The defect.</b> An activity lives at <c>{ownerPath}/_Activity/{id}</c> and is routed

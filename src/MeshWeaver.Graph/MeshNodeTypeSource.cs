@@ -954,7 +954,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // node writes. BuildInstanceCollection runs on EVERY ownNode emission (not just first load),
         // so the old SetInitialVersion(node.Version) re-stamped the clock BACKWARD to a low static/doc
         // node version on every catalog push, dropping the live layout Fulls under the stale-Full
-        // monotonicity guard → "cannot find pinned doc" wedge (atioz 2026-06-18). Removing that reset
+        // monotonicity guard → "cannot find pinned doc" wedge (prod 2026-06-18). Removing that reset
         // IS the wedge fix. Do NOT bump the loaded node's own version either: a load is a READ, and a
         // read that inflates Version breaks read-your-version semantics (MeshNodeVersionSyncTest) and
         // would re-emit on every catalog push. Recovery/reload re-application is driven by the WRITE
@@ -995,7 +995,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 // discriminator is unresolvable on the one registry that is canonical
                 // for this node (mesh root chain + this NodeType's content types), so
                 // the node will render empty and refuse content edits everywhere.
-                // Silent degradation here is exactly how the atioz 2026-06-12
+                // Silent degradation here is exactly how the prod 2026-06-12
                 // '$type: MarkdownConfiguration' rows went undiagnosed.
                 _logger?.LogWarning(
                     "MeshNodeTypeSource[{HubPath}]: content discriminator '$type': '{TypeName}' " +

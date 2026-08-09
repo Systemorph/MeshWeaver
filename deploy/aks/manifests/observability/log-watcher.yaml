@@ -10,7 +10,7 @@
 # its PVC until the portal answers again.
 #
 # Apply:
-#   az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+#   az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
 #     --command "kubectl apply -f log-watcher.yaml" --file log-watcher.yaml
 #
 # The ingest token must match the portal's LogWatch:IngestToken. Create it FIRST:

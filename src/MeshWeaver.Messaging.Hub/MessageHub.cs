@@ -390,7 +390,7 @@ public sealed class MessageHub : IMessageHub
     /// <para><b>Robustness — a faulting BuildupAction must NOT wedge the hub.</b> A throw in init used to
     /// propagate out of the <c>Concat</c> so the <c>Select</c> that calls <see cref="OpenGate"/> never ran:
     /// the Initialize gate stayed closed forever, so EVERY later message deferred until the 30s
-    /// deferral-timeout — which the user experiences as an unrecoverable hang (the atioz AgenticPension
+    /// deferral-timeout — which the user experiences as an unrecoverable hang (the prod AgenticPension
     /// agent-select wedge, 2026-06-16). The <c>.Catch</c> below mirrors
     /// <c>DataContext</c> (MeshWeaver.Data)'s per-context guard, lifted to the hub level so EVERY
     /// BuildupAction is covered: on a fault the hub enters a FAILED state (see
@@ -1167,7 +1167,7 @@ public sealed class MessageHub : IMessageHub
     /// <para>The mesh hub is the mesh's ROUTER and nothing else. Work executed on its action block —
     /// node CRUD above all — competes with routing itself: a burst of creates starves real
     /// <c>SubscribeRequest</c> traffic and every node op then times out, which is a portal-wide wedge
-    /// (atioz 2026-06-11: "11× CreateOrUpdateNodeRequest + 3× CreateNodeRequest@mesh/&lt;self&gt; stale
+    /// (prod 2026-06-11: "11× CreateOrUpdateNodeRequest + 3× CreateNodeRequest@mesh/&lt;self&gt; stale
     /// &gt;60s while real user SubscribeRequests starved"). Work belongs on a hub of its own — the
     /// session portal hub for REST / Blazor / MCP, the dedicated <c>import/{id}</c> hub for bulk
     /// imports.</para>
@@ -2152,7 +2152,7 @@ public sealed class MessageHub : IMessageHub
         // so ANY sender (including an unauthenticated external / RawJson client routed
         // to mesh/<id>) could otherwise tear the whole mesh down: once disposed, every
         // node operation times out at 60 s forever until the process restarts — the
-        // atioz mesh-wide outage on 2026-06-10. The host owns this hub's lifecycle and
+        // prod mesh-wide outage on 2026-06-10. The host owns this hub's lifecycle and
         // disposes it via a DIRECT Dispose() call (MeshTeardownExtensions.TeardownAsync
         // on host shutdown), NEVER through the message bus — so refusing the message
         // path here cannot block a legitimate shutdown. Per-node / portal / client hubs

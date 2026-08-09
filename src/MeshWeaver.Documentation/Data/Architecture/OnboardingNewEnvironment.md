@@ -8,7 +8,7 @@ Category: Architecture
 # Onboarding a New Environment
 
 A "new environment" is an additional Memex portal — its own domain, database, and
-sign-in — running on the **shared AKS cluster** (`memexaks-cluster` / `memex-aks-rg`,
+sign-in — running on the **shared AKS cluster** (`<aks-cluster>` / `<aks-resource-group>`,
 swedencentral). `memex.meshweaver.cloud` is the worked example; it lives under
 `deploy/aks/envs/<env>/`.
 The shared platform (cluster, ingress, Postgres server, Key Vault, ACR) is brought up
@@ -19,9 +19,9 @@ adds an environment on top of it.
 
 | Resource | Shared across envs | Separate per env |
 |---|---|---|
-| AKS cluster + node pools | ✅ `memexaks-cluster` | |
+| AKS cluster + node pools | ✅ `<aks-cluster>` | |
 | Ingress controller (app-routing nginx, one public IP) | ✅ | |
-| Postgres **server** | ✅ `memexaks-pg` | **database** (`memexcloud`, …) |
+| Postgres **server** | ✅ `<pg-server>` | **database** (`<database>`, …) |
 | Key Vault | ✅ `Systemorph` | secret **names** (`<env>-*`) + **master key** |
 | ACR + portal image | ✅ `meshweaver.azurecr.io/memex-portal-ai` | image **tag** (a commit sha) |
 | Kubernetes namespace | | ✅ `<env>` |
@@ -48,8 +48,8 @@ Copy the template folder `deploy/aks/envs/example/` to `deploy/aks/envs/<env>/`:
 ## 2. Provision Azure (control-plane; no cluster access needed)
 
 ```bash
-RG=memex-aks-rg; PG=memexaks-pg; KV=Systemorph; ZONE=meshweaver.cloud
-INGRESS_IP=$(az aks command invoke -g $RG -n memexaks-cluster \
+RG=<aks-resource-group>; PG=<pg-server>; KV=Systemorph; ZONE=meshweaver.cloud
+INGRESS_IP=$(az aks command invoke -g $RG -n <aks-cluster> \
   --command "kubectl get svc -n app-routing-system nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}'" --query logs -o tsv | tr -d '\r\n ')
 # 1. Database on the shared server
 az postgres flexible-server db create -g $RG -s $PG -d <env>
@@ -67,13 +67,13 @@ az keyvault secret set --vault-name $KV --name <env>-Authentication-Microsoft-Cl
 # 5. Self-update (ACR polling): federate the SHARED portal UAMI to THIS namespace's memex-portal-sa
 #    so the in-pod self-updater can list ACR tags. Preferred: add the namespace to `portalNamespaces`
 #    in infra/main.bicep and re-run the (idempotent) infra deploy. Quick out-of-band equivalent:
-ISSUER=$(az aks show -g $RG -n memexaks-cluster --query oidcIssuerProfile.issuerURL -o tsv)
-az identity federated-credential create -g $RG --identity-name memexaks-portal-mi \
+ISSUER=$(az aks show -g $RG -n <aks-cluster> --query oidcIssuerProfile.issuerURL -o tsv)
+az identity federated-credential create -g $RG --identity-name <portal-identity> \
   --name "memex-portal-<env>" --issuer "$ISSUER" \
   --subject "system:serviceaccount:<env>:memex-portal-sa" --audience "api://AzureADTokenExchange"
 # The shared UAMI already has AcrPull on meshweaver.azurecr.io — set its clientId as
 # selfUpdate.azureClientId in values.<env>.yaml (same value as every other env):
-PORTAL_MI_CLIENT_ID=$(az identity show -g $RG -n memexaks-portal-mi --query clientId -o tsv); echo "$PORTAL_MI_CLIENT_ID"
+PORTAL_MI_CLIENT_ID=$(az identity show -g $RG -n <portal-identity> --query clientId -o tsv); echo "$PORTAL_MI_CLIENT_ID"
 ```
 
 > **`<env>` is the Kubernetes namespace.** The federated-credential subject must be EXACTLY
@@ -87,12 +87,12 @@ PORTAL_MI_CLIENT_ID=$(az identity show -g $RG -n memexaks-portal-mi --query clie
 STAGE=$(mktemp -d); cp deploy/aks/envs/<env>/* "$STAGE"/; cp -r deploy/helm "$STAGE"/helm
 export MEMEX_PG_CONN='Host=<PG_PRIVATE_IP>;Port=5432;Username=memexadmin;Password=<PW>;Database=<env>;SslMode=Require;Trust Server Certificate=true'
 export IMAGE_TAG=<sha>
-( cd "$STAGE" && az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+( cd "$STAGE" && az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
     --command "MEMEX_PG_CONN='$MEMEX_PG_CONN' IMAGE_TAG='$IMAGE_TAG' bash deploy.sh" --file . )
 # Verify BEFORE DNS/TLS (host still unresolved or pointing elsewhere):
 curl -sS -k -o /dev/null -w "%{http_code}\n" --resolve <host>:443:$INGRESS_IP https://<host>/
 # Then issue the cert (needs the A-record to resolve publicly):
-( cd deploy/aks/envs/<env> && az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "bash tls.sh" --file tls.sh )
+( cd deploy/aks/envs/<env> && az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "bash tls.sh" --file tls.sh )
 ```
 
 ## Self-update: first-install checklist
@@ -103,12 +103,12 @@ The manual [AKS runbook](/Doc/Architecture/DeploymentAKS) (`kubectl set image` +
 environment, in this order:
 
 1. **Deploy the `portal-identity` bicep.** It provisions the shared portal UAMI
-   (`memexaks-portal-mi`) + one federated credential per portal namespace
+   (`<portal-identity>`) + one federated credential per portal namespace
    (`deployPortalIdentity: true`, default). For a brand-new namespace, add it to `portalNamespaces`
    and re-run the (idempotent) infra deploy, or create the federated credential out-of-band
    (§2 step 5). The subject must be exactly `system:serviceaccount:<env>:memex-portal-sa`.
 2. **Grant the portal UAMI `AcrPull` on the shared ACR.** `meshweaver.azurecr.io` lives in
-   `meshweaver-shared` — cross-RG from `memex-aks-rg` — so grant it out-of-band exactly like the
+   `meshweaver-shared` — cross-RG from `<aks-resource-group>` — so grant it out-of-band exactly like the
    kubelet's grant (or set `grantSharedAcrPull=true` for pure-IaC). One grant covers every namespace
    (one shared UAMI). Without it the in-pod Deployment PATCH still works; only ACR tag discovery is
    blocked.

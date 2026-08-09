@@ -1,8 +1,9 @@
 ---
 Name: Steadier workspace, and “create” makes real pages
-Category: What's New
+Category: Fix
 Description: Chats and deletes no longer stall the workspace, and asking to “create” something now makes a proper page.
 Icon: Sparkle
+Order: -20260710
 ---
 
 # Steadier workspace, and “create” makes real pages

@@ -12,7 +12,7 @@ namespace Memex.Database.Migration.Migrations;
 /// so its <c>$type</c> is the namespace-qualified FULL name. That orphan keeps a phantom partition
 /// alive: PathResolutionService synthesises a bare <c>_Provider</c> root on every probe, and the
 /// access-control read path re-reads <c>_Provider/_Policy</c>, which never type-resolves → "stayed an
-/// untyped JsonElement" logged thousands of times per hour (the atioz storm + sglauser flake).</para>
+/// untyped JsonElement" logged thousands of times per hour (the prod storm + sglauser flake).</para>
 ///
 /// <para>No current code path writes a top-level <c>_provider</c> schema — the live
 /// <c>{user}/_Provider/…</c> credential namespace lives INSIDE each user's own partition schema, NOT

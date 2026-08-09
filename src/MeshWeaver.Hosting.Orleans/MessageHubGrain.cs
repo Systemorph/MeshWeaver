@@ -233,7 +233,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             // and fault the activation. Without this, with two users active a grain
             // triggered by user A activating user B's node fails closed
             // ("User 'A' lacks Read permission on 'B/…'") → the grain FAILS → the node
-            // wedges for its legitimate owner (the 2026-06-23 atioz cross-user "boom":
+            // wedges for its legitimate owner (the 2026-06-23 prod cross-user "boom":
             // sglauser's submit faulted activation of rbuergi/_Thread/…). The activated
             // hub still enforces per-request RLS on the data it serves — ONLY the
             // activation read is System. Defer so System is live at SUBSCRIBE time, when
@@ -264,7 +264,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         //  - enriched node (config or not) → CompleteActivation (null config builds
         //    a NACK fallback hub; never silently filtered — the old
         //    `.Where(HubConfiguration is not null)` swallowed null-config terminal
-        //    answers and parked every DeliverMessage forever: the atioz wedge).
+        //    answers and parked every DeliverMessage forever: the prod wedge).
         //  - enrichment fault / no first emission within FirstNodeResolutionTimeout
         //    → OnError (DeliverMessage answers Failed; RoutingGrain NACKs the
         //    sender) + DeactivateOnIdle so the next access retries fresh.

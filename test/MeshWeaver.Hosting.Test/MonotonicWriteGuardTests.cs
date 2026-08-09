@@ -148,15 +148,25 @@ public class MonotonicWriteGuardTests
     [Fact]
     public async Task StaleHighWaterMark_DoesNotRefuse_WhenTheStoreMovedOutOfBand()
     {
-        // The in-process high-water mark is a cheap FILTER, never the verdict. Another
-        // replica deleting + recreating the node (or an out-of-band store restore) leaves
-        // this process holding a mark ABOVE the real durable row; the guard must verify
-        // against the store and let the write through, not refuse on a stale suspicion.
+        // The in-process high-water mark is a cheap FILTER, never the verdict. Another replica
+        // deleting + recreating the node leaves this process holding a mark ABOVE the real durable
+        // row; the guard must verify against the store and let the write through, not refuse on a
+        // stale suspicion.
         var (store, leaf) = BuildStore();
 
         await store.Write(Node("v50", 50), JsonOptions).Should().Emit();
 
-        // Out-of-band rewind straight on the leaf — this process never sees it.
+        // The out-of-band rewind, straight on the leaf — this process never sees it.
+        //
+        // 🚨 It is a DELETE + recreate, not a bare write of v1 over v50 (#971). The leaf itself is
+        // now version-conditional, so an in-place rewind through IStorageAdapter is refused by the
+        // STORE — that is the whole point of the store-level compare-and-set, and it is what makes a
+        // fresh replica's first write safe. Delete-then-recreate is how a legitimate rewind has
+        // always been expressed (see the guard's "Legitimate rewinds" note and the
+        // RecreateAfterDelete cases above): the row is gone, so the recreate at version 1 faces
+        // nothing to regress against. What this test pins is unchanged and orthogonal — that a mark
+        // left stale by that sequence cannot by itself refuse the next legitimate write.
+        await leaf.Delete(Path).Should().Emit();
         await leaf.Write(Node("recreated-elsewhere", 1), JsonOptions).Should().Emit();
 
         await store.Write(Node("v2-legitimate", 2), JsonOptions).Should().Emit();

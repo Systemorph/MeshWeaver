@@ -49,7 +49,7 @@ public static class InstanceProvisioningPlan
 # deploy/aks/infra/main.bicep → param portalNamespaces: add '{{ns}}', then:
 az deployment group create -g {{o.ResourceGroup}} \
   --template-file deploy/aks/infra/main.bicep \
-  --parameters portalNamespaces="['memex','memex-cloud','atioz','{{ns}}']"
+  --parameters portalNamespaces="['memex','memex-cloud','prod','{{ns}}']"
 ```
 
 **2. Database on the shared server:**

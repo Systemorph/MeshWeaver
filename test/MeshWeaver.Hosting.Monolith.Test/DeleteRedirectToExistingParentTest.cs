@@ -18,7 +18,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// <summary>
 /// End-to-end test for the Delete → redirect-to-parent GUI flow (<see cref="DeleteLayoutArea"/>).
 ///
-/// The bug (atioz, 2026-06-22): deleting a node whose immediate parent PATH is a VIRTUAL grouping
+/// The bug (prod, 2026-06-22): deleting a node whose immediate parent PATH is a VIRTUAL grouping
 /// (its children exist, but the segment itself is not a node — e.g. <c>AgenticPension/Script</c>)
 /// redirected straight to that virtual path, landing the user on another
 /// "No node found at '…'. Closest ancestor is '…'" page. The fix redirects to the nearest ancestor

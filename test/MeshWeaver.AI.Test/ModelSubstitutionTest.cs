@@ -153,7 +153,7 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
         // Warm on the CANDIDATE list (the model is in the snapshot) rather than on the default, which
         // is null both before and after warm-up and would prove nothing.
         await Observable.Interval(TimeSpan.FromMilliseconds(50))
-            .Select(_ => resolver.ReadSizeCandidates())
+            .Select(_ => resolver.ReadTierCandidates())
             .Should().Within(30.Seconds())
             .Match(c => c.Any(m => m.Id == StaleModel));
         resolver.ResolveDefaultModelId().Should().BeNull(

@@ -1,8 +1,9 @@
 ---
 Name: Plugin-shipped agents now appear in the agent picker
-Category: What's New
+Category: Fix
 Description: Agents installed by a package are now offered in the chat's agent picker and combobox, wherever you are chatting.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Plugin-shipped agents now appear in the agent picker

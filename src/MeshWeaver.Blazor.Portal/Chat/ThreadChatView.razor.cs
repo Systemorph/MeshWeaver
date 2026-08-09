@@ -2181,7 +2181,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         //
         // 🚨 TIMING-SAFE: the navigation context resolves ASYNCHRONOUSLY, so the stale
         // `_currentNavContext` field (and the seeded `initialContext`) are frequently NULL in the
-        // floating side-panel chat — collapsing the union to the built-in query only (the atioz
+        // floating side-panel chat — collapsing the union to the built-in query only (the prod
         // "Space agent missing from /agent" bug). We instead read the LATEST RESOLVED context off
         // NavigationService.NavigationContext (ReplaySubject(1) → the last value replays
         // immediately). Take(1) after a short Timeout so a still-resolving context can't hang the

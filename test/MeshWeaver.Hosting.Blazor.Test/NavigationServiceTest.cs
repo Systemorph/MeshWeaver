@@ -1216,18 +1216,18 @@ public class NavigationServiceTest
     [Fact]
     public async Task OnLocationChanged_SatelliteNode_CurrentNamespacePointsAtMainNode()
     {
-        // User browses to a thread under PartnerRe/AIConsulting. The thread node's MainNode
+        // User browses to a thread under Acme/AIConsulting. The thread node's MainNode
         // points back at the parent that owns it, so CurrentNamespace â€” which downstream
         // chat/autocomplete/attachment code uses to resolve relative paths â€” must surface
         // the main node, not the satellite path.
         var service = CreateService();
-        const string SatellitePath = "PartnerRe/AIConsulting/_Thread/abc-123";
-        const string MainNode = "PartnerRe/AIConsulting";
+        const string SatellitePath = "Acme/AIConsulting/_Thread/abc-123";
+        const string MainNode = "Acme/AIConsulting";
 
         _pathResolver.ResolveNavigationPath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution(SatellitePath, null)));
 
-        var threadNode = new MeshNode("abc-123", "PartnerRe/AIConsulting/_Thread")
+        var threadNode = new MeshNode("abc-123", "Acme/AIConsulting/_Thread")
         {
             NodeType = "Thread",
             MainNode = MainNode
@@ -1259,12 +1259,12 @@ public class NavigationServiceTest
         // the no-node-found path (existing tests rely on this fallback).
         var service = CreateService();
         _pathResolver.ResolveNavigationPath(Arg.Any<string>())
-            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("PartnerRe/AIConsulting", null)));
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("Acme/AIConsulting", null)));
 
-        var mainNode = new MeshNode("AIConsulting", "PartnerRe")
+        var mainNode = new MeshNode("AIConsulting", "Acme")
         {
             NodeType = "Group"
-            // MainNode defaults to Path → "PartnerRe/AIConsulting"
+            // MainNode defaults to Path → "Acme/AIConsulting"
         };
         _meshQuery.Query<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
             .Returns(System.Reactive.Linq.Observable.Return(QueryChange(mainNode)));
@@ -1274,14 +1274,14 @@ public class NavigationServiceTest
         // relative path) and PublishPath("") returns early, so InitializeAsync's
         // bootstrap is a no-op. Trigger the navigation explicitly — same shape
         // as OnLocationChanged_ResolvesPath_CreatesNavigationContext above.
-        _navigationManager.SimulateLocationChanged("http://localhost/PartnerRe/AIConsulting");
+        _navigationManager.SimulateLocationChanged("http://localhost/Acme/AIConsulting");
         // Stream-wait for the navigation to land — PrimaryPath becoming the
         // main node path is the positive signal.
         await service.NavigationContext.Should().Within(WaitTimeout)
-            .Match(ctx => ctx?.PrimaryPath == "PartnerRe/AIConsulting");
+            .Match(ctx => ctx?.PrimaryPath == "Acme/AIConsulting");
 
-        service.CurrentNamespace.Should().Be("PartnerRe/AIConsulting");
-        service.Context!.PrimaryPath.Should().Be("PartnerRe/AIConsulting");
+        service.CurrentNamespace.Should().Be("Acme/AIConsulting");
+        service.Context!.PrimaryPath.Should().Be("Acme/AIConsulting");
         service.Context.IsSatellite.Should().BeFalse();
     }
 
@@ -1292,38 +1292,38 @@ public class NavigationServiceTest
         // satellite pages reflect what can be created on the parent node.
         var service = CreateService();
         _pathResolver.ResolveNavigationPath(Arg.Any<string>())
-            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("PartnerRe/AIConsulting/_Thread/abc-123", null)));
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("Acme/AIConsulting/_Thread/abc-123", null)));
 
-        var threadNode = new MeshNode("abc-123", "PartnerRe/AIConsulting/_Thread")
+        var threadNode = new MeshNode("abc-123", "Acme/AIConsulting/_Thread")
         {
             NodeType = "Thread",
-            MainNode = "PartnerRe/AIConsulting"
+            MainNode = "Acme/AIConsulting"
         };
         _meshQuery.Query<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
             .Returns(System.Reactive.Linq.Observable.Return(QueryChange(threadNode)));
 
-        StubCreatableTypes("PartnerRe/AIConsulting",
-            new CreatableTypeInfo("PartnerRe/AIConsulting/Story"));
+        StubCreatableTypes("Acme/AIConsulting",
+            new CreatableTypeInfo("Acme/AIConsulting/Story"));
 
         CreatableTypesSnapshot? lastSnapshot = null;
         service.CreatableTypes.Subscribe(s => lastSnapshot = s);
 
         // Set URI so InitializeAsync triggers ProcessLocationChange
         // (PublishPath skips empty initial paths in production).
-        _navigationManager.SetUri("http://localhost/PartnerRe/AIConsulting/_Thread/abc-123");
+        _navigationManager.SetUri("http://localhost/Acme/AIConsulting/_Thread/abc-123");
 
         service.Initialize();
         // Stream-wait for the creatable-types load for the main node to land
         // — replaces a Task.Delay(150).
         await service.CreatableTypes.Should().Within(WaitTimeout)
-            .Match(s => !s.IsLoading && s.Items.Any(t => t.NodeTypePath == "PartnerRe/AIConsulting/Story"));
+            .Match(s => !s.IsLoading && s.Items.Any(t => t.NodeTypePath == "Acme/AIConsulting/Story"));
 
         // Discard the IObservable result — this is an NSubstitute received-call
         // verification, not a real invocation. The discard silences CS4014
         // (System.Reactive's GetAwaiter makes IObservable<T> awaitable).
         _ = _creatableTypesProvider.Received().GetCreatableTypes(
-            "PartnerRe/AIConsulting", Arg.Any<MeshNode?>());
-        lastSnapshot!.Items.Should().Contain(t => t.NodeTypePath == "PartnerRe/AIConsulting/Story");
+            "Acme/AIConsulting", Arg.Any<MeshNode?>());
+        lastSnapshot!.Items.Should().Contain(t => t.NodeTypePath == "Acme/AIConsulting/Story");
     }
 
     #endregion

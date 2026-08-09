@@ -73,12 +73,13 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             string.Equals(m, modelName, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// Resolves the agent's <see cref="AgentConfiguration.ModelTier"/> — a SIZE label ("S"/"M"/"L"/"XL",
-    /// or the legacy "utility"/"light"/"standard"/"heavy") — to a concrete model.
+    /// Resolves the agent's <see cref="AgentConfiguration.ModelTier"/> — a USAGE tier
+    /// ("utility"/"chat"/"reasoning"/"coding", or a legacy "light"/"standard"/"heavy" / "S"-"XL"
+    /// spelling) — to a concrete model.
     ///
     /// <para>Two sources, in order: the <b>model nodes themselves</b> (a node carrying that
-    /// <see cref="ModelDefinition.Size"/>, lowest Order wins — the data-driven form, so a new
-    /// environment labels its models and needs no config keys at all), then the legacy
+    /// <see cref="ModelDefinition.Tier"/>, lowest Order wins — the data-driven form, so a new
+    /// environment labels its models and needs no config keys at all), then the deprecated
     /// <c>ModelTier:*</c> config section for deployments still expressing tiers that way.</para>
     ///
     /// Returns null when the agent declares no tier, neither source names a model, or this factory
@@ -86,45 +87,42 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     /// creating a client for a model another factory owns). Precedence in concrete factories:
     /// composer selection (<see cref="CurrentModelName"/>) → agent tier → provider default.
     /// </summary>
+    /// <param name="agentConfig">The agent whose declared tier is being resolved.</param>
+    /// <returns>The model id this factory should use, or <c>null</c> to fall through.</returns>
     protected string? ResolveTierModel(AgentConfiguration agentConfig)
     {
         if (string.IsNullOrEmpty(agentConfig.ModelTier))
             return null;
+        // Resolve the declared label against the deployment's OWN tier registry — a renamed or
+        // added tier resolves; the shipped tiers stand in when none is visible.
+        var resolver = Hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
+        var tiers = resolver?.ReadTiers();
+        if (ModelTierCatalog.Find(agentConfig.ModelTier, tiers) is not { } tier)
+            return null;
 
-        // 1. The label as DATA on the model nodes. Deliberately does NOT fall through to the
+        // 1. The tier as DATA on the model nodes. Deliberately does NOT fall through to the
         //    deployment default here: that is the caller's own last resort, and swallowing it at
         //    this level would hand this factory a model another factory owns.
-        if (ModelSizes.Parse(agentConfig.ModelTier) is { } size
-            && Hub.ServiceProvider.GetService<ChatClientCredentialResolver>() is { } resolver)
+        if (resolver is not null)
         {
-            var labelled = ModelSizeCatalog.Resolve(
-                size, resolver.ReadSizeCandidates(), resolver.HasUsableCredential);
+            var labelled = ModelTierCatalog.ResolveLabel(
+                tier, resolver.ReadTierCandidates(), tiers, resolver.HasUsableCredential);
             if (!string.IsNullOrEmpty(labelled) && Supports(labelled))
             {
-                Logger.LogDebug("[AgentFactory] Agent {Agent} size '{Size}' resolved to labelled model {Model}",
+                Logger.LogDebug("[AgentFactory] Agent {Agent} tier '{Tier}' resolved to labelled model {Model}",
                     agentConfig.Id, agentConfig.ModelTier, labelled);
                 return labelled;
             }
         }
 
-        // 2. Legacy: the ModelTier:* config section.
-        var configuration = Hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>();
-        if (configuration == null)
-            return null;
-
-        var tiers = new ModelTierConfiguration
-        {
-            Heavy = configuration["ModelTier:Heavy"],
-            Standard = configuration["ModelTier:Standard"],
-            Light = configuration["ModelTier:Light"],
-            Utility = configuration["ModelTier:Utility"]
-        };
-
-        var resolved = tiers.Resolve(agentConfig.ModelTier);
+        // 2. Deprecated: the ModelTier:* config section (mapped onto the same tiers by rank).
+        var resolved = ModelTierConfiguration
+            .From(Hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>())
+            .Resolve(tier);
         if (string.IsNullOrEmpty(resolved) || !Supports(resolved))
             return null;
 
-        Logger.LogDebug("[AgentFactory] Agent {Agent} tier '{Tier}' resolved to model {Model}",
+        Logger.LogDebug("[AgentFactory] Agent {Agent} tier '{Tier}' resolved to model {Model} via the deprecated ModelTier:* config",
             agentConfig.Id, agentConfig.ModelTier, resolved);
         return resolved;
     }
@@ -631,7 +629,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             // Self-disposing watch: the sub-thread sync subscription is released
                             // the moment the sub-thread reaches a terminal state. Without this it
                             // stays subscribed for the life of the PROCESS — one leaked sync/ hub
-                            // per delegation, which accumulates until the portal wedges (the atioz
+                            // per delegation, which accumulates until the portal wedges (the prod
                             // 2026-06-25 wedge: ~1778 leaked sync hubs). See the /storm skill.
                             IDisposable? subThreadWatch = null;
                             subThreadWatch = workspace.GetMeshNodeStream(subThreadPath).Subscribe(

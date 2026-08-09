@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -37,6 +38,26 @@ public static class LanguageModelNodeType
     public const string RootNamespace = "Model";
 
     /// <summary>
+    /// Pseudo-provider that owns the <b>Auto</b> router. Not a vendor: Auto belongs to the platform,
+    /// not to whoever ends up serving the round.
+    /// </summary>
+    public const string RouterProviderName = "Auto";
+
+    /// <summary>The router's model id. Never sent on the wire — Auto dispatches before any factory sees it.</summary>
+    public const string RouterModelId = "auto";
+
+    /// <summary>
+    /// The router's <see cref="MeshNode.Order"/>. Below the <c>-1</c> "make this the default"
+    /// convention on purpose: Auto is the DEFAULT selection for a new thread, so it must sort ahead
+    /// of whichever concrete model a deployment pinned at <c>-1</c>.
+    /// </summary>
+    public const int RouterOrder = -10;
+
+    /// <summary>The router's node path — what the composer persists when Auto is selected.</summary>
+    public static string RouterPath =>
+        $"{ModelProviderNodeType.RootNamespace}/{RouterProviderName}/{RouterModelId}";
+
+    /// <summary>
     /// Registers the built-in <c>LanguageModel</c> MeshNode definition + the
     /// <see cref="BuiltInLanguageModelProvider"/> that materialises every
     /// configured model as a static node, plus public-read access. Auto-seeds
@@ -67,6 +88,10 @@ public static class LanguageModelNodeType
         // calling AddLanguageModelType wires the entire data shape (the
         // ChatClientCredentialResolver depends on both being available).
         builder.AddModelProviderType(serveFromPartition);
+        // Companion NodeType: ModelTier is the registry of usage rungs a model node's
+        // ModelDefinition.Tier and an agent's ModelTier point at. Same reason it is registered here —
+        // a deployment that has models must be able to say what each one is FOR.
+        builder.AddModelTierType(serveFromPartition);
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<LanguageModelCatalogOptions>();
@@ -78,7 +103,19 @@ public static class LanguageModelNodeType
             // is safe to register unconditionally.
             services.TryAddSingleton<IMasterKeyProvider, ConfigMasterKeyProvider>();
             services.TryAddSingleton<IProviderKeyProtector, ProviderKeyProtector>();
-            services.TryAddSingleton<ChatClientCredentialResolver>();
+            // 🧊 The mesh's SHARED resolver is warmed by whoever builds it — here. Reads are pure
+            // (they never open the catalog subscription), so warming is an owner's decision rather
+            // than a side effect of the first lookup. Every consumer resolves the resolver from DI,
+            // so every consumer still gets a warming snapshot; and a caller that constructs its OWN
+            // resolver keeps it in the pre-warm state for as long as it wants — which is what makes
+            // "cold catalog" a state a test can OWN instead of race
+            // (AutoRouterDispatchTest.RouterIsRecognisedAgainstAColdCatalog).
+            services.TryAddSingleton(sp =>
+            {
+                var resolver = new ChatClientCredentialResolver(sp.GetRequiredService<IMessageHub>());
+                resolver.EnsureSubscription();
+                return resolver;
+            });
             // Headless default chat client (for background one-shot model calls, e.g. the
             // content-indexing image describer). Resolves the lowest-Order resolvable LanguageModel
             // and its serving factory — no agent, no shared-state mutation.
@@ -100,7 +137,7 @@ public static class LanguageModelNodeType
             // 🚨 Gate the IStaticNodeProvider (feeds FindStaticNode) on !dbSynced, same as the
             // partition provider below — leaving it registered while the model-catalog partition is
             // DB-synced made the importer's inner CreateNode see the built-in catalog/Provider
-            // nodes as already-present and fail "Node already exists" (atioz 2026-06-11: imported
+            // nodes as already-present and fail "Node already exists" (prod 2026-06-11: imported
             // 4 / failed 2, incl. Provider/_Policy + Provider/Anthropic). The
             // BuiltInLanguageModelProvider singleton stays (the import source wraps it); the
             // LanguageModel/ModelProvider NodeType defs stay via AddMeshNodes. See AddAgentType.

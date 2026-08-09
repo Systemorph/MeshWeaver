@@ -86,7 +86,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         // `skill`/`model`/`harness`) holding the platform agents. Excluding it kept the `agent`
         // schema out of `searchable_schemas`, so the multi-namespace registry fan-out
         // (`namespace:{user}/Agent|{space}/Agent|Agent`) never queried it → the chat agent
-        // picker came back EMPTY for every user while models/skills worked (atioz 2026-06-20).
+        // picker came back EMPTY for every user while models/skills worked (prod 2026-06-20).
         // Single-namespace `namespace:Agent` masked it because that path is SCOPED (resolves the
         // schema directly, bypassing searchable_schemas).
         "p", "path", "mesh", "thread", "partition", "organization", "vuser",
@@ -343,7 +343,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         if (!string.IsNullOrEmpty(query.TextSearch))
         {
             var escaped = EscapeSql(query.TextSearch);
-            // Split into words, each as prefix match (e.g., "Partner Re" → "Partner:* & Re:*")
+            // Split into words, each as prefix match (e.g., "Acme Corp" → "Acme:* & Corp:*")
             var words = escaped.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var tsTerms = string.Join(" & ", words.Select(w => $"{w}:*"));
 

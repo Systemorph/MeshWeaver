@@ -1820,7 +1820,7 @@ public class AgentChatClient : IAgentChat
 
         // 🩹 Self-heal a stale / deleted pinned model. The composer can carry a model id that no
         // longer resolves to a live LanguageModel (catalog refactor, deleted provider) — building a
-        // chat client for it 404s the WHOLE thread (atioz sglauser / rsalzmann threads). When the
+        // chat client for it 404s the WHOLE thread (prod sglauser / rsalzmann threads). When the
         // selected model doesn't resolve, fall back to the DEFAULT available model so the thread runs
         // on the default instead of crashing.
         ApplyStaleModelFallback();
@@ -2002,11 +2002,28 @@ public class AgentChatClient : IAgentChat
     }
 
     /// <summary>
-    /// If the chat-selected model (<see cref="currentModelName"/>) no longer resolves to a live model
-    /// — deleted / refactored out of the catalog so its provider endpoint 404s — swap it for the
-    /// DEFAULT available model (lowest-Order resolvable model in the live catalog). Best-effort and
-    /// fully synchronous: reads the credential resolver's warm snapshot. No-ops when no resolver is
-    /// registered, the selected model already resolves, or no working default exists (so deployments
+    /// Resolves <see cref="currentModelName"/> to a model that can actually serve this round. Two
+    /// cases land here, and they are NOT the same thing:
+    ///
+    /// <list type="number">
+    /// <item><b>Auto (the router) was selected</b> — the DEFAULT for a new thread. Auto has no wire
+    /// API of its own, so it is DISPATCHED to a real model here, before any factory sees it. The
+    /// dispatch rule is deliberately the simplest one that is explainable: <b>run the tier the
+    /// selected agent declares</b> (<see cref="AgentConfiguration.ModelTier"/>), and the deployment
+    /// default when it declares none. No classification call, no guessing — a router nobody can
+    /// predict is worse than a fixed default.</item>
+    /// <item><b>The selection is stale</b> — deleted / refactored out of the catalog, or its provider
+    /// carries no key — so it is swapped for a working model on the same chain.</item>
+    /// </list>
+    ///
+    /// <para>Both run the ONE resolution chain (<see cref="ChatClientCredentialResolver.ResolveForTier"/>):
+    /// tier label on a model node → deprecated <c>ModelTier:*</c> config → deployment default. It
+    /// cannot resolve to Auto (routers are excluded from every rung), and it cannot fail — the worst
+    /// case is an empty/unusable catalog, which latches <see cref="modelFallbackExhausted"/> so the
+    /// round FAILS AUDIBLY rather than running on nothing.</para>
+    ///
+    /// Best-effort and fully synchronous: reads the credential resolver's warm snapshot. No-ops when
+    /// no resolver is registered or a usable non-router model is already selected (so deployments
     /// whose models bypass the catalog are unaffected).
     /// </summary>
     private void ApplyStaleModelFallback()
@@ -2014,57 +2031,115 @@ public class AgentChatClient : IAgentChat
         var resolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
         if (resolver is null)
             return;
+
+        // 🚦 The router check comes FIRST and is independent of usability. Auto must be dispatched
+        // even if someone parked it on a keyed provider node: it names no wire model, so "it has a
+        // key" would be the wrong reason to let it through to a factory.
+        var isRouter = resolver.IsRouterSelection(currentModelName);
+
         // The selected model is actually USABLE (resolves to a real key) → nothing to heal. Note this
         // is HasUsableCredential, not `Resolve != Missing`: a keyless/endpoint-only resolution (a
         // provider node with a gateway URL but no ApiKey — e.g. z-ai/glm-5.2 on Provider/OpenAICompatible)
         // is non-Missing yet every factory throws "ApiKey is missing" for it. Treating keyless as
         // usable is exactly what let that raw error reach the user.
-        if (resolver.HasUsableCredential(currentModelName))
+        if (!isRouter && resolver.HasUsableCredential(currentModelName))
             return;
-        // Either NO model is selected, or the selected one isn't usable (deleted/refactored out of the
-        // catalog, or its provider carries no key). Seed a working model so the round runs instead of
+
+        // Auto, or no/unusable selection. Resolve a working model so the round runs instead of
         // dead-ending on the first factory (OpenAI) with "(none selected)".
         //
-        // 📏 Seed by the selected agent's declared SIZE, not the bare default. This is the ONE place a
-        // size label can take effect: the concrete factories consult ResolveTierModel only when no model
-        // is selected, and by then this method has already seeded one — so seeding the plain default
-        // here would make every sized agent run on the default and the label would be decorative.
-        // ResolveModelIdForSize(null) IS the default, so an agent declaring no size is unaffected, and
-        // an explicit USABLE selection never reaches this line (early return above) — a human pick still
-        // wins. When nothing usable exists, `fallback` is empty → currentModelName stays as-is → the
-        // round surfaces the clear "No AI model available" message.
-        var declaredSize = loadedAgents
-            .FirstOrDefault(a => string.Equals(a.Name, currentAgentName, StringComparison.OrdinalIgnoreCase))
-            ?.AgentConfiguration?.ModelTier;
-        // 🩺 The fallback target is HEALTH-CHECKED, never assumed: ResolveModelIdForSize ranks the
-        // catalog through the SAME HasUsableCredential predicate the early return above uses (and
-        // that AgentPickerProjection.ObserveDefaultComposer uses for the composer default), so a
-        // swap can only ever land on a model whose credentials actually resolve.
-        var fallback = resolver.ResolveModelIdForSize(declaredSize);
-        if (string.IsNullOrEmpty(fallback)
-            || string.Equals(fallback, currentModelName, StringComparison.OrdinalIgnoreCase))
+        // 🎚️ Resolve by the selected agent's declared TIER, not the bare default. This is the ONE
+        // place a tier label can take effect: the concrete factories consult ResolveTierModel only
+        // when no model is selected, and by then this method has already set one — so resolving the
+        // plain default here would make every tiered agent run on the default and the label would be
+        // decorative. ResolveForTier(null) IS the default, so an agent declaring no tier is unaffected,
+        // and an explicit USABLE non-router selection never reaches this line (early return above) —
+        // a human pick still wins over both a tier label and Auto.
+        var declaredTier = AgentForThisRound()?.ModelTier;
+        // 🩺 The target is HEALTH-CHECKED, never assumed: ResolveForTier ranks the catalog through the
+        // SAME HasUsableCredential predicate the early return above uses (and that
+        // AgentPickerProjection.ObserveDefaultComposer uses for the composer default), so a swap can
+        // only ever land on a model whose credentials actually resolve.
+        var resolution = resolver.ResolveForTier(declaredTier);
+        var target = resolution.ModelId;
+        if (string.IsNullOrEmpty(target)
+            || string.Equals(target, currentModelName, StringComparison.OrdinalIgnoreCase))
         {
-            // Nothing usable to swap TO. Not fatal on its own — a deployment can keep its keys in
+            // Nothing usable to move TO. Not fatal on its own — a deployment can keep its keys in
             // factory config where the resolver cannot see them — so the round still tries. The
             // latch lets CreateAgentsSync turn "no usable model AND no agent could be built" into a
             // speaking round failure instead of a raw provider error (#476).
             modelFallbackExhausted = true;
+            if (isRouter)
+                logger.LogWarning(
+                    "[AgentChatClient] Auto could not dispatch: the catalog offers no usable model "
+                    + "(agent '{Agent}', tier '{Tier}').",
+                    currentAgentName ?? "(none)", declaredTier ?? "(none)");
             return;
         }
-        var stale = currentModelName;
-        currentModelName = fallback;
+
+        var previous = currentModelName;
+        currentModelName = target;
         // 🔇 SILENT for the USER (directive 2026-07-13: "the user does not get such messages —
         // silently correct this and take the first valid model"): no assistant chat message, because
-        // an unusable pinned model is a config/catalog problem the user cannot act on mid-thread.
-        // NEVER silent for an OPERATOR though — that was the #476 defect. Two durable signals:
-        // this Warning naming BOTH models, and `substitutedFromModel`, which ThreadExecution stamps
-        // onto the round's response cell so a non-interactive round (which reads no chat stream)
-        // still carries the fact in its data.
-        substitutedFromModel = string.IsNullOrEmpty(stale) ? null : stale;
+        // neither an Auto dispatch nor an unusable pinned model is something the user can act on
+        // mid-thread. NEVER silent for an OPERATOR though — that was the #476 defect. Two durable
+        // signals: the log line naming BOTH models, and `substitutedFromModel`, which ThreadExecution
+        // stamps onto the round's response cell so a non-interactive round (which reads no chat
+        // stream) still carries the fact in its data.
+        substitutedFromModel = string.IsNullOrEmpty(previous) ? null : previous;
+
+        if (isRouter)
+        {
+            // An Auto dispatch onto the declared tier (or, with no tier declared, onto the default)
+            // is the designed path — Debug. A dispatch that had to fall PAST an unpopulated tier is
+            // the operator-visible case: the coding agent is not running on the coding model.
+            if (resolution.IsUnpopulatedTierFallback)
+                logger.LogWarning(
+                    "[AgentChatClient] Auto dispatched agent '{Agent}' to the deployment default "
+                    + "'{Model}': no usable model carries tier '{Tier}'. Label one (ModelDefinition.Tier) "
+                    + "to make the tier take effect.",
+                    currentAgentName ?? "(none)", target, resolution.RequestedTier);
+            else
+                logger.LogDebug(
+                    "[AgentChatClient] Auto dispatched agent '{Agent}' (tier '{Tier}') to model "
+                    + "'{Model}' via {Source}.",
+                    currentAgentName ?? "(none)", declaredTier ?? "(none)", target, resolution.Source);
+            return;
+        }
+
         logger.LogWarning(
             "[AgentChatClient] Selected model '{Stale}' is not usable (no resolvable key); "
-            + "silently falling back to default model '{Default}'.",
-            string.IsNullOrEmpty(stale) ? "(none selected)" : stale, fallback);
+            + "silently falling back to model '{Default}' (via {Source}).",
+            string.IsNullOrEmpty(previous) ? "(none selected)" : previous, target, resolution.Source);
+    }
+
+    /// <summary>
+    /// The agent whose declared tier <see cref="ApplyStaleModelFallback"/> dispatches on — i.e. the
+    /// agent that will actually serve this round, resolved BEFORE the agents are built.
+    ///
+    /// <para>Match order deliberately mirrors <see cref="ResolveSelectedAgent"/>: full node path, then
+    /// bare id/name, then the DEFAULT agent. The default matters more than it looks — most rounds
+    /// carry no explicit agent selection, and without it Auto would dispatch every one of them to the
+    /// deployment default while the default agent's own tier sat on its node doing nothing.</para>
+    /// </summary>
+    /// <returns>The agent configuration to read <see cref="AgentConfiguration.ModelTier"/> from, or null.</returns>
+    private AgentConfiguration? AgentForThisRound()
+    {
+        var matched = !string.IsNullOrEmpty(currentAgentPath)
+            ? loadedAgents.FirstOrDefault(a =>
+                string.Equals(a.Path, currentAgentPath, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+        matched ??= !string.IsNullOrEmpty(currentAgentName)
+            ? loadedAgents.FirstOrDefault(a =>
+                string.Equals(a.Name, currentAgentName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(a.AgentConfiguration?.Id, currentAgentName, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+        matched ??= loadedAgents.FirstOrDefault(a => a.AgentConfiguration?.IsDefault == true);
+
+        return matched?.AgentConfiguration;
     }
 
     /// <summary>

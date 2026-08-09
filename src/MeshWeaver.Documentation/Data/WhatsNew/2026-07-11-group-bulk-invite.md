@@ -1,8 +1,9 @@
 ---
 Name: Invite a whole list of emails to a group
-Category: What's New
+Category: Feature
 Description: Groups now have an "Invite by Email" button — paste a list of addresses, pick a role, and everyone is added now or the moment they register.
 Icon: Sparkle
+Order: -20260711
 ---
 
 Bringing a whole team into a group no longer means adding people one by one. Every group's Edit page now has an **Invite by Email** button: paste a list of email addresses (one per line, comma-separated, or straight from your mail client as `Name <email>`), pick the role they should get, and hit Invite.

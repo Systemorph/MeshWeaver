@@ -1,8 +1,9 @@
 ---
 Name: The React frontend looks and works like the portal
-Category: What's New
+Category: Feature
 Description: The new React frontend got a full styling and completeness overhaul — node icons show everywhere, pages match the classic portal's look, breadcrumbs are back, and embedded catalogs and dashboard regions load reliably.
 Icon: PaintBrush
+Order: -20260712
 ---
 
 The React frontend (the "Try the new frontend" experience) now looks and behaves like the classic

@@ -52,7 +52,7 @@ public class ProvisioningBoundaryValidationTest
 
     [Theory]
     [InlineData("search?q=query%20syntax&hq=scope%3adescendants")]  // the literal #714 junk schemas
-    [InlineData("login?returnurl=https%3a%2f%2fmemex.systemorph.com%2fauthorize")]
+    [InlineData("login?returnurl=https%3a%2f%2fportal.example.com%2fauthorize")]
     [InlineData("a b")]
     [InlineData("ns:with:colons")]
     // 🚨 `_access` is junk AS A PARTITION NAME, and must stay junk. A `_`-prefixed name is a

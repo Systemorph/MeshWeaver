@@ -268,9 +268,14 @@ public class MeshOperations
             var documentPath = DocumentPaths.For(imgCollectionPath, imgFilePath);
             // Short timeout: a missing Document (image not yet indexed, or indexing disabled) maps to
             // null and falls through to the guarded file read — don't make an image get hang.
+            // Absent AND Unavailable both fall through to the guarded file read — deliberately.
+            // This lookup is a best-effort ENRICHMENT, not the answer to the user's question: the
+            // fallback read below produces the real verdict (and will itself report unavailability
+            // honestly if the mesh is degraded). Reporting "unavailable" here would replace a
+            // perfectly good answer with an error.
             return FetchNode(documentPath, timeoutSeconds: 3)
-                .SelectMany(doc => doc is not null
-                    ? Observable.Return(JsonSerializer.Serialize(doc, hub.JsonSerializerOptions))
+                .SelectMany(doc => doc.Node is not null
+                    ? Observable.Return(JsonSerializer.Serialize(doc.Node, hub.JsonSerializerOptions))
                     : ReadNodeOrUnified(resolvedPath));
         }
 
@@ -307,8 +312,15 @@ public class MeshOperations
                 if (unified is not null && unifiedError is null)
                     return Observable.Return(unified);
 
-                return FetchNode(resolvedPath).SelectMany(node =>
+                return FetchNode(resolvedPath).SelectMany(outcome =>
                 {
+                    // 🚨 UNAVAILABLE ≠ absent (#974). The broken-NodeType fallback below ends in
+                    // "Not found: {path}", so routing a stalled read into it would state, falsely
+                    // and specifically, that the node does not exist.
+                    if (outcome.IsUnavailable)
+                        return Observable.Return(UnavailableMessage(resolvedPath, outcome.UnavailableReason!));
+
+                    var node = outcome.Node;
                     if (node is null)
                         return unifiedError is not null
                             ? Observable.Return(unifiedError)
@@ -684,9 +696,14 @@ public class MeshOperations
                 if (!result.StartsWith("Not found:", StringComparison.Ordinal)
                     && !result.StartsWith("Error:", StringComparison.Ordinal))
                     return Observable.Return(result);
-                return FetchNode(fullPath).Select(node => node is null
-                    ? result
-                    : JsonSerializer.Serialize(node, hub.JsonSerializerOptions));
+                // Absent → keep the area's own error (it is the more specific answer). Unavailable
+                // → say so, rather than letting the area's "Not found: …" stand as if the node
+                // had been checked and found missing.
+                return FetchNode(fullPath).Select(outcome => outcome.IsUnavailable
+                    ? UnavailableMessage(fullPath, outcome.UnavailableReason!)
+                    : outcome.Node is null
+                        ? result
+                        : JsonSerializer.Serialize(outcome.Node, hub.JsonSerializerOptions));
             });
 
     /// <summary>
@@ -738,6 +755,25 @@ public class MeshOperations
         return true;
     }
 
+    /// <summary>
+    /// The caller-facing sentence for a read that reached NO verdict (issue #974) — the honest
+    /// counterpart to <c>"Not found: {path}"</c>.
+    ///
+    /// <para>It says three things on purpose, because the audience is usually a language model
+    /// deciding what to do next: the existence of the node is UNKNOWN; this is explicitly not
+    /// "not found"; and the recovery is to retry, never to create/delete/recreate. The old
+    /// collapse produced the opposite instruction — a stalled read read as "this node is gone",
+    /// which is an invitation to rebuild something that already exists.</para>
+    ///
+    /// <para>Not localized, by the same rule as every other tool-result sentinel here
+    /// (<c>"Not found: …"</c>, <c>"Error: …"</c>): this surface is model-facing, and AGENTS.md
+    /// keeps model-facing text in English so tool-calling does not degrade.</para>
+    /// </summary>
+    private static string UnavailableMessage(string path, string reason) =>
+        $"Unavailable: {path} — this read reached no verdict, so it is UNKNOWN whether this node "
+        + "exists. This is NOT 'not found': do not create, delete or recreate anything on the "
+        + $"strength of it. Retry shortly. Cause: {reason}";
+
     /// <summary>Reads one instance from a wire <c>InstanceCollection</c> object (JSON-encoded keys).</summary>
     private static bool TryGetWireInstance(JsonElement collection, string key, out JsonElement value)
     {
@@ -753,10 +789,17 @@ public class MeshOperations
     /// owning per-node hub's <c>MeshNodeReference</c> reducer — the authoritative
     /// source of truth, no catalog lag. <c>GetDataRequest</c> activates the cold
     /// per-node hub on receipt; the response carries the live MeshNode.
-    /// Returns <c>null</c> on timeout or routing failure (node does not exist /
-    /// hub couldn't be activated). See <c>Doc/Architecture/CqrsAndContentAccess.md</c>.
+    /// Returns a <see cref="NodeReadOutcome"/> that keeps the three cases apart (issue #974):
+    /// the node, a DEFINITIVE absence, or an UNAVAILABLE read that reached no verdict.
+    /// See <c>Doc/Architecture/CqrsAndContentAccess.md</c>.
+    ///
+    /// <para>🚨 It used to return <c>MeshNode?</c>, and <c>null</c> meant all three at once — a
+    /// 10-second stall was indistinguishable from "no such node", so every caller printed
+    /// <c>"Not found: {path}"</c> for a node that existed. That is the lie this signature exists to
+    /// prevent; the budget below is the ONLY place that knows the read gave up, so it is the place
+    /// that classifies.</para>
     /// </summary>
-    private IObservable<MeshNode?> FetchNode(string resolvedPath, int timeoutSeconds = 10)
+    private IObservable<NodeReadOutcome> FetchNode(string resolvedPath, int timeoutSeconds = 10)
     {
         // 🚨 SECURITY: capture the caller's identity HERE, synchronously, while we are still on the
         // caller's execution context — and re-establish it around the subscribe below.
@@ -797,7 +840,7 @@ public class MeshOperations
         var callerIdentity = accessService?.Context ?? accessService?.CircuitContext
             ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = "Anonymous", IsVirtual = true };
 
-        return Observable.Create<MeshNode?>(observer =>
+        return Observable.Create<NodeReadOutcome>(observer =>
         {
             var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
             var emitted = 0;
@@ -812,14 +855,20 @@ public class MeshOperations
             // Matches the GetMeshNode shape in MeshNodeStreamExtensions.cs.
             IDisposable? innerSubscription = null;
 
-            void EmitOnce(MeshNode? node)
+            void EmitOnce(NodeReadOutcome outcome)
             {
                 if (Interlocked.Exchange(ref emitted, 1) != 0) return;
-                observer.OnNext(node);
+                observer.OnNext(outcome);
                 observer.OnCompleted();
             }
 
-            cts.Token.Register(() => EmitOnce(null));
+            // 🚨 The budget elapsed with NO verdict — this is UNAVAILABLE, not absence (#974).
+            // Nothing about a node that never answered says the node is missing; a missing node
+            // gets an authoritative routing NotFound (classified in FromReadFailure), it does not
+            // sit silent. Reporting the silence as "Not found" is what made callers delete and
+            // recreate nodes that existed. Widening this budget would only make the lie rarer.
+            cts.Token.Register(() => EmitOnce(NodeReadOutcome.Unavailable(
+                $"read of '{resolvedPath}' reached no verdict within {timeoutSeconds}s")));
 
             try
             {
@@ -847,27 +896,43 @@ public class MeshOperations
                         && string.Equals(n.Path, resolvedPath, StringComparison.OrdinalIgnoreCase))
                     .Take(1)
                     .Subscribe(
-                        node => EmitOnce(node),
+                        node => EmitOnce(NodeReadOutcome.Found(node!)),
                         ex =>
                         {
-                            // Read DENIED by the cache's per-user gate, or DeliveryFailure /
-                            // node not found. Both collapse to null → the caller reports
-                            // "Not found", which is the safe denial: it does not disclose that a
-                            // gated node exists. Logged distinctly so an operator can tell a
-                            // paywall denial from a routing failure.
+                            // Classify at the READ, where the failure's type is still intact
+                            // (#974). A per-user DENIAL and a routing NotFound are completed
+                            // reads with a definitive answer — both stay Absent, the denial
+                            // deliberately so, because saying "denied" would disclose that a
+                            // gated node exists at this exact path. Anything else is an
+                            // availability failure and is named as one.
+                            var outcome = NodeReadOutcome.FromReadFailure(resolvedPath, ex);
                             if (ex is UnauthorizedAccessException)
                                 logger.LogInformation(
                                     "FetchNode DENIED for {Path} — caller lacks Read (gated content)",
                                     resolvedPath);
+                            else if (outcome.IsUnavailable)
+                                logger.LogWarning(ex,
+                                    "FetchNode UNAVAILABLE for {Path} — the read reached no verdict; "
+                                    + "this is NOT a statement that the node is missing",
+                                    resolvedPath);
                             else
-                                logger.LogDebug(ex, "FetchNode read failed for {Path}", resolvedPath);
-                            EmitOnce(null);
-                        });
+                                logger.LogDebug(ex, "FetchNode: no node at {Path}", resolvedPath);
+                            EmitOnce(outcome);
+                        },
+                        // The stream completed without ever passing the exact-path filter: the
+                        // read DID reach an answer and there is nothing readable here. Absent,
+                        // not unavailable — and reaching it here beats sitting out the budget.
+                        () => EmitOnce(NodeReadOutcome.Absent));
             }
             catch (Exception ex)
             {
+                // 🚨 SWEEP (#974): composing the read touches the service provider, the workspace
+                // and the stream cache — all of which throw on a hub mid-disposal, i.e. exactly
+                // the availability condition this method exists to name. A synchronous throw here
+                // is NOT evidence the node is missing.
                 logger.LogWarning(ex, "FetchNode read setup failed for {Path}", resolvedPath);
-                EmitOnce(null);
+                EmitOnce(NodeReadOutcome.Unavailable(
+                    $"read setup for '{resolvedPath}' faulted: {ex.GetType().Name}: {ex.Message}"));
             }
 
             return Disposable.Create(() =>
@@ -1581,8 +1646,16 @@ public class MeshOperations
             // Read-merge-write via DataChangeRequest. FetchNode returns null when the
             // path doesn't resolve (now with path-match verification so we don't
             // accidentally patch an ancestor hub).
-            return FetchNode(resolvedPath).SelectMany(existing =>
+            return FetchNode(resolvedPath).SelectMany(outcome =>
             {
+                // 🚨 The read-before-write MUST NOT report a stall as "node not found" (#974) —
+                // that message tells the caller to go create the node instead, which duplicates a
+                // node that already exists. An unavailable read means the write cannot proceed and
+                // should be RETRIED, not converted into a create.
+                if (outcome.IsUnavailable)
+                    return Observable.Return(UnavailableMessage(resolvedPath, outcome.UnavailableReason!));
+
+                var existing = outcome.Node;
                 if (existing == null)
                     return Observable.Return(
                         $"Error: node not found at {resolvedPath}. The path must be the node's exact 'path' property " +
@@ -1718,8 +1791,14 @@ public class MeshOperations
         return Observable.Defer(() =>
         {
             var resolvedPath = ResolvePath(path);
-            return FetchNode(resolvedPath).SelectMany(existing =>
+            return FetchNode(resolvedPath).SelectMany(outcome =>
             {
+                // Same read-before-write rule as Patch: a stall must never be reported as a
+                // missing node, because that steers the caller into creating a duplicate (#974).
+                if (outcome.IsUnavailable)
+                    return Observable.Return(UnavailableMessage(resolvedPath, outcome.UnavailableReason!));
+
+                var existing = outcome.Node;
                 if (existing == null)
                     return Observable.Return(
                         $"Error: node not found at {resolvedPath}. The path must be the node's exact 'path' property — " +
@@ -2074,7 +2153,7 @@ public class MeshOperations
             // AddContentCollections(). A target node hub WITHOUT it never answers this
             // GetDataRequest, so an un-timed Take(1) hangs FOREVER — and since the MCP/REST
             // boundary does ops.Upload(...).FirstAsync().ToTask(), that wedges the calling
-            // request (the 2026-06-14 atioz upload wedge). On timeout the TimeoutException
+            // request (the 2026-06-14 prod upload wedge). On timeout the TimeoutException
             // falls through to the .Catch below and surfaces as a clean "Error: …" string.
             return hub.Observe(
                 new GetDataRequest(new ContentCollectionReference([collectionName])),
@@ -2683,7 +2762,21 @@ public class MeshOperations
                 allNodes
                     .Select(n => permissionHub
                         .CheckPermission(n.Path, callerUserId, Permission.Export)
-                        .Take(1)
+                        // 🚨 TakeDecisionOutsideGate, NOT a bare Take(1) — issue #899/#978. Everything
+                        //    downstream of this decision is REAL WORK: stage 3 posts GetDataRequest to
+                        //    each permitted node's address (ACTIVATING those hubs), mutates the shared
+                        //    IContentService config registry, reads files and builds the zip. A bare
+                        //    Take(1) runs all of that inside PermissionEvaluator's CombineLatest gate —
+                        //    which, on a warm cache, emits synchronously during Subscribe — and inside
+                        //    Rx Merge's own _gate, taken while subscribing each inner. Two hubs entering
+                        //    {own fold gate, shared gate} in opposite orders wedge with NO error and NO
+                        //    emission, and the sibling Timeout timers' OnError block on the same Merge
+                        //    gate, so not even the bounds can report. That is exactly the observed
+                        //    ExportImportAccessControlTest signature: "emitted nothing at all" for 60s
+                        //    with not one log line — and it only ever hit the tests with at least one
+                        //    PERMITTED node, because the zero-permitted path short-circuits below into
+                        //    pool.InvokeBlocking and hops off the gate before doing any work.
+                        .TakeDecisionOutsideGate()
                         .Timeout(TimeSpan.FromSeconds(30))
                         .Catch((Exception ex) =>
                         {
@@ -3096,6 +3189,15 @@ public class MeshOperations
         // target so a read-only caller can't bounce other partitions' hubs. With no RLS
         // wired, the default evaluator grants All and behavior is unchanged. Fail closed
         // on evaluator errors/timeouts.
+        // 🚨 A bare Take(1) here, deliberately — do NOT "fix" it to TakeDecisionOutsideGate.
+        //    Measured: that hop makes NodeTypeCompileParkTest.ParkedNodeType_RecycleRetry_
+        //    AfterFix_SettlesOkAndUnparks fail 91s-timeout (7s pass without it). Leaving the
+        //    fold's gate also leaves the HUB'S TURN — the caveat #899's own commit records for
+        //    WorkspaceCacheEvictionTest — and RecycleCore's DisposeRequest + cache-invalidation
+        //    broadcast must stay ordered against the caller's turn, or the recompile that
+        //    follows re-runs its source query against a half-invalidated state and matches zero
+        //    Code nodes. Export above is the opposite case: its continuation is genuinely
+        //    detached work that must leave the gate.
         return hub.CheckPermission(resolvedPath, MeshWeaver.Mesh.Security.Permission.Update)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
@@ -3194,8 +3296,21 @@ public class MeshOperations
         // Diagnostics are read directly off the NodeType MeshNode — the
         // owner-driven status/error/timestamps live on NodeTypeDefinition,
         // populated by the per-NodeType hub's CompileWatcher.
-        return FetchNode(resolvedPath).SelectMany(node =>
+        return FetchNode(resolvedPath).SelectMany(outcome =>
             {
+                // Diagnostics answer "what is wrong with this NodeType?". A read that reached no
+                // verdict must say so — the "Unknown / Not found" reply below would otherwise
+                // point the caller at the node's existence instead of at the degradation (#974).
+                if (outcome.IsUnavailable)
+                    return Observable.Return(JsonSerializer.Serialize(
+                        new
+                        {
+                            status = "Unavailable",
+                            message = UnavailableMessage(resolvedPath, outcome.UnavailableReason!)
+                        },
+                        hub.JsonSerializerOptions));
+
+                var node = outcome.Node;
                 // Match LookupCompilationError: node.Content arrives as JsonElement
                 // when the per-node hub doesn't have NodeTypeDefinition in its
                 // TypeRegistry, so check NodeType==MeshNode.NodeTypePath as fallback.
@@ -3444,7 +3559,7 @@ public class MeshOperations
                         // even when the caller has no Update right on the target partition (the
                         // read-only Doc partition is the canonical case). Under the caller's identity
                         // this write was denied → "UpdateMeshNode failed" → the compile never ran and
-                        // the cache stayed empty (atioz on-demand-compile failure on Doc). The
+                        // the cache stayed empty (prod on-demand-compile failure on Doc). The
                         // RunCompile watcher + Release-node creation already run as System; this entry
                         // write was the straggler still on the caller's identity.
                         var accessService = hub.ServiceProvider.GetService<AccessService>();

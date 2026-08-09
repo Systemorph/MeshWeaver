@@ -1,8 +1,9 @@
 ---
 Name: AI models now show their provider's logo
-Category: What's New
+Category: Feature
 Description: The model picker displays each model's brand mark instead of a generic sparkle.
 Icon: Sparkle
+Order: -20260710
 ---
 
 # AI models now show their provider's logo

@@ -821,7 +821,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // null as "resolved" wiped the negative entry every re-probe, so the next
             // OnError's FailCount reset to 1 and the backoff never grew past the 2 s
             // base — the path re-probed every ~2–4 s forever instead of decaying to the
-            // 5 min cap (the atioz `_Activity` / missing-node NotFound resubscribe storm
+            // 5 min cap (the prod `_Activity` / missing-node NotFound resubscribe storm
             // that saturated the action block and tripped the liveness probe). A real
             // resolution is a non-null node; nothing else clears the breaker.
             //

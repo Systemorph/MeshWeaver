@@ -6,7 +6,7 @@ using Xunit;
 namespace MeshWeaver.Layout.Test;
 
 /// <summary>
-/// Reproduces + pins the fix for the DataGrid render crash (atioz 2026-06-21): a column whose
+/// Reproduces + pins the fix for the DataGrid render crash (prod 2026-06-21): a column whose
 /// enum-typed property carried a mis-cased literal — <c>HorizontalAlignment = "center"</c> from a
 /// node's Source — crashed the Blazor render. <see cref="LayoutClientExtensions.GetDataBoundValue{T}"/>
 /// did a case-SENSITIVE <c>Enum.Parse</c> that threw <see cref="System.ArgumentException"/>
@@ -27,7 +27,7 @@ public class GetDataBoundValueEnumTest
     [Fact]
     public void MisCased_enum_literal_resolves_case_insensitively()
     {
-        // Without the fix this THREW ArgumentException (the atioz render crash); with it, "center"
+        // Without the fix this THREW ArgumentException (the prod render crash); with it, "center"
         // resolves to Align.Center.
         Assert.Equal(Align.Center, NoStream.GetDataBoundValue<Align>("center", null));
     }

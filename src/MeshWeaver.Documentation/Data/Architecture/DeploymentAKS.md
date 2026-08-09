@@ -1,15 +1,15 @@
 ---
 Name: Deployment — AKS
 Category: Architecture
-Description: Deploying a code update to the shared AKS cluster (memexaks-cluster) that hosts the memex portal — build images, set image, roll out, verify
+Description: Deploying a code update to the shared AKS cluster (<aks-cluster>) that hosts the memex portal — build images, set image, roll out, verify
 Icon: Cloud
 ---
 
 # Deploying to AKS
 
-This is **one of two deploy routes** for MeshWeaver. Use it for the shared portals on the **AKS cluster `memexaks-cluster`** (resource group `memex-aks-rg`, region swedencentral) — the `memex` namespace, backed by the Postgres Flexible Server, with container images in ACR `meshweaver.azurecr.io`. For the Azure Container Apps route (Aspire `test`/`prod` modes via `tools/deploy.sh`), see [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps). These are **different routes to different targets**, not old-vs-new — pick the one that matches where you're deploying.
+This is **one of two deploy routes** for MeshWeaver. Use it for the shared portals on the **AKS cluster `<aks-cluster>`** (resource group `<aks-resource-group>`, region swedencentral) — the `memex` namespace, backed by the Postgres Flexible Server, with container images in ACR `meshweaver.azurecr.io`. For the Azure Container Apps route (Aspire `test`/`prod` modes via `tools/deploy.sh`), see [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps). These are **different routes to different targets**, not old-vs-new — pick the one that matches where you're deploying.
 
-> **The cluster is private.** `kubectl` is not reachable directly — every command runs through `az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "…"`, which executes inside the cluster's API-server-side runner.
+> **The cluster is private.** `kubectl` is not reachable directly — every command runs through `az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "…"`, which executes inside the cluster's API-server-side runner.
 
 A **code update** is three steps: build the images, point the Deployments at the new tag, restart. It is **not** `tools/deploy.sh` and **not** `aspire deploy` — those are the Container Apps route.
 
@@ -46,7 +46,7 @@ Every `IScope<,>` node (e.g. the PensionFund balance sheet) needs the BusinessRu
 ## 2. Roll out (NS = `memex`)
 
 ```bash
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "\
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "\
   kubectl -n <NS> set image deployment/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag>; \
   kubectl -n <NS> set image deployment/memex-migration-deployment memex-migration=meshweaver.azurecr.io/memex-migration:<tag>; \
   kubectl -n <NS> rollout restart deployment/memex-migration-deployment deployment/memex-portal-deployment; \
@@ -82,8 +82,8 @@ Operational facts about the in-pod updater (learned the hard way — each cost a
   pod (sort by `creationTimestamp`).
 - **🚨 Namespace ↔ instance mapping**: this cluster hosts several instances whose Deployments all
   share names (`memex-portal-deployment`): namespace `memex` = the systemorph.com company portal,
-  `memex-cloud` = **memex.meshweaver.cloud** (SPC `memexcloud-portal-ai-secrets`, KeyVault
-  `Systemorph`, `memexcloud-`-prefixed secret names), `atioz` = the customer portal. Before ANY
+  `memex-cloud` = **memex.meshweaver.cloud** (SPC `<database>-portal-ai-secrets`, KeyVault
+  `Systemorph`, `<database>-`-prefixed secret names), `prod` = the customer portal. Before ANY
   kubectl change, confirm the namespace matches the instance you mean — e.g. run a diagnostic on
   the target portal that prints its pod hostname and `kubectl get pods -A | grep <hostname>`.
 
@@ -102,9 +102,9 @@ Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/Rele
    az deployment sub show --name memex-aks-infra \
      --query "properties.outputs.{clientId:portalIdentityClientId.value, principalId:portalIdentityPrincipalId.value}" -o jsonc
    ```
-2. **Grant AcrPull on the shared registry.** The ACR (`meshweaver.azurecr.io`, RG `meshweaver-shared`) is **cross-RG** from `memex-aks-rg`, so — exactly like the cluster kubelet's AcrPull — grant it out-of-band:
+2. **Grant AcrPull on the shared registry.** The ACR (`meshweaver.azurecr.io`, RG `meshweaver-shared`) is **cross-RG** from `<aks-resource-group>`, so — exactly like the cluster kubelet's AcrPull — grant it out-of-band:
    ```bash
-   PORTAL_MI_OID=$(az identity show -g memex-aks-rg -n memexaks-portal-mi --query principalId -o tsv)
+   PORTAL_MI_OID=$(az identity show -g <aks-resource-group> -n <portal-identity> --query principalId -o tsv)
    az role assignment create --assignee-object-id "$PORTAL_MI_OID" --assignee-principal-type ServicePrincipal \
      --role AcrPull --scope $(az acr show -n meshweaver --query id -o tsv)
    ```

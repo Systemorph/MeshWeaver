@@ -97,7 +97,7 @@ public record DeliveryFailure(IMessageDelivery Delivery, string? Message = null)
 /// <see cref="NodeTypePath"/>, instead of being silently
 /// <c>Ignored()</c>. Without this, a typed request to a broken-type hub arrives
 /// as RawJson (type not in the hub's registry), fails the <c>IRequest&lt;&gt;</c>
-/// check, and the caller parks forever — the atioz wedge of 2026-06-12.</para>
+/// check, and the caller parks forever — the prod wedge of 2026-06-12.</para>
 /// </summary>
 public record UnhandledMessageNack(
     string Reason,
@@ -191,7 +191,30 @@ public enum ErrorType
     /// latch and wedged every read of a mid-recycle NodeType). Mirrors the Orleans
     /// mid-DeactivateOnIdle forwarding reject ("invalid activation. Rejecting now.").
     /// </summary>
-    ShuttingDown
+    ShuttingDown,
+    /// <summary>
+    /// NO VERDICT WAS REACHED. The check or read that would have produced the answer did not
+    /// complete — it stalled past its budget, or it faulted. This says NOTHING about the caller's
+    /// rights and NOTHING about whether the target exists (issues #637, #974).
+    ///
+    /// <para>🚨 This is the member to reach for whenever the honest answer is "we could not find
+    /// out". Collapsing that into a definitive negative — <see cref="Unauthorized"/> /
+    /// <see cref="Forbidden"/> ("access denied") or <see cref="NotFound"/> ("no such node") — is
+    /// worse than a plain error, because it is <em>actionable-looking</em>: a correctly-entitled
+    /// user goes and asks for permissions they already hold, and a node that exists gets deleted
+    /// and recreated. Both were observed in production.</para>
+    ///
+    /// <para>Retryable by construction: the condition is an availability failure, so the same
+    /// request repeated once the degradation clears produces the real verdict. Consumers surface it
+    /// as "temporarily unavailable — retry", never as a denial or an absence, and must never treat
+    /// it as a GRANT either: it is not an authorization answer in EITHER direction.</para>
+    ///
+    /// <para>Decided WHERE THE CONDITION IS KNOWN — inside the one place a budget or a fold is
+    /// applied (<c>HubPermissionExtensions.CheckPermissionOutcome</c>) — never reconstructed
+    /// upstream by pattern-matching a message string, which drifts the moment someone rewords an
+    /// exception. Same rule as <c>IdentityReadOutcome</c> on the identity side (#947, #970).</para>
+    /// </summary>
+    Unavailable
 }
 
 

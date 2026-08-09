@@ -39,6 +39,24 @@ It arrives inside the **`testResults-shard<N>`** artifact under `collected-logs/
 alongside `_meshweaver-test-trace.log` and `_meshweaver-memory-delta.log`. **Retention is 15 days** —
 pull it before it expires.
 
+### 🚨 Ask the trace log whether it is complete before you reason from it
+
+`_meshweaver-test-trace.log` carries `[FAULT]` records — exception type, message and stack for
+everything logged at `Warning` or above with an exception. Its fault records are **rate-bounded**
+(100 per 10 s per process), so a storming process has records missing, and reasoning from an
+absence in a truncated log is how you conclude the wrong thing. The log always says when that
+happened:
+
+```bash
+grep FAULT-BUDGET collected-logs/_meshweaver-test-trace.log
+```
+
+Nothing back ⇒ every fault this process logged is in the file. Otherwise each hit names the
+running count of suppressed records, and a `resuming fault records after suppressing N` line
+states exactly how many were lost in that gap. A **budget never silences a later fault** — the
+window refills, so the fault next to a wedge is written even if an earlier storm saturated the
+allowance (issue #982).
+
 ```bash
 # find the shard artifact (the crashing shard's is the big one — the others are ~0MB)
 gh api repos/Systemorph/MeshWeaver/actions/runs/<RUN_ID>/artifacts \
@@ -49,9 +67,61 @@ gh api repos/Systemorph/MeshWeaver/actions/artifacts/<ARTIFACT_ID>/zip > shard.z
 unzip -q shard.zip -d shard && find shard -name '*.dmp'
 ```
 
-## 🚨 You cannot open a Linux dump on macOS
+## 🚀 Start here on macOS: name the faulting frame with no container at all
 
-`dotnet-dump` on macOS **cannot** read a Linux core dump. Analyse it in a **linux/amd64** container
+**Before reaching for Docker, answer "where did it fault and on what address" in about ten minutes,
+entirely on the Mac.** A `createdump` core is a plain ELF64 file; every fact needed to name the
+faulting function is inside it plus one 138 MB download from Microsoft's public symbol server. This
+is the route that produced the 2026-08-09 confirmation below, and it needs no DAC, no emulation and
+no `dotnet-dump` — all of which are what make the container route slow and failure-prone.
+
+Four steps, each a few lines of pure Python over the core (no debugger, no elfutils):
+
+1. **`NT_SIGINFO` → the kernel's verdict.** Walk the `PT_NOTE` program headers; note type
+   `0x53494749` carries `si_signo` / `si_code` / `si_addr`. `si_code == 1` is `SEGV_MAPERR`, and
+   `si_addr` is the dereferenced address — `0x0` versus a plausible-but-unmapped pointer is already
+   the difference between a null read and a use-after-unload.
+2. **`NT_FILE` → the module load bases.** Note type `0x46494c45` maps every file-backed range;
+   the minimum start for `libcoreclr.so` is the load base you subtract to get an RVA.
+3. **The faulting `ucontext`** — *not* `NT_PRSTATUS`, which `createdump` records from inside its own
+   signal handler (its `rip` is `waitpid` in libc). Scan the `PT_LOAD` segments on 8-byte alignment
+   for a `gregs[23]` block whose `TRAPNO` (index 20) is `14` (page fault) and whose `RIP` (index 16)
+   lands inside `libcoreclr`; `ERR` (19) and `CR2` (22) then decode the access — `ERR == 0x4` is a
+   user-mode **read** of a non-present page. Read the bytes at `RIP` straight out of the core through
+   the same `PT_LOAD` table: that is the faulting instruction, and with the register values it names
+   the exact dereference.
+4. **RVA → function name, via the public symbol server.** The shipped `libcoreclr.so` is stripped to
+   nine exported `STT_FUNC` symbols, so resolving against it fails — and that failure looks like the
+   technique not working rather than the file being stripped. Fetch the separate debug file, keyed by
+   build-id:
+
+   ```bash
+   curl -sL -o rt.tar.gz \
+     "https://builds.dotnet.microsoft.com/dotnet/Runtime/<VER>/dotnet-runtime-<VER>-linux-x64.tar.gz"
+   tar xzf rt.tar.gz shared/Microsoft.NETCore.App/<VER>/libcoreclr.so
+   # <BUILD_ID> comes from that libcoreclr.so — see below
+   curl -sfL -o coreclr.debug \
+     "https://msdl.microsoft.com/download/symbols/_.debug/elf-buildid-sym-<BUILD_ID>/_.debug"
+   ```
+
+   **Reading `<BUILD_ID>` is the same Python you already have** — walk the section headers
+   (`e_shoff`/`e_shentsize`/`e_shnum` at `0x28`/`0x3A`, names via the `e_shstrndx` section), find
+   `.note.gnu.build-id`, and read its note: `namesz`/`descsz`/`type` as three `<I`, then skip
+   `12 + ((namesz+3) & ~3)` bytes and take `descsz` bytes — that hex string is the id.
+
+   Then walk `coreclr.debug`'s `.symtab` for the `STT_FUNC` entry (`st_info & 0xf == 2`) whose
+   `[st_value, st_value + st_size)` contains the RVA; symbol names come from the section its `sh_link`
+   points at. It carries ~31 800 symbols, so the hit is exact — e.g. RVA `0x5cb1e1` →
+   `_ZN3WKS7gc_heap16background_sweepEv` (`WKS::gc_heap::background_sweep()`, `+0xa61`).
+
+Take the runtime version from `collected-logs/symbols-<Project>/_runtimes.txt` in the same artifact —
+CI's patch is regularly not the one you have locally, and a mismatched `libcoreclr.so` yields a
+different build-id and therefore no symbols at all.
+
+## You do need a container for the managed side
+
+`dotnet-dump` on macOS **cannot** read a Linux core dump, so `clrthreads` / `clrstack` / `verifyheap`
+— anything needing the DAC — still requires a **linux/amd64** container
 (CI runners are x64; Apple-silicon Docker is arm64, so `--platform linux/amd64` and emulation are
 required — it is slow but it works).
 
@@ -217,6 +287,44 @@ collectible NodeType assemblies loading and unloading, and 48 gen2 GCs in 75 s.
 
 🚨 **Do not "fix" this by turning off concurrent GC** in the test host. That hides the fault without
 changing anything about why it happens, and the same workload runs in prod.
+
+### 2026-08-09: reproduced twice more — the verdict is not a one-off, and `+0x5cb1e1` is its fingerprint
+
+Both `exit=139`s of 2026-08-09 resolve to the **identical** fault, days and many merges after the
+original analysis. On runtime `10.0.10` the whole comparison collapses to one number: **RVA
+`0x5cb1e1`**, `WKS::gc_heap::background_sweep()+0xa61`. Compare that first on any recurrence.
+
+| | 2026-08-06 (`31083356138`) | 2026-08-09 06:59Z (`31299547995`) | 2026-08-09 11:05Z (`31309378803`) |
+|---|---|---|---|
+| `si_signo`/`si_code`/`si_addr` | 11 / 1 / — | 11 / 1 (`SEGV_MAPERR`) / **`0x0`** | 11 / 1 / **`0x0`** |
+| faulting RVA | `background_sweep()` | **`0x5cb1e1` (+`0xa61`)** | **`0x5cb1e1` (+`0xa61`)** |
+| instruction | `mov ecx,[rax]`, `rax == 0` | **`8b 08` = `mov ecx,[rax]`, `RAX=0x0`** | **`8b 08`, `RAX=0x0`** |
+| `TRAPNO`/`ERR`/`CR2` | 14 / `0x4` / `0x0` | **14 / `0x4` / `0x0`** | **14 / `0x4` / `0x0`** |
+| mutator phase | 44 ms into a fresh fixture | **96 ms into a `Mesh.Dispose()`** | **476 ms into a fresh fixture** |
+| dump | — | `dotnet-3050.dmp` | `dotnet-3032.dmp` |
+
+**The mutator phase varies while the faulting instruction does not — and that is the point.** One
+lands mid-teardown, two land inside a fresh test. A background-GC sweep runs *concurrently* with
+whatever the mutator is doing, so an identical fault at three different phases is what this
+diagnosis predicts, and it is the opposite of what a teardown-ordering defect would produce (those
+reproduce at one phase, by construction). Do not read the phase of any single sighting as evidence
+about the cause; read the RVA.
+
+Two further things these sightings settle, both re-litigated at length in #613:
+
+- **The teardown work neither caused nor cured it.** The 11:05Z tree contains #967 (node ALCs unload
+  at the *end* of teardown) and #996 (pending Rx timers no longer root disposed hubs) — it crashed
+  87 minutes after the latter merged. Across both processes' `_meshweaver-test-trace.log`, **all 22
+  and all 44** `DISPOSE_DONE` records read `teardown clean — all pooled I/O joined, async dispose
+  queue drained`, with **zero** `DISPOSE_QUIESCE_LEAK` and **zero** `DISPOSE_DIRTY_TEARDOWN`.
+- **It is not the quiescing-leak family (#981).** Over 18 failing shard-job logs across those two
+  days, the signal death and the `left Observe subscriptions pending past the Quiescing budget`
+  failure each occur twice and **never co-occur** — not in a run, a shard, or a job. In one job
+  `FutuRe.Test` ran 69 s to `exit=0` while the quiescing leak fired in `Hosting.Monolith.Test`.
+
+**Check the trace log's completeness before reasoning from it** (see the `FAULT-BUDGET` note above):
+in the 11:05Z file all four suppression windows belonged to a *later* project's pid, so the crashing
+process's record was whole — which is what makes "zero quiesce leaks" evidence rather than an absence.
 
 ## Reading the result honestly
 

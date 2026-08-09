@@ -1,8 +1,9 @@
 ---
 Name: The portal speaks German
-Category: What's New
+Category: Feature
 Description: The interface is now available in German, picked up from your browser on first sign-in and switchable any time under Settings → Preferences.
 Icon: Globe
+Order: -20260804
 ---
 
 # The portal speaks German

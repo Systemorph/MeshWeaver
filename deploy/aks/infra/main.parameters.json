@@ -3,13 +3,13 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "resourceGroupName": {
-      "value": "memex-aks-rg"
+      "value": "<aks-resource-group>"
     },
     "location": {
       "value": "swedencentral"
     },
     "namePrefix": {
-      "value": "memexaks"
+      "value": "<aks>"
     },
     "acrSku": {
       "value": "Premium"
@@ -36,7 +36,7 @@
       "value": []
     },
     "vnetAddressSpace": {
-      "value": "10.42.0.0/16"
+      "value": "10.0.0.0/16"
     },
     "deployVpnGateway": {
       "value": true

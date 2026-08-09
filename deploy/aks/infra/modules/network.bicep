@@ -22,19 +22,19 @@ param location string
 param namePrefix string
 
 @description('Address space for the whole VNet.')
-param vnetAddressSpace string = '10.42.0.0/16'
+param vnetAddressSpace string = '10.0.0.0/16'
 
 @description('Subnet CIDR for the AKS node pool.')
-param aksSubnetPrefix string = '10.42.0.0/20'
+param aksSubnetPrefix string = '10.0.0.0/20'
 
 @description('Subnet CIDR for the VPN GatewaySubnet (must be named GatewaySubnet).')
-param gatewaySubnetPrefix string = '10.42.16.0/24'
+param gatewaySubnetPrefix string = '10.0.16.0/24'
 
 @description('Subnet CIDR for an optional AzureBastionSubnet (jumpbox alternative).')
-param bastionSubnetPrefix string = '10.42.17.0/26'
+param bastionSubnetPrefix string = '10.0.17.0/26'
 
 @description('Subnet CIDR for the delegated Azure Database for PostgreSQL Flexible Server subnet (private/VNet-injected PG).')
-param postgresSubnetPrefix string = '10.42.18.0/24'
+param postgresSubnetPrefix string = '<pg-private-ip-prefix>.0/24'
 
 @description('Tags applied to every resource.')
 param tags object = {}

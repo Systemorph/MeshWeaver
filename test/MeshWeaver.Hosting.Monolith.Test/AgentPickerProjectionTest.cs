@@ -104,20 +104,34 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
         models.Should().NotBeEmpty(
             "ObserveModels is the EXACT pipe ThreadChatView binds to via "
             + "modelSubscription. Empty here = empty model combobox in chat.");
-        models.Select(m => m.Name).Should().BeEquivalentTo(
+
+        // 🚦 Auto BELONGS in the combobox, and belongs FIRST. It is the default selection for a new
+        // thread, so a picker that omitted it would leave the user unable to see — or return to —
+        // the mode their threads start in. It sorts ahead of every concrete model (Order -10) for
+        // the same reason: ObserveDefaultComposer takes the first servable entry.
+        // Name is the WIRE id (like every other entry — "claude-opus-4-6"); Label is the row text the
+        // user reads. Both matter here: the id is what a selection persists and dispatches on, the
+        // label is what makes the entry recognisable as "Auto" rather than a model called "auto".
+        models[0].Name.Should().Be(LanguageModelNodeType.RouterModelId,
+            "Auto is the default selection for a new thread, so it must lead the picker");
+        models[0].Label.Should().Be(LanguageModelNodeType.RouterProviderName);
+        models[0].IsRouter.Should().BeTrue();
+        models[0].Path.Should().Be(LanguageModelNodeType.RouterPath);
+
+        var concrete = models.Where(m => !m.IsRouter).ToList();
+        concrete.Select(m => m.Name).Should().BeEquivalentTo(
             new[] { "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5" },
             System.Text.Json.JsonSerializerOptions.Default);
-        models.Should().AllSatisfy(m =>
-        {
-            m.Name.Should().NotBeNullOrWhiteSpace();
+        models.Should().AllSatisfy(m => m.Name.Should().NotBeNullOrWhiteSpace());
+        concrete.Should().AllSatisfy(m =>
             // Provider on the projected ModelInfo is the catalog source's
             // ProviderName (LanguageModelCatalogSource.ProviderName), which is
             // "Anthropic" — what BuiltInLanguageModelProvider stamps onto each
             // emitted node's ModelDefinition.Provider. "Azure Claude" is the
             // factory NAME used at chat-client construction time, not the
-            // provider label on the catalog node.
-            m.Provider.Should().Be("Anthropic");
-        });
+            // provider label on the catalog node. Auto is excluded from this: it is
+            // platform-owned, so its provider is the Auto pseudo-provider, not a vendor.
+            m.Provider.Should().Be("Anthropic"));
     }
 
     /// <summary>
@@ -167,7 +181,7 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// 🚨 The atioz "Space's own agent missing from /agent" regression, end-to-end.
+    /// 🚨 The prod "Space's own agent missing from /agent" regression, end-to-end.
     /// The picker issues the ONE canonical query
     /// (<c>namespace:{user}/Agent|{space}/Agent|Agent nodeType:Agent</c> —
     /// see <see cref="AgentPickerProjection.BuildAgentQuery"/>), which resolves to a
@@ -204,7 +218,7 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
 
         agents.Select(a => a.Path).Should().Contain(spaceAgentPath,
             "the agent in the space's /Agent namespace (ACME/Agent) is listed directly — 'in space'. "
-            + "This is the Space agent that was missing on atioz.");
+            + "This is the Space agent that was missing on prod.");
         agents.Select(a => a.Path).Should().Contain(userAgentPath,
             "the agent in the user's /Agent namespace (rbuergi/Agent) is listed directly — 'for the user'.");
         agents.Select(a => a.Name).Should().Contain("Assistant",

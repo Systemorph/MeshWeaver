@@ -1,8 +1,9 @@
 ---
 Name: More reliable node recompilation
-Category: What's New
+Category: Fix
 Description: Recompiling code/scope nodes no longer leaks unloaded assemblies or risks a rare crash under load.
 Icon: Sparkle
+Order: -20260714
 ---
 
 # More reliable node recompilation

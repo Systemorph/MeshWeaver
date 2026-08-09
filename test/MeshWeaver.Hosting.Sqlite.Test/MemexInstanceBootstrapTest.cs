@@ -50,11 +50,11 @@ public class MemexInstanceBootstrapTest(ITestOutputHelper output) : MonolithMesh
             },
         }).FirstAsync().ToTask();
 
-        await NodeFactory.CreateNode(new MeshNode("atioz", TestPartition)
+        await NodeFactory.CreateNode(new MeshNode("prod", TestPartition)
         {
             NodeType = MemexInstanceNodeType.NodeType,
-            Name = "atioz",
-            Content = new MemexInstanceContent { DisplayName = "atioz", Url = "https://atioz.example", MeshId = "atioz" }, // no token
+            Name = "prod",
+            Content = new MemexInstanceContent { DisplayName = "prod", Url = "https://prod.example", MeshId = "prod" }, // no token
         }).FirstAsync().ToTask();
 
         // The bootstrap read: GetQuery the instance nodes (live set), wait for both to land.
@@ -70,12 +70,12 @@ public class MemexInstanceBootstrapTest(ITestOutputHelper output) : MonolithMesh
             .Where(c => c is not null).Select(c => c!)
             .ToList();
 
-        instances.Select(i => i.DisplayName).Should().Contain(["memex", "atioz"]);
+        instances.Select(i => i.DisplayName).Should().Contain(["memex", "prod"]);
 
         var memex = instances.First(i => i.DisplayName == "memex");
         memex.Url.Should().Be("https://memex.meshweaver.cloud");
         memex.IsAuthenticated.Should().BeTrue();   // has a token → the bootstrap would ConnectToMesh
 
-        instances.First(i => i.DisplayName == "atioz").IsAuthenticated.Should().BeFalse(); // no token → skipped
+        instances.First(i => i.DisplayName == "prod").IsAuthenticated.Should().BeFalse(); // no token → skipped
     }
 }

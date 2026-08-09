@@ -14,7 +14,7 @@ namespace MeshWeaver.Mesh;
 /// (<c>SubmitCodeRequest</c>, a thread submission, an activity status flip) and every subscriber
 /// (the GUI progress panels, the activity stream readers, the chat view) gets a
 /// <c>[ROUTE] NotFound</c> from the RoutingGrain. A re-subscriber then hammers that path hundreds of
-/// times → CPU pegs and the hub wedges (the atioz <c>_Activity/import-*</c> / <c>_Activity/compile-*</c>
+/// times → CPU pegs and the hub wedges (the prod <c>_Activity/import-*</c> / <c>_Activity/compile-*</c>
 /// resubscribe storm; the voice-bridge bare-<c>_Thread</c> anchor). The defect is the <i>creation</i>,
 /// so we fail fast AT THE SOURCE — loudly, with a named exception — instead of letting a phantom
 /// escape and surface downstream as an opaque routing storm.</para>

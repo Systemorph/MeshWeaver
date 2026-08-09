@@ -122,8 +122,9 @@
         </div>
     }
 
-    @* Bottom page comment section — suppressed for @@ embeds (HideAnnotations) *@
-    @if (!BoundHideAnnotations && !string.IsNullOrEmpty(BoundNodePath))
+    @* Bottom page comment section — suppressed for @@ embeds (HideAnnotations) and for a version
+       comparison, whose subject is what changed, not the conversation about the page. *@
+    @if (!BoundHideAnnotations && !IsComparing && !string.IsNullOrEmpty(BoundNodePath))
     {
         <div class="page-comment-section">
             @if (_showPageCommentInput)
