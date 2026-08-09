@@ -180,6 +180,35 @@ public class VersionCompareViewTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     /// <summary>
+    /// An EMPTY markdown document is still a document. It has no text to probe, so a content-shape
+    /// test would push it to the source diff and show two blank panes; the node TYPE is the
+    /// authority, and the redline correctly reports that there is no content.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task VersionDiff_EmptyMarkdownDocument_StillRendersTheRedline()
+    {
+        var path = $"test/empty-{Guid.NewGuid():N}"[..22];
+        await NodeFactory.CreateNode(MeshNode.FromPath(path) with
+        {
+            Name = "Emptied Report",
+            NodeType = MarkdownNodeType.NodeType,
+            State = MeshNodeState.Active,
+            Content = new MarkdownContent { Content = "" }
+        }).Should().Within(Step).Emit();
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Update(node => node with { Name = "Emptied Report (renamed)" })
+            .Should().Within(Step).Emit();
+        var versions = await Versions(path, 2);
+
+        var markdown = await RenderMarkdownBody(
+            path, MeshNodeLayoutAreas.VersionDiffArea, $"?from={versions[0]}&to={versions[1]}");
+
+        markdown.CompareFromVersion.Should().Be(versions[0]);
+        markdown.Value.Should().Be("",
+            "the redline reads the markdown, never ExtractDiffContent's JSON fallback for empty content");
+    }
+
+    /// <summary>
     /// The version list is the picker: every version offers itself as either endpoint, and the
     /// one-click "compare with current" is on every row EXCEPT the current one — where it would
     /// compare a version with itself.
