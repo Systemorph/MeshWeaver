@@ -1,4 +1,4 @@
-﻿#pragma warning disable CS1591
+#pragma warning disable CS1591
 
 using System;
 using System.Collections.Immutable;
@@ -533,7 +533,6 @@ public class ChatClientCredentialResolverTest : AITestBase
         }).Should().Within(15.Seconds()).Emit();
 
         var defaultModelId = $"default-model-{suffix}";
-        var defaultModelPath = $"{providerPath}/{defaultModelId}";
         await MeshService.CreateNode(new MeshNode(defaultModelId, providerPath)
         {
             NodeType = LanguageModelNodeType.NodeType,
@@ -581,7 +580,13 @@ public class ChatClientCredentialResolverTest : AITestBase
 
         composer.ModelName.Should().NotBe(goneModel,
             "a pinned model that no longer resolves must be sanitised away, not shown/used as-is");
-        composer.ModelName.Should().Be(defaultModelPath,
-            "the composer falls back to the lowest-Order resolvable model (persisted as its node PATH)");
+        composer.ModelName.Should().Be(LanguageModelNodeType.RouterPath,
+            "the composer falls back to the DEFAULT SELECTION, which is Auto — it sorts ahead of even "
+            + "a deliberately-pinned Order -1 model and holds no credential of its own");
+        // …and Auto is not a dead end: the model it dispatches to is the lowest-Order model whose
+        // credentials actually resolve — the one this test seeded. The composer's default selection
+        // and the model that RUNS are two different things, and both have to be right.
+        resolver.ResolveDefaultModelId().Should().Be(defaultModelId,
+            "Auto dispatches to the lowest-Order resolvable model; routers are excluded from that rung");
     }
 }

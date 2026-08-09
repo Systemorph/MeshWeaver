@@ -34,16 +34,19 @@ public static class AiCatalogLayoutAreas
     public const string ProvidersArea = "AiProviders";
     /// <summary>Area name for the scope-tabbed Models catalog. Menu href: <c>/Provider/AiModels</c>.</summary>
     public const string ModelsArea = "AiModels";
+    /// <summary>Area name for the scope-tabbed model-Tiers catalog. Menu href: <c>/Provider/AiModelTiers</c>.</summary>
+    public const string TiersArea = "AiModelTiers";
 
-    /// <summary>Registers the four AI catalog areas on a layout definition.</summary>
+    /// <summary>Registers the AI catalog areas on a layout definition.</summary>
     public static LayoutDefinition AddAiCatalogLayoutAreas(this LayoutDefinition layout)
         => layout
             .WithView(AgentsArea, AgentsCatalog)
             .WithView(SkillsArea, SkillsCatalog)
             .WithView(ProvidersArea, ProvidersCatalog)
-            .WithView(ModelsArea, ModelsCatalog);
+            .WithView(ModelsArea, ModelsCatalog)
+            .WithView(TiersArea, TiersCatalog);
 
-    /// <summary>Registers the four AI catalog areas on a hub configuration.</summary>
+    /// <summary>Registers the AI catalog areas on a hub configuration.</summary>
     public static MessageHubConfiguration AddAiCatalogLayoutAreas(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout.AddAiCatalogLayoutAreas());
 
@@ -61,13 +64,53 @@ public static class AiCatalogLayoutAreas
         // scope roots at ModelProviderNodeType.RootNamespace ("Provider"), not "Model".
         => BuildScopeCatalog(host, "models", LanguageModelNodeType.NodeType, globalNamespace: ModelProviderNodeType.RootNamespace);
 
+    private static UiControl TiersCatalog(LayoutAreaHost host, RenderingContext _)
+        // Tiers are a PLATFORM registry, not a per-space one — deliberately the ONE catalog here
+        // without scope tabs. A model node in any partition points at a tier by ID, so a space-local
+        // tier set would make the same label mean different things in different spaces. One flat list
+        // rooted at Provider/Tier, with the same "+" create button as every other catalog, so an
+        // operator can add or edit a rung without leaving the page.
+        => Controls.Tabs.WithSkin(s => s.WithWidth("100%"))
+            .WithMeshSearch(host.Localize(TabGlobal),
+                @namespace: ModelTierNodeType.RootNamespace, scope: "descendants",
+                nodeType: ModelTierNodeType.NodeType,
+                createNodeType: ModelTierNodeType.NodeType,
+                createNamespace: ModelTierNodeType.RootNamespace,
+                placeholder: host.Localize("aiCatalog.search.tiers.global"), configure: ScopeSearch);
+
+    // 🌍 Tab labels and search placeholders are USER-VISIBLE, so they are catalog keys, never
+    // literals — the portal ships English + German and a hard-coded string renders English for
+    // every viewer. Resolution goes through host.Localize (→ AccessContext.Locale), never an
+    // ambient CultureInfo, because a layout-area render hops the hub scheduler.
+    private const string TabThisSpace = "aiCatalog.tab.thisSpace";
+    private const string TabUser = "aiCatalog.tab.user";
+    private const string TabGlobal = "aiCatalog.tab.global";
+
+    /// <summary>
+    /// The placeholder key for one catalog + scope, e.g. <c>aiCatalog.search.models.user</c>.
+    ///
+    /// <para>One key per COMBINATION rather than one template with the noun interpolated. English
+    /// tolerates "Search your {noun}…"; German does not — the article and case inflect with the
+    /// noun's gender ("Suche deine Modelle" vs "Suche deinen Provider"), so a shared template would
+    /// be ungrammatical for at least one catalog no matter which wording won.</para>
+    /// </summary>
+    /// <param name="catalog">Catalog key: agents / skills / providers / models / tiers.</param>
+    /// <param name="scope">Scope key: space / user / global.</param>
+    /// <returns>The localization key.</returns>
+    private static string SearchKey(string catalog, string scope) => $"aiCatalog.search.{catalog}.{scope}";
+
     /// <summary>
     /// Builds a <see cref="Controls.Tabs"/> catalog with the This-space / User / Global scope tabs
     /// for <paramref name="nodeType"/>. Each tab is a namespace-scoped mesh search whose
     /// <c>CreateNodeType</c> shows the "+" button; new nodes are created in that tab's namespace.
     /// </summary>
+    /// <param name="host">The layout-area host — also the localization scope (AccessContext.Locale).</param>
+    /// <param name="catalog">Catalog key for the placeholder lookup: agents / skills / providers / models.</param>
+    /// <param name="nodeType">The node type each tab searches for.</param>
+    /// <param name="globalNamespace">Namespace root of the platform-wide "Global" tab.</param>
+    /// <returns>The composed tabs control.</returns>
     private static UiControl BuildScopeCatalog(
-        LayoutAreaHost host, string plural, string nodeType, string globalNamespace)
+        LayoutAreaHost host, string catalog, string nodeType, string globalNamespace)
     {
         var contextNs = host.Hub.Address.ToString();
         var viewerHome = ResolveViewerHome(host);
@@ -81,23 +124,23 @@ public static class AiCatalogLayoutAreas
             && !string.Equals(contextNs, globalNamespace, StringComparison.OrdinalIgnoreCase)
             && !string.Equals(contextNs, viewerHome, StringComparison.OrdinalIgnoreCase);
         if (isSpace)
-            tabs = tabs.WithMeshSearch("This space",
+            tabs = tabs.WithMeshSearch(host.Localize(TabThisSpace),
                 @namespace: contextNs, scope: "descendants", nodeType: nodeType,
                 createNodeType: nodeType, createNamespace: contextNs,
-                placeholder: $"Search {plural} in this space…", configure: ScopeSearch);
+                placeholder: host.Localize(SearchKey(catalog, "space")), configure: ScopeSearch);
 
         // "User" — the viewer's own partition.
         if (!string.IsNullOrEmpty(viewerHome))
-            tabs = tabs.WithMeshSearch("User",
+            tabs = tabs.WithMeshSearch(host.Localize(TabUser),
                 @namespace: viewerHome, scope: "descendants", nodeType: nodeType,
                 createNodeType: nodeType, createNamespace: viewerHome,
-                placeholder: $"Search your {plural}…", configure: ScopeSearch);
+                placeholder: host.Localize(SearchKey(catalog, "user")), configure: ScopeSearch);
 
         // "Global" — the platform-wide type root.
-        tabs = tabs.WithMeshSearch("Global",
+        tabs = tabs.WithMeshSearch(host.Localize(TabGlobal),
             @namespace: globalNamespace, scope: "descendants", nodeType: nodeType,
             createNodeType: nodeType, createNamespace: globalNamespace,
-            placeholder: $"Search global {plural}…", configure: ScopeSearch);
+            placeholder: host.Localize(SearchKey(catalog, "global")), configure: ScopeSearch);
 
         return tabs;
     }
