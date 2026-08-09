@@ -129,6 +129,17 @@ GC-handle** root (a true leak that accumulates) from a **stack** root — a disp
 continuation the snapshot froze mid-flight, which clears on resume. Assert on the
 former; tolerate the latter.
 
+🚨 **A PASS HERE PINS NOTHING.** This probe *samples* (a root live only for a bounded
+window — 1 s, 100 ms — is caught only if the forced GC lands inside it), it *cannot
+attribute* (it names whatever chain it happened to walk), and it *SKIPs on macOS*
+(#674). It is for **discovery** — naming a root nobody knew about. Once you have found
+one, pin the fix with a targeted, timing-free **ownership** test next to the code that
+owns the subscription, and prove it with a **negative control** (revert only the
+ownership line; watch that test fail). See
+[Subscription Ownership](/Doc/Architecture/SubscriptionOwnership) for the convention
+these leaks keep violating, and for the measured table of which primitives actually
+root.
+
 ### Common disposal pins and their fixes
 
 | Pin (ClrMD chain) | Cause | Fix |

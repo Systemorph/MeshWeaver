@@ -681,7 +681,36 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// that do. Widening it does not weaken any assertion — the test still fails, it just
     /// fails naming the operation instead of the harness.</para>
     /// </summary>
-    protected virtual TimeSpan TestHardDeadline => TimeSpan.FromSeconds(90);
+    protected virtual TimeSpan TestHardDeadline => DefaultHardDeadline;
+
+    /// <summary>
+    /// The default hard deadline: 90 s, overridable via the <c>MESHWEAVER_TEST_HARD_DEADLINE_SECONDS</c>
+    /// environment variable.
+    ///
+    /// <para>Configurable rather than a literal because a baked timeout is a value people edit to
+    /// get through a debugging session — which AGENTS.md forbids, since the committed number is a
+    /// contract (CI is sized for a cold Roslyn compile on a fresh runner; a laptop is not). An env
+    /// var lets a local run dial it without touching the tree, and lets a fixture that is TESTING
+    /// the watchdog run against a small floor instead of burning the real one in wall clock.</para>
+    ///
+    /// <para>🚨 <b>static readonly, read ONCE</b> — and it must stay that way. This is not a cache
+    /// (which the no-static-state rule bans); it is an immutable constant resolved at type init.
+    /// It cannot become instance state or a DI lookup: <c>HardDeadlineHonoursFactTimeoutTest</c>'s
+    /// static guard reads <see cref="TestHardDeadline"/> off a
+    /// <c>RuntimeHelpers.GetUninitializedObject</c> instance — no constructor, no fields, no
+    /// ServiceProvider — so anything instance-bound would throw or read garbage there.</para>
+    ///
+    /// <para>Malformed or non-positive values fall back to 90 s rather than failing: a typo in an
+    /// env var must not turn every test in the assembly red with a harness error.</para>
+    /// </summary>
+    private static readonly TimeSpan DefaultHardDeadline =
+        double.TryParse(
+            Environment.GetEnvironmentVariable("MESHWEAVER_TEST_HARD_DEADLINE_SECONDS"),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var configuredSeconds) && configuredSeconds > 0
+            ? TimeSpan.FromSeconds(configuredSeconds)
+            : TimeSpan.FromSeconds(90);
 
     /// <summary>
     /// Headroom the watchdog keeps ABOVE a test's own declared <c>[Fact(Timeout)]</c>, so the

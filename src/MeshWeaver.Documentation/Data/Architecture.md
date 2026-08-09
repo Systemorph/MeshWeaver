@@ -67,7 +67,7 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 
 | Theme | Start here | Go deeper |
 |---|---|---|
-| **Reactive core** | [Asynchronous Calls](AsynchronousCalls) — the no-`await` rulebook | [Actor Model](ActorModel) · [Controlled I/O Pooling](ControlledIoPooling) · [Initialization Gates](InitializationGates) · [Aggregating Providers](AggregatingProviders) · [Hub Disposal Model](HubDisposalModel) |
+| **Reactive core** | [Asynchronous Calls](AsynchronousCalls) — the no-`await` rulebook | [Actor Model](ActorModel) · [Controlled I/O Pooling](ControlledIoPooling) · [Subscription Ownership](SubscriptionOwnership) — a pending timer is a GC root · [Initialization Gates](InitializationGates) · [Aggregating Providers](AggregatingProviders) · [Hub Disposal Model](HubDisposalModel) |
 | **Reading & writing nodes** | [CQRS — Queries vs. Content Access](CqrsAndContentAccess) | [MeshNode Stream Cache](MeshNodeStreamCache) · [Request via Stream Update](RequestViaStreamUpdate) · [Data Access Patterns](DataAccessPatterns) · [Workspace References](WorkspaceReferences) · [Content Chunk Navigation](ContentChunkNavigation) |
 | **Storage & partitions** | [Postgres Schema Architecture](PostgresSchemaArchitecture) | [Partition Storage Routing](PartitionStorageRouting) · [Partition Storage Hubs](PartitionStorageHubs) · [Partitioned Persistence](PartitionedPersistence) · [Static Repo Import](StaticRepoImport) · [Vector Search](VectorSearch) |
 | **Security** | [Access Control](AccessControl) | [Granting Access](GrantingAccess) · [AccessContext Propagation](AccessContextPropagation) · [Owner Injection](OwnerInjection) · [Permission API](PermissionApi) · [Invitation-Only Onboarding](InvitationOnlyOnboarding) |
