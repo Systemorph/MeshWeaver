@@ -1,8 +1,9 @@
 ---
 Name: The About page now lists every installed plugin
-Category: What's New
+Category: Feature
 Description: Settings → About shows the platform build plus all installed plugins with their versions.
 Icon: Sparkle
+Order: -20260807
 ---
 
 # The About page now lists every installed plugin

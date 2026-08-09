@@ -1,8 +1,9 @@
 ---
 Name: GitHub sync now compares what you authored, not compile bookkeeping
-Category: What's New
+Category: Feature
 Description: Type definitions sync on their authored content and code; compile state stays live on the mesh and out of your repo.
 Icon: Sparkle
+Order: -20260802
 ---
 
 # GitHub sync now compares what you authored, not compile bookkeeping

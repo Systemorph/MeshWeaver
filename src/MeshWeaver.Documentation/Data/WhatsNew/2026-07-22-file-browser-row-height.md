@@ -1,8 +1,9 @@
 ---
 Name: File browser rows no longer stretch
-Category: What's New
+Category: Fix
 Description: Folder rows in the content file browser are content-height at every depth — no more huge empty bands between rows.
 Icon: Sparkle
+Order: -20260722
 ---
 
 # File browser rows no longer stretch

@@ -1,8 +1,9 @@
 ---
 Name: Models are picked by what they are for — and Auto is the new default
-Category: What's New
+Category: Feature
 Description: Model tiers are now named for the job (utility, chat, reasoning, coding), live as editable nodes in the AI menu, and Auto is the default for a new thread and actually dispatches.
 Icon: Sparkle
+Order: -20260809
 ---
 
 # Models are picked by what they are for — and Auto is the new default

@@ -1,8 +1,9 @@
 ---
 Name: Static assets load reliably
-Category: What's New
+Category: Fix
 Description: Media and images served from a space no longer intermittently fail to load, and HEAD requests for them now succeed.
 Icon: CheckmarkCircle
+Order: -20260806
 ---
 
 # Static assets load reliably

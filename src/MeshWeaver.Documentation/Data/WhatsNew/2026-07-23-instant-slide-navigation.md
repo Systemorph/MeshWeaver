@@ -1,8 +1,9 @@
 ---
 Name: Instant slide navigation and flicker-free page switches
-Category: What's New
+Category: Feature
 Description: Switching slides (and navigating between pages in general) no longer blanks the screen with spinners — the previous content stays visible until the next one is ready.
 Icon: Sparkle
+Order: -20260723
 ---
 
 # Instant slide navigation and flicker-free page switches

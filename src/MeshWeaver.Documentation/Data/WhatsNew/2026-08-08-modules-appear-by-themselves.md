@@ -1,8 +1,9 @@
 ---
 Name: New modules from a plugin repo can now appear by themselves
-Category: What's New
+Category: Feature
 Description: Turn on auto-discovery for a plugin repository and every module it ships is listed here — with the missing ones set up automatically when you ask for that.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # New modules from a plugin repo can now appear by themselves

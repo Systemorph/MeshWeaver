@@ -1,8 +1,9 @@
 ---
 Name: What you install opens right away
-Category: What's New
+Category: Fix
 Description: A freshly installed package is live the moment it lands, instead of staying invisible until an administrator intervened.
 Icon: Sparkle
+Order: -20260806
 ---
 
 # What you install opens right away

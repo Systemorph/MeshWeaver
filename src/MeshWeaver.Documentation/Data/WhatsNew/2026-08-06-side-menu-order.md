@@ -1,8 +1,9 @@
 ---
 Name: Side menus follow the order you set
-Category: What's New
+Category: Fix
 Description: A page's left-hand menu of sub-pages now follows the order you set on each node, and re-installing a course whose only change was the ordering now takes effect.
 Icon: ArrowSort
+Order: -20260806
 ---
 
 # Side menus follow the order you set

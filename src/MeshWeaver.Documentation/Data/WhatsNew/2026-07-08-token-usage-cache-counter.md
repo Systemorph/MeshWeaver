@@ -1,8 +1,9 @@
 ---
 Name: Token counter now counts cached tokens
-Category: What's New
+Category: Feature
 Description: The chat token counter finally accounts for prompt-cache tokens across every provider, with a cached figure and cache-aware cost.
 Icon: Sparkle
+Order: -20260708
 ---
 
 # What's New — 8 July 2026
