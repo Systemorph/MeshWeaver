@@ -122,8 +122,10 @@
 
        Owning both branches here (rather than leaving the local copy to each .csproj) is what
        makes them mutually exclusive; the per-project `<Content Include="appsettings.json">`
-       declarations were removed in the same change, and VerifyTestConfigCopied in
-       Directory.Build.targets fails the build if neither branch lands a file. -->
+       declarations were removed in the same change. The `VerifyXunitRunnerConfigCopied` target
+       in Directory.Build.targets guards BOTH files — despite its name it now errors if either
+       xunit.runner.json or appsettings.json fails to reach $(TargetDir), which is what stops
+       either two-branch selection from silently picking neither. -->
   <ItemGroup Condition="!Exists('$(MSBuildProjectDirectory)/appsettings.json')">
     <Content Include="$(MSBuildThisFileDirectory)\appsettings.json">
       <Link>%(RecursiveDir)%(Filename)%(Extension)</Link>

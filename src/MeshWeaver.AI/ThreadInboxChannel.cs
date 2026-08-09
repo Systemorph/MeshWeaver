@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Messaging;
@@ -66,16 +67,18 @@ internal sealed class ThreadInboxChannel
     private readonly ConcurrentQueue<string> consumedIds = new();
     private readonly ConcurrentDictionary<string, byte> consumedSeen = new();
 
-    // Emits the channeled-id set after every Stage-1 offer (and on Reset). Synchronized:
-    // OfferFromNode runs on the submission watcher's stream chain and Reset on the round's
-    // terminal continuation.
-    private readonly ISubject<ImmutableHashSet<string>> channeledSignal =
-        Subject.Synchronize(new Subject<ImmutableHashSet<string>>());
+    // Fires after every Stage-1 offer (and on Reset) to say "the channeled set moved" — and
+    // NOTHING else. 🚨 It deliberately carries Unit, not the set: the live submission path
+    // must not pay to materialise a snapshot that, in production, nobody is subscribed to.
+    // The set is built only in Channeled below, i.e. only per subscriber, per emission.
+    // Synchronized because OfferFromNode runs on the submission watcher's stream chain while
+    // Reset runs on the round's terminal continuation.
+    private readonly ISubject<Unit> channeledSignal = Subject.Synchronize(new Subject<Unit>());
 
     /// <summary>
     /// Live view of the ids Stage 1 has buffered into the channel — the ONLY observable proof
-    /// that the node→channel hand-off has happened. Replays the current set on subscribe, then
-    /// emits on every offer.
+    /// that the node→channel hand-off has happened. Emits what has ALREADY landed on subscribe,
+    /// then again after every offer.
     ///
     /// <para>🚨 Seeing a message in <see cref="MeshThread.PendingUserMessages"/> on the thread
     /// node does NOT imply it is drainable. <c>check_inbox</c> reads ONLY this channel, which is
@@ -86,9 +89,24 @@ internal sealed class ThreadInboxChannel
     /// one must wait on THIS — waiting on the node is the #978
     /// <c>CheckInbox_TwoCallsBackToBack_SecondReturnsEmpty</c> flake, where the first drain
     /// returned "(no new messages)" for a message the node already carried.</para>
+    ///
+    /// <para>🚨 The current-state emission is what makes this safe to wait on, and it is ordered
+    /// deliberately: the signal is subscribed FIRST, then the already-landed set is pushed. The
+    /// obvious spelling (<c>signal.StartWith(snapshot)</c>) reads the snapshot BEFORE subscribing
+    /// to the signal, so an offer landing in between is neither in the snapshot nor delivered —
+    /// and if it were the last offer, a waiter would hang to its timeout. Do not "simplify" it
+    /// back. A duplicate emission is possible instead, which is harmless for a predicate wait.</para>
     /// </summary>
     public IObservable<ImmutableHashSet<string>> Channeled
-        => Observable.Defer(() => channeledSignal.StartWith(ChanneledSnapshot()));
+        => Observable.Create<ImmutableHashSet<string>>(observer =>
+        {
+            var serialized = Observer.Synchronize(observer);
+            var subscription = channeledSignal
+                .Select(_ => ChanneledSnapshot())
+                .Subscribe(serialized);
+            serialized.OnNext(ChanneledSnapshot());
+            return subscription;
+        });
 
     private ImmutableHashSet<string> ChanneledSnapshot()
         => channeled.Keys.ToImmutableHashSet(StringComparer.Ordinal);
@@ -149,9 +167,11 @@ internal sealed class ThreadInboxChannel
             }
 
         // Publish AFTER the queue is filled, so a subscriber that reacts to the signal always
-        // finds the messages already drainable.
+        // finds the messages already drainable. Unit, not a snapshot — see channeledSignal:
+        // with no subscribers this is a lock plus an empty observer list, no allocation and no
+        // enumeration of the concurrent dictionary, which is what production actually runs.
         if (offered)
-            channeledSignal.OnNext(ChanneledSnapshot());
+            channeledSignal.OnNext(Unit.Default);
     }
 
     /// <summary>
@@ -191,6 +211,6 @@ internal sealed class ThreadInboxChannel
         while (consumedIds.TryDequeue(out _)) { }
         channeled.Clear();
         consumedSeen.Clear();
-        channeledSignal.OnNext(ImmutableHashSet<string>.Empty);
+        channeledSignal.OnNext(Unit.Default);
     }
 }

@@ -1,6 +1,8 @@
 <Project>
 
-  <!-- Guard the xunit.runner.json plumbing in Directory.Build.props.
+  <!-- Guard the two-branch test-config plumbing in Directory.Build.props.
+       Named for xunit.runner.json, which it was written for; it now guards appsettings.json
+       too, since that file rides the identical shared-default-or-project-local selection.
 
        That plumbing picks ONE of two Content includes (shared default vs project-local opt-in)
        on an Exists() condition. If it ever picks neither — a renamed file, a reworked condition,
