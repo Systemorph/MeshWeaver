@@ -67,9 +67,54 @@ gh api repos/Systemorph/MeshWeaver/actions/artifacts/<ARTIFACT_ID>/zip > shard.z
 unzip -q shard.zip -d shard && find shard -name '*.dmp'
 ```
 
-## 🚨 You cannot open a Linux dump on macOS
+## 🚀 Start here on macOS: name the faulting frame with no container at all
 
-`dotnet-dump` on macOS **cannot** read a Linux core dump. Analyse it in a **linux/amd64** container
+**Before reaching for Docker, answer "where did it fault and on what address" in about ten minutes,
+entirely on the Mac.** A `createdump` core is a plain ELF64 file; every fact needed to name the
+faulting function is inside it plus one 138 MB download from Microsoft's public symbol server. This
+is the route that produced the 2026-08-09 confirmation below, and it needs no DAC, no emulation and
+no `dotnet-dump` — all of which are what make the container route slow and failure-prone.
+
+Four steps, each a few lines of pure Python over the core (no debugger, no elfutils):
+
+1. **`NT_SIGINFO` → the kernel's verdict.** Walk the `PT_NOTE` program headers; note type
+   `0x53494749` carries `si_signo` / `si_code` / `si_addr`. `si_code == 1` is `SEGV_MAPERR`, and
+   `si_addr` is the dereferenced address — `0x0` versus a plausible-but-unmapped pointer is already
+   the difference between a null read and a use-after-unload.
+2. **`NT_FILE` → the module load bases.** Note type `0x46494c45` maps every file-backed range;
+   the minimum start for `libcoreclr.so` is the load base you subtract to get an RVA.
+3. **The faulting `ucontext`** — *not* `NT_PRSTATUS`, which `createdump` records from inside its own
+   signal handler (its `rip` is `waitpid` in libc). Scan the `PT_LOAD` segments on 8-byte alignment
+   for a `gregs[23]` block whose `TRAPNO` (index 20) is `14` (page fault) and whose `RIP` (index 16)
+   lands inside `libcoreclr`; `ERR` (19) and `CR2` (22) then decode the access — `ERR == 0x4` is a
+   user-mode **read** of a non-present page. Read the bytes at `RIP` straight out of the core through
+   the same `PT_LOAD` table: that is the faulting instruction, and with the register values it names
+   the exact dereference.
+4. **RVA → function name, via the public symbol server.** The shipped `libcoreclr.so` is stripped to
+   nine exported symbols, so resolving against it fails — fetch the separate debug file instead,
+   keyed by build-id:
+
+```bash
+# build-id: the .note.gnu.build-id section of the MATCHING runtime's libcoreclr.so
+curl -sL -o rt.tar.gz \
+  "https://builds.dotnet.microsoft.com/dotnet/Runtime/<VER>/dotnet-runtime-<VER>-linux-x64.tar.gz"
+tar xzf rt.tar.gz shared/Microsoft.NETCore.App/<VER>/libcoreclr.so
+curl -sfL -o coreclr.debug \
+  "https://msdl.microsoft.com/download/symbols/_.debug/elf-buildid-sym-<BUILD_ID>/_.debug"
+```
+
+Then walk `coreclr.debug`'s `.symtab` for the `STT_FUNC` entry whose `[st_value, st_value+st_size)`
+contains the RVA. It carries ~31 800 symbols, so the hit is exact — e.g. RVA `0x5cb1e1` →
+`_ZN3WKS7gc_heap16background_sweepEv` (`WKS::gc_heap::background_sweep()`, `+0xa61`).
+
+Take the runtime version from `collected-logs/symbols-<Project>/_runtimes.txt` in the same artifact —
+CI's patch is regularly not the one you have locally, and a mismatched `libcoreclr.so` yields a
+different build-id and therefore no symbols at all.
+
+## You do need a container for the managed side
+
+`dotnet-dump` on macOS **cannot** read a Linux core dump, so `clrthreads` / `clrstack` / `verifyheap`
+— anything needing the DAC — still requires a **linux/amd64** container
 (CI runners are x64; Apple-silicon Docker is arm64, so `--platform linux/amd64` and emulation are
 required — it is slow but it works).
 
@@ -235,6 +280,37 @@ collectible NodeType assemblies loading and unloading, and 48 gen2 GCs in 75 s.
 
 🚨 **Do not "fix" this by turning off concurrent GC** in the test host. That hides the fault without
 changing anything about why it happens, and the same workload runs in prod.
+
+### 2026-08-09: the same fault, independently reproduced — the verdict is not a one-off
+
+`MeshWeaver.FutuRe.Test exit=139` on **`main` @ `8a5c8bf57`** (run `31309378803`, shard 2, dump
+`dotnet-3032.dmp`) resolves to the identical fault, three days and many merges later:
+
+| | 2026-08-06 (run `31083356138`) | 2026-08-09 (run `31309378803`) |
+|---|---|---|
+| `si_signo` / `si_code` / `si_addr` | 11 / 1 / — | 11 / 1 (`SEGV_MAPERR`) / **`0x0`** |
+| faulting frame | `WKS::gc_heap::background_sweep()` | **`WKS::gc_heap::background_sweep()`** (RVA `0x5cb1e1`, `+0xa61`) |
+| instruction | `mov ecx, [rax]`, `rax == 0` | **`8b 08` = `mov ecx, [rax]`, `RAX = 0x0`** |
+| `TRAPNO` / `ERR` / `CR2` | 14 / `0x4` / `0x0` | **14 / `0x4` / `0x0`** |
+| phase | mid-run, 44 ms into a fresh fixture | **mid-run, ~476 ms into a fresh fixture** |
+| gen2 GCs | 48 in 75 s | **34 in 35 s** |
+
+Two things this second sighting settles, both of which had been re-litigated in #613:
+
+- **It is not fixed by, and has nothing to do with, the teardown work.** The crashing tree contains
+  both #967 (node ALCs unload at the *end* of teardown) and #996 (pending Rx timers no longer root
+  disposed hubs). The process's own `_meshweaver-test-trace.log` shows **all 22** `DISPOSE_DONE`
+  records reading `teardown clean — all pooled I/O joined, async dispose queue drained`, **zero**
+  `DISPOSE_QUIESCE_LEAK`, **zero** `DISPOSE_DIRTY_TEARDOWN`, and the straggler log holds two
+  first-chance records, both in a *different* project's process.
+- **It is not a teardown crash at all.** The last trace record is `INIT_MEM` for a *newly
+  constructed* fixture whose predecessor had just torn down cleanly. "Teardown SIGSEGV" is the
+  wrong frame for this failure; it dies inside a fresh test, under gen2 pressure of roughly one
+  collection per second.
+
+**Check the trace log's completeness before reasoning from it** (see the `FAULT-BUDGET` note above):
+here all four suppression windows belonged to a later project's pid, so the crashing process's
+record was whole — which is what makes "zero quiesce leaks" evidence rather than an absence.
 
 ## Reading the result honestly
 
