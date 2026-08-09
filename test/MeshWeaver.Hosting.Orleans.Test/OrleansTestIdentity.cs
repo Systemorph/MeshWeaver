@@ -44,6 +44,23 @@ internal static class OrleansTestIdentity
 
     /// <summary>
     /// Seeds the default <see cref="WellKnownUsers.System"/> circuit identity on the
+    /// cluster's client mesh hub (when present) and every silo's mesh hub. Called by
+    /// <see cref="OrleansTestCluster.DeployAsync"/>; the Orleans client host is owned by
+    /// <see cref="OrleansTestClusterHost"/> rather than by <c>TestCluster</c>, so
+    /// <c>cluster.Client</c> is null on those clusters and this overload reads the client
+    /// mesh hub off the host instead.
+    /// </summary>
+    public static void SeedDefaultIdentity(OrleansTestClusterHost host)
+    {
+        if (host.ClientHost is { } clientHost)
+            SeedHub(clientHost.Services.GetService<IMessageHub>());
+
+        foreach (var silo in host.Cluster.Silos)
+            SeedHub(GetSiloMeshHub(silo));
+    }
+
+    /// <summary>
+    /// Seeds the default <see cref="WellKnownUsers.System"/> circuit identity on the
     /// cluster's client mesh hub (when present) and every silo's mesh hub. Call once
     /// after <see cref="TestCluster.DeployAsync"/>.
     /// </summary>

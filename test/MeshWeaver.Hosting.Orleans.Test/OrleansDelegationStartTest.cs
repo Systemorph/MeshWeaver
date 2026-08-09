@@ -68,62 +68,55 @@ public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansShare
     [Fact]
     public async Task Delegation_CreateCellsThenThread_ExecutionStartsAndCompletes()
     {
-        SharedOrleansFixture.SwappableFactory.SetInner(new DelegationEchoChatClientFactory());
-        try
+        Fixture.ChatFactory.SetInner(new DelegationEchoChatClientFactory());
+        var client = GetClient();
+
+        // Create a parent thread first (delegations live under a response message)
+        var parentNode = ThreadNodeType.BuildThreadNode("TestUser", "Parent for delegation test", "TestUser");
+        var parentResp = await CreateNode(client, parentNode, "TestUser");
+        parentResp.Message.Success.Should().BeTrue(parentResp.Message.Error ?? "");
+        var parentPath = parentResp.Message.Node!.Path!;
+        Output.WriteLine($"Parent thread: {parentPath}");
+
+        // Simulate a response message on the parent (delegation lives under it)
+        var parentResponseId = Guid.NewGuid().ToString("N")[..8];
+        await CreateNode(client, new MeshNode(parentResponseId, parentPath)
         {
-            var client = GetClient();
+            NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
+            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
+        }, parentPath);
+        var parentMsgPath = $"{parentPath}/{parentResponseId}";
 
-            // Create a parent thread first (delegations live under a response message)
-            var parentNode = ThreadNodeType.BuildThreadNode("TestUser", "Parent for delegation test", "TestUser");
-            var parentResp = await CreateNode(client, parentNode, "TestUser");
-            parentResp.Message.Success.Should().BeTrue(parentResp.Message.Error ?? "");
-            var parentPath = parentResp.Message.Node!.Path!;
-            Output.WriteLine($"Parent thread: {parentPath}");
+        // Now simulate delegation: create the sub-thread (exact ChatClientAgentFactory
+        // flow). BuildThreadWithMessages seeds PendingUserMessages at Status=Idle;
+        // the submission watcher claims, drains the pending message into Messages,
+        // allocates the response cell, and dispatches execution — the test no longer
+        // pre-creates the user/response cells (that was the old contract, before
+        // DispatchAfterClaim owned cell allocation; responseMsgId is "" now).
+        var (subThreadNode, userMsgId, _) = ThreadNodeType.BuildThreadWithMessages(
+            parentMsgPath, "Delegation task: do something", createdBy: "TestUser", agentName: "Worker");
+        subThreadNode = subThreadNode with { MainNode = "TestUser" };
+        var subThreadPath = subThreadNode.Path!;
+        Output.WriteLine($"Sub-thread: {subThreadPath}, user={userMsgId}");
 
-            // Simulate a response message on the parent (delegation lives under it)
-            var parentResponseId = Guid.NewGuid().ToString("N")[..8];
-            await CreateNode(client, new MeshNode(parentResponseId, parentPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
-                Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-            }, parentPath);
-            var parentMsgPath = $"{parentPath}/{parentResponseId}";
+        // Create the sub-thread — WatchForExecution claims + dispatches the round.
+        var threadResp = await CreateNode(client, subThreadNode, parentMsgPath);
+        threadResp.Message.Success.Should().BeTrue(threadResp.Message.Error ?? "");
+        Output.WriteLine("Sub-thread created — WatchForExecution should trigger");
 
-            // Now simulate delegation: create the sub-thread (exact ChatClientAgentFactory
-            // flow). BuildThreadWithMessages seeds PendingUserMessages at Status=Idle;
-            // the submission watcher claims, drains the pending message into Messages,
-            // allocates the response cell, and dispatches execution — the test no longer
-            // pre-creates the user/response cells (that was the old contract, before
-            // DispatchAfterClaim owned cell allocation; responseMsgId is "" now).
-            var (subThreadNode, userMsgId, _) = ThreadNodeType.BuildThreadWithMessages(
-                parentMsgPath, "Delegation task: do something", createdBy: "TestUser", agentName: "Worker");
-            subThreadNode = subThreadNode with { MainNode = "TestUser" };
-            var subThreadPath = subThreadNode.Path!;
-            Output.WriteLine($"Sub-thread: {subThreadPath}, user={userMsgId}");
+        // Wait for execution to complete; the response cell id is Messages[1]
+        // (allocated by DispatchAfterClaim).
+        var settled = await GetHubContent<MeshThread>(client, subThreadPath)
+            .Should().Within(30.Seconds())
+            .Match(t => t is { IsExecuting: false } && t.Messages.Count >= 2);
+        Output.WriteLine("Execution complete");
 
-            // Create the sub-thread — WatchForExecution claims + dispatches the round.
-            var threadResp = await CreateNode(client, subThreadNode, parentMsgPath);
-            threadResp.Message.Success.Should().BeTrue(threadResp.Message.Error ?? "");
-            Output.WriteLine("Sub-thread created — WatchForExecution should trigger");
-
-            // Wait for execution to complete; the response cell id is Messages[1]
-            // (allocated by DispatchAfterClaim).
-            var settled = await GetHubContent<MeshThread>(client, subThreadPath)
-                .Should().Within(30.Seconds())
-                .Match(t => t is { IsExecuting: false } && t.Messages.Count >= 2);
-            Output.WriteLine("Execution complete");
-
-            var responsePath = $"{subThreadPath}/{settled!.Messages[1]}";
-            var responseMsg = await GetHubContent<ThreadMessage>(client, responsePath)
-                .Should().Within(30.Seconds()).Match(m => !string.IsNullOrEmpty(m?.Text));
-            responseMsg!.Text.Should().NotBeNullOrEmpty("agent must have written response");
-            Output.WriteLine($"Response: {responseMsg.Text![..Math.Min(100, responseMsg.Text.Length)]}");
-            Output.WriteLine("PASSED");
-        }
-        finally
-        {
-            SharedOrleansFixture.SwappableFactory.Reset();
-        }
+        var responsePath = $"{subThreadPath}/{settled!.Messages[1]}";
+        var responseMsg = await GetHubContent<ThreadMessage>(client, responsePath)
+            .Should().Within(30.Seconds()).Match(m => !string.IsNullOrEmpty(m?.Text));
+        responseMsg!.Text.Should().NotBeNullOrEmpty("agent must have written response");
+        Output.WriteLine($"Response: {responseMsg.Text![..Math.Min(100, responseMsg.Text.Length)]}");
+        Output.WriteLine("PASSED");
     }
 
     #region Echo LLM

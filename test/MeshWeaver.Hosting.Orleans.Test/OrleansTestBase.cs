@@ -46,9 +46,24 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper output) : TestBase(output)
     where TSiloConfigurator : ISiloConfigurator, IHostConfigurator, new()
 {
-    protected TestCluster Cluster { get; private set; } = null!;
+    private OrleansTestClusterHost host = null!;
 
-    protected IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
+    protected TestCluster Cluster => host.Cluster;
+
+    /// <summary>
+    /// The Orleans client host's services. <c>Cluster.Client</c> is null on these clusters —
+    /// the client host belongs to <see cref="OrleansTestClusterHost"/> so it can be handed
+    /// this class's per-cluster instances through a closure. See that type's remarks.
+    /// </summary>
+    protected IServiceProvider ClientServices => host.ClientServices;
+
+    protected IMessageHub ClientMesh => ClientServices.GetRequiredService<IMessageHub>();
+
+    /// <summary>
+    /// This cluster's in-memory store, shared by the silo host(s) and the Orleans client
+    /// host. An instance — it dies with the test class, so there is nothing to reset.
+    /// </summary>
+    private readonly OrleansTestBackingStore backingStore = new();
 
     // Unique-per-call when id is null. See MonolithMeshTestBase.CreateClientAddress
     // for the routing-table partitioning rationale (leaked server-side sync
@@ -66,22 +81,19 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
-        // Own-cluster classes still wire their InMemoryStorageAdapter to the
-        // process-wide SharedOrleansFixture statics (TestSiloConfigurator /
-        // TestClientConfigurator). Reset them here too so a prior class's leftover
-        // nodes / swapped chat factory don't bleed into this fresh cluster — see
-        // SharedOrleansFixture.ResetSharedState for the full rationale.
-        SharedOrleansFixture.ResetSharedState();
-        var builder = new TestClusterBuilder();
-        builder.Options.InitialSilosCount = InitialSilosCount;
-        builder.AddSiloBuilderConfigurator<TSiloConfigurator>();
-        builder.AddClientBuilderConfigurator<TestClientConfigurator>();
-        Cluster = builder.Build();
-        await Cluster.DeployAsync();
-        // DevLogin analog: seed a default System circuit identity on the client +
-        // silo mesh hubs so direct test posts (and the mesh hubs' own re-posts)
-        // satisfy the never-null AccessContext invariant. See OrleansTestIdentity.
-        OrleansTestIdentity.SeedDefaultIdentity(Cluster);
+        // The silo host AND the Orleans client host share THIS class's backingStore
+        // instance — the per-cluster channel that replaced the process-wide statics
+        // (see OrleansTestBackingStore). DeployAsync also seeds the default System
+        // circuit identity on the client + silo mesh hubs.
+        host = await OrleansTestCluster.DeployAsync(
+            builder =>
+            {
+                builder.Options.InitialSilosCount = InitialSilosCount;
+                builder.AddSiloBuilderConfigurator<TSiloConfigurator>();
+                builder.AddClientBuilderConfigurator<TestClientConfigurator>();
+            },
+            configureSiloServices: services => backingStore.Register(services),
+            configureClientServices: services => backingStore.Register(services));
     }
 
     /// <summary>
@@ -110,8 +122,7 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
             catch { /* best-effort */ }
         }
 
-        if (Cluster is not null)
-            OrleansClusterDisposal.DisposeInBackground(Cluster);
+        OrleansClusterDisposal.DisposeInBackground(host);
         await base.DisposeAsync();
     }
 
@@ -147,7 +158,7 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
             Name = userId,
             Email = $"{userId}@meshweaver.io"
         });
-        Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+        ClientServices.GetRequiredService<IRoutingService>()
             .RegisterStream(client.Address, client.DeliverMessage);
         lock (_clientsCreated) _clientsCreated.Add(client);
         return client;
@@ -172,21 +183,12 @@ public class TestClientConfigurator : IHostConfigurator
 {
     public void Configure(IHostBuilder hostBuilder)
     {
+        // 🚨 The in-memory backing store this client shares with the silo is a PER-CLUSTER
+        // instance, so it cannot be registered here — Orleans instantiates this configurator
+        // via new(). The deploying fixture passes it in through
+        // OrleansTestCluster.DeployAsync's post-configure closure; see OrleansTestBackingStore.
         hostBuilder.UseOrleansMeshClient()
-            .ConfigurePortalMesh()
-            .ConfigureServices(services =>
-            {
-                // 🚨 Share the in-memory backing dicts with the silo — see
-                // SharedSiloConfigurator for rationale. Single-process test
-                // cluster needs ONE logical store; production has multiple
-                // adapter instances all pointing at the same PG backend.
-                services.Replace(ServiceDescriptor.Singleton<InMemoryStorageAdapter>(sp =>
-                    new InMemoryStorageAdapter(
-                        SharedOrleansFixture.SharedNodes,
-                        SharedOrleansFixture.SharedPartitionObjects,
-                        sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>())));
-                return services;
-            });
+            .ConfigurePortalMesh();
     }
 }
 
@@ -263,20 +265,12 @@ public class TestSiloConfigurator : ISiloConfigurator, IHostConfigurator
 
     public void Configure(IHostBuilder hostBuilder)
     {
-        hostBuilder.ConfigureServices(services =>
-        {
-            // 🚨 Share the in-memory backing dicts with the Orleans client
-            // (TestClientConfigurator). Single-process test cluster mirrors
-            // prod's "multiple adapter instances, same PG backend" shape so
-            // a node created via either mesh hub is visible to the silo's
-            // path resolver. See SharedOrleansFixture.SharedNodes for the
-            // rationale.
-            services.Replace(ServiceDescriptor.Singleton<InMemoryStorageAdapter>(sp =>
-                new InMemoryStorageAdapter(
-                    SharedOrleansFixture.SharedNodes,
-                    SharedOrleansFixture.SharedPartitionObjects,
-                    sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>())));
-        });
+        // 🚨 The in-memory backing store this silo shares with the Orleans client
+        // (TestClientConfigurator) is a PER-CLUSTER instance and cannot be registered here:
+        // Orleans instantiates this configurator via new(). The deploying fixture passes it
+        // in through OrleansTestCluster.DeployAsync's post-configure closure. The single-process
+        // test cluster mirrors prod's "multiple adapter instances, same PG backend" shape so a
+        // node created via either mesh hub is visible to the silo's path resolver.
         var meshBuilder = hostBuilder.UseOrleansMeshServer()
             .AddPartitionedInMemoryPersistence()
             .ConfigurePortalMesh()
