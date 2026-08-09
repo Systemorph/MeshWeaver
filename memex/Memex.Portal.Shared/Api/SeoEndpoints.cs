@@ -52,7 +52,64 @@ public static class SeoEndpoints
                 .ToTask(ct);
         }).AllowAnonymous();
 
+        MapShareCard(app);
         return app;
+    }
+
+    /// <summary>
+    /// 🚨 THE FALLBACK SHARE CARD — <c>/api/og/{node}.png</c>.
+    ///
+    /// <para>Generated on demand from the node's own name, description and category so that EVERY
+    /// public page has an Open Graph image without anyone authoring one. An authored image always
+    /// wins; this is what <see cref="SeoResolver.ExtractImage"/> falls back to.</para>
+    ///
+    /// <para><b>Gated identically to the SEO head.</b> The card is drawn from
+    /// <see cref="SeoResolver.Resolve"/>, which returns null for anything the fail-closed
+    /// <see cref="AnonymousGate"/> refuses — so a private node's NAME cannot be lifted out of this
+    /// route, and a missing node and a private one answer the same 404. There is no parallel
+    /// permission rule here to drift from the page's.</para>
+    ///
+    /// <para><b>Shared-cacheable on purpose</b> — the one image route where <c>public</c> is
+    /// correct. Everything drawn on it is already served to anonymous callers on the page itself,
+    /// and crawlers refetch cards aggressively; the strong ETag is the render's own hash, so a
+    /// renamed node produces a new card rather than a stale one.</para>
+    /// </summary>
+    private static void MapShareCard(IEndpointRouteBuilder app) =>
+        app.MapGet("/api/og/{**path}", (
+            IMessageHub hub, OgCardRenderer renderer, HttpContext http, string path,
+            CancellationToken ct) =>
+        {
+            var nodePath = (path ?? "").Trim('/');
+            if (nodePath.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+                nodePath = nodePath[..^4];
+            if (nodePath.Length == 0)
+                return Task.FromResult(Results.NotFound());
+
+            return SeoResolver.Resolve(hub, nodePath)
+                .Select(data => data is null
+                    ? Results.NotFound()
+                    : CardResult(http, renderer, data))
+                .Catch<IResult, Exception>(_ => Observable.Return(Results.NotFound()))
+                .FirstAsync()
+                .ToTask(ct);
+        }).AllowAnonymous();
+
+    private static IResult CardResult(HttpContext http, OgCardRenderer renderer, SeoPageData data)
+    {
+        var node = data.Node;
+        var png = renderer.Render(
+            node.Name ?? node.Id,
+            data.Description,
+            string.IsNullOrWhiteSpace(node.Category) ? node.NodeType : node.Category,
+            node.Path);
+
+        var etag = $"\"{Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(png))}\"";
+        if (string.Equals(http.Request.Headers.IfNoneMatch.ToString(), etag, StringComparison.Ordinal))
+            return Results.StatusCode(StatusCodes.Status304NotModified);
+
+        http.Response.Headers.ETag = etag;
+        http.Response.Headers.CacheControl = "public, max-age=86400";
+        return Results.File(png, "image/png");
     }
 
     /// <summary>
