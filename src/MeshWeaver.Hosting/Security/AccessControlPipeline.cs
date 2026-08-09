@@ -188,8 +188,8 @@ public static class AccessControlPipeline
                     // denied: user 'x' lacks Read permission on 'y'", which is an actionable-looking
                     // sentence that sends a correctly-entitled user to request permissions they
                     // already hold. The replacement is still fail-closed (Undetermined carries
-                    // IsGranted=false, so `result.Outcome.IsGranted` gates exactly as before) — it
-                    // simply stops claiming to know why.
+                    // IsGranted=false, so the `!evaluated.Outcome.IsGranted` filter below gates
+                    // exactly as before) — it simply stops claiming to know why.
                     //
                     // No Timeout here: the access cache must always be a
                     // reactive Subscribe over the hierarchical union
@@ -203,7 +203,7 @@ public static class AccessControlPipeline
                     .Select(check => hub.CheckPermissionOutcome(check.Path, effectiveUserId, check.Permission)
                         // 🚨 TakeDecisionOutsideGate, NOT a bare Take(1) — issue #899. This is
                         // the BROADEST generator of the Rx lock-order inversion in the repo:
-                        // the onCompleted branch below invokes `next`, i.e. the ENTIRE
+                        // the all-granted branch below invokes `next`, i.e. the ENTIRE
                         // downstream handler for EVERY [RequiresPermission] message. On a warm
                         // permission cache the fold emits synchronously during Subscribe while
                         // holding its CombineLatest gate, so with a bare Take(1) that whole
