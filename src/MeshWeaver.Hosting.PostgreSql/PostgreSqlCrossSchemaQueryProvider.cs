@@ -343,7 +343,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         if (!string.IsNullOrEmpty(query.TextSearch))
         {
             var escaped = EscapeSql(query.TextSearch);
-            // Split into words, each as prefix match (e.g., "Partner Re" → "Partner:* & Re:*")
+            // Split into words, each as prefix match (e.g., "Acme Corp" → "Acme:* & Corp:*")
             var words = escaped.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var tsTerms = string.Join(" & ", words.Select(w => $"{w}:*"));
 
