@@ -65,20 +65,18 @@ dotnet build src/<TheProjectYouTouched> -c Release -warnaserror --no-restore   #
 #     Order is -YYYYMMDD (a NEGATIVE date), which sorts the doc tree and the Doc/WhatsNew folder
 #     page newest-first — without it they fall back to alphabetical by title.
 DATE=$(date -u +%Y-%m-%d)                   # no clock in scripts elsewhere, but this is a shell step
-cat > src/MeshWeaver.Documentation/Data/WhatsNew/${DATE}-<slug>.md <<NOTE
----
-Name: <short human title of the change>
-Category: <Feature|Fix>
-Description: <one-line summary shown in the What's New list>
-Icon: Sparkle
-Order: -$(date -u +%Y%m%d)
----
-
+NOTE_FILE=src/MeshWeaver.Documentation/Data/WhatsNew/${DATE}-<slug>.md
+# Frontmatter is printf'd (Order needs the date substituted); the PROSE goes in a QUOTED heredoc so
+# a note containing `$`, `${…}` or backticks is written literally instead of being expanded by bash.
+printf -- '---\nName: %s\nCategory: %s\nDescription: %s\nIcon: Sparkle\nOrder: -%s\n---\n\n' \
+  '<short human title of the change>' '<Feature|Fix>' \
+  '<one-line summary shown in the What'"'"'s New list>' "${DATE//-/}" > "$NOTE_FILE"
+cat >> "$NOTE_FILE" <<'NOTE'
 # <title>
 
 <2–5 plain-language sentences on what changed and why it matters to a user — not the how.>
 NOTE
-git add src/MeshWeaver.Documentation/Data/WhatsNew/${DATE}-<slug>.md
+git add "$NOTE_FILE"
 
 # 1. CREATE the PR (branch must be pushed first; push only when the user asked — AGENTS.md).
 git push -u origin "$(git branch --show-current)"
