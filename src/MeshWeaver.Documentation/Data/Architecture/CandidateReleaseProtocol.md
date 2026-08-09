@@ -2,18 +2,27 @@
 nodeType: Markdown
 name: Candidate Release Protocol
 category: Architecture
-description: How a new version of a module — including the framework itself — is verified against every dependent BEFORE it is promoted, so a removed API can never again reach production as a runtime compile failure.
+description: How a new version is verified against what actually depends on it — inside the mesh a module verifies its dependents before promoting, and for the framework the gate sits at the DEPLOY boundary, where a portal refuses an image its own installed plugins cannot compile.
 ---
 
 # Candidate Release Protocol
 
-A module does not get to declare itself released. It builds itself, publishes the build as a
-**candidate**, and every dependent builds against that candidate. Only when the whole closure
-compiles does the candidate become a release. Anything less is published as a **preview**, carrying
-the complete list of what it broke.
+**Releases are fast; deploys are gated.** A new version ships as soon as it is ready. What is
+verified — and where — depends on who can answer the question.
 
-This page specifies that protocol: the states, the failure semantics, and the two places it has to
-be enforced.
+Inside the mesh, a module can name its own dependents, so it verifies them: it builds itself,
+publishes the build as a **candidate**, and every dependent builds against that candidate. A clean
+closure promotes it to a release; a broken one publishes a **preview** carrying the complete list of
+what it broke.
+
+The framework cannot do that, and should not try. It ships as a container image, it has no
+enumerable set of dependents, and holding its release until every downstream repo was rebuilt would
+slow the train while still answering the wrong question. **The set that matters is per-instance —
+the plugins a given portal actually installed** — so for the framework the gate sits at the *deploy*
+boundary: a portal verifies a candidate image against its own installed plugins, and refuses to
+adopt one they cannot compile.
+
+This page specifies both: the states, the failure semantics, and where each gate lives.
 
 ## Why — the gap it closes
 
@@ -111,26 +120,54 @@ than strictly serially, and caches on `(source hash, framework version, upstream
 Anything it bounds — a truncated closure, a skipped level — is logged explicitly; a silent cap reads
 as "verified everything" when it did not.
 
-## Where it is enforced
+## Where it is enforced — the gate is on the INSTANCE, not the release
 
-The framework ships as a container image, not as a mesh module, so it cannot enter the protocol from
-inside a portal. It enters at the release boundary instead. Two gates, in the order a change meets
-them:
+**Core releases immediately.** It does not wait on its dependents, does not fan out to node repos,
+and does not need to know who depends on it. Holding a release until every downstream repo has been
+rebuilt would slow the release train, require cross-repo credentials, and still not answer the only
+question that matters — because *no* central set of dependents is the right set.
 
-**1. Core release → dependents (the gate that was missing).** When core publishes an image, that
-image is a **candidate**. Each node repo's `Compile every NodeType (vs core)` runs against the
-candidate digest — not its pinned one — and every result must be `Compiled` before the image is
-promoted to the tag that portals self-update from. A failure publishes the image as a preview and
-names every broken NodeType across every repo. Mechanically: a dispatch from core CD to each node
-repo carrying the candidate digest, an accepted digest override in the repo's workflow, and results
-aggregated back into the promotion decision.
+**The right set is per-instance: the plugins THAT portal actually has installed.** A NodeType broken
+on a plugin nobody deployed is not an outage; a NodeType broken on a plugin one portal installed is
+an outage for exactly that portal. Only the instance knows its own set.
 
-**2. Node repo PR → pinned core (the gate that already exists).** Unchanged, and still pinned: a
-plugin PR must not go red because core moved underneath it. Pin bumps stay deliberate — gate 1 is
-what proves the bump is safe.
+So the gate moves to the deploy boundary:
 
-Neither gate replaces the other. Gate 2 protects plugin authors from core; gate 1 protects core — and
-production — from plugins.
+> Before a portal **adopts** a candidate image, it verifies that every plugin it has installed still
+> compiles against that candidate. If any regresses, the instance does not roll — it keeps serving
+> the image it is on and reports what broke.
+
+This is a *deploy* gate, not a release gate. A broken candidate stops at whichever instances it would
+break and rolls everywhere else.
+
+### Most of this already exists — and it fired too late
+
+`DynamicTypePreWarmer` already computes exactly the required signal: it captures a `WasHealthy`
+baseline before baking, then refuses readiness for any NodeType that regressed on the new image —
+
+```
+REFUSING READINESS — N NodeType(s) regressed on this image.
+The rollout will stall with the previous image still serving.
+```
+
+That sentence is the intent, and it is what makes the design cheap to finish. But in the incident the
+portal went down anyway, so the mechanism has a gap to close:
+
+- **The check runs inside the NEW pod, after it is already live.** Readiness refusal only protects
+  the portal while a previous pod is still serving. On a **single-replica** deployment there is no
+  previous pod — the old one is already gone — so "the rollout will stall with the previous image
+  still serving" is simply false and the portal is down. The Deployment's `replicas`,
+  `maxUnavailable` and `maxSurge` are therefore part of this gate, not incidental.
+- **Verification happens after adoption, not before it.** The natural home is the self-update path
+  (`SelfUpdateOptions.PollInterval`): verify the candidate, *then* adopt — rather than adopt, then
+  discover.
+
+### The node repo's own pin stays
+
+A node repo's `Compile every NodeType (vs core)` remains pinned to a fixed core digest. A plugin PR
+must not go red because core moved underneath it, and a moving `:latest` makes two runs of identical
+code disagree. Pin bumps stay deliberate — the instance gate is what makes an unsafe bump harmless,
+because a portal that cannot compile its own plugins simply never adopts it.
 
 ## What this does not do
 
