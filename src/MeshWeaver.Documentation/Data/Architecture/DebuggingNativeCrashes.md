@@ -91,21 +91,28 @@ Four steps, each a few lines of pure Python over the core (no debugger, no elfut
    the same `PT_LOAD` table: that is the faulting instruction, and with the register values it names
    the exact dereference.
 4. **RVA → function name, via the public symbol server.** The shipped `libcoreclr.so` is stripped to
-   nine exported symbols, so resolving against it fails — fetch the separate debug file instead,
-   keyed by build-id:
+   nine exported `STT_FUNC` symbols, so resolving against it fails — and that failure looks like the
+   technique not working rather than the file being stripped. Fetch the separate debug file, keyed by
+   build-id:
 
-```bash
-# build-id: the .note.gnu.build-id section of the MATCHING runtime's libcoreclr.so
-curl -sL -o rt.tar.gz \
-  "https://builds.dotnet.microsoft.com/dotnet/Runtime/<VER>/dotnet-runtime-<VER>-linux-x64.tar.gz"
-tar xzf rt.tar.gz shared/Microsoft.NETCore.App/<VER>/libcoreclr.so
-curl -sfL -o coreclr.debug \
-  "https://msdl.microsoft.com/download/symbols/_.debug/elf-buildid-sym-<BUILD_ID>/_.debug"
-```
+   ```bash
+   curl -sL -o rt.tar.gz \
+     "https://builds.dotnet.microsoft.com/dotnet/Runtime/<VER>/dotnet-runtime-<VER>-linux-x64.tar.gz"
+   tar xzf rt.tar.gz shared/Microsoft.NETCore.App/<VER>/libcoreclr.so
+   # <BUILD_ID> comes from that libcoreclr.so — see below
+   curl -sfL -o coreclr.debug \
+     "https://msdl.microsoft.com/download/symbols/_.debug/elf-buildid-sym-<BUILD_ID>/_.debug"
+   ```
 
-Then walk `coreclr.debug`'s `.symtab` for the `STT_FUNC` entry whose `[st_value, st_value+st_size)`
-contains the RVA. It carries ~31 800 symbols, so the hit is exact — e.g. RVA `0x5cb1e1` →
-`_ZN3WKS7gc_heap16background_sweepEv` (`WKS::gc_heap::background_sweep()`, `+0xa61`).
+   **Reading `<BUILD_ID>` is the same Python you already have** — walk the section headers
+   (`e_shoff`/`e_shentsize`/`e_shnum` at `0x28`/`0x3A`, names via the `e_shstrndx` section), find
+   `.note.gnu.build-id`, and read its note: `namesz`/`descsz`/`type` as three `<I`, then skip
+   `12 + ((namesz+3) & ~3)` bytes and take `descsz` bytes — that hex string is the id.
+
+   Then walk `coreclr.debug`'s `.symtab` for the `STT_FUNC` entry (`st_info & 0xf == 2`) whose
+   `[st_value, st_value + st_size)` contains the RVA; symbol names come from the section its `sh_link`
+   points at. It carries ~31 800 symbols, so the hit is exact — e.g. RVA `0x5cb1e1` →
+   `_ZN3WKS7gc_heap16background_sweepEv` (`WKS::gc_heap::background_sweep()`, `+0xa61`).
 
 Take the runtime version from `collected-logs/symbols-<Project>/_runtimes.txt` in the same artifact —
 CI's patch is regularly not the one you have locally, and a mismatched `libcoreclr.so` yields a
