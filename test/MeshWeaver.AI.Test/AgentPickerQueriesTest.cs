@@ -24,6 +24,15 @@ public class AgentPickerQueriesTest
     /// whose Content is silently null, which reads as an empty picker.</summary>
     private const string Proj = AgentPickerProjection.RegistryProjection;
 
+    /// <summary>
+    /// The model-registry type filter, built from the SAME constants the production query builder
+    /// uses. Spelling it out as a literal is how these assertions drifted when ModelTier joined the
+    /// registry: five tests failed naming a filter no code produced any more, which reads as a
+    /// regression rather than as "a node type was added".
+    /// </summary>
+    private const string ModelTypes =
+        LanguageModelNodeType.NodeType + "|" + ModelProviderNodeType.NodeType + "|" + ModelTierNodeType.NodeType;
+
     // ─── BuildAgentQuery: the SINGLE canonical agent-registry query ───
     // Agents live in a dedicated /Agent sub-namespace PER PARTITION; the query lists the platform
     // default + the current space's + the user's DIRECTLY (exact membership, no graph search).
@@ -176,7 +185,7 @@ public class AgentPickerQueriesTest
     {
         var queries = AgentPickerProjection.BuildModelQueries();
         queries.Should().ContainSingle()
-            .Which.Should().Be("namespace:Provider nodeType:LanguageModel|ModelProvider scope:descendants" + Proj);
+            .Which.Should().Be("namespace:Provider nodeType:" + ModelTypes + " scope:descendants" + Proj);
     }
 
     [Fact]
@@ -194,10 +203,10 @@ public class AgentPickerQueriesTest
             selectedProviderPaths: new[] { "acme/Provider/Anthropic", "rbuergi/Provider/OpenAI" });
 
         // Root catalog query is always present.
-        queries.Should().Contain("namespace:Provider nodeType:LanguageModel|ModelProvider scope:descendants" + Proj);
+        queries.Should().Contain("namespace:Provider nodeType:" + ModelTypes + " scope:descendants" + Proj);
         // One selfAndDescendants query per selected provider path (provider node + its models).
-        queries.Should().Contain("namespace:acme/Provider/Anthropic nodeType:LanguageModel|ModelProvider scope:selfAndDescendants" + Proj);
-        queries.Should().Contain("namespace:rbuergi/Provider/OpenAI nodeType:LanguageModel|ModelProvider scope:selfAndDescendants" + Proj);
+        queries.Should().Contain("namespace:acme/Provider/Anthropic nodeType:" + ModelTypes + " scope:selfAndDescendants" + Proj);
+        queries.Should().Contain("namespace:rbuergi/Provider/OpenAI nodeType:" + ModelTypes + " scope:selfAndDescendants" + Proj);
     }
 
     [Fact]
@@ -209,7 +218,7 @@ public class AgentPickerQueriesTest
         var queries = AgentPickerProjection.BuildModelQueries(currentPath: "login", nodeTypePath: "welcome");
 
         queries.Should().ContainSingle("a reserved currentPath/nodeTypePath is skipped — only the platform catalog remains")
-            .Which.Should().Be("namespace:Provider nodeType:LanguageModel|ModelProvider scope:descendants" + Proj);
+            .Which.Should().Be("namespace:Provider nodeType:" + ModelTypes + " scope:descendants" + Proj);
     }
 
     [Fact]
@@ -217,7 +226,7 @@ public class AgentPickerQueriesTest
     {
         // A real (non-reserved) context partition still contributes its /Provider namespace.
         var queries = AgentPickerProjection.BuildModelQueries(currentPath: "AgenticPension");
-        queries.Should().Contain("namespace:AgenticPension/Provider nodeType:LanguageModel|ModelProvider scope:descendants" + Proj);
+        queries.Should().Contain("namespace:AgenticPension/Provider nodeType:" + ModelTypes + " scope:descendants" + Proj);
     }
 
     [Fact]
@@ -229,7 +238,7 @@ public class AgentPickerQueriesTest
             currentPath: "ctx", nodeTypePath: "nt",
             selectedProviderPaths: new[] { "acme/Provider/Anthropic" });
 
-        queries.Should().OnlyContain(q => q.Contains("nodeType:LanguageModel|ModelProvider"));
+        queries.Should().OnlyContain(q => q.Contains("nodeType:" + ModelTypes));
         queries.Should().HaveCount(4); // root + currentPath + nodeTypePath + 1 selection
     }
 
@@ -249,8 +258,8 @@ public class AgentPickerQueriesTest
         // descendants query over it so they appear alongside the catalog.
         var queries = AgentPickerProjection.BuildModelQueries(userPath: "rbuergi");
 
-        queries.Should().Contain("namespace:Provider nodeType:LanguageModel|ModelProvider scope:descendants" + Proj);
-        queries.Should().Contain($"namespace:{ModelProviderNodeType.UserNamespacePath("rbuergi")} nodeType:LanguageModel|ModelProvider scope:descendants" + Proj);
+        queries.Should().Contain("namespace:Provider nodeType:" + ModelTypes + " scope:descendants" + Proj);
+        queries.Should().Contain($"namespace:{ModelProviderNodeType.UserNamespacePath("rbuergi")} nodeType:" + ModelTypes + " scope:descendants" + Proj);
         queries.Should().HaveCount(2); // root + user _Memex
     }
 

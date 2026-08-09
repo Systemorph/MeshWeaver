@@ -181,17 +181,17 @@ Two ways to fix an AKS deployment:
 
 The Systemorph space ships three tiers, chosen to be **powerful but inexpensive and open-weight** — strong at programming and at producing structured data — sourced from the Azure AI Foundry catalog:
 
-| Tier (`ModelTier`) | Model id | Why |
+| Tier | Model id | Why |
 |---|---|---|
-| **High** (`heavy`) | `DeepSeek-V4-Pro` | flagship open-weight (2026), best open-source coding + reasoning. The pick when answer quality matters most. |
-| **Medium** (`standard`) | `DeepSeek-V3-0324` | proven open-weight workhorse, large deployed quota; balanced coding + general use at low cost. |
-| **Low** (`light` / `utility`) | `DeepSeek-V4-Flash` | fast + very cheap open-weight variant, ideal for high-volume classification, extraction, and JSON/structured output. |
+| **`coding`** (legacy `heavy`) | `DeepSeek-V4-Pro` | flagship open-weight (2026), best open-source coding + reasoning. The pick when a wrong answer is expensive. |
+| **`reasoning`** (legacy `standard`) | `DeepSeek-V3-0324` | proven open-weight workhorse, large deployed quota; balanced general use at low cost. |
+| **`chat` / `utility`** (legacy `light`) | `DeepSeek-V4-Flash` | fast + very cheap open-weight variant, ideal for high-volume classification, extraction, and JSON/structured output. |
 
-All three are deployed on the `s-meshweaver` Azure AI Foundry resource (verify with `az cognitiveservices account deployment list -n s-meshweaver -g rg-meshweaverai`). The tier → model mapping lives in `ModelTier:Heavy/Standard/Light/Utility` config (wired via the Helm overlay for the AKS deployment).
+All three are deployed on the `s-meshweaver` Azure AI Foundry resource (verify with `az cognitiveservices account deployment list -n s-meshweaver -g rg-meshweaverai`). Put the tier on the model NODE (`"tier": "coding"`) — see [Model Tiers](/Doc/AI/ModelTiers). The `ModelTier:Heavy/Standard/Light/Utility` config keys still work (mapped by rank) but are deprecated.
 
 > **Claude (Anthropic) works very well — noticeably stronger on the hardest agentic and coding tasks — but it comes at a price.** It is intentionally **not** wired as a shared org key. Each user connects **Claude Code** (the co-hosted CLI, `Features:Ai:Clis:ClaudeCode`) under their own account in **Settings → Models → Connect**, which stores a per-user `{user}/_Memex/ClaudeCode` provider and injects Claude into their picker on their own subscription. To turn this on for a deployment, see [Enabling per-user Claude Code Connect](#enabling-per-user-claude-code-connect).
 
-`modelTier:` frontmatter is a strictly **optional hint** declared only by the built-in background micro-agents (notification triage, description/icon writing, thread naming) — it kicks in solely when no model was selected in the chat composer (the composer selection always wins), resolving through the `ModelTier__*` config. With no tier config the hint is inert. Keep the deployed tier mapping and the `Models[]` catalog in sync where you do configure it.
+`modelTier:` frontmatter names the USAGE tier an agent's work belongs on (`utility` / `chat` / `reasoning` / `coding`). It is optional and never fatal: it fills the gap where nobody picked a concrete model — every headless flow, and every round left on **Auto**, which dispatches on exactly this value. An explicit composer selection always wins over it, and a tier no model carries falls through to the deployment default. See [Model Tiers](/Doc/AI/ModelTiers).
 
 ---
 
