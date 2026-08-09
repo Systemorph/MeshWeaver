@@ -169,13 +169,18 @@ public static partial class SlidePrintComposer
     /// image.</para>
     ///
     /// <para>Percent-escapes are undone <b>per segment</b>
-    /// (<see cref="ContentCollectionsExtensions.DecodeCollectionPath"/>), never across the whole
-    /// string — the same decode the content route applies, and for the same reason: a top-level
-    /// segment IS a partition and the router lowercases it. Per-segment decoding cannot introduce
-    /// or remove a <c>/</c>, so it can never split, merge or rename a segment, and therefore cannot
-    /// create or mask a partition collision. The <c>~</c> form of a qualified collection name
-    /// (<see cref="ContentCollectionsExtensions.EncodeCollectionName"/>) is left for the resolver,
-    /// which decodes it on the one segment that can be a collection.</para>
+    /// (<see cref="ContentCollectionsExtensions.DecodeCollectionPath"/>) — the same decode the
+    /// content route applies, so a folder named <c>Data Extraction</c> matches whether it arrives
+    /// escaped or not.</para>
+    ///
+    /// <para><b>Decoding CAN introduce a separator</b>, and the guard for that is not here: an
+    /// escaped <c>%2F</c> unescapes to <c>/</c>, so a segment can become two. That is exactly why
+    /// <see cref="ContentFileResolver.Resolve"/> rejects an unsafe decoded reference
+    /// (<see cref="StaticAssetMount.IsSafeRelativePath"/>) before it resolves anything — this
+    /// method's job is to hand over the decoded string, not to decide it is safe. The <c>~</c> form
+    /// of a qualified collection name
+    /// (<see cref="ContentCollectionsExtensions.EncodeCollectionName"/>) is likewise left for the
+    /// resolver, which decodes it on the one segment that can be a collection.</para>
     /// </summary>
     /// <param name="reference">An asset reference as it appears in the composed document.</param>
     /// <returns>The decoded, prefix-less reference, or <c>null</c>.</returns>

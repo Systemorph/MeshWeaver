@@ -95,6 +95,19 @@ public static class ContentFileResolver
         string reference,
         AccessContext? caller = null)
     {
+        // 🚨 TRAVERSAL GUARD, on the DECODED reference, before anything else. `%2E%2E` and `%2F`
+        // survive URL normalisation and only become `..` and `/` once a caller has decoded per
+        // segment — and FileSystemStreamProvider resolves a collection-relative path with a bare
+        // Path.Combine, so an un-guarded `..` reads outside the collection's BasePath, i.e. another
+        // partition's files. It lives HERE rather than in each caller because the export's
+        // references come out of user-authored slide markup with raw-HTML passthrough: a slide could
+        // otherwise point the server at anything the portal can read. (The content route also checks
+        // this before calling us; belt and braces on a path where the cost of being wrong is a file
+        // disclosure.)
+        if (!StaticAssetMount.IsSafeRelativePath(reference))
+            return Observable.Return(
+                ContentFileResolutionResult.NotFound("Invalid content path"));
+
         // Cold: nothing is resolved and nothing is posted until somebody subscribes.
         return Observable.Defer(() => hub.ServiceProvider
             .GetRequiredService<IPathResolver>()

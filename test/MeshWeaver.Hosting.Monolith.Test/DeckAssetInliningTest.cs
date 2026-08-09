@@ -136,6 +136,39 @@ public class DeckAssetInliningTest(ITestOutputHelper output) : MonolithMeshTestB
         await NodeFactory.DeleteNode(space).Should().Emit();
     }
 
+    /// <summary>
+    /// A slide body is user-authored and passes raw HTML through verbatim, so an author can point
+    /// the SERVER at a path of their choosing. The export reads under the portal's own filesystem
+    /// access, and a FileSystem-backed collection resolves a collection-relative path with a bare
+    /// <c>Path.Combine</c> — so a traversal would read another partition's files. <c>%2E%2E</c>
+    /// survives URL normalisation and only becomes <c>..</c> once the reference is decoded, which
+    /// is why the refusal has to happen after decoding and before resolving.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task A_traversal_reference_is_refused_rather_than_read()
+    {
+        var (space, _, slidePath) = await CreateDeck("");
+        // A file in ANOTHER node's collection — the slide has no reference that legitimately
+        // reaches it. Two levels up from the slide's own collection directory is exactly where it
+        // sits on disk, so without the guard this traversal succeeds and returns its bytes.
+        var secret = Payload(9);
+        await StoreAsset($"{space}/logo.png", secret);
+
+        var markdown =
+            $"<img src=\"/api/content/{slidePath}/content/%2E%2E/%2E%2E/logo.png\" alt=\"escape\" />";
+
+        var inlining = await Inline(space, slidePath, markdown);
+
+        inlining.Inlined.Should().BeEmpty("a traversal must never be read, however it is escaped");
+        inlining.Html.Should().NotContain(Convert.ToBase64String(secret),
+            "no byte reached the document through a '..' path");
+        inlining.Unresolved.Should().ContainSingle()
+            .Which.Reason.Should().Contain("Invalid content path",
+                "the refusal is explicit, so an author sees a rejected reference rather than silence");
+
+        await NodeFactory.DeleteNode(space).Should().Emit();
+    }
+
     [Fact(Timeout = 120000)]
     public async Task Every_reference_shape_resolves_against_a_real_collection()
     {

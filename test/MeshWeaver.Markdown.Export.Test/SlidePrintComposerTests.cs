@@ -1,4 +1,5 @@
 using System.Linq;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown.Export.Pixel;
@@ -231,14 +232,26 @@ public class SlidePrintComposerTests
     }
 
     [Fact]
-    public void Decoding_never_changes_how_many_segments_a_reference_has()
+    public void Percent_escaped_segments_are_decoded_so_a_real_folder_name_matches()
     {
-        // A top-level segment IS a partition and the router lowercases it, so a decoder that could
-        // introduce or remove a '/' could split, merge or rename a partition — creating or masking
-        // exactly the Acme/ACME collision PR #983 hit. Per-segment decoding cannot: an escaped
-        // separator stays inside its own segment, and nothing here case-folds.
+        // A folder named "Data Extraction" arrives as "Data%20Extraction"; the collection's item
+        // names carry the decoded characters, so an undecoded reference never matches and the asset
+        // silently stays broken. Nothing here case-folds — a top-level segment IS a partition.
         SlidePrintComposer.ToContentReference("api/content/Acme/a%20folder/file%20name.png")
             .Should().Be("Acme/a folder/file name.png");
+    }
+
+    [Fact]
+    public void An_escaped_separator_really_does_become_one_which_is_why_the_resolver_guards()
+    {
+        // Decoding CAN split a segment: %2F unescapes to '/'. This method does not pretend
+        // otherwise and does not police it — ContentFileResolver rejects an unsafe decoded
+        // reference before resolving anything, which is where a traversal has to be stopped
+        // (%2E%2E survives URL normalisation and only becomes '..' here).
+        SlidePrintComposer.ToContentReference("api/content/Acme/%2E%2E%2F%2E%2E/secrets.png")
+            .Should().Be("Acme/../../secrets.png");
+        StaticAssetMount.IsSafeRelativePath("Acme/../../secrets.png").Should().BeFalse(
+            "the decoded reference is what the resolver refuses");
     }
 
     [Fact]
