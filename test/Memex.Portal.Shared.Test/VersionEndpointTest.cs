@@ -1,17 +1,21 @@
 using System.Net;
 using System.Net.Http;
-using System.Net.Http.Json;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Memex.Portal.ServiceDefaults;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Xunit;
+
+// The class and its namespace share the name "ServiceDefaults", so the bare name binds to the
+// namespace here. Alias it so the endpoint's own constants stay readable.
+using Defaults = Memex.Portal.ServiceDefaults.ServiceDefaults;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -33,10 +37,13 @@ public class VersionEndpointTest
     /// <summary>A route with no <c>AllowAnonymous</c> — the proof the fallback policy is real.</summary>
     private const string GuardedRoute = "/guarded";
 
+    private const string TestScheme = "NoSession";
+
     /// <summary>
     /// The pipeline under test: the REAL <see cref="ServiceDefaults.MapDefaultEndpoints"/> composition
-    /// (so this pins the endpoint as it actually ships, not a hand-mapped copy), behind authentication
-    /// and an authorization fallback that denies everything not explicitly anonymous.
+    /// (so this pins the endpoint as it actually ships, not a hand-mapped copy), behind the real
+    /// authentication + authorization middleware with a fallback policy that denies everything not
+    /// explicitly marked anonymous — i.e. the shape of a portal that requires a login by default.
     /// </summary>
     private static WebApplication BuildApp()
     {
@@ -45,6 +52,11 @@ public class VersionEndpointTest
         builder.Logging.ClearProviders();
         builder.AddDefaultHealthChecks();
 
+        // A scheme that never authenticates anyone: every caller here is anonymous, and a challenge
+        // answers 401 (the handler's default) instead of throwing for want of a registered scheme.
+        builder.Services.AddAuthentication(TestScheme)
+            .AddScheme<AuthenticationSchemeOptions, NoSessionHandler>(TestScheme, _ => { });
+
         // Deny by default. AllowAnonymous on the version endpoint is what must beat this.
         builder.Services.AddAuthorizationBuilder()
             .SetFallbackPolicy(new AuthorizationPolicyBuilder()
@@ -52,10 +64,20 @@ public class VersionEndpointTest
                 .Build());
 
         var app = builder.Build();
+        app.UseAuthentication();
         app.UseAuthorization();
         app.MapDefaultEndpoints();
         app.MapGet(GuardedRoute, () => "secret");
         return app;
+    }
+
+    /// <summary>Authenticates nobody — the "no session" the endpoint must answer under.</summary>
+    private sealed class NoSessionHandler(
+        IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
+        : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
+    {
+        protected override Task<AuthenticateResult> HandleAuthenticateAsync() =>
+            Task.FromResult(AuthenticateResult.NoResult());
     }
 
     private static async Task<(HttpResponseMessage Response, string Body)> GetAsync(string route)
@@ -87,7 +109,7 @@ public class VersionEndpointTest
     [Fact]
     public async Task Version_endpoint_answers_anonymously_with_version_and_commit()
     {
-        var (response, body) = await GetAsync(ServiceDefaults.VersionRoute);
+        var (response, body) = await GetAsync(Defaults.VersionRoute);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK,
             "verifying a deployment from outside must not require a login");
@@ -105,11 +127,13 @@ public class VersionEndpointTest
     [Fact]
     public async Task Version_endpoint_discloses_nothing_beyond_version_and_commit()
     {
-        var (_, body) = await GetAsync(ServiceDefaults.VersionRoute);
+        var (_, body) = await GetAsync(Defaults.VersionRoute);
 
         using var document = JsonDocument.Parse(body);
-        document.RootElement.EnumerateObject().Select(p => p.Name)
-            .Should().BeEquivalentTo(["version", "commit"]);
+        var properties = document.RootElement.EnumerateObject()
+            .Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+
+        properties.Should().Equal("commit", "version");
     }
 
     /// <summary>
@@ -119,7 +143,7 @@ public class VersionEndpointTest
     [Fact]
     public void ReadBuildIdentity_reads_the_stamps_off_the_assembly()
     {
-        var identity = ServiceDefaults.ReadBuildIdentity(typeof(VersionEndpointTest).Assembly);
+        var identity = Defaults.ReadBuildIdentity(typeof(VersionEndpointTest).Assembly);
 
         identity.Version.Should().NotBeNullOrWhiteSpace();
         identity.Commit.Should().NotBeNullOrWhiteSpace();
@@ -133,7 +157,7 @@ public class VersionEndpointTest
     public void ReadBuildIdentity_reports_an_empty_commit_when_the_build_carries_no_sha()
     {
         // The framework's own assembly is built outside this repo, so it carries no CommitHash.
-        var identity = ServiceDefaults.ReadBuildIdentity(typeof(object).Assembly);
+        var identity = Defaults.ReadBuildIdentity(typeof(object).Assembly);
 
         identity.Commit.Should().BeEmpty();
         identity.Version.Should().NotBeNullOrWhiteSpace();

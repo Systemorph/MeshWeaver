@@ -16,6 +16,9 @@ public class VirtualUserMiddlewareExclusionTest
     [InlineData("/static/images/logo.png")]
     [InlineData("/favicon.ico")]
     [InlineData("/mcp")]
+    // The anonymous build-identity endpoint: polled by machines that keep no cookie, so the VUser
+    // flow could only churn — and it must stay answerable when the mesh is unhealthy.
+    [InlineData("/api/version")]
     public async Task ExcludedPrefixes_SkipVirtualUserAssignment(string path)
     {
         var nextCalled = false;
