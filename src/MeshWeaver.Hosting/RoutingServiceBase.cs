@@ -335,9 +335,10 @@ namespace MeshWeaver.Hosting
                 "RouteMessage: NotFound for {MessageType} → {Address}. {FailureMessage}",
                 delivery.Message.GetType().Name, originalAddress, failureMessage);
 
-            if (delivery.Message is not DeliveryFailure
+            var senderNacked = delivery.Message is not DeliveryFailure
                 && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
-                && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+                && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs;
+            if (senderNacked)
             {
                 // 🚨 Routing infrastructure's OWN NotFound NACK. As in NackRouteFailure:
                 // ResponseFor carries the request's user when known; else System, never null.
@@ -350,7 +351,15 @@ namespace MeshWeaver.Hosting
                             Message = failureMessage
                         }, o => o.ResponseFor(delivery));
             }
-            return delivery.Failed(failureMessage);
+            // 🚨 Say WHETHER the sender was answered. This routing path is hot — every message to a
+            // missing / undeployed node takes it — and MessageService now NACKs any unanswered
+            // Failed delivery it finishes. Marking the answered case keeps that from doubling every
+            // NotFound in the mesh; the unanswered case (DeliveryFailure / [CanBeIgnored] / mesh
+            // shutting down) is classified so it can still be reported, and ReportFailure's own
+            // guards suppress exactly the same three shapes.
+            return senderNacked
+                ? delivery.FailedAndNacked(failureMessage)
+                : delivery.Failed(failureMessage, ErrorType.NotFound);
         }
 
         /// <summary>

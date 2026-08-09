@@ -54,6 +54,26 @@ Two edges were missing: the deferred read/write **dropped** the user identity, a
 
 Opening a node whose NodeType won't compile subscribes to its layout area. The grain churned (compile fault → `DeactivateOnIdle`); the in-flight `SubscribeRequest` hit *"invalid activation. Rejecting now."* and the router **dead-ended it onto a subscriber-less memory stream** → 60 s timeout → *"Subscribing to {path}…"* forever. The missing edge was the router silently dropping a transient rejection. The fix retries the delivery so the grain **reactivates** (a fresh instance answers), and on a terminal failure **NACKs the sender** — never the silent dead-end. Once the grain is reached, the compilation-error overlay renders the error into the **Overview area** (the GUI sink). See [Node Type Compilation](/Doc/Architecture/NodeTypeCompilation) and [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow).
 
+### A delivery that ROUTING failed while passing through (router → requester)
+
+A hub that is not the delivery's target only *forwards* it. When forwarding failed, `MessageService`
+returned the failed delivery to its own turn loop and nothing else happened — the state was never
+inspected on that branch, so **no `DeliveryFailure` was posted and the requester's `hub.Observe(...)`
+never resolved**. The tell is a request that was dequeued and handled, every queue empty, nothing
+wedged on an action block, and a caller waiting anyway.
+
+The routing sites that hit it are all disposal races, and none of them NACKs on its own: a hosted hub
+that quiesces *after* its parent reached `DisposeHostedHubs` still posts to that parent, and the
+reply can never come. The missing edge was the router keeping the failure to itself.
+
+The invariant restored: **routing failures report like every other failure.** The failing site records
+two things ON the delivery — the `ErrorType` verdict (decided where the condition is known, never
+re-derived downstream from message text) and whether it already answered the sender — and
+`MessageService` NACKs every unanswered one. Disposal races report as the transient
+`ErrorType.ShuttingDown`, so a `SynchronizationStream` rides them out instead of tearing down; a
+routing loop reports as `ErrorType.RoutingLoop`. A site that posts its own NACK (the routing
+services' `NotFound`, on a hot path) marks the delivery answered so the sender never gets two.
+
 ### Long-running operations (activity → activity log)
 
 An import / compile / mirror runs as an activity. A fault must not strand the activity "Running" forever — it writes `Status = Error` with the message onto the activity node, which the activity log and any progress reader render. Persistence at the bottom of the stack never re-gates and never fail-closes a write that was already approved; it forwards. See [Activity Control Plane](/Doc/Architecture/ActivityControlPlane) and [Activity Operations](/Doc/Architecture/ActivityOperations).

@@ -95,6 +95,72 @@ public interface IMessageDelivery
     /// <param name="message">The failure message.</param>
     /// <returns>The failed delivery.</returns>
     IMessageDelivery Failed(string message) => ChangeState(MessageDeliveryState.Failed).WithProperty(nameof(Error), message);
+
+    /// <summary>
+    /// Property key under which <see cref="Failed(string, ErrorType)"/> records the classification
+    /// the FAILING SITE decided on.
+    /// </summary>
+    public const string FailureErrorTypeProperty = "FailureErrorType";
+
+    /// <summary>
+    /// Property key under which <see cref="FailedAndNacked"/> records that the failing site has
+    /// already answered the sender itself.
+    /// </summary>
+    public const string SenderNackedProperty = "SenderNacked";
+
+    /// <summary>
+    /// Transitions this delivery to <see cref="MessageDeliveryState.Failed"/>, recording BOTH the
+    /// failure message and the <see cref="ErrorType"/> the failing site decided on.
+    ///
+    /// <para>The classification is decided WHERE THE CONDITION IS KNOWN and carried on the delivery,
+    /// never reconstructed downstream by pattern-matching the message text — that drifts the moment
+    /// someone rewords a string. It matters concretely: a disposal race MUST reach the sender as the
+    /// transient <see cref="ErrorType.ShuttingDown"/> so consumers with their own recovery machinery
+    /// (chiefly <c>SynchronizationStream</c>'s resubscribe latch) ride it out instead of tearing
+    /// down.</para>
+    ///
+    /// <para>Using this overload also DECLARES that the failing site did NOT answer the sender —
+    /// whoever finishes the delivery owes it a <see cref="DeliveryFailure"/>. A site that posts its
+    /// own NACK must use <see cref="FailedAndNacked"/> instead, or the sender gets two.</para>
+    /// </summary>
+    /// <param name="message">The failure message.</param>
+    /// <param name="errorType">The classification for the resulting <see cref="DeliveryFailure"/>.</param>
+    /// <returns>The failed delivery, carrying its classification.</returns>
+    IMessageDelivery Failed(string message, ErrorType errorType) =>
+        Failed(message).WithProperty(FailureErrorTypeProperty, errorType);
+
+    /// <summary>
+    /// Transitions this delivery to <see cref="MessageDeliveryState.Failed"/> and records that the
+    /// failing site has ALREADY posted its own <see cref="DeliveryFailure"/> to the sender, so
+    /// downstream reporting must not NACK it a second time.
+    ///
+    /// <para>Used by the routing services, whose "no node at this address" path posts a
+    /// <see cref="ErrorType.NotFound"/> NACK before failing the delivery. That path is hot — every
+    /// message to a missing/undeployed node takes it — so a duplicate NACK there is a traffic
+    /// multiplier, not a harmless extra log line.</para>
+    /// </summary>
+    /// <param name="message">The failure message.</param>
+    /// <returns>The failed delivery, marked as already answered.</returns>
+    IMessageDelivery FailedAndNacked(string message) =>
+        Failed(message).WithProperty(SenderNackedProperty, true);
+
+    /// <summary>
+    /// True when the site that failed this delivery already answered the sender with its own
+    /// <see cref="DeliveryFailure"/> (see <see cref="FailedAndNacked"/>).
+    /// </summary>
+    bool SenderWasNacked => Properties.ContainsKey(SenderNackedProperty);
+
+    /// <summary>
+    /// The classification recorded by <see cref="Failed(string, ErrorType)"/>, or
+    /// <paramref name="fallback"/> when the failing site recorded none.
+    /// </summary>
+    /// <param name="fallback">The verdict to use when the failing site classified nothing.</param>
+    /// <returns>The recorded classification, or <paramref name="fallback"/>.</returns>
+    ErrorType GetFailureErrorType(ErrorType fallback) =>
+        Properties.TryGetValue(FailureErrorTypeProperty, out var value) && value is ErrorType errorType
+            ? errorType
+            : fallback;
+
     /// <summary>
     /// Returns a copy of this delivery with a single property set.
     /// </summary>
