@@ -379,161 +379,42 @@ public static class BlazorHostingExtensions
         if (!StaticAssetMount.IsSafeRelativePath(decodedPath))
             return Observable.Return(Results.NotFound("Invalid content path"));
 
-        var pathResolver = mainHub.ServiceProvider.GetRequiredService<IPathResolver>();
-        return pathResolver.ResolvePath(decodedPath).Take(1).SelectMany(resolution =>
+        // 🚨 ONE resolution, shared. Which segments name the node and which name the collection is
+        // decided by ContentFileResolver — the same reading every server-side content read uses.
+        // A second, private copy of this logic is what let the deck export ask for a collection
+        // named after the partition and silently print blank images (issue #990).
+        return ContentFileResolver.Resolve(mainHub, decodedPath, caller).SelectMany(result =>
         {
-            if (resolution == null || string.IsNullOrEmpty(resolution.Prefix))
-                return Observable.Return(Results.NotFound("No matching node found for path"));
-            if (string.IsNullOrEmpty(resolution.Remainder))
-                return Observable.Return(Results.NotFound("File path is required"));
+            if (result.Resolution is not { } resolution)
+                return Observable.Return(Results.NotFound(result.Reason));
 
-            var remainderParts = resolution.Remainder.Split('/');
-            var explicitCollection = DecodeCollectionName(remainderParts[0]);
-            var defaultCollection = ContentCollectionsExtensions.DefaultCollectionName;
+            var sourceConfig = resolution.Collection;
 
-            var targetAddress = (Address)resolution.Prefix;
+            // 🚨 MOUNT CHECK, default-closed. A collection is servable by URL only when it
+            // declares it (ContentCollectionConfig.IsStatic). The flag existed but was read
+            // NOWHERE — set at two sites, consulted at zero — so every collection registered
+            // anywhere on the mesh was fetchable by URL. Not declared ⇒ 404, for every
+            // caller alike (publishing is a hosting decision, not an access one).
+            if (!sourceConfig.IsStatic)
+                return Observable.Return(NotServable(sourceConfig.Name));
 
-            // ONE round trip for both candidate shapes: the named collection (when there is a file
-            // path after it) and the node's default content collection.
-            var candidates = remainderParts.Length >= 2 && explicitCollection != defaultCollection
-                ? new[] { explicitCollection, defaultCollection }
-                : [defaultCollection];
+            // The portal hub is where the resolved config is cached and the bytes are read.
+            // Fall back to the mesh hub for hosts that do not run the Blazor portal (the
+            // sidecar, tests) — the access decision has already been made above.
+            var portal = mainHub.ServiceProvider.GetService<PortalApplication>()?.Hub ?? mainHub;
+            var portalContentService = portal.ServiceProvider.GetService<IContentService>();
+            if (portalContentService is null)
+                return Observable.Return(Results.NotFound("Content service not configured"));
 
-            return mainHub.Observe(
-                    new GetDataRequest(new ContentCollectionReference(candidates)),
-                    o => o.WithTarget(targetAddress).WithAccessContext(caller))
-                .Take(1)
-                .SelectMany(collectionResponse =>
-                {
-                    var configs = ReadCollectionConfigs(collectionResponse);
-
-                    // Prefer the explicitly-named collection — there the file path is relative to
-                    // the COLLECTION's own root, exactly as the file browser lists it.
-                    //
-                    // Otherwise the node's default collection, with the whole remainder as a
-                    // NODE-relative path. A Space's `content` collection is mounted on the partition
-                    // ROOT and inherited by children (ExposeInChildren), so an inherited config
-                    // carries the ROOT's BasePath — the resolved node's own path relative to the
-                    // collection's owner has to be put back in front of the file. That is the
-                    // `content/{nodePath}/{file}` layout the backing store has always had, and the
-                    // reason `/static/storage/content/{nodePath}/{file}` resolved correctly.
-                    var (sourceConfig, filePath) =
-                        remainderParts.Length >= 2
-                        && configs?.FirstOrDefault(c => c.Name == explicitCollection) is { } named
-                            ? (named, string.Join('/', remainderParts.Skip(1)))
-                            : (configs?.FirstOrDefault(c => c.Name == defaultCollection),
-                                CombineOwnerRelative(
-                                    configs?.FirstOrDefault(c => c.Name == defaultCollection)?.Address,
-                                    resolution.Prefix,
-                                    resolution.Remainder!));
-
-                    if (sourceConfig is null)
-                        return Observable.Return(Results.NotFound(
-                            $"No content collection at '{resolution.Prefix}' serves '{resolution.Remainder}'"));
-
-                    // 🚨 MOUNT CHECK, default-closed. A collection is servable by URL only when it
-                    // declares it (ContentCollectionConfig.IsStatic). The flag existed but was read
-                    // NOWHERE — set at two sites, consulted at zero — so every collection registered
-                    // anywhere on the mesh was fetchable by URL. Not declared ⇒ 404, for every
-                    // caller alike (publishing is a hosting decision, not an access one).
-                    if (!sourceConfig.IsStatic)
-                        return Observable.Return(NotServable(sourceConfig.Name));
-
-                    if (string.IsNullOrEmpty(filePath))
-                        return Observable.Return(Results.NotFound("File path is required"));
-
-                    var qualifiedCollectionName = $"{resolution.Prefix}/{sourceConfig.Name}";
-                    var collectionConfig = sourceConfig with
-                    {
-                        Name = qualifiedCollectionName, Address = targetAddress
-                    };
-
-                    // The portal hub is where the resolved config is cached and the bytes are read.
-                    // Fall back to the mesh hub for hosts that do not run the Blazor portal (the
-                    // sidecar, tests) — the access decision has already been made above.
-                    var portal = mainHub.ServiceProvider.GetService<PortalApplication>()?.Hub ?? mainHub;
-                    var portalContentService = portal.ServiceProvider.GetService<IContentService>();
-                    if (portalContentService is null)
-                        return Observable.Return(Results.NotFound("Content service not configured"));
-
-                    portalContentService.AddConfiguration(collectionConfig);
-                    // Pure composition — collection resolution and the file read both run on the
-                    // collection's own IIoPool; ServeFile only shapes the (already-read) result.
-                    return portalContentService.GetCollection(qualifiedCollectionName)
-                        .SelectMany(contentCollection => contentCollection == null
-                            ? Observable.Return(Results.NotFound($"Content collection '{sourceConfig.Name}' not found"))
-                            : ServeFile(context, contentCollection, filePath));
-                });
+            portalContentService.AddConfiguration(resolution.QualifiedConfig);
+            // Pure composition — collection resolution and the file read both run on the
+            // collection's own IIoPool; ServeFile only shapes the (already-read) result.
+            return portalContentService.GetCollection(resolution.QualifiedName)
+                .SelectMany(contentCollection => contentCollection == null
+                    ? Observable.Return(Results.NotFound($"Content collection '{sourceConfig.Name}' not found"))
+                    : ServeFile(context, contentCollection, resolution.FilePath));
         });
     }
-
-    /// <summary>
-    /// Puts the resolved node's OWN path back in front of a node-relative file path when the
-    /// collection is inherited from an ancestor.
-    ///
-    /// <para>A Space's <c>content</c> collection is mounted on the partition root with
-    /// <c>ExposeInChildren</c>, so a child hub reports the ancestor's config verbatim — same
-    /// <c>BasePath</c>. The file of node <c>Org/Project</c> therefore lives at
-    /// <c>Project/{file}</c> inside it. Owner == node (or an unknown owner) ⇒ no prefix.</para>
-    /// </summary>
-    /// <param name="collectionOwner">The address the collection is registered on, if known.</param>
-    /// <param name="nodePath">The node the request resolved to.</param>
-    /// <param name="filePath">The node-relative file path.</param>
-    /// <returns>The collection-relative file path.</returns>
-    internal static string CombineOwnerRelative(Address? collectionOwner, string nodePath, string filePath)
-    {
-        var owner = collectionOwner?.ToString()?.Trim('/');
-        var node = nodePath.Trim('/');
-        if (string.IsNullOrEmpty(owner)
-            || string.Equals(owner, node, StringComparison.OrdinalIgnoreCase)
-            || !node.StartsWith(owner + "/", StringComparison.OrdinalIgnoreCase))
-            return filePath;
-        return $"{node[(owner.Length + 1)..]}/{filePath}";
-    }
-
-    /// <summary>
-    /// Projects the collection configs out of the owning hub's <c>GetDataResponse</c>. The remote
-    /// form arrives as a <see cref="JsonElement"/>; <see cref="ContentCollectionConfig.IsStatic"/>
-    /// and <see cref="ContentCollectionConfig.Address"/> MUST survive that projection — without the
-    /// first, every legitimately-published remote collection fails the mount check; without the
-    /// second, an inherited collection loses its owner and a child node's file resolves against the
-    /// ancestor's folder. <c>IsStatic</c> is suppressed when false, so an absent property means
-    /// false — the safe value either way.
-    /// </summary>
-    /// <summary>
-    /// Reads a collection config's owning address off the wire. Absent, non-string or empty ⇒
-    /// <c>null</c>, which <see cref="CombineOwnerRelative"/> treats as "owner unknown" and leaves
-    /// the file path alone — the conservative reading.
-    /// </summary>
-    private static Address? ToAddress(JsonElement element)
-    {
-        if (element.ValueKind != JsonValueKind.String)
-            return null;
-        var value = element.GetString();
-        if (string.IsNullOrEmpty(value))
-            return null;
-        return value;
-    }
-
-    private static IReadOnlyCollection<ContentCollectionConfig>? ReadCollectionConfigs(IMessageDelivery? delivery) =>
-        delivery?.Message switch
-        {
-            GetDataResponse { Data: JsonElement je } => je.EnumerateArray()
-                .Select(e => new ContentCollectionConfig
-                {
-                    Name = e.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "",
-                    SourceType = e.TryGetProperty("sourceType", out var typeProp) ? typeProp.GetString() ?? "" : "",
-                    BasePath = e.TryGetProperty("basePath", out var pathProp) ? pathProp.GetString() : null,
-                    IsStatic = e.TryGetProperty("isStatic", out var staticProp)
-                               && staticProp.ValueKind == JsonValueKind.True,
-                    Address = e.TryGetProperty("address", out var addressProp)
-                        ? ToAddress(addressProp)
-                        : null,
-                })
-                .ToArray(),
-            GetDataResponse { Data: IReadOnlyCollection<ContentCollectionConfig> direct } => direct,
-            _ => null
-        };
 
     /// <summary>
     /// The response for a collection that exists but does not declare itself servable by URL
@@ -613,14 +494,6 @@ public static class BlazorHostingExtensions
                     downloadName,
                     enableRangeProcessing: true));
             });
-
-    /// <summary>
-    /// Decodes a collection name from a URL by replacing '~' back to '/'.
-    /// Collection names with slashes (e.g., "Submissions@Microsoft/2026") are encoded
-    /// with '~' in URLs to avoid path parsing issues.
-    /// </summary>
-    private static string DecodeCollectionName(string encodedName)
-        => ContentCollectionsExtensions.DecodeCollectionName(encodedName);
 
     /// <summary>
     /// URL-decodes a content-collection file path captured from the <c>/static/{**path}</c>

@@ -153,50 +153,57 @@ public static partial class SlidePrintComposer
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Splits an asset reference into the collection name and collection-relative path a
-    /// server-side read needs, or null when it is not a content-collection route.
+    /// Strips the content-route prefix off an asset reference and percent-decodes it, yielding the
+    /// <c>{node}/{collection}/{file}</c>-or-<c>{node}/{file…}</c> form
+    /// <see cref="ContentFileResolver.Resolve"/> takes — or null when the reference is not a
+    /// content-collection route at all.
     ///
-    /// <para>Normalisation goes through the framework's own reader,
-    /// <see cref="ContentPathReference.TryGetRelativePath"/> — which also folds out the
-    /// default-collection segment of <c>/api/content/{collection}/content/{path}</c> — and the
-    /// first-segment-names-the-collection split is the same one <c>BrandingResolver</c> uses for
-    /// exactly this job. One convention for reading content server-side, not two.</para>
+    /// <para><b>It does NOT split off a collection, deliberately.</b> Which segments name the node
+    /// and which name the collection cannot be read off the string: the markdown pipeline writes
+    /// <c>api/content/{nodePath}/{file}</c>, where the first segment is the node's PARTITION rather
+    /// than a collection, and a node path is any number of segments long. Only the resolver — which
+    /// resolves the owning node and asks it which collections it has — can tell the two shapes
+    /// apart. Splitting here instead is exactly how a stored slide image came to fail silently
+    /// (issue #990): the split asked the content service for a collection named after the
+    /// partition, which does not exist, and the CSP turned the un-inlined reference into a blank
+    /// image.</para>
     ///
-    /// <para><b>Both segments are decoded, each with the decoder that matches how it was
-    /// encoded.</b> A collection name carries <c>/</c> as <c>~</c>
-    /// (<see cref="ContentCollectionsExtensions.EncodeCollectionName"/>), so leaving it encoded
-    /// asks the content service for a collection that does not exist and the asset silently stays
-    /// broken. Percent-escapes are then undone <b>per segment</b>
-    /// (<see cref="ContentCollectionsExtensions.DecodeCollectionPath"/>), never across the whole
-    /// string: that is deliberate, because a top-level segment IS a partition and the router
-    /// lowercases it. Per-segment decoding cannot introduce or remove a <c>/</c>, so it can never
-    /// split, merge or rename a segment — and therefore cannot create or mask a partition
-    /// collision. Nothing here case-folds; the value is passed through exactly as authored.</para>
+    /// <para>Percent-escapes are undone <b>per segment</b>
+    /// (<see cref="ContentCollectionsExtensions.DecodeCollectionPath"/>) — the same decode the
+    /// content route applies, so a folder named <c>Data Extraction</c> matches whether it arrives
+    /// escaped or not.</para>
+    ///
+    /// <para><b>Decoding CAN introduce a separator</b>, and the guard for that is not here: an
+    /// escaped <c>%2F</c> unescapes to <c>/</c>, so a segment can become two. That is exactly why
+    /// <see cref="ContentFileResolver.Resolve"/> rejects an unsafe decoded reference
+    /// (<see cref="StaticAssetMount.IsSafeRelativePath"/>) before it resolves anything — this
+    /// method's job is to hand over the decoded string, not to decide it is safe. The <c>~</c> form
+    /// of a qualified collection name
+    /// (<see cref="ContentCollectionsExtensions.EncodeCollectionName"/>) is likewise left for the
+    /// resolver, which decodes it on the one segment that can be a collection.</para>
     /// </summary>
-    public static (string Collection, string Path)? ParseAssetReference(string reference)
+    /// <param name="reference">An asset reference as it appears in the composed document.</param>
+    /// <returns>The decoded, prefix-less reference, or <c>null</c>.</returns>
+    public static string? ToContentReference(string reference)
     {
         if (!AssetReferenceRegex().IsMatch(reference))
             return null;
 
-        // TryGetRelativePath matches on the rooted route prefix; our references are captured from
-        // markup and may be site-relative.
-        var rooted = reference.StartsWith('/') ? reference : "/" + reference;
-        var relative = ContentPathReference.TryGetRelativePath(rooted);
-        if (string.IsNullOrEmpty(relative))
+        // References are captured from markup and are site-relative (no leading slash); the route
+        // prefix is rooted.
+        var rooted = reference.Replace('\\', '/');
+        if (!rooted.StartsWith('/'))
+            rooted = "/" + rooted;
+
+        var prefix = ContentCollectionsExtensions.ContentFileRoutePrefix + "/";
+        if (!rooted.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             return null;
 
-        relative = relative.Replace('\\', '/').TrimStart('/');
-        var slash = relative.IndexOf('/');
-        if (slash <= 0 || slash == relative.Length - 1)
-            return null;
+        var relative = ContentCollectionsExtensions
+            .DecodeCollectionPath(rooted[prefix.Length..])
+            .TrimStart('/');
 
-        var collection = ContentCollectionsExtensions.DecodeCollectionPath(
-            ContentCollectionsExtensions.DecodeCollectionName(relative[..slash]));
-        var path = ContentCollectionsExtensions.DecodeCollectionPath(relative[(slash + 1)..]);
-
-        return string.IsNullOrEmpty(collection) || string.IsNullOrEmpty(path)
-            ? null
-            : (collection, path);
+        return string.IsNullOrEmpty(relative) ? null : relative;
     }
 
     // api/content/{collection}/{path} — optionally leading '/', stopping at a quote, whitespace,
