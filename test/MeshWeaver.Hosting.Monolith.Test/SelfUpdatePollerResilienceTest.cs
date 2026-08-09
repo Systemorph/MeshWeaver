@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
@@ -109,6 +110,70 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
             var channel = new Subject<UpdatePolicyContent>();
             Volatile.Write(ref _current, channel);
             return base.ReadPolicyStream().Merge(channel);
+        }
+    }
+
+    /// <summary>
+    /// Injects the #1020 prod fault shape: the availability BOOKKEEPING write to
+    /// <c>Admin/UpdatePolicy</c> times out. On atioz that node's hub was unreachable (its
+    /// <c>SubscribeRequest</c> never answered — the silo's routing was wedged), so every tick died
+    /// here 30 s in. Everything else — the registry check, the version pick, the k8s patch — was
+    /// healthy, which is why the install looked fine and drifted 37 h.
+    /// </summary>
+    private sealed class FaultingRecordService(
+        IMessageHub hub,
+        IAcrTagLister acr,
+        IDeploymentUpdater updater,
+        SelfUpdateOptions options,
+        ILogger<SelfUpdateHostedService>? logger)
+        : SelfUpdateHostedService(hub, acr, updater, options, logger)
+    {
+        private int _attempts;
+
+        public int RecordAttempts => Volatile.Read(ref _attempts);
+
+        protected override IObservable<Unit> RecordAvailable(string tag)
+        {
+            Interlocked.Increment(ref _attempts);
+            return Observable.Throw<Unit>(new TimeoutException(
+                $"Update aborted: no initial state arrived for '{UpdatePolicyNodeType.NodePath}' within 30s."));
+        }
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task Failed_availability_write_never_blocks_the_roll_forward()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var acr = new FakeAcrTagLister();
+        var updater = new RecordingUpdater();
+        var options = new SelfUpdateOptions
+        {
+            PollInterval = TimeSpan.FromMilliseconds(500),
+            DefaultPolicy = UpdatePolicyKind.Continuous,
+        };
+        var service = new FaultingRecordService(
+            Mesh, acr, updater, options,
+            Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>());
+
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            // The bookkeeping write fails on EVERY tick — exactly the atioz shape. Pre-fix the patch
+            // was chained after it with .SelectMany, so the tick errored into the poller's warning
+            // sink and NOTHING was ever applied: this await timed out while the registry check kept
+            // succeeding. The roll-forward must happen regardless.
+            var applied = await updater.Patched
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(ct);
+            applied.Should().Be(FakeAcrTagLister.CiTag);
+
+            // …and it really went THROUGH the failing write, not around it.
+            service.RecordAttempts.Should().BeGreaterThan(0);
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
         }
     }
 
