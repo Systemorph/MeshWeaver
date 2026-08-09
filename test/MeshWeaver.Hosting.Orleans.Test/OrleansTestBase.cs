@@ -60,10 +60,20 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
     protected IMessageHub ClientMesh => ClientServices.GetRequiredService<IMessageHub>();
 
     /// <summary>
-    /// This cluster's in-memory store, shared by the silo host(s) and the Orleans client
-    /// host. An instance — it dies with the test class, so there is nothing to reset.
+    /// Whether the Orleans client's <see cref="InMemoryStorageAdapter"/> is pointed at the
+    /// SILO's instance, making the two hosts one logical store.
+    ///
+    /// <para>True for the canonical <see cref="TestSiloConfigurator"/>, which is all-in-memory —
+    /// mirroring prod's "several adapter instances, one PG database". False for a configurator
+    /// that brings its own durable backend (<c>ChatSiloConfigurator</c>'s FileSystem
+    /// persistence, the PostgreSQL ones): those claim at Priority 100 while the in-memory
+    /// catch-all sits at 0, so joining the stores would let a client-side mirror copy answer a
+    /// silo read the durable backend owns. That split is exactly what the old static wiring
+    /// did — <see cref="TestSiloConfigurator"/> was the only silo configurator that ever
+    /// referenced the statics.</para>
     /// </summary>
-    private readonly OrleansTestBackingStore backingStore = new();
+    protected virtual bool ClientSharesSiloStore =>
+        typeof(TSiloConfigurator).IsAssignableTo(typeof(TestSiloConfigurator));
 
     // Unique-per-call when id is null. See MonolithMeshTestBase.CreateClientAddress
     // for the routing-table partitioning rationale (leaked server-side sync
@@ -81,10 +91,10 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
-        // The silo host AND the Orleans client host share THIS class's backingStore
-        // instance — the per-cluster channel that replaced the process-wide statics
-        // (see OrleansTestBackingStore). DeployAsync also seeds the default System
-        // circuit identity on the client + silo mesh hubs.
+        // The Orleans client borrows the SILO's InMemoryStorageAdapter — a singleton of that
+        // silo's own container, per-cluster by construction, which is what replaced the
+        // process-wide statics. DeployAsync also seeds the default System circuit identity on
+        // the client + silo mesh hubs.
         host = await OrleansTestCluster.DeployAsync(
             builder =>
             {
@@ -92,8 +102,9 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
                 builder.AddSiloBuilderConfigurator<TSiloConfigurator>();
                 builder.AddClientBuilderConfigurator<TestClientConfigurator>();
             },
-            configureSiloServices: services => backingStore.Register(services),
-            configureClientServices: services => backingStore.Register(services));
+            configureClientServices: ClientSharesSiloStore
+                ? OrleansTestCluster.ShareSiloNodeStore
+                : null);
     }
 
     /// <summary>
