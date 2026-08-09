@@ -57,6 +57,40 @@ public sealed class MessageHub : IMessageHub
         Address? Target,
         long RegisteredAtTicks);
 
+    /// <summary>
+    /// Handler-side trail for the requests this hub TREE is awaiting (see
+    /// <see cref="RequestFateLedger"/>). One instance per tree — the root creates it, every hosted
+    /// hub inherits its parent's — so the hub that registered a callback and the hub that received
+    /// (or dropped, or handled) the corresponding delivery write to the SAME ledger. Without that,
+    /// a quiescing timeout can only ever report the caller's side.
+    /// </summary>
+    private readonly RequestFateLedger requestFates;
+
+    /// <summary>
+    /// The tree's <see cref="RequestFateLedger"/>, so this hub's <see cref="MessageService"/> can
+    /// record the receiving-side stages of a delivery.
+    /// </summary>
+    internal RequestFateLedger RequestFates => requestFates;
+
+    /// <summary>
+    /// Records one stage on the handler-side trail of an awaited request — the seam a HANDLER uses
+    /// to report on work it detached from the rule chain.
+    ///
+    /// <para>Needed because the pipeline's own <c>HANDLER_ENTER</c>/<c>HANDLER_EXIT</c> stages only
+    /// bound the RULE CHAIN. The canonical mesh handlers return <c>request.Processed()</c>
+    /// immediately and owe their reply from a composed observable they subscribed and let run — so
+    /// from the pipeline's point of view a handler that answers in 3 s, one that faults silently and
+    /// one that completes EMPTY without ever posting are indistinguishable. Whichever of those it is
+    /// is precisely the open question on issue #981, and only the handler can answer it.</para>
+    ///
+    /// <para>No-ops when nothing is awaiting <paramref name="requestId"/>, so it is free to call
+    /// unconditionally from a hot handler path.</para>
+    /// </summary>
+    /// <param name="requestId">The awaited request delivery's id (<c>request.Id</c> on the handler side).</param>
+    /// <param name="stage">The stage description to append.</param>
+    internal void NoteRequestStage(string? requestId, string stage)
+        => requestFates.Find(requestId)?.Add(stage, Address);
+
     private readonly ILogger logger;
     /// <summary>The immutable configuration this hub was built from.</summary>
     public MessageHubConfiguration Configuration { get; }
@@ -288,9 +322,15 @@ public sealed class MessageHub : IMessageHub
             if (pending.Length == 0) return;
             var stale = pending.Where(p => p.AgeMs > thresholdMs).ToArray();
             if (stale.Length == 0) return;
+            // Handler-side trail on the LIVE-mesh path too (#981). The teardown capture only ever
+            // sees a stall that survived to disposal; this one fires while the mesh is still
+            // serving, which is where the #981 callbacks actually go unanswered (measured ~3.1 s
+            // before Dispose() was even invoked). Dial MESHWEAVER_STALE_CALLBACK_MS down on a
+            // repro run and this line, not the teardown one, names the handler side first.
             TryLog(LogLevel.Warning,
-                "[STALE-CALLBACK] {Address}: {Count} callback(s) pending > {ThresholdMs}ms: {Detail}",
-                Address, stale.Length, thresholdMs, FormatPendingCallbacks(stale));
+                "[STALE-CALLBACK] {Address}: {Count} callback(s) pending > {ThresholdMs}ms: {Detail}{Fates}",
+                Address, stale.Length, thresholdMs, FormatPendingCallbacks(stale),
+                FormatPendingCallbackFates(stale));
         }
         catch (Exception ex)
         {
@@ -336,6 +376,11 @@ public sealed class MessageHub : IMessageHub
         parentAddress = parentHub?.Address;
         accessService = serviceProvider.GetRequiredService<AccessService>();
 
+        // One ledger per hub TREE. Inheriting the parent's instance is what lets the RECEIVING
+        // hub's stages land on the trail the REQUESTING hub reads at its quiescing timeout; a
+        // per-hub ledger would reproduce the caller-only blindness this exists to remove. A root
+        // hub (no parent) starts a fresh one, so the ledger's lifetime is the tree's.
+        requestFates = (parentHub as MessageHub)?.requestFates ?? new RequestFateLedger();
 
         messageService = new MessageService(configuration.Address,
             serviceProvider.GetRequiredService<ILogger<MessageService>>(), this, parentHub);
@@ -824,9 +869,13 @@ public sealed class MessageHub : IMessageHub
     public IObservable<IMessageDelivery> Observe(IMessageDelivery delivery)
     {
         var requestType = delivery.Message?.GetType().Name ?? "<null>";
-        return RestoreUserContextOnEmission(
-            ObserveById(delivery.Id, requestType, delivery.Target),
-            delivery.AccessContext);
+        var observable = ObserveById(delivery.Id, requestType, delivery.Target);
+        // This overload registers the callback for a delivery the caller ALREADY posted, so every
+        // stage that happened before now was missed. Mark it, or a trail carrying only the
+        // registration would read as "nothing was ever posted" — the opposite of the truth (#981).
+        requestFates.Find(delivery.Id)?.Add(
+            "REGISTERED_AFTER_POST (Observe(delivery) overload — earlier stages not recorded)", Address);
+        return RestoreUserContextOnEmission(observable, delivery.AccessContext);
     }
 
     /// <summary>
@@ -852,7 +901,23 @@ public sealed class MessageHub : IMessageHub
         var probeOptions = options(new PostOptions(Address));
         var requestType = r?.GetType().Name ?? "<null>";
         var subject = GetOrAddResponseSubject(messageId, requestType, probeOptions.Target);
-        Post(r, opts => options(opts).WithMessageId(messageId));
+        // 🔍 DIAGNOSTIC ONLY (#981) — records and RETHROWS; it changes no behaviour.
+        //
+        // The callback is registered on the line above and the delivery is posted on the line
+        // below. A throw BETWEEN them leaves a pending callback that nothing will ever answer:
+        // the entry is in responseSubjects, no delivery carrying its id ever reaches the pipeline,
+        // and the quiescing budget reports it as a leak with no handler-side stages at all. That
+        // is precisely the shape the first captures showed, so the window needs its own stage
+        // rather than being inferred from an absence.
+        try
+        {
+            Post(r, opts => options(opts).WithMessageId(messageId));
+        }
+        catch (Exception postEx)
+        {
+            requestFates.Find(messageId)?.Add($"POST_THREW {postEx.GetType().Name}: {postEx.Message}", Address);
+            throw;
+        }
         return RestoreUserContextOnEmission(
             WrapWithCancelOnDispose(
                 ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
@@ -896,6 +961,9 @@ public sealed class MessageHub : IMessageHub
                             && ReferenceEquals(entry.Subject, subject))
                         {
                             responseSubjects.Remove(messageId);
+                            // Nobody is awaiting it any more — drop the trail with the callback so
+                            // the ledger stays bounded by the in-flight set.
+                            requestFates.Untrack(messageId);
                         }
                     }
                 }));
@@ -976,6 +1044,10 @@ public sealed class MessageHub : IMessageHub
                     target,
                     Stopwatch.GetTimestamp());
                 responseSubjects[messageId] = entry;
+                // THE one place a hub starts awaiting a reply — so it is also the one place the
+                // handler-side trail starts. "Tracked" and "awaited" are the same set by
+                // construction, which is what bounds the ledger.
+                requestFates.Track(messageId, Address, requestType, target);
                 logger.LogDebug("Adding response subject for {Id} (type={Type}, target={Target})",
                     messageId, requestType, target);
             }
@@ -1053,12 +1125,19 @@ public sealed class MessageHub : IMessageHub
         {
             if (!responseSubjects.Remove(requestIdString, out var entry))
             {
+                // No live callback for this correlation. Record it on the trail (if some OTHER hub
+                // is still awaiting the same id — the shape where a reply lands on the wrong hub)
+                // before treating the response as consumed.
+                requestFates.Find(requestIdString)?.Add(
+                    $"RESPONSE_ARRIVED_NO_SUBJECT type={delivery.Message.GetType().Name}", Address);
                 if (debugEnabled)
                     logger.LogDebug("No subject found for response message {MessageType} (ID: {MessageId}) - treating as processed",
                         messageTypeName, delivery.Id);
                 return Observable.Return(delivery.Processed());
             }
             subject = entry.Subject;
+            // The callback is resolving now — the trail has done its job.
+            requestFates.Untrack(requestIdString);
         }
 
         if (debugEnabled)
@@ -1666,7 +1745,11 @@ public sealed class MessageHub : IMessageHub
         var pending = SnapshotPendingCallbacks();
         if (pending.Length > 0)
             sb.Append(" PendingCallbacks=").Append(pending.Length)
-              .Append('[').Append(FormatPendingCallbacks(pending)).Append(']');
+              .Append('[').Append(FormatPendingCallbacks(pending)).Append(']')
+              // …and the handler side (#981). This snapshot is what the test base writes on a
+              // DISPOSE_TIMEOUT — the case where the hub never even reached its quiescing
+              // timeout, so the enriched QuiescingTimeoutDetail does not exist yet.
+              .Append(FormatPendingCallbackFates(pending));
         sb.AppendLine();
 
         var hosted = hostedHubs.Hubs.ToArray();
@@ -1924,14 +2007,36 @@ public sealed class MessageHub : IMessageHub
             {
                 var stuck = SnapshotPendingCallbacks();
                 var detail = FormatPendingCallbacks(stuck);
+                // 🚨 The HANDLER side (issue #981). The line above is caller-only — it says a
+                // request was posted and never answered. This one says what happened to the
+                // delivery at the receiving end: whether it was ever received, routed, deferred,
+                // dropped, handled, or answered. Rendered HERE, while the trails are still live,
+                // because QuiescingTimeoutDetail is a captured string read long after
+                // CancelCallbacks has torn the ledger entries down.
+                var fates = FormatPendingCallbackFates(stuck);
                 TryLog(LogLevel.Warning,
-                    "[QUIESCE-TIMEOUT] {Address}: {Count} callback(s) still pending after {Timeout}s — forcibly cancelling. Pending: {Pending}",
-                    Address, stuck.Length, QuiesceTimeout.TotalSeconds, detail);
+                    "[QUIESCE-TIMEOUT] {Address}: {Count} callback(s) still pending after {Timeout}s — forcibly cancelling. Pending: {Pending}{Fates}",
+                    Address, stuck.Length, QuiesceTimeout.TotalSeconds, detail, fates);
                 // Sticky flag — tests recursively inspect this and treat any hub with
                 // QuiescingTimedOut=true as a dispose failure. Forces visibility on leaked
                 // Observe subscriptions instead of silently extending dispose budgets.
                 QuiescingTimedOut = true;
-                QuiescingTimeoutDetail = $"{stuck.Length} pending callback(s) after {QuiesceTimeout.TotalSeconds:F2}s: {detail}";
+                QuiescingTimeoutDetail = stuck.Length == 0
+                    // 🚨 NOT the leaked-callback failure, and it must not read like one. The poll
+                    // said "not drained" and by the time the verdict was rendered the dictionary
+                    // was EMPTY — every callback resolved inside the hand-off between the last
+                    // poll tick and this line. There is nothing outstanding and so nothing to name;
+                    // a report that says "0 pending callback(s): <none>" looks like the diagnostic
+                    // failed to collect evidence, which sends an investigation hunting for a leak
+                    // that is not there. 26 of the 30 quiesce-leak records in a local trace were
+                    // this shape (TodoDataChangeWorkflowTest, TodoGraphIntegrationTest,
+                    // TodoViewsTest) — all indistinguishable, at a glance, from issue #981.
+                    ? $"drained DURING the {QuiesceTimeout.TotalSeconds:F2}s timeout hand-off: the poll "
+                      + "reported not-drained, but no callback was outstanding by the time the verdict "
+                      + "was rendered. Nothing leaked here — this is the detector racing its own "
+                      + "budget, NOT a pending callback. Do not confuse it with a report that names "
+                      + "a request and an age."
+                    : $"{stuck.Length} pending callback(s) after {QuiesceTimeout.TotalSeconds:F2}s: {detail}{fates}";
                 try { CancelCallbacks(); }
                 catch (Exception cancelEx)
                 {
@@ -2021,16 +2126,20 @@ public sealed class MessageHub : IMessageHub
     {
         // Push ObjectDisposedException to all pending response subjects so anyone
         // currently subscribed gets onError instead of waiting forever.
-        PendingCallback[] pending;
+        KeyValuePair<string, PendingCallback>[] pending;
         lock (responseSubjects)
         {
-            pending = responseSubjects.Values.ToArray();
+            pending = responseSubjects.ToArray();
             responseSubjects.Clear();
+            // Callers are being errored out — nothing awaits these ids any more. Drop their trails
+            // (the quiescing detail has already been rendered from them by the caller above).
+            foreach (var (messageId, _) in pending)
+                requestFates.Untrack(messageId);
         }
         logger.LogDebug("Cancelling {SubjectCount} pending response subjects during disposal for hub {Address}",
             pending.Length, Address);
 
-        foreach (var entry in pending)
+        foreach (var (_, entry) in pending)
         {
             try
             {
@@ -2088,6 +2197,37 @@ public sealed class MessageHub : IMessageHub
             .OrderByDescending(g => g.Count())
             .Select(g => $"{g.Key}×{g.Count()}");
         return $"{head}, …+{pending.Length - PendingCallbackLogCap} more [{string.Join(", ", rest)}]";
+    }
+
+    /// <summary>
+    /// Renders the HANDLER-side trail (see <see cref="RequestFateLedger"/>) for each still-pending
+    /// callback, one indented line per request id.
+    ///
+    /// <para>This is the half that every #981 capture was missing. <see cref="FormatPendingCallbacks"/>
+    /// answers "what did this hub post and never hear back about"; this answers "and what happened
+    /// to that delivery" — received / routed / deferred / dropped / handled / answered — which is
+    /// what tells a leaked subscription apart from a request the receiver never saw, never handled,
+    /// or handled without replying.</para>
+    ///
+    /// <para>Capped by the same <see cref="PendingCallbackLogCap"/> as the caller-side line, for
+    /// the same reason: one enormous log line breaks downstream TRX parsing.</para>
+    /// </summary>
+    /// <param name="pending">The still-pending callbacks, as snapshotted at the timeout.</param>
+    /// <returns>A newline-prefixed block, or the empty string when there is nothing to report.</returns>
+    private string FormatPendingCallbackFates(
+        (string MessageId, string RequestType, Address? Target, long AgeMs)[] pending)
+    {
+        if (pending.Length == 0)
+            return string.Empty;
+        var sb = new System.Text.StringBuilder();
+        sb.Append(Environment.NewLine).Append("  handler-side fate (what happened to the delivery):");
+        foreach (var p in pending.Take(PendingCallbackLogCap))
+            sb.Append(Environment.NewLine).Append("    ").Append(p.MessageId).Append('=')
+              .Append(p.RequestType).Append(": ").Append(requestFates.Describe(p.MessageId));
+        if (pending.Length > PendingCallbackLogCap)
+            sb.Append(Environment.NewLine).Append("    …+")
+              .Append(pending.Length - PendingCallbackLogCap).Append(" more not rendered");
+        return sb.ToString();
     }
 
     /// <summary>
