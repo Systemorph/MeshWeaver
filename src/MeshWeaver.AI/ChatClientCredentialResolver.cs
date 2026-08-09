@@ -349,17 +349,64 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// than a model that can serve a round. Accepts a bare id or the full LanguageModel node PATH (the
     /// form the composer persists). The caller must DISPATCH such a selection to a real model before
     /// any factory sees it — Auto has no wire API of its own.
+    ///
+    /// <para>🚨 <b>The built-in router is matched STATICALLY, before the snapshot is consulted.</b>
+    /// Router identity must not depend on catalog warm-up: the snapshot is lazily warmed, so a
+    /// snapshot-only check answers <c>false</c> for Auto during the window before the first emission
+    /// lands — and both callers treat <c>false</c> as "this is an ordinary model". That window is
+    /// exactly when a fresh circuit initialises a composer, so <c>ValidMasterModel</c> would find no
+    /// usable credential for Auto (it deliberately has none) and <b>silently rewrite the user's
+    /// stored Auto selection to a concrete model</b> — a persisted, lossy change caused by nothing but
+    /// timing. <c>ApplyStaleModelFallback</c> has the milder version of the same bug: it would treat
+    /// Auto as a stale selection instead of dispatching it.</para>
+    ///
+    /// <para><see cref="LanguageModelNodeType.RouterModelId"/> and
+    /// <see cref="LanguageModelNodeType.RouterPath"/> are compile-time constants owned by the
+    /// platform, and <see cref="BuiltInLanguageModelProvider"/> reserves the id so no catalog source
+    /// can claim it — so the static answer is not merely a fast path, it is the authoritative one.
+    /// The snapshot lookup remains for routers a DEPLOYMENT defined itself, which necessarily are
+    /// data and cannot be known before the catalog is readable.</para>
     /// </summary>
     /// <param name="modelNameOrPath">The selected model id or node path.</param>
     /// <returns>True when the selection is a router.</returns>
     public bool IsRouterSelection(string? modelNameOrPath)
     {
         if (string.IsNullOrEmpty(modelNameOrPath)) return false;
+        if (IsBuiltInRouter(modelNameOrPath)) return true;
         var snapshot = ReadSnapshot();
         if (modelNameOrPath.Contains('/')
             && FindDefinitionByNodePath(snapshot, modelNameOrPath) is { } byPath)
             return byPath.IsRouter == true;
         return FindModelDefinitions(snapshot, modelNameOrPath).Any(d => d.IsRouter == true);
+    }
+
+    /// <summary>
+    /// True when the credential snapshot actually holds a catalog — i.e. reading it can distinguish
+    /// "this model is gone" from "I cannot tell yet".
+    ///
+    /// <para>🧊 The snapshot is lazily warmed, so before the first emission lands EVERY lookup answers
+    /// negatively: <see cref="HasUsableCredential"/> is false for every model, <see cref="Resolve"/> is
+    /// Missing for every model. A caller that reads those as "the model no longer exists" will discard a
+    /// perfectly good stored selection purely because of timing. <c>AgentPickerProjection.ValidOrDefault</c>
+    /// already states the rule for harness/agent — "a transiently-empty snapshot must NEVER wipe a good
+    /// selection" — and this is how a model-side caller asks the same question.</para>
+    /// </summary>
+    public bool HasReadableCatalog => ReadTierCandidates().Count > 0;
+
+    /// <summary>
+    /// True when the selection names the PLATFORM's Auto router — by bare id (<c>auto</c>) or by its
+    /// node path (<c>Provider/Auto/auto</c>), the two forms the composer and the chat client persist.
+    /// Deliberately snapshot-free: see <see cref="IsRouterSelection"/> for why this cannot wait for
+    /// the catalog.
+    /// </summary>
+    /// <param name="modelNameOrPath">The selected model id or node path.</param>
+    /// <returns>True for the built-in router in either form.</returns>
+    public static bool IsBuiltInRouter(string? modelNameOrPath)
+    {
+        if (string.IsNullOrWhiteSpace(modelNameOrPath)) return false;
+        var trimmed = modelNameOrPath.Trim();
+        return string.Equals(trimmed, LanguageModelNodeType.RouterModelId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmed, LanguageModelNodeType.RouterPath, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

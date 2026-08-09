@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using Memex.Portal.Shared.SelfUpdate;
 using Memex.Portal.Shared.Settings;
 using MeshWeaver.PluginCatalog;
 using Xunit;
@@ -44,6 +45,30 @@ public class AboutSettingsTabTest
         rows[1].Partition.Should().Be("");
     }
 
+    /// <summary>
+    /// The update line renders for both verdicts and stays SILENT on <c>Unknown</c> — an install with
+    /// no self-update wiring (or with checks switched off) must not be told it is "up to date" on the
+    /// strength of a check that never ran.
+    /// </summary>
+    [Fact]
+    public void UpdateStatusMarkdown_renders_both_verdicts_and_nothing_when_unknown()
+    {
+        // Localizer echoes the key, so the assertions pin WHICH key each verdict reads.
+        static string Echo(string key) => key;
+
+        var available = AboutSettingsTab.UpdateStatusMarkdown(
+            new PlatformUpdateStatus(PlatformUpdateAvailability.UpdateAvailable, "3.0.0-ci.2400"), Echo);
+        available.Should().Contain("about.updateAvailable").And.Contain("3.0.0-ci.2400");
+
+        var current = AboutSettingsTab.UpdateStatusMarkdown(
+            new PlatformUpdateStatus(PlatformUpdateAvailability.UpToDate, null), Echo);
+        current.Should().Contain("about.upToDate");
+        // The verdict is a two-state answer — "up to date" must never name a version.
+        current.Should().NotContain("3.0.0");
+
+        AboutSettingsTab.UpdateStatusMarkdown(PlatformUpdateStatus.Unknown, Echo).Should().BeNull();
+    }
+
     [Fact]
     public void Every_localization_key_the_about_tab_reads_exists_in_the_catalog()
     {
@@ -53,6 +78,7 @@ public class AboutSettingsTabTest
         [
             "ui.aboutMeshWeaver", "about.intro", "about.version", "about.buildCommit",
             "about.buildCommitMissing", "about.repository", "about.runtime",
+            "about.updateStatus", "about.upToDate", "about.updateAvailable",
             "about.plugins.title", "about.plugins.none",
             "about.plugins.column.name", "about.plugins.column.version", "about.plugins.column.module",
             "about.plugins.column.kind", "about.plugins.column.partition"

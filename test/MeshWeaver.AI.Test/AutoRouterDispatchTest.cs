@@ -75,6 +75,46 @@ public class AutoRouterDispatchTest(ITestOutputHelper output) : AITestBase(outpu
     }
 
     /// <summary>
+    /// 🧊 <b>Router identity must not wait for the catalog.</b> The credential snapshot is lazily
+    /// warmed, and both callers of <see cref="ChatClientCredentialResolver.IsRouterSelection"/> read
+    /// <c>false</c> as "an ordinary model". Answering off the snapshot alone therefore mis-answers for
+    /// Auto during the window before the first emission lands — which is exactly when a fresh circuit
+    /// initialises a composer, so <c>ValidMasterModel</c> would find no usable credential for Auto (it
+    /// deliberately has none) and <b>rewrite the user's stored Auto selection to a concrete model</b>.
+    /// A persisted, lossy change caused by nothing but timing.
+    ///
+    /// <para>This test never warms the resolver — it asserts the snapshot IS cold first, so it cannot
+    /// pass vacuously against a catalog that happened to load — and then requires both persisted forms
+    /// of the router to be recognised anyway. It fails against a snapshot-only implementation.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void RouterIsRecognisedAgainstAColdCatalog()
+    {
+        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+
+        // Precondition: deliberately NO EnsureSubscription() — nothing has warmed the snapshot.
+        resolver.ReadTierCandidates().Should().BeEmpty(
+            "this test is about the pre-warm window; if the catalog is already readable it proves nothing");
+        resolver.HasReadableCatalog.Should().BeFalse(
+            "a cold snapshot cannot tell 'gone' from 'not loaded yet' — which is why callers that "
+            + "validate a STORED selection must keep it rather than reset it (ValidMasterModel)");
+
+        resolver.IsRouterSelection(LanguageModelNodeType.RouterModelId).Should().BeTrue(
+            "the bare id is what AgentChatClient carries once ResolveModelId has run");
+        resolver.IsRouterSelection(LanguageModelNodeType.RouterPath).Should().BeTrue(
+            "the node PATH is what the composer persists, and what it hands back before the catalog "
+            + "is readable enough for ResolveModelId to shorten it");
+
+        // …and the static rule stays narrow: it must not wave through anything that merely looks
+        // similar, or a real model would be dispatched away instead of served.
+        resolver.IsRouterSelection("automatic").Should().BeFalse();
+        resolver.IsRouterSelection("Provider/Auto").Should().BeFalse();
+        resolver.IsRouterSelection("some-other/auto-model").Should().BeFalse();
+        resolver.IsRouterSelection(null).Should().BeFalse();
+        resolver.IsRouterSelection("").Should().BeFalse();
+    }
+
+    /// <summary>
     /// The round-level contract: submit with the SHIPPED Auto selected — exactly what the composer
     /// persists for a new thread — and the round records a real, usable model. Asserting on the
     /// RECORDED model (not on a log line) is the point: that is the same value token accounting and
