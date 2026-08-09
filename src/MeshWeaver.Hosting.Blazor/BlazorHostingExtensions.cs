@@ -238,13 +238,34 @@ public static class BlazorHostingExtensions
         if (!mounts.TryGetValue(segment, out var mount))
             return NotMounted(segment);
 
-        using var stream = mount.Open(filePath);
-        if (stream is null)
-            return Results.NotFound("File not found");
+        byte[] bytes;
+        using (var stream = mount.Open(filePath))
+        {
+            if (stream is null)
+            {
+                // 🚨 A missing NODE-TYPE ICON is served as a generated stand-in, never as a 404.
+                // An icon path is embedded in rendered HTML and persisted on nodes, so a 404 here
+                // surfaces as a broken image on a page that is otherwise fine — and it is a
+                // permanent, silent defect: nothing retries, and a typo made once keeps shipping.
+                // On this mesh 8 of the 35 referenced icons were 404 (including `bug.svg` from
+                // core and `image.svg` from a shipped plugin), all of them rendering broken.
+                //
+                // The fallback is deliberately narrow: it applies ONLY to a missing FILE inside the
+                // already-resolved icons mount. An unknown MOUNT still 404s above, so "is this
+                // published on this route" stays a hosting decision that does not vary with the
+                // request — and traversal is still rejected before we get here.
+                if (!IsNodeTypeIcon(segment, filePath))
+                    return Results.NotFound("File not found");
 
-        using var buffer = new MemoryStream();
-        stream.CopyTo(buffer);
-        var bytes = buffer.ToArray();
+                bytes = GeneratedIcon.For(filePath);
+            }
+            else
+            {
+                using var buffer = new MemoryStream();
+                stream.CopyTo(buffer);
+                bytes = buffer.ToArray();
+            }
+        }
 
         // Public by construction — a build asset carries no user data, so a shared cache may keep
         // it. This is the ONLY route on which `public` is correct.
@@ -254,6 +275,38 @@ public static class BlazorHostingExtensions
             $"\"{Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(bytes))}\"";
         return FileResultFor(bytes, filePath, context.Request.Query.ContainsKey("download"));
     }
+
+    /// <summary>The mount whose missing files are generated rather than 404'd (see the call site).</summary>
+    private const string NodeTypeIconsSegment = "NodeTypeIcons";
+
+    /// <summary>
+    /// Whether this request is for a node-type icon, and therefore eligible for a generated
+    /// stand-in.
+    ///
+    /// <para>🚨 <b><see cref="StaticAssetMount.Open"/> returns <c>null</c> for a REFUSED path as
+    /// well as a missing one</b> — a traversal attempt and a typo are indistinguishable by its
+    /// return value. So this must re-establish that the path was legitimate, or the fallback
+    /// answers a refused request with <c>200</c> and quietly converts the traversal guard into a
+    /// success. <c>StaticContentUnmountedTest.TraversalAttempts_AreRefused</c> caught exactly that
+    /// on the first cut of this change.</para>
+    ///
+    /// <para>Node-type icons are a FLAT set of <c>.svg</c> files, so the eligible shape is exact:
+    /// one path segment, no separators, safe by <see cref="StaticAssetMount.IsSafeRelativePath"/>,
+    /// ending in <c>.svg</c>. Anything else — a nested path, a dot segment, another extension —
+    /// falls through to the 404 it would have got before.</para>
+    /// </summary>
+    private static bool IsNodeTypeIcon(string segment, string filePath) =>
+        string.Equals(segment, NodeTypeIconsSegment, StringComparison.OrdinalIgnoreCase)
+        && filePath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase)
+        && filePath.Length > ".svg".Length
+        && !filePath.Contains('/', StringComparison.Ordinal)
+        && !filePath.Contains('\\', StringComparison.Ordinal)
+        && StaticAssetMount.IsSafeRelativePath(filePath);
+
+    /// <summary>Test seam for <see cref="IsNodeTypeIcon"/> — the eligibility rule is the security
+    /// boundary of the fallback, so it is pinned directly rather than only through HTTP.</summary>
+    internal static bool IsNodeTypeIconForTest(string segment, string filePath) =>
+        IsNodeTypeIcon(segment, filePath);
 
     /// <summary>How long a build asset stays fresh in any cache.</summary>
     internal static readonly TimeSpan PublicCacheDuration = TimeSpan.FromDays(30);
