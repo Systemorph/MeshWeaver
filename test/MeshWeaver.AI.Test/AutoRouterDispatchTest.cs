@@ -94,6 +94,10 @@ public class AutoRouterDispatchTest(ITestOutputHelper output) : AITestBase(outpu
     /// resolver instead is what made this test racy on CI run 31305125041: its own precondition read
     /// opened the live catalog subscription, and the first emission landing between two adjacent lines
     /// flipped <see cref="ChatClientCredentialResolver.HasReadableCatalog"/> to true mid-test.</para>
+    ///
+    /// <para>Every call below is a snapshot PROJECTION. Deliberately none is <c>Resolve</c> /
+    /// <c>HasUsableCredential</c>: those read THROUGH — a miss fires the authoritative re-read, which
+    /// can fill the cache with no subscription in play, and would hand the window back to chance.</para>
     /// </summary>
     [Fact(Timeout = 120_000)]
     public void RouterIsRecognisedAgainstAColdCatalog()
@@ -150,7 +154,10 @@ public class AutoRouterDispatchTest(ITestOutputHelper output) : AITestBase(outpu
     {
         using var mine = new ChatClientCredentialResolver(Mesh);
 
-        // Every shape of read, several times over — none of them may subscribe.
+        // Every shape of snapshot projection, several times over — none of them may subscribe.
+        // (ResolveDefaultModelId is included on purpose: it takes HasUsableCredential as a predicate,
+        // and an empty candidate list means that read-through is never reached — so it too is pure
+        // here. Calling Resolve directly would NOT be: a miss fires the authoritative re-read.)
         for (var i = 0; i < 5; i++)
         {
             mine.ReadTierCandidates().Should().BeEmpty();

@@ -109,13 +109,19 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// protector from the hub's service provider.
     ///
     /// <para>🧊 A new resolver is in the PRE-WARM state: the snapshot is empty and NOTHING is watching
-    /// the catalog. It stays that way until its owner says otherwise — reads are pure and never open
-    /// the subscription (see <see cref="ReadSnapshot"/>). <see cref="EnsureSubscription"/> (or
-    /// <see cref="WatchPartition"/> / <see cref="WatchSharedProvider"/>, which widen and rebuild) is
-    /// what starts the watch; <c>AddLanguageModelType</c>'s DI registration calls it when it builds the
-    /// mesh's shared resolver, so consumers that resolve from DI are warm. A caller that constructs its
-    /// own resolver therefore OWNS its warm state — which is how a test pins behaviour against a
+    /// the catalog. It stays that way until its owner says otherwise — snapshot reads are pure and
+    /// never open the subscription (see <see cref="ReadSnapshot"/>). <see cref="EnsureSubscription"/>
+    /// (or <see cref="WatchPartition"/> / <see cref="WatchSharedProvider"/>, which widen and rebuild)
+    /// is what starts the watch; <c>AddLanguageModelType</c>'s DI registration calls it when it builds
+    /// the mesh's shared resolver, so consumers that resolve from DI are warm. A caller that constructs
+    /// its own resolver therefore OWNS its warm state — which is how a test pins behaviour against a
     /// deterministically cold catalog.</para>
+    ///
+    /// <para>One nuance the owner must know: <see cref="Resolve"/> / <see cref="HasUsableCredential"/>
+    /// are read-THROUGH, not pure — a miss fires the single-flight
+    /// <see cref="TriggerAuthoritativeRefresh"/> and that CAN populate the cache without any
+    /// subscription. Holding a resolver cold therefore means not warming it AND not asking it for a
+    /// credential; the snapshot projections alone never end the window.</para>
     /// </summary>
     /// <param name="hub">The message hub whose workspace and services back the live credential snapshot.</param>
     public ChatClientCredentialResolver(IMessageHub hub)
@@ -134,9 +140,18 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// partitions watched so far) so the cache is warming before the first <see cref="Resolve"/>.
     /// Idempotent: re-subscribes to the current watched set.
     ///
-    /// <para>This is the ONLY way a root-catalog-only resolver starts watching — a read will not do it
-    /// (see <see cref="ReadSnapshot"/>). Until it is called the resolver reports the pre-warm window
-    /// honestly: <see cref="HasReadableCatalog"/> false, every lookup a miss.</para>
+    /// <para>This is the ONLY way a root-catalog-only resolver starts WATCHING — a snapshot read will
+    /// not do it (see <see cref="ReadSnapshot"/>), so until it is called the resolver reports the
+    /// pre-warm window honestly: <see cref="HasReadableCatalog"/> false, every snapshot projection
+    /// empty.</para>
+    ///
+    /// <para>It governs the long-lived watch, NOT whether the snapshot can ever be populated:
+    /// <see cref="Resolve"/> (and therefore <see cref="HasUsableCredential"/>) is a read-THROUGH — a
+    /// miss fires the single-flight <see cref="TriggerAuthoritativeRefresh"/>, whose result merges into
+    /// the cache with no subscription involved. So a resolver stays cold exactly as long as its owner
+    /// neither warms it nor asks it to resolve a credential; the snapshot projections
+    /// (<see cref="ReadTierCandidates"/>, <see cref="ReadTiers"/>, <see cref="HasReadableCatalog"/>,
+    /// <see cref="IsRouterSelection"/>) never end that window.</para>
     /// </summary>
     public void EnsureSubscription() => RebuildSubscription();
 
