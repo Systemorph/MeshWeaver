@@ -352,6 +352,12 @@ change-feed resubscribe latch **stay armed** and the subscriber rehydrates after
   terminal callback, exactly as the phases above do.
 - **Tempted to add a `TaskCompletionSource` to signal "done"?** That is the smell
   the `ReplaySubject` replaced. Use a subject and a CAS-guarded `Signal…` helper.
+- **Armed a timer, interval or debounce?** Its subscription must reach this disposal
+  chain — `hub.RegisterForDisposal(serialDisposable)`, then arm into the
+  `SerialDisposable`. A pending `TimerQueue` entry is a strong GC root, so an
+  unregistered one keeps the hub alive past its own teardown, and holding it in a
+  field is not the same as owning it. See
+  [Subscription Ownership](/Doc/Architecture/SubscriptionOwnership).
 
 Canonical implementation: `MessageHub.HandleShutdownCore` /
 `MessageHub.Dispose` / `HostedHubsCollection.DisposeHubsReactive` in
