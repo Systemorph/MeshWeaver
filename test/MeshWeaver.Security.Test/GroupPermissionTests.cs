@@ -60,9 +60,15 @@ public class GroupPermissionTests(ITestOutputHelper output) : MonolithMeshTestBa
     {
         // The group + its membership live under one root; the grant lives under a DIFFERENT root.
         // The group set is resolved GLOBALLY, so the grant still reaches the member.
+        //
+        // 🚨 The root here must not case-collide with any other root in this class. A top-level
+        // segment IS a partition and its schema is segment.ToLowerInvariant(), so "Acme" and the
+        // "ACME" used above would be ONE partition — which quietly removes the separation this
+        // "CrossPartition" test exists to demonstrate. (It briefly was "Acme", from the
+        // identifier scrub.)
         await MeshService.CreateNode(
-            AssignmentNodeFactory.UserRole("Acme/Cohort", "Viewer", "Course")).Should().Emit();
-        await MeshService.CreateNode(Membership("carol", "Acme/Cohort")).Should().Emit();
+            AssignmentNodeFactory.UserRole("Zenith/Cohort", "Viewer", "Course")).Should().Emit();
+        await MeshService.CreateNode(Membership("carol", "Zenith/Cohort")).Should().Emit();
 
         await Mesh.GetEffectivePermissions("Course/Module", "carol")
             .Should().Match(p => p.HasFlag(Permission.Read));
