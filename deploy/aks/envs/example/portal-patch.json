@@ -1,7 +1,7 @@
 [
   { "op": "add", "path": "/spec/template/spec/nodeSelector", "value": { "workload": "silos" } },
 
-  { "_comment": "data/users/content PVC volumes + mounts now render from the CHART (persistence: in values.aks.yaml) — this patch only adds the memex-cloud-specific extras below.",
+  { "_comment": "data/users/content PVC volumes + mounts now render from the CHART (persistence: in values.aks.yaml) — this patch only adds the example-specific extras below.",
     "op": "test", "path": "/spec/template/spec/volumes/0/name", "value": "memex-data" },
   { "op": "add", "path": "/spec/template/spec/volumes/-",
     "value": { "name": "memex-attachments", "persistentVolumeClaim": { "claimName": "memex-attachments" } } },
@@ -10,7 +10,7 @@
   { "op": "add", "path": "/spec/template/spec/volumes/-",
     "value": { "name": "kv-ai-secrets",
                "csi": { "driver": "secrets-store.csi.k8s.io", "readOnly": true,
-                        "volumeAttributes": { "secretProviderClass": "memexcloud-portal-ai-secrets" } } } },
+                        "volumeAttributes": { "secretProviderClass": "exampledb-portal-ai-secrets" } } } },
 
   { "op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-",
     "value": { "name": "memex-attachments", "mountPath": "/mnt/attachments" } },
@@ -20,7 +20,7 @@
     "value": { "name": "kv-ai-secrets", "mountPath": "/mnt/secrets-store", "readOnly": true } },
 
   { "op": "add", "path": "/spec/template/spec/containers/0/envFrom/-",
-    "value": { "secretRef": { "name": "memexcloud-portal-ai-secrets" } } },
+    "value": { "secretRef": { "name": "exampledb-portal-ai-secrets" } } },
 
   { "op": "add", "path": "/spec/template/spec/containers/0/resources",
     "value": { "requests": { "cpu": "4", "memory": "8Gi" }, "limits": { "cpu": "6", "memory": "16Gi" } } }
