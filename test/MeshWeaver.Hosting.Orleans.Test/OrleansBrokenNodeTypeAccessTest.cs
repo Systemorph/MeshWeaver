@@ -31,7 +31,7 @@ public record OrleansBrokenTypeProbeResponse;
 /// <summary>
 /// 🚨 Orleans mirror of <c>BrokenNodeTypeAccessTest</c>: accessing an instance
 /// of a NON-COMPILING NodeType over the real grain path must answer a TERMINAL
-/// error — never park the caller (the atioz wedge of 2026-06-12: every
+/// error — never park the caller (the prod wedge of 2026-06-12: every
 /// <c>DeliverMessage</c> burned the 30 s Orleans call timeout, the GUI
 /// resubscribed, and the storm wedged the space).
 ///
@@ -141,7 +141,7 @@ public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
     /// (<c>GetRemoteStream&lt;JsonElement, LayoutAreaReference&gt;</c> — the same SubscribeRequest the
     /// portal issues). It MUST surface a terminal signal within budget — an <c>OnError</c> carrying the
     /// compilation failure, or an error-overlay data emission — and NEVER spin forever on
-    /// "Subscribing to {path}…" (the atioz 2026-06 wedge: a non-compiling NodeType under
+    /// "Subscribing to {path}…" (the prod 2026-06 wedge: a non-compiling NodeType under
     /// <c>AgenticPension/Statement</c>). The bounded <c>Timeout</c> turns a wedge into a loud
     /// <see cref="TimeoutException"/> (RED) while the bug is live; a surfaced compile error is GREEN.
     /// </summary>

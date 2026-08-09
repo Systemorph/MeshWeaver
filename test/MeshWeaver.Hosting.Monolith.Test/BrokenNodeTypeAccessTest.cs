@@ -26,7 +26,7 @@ public record BrokenTypeProbeResponse;
 /// configuration (non-compiling source) must FAIL FAST with a terminal error —
 /// never silence, never a phantom hang.
 ///
-/// <para>The wedge this pins (atioz, 2026-06-12/13, user-reproduced): a
+/// <para>The wedge this pins (prod, 2026-06-12/13, user-reproduced): a
 /// non-compiling NodeType gets the compilation-error overlay hub (default node
 /// config + error Overview). That hub handles framework messages fine — but any
 /// request type the BROKEN ASSEMBLY would have registered arrives as RawJson,

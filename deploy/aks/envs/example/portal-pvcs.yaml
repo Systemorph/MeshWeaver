@@ -1,5 +1,5 @@
 # RWX Azure Files PVCs for the example portal (ns example). Uses the
-# cluster-wide azurefile-memex StorageClass. No pg PVC (uses memexaks-pg).
+# cluster-wide azurefile-memex StorageClass. No pg PVC (uses <pg-server>).
 #   kubectl apply -n example -f portal-pvcs.yaml
 apiVersion: v1
 kind: PersistentVolumeClaim

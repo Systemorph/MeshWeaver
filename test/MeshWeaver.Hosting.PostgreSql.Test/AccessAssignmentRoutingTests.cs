@@ -13,7 +13,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// Tests that AccessAssignment nodes are routed to the `access` satellite table
 /// even when their path doesn't contain a "_Access" segment.
 ///
-/// Reproduces the production bug where `PartnerRe/rbuergi_Access` was written
+/// Reproduces the production bug where `Acme/rbuergi_Access` was written
 /// to `mesh_nodes` instead of `access`, so the trigger never fired and
 /// `user_effective_permissions` stayed empty.
 /// </summary>
@@ -33,7 +33,7 @@ public class AccessAssignmentRoutingTests
     {
         var ct = TestContext.Current.CancellationToken;
 
-        // Setup: create a partitioned schema (like PartnerRe)
+        // Setup: create a partitioned schema (like Acme)
         var partitionDef = new PartitionDefinition
         {
             Namespace = "TestOrg",

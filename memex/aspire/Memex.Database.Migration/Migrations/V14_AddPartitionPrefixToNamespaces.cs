@@ -8,7 +8,7 @@ namespace Memex.Database.Migration.Migrations;
 ///
 /// V10 stripped the entire <c>User/&lt;userid&gt;/</c> prefix when moving rows into per-user
 /// schemas. The current convention (see AGENTS.md and how org partitions like
-/// <c>partnerre</c>/<c>systemorph</c> store their rows) is that <c>namespace</c> KEEPS the
+/// <c>acme</c>/<c>systemorph</c> store their rows) is that <c>namespace</c> KEEPS the
 /// partition prefix — e.g., <c>(ns='rbuergi/Notes', id='foo')</c>, not <c>(ns='Notes')</c>.
 ///
 /// V10-migrated content thus became invisible to every code path that queries via

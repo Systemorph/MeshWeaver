@@ -66,7 +66,7 @@ public static class AgentNodeType
         // !dbSynced. The IStaticNodeProvider feeds serviceProvider.FindStaticNode(path); leaving
         // it registered while synced made the importer's inner CreateNode see the built-in agent
         // as already-present and fail "Node already exists at path: Agent/X" — so the Agent
-        // partition never materialized into the DB (atioz 2026-06-11: Agent imported 4 / failed 8
+        // partition never materialized into the DB (prod 2026-06-11: Agent imported 4 / failed 8
         // while Doc — which has no IStaticNodeProvider — imported 161/0). Gating only the storage
         // provider (the prior state) was the gap. The "Agent" NodeType definition itself stays via
         // AddMeshNodes(CreateMeshNode()) above, so the import's NodeType-existence check still

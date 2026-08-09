@@ -13,7 +13,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// Pins the atioz 2026-06-24 "Subscribing to {path}…" wedge at the routing layer.
+/// Pins the prod 2026-06-24 "Subscribing to {path}…" wedge at the routing layer.
 ///
 /// <para><b>Trigger.</b> A node-hub grain that just called <c>DeactivateOnIdle</c> (e.g. after a
 /// faulted AI-chat round) answers the next delivery with an Orleans

@@ -86,7 +86,7 @@ public class SqlGeneratorTests
     {
         // `state:Active` must bind the MeshNodeState NUMERIC value — the state column
         // is smallint; binding the raw string produced
-        // `42883: operator does not exist: smallint = text` (atioz 2026-06-12, the
+        // `42883: operator does not exist: smallint = text` (prod 2026-06-12, the
         // BalanceSheet virtual-data-source init failure).
         var gen = new PostgreSqlSqlGenerator();
         var query = new ParsedQuery(

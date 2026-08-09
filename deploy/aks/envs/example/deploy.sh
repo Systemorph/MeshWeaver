@@ -5,12 +5,12 @@
 #
 # The db-migration is NOT run here: the data was restored from prod at its
 # current schema version, so we deploy against it as-is (run the migration
-# deliberately only if a schema delta is needed). Stage like the atioz env:
+# deliberately only if a schema delta is needed). Stage like the prod env:
 #   STAGE with this script + values.exampledb.yaml + portal-pvcs.yaml +
 #   portal-ingress.yaml + secretproviderclass.yaml + portal-patch.json + ./helm
 #   export MEMEX_PG_CONN='Host=<pg-private-ip>;...;Database=exampledb;SslMode=Require;Trust Server Certificate=true'
 #   export IMAGE_TAG=<sha>
-#   az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+#   az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
 #     --command "MEMEX_PG_CONN='$MEMEX_PG_CONN' IMAGE_TAG='$IMAGE_TAG' bash deploy.sh" --file .
 set -uo pipefail
 NS=example

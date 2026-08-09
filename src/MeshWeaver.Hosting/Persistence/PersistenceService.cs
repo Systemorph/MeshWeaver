@@ -56,7 +56,7 @@ public sealed class PersistenceService : IStorageAdapter
         // registration order (OrderByDescending is stable). Without the
         // priority sort, the in-memory wildcard that AddOrleansMeshServices
         // registers as a baseline claimed every write ahead of a Postgres
-        // provider registered later — the atioz 2026-06-11 silent create-loss.
+        // provider registered later — the prod 2026-06-11 silent create-loss.
         var all = providers.ToList();
         var specific = all
             .Where(p => p.PartitionDefinition != null

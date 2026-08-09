@@ -93,7 +93,7 @@ public class SkillNodeTypeTest
         // The hub serializer omits default-valued properties (DefaultIgnoreCondition.WhenWritingDefault),
         // so a Pick action (Kind = the default enum value 0) serializes with NO `kind` field. A *required*
         // Kind then fails to deserialize ("missing required properties including: 'kind'") and EVERY Pick
-        // skill is dropped — the live memex/atioz bug. Verify the omitted default round-trips to Pick.
+        // skill is dropped — the live memex/prod bug. Verify the omitted default round-trips to Pick.
         var opts = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault };
         var def = new SkillDefinition
         {

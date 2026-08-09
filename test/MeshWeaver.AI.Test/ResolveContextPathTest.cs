@@ -21,13 +21,13 @@ public class ResolveContextPathTest
 {
     /// <summary>Absolute paths (leading <c>@/</c> or multi-segment <c>@</c>) are returned unchanged.</summary>
     [Theory]
-    [InlineData("@/PartnerRe/AIConsulting/FinalReport", "@PartnerRe/AIConsulting/FinalReport")] // absolute @/ â†’ keeps path
-    [InlineData("/PartnerRe/AIConsulting/FinalReport", "@PartnerRe/AIConsulting/FinalReport")] // absolute / â†’ rewrites to @
+    [InlineData("@/Acme/AIConsulting/FinalReport", "@Acme/AIConsulting/FinalReport")] // absolute @/ â†’ keeps path
+    [InlineData("/Acme/AIConsulting/FinalReport", "@Acme/AIConsulting/FinalReport")] // absolute / â†’ rewrites to @
     [InlineData("@OrgA/Doc", "@OrgA/Doc")] // multi-segment already looks absolute â†’ returned as-is
     [InlineData("@Doc/Architecture/content:file.svg", "@Doc/Architecture/content:file.svg")] // colon with slash before â†’ absolute
     public void AbsolutePaths_AreReturnedUnchanged(string input, string expected)
     {
-        var chat = new StubChat(new AgentContext { Context = "PartnerRe/AIConsulting" });
+        var chat = new StubChat(new AgentContext { Context = "Acme/AIConsulting" });
         MeshOperations.ResolveContextPath(chat, input).Should().Be(expected);
     }
 
@@ -38,12 +38,12 @@ public class ResolveContextPathTest
         // This is the bug scenario: agent passes just "FinalReport" (or @FinalReport), expecting
         // the tool to find it under the current context. Before the fix this went straight to the
         // mesh as "FinalReport" and Orleans threw "Cannot activate grain FinalReport".
-        var chat = new StubChat(new AgentContext { Context = "PartnerRe/AIConsulting" });
+        var chat = new StubChat(new AgentContext { Context = "Acme/AIConsulting" });
 
         MeshOperations.ResolveContextPath(chat, "FinalReport")
-            .Should().Be("@PartnerRe/AIConsulting/FinalReport");
+            .Should().Be("@Acme/AIConsulting/FinalReport");
         MeshOperations.ResolveContextPath(chat, "@FinalReport")
-            .Should().Be("@PartnerRe/AIConsulting/FinalReport");
+            .Should().Be("@Acme/AIConsulting/FinalReport");
     }
 
     /// <summary>Relative UCR prefix paths (e.g. <c>content/file</c>) resolve against the context.</summary>
@@ -51,10 +51,10 @@ public class ResolveContextPathTest
     public void RelativeUnifiedPath_IsPrefixedWithContextPath()
     {
         // "content/report.docx" â€” UCR prefix path; relative to context.
-        var chat = new StubChat(new AgentContext { Context = "PartnerRe/AIConsulting" });
+        var chat = new StubChat(new AgentContext { Context = "Acme/AIConsulting" });
 
         MeshOperations.ResolveContextPath(chat, "@content/report.docx")
-            .Should().Be("@PartnerRe/AIConsulting/content/report.docx");
+            .Should().Be("@Acme/AIConsulting/content/report.docx");
     }
 
     /// <summary>Legacy colon-syntax relative paths (e.g. <c>content:file</c>) resolve against the context.</summary>

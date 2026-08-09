@@ -11,7 +11,7 @@ namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// Pins the wedges-to-zero contract for delegation (<c>delegate_to_agent</c>) tool
-/// calls — the 2026-06-26 atioz wedge.
+/// calls — the 2026-06-26 prod wedge.
 ///
 /// <para>A sub-thread that ERRORS (its node stream faults — a stuck-init gate failure
 /// surfaces as a <c>DeliveryFailure</c> ~30s in), TIMES OUT, or ends

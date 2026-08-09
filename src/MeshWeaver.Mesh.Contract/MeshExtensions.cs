@@ -162,7 +162,7 @@ public static class MeshExtensions
     ///
     /// <para>🚨 <b>The mesh hub is the ROUTER — it must not execute work.</b> Targeting it makes every
     /// create/delete/move run on the router's own action block; a burst starves real
-    /// <c>SubscribeRequest</c> traffic and the whole portal wedges (atioz 2026-06-11:
+    /// <c>SubscribeRequest</c> traffic and the whole portal wedges (prod 2026-06-11:
     /// "11× CreateOrUpdateNodeRequest + 3× CreateNodeRequest@mesh/&lt;self&gt; stale &gt;60s"). The
     /// dedicated <c>import/{id}</c> hub exists precisely to keep bulk creates off the router, but
     /// <c>MeshService</c> used to post to <c>GetMeshHub()</c> unconditionally — so that isolation
@@ -301,7 +301,7 @@ public static class MeshExtensions
 
         // FAIL CLOSED on missing storage: a create that cannot persist must error,
         // never ack. The old fallback (save = Observable.Return(node)) reported
-        // Success while writing NOTHING — on the 2026-06-11 atioz portal every MCP
+        // Success while writing NOTHING — on the 2026-06-11 prod portal every MCP
         // create was acked "Created: …" and silently lost. Storage-less meshes are
         // not a supported mode (tests use AddInMemoryPersistence); a null adapter
         // here is always a wiring defect on the responding hub — name it loudly.
@@ -367,7 +367,7 @@ public static class MeshExtensions
         // ownerless path. A bare `_Activity/{id}` (empty owner, MainNode="") — or any `_Activity`
         // folder with no owning node before it — has no per-node hub to route to, so every poster
         // (SubmitCodeRequest / DataChangeRequest) and every subscriber (the GUI progress panels)
-        // NotFound-storms the router (the atioz `_Activity/import-*` / `_Activity/compile-*` storm).
+        // NotFound-storms the router (the prod `_Activity/import-*` / `_Activity/compile-*` storm).
         // Reject at the create boundary — loudly, at the source — instead of letting the phantom
         // escape downstream. Runs BEFORE EnsurePartitionBootstrap + the validators (and BEFORE the
         // System bypass inside those validators) because this is a STRUCTURAL invariant that holds

@@ -461,7 +461,7 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// <para>This is deliberately NOT <see cref="Resolve(string)"/>: a CLI harness (Claude Code /
     /// GitHub Copilot) authenticates with the user's <i>subscription</i> token, never with a selected
     /// MODEL's API key. Passing the selected model's key (e.g. the DeepSeek/AzureFoundry key) is
-    /// exactly what produced the atioz "Not logged in" failure. Best-effort: the authoritative login
+    /// exactly what produced the prod "Not logged in" failure. Best-effort: the authoritative login
     /// also lives in the CLI's own per-user config dir (<c>.credentials.json</c> on the shared
     /// volume), so a not-yet-warm node read simply leaves the env var unset and the CLI falls back to
     /// its config dir.</para>

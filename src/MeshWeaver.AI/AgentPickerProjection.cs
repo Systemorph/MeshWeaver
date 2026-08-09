@@ -339,7 +339,7 @@ public static class AgentPickerProjection
     /// whose per-user RLS keys off the hub's AccessContext. Pass a SERVER-SIDE layout-area hub (a
     /// node's per-node hub) and you get the hub principal, NOT the user — RLS strips the
     /// user/space namespaces (empty dropdown) AND the cross-partition subscribe STORMS the portal
-    /// (the 2026-06-17 atioz wedge: a server-side combobox in ThreadComposerView). GUI →
+    /// (the 2026-06-17 prod wedge: a server-side combobox in ThreadComposerView). GUI →
     /// <c>BlazorView.Hub</c> (= <c>PortalApplication.Hub</c>); exec → <c>ThreadExecution</c>'s
     /// <c>parentHub</c>. NEVER a <c>LayoutAreaHost.Hub</c> for the per-partition query.</para>
     /// </summary>

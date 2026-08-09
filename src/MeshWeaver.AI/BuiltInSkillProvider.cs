@@ -22,7 +22,7 @@ public class BuiltInSkillProvider : IStaticNodeProvider
         // Read-only, world-readable policy for the Skill namespace — the skill catalog is public, same
         // as Agent/Harness. On the SYNCED path this _Policy MUST be imported (SkillStaticRepoSource),
         // else the partition has no read policy and the skills are unreadable → the chat finds no skills
-        // (the Harness wedge, atioz 2026-06-15). The write caps keep the built-in skills unmodifiable.
+        // (the Harness wedge, prod 2026-06-15). The write caps keep the built-in skills unmodifiable.
         yield return new MeshNode("_Policy", SkillNodeType.RootNamespace)
         {
             NodeType = "PartitionAccessPolicy",

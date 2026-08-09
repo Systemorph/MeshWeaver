@@ -1212,7 +1212,7 @@ internal static class NodeTypeCompilationHelpers
         // GUI CompileProgressIndicator's in-flight SubscribeToActivity, the
         // NodeTypeLayoutAreas.Progress embed — then subscribed to that phantom path, each
         // routing a SubscribeRequest → RoutingGrain → endless `[ROUTE] NotFound` for a FEW
-        // specific compile-<ts> paths (the atioz storm). Reading/subscribing a node that
+        // specific compile-<ts> paths (the prod storm). Reading/subscribing a node that
         // does not exist is the defect — so we only ever advertise a path we created.
         // Provision is reactive + pooled + promise-cached (no-op when already provisioned —
         // EnsurePartitionProvisioned, the sanctioned pattern StaticRepoImporter uses); the

@@ -7,7 +7,7 @@ namespace Memex.Database.Migration.Migrations;
 /// the per-partition agent registry (<c>AgentPickerProjection.BuildAgentQuery</c> →
 /// <c>namespace:{user}/Agent|{space}/Agent|Agent nodeType:Agent</c> — exact membership, no graph search).
 ///
-/// Before: a space/user dropped agents directly in its partition (e.g. atioz had
+/// Before: a space/user dropped agents directly in its partition (e.g. prod had
 /// <c>AgenticPension/Datenextraktion</c>, namespace <c>AgenticPension</c>). The new registry only lists
 /// <c>{partition}/Agent</c>, so those agents would no longer surface. This migration rewrites every
 /// <c>nodeType=Agent</c> row in each partition schema to <c>namespace = '{partition}/Agent'</c> (and

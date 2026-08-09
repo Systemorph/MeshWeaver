@@ -55,7 +55,7 @@ public class SyncedPartitionReadOnlyTest(ITestOutputHelper output) : MonolithMes
 
     // ── System must ALWAYS bypass row-based access — even on a read-only _Policy partition ──
     //
-    // The atioz 2026-06-18 wedge: compile/import write their progress as `_Activity` nodes UNDER
+    // The prod 2026-06-18 wedge: compile/import write their progress as `_Activity` nodes UNDER
     // the read-only Doc partition, as System (the partition provisioner). If that System write is
     // denied, the activity node never lands in `doc.activities`, yet the parent is still stamped
     // with its path → progress readers subscribe to a non-existent node → `[ROUTE] NotFound`

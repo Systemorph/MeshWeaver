@@ -28,7 +28,7 @@ namespace MeshWeaver.Graph.Security;
 /// <para><b>Why eager is now mandatory.</b> The storage router
 /// (<c>PostgreSqlPathRoutingAdapter</c>) no longer lazily <c>CREATE SCHEMA</c>s on first write —
 /// a write whose partition isn't provisioned now fails loudly (42P01) instead of conjuring a
-/// ghost schema for an arbitrary path segment (the atioz 45-ghost-schema corruption). So the
+/// ghost schema for an arbitrary path segment (the prod 45-ghost-schema corruption). So the
 /// partition schema MUST exist before the root write, and this validator is the one place that
 /// makes it so. See <c>Doc/Architecture/PartitionStorageRouting.md</c>.</para>
 ///
