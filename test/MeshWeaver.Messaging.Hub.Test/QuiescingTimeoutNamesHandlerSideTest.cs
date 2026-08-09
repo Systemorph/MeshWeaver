@@ -29,6 +29,10 @@ public class QuiescingTimeoutNamesHandlerSideTest(ITestOutputHelper output) : Hu
     private record SwallowedRequest : IRequest<SwallowedResponse>;
     private record SwallowedResponse;
 
+    /// <summary>Answered — but to an address that is not the requester (the "replied to the wrong
+    /// place" shape, which must NOT read the same as a handler that replied to nothing).</summary>
+    private record MisroutedReplyRequest : IRequest<SwallowedResponse>;
+
     /// <summary>
     /// Budget for a hub that is deliberately disposed with an outstanding callback. Short so the
     /// test costs its own budget, not the 2 s default — the assertion is about WHAT the timeout
@@ -47,6 +51,15 @@ public class QuiescingTimeoutNamesHandlerSideTest(ITestOutputHelper output) : Hu
             .WithQuiesceTimeout(LeakQuiesceTimeout)
             .WithHandler<SwallowedRequest>((_, delivery) =>
             {
+                handlerRan.TrySetResult();
+                return delivery.Processed();
+            })
+            // Posts a correlated reply, but aims it at the mesh hub instead of the requester —
+            // so RESPONSE_POSTED lands on the trail while the caller's callback never resolves.
+            .WithHandler<MisroutedReplyRequest>((hub, delivery) =>
+            {
+                hub.Post(new SwallowedResponse(),
+                    o => o.WithRequestIdFrom(delivery).WithTarget(CreateMeshAddress()));
                 handlerRan.TrySetResult();
                 return delivery.Processed();
             });
@@ -92,6 +105,44 @@ public class QuiescingTimeoutNamesHandlerSideTest(ITestOutputHelper output) : Hu
         summary.Should().NotContain("RESPONSE_POSTED",
             "nothing replied to this correlation — that absence IS the finding, so it must not be "
             + "reported the same way as a reply that was posted and then lost");
+
+        // The raw stages are the evidence; the verdict is the answer. Pinning it here also pins the
+        // branch ORDER in RequestFateLedger.Verdict — an earlier branch matching by mistake would
+        // hand the next investigator a confidently wrong diagnosis.
+        summary.Should().Contain("a handler was entered and no reply, completion or fault has been recorded",
+            "the report must state which failure shape this is, not leave the reader to infer it "
+            + "from raw stages");
+    }
+
+    /// <summary>
+    /// The discriminator that matters most: a reply that WAS posted but never reached the requester
+    /// must not read like a handler that replied to nothing. One says "chase the response delivery",
+    /// the other says "chase the handler" — sending an investigation the wrong way is the specific
+    /// cost this instrumentation exists to avoid.
+    /// </summary>
+    [Fact]
+    public async Task ReplyPostedToTheWrongTarget_IsReportedDifferentlyFromNoReplyAtAll()
+    {
+        var host = GetHost();
+        var client = GetClient();
+
+        using var subscription = client
+            .Observe<SwallowedResponse>(new MisroutedReplyRequest(), o => o.WithTarget(CreateHostAddress()))
+            .Subscribe(_ => { }, _ => { });
+
+        await handlerRan.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        client.Dispose();
+        await client.DisposalCompleted.FirstAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(20));
+
+        var summary = client.GetQuiescingTimeoutSummary();
+        Output.WriteLine(summary);
+
+        summary.Should().Contain("RESPONSE_POSTED",
+            "the handler did answer this correlation — the trail must say so");
+        summary.Should().Contain("a reply WAS posted for this correlation and the callback is STILL pending",
+            "this is the 'reply lost on the way home' shape, and it must be told apart from a "
+            + "handler that never replied");
     }
 
     /// <summary>

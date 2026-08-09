@@ -141,7 +141,7 @@ internal sealed class RequestFateLedger
             }
         }
 
-        /// <summary>Renders the ordered trail as one arrow-separated line.</summary>
+        /// <summary>Renders the ordered trail as one arrow-separated line, plus a verdict.</summary>
         /// <returns>The trail, or a marker when no stage was ever recorded.</returns>
         public string Render()
         {
@@ -155,7 +155,61 @@ internal sealed class RequestFateLedger
             if (snapshot.Count == 0)
                 return "<never reached any hub in this tree: posted but no RECEIVED stage was recorded>";
             var line = string.Join(" → ", snapshot);
-            return truncated > 0 ? $"{line} … (+{truncated} more stage(s) suppressed)" : line;
+            if (truncated > 0)
+                line += $" … (+{truncated} more stage(s) suppressed)";
+            return $"{line}{Environment.NewLine}      ⇒ {Verdict(snapshot)}";
+        }
+
+        /// <summary>
+        /// Reduces the stage trail to the ONE sentence a reader needs — which of the mutually
+        /// exclusive failure shapes this is.
+        ///
+        /// <para>Raw stages alone reproduce the ambiguity this instrumentation exists to remove: a
+        /// reader who sees <c>HANDLER_EXIT state=Processed</c> and nothing after it still has to
+        /// know that the canonical mesh handlers reply from a DETACHED observable before they can
+        /// tell "still working" from "terminated silently". The verdict states it.</para>
+        ///
+        /// <para>🚨 It reports what was OBSERVED and nothing more. When the reply is owed by code
+        /// that records no terminal stage of its own, the verdict says exactly that rather than
+        /// guessing which of the two it was.</para>
+        /// </summary>
+        /// <param name="snapshot">The recorded stages, in order.</param>
+        /// <returns>A single-sentence verdict.</returns>
+        private static string Verdict(ImmutableList<string> snapshot)
+        {
+            bool Has(string token) => snapshot.Any(s => s.StartsWith(token, StringComparison.Ordinal));
+
+            if (Has("RESPONSE_POSTED"))
+                return "a reply WAS posted for this correlation and the callback is STILL pending — "
+                     + "the reply was lost between the responder and the requester, so chase the "
+                     + "response delivery, not the handler.";
+            if (snapshot.Any(s => s.Contains("_ERROR", StringComparison.Ordinal)
+                                  || s.StartsWith("HANDLER_FAULT", StringComparison.Ordinal)))
+                return "the chain FAULTED and no reply was posted — the fault is the cause; find "
+                     + "why its error arm does not answer the requester.";
+            if (snapshot.Any(s => s.Contains("COMPLETED_EMPTY", StringComparison.Ordinal))
+                || Has("HANDLER_COMPLETED_WITHOUT_DELIVERY"))
+                return "the chain COMPLETED WITHOUT PRODUCING A REPLY — nothing will ever answer "
+                     + "this request. This is a terminated chain, NOT a slow one: look for a "
+                     + "filtering operator (a Where that dropped the only element, an "
+                     + "Observable.Empty branch) upstream of the post.";
+            if (Has("NO_HANDLER_MATCHED"))
+                return "the delivery reached its target hub and NO handler matched its type.";
+            if (Has("HANDLER_ENTER"))
+                return "a handler was entered and no reply, completion or fault has been recorded "
+                     + "since — the work that owes the reply is either STILL RUNNING or terminated "
+                     + "inside code that records no stage. Add hub.NoteRequestStage(request.Id, …) "
+                     + "at that handler's terminal arms to split the two.";
+            if (snapshot.Any(s => s.StartsWith("DROPPED", StringComparison.Ordinal)
+                                  || s.StartsWith("SHED_", StringComparison.Ordinal)
+                                  || s.StartsWith("DEFERRED", StringComparison.Ordinal)))
+                return "the receiving hub took the delivery and then PARKED or DISCARDED it — the "
+                     + "last stage names the gate, breaker or shutdown check responsible.";
+            if (Has("RECEIVED"))
+                return "the delivery reached a hub but no handler was ever entered — it is still "
+                     + "being routed, or it was accepted and never executed.";
+            return "the delivery never reached any hub in this tree — it was lost before routing, "
+                 + "or its target lives outside this tree.";
         }
     }
 }

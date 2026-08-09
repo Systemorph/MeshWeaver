@@ -173,6 +173,9 @@ trail is printed whenever a pending callback is reported.
       → HANDLER_EXIT state=Processed@host/1(+1ms)
 ```
 
+Each trail ends in a **verdict line** (`⇒ …`) that names which failure shape it is, so you do not
+have to infer it from the stages. The stages remain above it as the evidence.
+
 Read it by what is **missing**:
 
 | The trail shows | Verdict |

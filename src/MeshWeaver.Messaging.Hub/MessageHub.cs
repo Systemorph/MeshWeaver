@@ -72,6 +72,25 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     internal RequestFateLedger RequestFates => requestFates;
 
+    /// <summary>
+    /// Records one stage on the handler-side trail of an awaited request — the seam a HANDLER uses
+    /// to report on work it detached from the rule chain.
+    ///
+    /// <para>Needed because the pipeline's own <c>HANDLER_ENTER</c>/<c>HANDLER_EXIT</c> stages only
+    /// bound the RULE CHAIN. The canonical mesh handlers return <c>request.Processed()</c>
+    /// immediately and owe their reply from a composed observable they subscribed and let run — so
+    /// from the pipeline's point of view a handler that answers in 3 s, one that faults silently and
+    /// one that completes EMPTY without ever posting are indistinguishable. Whichever of those it is
+    /// is precisely the open question on issue #981, and only the handler can answer it.</para>
+    ///
+    /// <para>No-ops when nothing is awaiting <paramref name="requestId"/>, so it is free to call
+    /// unconditionally from a hot handler path.</para>
+    /// </summary>
+    /// <param name="requestId">The awaited request delivery's id (<c>request.Id</c> on the handler side).</param>
+    /// <param name="stage">The stage description to append.</param>
+    internal void NoteRequestStage(string? requestId, string stage)
+        => requestFates.Find(requestId)?.Add(stage, Address);
+
     private readonly ILogger logger;
     /// <summary>The immutable configuration this hub was built from.</summary>
     public MessageHubConfiguration Configuration { get; }
