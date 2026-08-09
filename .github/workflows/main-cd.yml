@@ -832,6 +832,12 @@ jobs:
           # of one commit are two independent compilations, so the bits the plugins repo gates on
           # from GHCR would not provably be the bits validated in ACR (and it measured 411 s on top
           # of the ACR leg's 637 s, run 31269491065). imagetools copies the index by digest.
+          #
+          # 🚨 In phase B ON PURPOSE, so a GHCR outage BLOCKS the release rather than silently
+          # leaving the plugins repo's `latest` stale. It is a real coupling and it is the lesser
+          # evil: check-image-set.sh only sees ACR, so a GHCR miss after phase C would never be
+          # reconciled and nothing would ever notice. Here it fails CD, alerts, and the 3-hourly
+          # reconciler re-drives HEAD until it lands or the budget escalates.
           NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
           docker buildx imagetools create \
             --tag "ghcr.io/$NS/mw-plugin-test:$V_PLUGIN" \
