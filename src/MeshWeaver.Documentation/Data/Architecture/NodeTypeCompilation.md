@@ -308,6 +308,66 @@ loaded on it keep running until they cycle.
 
 ---
 
+## 🚨 That recompile can FAIL — and nothing upstream can warn you
+
+Rule 3 guarantees a framework upgrade recompiles **every** dynamic NodeType. That recompile
+builds source **stored in the mesh** against the **new** framework — and nothing in the build
+pipeline has ever type-checked it.
+
+### Where NodeType source actually lives
+
+|  | Repo file | Mesh node |
+|---|---|---|
+| Example | `samples/Graph/Data/SocialMedia/Post/Source/*.cs` | `SocialMedia/Post/Source/*` |
+| Role | **import seed** — declared `<None Include="**/*" …>` in `MeshWeaver.Samples.Graph.csproj` | **the runtime source of truth** |
+| Compiled by `dotnet build` / CI | **Never.** It is content, not code — no `<Compile>` item, no `-warnaserror`, no test | Compiled at runtime by `RunCompile` |
+| Edited by | git | in-mesh edit, `Patch`, GitSync import |
+
+The two **drift**. A node carries its own version history, so the mesh can hold source that is
+*older* than the repo's: a repo grep comes back clean while the deployed mesh still calls the API
+you removed. Treat the repo file as a seed, never as the answer to "what will the portal compile?"
+
+### The failure cascade
+
+A failed type produces no assembly, so everything downstream of it is *skipped* rather than built
+(`NodeTypeDependencyGraph.FirstBlockedBy`), and `DynamicTypePreWarmer` refuses readiness for any
+type that regressed against its pre-bake baseline:
+
+```
+framework API deleted in src/  →  in-mesh caller no longer compiles
+  → NodeType = CompileError
+  → every dependent = UpstreamFailed          (transitive, in topological order)
+  → DynamicTypePreWarmer: REFUSING READINESS
+  → instance hubs never activate → each SubscribeRequest waits the full 60 s → faults
+  → hung pages, failed liveness probes, dropped silo
+```
+
+The shape in the log is a `CS1061` / `CS0103` against framework surface:
+
+```
+CS1061: 'MessageHubConfiguration' does not contain a definition for 'AddTracking'
+```
+
+### The obligation on framework changes
+
+Removing or renaming any public framework surface — extension methods on
+`MessageHubConfiguration` / `IMessageHub`, `Controls.*`, `host.*` helpers, content base types — is
+a **breaking change to code the compiler cannot see**. Before deleting one:
+
+1. `grep -rn "<Symbol>" content samples/*/Data` — catches in-repo node source.
+2. Search the **live mesh** (`search_chunks`) — catches nodes that drifted from the repo.
+3. Port or delete the callers in the same change, then sweep.
+
+### The pre-prod sweep
+
+`Search('nodeType:NodeType')` → `LspDiagnosticsForNode('@{path}')` per type (reads the *cached*
+compilation, no re-emit) → fix roots first, since one red upstream reports as a failure in every
+dependent → re-check until every type reads `Ok`. Warnings are in scope: an unregistered `$type`
+leaves content as an untyped `JsonElement`, which renders **empty** rather than erroring. The full
+protocol lives in the `/code` skill.
+
+---
+
 ## Quick reference
 
 | I want to… | Do this |
@@ -323,3 +383,6 @@ loaded on it keep running until they cycle.
 | Pin instances to a fixed release | Set `NodeTypeDefinition.RequestedReleasePath` |
 | Understand why it recompiled | `HasUsableBuild` failed rule 2 (assembly gone) or rule 3 (framework changed) |
 | Understand a "Compile leg '…' did not complete within Ns" error | That stage stopped answering — see [Every stage is bounded](#every-stage-is-bounded--a-compile-can-never-park-at-compiling) |
+| Delete or rename a public framework API | Grep `content` + `samples/*/Data` **and** search the live mesh for callers first — CI never compiles in-mesh source |
+| Check the mesh is shippable | `Search('nodeType:NodeType')` → `LspDiagnosticsForNode` per type → every one reads `Ok` |
+| Understand why one bad NodeType took the portal down | `CompileError` → dependents `UpstreamFailed` → readiness refused → 60 s hub-activation faults |
