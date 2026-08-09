@@ -267,10 +267,20 @@ internal sealed class RequestFateLedger
                 return "the delivery was posted and no hub in this tree ever received it — it was "
                      + "lost between the post pipeline and routing, or its target lives outside "
                      + "this tree.";
-            // Only the seed stage. See Track: this is unambiguous, not an absence of evidence.
+            if (Has("POST_THREW"))
+                return "the Post THREW after the callback was already registered — the request was "
+                     + "never dispatched and the pending entry leaked. The stage carries the "
+                     + "exception; fix that, not any handler.";
+            if (Has("REGISTERED_AFTER_POST"))
+                return "the callback was registered AFTER its delivery was posted (the "
+                     + "Observe(delivery) overload), so the stages before registration were not "
+                     + "recorded. This trail cannot say where the delivery went — re-run with the "
+                     + "caller switched to Observe(request, options), which registers first.";
+            // Only the seed stage, and the two post-hoc cases above are excluded.
             return "the hub registered a callback and NO delivery carrying this id ever entered the "
                  + "pipeline — nothing was posted under this correlation, so no reply was ever "
-                 + "possible. Look at the caller between Observe and Post, not at any handler.";
+                 + "possible. The gap is in the CALLER between Observe and Post (a throw, an early "
+                 + "return, a swallowed post), not in any handler.";
         }
     }
 }

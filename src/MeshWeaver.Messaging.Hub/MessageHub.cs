@@ -869,9 +869,13 @@ public sealed class MessageHub : IMessageHub
     public IObservable<IMessageDelivery> Observe(IMessageDelivery delivery)
     {
         var requestType = delivery.Message?.GetType().Name ?? "<null>";
-        return RestoreUserContextOnEmission(
-            ObserveById(delivery.Id, requestType, delivery.Target),
-            delivery.AccessContext);
+        var observable = ObserveById(delivery.Id, requestType, delivery.Target);
+        // This overload registers the callback for a delivery the caller ALREADY posted, so every
+        // stage that happened before now was missed. Mark it, or a trail carrying only the
+        // registration would read as "nothing was ever posted" — the opposite of the truth (#981).
+        requestFates.Find(delivery.Id)?.Add(
+            "REGISTERED_AFTER_POST (Observe(delivery) overload — earlier stages not recorded)", Address);
+        return RestoreUserContextOnEmission(observable, delivery.AccessContext);
     }
 
     /// <summary>
@@ -897,7 +901,23 @@ public sealed class MessageHub : IMessageHub
         var probeOptions = options(new PostOptions(Address));
         var requestType = r?.GetType().Name ?? "<null>";
         var subject = GetOrAddResponseSubject(messageId, requestType, probeOptions.Target);
-        Post(r, opts => options(opts).WithMessageId(messageId));
+        // 🔍 DIAGNOSTIC ONLY (#981) — records and RETHROWS; it changes no behaviour.
+        //
+        // The callback is registered on the line above and the delivery is posted on the line
+        // below. A throw BETWEEN them leaves a pending callback that nothing will ever answer:
+        // the entry is in responseSubjects, no delivery carrying its id ever reaches the pipeline,
+        // and the quiescing budget reports it as a leak with no handler-side stages at all. That
+        // is precisely the shape the first captures showed, so the window needs its own stage
+        // rather than being inferred from an absence.
+        try
+        {
+            Post(r, opts => options(opts).WithMessageId(messageId));
+        }
+        catch (Exception postEx)
+        {
+            requestFates.Find(messageId)?.Add($"POST_THREW {postEx.GetType().Name}: {postEx.Message}", Address);
+            throw;
+        }
         return RestoreUserContextOnEmission(
             WrapWithCancelOnDispose(
                 ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
