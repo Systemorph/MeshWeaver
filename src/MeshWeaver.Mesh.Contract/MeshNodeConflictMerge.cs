@@ -50,6 +50,16 @@ public sealed record MeshNodeConflictResolution(
 /// (latest always wins, never reported), and how <see cref="MeshNode.Content"/> is projected to JSON
 /// and materialised back into its CLR type.</para>
 ///
+/// <para><b>Which members take the string merge.</b> Only <see cref="MeshNode.Name"/> and
+/// <see cref="MeshNode.Description"/> — the prose. <see cref="MeshNode.NodeType"/>,
+/// <see cref="MeshNode.Category"/>, <see cref="MeshNode.Icon"/> and <see cref="MeshNode.DesiredId"/>
+/// are wire identifiers, not text: splicing them could retype a node (<c>"Code"</c> + <c>"CodeCell"</c>),
+/// which drives routing and hub activation. <see cref="MeshNode.PreRenderedHtml"/> is derived from
+/// <see cref="MeshNode.Content"/>, so it follows the merged content rather than being spliced. All of
+/// those take latest-wins-and-REPORT, so the policy's fallback still covers them and nothing is
+/// dropped silently. The user data that actually benefits from merging lives in
+/// <see cref="MeshNode.Content"/>, which is merged leaf by leaf.</para>
+///
 /// <para>🚨 <b>Identity and bookkeeping always come from LATEST, never reported.</b>
 /// <see cref="MeshNode.Id"/>, <see cref="MeshNode.Namespace"/>, <see cref="MeshNode.MainNode"/>,
 /// <see cref="MeshNode.Version"/>, <see cref="MeshNode.LastModified"/>,
@@ -83,16 +93,27 @@ public static class MeshNodeConflictMerge
         var merged = new List<string>();
         var overwritten = new List<string>();
 
+        // PROSE members take the string merge. Only these two: they are text a human wrote, which is
+        // what a splice-level merge is meaningful on.
         var result = latest with
         {
             Name = MergeText(nameof(MeshNode.Name), latest.Name, stale.Name, merged, overwritten),
             Description = MergeText(nameof(MeshNode.Description), latest.Description, stale.Description, merged, overwritten),
-            NodeType = MergeText(nameof(MeshNode.NodeType), latest.NodeType, stale.NodeType, merged, overwritten),
-            Category = MergeText(nameof(MeshNode.Category), latest.Category, stale.Category, merged, overwritten),
-            Icon = MergeText(nameof(MeshNode.Icon), latest.Icon, stale.Icon, merged, overwritten),
-            DesiredId = MergeText(nameof(MeshNode.DesiredId), latest.DesiredId, stale.DesiredId, merged, overwritten),
-            PreRenderedHtml = MergeText(nameof(MeshNode.PreRenderedHtml), latest.PreRenderedHtml, stale.PreRenderedHtml, merged, overwritten),
         };
+
+        // 🚨 IDENTIFIER-shaped strings are NOT prose and are deliberately excluded from the string
+        // rule: NodeType, Category, Icon and DesiredId are wire discriminators that drive routing and
+        // per-node hub activation. The superset rule would happily splice "Code" and "CodeCell" into
+        // one of them and silently retype the node — an outsized consequence next to a merged
+        // sentence. They take the same latest-wins-and-REPORT path as the true non-strings, so the
+        // policy's fallback still applies and nothing is dropped silently. PreRenderedHtml joins them
+        // because it is DERIVED from Content: the correct value follows from the merged content, and
+        // splicing two renderings could only produce broken markup.
+        ReportIfDifferent(nameof(MeshNode.NodeType), latest.NodeType, stale.NodeType, overwritten);
+        ReportIfDifferent(nameof(MeshNode.Category), latest.Category, stale.Category, overwritten);
+        ReportIfDifferent(nameof(MeshNode.Icon), latest.Icon, stale.Icon, overwritten);
+        ReportIfDifferent(nameof(MeshNode.DesiredId), latest.DesiredId, stale.DesiredId, overwritten);
+        ReportIfDifferent(nameof(MeshNode.PreRenderedHtml), latest.PreRenderedHtml, stale.PreRenderedHtml, overwritten);
 
         // Non-string members: latest wins, reported when the stale writer held something else.
         ReportIfDifferent(nameof(MeshNode.Order), latest.Order, stale.Order, overwritten);
