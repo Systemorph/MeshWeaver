@@ -13,7 +13,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// the prod DB filled with schemas like <c>login?error=auth_failed</c> and
 /// <c>search?q=agent&amp;hq=scope%3adescendants</c> — request URLs routed as mesh paths —
 /// and corrupted itself; #714 found the same junk (query-string schemas, each with its own
-/// <c>mesh_nodes</c>) in the memex and the cloud database databases. Pure validation: no DB, no Docker.
+/// <c>mesh_nodes</c>) in the memex and memex-cloud databases. Pure validation: no DB, no Docker.
 /// </summary>
 public class PartitionSegmentValidationTest
 {

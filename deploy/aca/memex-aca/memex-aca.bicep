@@ -87,7 +87,7 @@ resource storageVolumeFileService 'Microsoft.Storage/storageAccounts/fileService
 }
 
 resource shares_volumes_memex_postgres_0 'Microsoft.Storage/storageAccounts/fileServices/shares@2024-01-01' = {
-  name: take('sharesvolumes<pg-server>0-${uniqueString(resourceGroup().id)}', 63)
+  name: take('sharesvolumesmemexpostgres0-${uniqueString(resourceGroup().id)}', 63)
   properties: {
     enabledProtocols: 'SMB'
     shareQuota: 1024
@@ -96,7 +96,7 @@ resource shares_volumes_memex_postgres_0 'Microsoft.Storage/storageAccounts/file
 }
 
 resource managedStorage_volumes_memex_postgres_0 'Microsoft.App/managedEnvironments/storages@2025-07-01' = {
-  name: take('managedstoragevolumes<pg-server>${uniqueString(resourceGroup().id)}', 24)
+  name: take('managedstoragevolumesmemexpostgres${uniqueString(resourceGroup().id)}', 24)
   properties: {
     azureFile: {
       accountName: memex_aca_storageVolume.name

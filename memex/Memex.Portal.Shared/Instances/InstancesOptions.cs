@@ -41,14 +41,20 @@ public record InstancesOptions
 
     // ── Displayed / used for the guided create-instance command generation (Instances.md) ──
 
-    /// <summary>AKS cluster name (display + generated commands).</summary>
-    public string ClusterName { get; init; } = "the AKS cluster";
+    // These three are substituted VERBATIM into the copy/pasteable `az` commands the provisioning
+    // plan generates, so an unconfigured default has to survive being pasted into a shell. Prose
+    // ("the AKS cluster") does not: the spaces split it into three arguments and `az` reports a
+    // confusing error about the wrong flag. A single-token placeholder fails loudly at the right
+    // spot instead, and reads as "fill me in".
 
-    /// <summary>Azure resource group of the cluster + PG server (generated commands).</summary>
-    public string ResourceGroup { get; init; } = "the AKS resource group";
+    /// <summary>AKS cluster name (display + generated commands). Placeholder until configured.</summary>
+    public string ClusterName { get; init; } = "<aks-cluster>";
 
-    /// <summary>Shared PostgreSQL Flexible Server name (generated commands).</summary>
-    public string PostgresServer { get; init; } = "the Postgres server";
+    /// <summary>Azure resource group of the cluster + PG server (generated commands). Placeholder until configured.</summary>
+    public string ResourceGroup { get; init; } = "<aks-resource-group>";
+
+    /// <summary>Shared PostgreSQL Flexible Server name (generated commands). Placeholder until configured.</summary>
+    public string PostgresServer { get; init; } = "<pg-server>";
 
     /// <summary>DNS zone new instance hosts live under (generated commands / display).</summary>
     public string DnsZone { get; init; } = "meshweaver.cloud";
