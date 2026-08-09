@@ -81,6 +81,53 @@ public static class HubPermissionExtensions
     }
 
     /// <summary>
+    /// Runs ONE permission check and CLASSIFIES its outcome (issue #974): a verdict becomes
+    /// <see cref="PermissionCheckOutcome.Granted"/> / <see cref="PermissionCheckOutcome.Denied"/>,
+    /// a FAULTED fold becomes <see cref="PermissionCheckOutcome.Undetermined"/>.
+    ///
+    /// <para>🚨 <b>This is the one place the distinction can be made, so it is the only place it is
+    /// made.</b> The fold is the only party that knows whether it reached an answer. Callers branch
+    /// on <see cref="PermissionCheckOutcome.IsUndetermined"/>; nothing upstream re-derives the
+    /// difference from a <c>false</c> or from an exception message. Reporting a faulted fold as
+    /// "Access denied" is not merely imprecise — it sends a correctly-entitled user to request
+    /// permissions they already hold.</para>
+    ///
+    /// <para>The fault leg is a CLASSIFICATION, not a swallow: the reason travels out to the caller
+    /// (which turns it into <see cref="MeshWeaver.Messaging.ErrorType.Unavailable"/> on the bus) and
+    /// is logged by that caller. Nothing is defaulted to a verdict — and because
+    /// <see cref="PermissionCheckOutcome.IsGranted"/> is <c>false</c> on the undetermined leg, a
+    /// consumer that ignores the tri-state still fails CLOSED. Fail-closed and honest are not in
+    /// tension here; the previous code was fail-closed and dishonest.</para>
+    ///
+    /// <para>🚨 Composed inside <see cref="Observable.Defer{TResult}(Func{IObservable{TResult}})"/>
+    /// ON PURPOSE. Building the check touches <c>hub.Configuration</c> and
+    /// <c>hub.ServiceProvider</c>, both of which THROW on a hub whose DI scope is mid-disposal —
+    /// a synchronous throw that would otherwise escape past this classifier entirely and reach the
+    /// delivery pipeline as an unclassified fault. That is the exact edge #970's own review sweep
+    /// found in <c>LoadDbRolesAsync</c> (services resolved outside the classified chain); removing a
+    /// <c>catch</c> MOVES a failure, it does not delete it, so the classifier's mouth has to be
+    /// wide enough to swallow the composition too.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose configured evaluator answers the check.</param>
+    /// <param name="nodePath">Path the permission is evaluated on.</param>
+    /// <param name="userId">The user the check is about — always explicit, never ambient.</param>
+    /// <param name="permission">The permission being checked.</param>
+    public static IObservable<PermissionCheckOutcome> CheckPermissionOutcome(
+        this IMessageHub hub,
+        string nodePath,
+        string userId,
+        Permission permission)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        return Observable
+            .Defer(() => hub.CheckPermission(nodePath, userId, permission))
+            .Select(PermissionCheckOutcome.FromVerdict)
+            .Catch<PermissionCheckOutcome, Exception>(ex => Observable.Return(
+                PermissionCheckOutcome.Undetermined(
+                    $"permission fold on '{nodePath}' faulted: {ex.GetType().Name}: {ex.Message}")));
+    }
+
+    /// <summary>
     /// True when the current user (resolved from <see cref="AccessService.Context"/> /
     /// <see cref="AccessService.CircuitContext"/>) is a <b>global admin</b> — i.e. an
     /// admin on the <b>Admin partition</b> (<see cref="Permission.All"/> at scope

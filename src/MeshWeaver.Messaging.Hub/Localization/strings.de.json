@@ -56,6 +56,8 @@
   "error.accessDeniedHint": "Falls ein Zugriff bestehen sollte, bitte den Besitzer der Partition um Freigabe bitten.",
   "error.identityUnavailable": "Ihr Konto konnte gerade nicht geprüft werden.",
   "error.identityUnavailableHint": "Das ist ein vorübergehendes Problem auf unserer Seite und liegt nicht an Ihrem Konto. Sie sind weiterhin angemeldet — bitte einen Moment warten und die Seite neu laden. Eine erneute Anmeldung hilft nicht.",
+  "error.checkUnavailable": "Das konnte gerade nicht geladen werden.",
+  "error.checkUnavailableHint": "Etwas auf unserer Seite hat nicht rechtzeitig geantwortet, daher konnte dieser Inhalt nicht geprüft werden. Er ist weiterhin vorhanden, und an Ihrem Zugriff hat sich nichts geändert — bitte einen Moment warten und die Seite neu laden.",
   "error.viewFailed": "Diese Ansicht konnte nicht dargestellt werden.",
   "error.areaFailed": "Dieser Bereich konnte nicht dargestellt werden.",
   "error.dialogFailed": "Dieser Dialog konnte nicht dargestellt werden.",
