@@ -684,9 +684,86 @@ jobs:
   # pass/fail gate for tests + crashed hosts. (A shard job that infra-fails reds
   # the run on its own — GitHub's run conclusion is failure if ANY job fails,
   # regardless of this always() collector's own conclusion.)
+  # ── Cross-repo API gate: do the PLUGINS still compile against THIS PR's framework? ──
+  #
+  # 🚨 The bug class this exists for: plugin node source is Roslyn-compiled AT RUNTIME against
+  # this assembly, from a DIFFERENT REPO. So deleting a public member here is invisible to every
+  # check we had — a repo-local grep says "no callers", and the plugins repo's own CI compiles
+  # against a PUBLISHED image (MW_TEST_IMAGE, refreshed only by main-cd), so it keeps passing
+  # until that tag is rebuilt. Both repos stay green, the break lands in whatever deployment
+  # builds from source first, and the plugins repo then goes red REPO-WIDE for a change it never
+  # made. That is exactly how AiSettingsNodeType.AddSkillSource was deleted with a live caller in
+  # Store/Plugin/Source/Localizer.cs: Store failed to compile, and since nearly every module
+  # depends on Store, every plugin root node fell back to an untyped overlay — after burning a
+  # 60s settle timeout PER PACKAGE.
+  #
+  # The gate runs the SAME tester the plugins repo runs (tools/MeshWeaver.PluginTester, shipped
+  # in the platform image as mw-plugin-test) — import each node repo into a fresh in-process
+  # mesh, assert every NodeType reaches CompilationStatus.Ok, renders, and its `Tests` area runs
+  # green — but against the framework THIS PR just built, not a published tag. It reuses shard
+  # 0's build output, so it costs a download and the tester run, not a rebuild.
+  plugin-gate:
+    name: "Plugins compile against this PR"
+    needs: build
+    # Never block on the gate when the plugins checkout is unavailable (a fork PR has no access
+    # to the private repo). Skipping is correct there: a fork cannot break the private repo's
+    # consumers in a way this run could prove either way.
+    if: needs.build.result == 'success' && github.event.pull_request.head.repo.fork != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+    - uses: actions/checkout@v6
+      with: { fetch-depth: 1 }
+    - uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: 10.0.x
+    - name: "Download artifact: build output (shard 0)"
+      uses: actions/download-artifact@v6
+      with:
+        name: build-output-0
+    - name: Extract build output
+      run: |
+        set -euo pipefail
+        tar -I 'zstd --long=27' -xf build-output-0.tar.zst
+        rm -f build-output-0.tar.zst
+    - name: Check out MeshWeaver.Plugins
+      id: plugins
+      # A PAT/App token with read access to the private plugins repo. Absent (e.g. on a fork, or
+      # before the secret is provisioned) the gate reports SKIPPED rather than failing — an
+      # unavailable input is not evidence of a break.
+      continue-on-error: true
+      uses: actions/checkout@v6
+      with:
+        repository: Systemorph/MeshWeaver.Plugins
+        ref: main
+        path: plugins-repo
+        token: ${{ secrets.PLUGINS_REPO_TOKEN }}
+        fetch-depth: 1
+    - name: Import + compile + render + run every plugin's tests
+      if: steps.plugins.outcome == 'success'
+      run: |
+        set -euo pipefail
+        TESTER="$(find . -path '*/MeshWeaver.PluginTester/bin/*/mw-plugin-test.dll' | head -1)"
+        if [ -z "$TESTER" ]; then
+          echo "::error::mw-plugin-test.dll not in the build output — the gate cannot run."
+          exit 1
+        fi
+        echo "tester: $TESTER"
+        # plugin-gate.allow is the plugins repo's known-debt ratchet: listed failures are
+        # tolerated, NEW failures fail this PR. Same one-way contract the plugins CI uses, so the
+        # two gates cannot disagree about what is acceptable.
+        dotnet "$TESTER" "$GITHUB_WORKSPACE/plugins-repo" \
+          --allow "$GITHUB_WORKSPACE/plugins-repo/plugin-gate.allow"
+    - name: Report a skipped gate
+      if: steps.plugins.outcome != 'success'
+      run: |
+        echo "::warning::MeshWeaver.Plugins could not be checked out (no PLUGINS_REPO_TOKEN, or a fork PR) — the cross-repo API gate did NOT run for this PR."
+
   collect-results:
     name: "Consolidate test results"
-    needs: [precheck, build, test]
+    # plugin-gate is a NEEDS so this required check cannot go green while the plugins are
+    # broken by this PR — that is the whole point of the gate (see its step below).
+    needs: [precheck, build, test, plugin-gate]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -841,3 +918,13 @@ jobs:
         fi
         echo "Pruning ${#refspecs[@]} stale marker(s)."
         git push origin "${refspecs[@]}"
+
+    # ── The cross-repo gate decides this check too ──────────────────────────────────────────
+    # 🚨 `needs:` alone is NOT enough: this job runs with `if: always()`, so a failed dependency
+    # does not fail it — it would report success while the plugins are broken, which is precisely
+    # the silent-green failure the gate exists to end.
+    - name: Fail if the plugin gate failed
+      if: needs.plugin-gate.result == 'failure'
+      run: |
+        echo "::error::MeshWeaver.Plugins does not compile against this PR — see the 'Plugins compile against this PR' job. A public API change here breaks plugin node source that is Roslyn-compiled at runtime from the plugins repo."
+        exit 1
