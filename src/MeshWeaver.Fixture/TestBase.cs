@@ -26,6 +26,28 @@ public class TestBase : ServiceSetup, IAsyncLifetime
         Output = output;
         FileOutput = new XUnitFileOutputHelper(output, GetType().Name);
 
+        // 🚨 Register HERE, in the constructor — not in InitializeAsync.
+        //
+        // XUnitFileOutputRegistry is backed by an AsyncLocal, and an AsyncLocal written
+        // inside an `async` method is confined to that method's copied ExecutionContext:
+        // it is DISCARDED when the method returns. MonolithMeshTestBase overrides
+        // InitializeAsync as `async` (it awaits hosted-service starts and access setup),
+        // so registering from base.InitializeAsync() left the registry EMPTY by the time
+        // xUnit invoked AutoTestLoggingAttribute.Before. Before therefore never called
+        // SetCurrentTestMethod, XUnitFileOutputHelper.IsInTestMethod() stayed false for
+        // the whole test, and XUnitFileLogger.Log dropped EVERY record — so no ILogger
+        // line from any MonolithMeshTestBase test ever reached xUnit's captured output,
+        // at any level, on any platform. That is why the Debug channels added to
+        // test/MeshWeaver.Query.Test/appsettings.json to diagnose #993 emitted nothing
+        // even after #997 fixed the appsettings copy race: the file was landing, the
+        // level filter said enabled, and the sink was closed.
+        //
+        // The constructor runs synchronously on the runner's own flow, so the write
+        // survives to Before — which is what the registry's own doc comment always
+        // claimed ("the value set in a test's ctor flows to its method"). Pinned by
+        // TestOutputLoggingLifecycleTest.
+        XUnitFileOutputRegistry.Register(this, FileOutput);
+
         // Configure file logging integration. Log-level filters are bound
         // from appsettings.json in ServiceSetup (see ServiceSetup.CreateServiceCollection
         // → logging.AddConfiguration("Logging")). Flip the shared
@@ -50,10 +72,10 @@ public class TestBase : ServiceSetup, IAsyncLifetime
     {
         Initialize();
         SetOutputHelper(FileOutput);
-        
-        // Register this test instance for cross-class access
-        XUnitFileOutputRegistry.Register(this, FileOutput);
-        
+
+        // (Registration happens in the constructor — see the note there. Doing it from
+        // here is what broke test logging for every async-InitializeAsync test base.)
+
         // Get logger after service provider is built
         _logger = ServiceProvider.GetService(typeof(ILogger<TestBase>)) as ILogger<TestBase>;
         
