@@ -64,8 +64,23 @@ public class TwoSiloCacheUpdateFixture : IAsyncLifetime
                 // cross-silo routing path.
                 builder.Options.InitialSilosCount = 2;
                 builder.AddSiloBuilderConfigurator<TwoSiloConfigurator>();
+
+                // 🚨 The ONE fixture that needs a per-cluster instance inside a SILO host.
+                // Everywhere else the silo's own DI singleton is already per-cluster and only
+                // the client has to be pointed at it; here TWO silos must share ONE store, and
+                // neither can be handed an object (Orleans new()s the configurator). Replacing
+                // CreateSiloAsync is TestCluster's only silo-host hook. It also replaces
+                // DefaultCreateSiloAsync, which is what wires the in-memory connection transport
+                // from a hub private to TestCluster — so the setter switches
+                // Options.ConnectionTransport to TcpSocket, matching what DeployAsync declares
+                // for every cluster whose client we own.
+                builder.CreateSiloAsync = async (siloName, configuration) =>
+                    await InProcessSiloHandle.CreateAsync(
+                        siloName,
+                        configuration,
+                        hostBuilder => hostBuilder.ConfigureServices(
+                            services => backingStore.Register(services)));
             },
-            configureSiloServices: services => backingStore.Register(services),
             withClient: false);
     }
 

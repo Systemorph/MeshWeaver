@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
+using System.Net;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -15,21 +17,22 @@ using Orleans.TestingHost;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// The in-memory store shared by every host of ONE test cluster — the silo host(s)
-/// and the Orleans client host, which live in the same process but build separate DI
-/// containers. Production runs PostgreSQL, where several adapter instances point at the
-/// same database; the test cluster needs the same shape so a <c>CreateNodeRequest</c>
-/// handled on the client mesh hub is visible to the silo's path resolver.
+/// A mesh-node store shared by several hosts of ONE test cluster. Production runs
+/// PostgreSQL, where several adapter instances point at the same database; the test cluster
+/// needs the same shape so a node written through one host is visible to another's path
+/// resolver.
 ///
-/// <para>🚨 This is an INSTANCE, created and owned by the fixture that deploys the
-/// cluster, and it dies with it. It replaces the process-wide
-/// <c>SharedOrleansFixture.SharedNodes</c> / <c>SharedPartitionObjects</c> statics and the
-/// <c>ResetSharedState()</c> that had to wipe them at the start of every cluster init.
-/// That wipe was the isolation mechanism, and it is precisely what made the assembly
-/// un-parallelisable: class B's init cleared the dictionaries while class A was mid-test,
-/// deleting A's nodes ("No node found at …"). With a per-cluster instance there is nothing
-/// process-wide to clear, so no reset exists to race. See AGENTS.md → "No static
-/// collections" and issue #999.</para>
+/// <para>🚨 This is an INSTANCE, created and owned by the fixture that deploys the cluster,
+/// and it dies with it. It replaces the process-wide <c>SharedNodes</c> /
+/// <c>SharedPartitionObjects</c> statics and the <c>ResetSharedState()</c> that wiped them at
+/// the start of every cluster init. That wipe WAS the isolation, and it is what made the
+/// assembly un-parallelisable: class B's init cleared the dictionaries while class A was
+/// mid-test. See AGENTS.md → "No static collections" and issue #999.</para>
+///
+/// <para>Only <see cref="TwoSiloCacheUpdateFixture"/> needs this type. Everywhere else the
+/// per-cluster store is simply the SILO's own <see cref="InMemoryStorageAdapter"/> DI
+/// singleton — already per-cluster by construction — which the Orleans client borrows via
+/// <see cref="OrleansTestCluster.ShareSiloNodeStore"/>.</para>
 /// </summary>
 internal sealed class OrleansTestBackingStore
 {
@@ -42,18 +45,10 @@ internal sealed class OrleansTestBackingStore
     // per-node hub's workspace stream and works without a shared notifier.
     private readonly ConcurrentDictionary<string, List<object>> partitionObjects = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// Points a host's <see cref="InMemoryStorageAdapter"/> at this cluster's dictionaries.
-    /// Registered from the host post-configure hook so it runs AFTER the silo/client
-    /// configurators have added the default adapter.
-    /// </summary>
+    /// <summary>Points a host's <see cref="InMemoryStorageAdapter"/> at this cluster's dictionaries.</summary>
     public IServiceCollection Register(IServiceCollection services)
     {
-        services.Replace(ServiceDescriptor.Singleton<InMemoryStorageAdapter>(sp =>
-            new InMemoryStorageAdapter(
-                nodes,
-                partitionObjects,
-                sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>())));
+        services.Replace(ServiceDescriptor.Singleton(new InMemoryStorageAdapter(nodes, partitionObjects)));
         return services;
     }
 
@@ -68,15 +63,15 @@ internal sealed class OrleansTestBackingStore
 /// A deployed Orleans <see cref="TestCluster"/> together with the Orleans client host that
 /// <see cref="OrleansTestCluster.DeployAsync"/> created for it.
 ///
-/// <para>The client host is built here rather than by <c>TestCluster.DeployAsync</c>
-/// (<c>InitializeClientOnDeploy = false</c>) because that is what makes per-cluster state
-/// possible at all: Orleans instantiates <see cref="ISiloConfigurator"/> /
-/// <see cref="IHostConfigurator"/> types via <c>new()</c>, so a configurator can never be
-/// handed an instance — which is why the shared dictionaries used to be statics. Both
-/// creation paths this class uses (<see cref="InProcessSiloHandle.CreateAsync"/> and
-/// <see cref="TestClusterHostFactory.CreateClusterClient"/>) take a post-configure
-/// <c>Action&lt;IHostBuilder&gt;</c>, i.e. a CLOSURE, which can capture the per-cluster
-/// instances. That closure is the channel the <c>new()</c> constraint denies.</para>
+/// <para><b>Why the client host is ours.</b> Orleans instantiates
+/// <see cref="ISiloConfigurator"/> / <see cref="IHostConfigurator"/> types via <c>new()</c>, so
+/// a configurator can never be handed an instance — which is why the shared dictionaries used
+/// to be statics. For a SILO that no longer matters: its <see cref="InMemoryStorageAdapter"/>
+/// is a DI singleton of that silo's own container, i.e. already per-cluster and already dying
+/// with the cluster. What was missing was a way to point the CLIENT at that same instance, and
+/// <c>TestCluster.InitializeClientAsync</c> offers no hook. <see cref="TestClusterHostFactory.CreateClusterClient"/>
+/// does — it takes a post-configure <c>Action&lt;IHostBuilder&gt;</c>, i.e. a CLOSURE — so we
+/// deploy the client ourselves with <c>InitializeClientOnDeploy = false</c>.</para>
 ///
 /// <para>Consequence for callers: <c>Cluster.Client</c> is null on these clusters — use
 /// <see cref="ClientServices"/> / <see cref="ClusterClient"/> instead.</para>
@@ -100,12 +95,15 @@ public sealed class OrleansTestClusterHost
             "This cluster was deployed without an Orleans client (withClient: false).");
 
     public IClusterClient ClusterClient => ClientServices.GetRequiredService<IClusterClient>();
+
+    /// <summary>The services of one silo host in this cluster (default: the first).</summary>
+    public IServiceProvider SiloServices(int index = 0) => Cluster.SiloServices(index);
 }
 
 /// <summary>
 /// Deploys Orleans test clusters whose per-cluster state is an INSTANCE rather than a
 /// process-wide static. See <see cref="OrleansTestClusterHost"/> for why the client host is
-/// created here, and <see cref="OrleansTestBackingStore"/> for what the statics used to be.
+/// created here.
 /// </summary>
 internal static class OrleansTestCluster
 {
@@ -113,31 +111,30 @@ internal static class OrleansTestCluster
     /// Builds, deploys and identity-seeds a cluster.
     /// </summary>
     /// <param name="configure">Configures the <see cref="TestClusterBuilder"/> — silo count,
-    /// silo/client configurator types. Everything Orleans can express as a <c>new()</c>-able
-    /// type still goes here.</param>
-    /// <param name="configureSiloServices">Per-cluster service registrations applied to every
-    /// silo host AFTER its configurators have run. This is where instance state (a
-    /// <see cref="OrleansTestBackingStore"/>, a chat-client factory) enters the silo container.</param>
-    /// <param name="configureClientServices">The same, for the Orleans client host.</param>
+    /// silo/client configurator types.</param>
+    /// <param name="configureClientServices">Per-cluster service registrations applied to the
+    /// Orleans client host AFTER its configurators have run. The deployed
+    /// <see cref="TestCluster"/> is passed in so the client can borrow instances the silos
+    /// already own — see <see cref="ShareSiloNodeStore"/>.</param>
     /// <param name="withClient">False for silo-only clusters (no Orleans client host is created).</param>
     public static async Task<OrleansTestClusterHost> DeployAsync(
         Action<TestClusterBuilder> configure,
-        Action<IServiceCollection>? configureSiloServices = null,
-        Action<IServiceCollection>? configureClientServices = null,
+        Action<IServiceCollection, TestCluster>? configureClientServices = null,
         bool withClient = true)
     {
         var builder = new TestClusterBuilder();
         // We create the client host ourselves (below) so it can receive the per-cluster
         // closure; DeployAsync must not create one first.
         builder.Options.InitializeClientOnDeploy = false;
+        // 🚨 And therefore the cluster must speak TCP. TestCluster's default transport is
+        // ConnectionTransportType.InMemory, wired through an InMemoryTransportConnectionHub that
+        // is a PRIVATE field of TestCluster: DefaultCreateSiloAsync and InitializeClientAsync
+        // both hand it to their hosts, and nothing outside can. A client we build ourselves can
+        // never join that hub, so it would dial the silos' TCP endpoints and get
+        // ConnectionRefused. Declaring TcpSocket makes both ends agree — real loopback sockets,
+        // which is what TestCluster used by default before the in-memory transport existed.
+        builder.Options.ConnectionTransport = ConnectionTransportType.TcpSocket;
         configure(builder);
-
-        if (configureSiloServices is not null)
-            builder.CreateSiloAsync = async (siloName, configuration) =>
-                await InProcessSiloHandle.CreateAsync(
-                    siloName,
-                    configuration,
-                    hostBuilder => hostBuilder.ConfigureServices(configureSiloServices));
 
         var cluster = builder.Build();
         await cluster.DeployAsync();
@@ -145,21 +142,11 @@ internal static class OrleansTestCluster
         IHost? clientHost = null;
         if (withClient)
         {
-            // Mirrors TestCluster.InitializeClientAsync — same configuration sources, so the
-            // client resolves the same gateway list and the same ClientBuilderConfigurator
-            // types — plus the post-configure closure Orleans' own path has no room for.
-            var configurationBuilder = new ConfigurationBuilder();
-            foreach (var source in cluster.ConfigurationSources)
-                configurationBuilder.Add(source);
-
             clientHost = TestClusterHostFactory.CreateClusterClient(
                 "MainClient",
-                configurationBuilder.Build(),
-                hostBuilder =>
-                {
-                    if (configureClientServices is not null)
-                        hostBuilder.ConfigureServices(configureClientServices);
-                });
+                BuildClientConfiguration(cluster),
+                hostBuilder => hostBuilder.ConfigureServices(services =>
+                    configureClientServices?.Invoke(services, cluster)));
             await clientHost.StartAsync();
         }
 
@@ -169,4 +156,71 @@ internal static class OrleansTestCluster
         OrleansTestIdentity.SeedDefaultIdentity(host);
         return host;
     }
+
+    /// <summary>
+    /// The configuration <c>TestCluster.InitializeClientAsync</c> would have built: the
+    /// cluster's own configuration sources PLUS the gateway list, which exists nowhere else.
+    /// The gateways are read off the LIVE silos, so this must run after <c>DeployAsync</c>.
+    ///
+    /// <para>🚨 Without the gateway section the client starts and then fails with
+    /// <c>SiloUnavailableException: Could not find any gateway in
+    /// 'Orleans.Messaging.StaticGatewayListProvider'</c> — it is not optional, and it is the
+    /// one piece of Orleans' client bring-up that owning the client host makes us responsible
+    /// for. Kept deliberately faithful to <c>TestCluster.InitializeClientAsync</c>; if Orleans
+    /// changes it, every Orleans test fails loudly at deploy rather than subtly at runtime.</para>
+    /// </summary>
+    private static IConfiguration BuildClientConfiguration(TestCluster cluster)
+    {
+        var configurationBuilder = new ConfigurationBuilder();
+        foreach (var source in cluster.ConfigurationSources)
+            configurationBuilder.Add(source);
+
+        if (cluster.Options.UseTestClusterMembership)
+        {
+            var gateways = cluster.Silos
+                .Where(silo => silo.IsActive && silo.GatewayAddress?.Endpoint is { Port: > 0 })
+                .Select(silo => new IPEndPoint(
+                    silo.GatewayAddress.Endpoint.Address, silo.GatewayAddress.Endpoint.Port))
+                .Distinct()
+                .ToList();
+
+            if (gateways.Count == 0)
+                gateways.AddRange(cluster.Options.GatewayPerSilo
+                    ? Enumerable
+                        .Range(cluster.Options.BaseGatewayPort, cluster.Options.InitialSilosCount)
+                        .Select(port => new IPEndPoint(IPAddress.Loopback, port))
+                    : [new IPEndPoint(IPAddress.Loopback, cluster.Options.BaseGatewayPort)]);
+
+            var clustering = new Dictionary<string, string?>();
+            var i = 0;
+            foreach (var gateway in gateways)
+                clustering[$"Orleans:Clustering:Gateways:{i++}"] = gateway.ToString();
+            clustering["Orleans:Clustering:ProviderType"] = "Development";
+            configurationBuilder.AddInMemoryCollection(clustering);
+        }
+
+        return configurationBuilder.Build();
+    }
+
+    /// <summary>
+    /// Points the Orleans client's <see cref="InMemoryStorageAdapter"/> at the SILO's instance,
+    /// so the two hosts are one logical store — the shape production has for free, where every
+    /// adapter instance points at the same PostgreSQL database. Without it each DI container
+    /// builds its own dictionary and the silo's routing emits NotFound for a path the client
+    /// mesh hub just created.
+    ///
+    /// <para>The silo's adapter is a singleton of that silo's own container: per-cluster by
+    /// construction and disposed with it. That is what makes the old process-wide statics
+    /// unnecessary rather than merely relocated.</para>
+    /// </summary>
+    public static void ShareSiloNodeStore(IServiceCollection services, TestCluster cluster) =>
+        services.Replace(ServiceDescriptor.Singleton(
+            cluster.SiloServices().GetRequiredService<InMemoryStorageAdapter>()));
+}
+
+/// <summary>Reaching a silo host's services from a <see cref="TestCluster"/>.</summary>
+internal static class OrleansTestClusterExtensions
+{
+    public static IServiceProvider SiloServices(this TestCluster cluster, int index = 0) =>
+        ((InProcessSiloHandle)cluster.Silos[index]).SiloHost.Services;
 }
