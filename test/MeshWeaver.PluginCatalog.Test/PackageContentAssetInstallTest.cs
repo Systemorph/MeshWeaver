@@ -113,7 +113,7 @@ public class PackageContentAssetInstallTest(ITestOutputHelper output) : Monolith
     [
         new($"{PackageId}/index.json",
             """{"$type":"MeshNode","id":"Course","namespace":"","path":"Course","mainNode":"Course","name":"A Course","nodeType":"Space","state":"Active","content":{"$type":"PluginManifest","description":"A course with video."}}"""),
-        new($"{PackageId}/Lesson.md", "# Lesson\n\n<video src=\"/static/Course/content/videos/clip.mp4\"></video>\n"),
+        new($"{PackageId}/Lesson.md", "# Lesson\n\n<video src=\"/api/content/Course/content/videos/clip.mp4\"></video>\n"),
         new($"{PackageId}/content/videos/clip.mp4", "", VideoBytes),
         new($"{PackageId}/content/videos/clip.poster.png", "", PosterBytes),
         new($"{PackageId}/content/notes.txt", TextAssetContent),
@@ -155,9 +155,11 @@ public class PackageContentAssetInstallTest(ITestOutputHelper output) : Monolith
 
         // The collection is mounted at {contentRoot}/{root}, and ContentAssetMapper maps a repo path
         // {package}/content/<file> onto collection-relative <file>. So the bytes must be readable at
-        // exactly the layout /api/content/Course/videos/clip.mp4 (and the legacy
-        // /static/Course/content/videos/clip.mp4) resolve to — which is what the Lesson markup above
-        // already points at.
+        // exactly the layout /api/content/Course/videos/clip.mp4 resolves to — and equally at
+        // /api/content/Course/content/videos/clip.mp4, since `content` names the default collection.
+        // That second shape is what the Lesson markup above points at. 🚨 The pre-#587
+        // /static/Course/content/… shape is NOT an alias: /static carries build assets only and 404s
+        // for every caller, so authored asset URLs must name /api/content.
         var collectionRoot = Path.Combine(_contentRoot, PackageId);
 
         ReadAsset(collectionRoot, "videos/clip.mp4").Should().Equal(VideoBytes,
