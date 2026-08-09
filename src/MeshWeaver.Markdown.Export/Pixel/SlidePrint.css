@@ -2,8 +2,9 @@
  *
  * It mirrors the LIVE slide stage (MeshWeaver.Graph/SlideLayoutAreas.BuildStage): the same
  * 16:9 box, the same padding ratios, the same base type scale, and the same theme tokens —
- * which are injected at {{THEME_TOKENS}} straight from SlideLayoutAreas.ThemeTokens, so the
- * printed deck and the on-screen deck can never drift apart.
+ * injected into .mw-slide below straight from SlideLayoutAreas.ThemeTokens, so the printed
+ * deck and the on-screen deck can never drift apart. (Never spell the placeholder token in a
+ * comment: substitution is a plain string replace and would fill the comment too.)
  *
  * The page box is 13.333in x 7.5in — the standard 16:9 presentation page, exactly 1280x720
  * CSS px at 96dpi. That matters twice over: it makes one slide one page with no scaling, and

@@ -1,9 +1,11 @@
 <!DOCTYPE html>
 <!-- Print document skeleton for the pixel-faithful deck export.
-     Placeholders are filled by SlidePrintComposer: {{TITLE}} (HTML-encoded node title),
-     {{STYLES}} (SlidePrint.css with its theme tokens resolved) and {{SLIDES}} (one
-     SlidePrintSection.html per slide). The document is self-contained by construction —
-     the headless browser prints it from a file:// URL with no network. -->
+     SlidePrintComposer fills the three placeholders below: the title (HTML-encoded), the
+     stylesheet (SlidePrint.css with its theme tokens resolved), and one section per slide
+     (SlidePrintSection.html). The document is self-contained by construction — the headless
+     browser prints it from a file:// URL with no network.
+     NB: never spell a placeholder token inside a comment — substitution is a plain string
+     replace and would fill the comment too, duplicating the whole deck. -->
 <html lang="en">
 <head>
     <meta charset="utf-8" />
