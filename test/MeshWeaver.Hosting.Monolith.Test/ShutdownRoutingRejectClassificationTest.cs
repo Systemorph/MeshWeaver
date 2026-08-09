@@ -58,6 +58,15 @@ public class ShutdownRoutingRejectClassificationTest(ITestOutputHelper output) :
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
             .ConfigureHub(c => c
+                // The base's 500 ms budget is a LEAKED-callback detector, and it assumes no test
+                // deliberately has a request in flight when Quiescing starts. This one does — by
+                // construction: the probe's pending callback IS what holds the window open, and it
+                // is answered by a routing round trip that crosses two thread-pool hops. 500 ms is
+                // the wrong budget for that on a loaded 2-core runner, and blowing it fails the
+                // CLASS with a leak report instead of the assertion. Nothing is masked: the probe's
+                // own 10 s Rx timeout fires FIRST if the NACK never arrives, so a genuinely
+                // unanswered request still fails here, loudly, and on the right assertion.
+                .WithQuiesceTimeout(TimeSpan.FromSeconds(20))
                 .WithTypes(typeof(StallMeshActionBlock))
                 .WithHandler<StallMeshActionBlock>((_, request) =>
                 {
@@ -107,7 +116,7 @@ public class ShutdownRoutingRejectClassificationTest(ITestOutputHelper output) :
             probe = Mesh.Observe(
                     new GetDataRequest(new MeshNodeReference()),
                     o => o.WithTarget(new Address(path)))
-                .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+                .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
 
             // 3. Dispose: IsDisposing flips synchronously, ShutdownRequest queues after the probe.
             Mesh.Dispose();
