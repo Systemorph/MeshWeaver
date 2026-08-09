@@ -110,9 +110,9 @@ public class TrackedChangeProjectionTest(ITestOutputHelper output) : MonolithMes
     /// replays the node's currently cached snapshot, and immediately after an edit that is still the
     /// PRE-edit one: <c>stream.Update</c> returns the locally computed node optimistically and the
     /// storage layer stamps the reconciled version a moment later ("take the next emission off the
-    /// same handle" for the owner's reconciled state). <c>ChangeProjection.FromHistory</c> projects
+    /// same handle" for the owner's reconciled state). <c>ChangeProjection.Between</c> projects
     /// only versions STRICTLY OLDER than the node it is handed, so a stale snapshot makes its
-    /// <c>older</c> set empty and the projection comes back EMPTY — with every version row already
+    /// step set empty and the projection comes back EMPTY — with every version row already
     /// sitting in the store. Waiting on the version ROWS does not imply the NODE has caught up: the
     /// history and the node are two different stores, and a bare <c>Take(1)</c> silently asserted
     /// against whichever snapshot happened to be cached.</para>
@@ -155,8 +155,10 @@ public class TrackedChangeProjectionTest(ITestOutputHelper output) : MonolithMes
         var current = await NodeAtVersion(path, versions.Max(v => v.Version)).Should().Within(Step).Emit();
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
 
+        // The reader names the baseline — here the version the document was created at, so the
+        // projection covers every edit since.
         var changes = await ChangeProjection
-            .FromHistory(versionQuery, current, Mesh.JsonSerializerOptions)
+            .Between(versionQuery, current, versions.Min(v => v.Version), Mesh.JsonSerializerOptions)
             .Should().Within(Step).Emit();
 
         foreach (var change in changes)
@@ -189,6 +191,54 @@ public class TrackedChangeProjectionTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
+    /// The reader states the range and gets exactly that range. Picking a baseline AFTER an earlier
+    /// edit excludes that edit from the redline — which is the whole point of naming two versions
+    /// rather than being shown "everything that ever happened".
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task Between_CoversOnlyTheChosenRange()
+    {
+        var path = $"test/range-{Guid.NewGuid():N}"[..22];
+        await NodeFactory.CreateNode(MeshNode.FromPath(path) with
+        {
+            Name = "Ranged Report",
+            NodeType = MarkdownNodeType.NodeType,
+            State = MeshNodeState.Active,
+            Content = new MarkdownContent { Content = Baseline }
+        }).Should().Within(Step).Emit();
+
+        await EditAs(path, "alice", "grew steadily", "grew SEVENTEEN percent");
+        var afterAlice = (await WaitForVersions(path, 2).Should().Within(Step).Emit()).Max(v => v.Version);
+
+        await EditAs(path, "bob", "stayed flat", "stayed FLATTISH");
+        await EditAs(path, "carol", "remains cautious", "remains OPTIMISTIC");
+
+        var versions = await WaitForVersions(path, 4).Should().Within(Step).Emit();
+        var current = await NodeAtVersion(path, versions.Max(v => v.Version)).Should().Within(Step).Emit();
+        var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
+
+        // Baseline = the version alice's edit produced, so her change is BEHIND the baseline.
+        var ranged = await ChangeProjection
+            .Between(versionQuery, current, afterAlice, Mesh.JsonSerializerOptions)
+            .Should().Within(Step).Emit();
+
+        foreach (var change in ranged)
+            Output.WriteLine($"  {change.ChangeType} by '{change.Author}': '{change.OriginalText}' -> '{change.NewText}'");
+
+        ranged.Should().HaveCount(2, "only the two edits after the chosen baseline are in range");
+        ranged.Select(c => c.Author).Order().Should().Equal("bob", "carol");
+        ranged.Should().NotContain(c => c.NewText != null && c.NewText.Contains("SEVENTEEN"),
+            "alice's edit is at the baseline, so it is not part of what changed SINCE it");
+
+        // A baseline at (or past) the target is not a range at all — it yields nothing rather than
+        // quietly falling back to some other pair.
+        var empty = await ChangeProjection
+            .Between(versionQuery, current, current.Version, Mesh.JsonSerializerOptions)
+            .Should().Within(Step).Emit();
+        empty.Should().BeEmpty("comparing a version with itself has no changes to show");
+    }
+
+    /// <summary>
     /// Reverting a projected change is a NORMAL versioned write: the text goes back and the revert
     /// itself becomes the newest version — which is what makes "reject" auditable instead of a
     /// satellite quietly disappearing.
@@ -215,7 +265,8 @@ public class TrackedChangeProjectionTest(ITestOutputHelper output) : MonolithMes
         MarkdownOverviewLayoutArea.GetMarkdownContent(edited).Should().Contain("RECKLESS",
             "the projection is only meaningful against the node that actually carries the edit");
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
-        var change = (await ChangeProjection.FromHistory(versionQuery, edited, Mesh.JsonSerializerOptions)
+        var change = (await ChangeProjection
+                .Between(versionQuery, edited, rows.Min(r => r.Version), Mesh.JsonSerializerOptions)
                 .Should().Within(Step).Emit())
             .Should().ContainSingle().Subject;
         change.Author.Should().Be("dave");
