@@ -39,6 +39,17 @@ CI builds **Release with warnings-as-errors**: `dotnet build --no-restore -c Rel
 
 Full PR/merge gate: the `pullrequest` skill (CI must be GREEN before merge — main's image feeds the self-update).
 
+## 🚨🚨🚨 ABSOLUTE: Green CI does NOT mean the mesh compiles — in-mesh source is invisible to `dotnet build`
+
+**Every `.cs` stored in a mesh node — NodeType `Source/*.cs`, Scripts, layout areas — compiles at RUNTIME in the portal, NEVER in CI.** The repo's node trees are `<None>` content (`samples/Graph/MeshWeaver.Samples.Graph.csproj`), so **12k+ lines of C# under `samples/Graph/Data/` and `content/` are never type-checked by any build or any test.** Worse, **the deployed mesh's copy outranks the repo's** — a node carries its own version history and drifts from the file that seeded it, so reading the repo file does NOT tell you what the portal will compile.
+
+**A framework-version bump recompiles EVERY dynamic NodeType** (`HasUsableBuild` rule 3), so breakage never trickles in — the whole accumulated backlog detonates on one deploy. A NodeType left at `CompileError` **refuses portal readiness** and parks every instance hub for the full **60 s** activation budget: hung pages, failed liveness probes, dropped silos.
+
+- **Deleting or renaming ANY public framework surface is a breaking change to code the compiler cannot see.** Extension methods on `MessageHubConfiguration` / `IMessageHub`, `Controls.*`, `host.*` helpers, content base types — before you delete one: `grep -rn "<Symbol>" content samples/*/Data` **AND** search the live mesh (`search_chunks`), which may hold callers the repo has already dropped. Port or delete them in the SAME change. A clean `-c Release -warnaserror` build proves nothing here.
+- **Before prod, sweep every NodeType green.** `Search('nodeType:NodeType')` → `LspDiagnosticsForNode` per type → fix roots first (a red upstream makes every dependent `UpstreamFailed`) → re-sweep until all read `Ok`. **Warnings count**: `stayed an untyped JsonElement`/unregistered-`$type` means a view **renders empty** and layout areas "cannot be found"; `CS0105`/`CS8632` noise is the camouflage that hides the one fatal diagnostic.
+
+Full protocol: [`/code` skill](content/ai/Skill/code.md) → "In-mesh source is NEVER compiled by CI" + "The pre-prod sweep". Mechanism: [NodeTypeCompilation.md](src/MeshWeaver.Documentation/Data/Architecture/NodeTypeCompilation.md).
+
 ## 🚨🚨🚨 ABSOLUTE: No band-aids — root cause only, literally always
 
 **The user is LITERALLY NEVER interested in a band-aid, workaround, mitigation, or symptom-suppression.** When something hangs, deadlocks, flakes, or errors, find the EXACT defect and fix THAT — never paper over it.
