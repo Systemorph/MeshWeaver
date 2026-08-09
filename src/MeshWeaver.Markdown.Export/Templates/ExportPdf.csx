@@ -147,8 +147,16 @@ if (rootNode.NodeType == DeckNodeType.NodeType)
 
         // Images live behind the access-controlled api/content route, which a file:// document
         // cannot fetch. Resolve them here — under the exporting user's identity — and inline them
-        // so the print document is genuinely self-contained.
-        html = await InlineSlideAssets(html, Mesh, Log, Ct);
+        // so the print document is genuinely self-contained. An asset that cannot be read is left
+        // as a link and named in the log: under the print document's CSP that is a BLANK image, so
+        // it must never pass unremarked.
+        var inlining = await SlideAssetInliner.Inline(html, Mesh).FirstAsync().ToTask(Ct);
+        html = inlining.Html;
+        foreach (var unresolved in inlining.Unresolved)
+            Log.LogWarning("Slide asset {Reference} could not be inlined ({Reason}); it will print "
+                           + "as a blank image", unresolved.Reference, unresolved.Reason);
+        Log.LogInformation("Inlined {Inlined}/{Total} slide assets",
+            inlining.Inlined.Length, inlining.Inlined.Length + inlining.Unresolved.Length);
 
         var pixelBytes = await renderer.Render(html).FirstAsync().ToTask(Ct);
         Log.LogInformation("Rendered {Bytes} bytes (pixel-faithful)", pixelBytes.Length);
@@ -237,61 +245,6 @@ return new RenderedDocument(
     Sanitize(title) + ".pdf",
     "application/pdf",
     bytes);
-
-// Resolves every `api/content/{collection}/{path}` reference the composed print document carries
-// and rewrites it to a data: URI, so the headless browser — which prints from a local file with no
-// network and no session — still sees the deck's images. An asset that cannot be read is left as a
-// link and logged: a missing picture must not fail the whole export, it renders broken exactly as
-// it would on screen.
-static async Task<string> InlineSlideAssets(
-    string html, IMessageHub mesh, ILogger log, CancellationToken ct)
-{
-    var references = SlidePrintComposer.CollectAssetReferences(html);
-    if (references.Length == 0)
-        return html;
-
-    var contentService = mesh.ServiceProvider.GetService<IContentService>();
-    if (contentService is null)
-    {
-        log.LogWarning("No content service available; {Count} slide asset(s) stay as links", references.Length);
-        return html;
-    }
-
-    var inlined = new Dictionary<string, string>(StringComparer.Ordinal);
-    foreach (var reference in references)
-    {
-        var parsed = SlidePrintComposer.ParseAssetReference(reference);
-        if (parsed is null)
-            continue;
-
-        try
-        {
-            var stream = await contentService
-                .GetContent(parsed.Value.Collection, parsed.Value.Path)
-                .FirstAsync()
-                .ToTask(ct);
-            if (stream is null)
-            {
-                log.LogWarning("Slide asset {Reference} not found; leaving it as a link", reference);
-                continue;
-            }
-
-            using (stream)
-            {
-                using var buffer = new MemoryStream();
-                await stream.CopyToAsync(buffer, ct);
-                inlined[reference] = SlidePrintComposer.ToDataUri(parsed.Value.Path, buffer.ToArray());
-            }
-        }
-        catch (Exception ex)
-        {
-            log.LogWarning(ex, "Could not inline slide asset {Reference}; leaving it as a link", reference);
-        }
-    }
-
-    log.LogInformation("Inlined {Inlined}/{Total} slide assets", inlined.Count, references.Length);
-    return SlidePrintComposer.InlineAssets(html, inlined);
-}
 
 static string ExtractMarkdown(MeshNode node)
 {

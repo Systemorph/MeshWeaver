@@ -1,4 +1,5 @@
 using System.Linq;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown.Export.Pixel;
@@ -217,61 +218,61 @@ public class SlidePrintComposerTests
     }
 
     [Fact]
-    public void An_asset_reference_splits_into_collection_and_path()
+    public void A_reference_keeps_every_segment_the_resolver_needs()
     {
-        var parsed = SlidePrintComposer.ParseAssetReference("api/content/Space%2FDeck/images%2Fbg.png");
-
-        parsed.Should().NotBeNull();
-        // The COLLECTION is decoded too, not just the path. Handing the content service a still-
-        // encoded name asks for a collection that does not exist, and the asset silently stays
-        // broken — which now means a missing image, since the print document's CSP denies the
-        // remote fetch that used to paper over it.
-        parsed!.Value.Collection.Should().Be("Space/Deck");
-        parsed.Value.Path.Should().Be("images/bg.png");
+        // Site-relative in, route-prefix off, nothing else touched. The node/collection boundary is
+        // NOT decided here: the markdown pipeline writes api/content/{nodePath}/{file}, whose first
+        // segment is the node's PARTITION, and a node path is any number of segments long. Only
+        // ContentFileResolver — which resolves the owning node and asks it which collections it has
+        // — can tell that apart from api/content/{node}/{collection}/{file}. Splitting the string
+        // here is what asked the content service for a collection named after the partition, and
+        // under the print CSP that miss is a blank image (issue #990).
+        SlidePrintComposer.ToContentReference("api/content/Space/Deck/s1/images/bg.png")
+            .Should().Be("Space/Deck/s1/images/bg.png");
     }
 
     [Fact]
-    public void A_qualified_collection_name_is_decoded_from_its_tilde_form()
+    public void Percent_escaped_segments_are_decoded_so_a_real_folder_name_matches()
+    {
+        // A folder named "Data Extraction" arrives as "Data%20Extraction"; the collection's item
+        // names carry the decoded characters, so an undecoded reference never matches and the asset
+        // silently stays broken. Nothing here case-folds — a top-level segment IS a partition.
+        SlidePrintComposer.ToContentReference("api/content/Acme/a%20folder/file%20name.png")
+            .Should().Be("Acme/a folder/file name.png");
+    }
+
+    [Fact]
+    public void An_escaped_separator_really_does_become_one_which_is_why_the_resolver_guards()
+    {
+        // Decoding CAN split a segment: %2F unescapes to '/'. This method does not pretend
+        // otherwise and does not police it — ContentFileResolver rejects an unsafe decoded
+        // reference before resolving anything, which is where a traversal has to be stopped
+        // (%2E%2E survives URL normalisation and only becomes '..' here).
+        SlidePrintComposer.ToContentReference("api/content/Acme/%2E%2E%2F%2E%2E/secrets.png")
+            .Should().Be("Acme/../../secrets.png");
+        StaticAssetMount.IsSafeRelativePath("Acme/../../secrets.png").Should().BeFalse(
+            "the decoded reference is what the resolver refuses");
+    }
+
+    [Fact]
+    public void The_tilde_form_of_a_qualified_collection_name_is_left_for_the_resolver()
     {
         // EncodeCollectionName maps '/' to '~' precisely because ASP.NET Core decodes %2F before
-        // route matching — so '~' is the shape a qualified name actually arrives in.
-        var parsed = SlidePrintComposer.ParseAssetReference("api/content/Submissions@Microsoft~2026/logo.png");
-
-        parsed.Should().NotBeNull();
-        parsed!.Value.Collection.Should().Be("Submissions@Microsoft/2026");
-        parsed.Value.Path.Should().Be("logo.png");
+        // route matching — so '~' is the shape a qualified name actually arrives in. Decoding it
+        // here would turn one segment into two and destroy the node/collection boundary before the
+        // resolver ever sees it; the resolver decodes it on the one segment that can be a collection.
+        SlidePrintComposer.ToContentReference("api/content/Space/Submissions@Microsoft~2026/logo.png")
+            .Should().Be("Space/Submissions@Microsoft~2026/logo.png");
     }
 
     [Fact]
-    public void Decoding_never_changes_how_many_segments_a_reference_has()
-    {
-        // A top-level segment IS a partition and the router lowercases it, so a decoder that could
-        // introduce or remove a '/' could split, merge or rename a partition — creating or masking
-        // exactly the Acme/ACME collision PR #983 hit. Per-segment decoding cannot: an escaped
-        // separator stays inside its own segment, and nothing here case-folds.
-        var parsed = SlidePrintComposer.ParseAssetReference("api/content/Acme/a%20folder/file%20name.png");
-
-        parsed.Should().NotBeNull();
-        parsed!.Value.Collection.Should().Be("Acme", "the partition segment is passed through verbatim");
-        parsed.Value.Path.Should().Be("a folder/file name.png");
-    }
-
-    [Fact]
-    public void The_default_collection_segment_is_folded_out_like_every_other_server_side_read()
-    {
-        // /api/content/{collection}/content/{path} is the shape the product renders; the framework's
-        // own reader folds the default-collection segment out, and this must agree with it rather
-        // than invent a second convention.
-        var parsed = SlidePrintComposer.ParseAssetReference("/api/content/Space/content/images/bg.png");
-
-        parsed.Should().NotBeNull();
-        parsed!.Value.Collection.Should().Be("Space");
-        parsed.Value.Path.Should().Be("images/bg.png");
-    }
+    public void A_rooted_reference_and_a_site_relative_one_read_the_same()
+        => SlidePrintComposer.ToContentReference("/api/content/Space/content/images/bg.png")
+            .Should().Be(SlidePrintComposer.ToContentReference("api/content/Space/content/images/bg.png"));
 
     [Fact]
     public void A_non_content_reference_does_not_parse()
-        => SlidePrintComposer.ParseAssetReference("https://example.com/x.png").Should().BeNull();
+        => SlidePrintComposer.ToContentReference("https://example.com/x.png").Should().BeNull();
 
     private static int CountOf(string haystack, string needle)
     {
