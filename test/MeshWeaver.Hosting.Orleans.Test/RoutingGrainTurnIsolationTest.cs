@@ -46,9 +46,11 @@ public class RoutingGrainTurnIsolationTest(ITestOutputHelper output)
     : OrleansTestBase<StallingResolverSiloConfigurator>(output)
 {
     /// <summary>
-    /// Budget for the probe ping. Comfortably above a healthy grain activation (&lt; 1 s) and
-    /// comfortably BELOW <see cref="StallingPathResolver.StallDuration"/>, so a pass can only mean
-    /// the probe overtook a still-running stall — never that it waited the stall out.
+    /// Budget for the probe ping — comfortably above a healthy grain activation (&lt; 1 s). The stall
+    /// only ends when the test calls <see cref="StallingPathResolver.Release"/> in its finally, so
+    /// the probe can never simply wait it out; the
+    /// <see cref="StallingPathResolver.StallsCompleted"/> assertion after the probe is what proves
+    /// the stall was still live when the ping was answered.
     /// </summary>
     private static readonly TimeSpan ProbeBudget = TimeSpan.FromSeconds(10);
 
