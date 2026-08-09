@@ -728,10 +728,20 @@ jobs:
   # exactly the partial publish this exists to prevent.
   #
   # Manifest-only. `docker buildx imagetools create --tag X --tag Y <src>` re-points tags at
-  # already-pushed content — no layer moves, no rebuild, seconds per repository. (The same
-  # primitive already mirrored mw-plugin-test to GHCR, so it is proven with these credentials.
+  # already-pushed content — no layer moves, no rebuild. MEASURED against the real registry, tag
+  # to tag within one repository (which is all this job ever does): memex-portal-ai 2.1 s,
+  # memex-portal-next 1.9 s. The whole promotion is ~15 s of work inside a ~1 min job.
+  # (The same primitive already mirrored mw-plugin-test to GHCR, so it is proven with these
+  # credentials — and a manifest PUT is exactly the permission every leg already exercises.
   # `az acr import` would also work server-side, but importImage/action is NOT in the AcrPush
   # role this identity is known to hold, and discovering that on main is not a good trade.)
+  #
+  # Verified on the real registry, both shapes: promoting a multi-arch source preserves the index
+  # exactly (`application/vnd.oci.image.index.v1+json`, linux/amd64 + linux/arm64 — so
+  # verify-images' architecture assertion still passes on a promoted tag). Promoting the
+  # single-arch memex-portal-next WRAPS it in a one-entry manifest list
+  # (`…manifest.list.v2+json`), a media-type change from today's plain manifest that every OCI
+  # runtime resolves identically; nothing asserts or pins portal-next's media type.
   #
   # ── ORDERING IS THE ROLLBACK STORY ────────────────────────────────────────────────────────────
   # Tagging five repositories is not one atomic act, so the design makes a mid-flight failure
