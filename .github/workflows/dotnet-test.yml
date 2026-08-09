@@ -710,7 +710,13 @@ jobs:
     # consumers in a way this run could prove either way.
     if: needs.build.result == 'success' && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # ⏱️ WALL-CLOCK: this job depends on `build` — the SAME dependency the test shards have — so it
+    # runs CONCURRENTLY with them, not after. Total run time is max(slowest shard, this), so while
+    # the gate stays under a shard it costs the PR nothing. That is why it is scoped to two modules
+    # and reuses shard 0's artifact instead of rebuilding: both choices exist to keep it under that
+    # bar. The timeout is deliberately well below the shard job's 20 min — if the gate ever becomes
+    # the long pole it should fail and be re-scoped, not silently stretch every PR.
+    timeout-minutes: 12
     steps:
     - uses: actions/checkout@v6
       with: { fetch-depth: 1 }
@@ -739,8 +745,21 @@ jobs:
         path: plugins-repo
         token: ${{ secrets.PLUGINS_REPO_TOKEN }}
         fetch-depth: 1
-    - name: Import + compile + render + run every plugin's tests
+    - name: "Compile + run the VITAL plugins against this PR"
       if: steps.plugins.outcome == 'success'
+      env:
+        # 🚨 The vital organs only — NOT the whole repo. This gate sits in the PR critical path,
+        # so it buys the most breakage-detection per minute rather than maximum coverage:
+        #   Store      — EVERY plugin declares `requires: Store` and compiles against
+        #                Store/Plugin/Source (`shared=@Store/Plugin/Source`). If Store's types
+        #                break, every plugin root node in the mesh falls back to an untyped
+        #                overlay. It is the single choke point through which a framework API
+        #                change reaches all of them.
+        #   Essentials — the default skills and agents every installation gets.
+        # The full-repo sweep still runs in the PLUGINS repo's own CI (which narrows by affected
+        # module) and on main-cd's refreshed mw-plugin-test image. Widen this list only if a
+        # module turns out to be a second choke point; each addition costs PR wall-clock.
+        VITAL_MODULES: "Store Essentials"
       run: |
         set -euo pipefail
         TESTER="$(find . -path '*/MeshWeaver.PluginTester/bin/*/mw-plugin-test.dll' | head -1)"
@@ -748,12 +767,23 @@ jobs:
           echo "::error::mw-plugin-test.dll not in the build output — the gate cannot run."
           exit 1
         fi
-        echo "tester: $TESTER"
+        # The tester gates every package it DISCOVERS under the root, so the staged tree IS the
+        # filter — the same mechanism the plugins repo uses to narrow to affected modules.
+        STAGE="${RUNNER_TEMP:-/tmp}/vital"
+        mkdir -p "$STAGE"
+        for m in $VITAL_MODULES; do
+          if [ ! -d "$GITHUB_WORKSPACE/plugins-repo/$m" ]; then
+            echo "::error::vital module '$m' is not in the plugins checkout — the gate would silently test less than it claims."
+            exit 1
+          fi
+          cp -R "$GITHUB_WORKSPACE/plugins-repo/$m" "$STAGE/"
+        done
+        cp "$GITHUB_WORKSPACE/plugins-repo/plugin-gate.allow" "$STAGE/" 2>/dev/null || true
+        echo "gating: $VITAL_MODULES"
         # plugin-gate.allow is the plugins repo's known-debt ratchet: listed failures are
         # tolerated, NEW failures fail this PR. Same one-way contract the plugins CI uses, so the
         # two gates cannot disagree about what is acceptable.
-        dotnet "$TESTER" "$GITHUB_WORKSPACE/plugins-repo" \
-          --allow "$GITHUB_WORKSPACE/plugins-repo/plugin-gate.allow"
+        time dotnet "$TESTER" "$STAGE" --allow "$STAGE/plugin-gate.allow"
     - name: Report a skipped gate
       if: steps.plugins.outcome != 'success'
       run: |
