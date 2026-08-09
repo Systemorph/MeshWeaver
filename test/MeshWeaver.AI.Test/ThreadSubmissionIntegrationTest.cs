@@ -99,7 +99,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var client = GetClient();
 
         client.StartThread(
-            MonolithMeshTestBase.TestPartition,
+            TestPartition,
             "New thread first message",
             createdBy: "rbuergi@systemorph.com",
             onCreated: node => { threadCreated.OnNext(node); threadCreated.OnCompleted(); });
@@ -438,7 +438,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     public async Task ThreadComposer_PersistsMessageContentAndComboboxes_ReadBackViaGetMeshNodeStream()
     {
         var client = GetClient();
-        var chatInputPath = ThreadComposerNodeType.PathFor(MonolithMeshTestBase.TestPartition);
+        var chatInputPath = ThreadComposerNodeType.PathFor(TestPartition);
 
         // The per-user ThreadComposer singleton is seeded at onboarding (ThreadComposerSeedHandler),
         // so the composer always updates an EXISTING node. Mirror that here.
@@ -502,7 +502,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var threadCreated = new System.Reactive.Subjects.AsyncSubject<MeshNode>();
 
         client.StartThread(
-            MonolithMeshTestBase.TestPartition,
+            TestPartition,
             "Compose then start",
             agentName: "Assistant",
             createdBy: "rbuergi@systemorph.com",
@@ -529,7 +529,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     private async Task<string> SeedEmptyThread()
     {
         var threadId = Guid.NewGuid().AsString();
-        var threadPath = $"{MonolithMeshTestBase.TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
+        var threadPath = $"{TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
         // FromPath splits the namespace ("TestData/_Thread") from the id — `new MeshNode(path)`
         // would bake the slashes into the Id with an EMPTY namespace, which the
         // PartitionWriteGuard (correctly) rejects as a malformed top-level node.
@@ -537,7 +537,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         {
             Name = $"Test Thread {threadId}",
             NodeType = ThreadNodeType.NodeType,
-            MainNode = MonolithMeshTestBase.TestPartition,
+            MainNode = TestPartition,
             Content = new MeshThread { CreatedBy = "rbuergi@systemorph.com" }
         }).Should().Emit();
         return threadPath;

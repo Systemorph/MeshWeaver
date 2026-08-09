@@ -697,7 +697,7 @@ public class InboxToolIntegrationTest : AITestBase
     private async Task<string> SeedEmptyThreadAsync(CancellationToken ct)
     {
         var threadId = Guid.NewGuid().AsString();
-        var threadPath = $"{MonolithMeshTestBase.TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
+        var threadPath = $"{TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
         // FromPath splits the namespace ("TestData/_Thread") from the id — `new MeshNode(path)`
         // would bake the slashes into the Id with an EMPTY namespace, which the
         // PartitionWriteGuard (correctly) rejects as a malformed top-level node.
@@ -705,7 +705,7 @@ public class InboxToolIntegrationTest : AITestBase
         {
             Name = $"Inbox Test Thread {threadId}",
             NodeType = ThreadNodeType.NodeType,
-            MainNode = MonolithMeshTestBase.TestPartition,
+            MainNode = TestPartition,
             Content = new MeshThread { CreatedBy = "rbuergi@systemorph.com" }
         });
         return threadPath;

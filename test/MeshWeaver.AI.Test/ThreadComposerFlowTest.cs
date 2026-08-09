@@ -74,13 +74,13 @@ public class ThreadComposerFlowTest : AITestBase
             Harness = $"{HarnessNodeType.RootNamespace}/{Harnesses.MeshWeaver}",
             AgentName = "Agent/Assistant",
             ModelName = "_Provider/Fake/fake-model",
-            ContextPath = MonolithMeshTestBase.TestPartition,
-            Attachments = ImmutableList.Create("TestData/SomeDoc"),
+            ContextPath = TestPartition,
+            Attachments = ImmutableList.Create($"{TestPartition}/SomeDoc"),
             OpenThreadPath = "stale/_Thread/previous" // must never carry onto the thread
         };
 
         client.StartThread(
-            namespacePath: MonolithMeshTestBase.TestPartition,
+            namespacePath: TestPartition,
             userText: composer.MessageContent!,
             agentName: composer.AgentName,
             modelName: composer.ModelName,
@@ -92,7 +92,7 @@ public class ThreadComposerFlowTest : AITestBase
 
         var created = await threadCreated.Should().Emit();
         created!.Path.Should().StartWith(
-            $"{MonolithMeshTestBase.TestPartition}/{ThreadNodeType.ThreadPartition}/",
+            $"{TestPartition}/{ThreadNodeType.ThreadPartition}/",
             "the thread must live under {context}/_Thread/{speakingId}");
 
         var thread = (created.Content as MeshThread)!;
@@ -123,7 +123,7 @@ public class ThreadComposerFlowTest : AITestBase
             Harness = $"{HarnessNodeType.RootNamespace}/{Harnesses.MeshWeaver}",
             AgentName = "Agent/Assistant",
             ModelName = "_Provider/Fake/fake-model",
-            Attachments = ImmutableList.Create("TestData/Chip")
+            Attachments = ImmutableList.Create($"{TestPartition}/Chip")
         });
         var client = GetClient();
 
@@ -151,7 +151,7 @@ public class ThreadComposerFlowTest : AITestBase
         userMessage.Text.Should().Be("typed into the composer");
         userMessage.AgentName.Should().Be("Agent/Assistant");
         userMessage.Harness.Should().Be($"{HarnessNodeType.RootNamespace}/{Harnesses.MeshWeaver}");
-        userMessage.Attachments.Should().Equal("TestData/Chip");
+        userMessage.Attachments.Should().Equal($"{TestPartition}/Chip");
     }
 
     [Fact]
@@ -238,12 +238,12 @@ public class ThreadComposerFlowTest : AITestBase
     private async Task<string> SeedThreadWithComposer(ThreadComposer composer)
     {
         var threadId = Guid.NewGuid().AsString();
-        var threadPath = $"{MonolithMeshTestBase.TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
+        var threadPath = $"{TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
         await NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = $"Composer Test Thread {threadId}",
             NodeType = ThreadNodeType.NodeType,
-            MainNode = MonolithMeshTestBase.TestPartition,
+            MainNode = TestPartition,
             Content = new MeshThread
             {
                 CreatedBy = "rbuergi@systemorph.com",

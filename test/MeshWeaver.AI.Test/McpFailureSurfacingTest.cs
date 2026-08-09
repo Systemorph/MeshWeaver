@@ -37,8 +37,8 @@ public class McpFailureSurfacingTest(ITestOutputHelper output) : MonolithMeshTes
     private Task<string> PatchAsync(string path, string fields) =>
         new MeshOperations(Mesh).Patch(path, fields).FirstAsync().Timeout(TimeSpan.FromSeconds(45)).ToTask(Ct);
 
-    private MeshNode ValidMarkdown(string id, string ns = TestPartition) =>
-        new(id, ns) { Name = id, NodeType = "Markdown", Content = new MarkdownContent { Content = $"# {id}" } };
+    private MeshNode ValidMarkdown(string id, string? ns = null) =>
+        new(id, ns ?? TestPartition) { Name = id, NodeType = "Markdown", Content = new MarkdownContent { Content = $"# {id}" } };
 
     [Fact(Timeout = 60000)]
     public async Task Create_InvalidJson_ReturnsError()

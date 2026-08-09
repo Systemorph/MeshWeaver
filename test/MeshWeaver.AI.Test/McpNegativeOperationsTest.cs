@@ -29,8 +29,8 @@ public class McpNegativeOperationsTest(ITestOutputHelper output) : MonolithMeshT
     private Task<string> Run(IObservable<string> op) =>
         op.FirstAsync().Timeout(TimeSpan.FromSeconds(45)).ToTask(Ct);
 
-    private MeshNode ValidMarkdown(string id, string ns = TestPartition) =>
-        new(id, ns) { Name = id, NodeType = "Markdown", Content = new MarkdownContent { Content = $"# {id}" } };
+    private MeshNode ValidMarkdown(string id, string? ns = null) =>
+        new(id, ns ?? TestPartition) { Name = id, NodeType = "Markdown", Content = new MarkdownContent { Content = $"# {id}" } };
 
     private static string Unique(string prefix) => prefix + Guid.NewGuid().ToString("N")[..8];
 

@@ -251,12 +251,12 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
     private async Task<string> SeedThread()
     {
         var threadId = Guid.NewGuid().AsString();
-        var threadPath = $"{MonolithMeshTestBase.TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
+        var threadPath = $"{TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
         await NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = $"Model Substitution Thread {threadId}",
             NodeType = ThreadNodeType.NodeType,
-            MainNode = MonolithMeshTestBase.TestPartition,
+            MainNode = TestPartition,
             Content = new MeshThread { CreatedBy = TestUser }
         }).Should().Within(30.Seconds()).Emit();
         return threadPath;

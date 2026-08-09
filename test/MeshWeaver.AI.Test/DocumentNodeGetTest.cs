@@ -21,7 +21,7 @@ namespace MeshWeaver.AI.Test;
 public class DocumentNodeGetTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     /// <summary>The collection segment is deliberately the UCR keyword <c>content</c>.</summary>
-    private static readonly string Collection = TestPartition + "/content";
+    private string Collection => TestPartition + "/content";
 
     /// <summary>Registers the Document NodeType + sink on the test mesh.</summary>
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)

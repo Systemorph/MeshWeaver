@@ -123,7 +123,7 @@ public class HarnessInstallGateTest : AITestBase
         // The absent-node case emits only after the InstallProbeTimeout elapses — give the
         // assertion strictly more than that so it never races the probe.
         var resolved = await HarnessNodeType
-            .ResolveInstalledHarness(hub, $"{MonolithMeshTestBase.TestPartition}/Harness/{GatedId}")
+            .ResolveInstalledHarness(hub, $"{TestPartition}/Harness/{GatedId}")
             .Should().Within(HarnessNodeType.InstallProbeTimeout + TimeSpan.FromSeconds(10)).Emit();
         resolved.Should().BeNull(
             "a RequiresInstall harness without its installed node must fall back — this is what " +
@@ -138,7 +138,7 @@ public class HarnessInstallGateTest : AITestBase
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // The node the Store plugin's install localizes into the viewer's partition.
-        var installed = new MeshNode(GatedId, $"{MonolithMeshTestBase.TestPartition}/Harness")
+        var installed = new MeshNode(GatedId, $"{TestPartition}/Harness")
         {
             NodeType = HarnessNodeType.NodeType,
             Name = "Gated CLI",
@@ -182,9 +182,9 @@ public class HarnessInstallGateTest : AITestBase
     {
         var client = GetClient();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var harnessPath = $"{MonolithMeshTestBase.TestPartition}/Harness/{GatedId}";
+        var harnessPath = $"{TestPartition}/Harness/{GatedId}";
 
-        await meshService.CreateNode(new MeshNode(GatedId, $"{MonolithMeshTestBase.TestPartition}/Harness")
+        await meshService.CreateNode(new MeshNode(GatedId, $"{TestPartition}/Harness")
         {
             NodeType = HarnessNodeType.NodeType,
             Name = "Gated CLI",
@@ -194,12 +194,12 @@ public class HarnessInstallGateTest : AITestBase
 
         var threadCreated = new System.Reactive.Subjects.AsyncSubject<MeshNode>();
         client.StartThread(
-            namespacePath: MonolithMeshTestBase.TestPartition,
+            namespacePath: TestPartition,
             userText: "run on the gated harness",
             agentName: "Agent/Assistant",
             modelName: "_Provider/Fake/fake-model",
             harness: harnessPath,
-            contextPath: MonolithMeshTestBase.TestPartition,
+            contextPath: TestPartition,
             createdBy: "rbuergi@systemorph.com",
             onCreated: node => { threadCreated.OnNext(node); threadCreated.OnCompleted(); });
 
@@ -222,16 +222,16 @@ public class HarnessInstallGateTest : AITestBase
     {
         var client = GetClient();
         // A picked path whose node deliberately does not exist (uninstalled / never installed).
-        var harnessPath = $"{MonolithMeshTestBase.TestPartition}/Harness/never-installed-{GatedId}";
+        var harnessPath = $"{TestPartition}/Harness/never-installed-{GatedId}";
 
         var threadCreated = new System.Reactive.Subjects.AsyncSubject<MeshNode>();
         client.StartThread(
-            namespacePath: MonolithMeshTestBase.TestPartition,
+            namespacePath: TestPartition,
             userText: "run without an install",
             agentName: "Agent/Assistant",
             modelName: "_Provider/Fake/fake-model",
             harness: harnessPath,
-            contextPath: MonolithMeshTestBase.TestPartition,
+            contextPath: TestPartition,
             createdBy: "rbuergi@systemorph.com",
             onCreated: node => { threadCreated.OnNext(node); threadCreated.OnCompleted(); });
 

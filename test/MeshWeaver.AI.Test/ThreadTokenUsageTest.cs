@@ -321,12 +321,12 @@ public class ThreadTokenUsageTest : AITestBase
     private async Task<string> SeedThread()
     {
         var threadId = Guid.NewGuid().AsString();
-        var threadPath = $"{MonolithMeshTestBase.TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
+        var threadPath = $"{TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
         await NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = $"Token Usage Thread {threadId}",
             NodeType = ThreadNodeType.NodeType,
-            MainNode = MonolithMeshTestBase.TestPartition,
+            MainNode = TestPartition,
             Content = new MeshThread { CreatedBy = TestUser }
         }).Should().Emit();
         return threadPath;

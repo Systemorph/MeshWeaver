@@ -551,7 +551,7 @@ public class ChatClientCredentialResolverTest : AITestBase
         // Seed the user's MASTER composer pinned to a GONE model (never created in the catalog) — the
         // exact stuck-selection the maintainer reported.
         var user = Mesh.ServiceProvider.GetRequiredService<AccessService>().Context?.ObjectId
-                   ?? MonolithMeshTestBase.TestPartition;
+                   ?? TestPartition;
         var masterPath = ThreadComposerNodeType.PathFor(user);
         var goneModel = $"gone-model-{suffix}";
         await MeshService.CreateNode(MeshNode.FromPath(masterPath) with

@@ -57,7 +57,10 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// (e.g., "TestData/mynode") and they'll have proper mesh node hubs.
     /// Registered as a Markdown node so the hub gets AddMeshDataSource + WithNodeOperationHandlers.
     /// </summary>
-    public const string TestPartition = "TestData";
+    /// <summary>Per-class overridable so concurrently-running classes do not contend on one
+    /// partition hub. Default is unchanged ("TestData"): only a project that opts in — by
+    /// overriding in its own base — gets isolation, so no existing test moves. See #1040.</summary>
+    public virtual string TestPartition => "TestData";
 
     /// <summary>
     /// Quiescing budget for test-mesh hubs.

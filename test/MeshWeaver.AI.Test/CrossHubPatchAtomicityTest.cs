@@ -84,7 +84,7 @@ public class CrossHubPatchAtomicityTest(ITestOutputHelper output) : AITestBase(o
         for (var round = 0; round < rounds; round++)
         {
             var nodeId = Guid.NewGuid().AsString();
-            var path = $"{MonolithMeshTestBase.TestPartition}/CrossHubAtomicity/{nodeId}";
+            var path = $"{TestPartition}/CrossHubAtomicity/{nodeId}";
 
             // Fresh node per round, empty merge-safe dict. NodeType is a plain "Markdown"
             // node (NOT Thread) so NO submission watcher runs — this isolates the OWNER
@@ -93,7 +93,7 @@ public class CrossHubPatchAtomicityTest(ITestOutputHelper output) : AITestBase(o
             {
                 Name = $"Atomicity Node {nodeId}",
                 NodeType = "Markdown",
-                MainNode = MonolithMeshTestBase.TestPartition,
+                MainNode = TestPartition,
                 Content = new MeshThread { CreatedBy = "rbuergi@systemorph.com" }
             }).FirstAsync().ToTask(ct);
 
