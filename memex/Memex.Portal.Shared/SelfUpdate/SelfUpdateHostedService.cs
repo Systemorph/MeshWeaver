@@ -19,7 +19,14 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// its own portal + migration Deployments to the new version so k8s rolls them. Outside Kubernetes it
 /// records the available version for detect-and-notify. Mirrors <c>ShippedReleaseSeedHostedService</c>
 /// (raw <see cref="IHostedService"/>, <c>SubscribeOn(TaskPoolScheduler.Default)</c>, one subscription).
-/// Not sealed: <see cref="ReadPolicyStream"/> is the fault-injection seam for the resilience test.
+/// Not sealed: <see cref="ReadPolicyStream"/> and <see cref="RecordAvailable"/> are the
+/// fault-injection seams for the resilience test — they are the only two mesh touches this poller
+/// makes, and therefore the only two ways a degraded mesh could ever stop an install rolling forward.
+///
+/// <para>🔁 wedges-to-zero, the standing invariant here: NEITHER mesh touch may gate the roll-forward.
+/// The registry poll and the k8s PATCH speak only to ACR and the API server, so they keep working
+/// while the mesh is degraded — and a fresh image is precisely what recovers a degraded pod. The
+/// policy READ was decoupled in #611; the availability WRITE in #1020.</para>
 /// </summary>
 public class SelfUpdateHostedService : IHostedService
 {
@@ -148,19 +155,55 @@ public class SelfUpdateHostedService : IHostedService
             .Where(target => !string.IsNullOrEmpty(target)
                           && VersionSelect.IsNewer(target!, ShippedReleaseSeed.InstalledPlatformVersion))
             .SelectMany(target => RecordAvailable(target!)
-                .SelectMany(_ => _updater.CanPatch
-                    ? _http.Invoke(ct => _updater.PatchToVersionAsync(target!, ct))
-                        .Do(_ => _logger?.LogInformation(
-                            "[SelfUpdate] applying update {Tag} (was {Current}).",
-                            target, ShippedReleaseSeed.InstalledPlatformVersion))
-                    : Observable.Return(Unit.Default)
-                        .Do(_ => _logger?.LogInformation(
-                            "[SelfUpdate] update available: {Tag} (detect-and-notify — this install does not self-patch).",
-                            target))));
+                // 🚨 BOOKKEEPING, NOT A GATE (#1020). RecordAvailable writes two cosmetic fields
+                // (LatestAvailableTag / CheckedAt) that drive the admin tab; the ROLL-FORWARD does not
+                // depend on them. Chaining Apply after it with .SelectMany made a failed status write
+                // abort the update: on atioz the Admin/UpdatePolicy node hub was unreachable (its
+                // SubscribeRequest never answered — the silo's routing was wedged), every 6 h tick
+                // timed out after 30 s in this write, and the portal sat 37 h on a stale image while
+                // the poller kept ticking and the ACR check kept succeeding. The update it would not
+                // apply is exactly what recovers a degraded pod, so the write must never gate it:
+                // surface the fault (never swallow it — the warning names the tag and the node) and
+                // carry on to Apply, which touches only ACR + the k8s API and works while the mesh
+                // is degraded. Concat, not Merge — the record still lands FIRST when it succeeds.
+                .Catch((Exception ex) =>
+                {
+                    _logger?.LogWarning(ex,
+                        "[SelfUpdate] could not record available tag {Tag} on {Node}; applying the update anyway.",
+                        target, UpdatePolicyNodeType.NodePath);
+                    return Observable.Return(Unit.Default);
+                })
+                .Concat(Apply(target!)));
+
+    /// <summary>
+    /// Applies the picked target: patch the workloads where this install is armed, else record-only
+    /// (detect-and-notify). The intent is announced BEFORE the attempt, so a failing apply is
+    /// diagnosable: the tick's error sink logs a generic "check failed", and until #1020 that was the
+    /// ONLY trace a stalled install left — it read like a registry problem while the registry was
+    /// fine. Deferred so the announcement runs per subscription (per tick), not at composition.
+    /// </summary>
+    private IObservable<Unit> Apply(string target) =>
+        Observable.Defer(() =>
+        {
+            if (!_updater.CanPatch)
+            {
+                _logger?.LogInformation(
+                    "[SelfUpdate] update available: {Tag} (detect-and-notify — this install does not self-patch).",
+                    target);
+                return Observable.Return(Unit.Default);
+            }
+
+            _logger?.LogInformation(
+                "[SelfUpdate] applying update {Tag} (was {Current}).",
+                target, ShippedReleaseSeed.InstalledPlatformVersion);
+            return _http.Invoke(ct => _updater.PatchToVersionAsync(target, ct));
+        });
 
     /// <summary>Record the newest available tag on the policy node (as System). Drives the admin tab
-    /// and the detect-and-notify path. Touches only the bookkeeping fields; preserves Policy.</summary>
-    private IObservable<Unit> RecordAvailable(string tag)
+    /// and the detect-and-notify path. Touches only the bookkeeping fields; preserves Policy.
+    /// Virtual: the second fault-injection seam for the resilience test (alongside
+    /// <see cref="ReadPolicyStream"/>) — it is where the #1020 prod stall surfaced.</summary>
+    protected virtual IObservable<Unit> RecordAvailable(string tag)
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
         var jsonOptions = _hub.JsonSerializerOptions;
