@@ -106,6 +106,59 @@
   <PropertyGroup Condition="'$(ContainerRuntimeIdentifiers)' != ''">
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
   </PropertyGroup>
+  <!-- 🚨 A container leg that pushed NOTHING must fail HERE, not two tasks later as "invalid metadata".
+       The SDK's CreateNewImage task is written to swallow cancellation:
+
+           try { Task.Run(() => ExecuteAsync(_cts.Token)).GetAwaiter().GetResult(); }
+           catch (TaskCanceledException ex)    { Log.LogWarningFromException(ex); }
+           catch (OperationCanceledException ex){ Log.LogWarningFromException(ex); }
+           return !Log.HasLoggedErrors;                         // ← WARNING, so the task SUCCEEDS
+
+       and Microsoft.NET.Build.Containers' registry client hard-codes
+       `new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(30) }`. A stalled TCP/TLS
+       connect to the base registry (mcr.microsoft.com) or the output registry therefore surfaces as
+       TaskCanceledException("The operation was canceled.") — whose inner
+       TimeoutException("A connection could not be established within the configured ConnectTimeout.")
+       LogWarningFromException DROPS, so the log names neither the host nor the timeout.
+
+       The task then returns SUCCESS having produced no image, `_PublishSingleContainer` emits its
+       GeneratedContainer item UNCONDITIONALLY (with every metadata value empty), and the failure only
+       lands ~100 ms later in CreateImageIndex as
+
+           error : Cannot create image index because provided images are invalid.
+                   Items must have 'Config', 'Manifest', 'ManifestMediaType' and 'ManifestDigest' metadata.
+
+       — an error that blames the image index for a network stall. That is CD run 31322066110 / issue
+       #1026: main 4f0c35cfc shipped memex-portal-ai:3.0.0-rc1.ci.2470 with NO matching memex-bake,
+       because the bake job's linux-arm64 leg sat exactly 30.2 s (16:01:03.9 → 16:01:34.1) between
+       "publish/" and that warning, and nothing in the log said why.
+
+       Refusing a "success" that produced no artifact is the fix we own: it fails at the true point of
+       failure, names the RID and both registries, and — on the SINGLE-RID path, where there is no
+       CreateImageIndex downstream — it is the ONLY thing standing between a swallowed cancellation and
+       a publish that reports success while pushing nothing at all.
+       Inert on every healthy publish (the metadata is populated) and on archive/local-daemon flows.
+
+       It lives in the PROPS, next to the rest of the multi-arch container block, deliberately: a new
+       root Directory.Build.targets would be shadowed outright by the existing test/Directory.Build.targets
+       (MSBuild imports only the NEAREST one), so splitting this off would scatter the container reasoning
+       across two files for no gain. AfterTargets is resolved after evaluation, so an early import is fine. -->
+  <Target Name="_MeshWeaverGuardContainerLegProducedAnImage"
+          AfterTargets="_PublishSingleContainer"
+          Condition="'$(ContainerRegistry)' != '' and '$(ContainerArchiveOutputPath)' == ''">
+    <!-- Name the leg defensively. ComputeContainerBaseImage defaults ContainerRuntimeIdentifier from
+         RuntimeIdentifier (and multi-arch legs are handed it explicitly), so it is normally set by the
+         time we get here — but this message is the whole point of the target, and a diagnostic that
+         says "RuntimeIdentifier ''" would be worth nothing on the single-RID path this also guards. -->
+    <PropertyGroup>
+      <_MeshWeaverFailedLegRid>$(ContainerRuntimeIdentifier)</_MeshWeaverFailedLegRid>
+      <_MeshWeaverFailedLegRid Condition="'$(_MeshWeaverFailedLegRid)' == ''">$(RuntimeIdentifier)</_MeshWeaverFailedLegRid>
+      <_MeshWeaverFailedLegRid Condition="'$(_MeshWeaverFailedLegRid)' == ''">&lt;unspecified&gt;</_MeshWeaverFailedLegRid>
+    </PropertyGroup>
+    <Error Condition="'$(GeneratedContainerDigest)' == '' or '$(GeneratedContainerManifest)' == '' or '$(GeneratedContainerConfiguration)' == '' or '$(GeneratedContainerMediaType)' == ''"
+           Code="MW1026"
+           Text="Container publish for RuntimeIdentifier '$(_MeshWeaverFailedLegRid)' reported success but produced NO image — CreateNewImage set no Manifest/Config/Digest. That task logs a swallowed cancellation as the bare warning 'The operation was canceled.' and still returns true, so the true fault is the warning IMMEDIATELY ABOVE this error, not this target. In CI it is a stalled connect (Microsoft.NET.Build.Containers hard-codes SocketsHttpHandler.ConnectTimeout=30s and drops the inner TimeoutException, so no host is logged): check the base registry '$(ContainerBaseRegistry)/$(ContainerBaseName):$(ContainerBaseTag)' and the output registry '$(ContainerRegistry)/$(ContainerRepository)', and look for a ~30 s gap in the timestamps before the warning. Do NOT respond by dropping a RID, disabling the image index, wrapping the publish in a retry, or suppressing this error — see issue #1026." />
+  </Target>
   <!-- Two version channels — CONTINUOUS (CI) vs RELEASED (CD):
        • RELEASED  (-p:PublicRelease=true, the CD/release pipeline): clean $(PlatformVersion).
          This is what NuGet packages AND the Docker image carry, e.g. 3.0.0-rc1. Tag the repo
