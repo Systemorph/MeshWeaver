@@ -364,21 +364,131 @@ public sealed class InstanceAutoRegistrationService(
             return Observable.Return(DefaultInstallSummary.Empty);
 
         return Sources(options).SelectMany(sources => sources.Count == 0
-            ? Observable.Return(DefaultInstallSummary.Empty)
-            : IsFreshInstallation().SelectMany(fresh =>
+            // 🚨 Asked to install, with nowhere to install FROM. Silence here would recreate the
+            // original "healthy boot, zero plugins" failure for the no-sources misconfiguration —
+            // the same shape, one layer up. Say it, and say what to set.
+            ? Observable.Defer(() =>
             {
-                if (!fresh && wanted.Count > 0)
+                if (wanted.Count > 0)
+                    logger.LogError(
+                        "[DefaultInstall] {Count} InstallByDefault pattern(s) are configured "
+                        + "([{Wanted}]) but this installation has NO package sources — nothing can "
+                        + "be installed. Configure PluginCatalog:Sources (a registry serving its own "
+                        + "repos) or PluginCatalog:RegistryUrl (a consumer).",
+                        wanted.Count, string.Join(", ", wanted));
+                return Observable.Return(DefaultInstallSummary.Empty);
+            })
+            : SeedLedger().SelectMany(seeded =>
+            {
+                // 🚨 PER-PACKAGE, not once-per-installation. The old gate was "install the seed only
+                // while the instance has ZERO packages", which made a misconfigured first boot
+                // unrecoverable: the boot installed the pre-installed baseline, the instance was no
+                // longer "fresh", and correcting the config could never take effect again — with no
+                // UI path back, because the catalog UI ships inside a plugin that failed to install.
+                //
+                // The ledger records what the SEED has already delivered, so the two cases the old
+                // flag conflated are now distinguished:
+                //   • never seeded  → install it (repairs a bad config, a failed install, a package
+                //                     newly added to the repo)
+                //   • seeded before → leave it alone forever, even if it is gone now, because the
+                //                     only way it can be gone is that someone REMOVED it, and the
+                //                     seed must not fight an operator.
+                // Content the operator edited inside an installed package is protected separately
+                // and already: the installer honours per-node SyncBehavior claims on upsert+prune.
+                if (wanted.Count > 0 && seeded.Count > 0)
                     logger.LogDebug(
-                        "Packages are already installed — the operator's InstallByDefault seed is "
-                        + "skipped; the pre-installed baseline is still reconciled.");
-                // Nothing left to select ⇒ do not list the sources at all. Listing is a network
-                // round-trip per source; an opted-out instance that is already seeded must cost
-                // nothing on every boot.
-                return !baseline && !fresh
-                    ? Observable.Return(DefaultInstallSummary.Empty)
-                    : Candidates(sources, baseline, fresh ? wanted : [])
-                        .SelectMany(InstallAll);
+                        "Default-install ledger holds {Count} package(s) already seeded; they are "
+                        + "not re-installed even if absent (an operator removed them).", seeded.Count);
+
+                return Candidates(sources, baseline, wanted)
+                    // Drop anything the seed has already delivered once. Done AFTER listing because
+                    // the decision is per PACKAGE, and only the listing knows which packages a
+                    // pattern covers.
+                    .Select(candidates => (IReadOnlyList<InstallCandidate>)candidates
+                        .Where(c => c.Package.PreInstalled || !seeded.Contains(c.Package.Id))
+                        .ToList())
+                    .SelectMany(InstallAll)
+                    .SelectMany(summary => RecordSeeded(seeded, summary).Select(_ => summary));
             }));
+    }
+
+    /// <summary>Node holding the default-install ledger — what the SEED has delivered, ever.</summary>
+    private const string SeedLedgerPath = PackageInstaller.InstalledPartition + "/_DefaultInstallLedger";
+
+    /// <summary>The ledger's own node type — deliberately distinct from <c>Package</c> so it never
+    /// appears in installed-package enumerations.</summary>
+    public const string LedgerNodeType = "DefaultInstallLedger";
+
+    /// <summary>
+    /// The package ids the default-install seed has already delivered. Empty on a fresh instance
+    /// and whenever the ledger cannot be read — failing OPEN here is deliberate: the cost of a
+    /// missing ledger is re-installing a package (idempotent, content-identity gated), whereas
+    /// failing closed would silently skip the repair this whole mechanism exists to perform.
+    /// </summary>
+    private IObservable<ImmutableHashSet<string>> SeedLedger()
+    {
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return Observable.Using(
+                () => accessService.ImpersonateAsSystem(),
+                _ => hub.GetMeshNode(SeedLedgerPath, TimeSpan.FromSeconds(10)))
+            .Take(1)
+            .Select(node => node?.ContentAs<DefaultInstallLedger>(hub.JsonSerializerOptions) is { } led
+                ? led.Seeded.ToImmutableHashSet(StringComparer.Ordinal)
+                : ImmutableHashSet<string>.Empty)
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "Could not read the default-install ledger at {Path} — treating as empty.",
+                    SeedLedgerPath);
+                return Observable.Return(ImmutableHashSet<string>.Empty);
+            });
+    }
+
+    /// <summary>
+    /// Appends the packages this pass covered to the ledger, so they are never seeded again.
+    /// Records what was COVERED (installed or already current), not what merely succeeded: a
+    /// package that FAILED stays off the ledger and is retried next boot — that retry is the
+    /// repair. Written as System; the Plugins partition is System-owned.
+    /// </summary>
+    private IObservable<Unit> RecordSeeded(
+        ImmutableHashSet<string> already, DefaultInstallSummary summary)
+    {
+        var delivered = summary.Packages.Where(id => !already.Contains(id)).ToList();
+        if (delivered.Count == 0)
+            return Observable.Return(Unit.Default);
+
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var node = new MeshNode("_DefaultInstallLedger", PackageInstaller.InstalledPartition)
+        {
+            Name = "Default install ledger",
+            // 🚨 NOT PackageNodeType. The ledger lives in the Plugins partition but is bookkeeping,
+            // not an install record — typing it "Package" puts it in every query that enumerates
+            // installed packages by nodeType (ModuleDiscoveryService.ReadInstanceState, the
+            // freshness probe, any inventory UI). The tell was undeniable: every verification query
+            // written against this feature had to say `id <> '_DefaultInstallLedger'`. A filter you
+            // must repeat at each call site is the schema telling you the type is wrong.
+            NodeType = LedgerNodeType,
+            State = MeshNodeState.Active,
+            Content = new DefaultInstallLedger
+            {
+                Seeded = already.Union(delivered).OrderBy(x => x, StringComparer.Ordinal).ToImmutableList(),
+                UpdatedAt = DateTimeOffset.UtcNow,
+            },
+        };
+        return Observable.Defer(() =>
+        {
+            var write = accessService.ImpersonateAsSystem();
+            return meshService.CreateOrUpdateNode(node)
+                .Select(_ => Unit.Default)
+                .Finally(() => write.Dispose());
+        }).Catch((Exception ex) =>
+        {
+            // A ledger write failure must not fail the boot — the packages ARE installed. The only
+            // consequence is that the next boot reconsiders them, which is idempotent.
+            logger.LogWarning(ex, "Could not update the default-install ledger at {Path}", SeedLedgerPath);
+            return Observable.Return(Unit.Default);
+        });
     }
 
     /// <summary>
@@ -465,14 +575,59 @@ public sealed class InstanceAutoRegistrationService(
     /// package's own <c>preInstalled</c> declaration needs no such scoping — it is the package
     /// author declaring platform baseline, not an entitlement being swept in.</para>
     /// </summary>
+    /// <summary>
+    /// The <c>InstallByDefault</c> patterns that can NEVER match, because they name a source this
+    /// installation does not have. Pure — no I/O, so it is checked before any listing and is
+    /// directly unit-testable.
+    ///
+    /// <para>🚨 This exists because the failure is otherwise SILENT. Matching is source-scoped and
+    /// fails closed by design (an instance entitled to paid content must not auto-install it), so a
+    /// pattern naming a non-existent source installs nothing and reports nothing. Observed for
+    /// real: a local registry served its checkout under the source name <c>MWP-main</c> (taken from
+    /// the directory) while <c>InstallByDefault</c> stayed <c>Plugins/*</c> — the deployment came up
+    /// healthy, every probe green, and not one plugin installed. The post-listing warning did not
+    /// fire either, because the pre-installed baseline had matched 8 packages, so "matched
+    /// something" was true overall while the operator's patterns matched nothing.</para>
+    /// </summary>
+    /// <param name="wanted">The operator's source-scoped patterns.</param>
+    /// <param name="sourceNames">The names of the sources actually configured.</param>
+    internal static IReadOnlyList<PluginGrantEntry> UnmatchablePatterns(
+        IReadOnlyList<PluginGrantEntry> wanted, IReadOnlyCollection<string> sourceNames) =>
+        wanted
+            .Where(w => !sourceNames.Any(
+                n => string.Equals(n, w.Source, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
     private IObservable<IReadOnlyList<InstallCandidate>> Candidates(
         IReadOnlyList<ConfiguredPackageSource> sources,
         bool baseline,
         IReadOnlyList<PluginGrantEntry> wanted) =>
-        sources
+        Observable.Defer(() =>
+        {
+            // Config error, reported BEFORE any listing: a pattern naming a source that does not
+            // exist here can never install anything, and silence is the worst possible answer.
+            if (UnmatchablePatterns(wanted, sources.Select(s => s.Name).ToList()) is { Count: > 0 } bad)
+                logger.LogError(
+                    "[DefaultInstall] {Count} InstallByDefault pattern(s) name a source this "
+                    + "installation does not have: [{Bad}]. Configured sources: [{Sources}]. Those "
+                    + "patterns will install NOTHING — fix the names so they agree (a source's name "
+                    + "is what grants and install-defaults are written against).",
+                    bad.Count, string.Join(", ", bad),
+                    string.Join(", ", sources.Select(s => s.Name)));
+            return Observable.Return(Unit.Default);
+        }).SelectMany(_ => sources
             .Select(source => source.Source.ListPackages(source.GitRef)
                 .Take(1)
+                // 🚨 Stamp the source name HERE, not only in the registry's HTTP merge. Source-
+                // scoped matching reads PackageManifest.Source, and until now only
+                // PluginRegistryEndpoints set it — so a REGISTRY instance, which reads its own
+                // configured sources directly with no HTTP hop, saw Source == null on every
+                // package and matched nothing. The result was a healthy deploy that installed
+                // zero plugins while reporting a green boot. The lister always knows which source
+                // it read from, so that is where the stamp belongs; an already-stamped value
+                // (arriving over the wire) is left alone.
                 .Select(packages => packages
+                    .Select(p => string.IsNullOrEmpty(p.Source) ? p with { Source = source.Name } : p)
                     .Where(p => (baseline && p.PreInstalled)
                                 || wanted.Any(w => w.Matches(p.Source ?? "", p.Id)))
                     .Select(p => new InstallCandidate(source, p))
@@ -495,12 +650,19 @@ public sealed class InstanceAutoRegistrationService(
                     .Select(g => g.First())
                     .OrderBy(c => c.Package.Id, StringComparer.Ordinal)
                     .ToList();
-                if (deduped.Count == 0 && wanted.Count > 0)
+                // 🚨 Judge the OPERATOR'S patterns on their own, not on whether the pass matched
+                // anything overall. `deduped.Count == 0` alone is masked by the pre-installed
+                // baseline: with 8 baseline packages selected, "matched something" is true while
+                // every InstallByDefault pattern matched nothing — which is exactly how a local
+                // registry came up with no plugins and no warning.
+                if (wanted.Count > 0
+                    && !deduped.Any(c => wanted.Any(w => w.Matches(c.Package.Source ?? "", c.Package.Id))))
                     logger.LogWarning(
-                        "The default install matched no packages (wanted [{Wanted}]). If the "
-                        + "registry predates source-stamped catalog entries, a Source/* pattern "
-                        + "cannot match — it fails closed rather than guessing.",
-                        string.Join(", ", wanted));
+                        "The default install matched no packages for the operator's patterns "
+                        + "(wanted [{Wanted}]; {Baseline} pre-installed package(s) were still "
+                        + "selected). If the registry predates source-stamped catalog entries, a "
+                        + "Source/* pattern cannot match — it fails closed rather than guessing.",
+                        string.Join(", ", wanted), deduped.Count);
                 // The TOLERANT sort: a cycle warns and still yields every package exactly once
                 // (the requirement closing the loop is ignored; order within the cycle is
                 // arbitrary — see InDependencyOrder's remarks) rather than refusing, because
@@ -513,7 +675,7 @@ public sealed class InstanceAutoRegistrationService(
                 return (IReadOnlyList<InstallCandidate>)ordered
                     .Select(p => bySource[p.Id])
                     .ToList();
-            });
+            }));
 
     /// <summary>Installs the selected packages sequentially and folds their outcomes into one summary.</summary>
     private IObservable<DefaultInstallSummary> InstallAll(IReadOnlyList<InstallCandidate> candidates)
@@ -606,6 +768,23 @@ public sealed class InstanceAutoRegistrationService(
     /// </summary>
     internal IObservable<DefaultInstallSummary> RunDefaultInstall() =>
         InstallDefaults(hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions());
+}
+
+/// <summary>
+/// What the default-install SEED has already delivered to this installation, ever.
+///
+/// <para>🚨 This is the difference between "repair" and "fight the operator". A package absent
+/// from the ledger has never been seeded, so installing it repairs a bad config, a failed install
+/// or a package newly added to the repo. A package ON the ledger is left alone even when it is
+/// absent, because the only way it can be absent is that someone removed it deliberately.</para>
+/// </summary>
+public record DefaultInstallLedger
+{
+    /// <summary>Package ids the seed has delivered. Append-only in practice.</summary>
+    public ImmutableList<string> Seeded { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>When the ledger last changed.</summary>
+    public DateTimeOffset UpdatedAt { get; init; }
 }
 
 /// <summary>
