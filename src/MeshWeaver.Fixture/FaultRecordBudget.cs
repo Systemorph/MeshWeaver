@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace MeshWeaver.Fixture;
 
 /// <summary>
@@ -135,7 +137,10 @@ public sealed class FaultRecordBudget
             noticedInWindow = true;
             return new FaultRecordVerdict(
                 false,
-                $"budget of {recordsPerWindow} fault records per {window.TotalSeconds:0.###}s "
+                // Invariant so the line reads identically whatever locale the runner is in —
+                // a diagnostic that changes shape by machine is a diagnostic you cannot grep.
+                $"budget of {Plural(recordsPerWindow)} per "
+                + $"{window.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)}s "
                 + $"exhausted — suppressing further fault records until the window rolls "
                 + $"({suppressedTotal} suppressed in this process so far); "
                 + "this log is NOT a complete record of faults");

@@ -97,6 +97,11 @@ public static class TestTraceLog
     /// active, which is exactly the wedge case. That is why the recurring compile abort
     /// of issue #890 was undiagnosable: the framework logged the exception object with
     /// its stack, and every sink that carried the stack was invisible to CI.</para>
+    ///
+    /// <para>Records are rate-bounded by <see cref="FaultRecordBudget"/>, so a storming process
+    /// has some suppressed — but never a late one, and never silently: each suppressed stretch
+    /// is announced in the file by a <c>[FAULT-BUDGET]</c> line carrying the count, so
+    /// <c>grep FAULT-BUDGET</c> answers "is this log complete?".</para>
     /// </summary>
     /// <param name="category">The logger category name.</param>
     /// <param name="level">The record's severity.</param>
