@@ -651,6 +651,44 @@ securityService.HasPermission("Anonymous", Permission.Read)
     .Subscribe(allowed => /* ... */);
 ```
 
+## 🧩 Library-seeded nodes need a library-seeded grant — the `Templates` partition
+
+**A partition whose nodes are seeded by library code must have its access grant seeded the same
+way, in the same call.** Otherwise the nodes exist on every mesh and are usable on none of them
+except where an admin happened to grant the right by hand.
+
+The `Templates` partition is the worked example. It holds the built-in "operations as scripts"
+Code nodes — `Templates/Export/{Pdf,Docx}` (seeded by `AddMarkdownExport()`) and
+`Templates/Import/{NodeCopy,Mirror}` (seeded by `AddGraph()`). Running one posts an
+`ExecuteScriptRequest` at the template, which is gated by
+`[RequiresPermission(Permission.Execute)]` **on the template's own path**. The templates shipped
+with no grant at all, so every non-admin's export died at the click with
+`"Access denied: user 'x' lacks Execute permission on 'Templates/Export/Pdf'"` (issue #423). The
+gate was correct — the missing grant was the bug.
+
+`ScriptTemplates.PublicExecuteGrant()` is that grant, seeded via
+`builder.AddMeshNodesIfAbsent(...)` from both call sites (either alone must land it; both together
+must land it once). Three properties make it the *minimum*, not a widening:
+
+| Choice | Why |
+|---|---|
+| `Public`, **not** `Anonymous` | A run writes its `Activity` into the caller's home (`ActivityParentPath = "{viewer}"`), which a signed-out visitor does not have. Granting Anonymous would buy nothing. |
+| `Viewer` (Read + Execute + Api) | Execute is what the gate checks; Read resolves the node. Viewer is the narrowest built-in role carrying Execute and grants **no** Create/Update/Delete — a user may run a template, never change one. |
+| `MainNode = "Templates"` | Scoped to the partition, per the scope invariant above. An empty `MainNode` here would be a **root** grant for every authenticated user. |
+
+> ### 🚨 Why this is seeded alongside the nodes and NOT as a migration
+> `Doc`'s equivalent Public/Anonymous grant is seeded **both** ways — statically in
+> `AddDocumentation()` *and* as PG rows by `DocumentationBackfill`. That second half exists because
+> doc pages are backfilled into the `doc` schema, so the SQL fold and `partition_access` need real
+> rows.
+>
+> `Templates` has no such half. Its nodes are `AddMeshNodes` statics served in-memory by
+> `StaticNodeQueryProvider`; **they never reach Postgres**, on a fresh mesh or a long-lived one. A
+> migration therefore could not cover them — it would write grant rows into a `templates` schema
+> that does not exist and that nothing reads. Seeding the grant where the nodes live is the only
+> placement that covers a fresh mesh and an existing deployment identically: both get it from the
+> next image, with no backfill.
+
 ---
 
 # Type-declared subtree gates (`NodeTypeGate`)
