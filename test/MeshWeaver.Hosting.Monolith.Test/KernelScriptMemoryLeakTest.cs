@@ -39,6 +39,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// <c>ScriptState</c>/<c>CSharpCompilation</c>/<c>AssemblyMetadata</c> is still
 /// reachable, the printed chain names the pin.</para>
 /// </summary>
+[Collection(GcReachabilityCollection.Name)]
 public class KernelScriptMemoryLeakTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)

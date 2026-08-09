@@ -30,6 +30,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// scope, keeps the timer alive, and asserts the capture target is collectible
 /// after the scope is disposed.</para>
 /// </summary>
+[Collection(GcReachabilityCollection.Name)]
 public class ConsoleCaptureExecutionContextLeakTest
 {
     [MethodImpl(MethodImplOptions.NoInlining)]
