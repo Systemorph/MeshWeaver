@@ -272,4 +272,187 @@ public class ActivityWriteTrackerTest
         var tracker = new ActivityWriteTracker();
         Assert.Throws<ArgumentException>(() => tracker.WhenSettled(" "));
     }
+
+    /// <summary>
+    /// 🚨 THE #1036 SIGNAL, and the false pass it exists to kill. Five writes for one path that do
+    /// NOT overlap — write i ends before write i+1 begins, which is what five independent posts can
+    /// legitimately do. The one-argument overload completes after the FIRST of them: correct for its
+    /// own contract ("my write finished"), and a silent false pass for a caller that is about to
+    /// assert on the result of all five. The counted overload spans every cycle.
+    ///
+    /// <para>Both are subscribed HERE, at the same instant, so the difference is the signal's
+    /// semantics and nothing else.</para>
+    /// </summary>
+    [Fact]
+    public async Task WhenSettled_WithCount_SpansNonOverlappingWrites_WhereTheSingleWriteSignalStops()
+    {
+        const string path = "charlie/_UserActivity/charlie_doc";
+        var tracker = new ActivityWriteTracker();
+
+        var settledOnce = tracker.WhenSettled(path).FirstAsync().ToTask();
+        var settledFive = tracker.WhenSettled(path, writes: 5).FirstAsync().ToTask();
+
+        // Write 1, complete before write 2 starts — deliberately NO overlap.
+        tracker.Begin(path).Dispose();
+
+        // The one-write signal is already done. That is precisely the hole: a HaveCount assertion
+        // running here would be checked against one write's worth of state, with four to come.
+        await settledOnce.WaitAsync(TimeSpan.FromSeconds(3));
+
+        for (var i = 2; i <= 4; i++)
+        {
+            tracker.Begin(path).Dispose();
+            var early = await Task.WhenAny(settledFive, Task.Delay(100));
+            early.Should().NotBe(settledFive,
+                $"only {i} of 5 writes have run — completing here would hand the caller an incomplete set");
+        }
+
+        tracker.Begin(path).Dispose();               // the fifth
+        await settledFive.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    /// <summary>
+    /// The other shape the same five posts can take: all five in flight at once. The per-path
+    /// counter only returns to zero when the last one ends, so the counted signal must not fire on
+    /// any of the intermediate releases either.
+    /// </summary>
+    [Fact]
+    public async Task WhenSettled_WithCount_WaitsForTheLastOfFiveOverlappingWrites()
+    {
+        const string path = "charlie/_UserActivity/charlie_doc";
+        var tracker = new ActivityWriteTracker();
+        var settled = tracker.WhenSettled(path, writes: 5).FirstAsync().ToTask();
+
+        var writes = Enumerable.Range(0, 5).Select(_ => tracker.Begin(path)).ToArray();
+        tracker.Count.Should().Be(5);
+
+        foreach (var write in writes[..4])
+        {
+            write.Dispose();
+            var early = await Task.WhenAny(settled, Task.Delay(100));
+            early.Should().NotBe(settled, "a write for this path is still running");
+        }
+
+        writes[4].Dispose();
+        await settled.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    /// <summary>
+    /// Overlap is not all-or-nothing: real posts interleave. Two writes overlap, then two more run
+    /// one at a time. The count is over ENTER→LEAVE cycles, not over "times the path went quiet".
+    /// </summary>
+    [Fact]
+    public async Task WhenSettled_WithCount_CountsWritesNotQuietPeriods()
+    {
+        const string path = "charlie/_UserActivity/charlie_doc";
+        var tracker = new ActivityWriteTracker();
+        var settled = tracker.WhenSettled(path, writes: 4).FirstAsync().ToTask();
+
+        var first = tracker.Begin(path);
+        var second = tracker.Begin(path);         // overlaps the first
+        first.Dispose();
+        second.Dispose();                          // path goes quiet at 2 of 4
+
+        var early = await Task.WhenAny(settled, Task.Delay(200));
+        early.Should().NotBe(settled,
+            "the path went quiet, but only 2 of the 4 writes have run — quiet is not the criterion");
+
+        tracker.Begin(path).Dispose();             // 3rd, on its own
+        var stillShort = await Task.WhenAny(settled, Task.Delay(100));
+        stillShort.Should().NotBe(settled, "3 of 4");
+
+        tracker.Begin(path).Dispose();             // 4th
+        await settled.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    /// <summary>
+    /// The <see cref="ActivityWriteTracker.Drain"/> trap, restated for the counted signal: writes
+    /// that never started must never be counted. An idle tracker asked for five writes must sit
+    /// there — a caller whose posts were dropped has to see a timeout, not a green assertion over
+    /// an empty set.
+    /// </summary>
+    [Fact]
+    public async Task WhenSettled_WithCount_NeverCompletesForWritesThatNeverStarted()
+    {
+        const string path = "charlie/_UserActivity/charlie_doc";
+        var tracker = new ActivityWriteTracker();
+
+        // Drain: completes at once on an idle tracker — correct for shutdown, wrong as a write signal.
+        await tracker.Drain().Timeout(TimeSpan.FromSeconds(2)).FirstAsync();
+
+        var settled = tracker.WhenSettled(path, writes: 5).FirstAsync().ToTask();
+
+        var raced = await Task.WhenAny(settled, Task.Delay(300));
+        raced.Should().NotBe(settled, "not one of the five writes has started");
+
+        // And a partial run is still not a completion — four writes must not settle a five-write wait.
+        for (var i = 0; i < 4; i++)
+            tracker.Begin(path).Dispose();
+
+        var partial = await Task.WhenAny(settled, Task.Delay(300));
+        partial.Should().NotBe(settled,
+            "4 of 5 writes ran — the fifth is still missing and its result is not in the set yet");
+    }
+
+    /// <summary>Another path's five writes say nothing about this one's, same as the single-write signal.</summary>
+    [Fact]
+    public async Task WhenSettled_WithCount_IgnoresOtherPaths()
+    {
+        var tracker = new ActivityWriteTracker();
+        var settled = tracker.WhenSettled("alice/_UserActivity/Mine", writes: 2).FirstAsync().ToTask();
+
+        for (var i = 0; i < 5; i++)
+            tracker.Begin("bob/_UserActivity/Theirs").Dispose();
+
+        var raced = await Task.WhenAny(settled, Task.Delay(300));
+        raced.Should().NotBe(settled, "bob's five writes say nothing about alice's two");
+
+        tracker.Begin("alice/_UserActivity/Mine").Dispose();
+        tracker.Begin("alice/_UserActivity/Mine").Dispose();
+        await settled.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    /// <summary>
+    /// A write already in flight when the subscription attaches is a real write for that path and
+    /// counts — that is what makes <c>WhenSettled(path)</c> the <c>writes: 1</c> case rather than a
+    /// separate mechanism. (Writes that already FINISHED cannot be counted and the wait then times
+    /// out loudly; erring toward waiting is the whole design.)
+    /// </summary>
+    [Fact]
+    public async Task WhenSettled_WithCount_CountsAWriteAlreadyInFlightAtSubscription()
+    {
+        const string path = "charlie/_UserActivity/charlie_doc";
+        var tracker = new ActivityWriteTracker();
+
+        var running = tracker.Begin(path);                    // started BEFORE the subscription
+        var settled = tracker.WhenSettled(path, writes: 2).FirstAsync().ToTask();
+
+        tracker.Begin(path).Dispose();                        // the second write
+        var early = await Task.WhenAny(settled, Task.Delay(200));
+        early.Should().NotBe(settled, "the write that was already running has not ended");
+
+        running.Dispose();
+        await settled.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    /// <summary>Zero or negative writes is a caller bug — there is no such thing as settling after
+    /// no writes (that is <see cref="ActivityWriteTracker.Drain"/>, and its idle-completion is
+    /// exactly the false pass this overload exists to avoid).</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void WhenSettled_WithCount_RejectsANonPositiveCount(int writes)
+    {
+        var tracker = new ActivityWriteTracker();
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => tracker.WhenSettled("alice/_UserActivity/Doc", writes));
+    }
+
+    /// <summary>An empty or whitespace path is a caller bug, same contract as <c>Begin</c>.</summary>
+    [Fact]
+    public void WhenSettled_WithCount_RejectsAnEmptyPath()
+    {
+        var tracker = new ActivityWriteTracker();
+        Assert.Throws<ArgumentException>(() => tracker.WhenSettled(" ", writes: 3));
+    }
 }
