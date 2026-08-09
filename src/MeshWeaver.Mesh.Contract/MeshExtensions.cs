@@ -273,9 +273,21 @@ public static class MeshExtensions
 
     /// <summary>
     /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
-    /// All async work is wrapped in <c>Observable.FromAsync</c> and composed via Subscribe; the
+    /// Its storage / change-feed leaves are ALREADY <see cref="IObservable{T}"/> (or reach the I/O
+    /// boundary through <c>IIoPool</c>) and are composed via <c>SelectMany</c>/<c>Subscribe</c>; the
     /// terminal response is posted from inside the deepest callback. The handler itself returns
     /// <c>request.Processed()</c> immediately so the hub scheduler is never blocked.
+    ///
+    /// <para>🚨 This doc-comment used to claim the async work was wrapped in
+    /// <c>Observable.FromAsync</c>. It is not, and it must not be: <c>Observable.FromAsync</c> is
+    /// FORBIDDEN outside <c>IoPool</c> (it runs the synchronous prologue on the SUBSCRIBING thread —
+    /// the hub scheduler — with no concurrency bound). The claim was stale and advertised a banned
+    /// pattern to the next reader; corrected here rather than left for someone to copy.</para>
+    ///
+    /// <para>🚨 The response is posted from a composed observable, so a chain that terminates
+    /// WITHOUT posting leaves the requester's <c>hub.Observe</c> callback pending forever. That is
+    /// the shape issue #981 is chasing; the <c>RequestFateLedger</c> trail distinguishes it from a
+    /// chain that is merely slow — see <c>Doc/Architecture/DebuggingMessageFlow</c>.</para>
     /// See <c>Doc/Architecture/AsynchronousCalls</c>.
     /// </summary>
     private static IMessageDelivery HandleCreateNodeRequest(
@@ -415,6 +427,15 @@ public static class MeshExtensions
         var existingObs = persistence != null
             ? persistence.Read(node.Path, hub.JsonSerializerOptions)
             : Observable.Return<MeshNode?>(null);
+
+        // Handler-side trail (#981). This handler returns Processed() immediately and owes its
+        // reply from the DETACHED chain below, so the pipeline's own HANDLER_EXIT stage proves
+        // nothing about whether the reply is coming. These stages are what let a pending-callback
+        // report say "the chain completed empty" (nothing will ever answer) rather than "no reply
+        // yet" — the ambiguity that left two #981 captures unexplained. `emitted` is written and
+        // read on the chain's own terminal arms only.
+        var emitted = false;
+        hub.NoteRequestStage(request.Id, $"CREATE_CHAIN_SUBSCRIBED path={node.Path}");
 
         existingObs
             .Select(existing =>
@@ -637,6 +658,8 @@ public static class MeshExtensions
                 {
                     var resultNode = tuple.node;
                     var mode = tuple.mode;
+                    emitted = true;
+                    hub.NoteRequestStage(request.Id, $"CREATE_CHAIN_EMITTED mode={mode}");
 
                     // MeshChangeEvent.Created/Updated already published inside the
                     // save observable via WriteAndPublishCreated/WriteAndPublishUpdated
@@ -705,11 +728,14 @@ public static class MeshExtensions
                     // the row this create wrote is deleted again, and the response carries the
                     // ORIGINAL cause plus the rollback outcome.
                     logger.LogDebug("[CreateNode] step=post-handlers-start path={Path}", resultNode.Path);
+                    hub.NoteRequestStage(request.Id, "CREATE_POST_HANDLERS_START");
                     RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger)
                         .Subscribe(
                             _ => { },
                             ex =>
                             {
+                                hub.NoteRequestStage(request.Id,
+                                    $"CREATE_POST_HANDLERS_ERROR {ex.GetType().Name}");
                                 logger.LogError(ex,
                                     "Post-creation handler chain errored at {Path} — rolling the create back (#638)",
                                     resultNode.Path);
@@ -735,12 +761,14 @@ public static class MeshExtensions
                             () =>
                             {
                                 logger.LogDebug("[CreateNode] step=post-handlers-done path={Path} — posting Ok", resultNode.Path);
+                                hub.NoteRequestStage(request.Id, "CREATE_POST_HANDLERS_DONE");
                                 hub.Post(CreateNodeResponse.Ok(resultNode),
                                     o => o.ResponseFor(request));
                             });
                 },
                 ex =>
                 {
+                    hub.NoteRequestStage(request.Id, $"CREATE_CHAIN_ERROR {ex.GetType().Name}");
                     if (ex is InvalidOperationException)
                     {
                         logger.LogWarning(ex, "Node creation failed for path {Path}", node.Path);
@@ -756,6 +784,29 @@ public static class MeshExtensions
                                 NodeCreationRejectionReason.Unknown),
                             o => o.ResponseFor(request));
                     }
+                },
+                () =>
+                {
+                    // 🔍 DIAGNOSTIC ONLY (#981) — this arm deliberately does NOT post a response.
+                    //
+                    // The chain can complete WITHOUT emitting: the two save paths filter with
+                    // `.Where(n => n is not null)`, and several branches return
+                    // `Observable.Empty<(string, MeshNode)>()`. Most of those branches post a Fail
+                    // first, so an empty completion is USUALLY answered — but if any of them ever
+                    // completes empty without having posted, this Subscribe has no onCompleted arm
+                    // and the requester's callback stays pending forever, which is exactly the
+                    // #981 signature (`CreateNodeRequest@mesh/<self>`, unanswered, queues empty).
+                    //
+                    // Recording it here is what settles the open binary question — "does the chain
+                    // complete slowly, or terminate without responding?" — because the stage is
+                    // written at the instant of termination. Posting a response from here would be
+                    // a FIX, and a guessed one: which response is correct depends on WHY the chain
+                    // went empty, and that is unknown until a capture names the branch. So this
+                    // arm observes and does not act.
+                    if (!emitted)
+                        hub.NoteRequestStage(request.Id,
+                            $"CREATE_CHAIN_COMPLETED_EMPTY path={node.Path} "
+                            + "(chain terminated without emitting — no response posted from here)");
                 });
 
         return request.Processed();

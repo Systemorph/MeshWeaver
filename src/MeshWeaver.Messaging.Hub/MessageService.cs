@@ -1035,9 +1035,14 @@ public class MessageService : IMessageService
             var token = delivery.Message is ShutdownRequest ? CancellationToken.None : cancellationTokenSource.Token;
             MessageTrace.Write($"hub={Address} msg={messageTypeName} id={delivery.Id} HandleMessageAsync ENTER");
             fate?.Add("HANDLER_ENTER", Address);
+            // A rule chain that completes WITHOUT emitting is silent in every other diagnostic —
+            // no exit state, no fault — and reads exactly like a chain that is still running. That
+            // ambiguity is the one #981 needs resolved, so the empty completion gets its own stage.
+            var handlerEmitted = false;
             exec = hub.HandleMessageAsync(delivery, token)
                 .Do(handled =>
                 {
+                    handlerEmitted = true;
                     MessageTrace.Write($"hub={Address} msg={messageTypeName} id={handled.Id} HandleMessageAsync EXIT state={handled.State}");
                     fate?.Add($"HANDLER_EXIT state={handled.State}", Address);
                     // Compare target without Host since Host tracks routing path
@@ -1053,6 +1058,11 @@ public class MessageService : IMessageService
                     if (traceEnabled)
                         logger.LogTrace("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
                             messageTypeName, Address, executionStopwatch.ElapsedMilliseconds);
+                },
+                () =>
+                {
+                    if (!handlerEmitted)
+                        fate?.Add("HANDLER_COMPLETED_WITHOUT_DELIVERY", Address);
                 });
         }
         else
