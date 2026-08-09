@@ -220,13 +220,36 @@ Only the handler can split them, so it records its own terminal arms:
 ```csharp
 hub.NoteRequestStage(request.Id, $"CREATE_CHAIN_EMITTED mode={mode}");   // produced a result
 hub.NoteRequestStage(request.Id, $"CREATE_CHAIN_ERROR {ex.GetType().Name}");
-hub.NoteRequestStage(request.Id, "CREATE_CHAIN_COMPLETED_EMPTY …");      // ← the silent one
+hub.NoteRequestStage(request.Id, "CREATE_CHAIN_COMPLETED_EMPTY …");      // ← terminated with nothing
+hub.NoteRequestStage(request.Id, $"CREATE_SAVE_DECLINED adapter={…} path={…}");
 ```
 
 `NoteRequestStage` is a no-op unless something is awaiting that id, so it is free to call
 unconditionally. **Add the `onCompleted` arm**: a chain that completes empty posts nothing, and
 without a stage there it is indistinguishable from one that is still running. `HandleCreateNodeRequest`
 is the worked example.
+
+### A detached chain must ANSWER on every terminal arm, not just record one
+
+Recording the arms is diagnostics; answering on them is the contract. `HandleCreateNodeRequest`
+carries both, and the shape is worth copying:
+
+- Every terminal post goes through ONE local `Respond(...)` that flips a `responded` flag. That is
+  what makes the backstop exact rather than approximate.
+- The `onCompleted` arm posts a failure **only** when nothing emitted AND nothing answered. Both
+  guards are load-bearing: `emitted` means the reply is owed by the post-success subscription (whose
+  own arms answer), and `responded` means a branch already answered and posted its own, more
+  specific, rejection.
+- `CREATE_SAVE_DECLINED` names the adapter behind a `null` from `IStorageAdapter.Write` — the
+  try-then-claim sentinel meaning *"this adapter does not own this path"*, not *"the write
+  succeeded"*. That null used to be filtered away with `.Where(n => n is not null)`, which is exactly
+  how a create terminated with no reply. It now FAULTS with the same message family the composite
+  `PersistenceService.Write` already threw, so the answer no longer depends on which adapter the hub
+  resolved.
+
+The general rule: **if a handler owes its reply from a detached observable, the observable's
+`onCompleted` is a terminal arm like any other.** Leaving it unhandled is not "nothing to do" — it is
+the one path that hangs the caller forever.
 
 The same block is printed by `[STALE-CALLBACK]` (every 5 s, for callbacks older than
 `MESHWEAVER_STALE_CALLBACK_MS`, default 30 s) — that is the one that fires while the mesh is still
