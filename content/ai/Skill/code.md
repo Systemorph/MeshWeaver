@@ -30,6 +30,58 @@ These rules apply just as strictly to test code: a NodeType test that does `awai
 
 **Tests are reactive role models — no `await` in the test body.** The platform runs reactive end-to-end, so its tests do too: assert on the stream directly instead of bridging to a `Task`. Replace `await x.FirstAsync().ToTask(ct)` with `x.Should().Match(predicate)` / `.Be(expected)` / `.Emit()`, and drive reactive creates/updates from the assertion's subscribe (`CreateNode(node).Should().Emit()`) — the `[Fact]` becomes a plain `void`. Folding the assertion into the predicate (`.Match(items => items.Count == 2)`) waits for the *right* state, removing the "wait, then assert" race that flakes in CI. Where production runs work on an activity hub, drive it through `RequestedStatus` and observe the activity stream — test the same path production takes. Use the test base, never mock `IMessageHub` / `IMeshService`. Full pattern + API: [Reactive Test Assertions](@/Doc/Architecture/ReactiveTestAssertions).
 
+# 🚨🚨🚨 ABSOLUTE: In-mesh source is NEVER compiled by CI — sweep it green before prod
+
+**Every `.cs` that lives in a mesh node — NodeType `Source/*.cs`, Script nodes, layout areas — compiles at RUNTIME in the portal, never in `dotnet build`.** The repo's node trees are `<None>` content, not code (`samples/Graph/MeshWeaver.Samples.Graph.csproj`), so **12k+ lines of C# under `samples/Graph/Data/` and `content/` are invisible to the compiler, to `-warnaserror`, and to every test.** Green build, green CI, clean review and a merged PR say **nothing** about whether the mesh still compiles.
+
+**The deployed mesh's copy outranks the repo's.** A node carries its own version history and drifts from the file that seeded it. Reading the repo file does not tell you what the portal will compile.
+
+**A framework-version bump recompiles EVERY dynamic NodeType** ([rule 3 of `HasUsableBuild`](@/Doc/Architecture/NodeTypeCompilation)). Breakage therefore does not trickle in — the entire accumulated backlog detonates on one deploy.
+
+**A NodeType at `CompileError` is an OUTAGE, not a cosmetic defect.** It refuses portal readiness, and every instance hub burns the full **60 s** activation budget before faulting: pages hang, probes fail, silos drop. The failure shape to recognise — an in-mesh type calling a framework API that `src/` deleted:
+
+```
+CS1061: 'MessageHubConfiguration' does not contain a definition for 'AddTracking'
+  → type = CompileError → every dependent = UpstreamFailed → REFUSING READINESS
+```
+
+## Two standing obligations
+
+**Removing or renaming ANY public framework surface is a breaking change to code you cannot see.** Extension methods on `MessageHubConfiguration` / `IMessageHub`, `Controls.*`, `host.*` helpers, content base types — before you delete one, `grep -rn "<Symbol>" content samples/*/Data` **and** search the live mesh (`search_chunks`), which may hold callers the repo has already dropped. Port or delete them in the same change.
+
+**In-mesh source is pinned to the live framework and WILL be recompiled against a newer one.** Stay on documented surface, `LspCheckNode` before every `Patch`, and never leave a type at `Error`.
+
+# 🚨 The pre-prod sweep — mandatory, errors AND warnings
+
+**Shipping is not "my change compiles". It is "nothing in the mesh is red, and nothing is one framework bump away from red."** Hunting these down is your job, not the operator's.
+
+## The sweep
+
+Run this whenever you finish NodeType work, and always before a release or a framework upgrade:
+
+1. **Enumerate.** `Search('nodeType:NodeType')` for the whole mesh, or `Search('nodeType:NodeType namespace:{target} scope:descendants')` for one area. That list is the work list — do not sample it.
+2. **Read status without recompiling.** `LspDiagnosticsForNode('@{path}')` returns diagnostics from the *current cached* compilation — far cheaper than `Compile`, and the right tool for a sweep. `GetDiagnostics('@{path}')` gives the `status` flip.
+3. **Triage in dependency order.** A red upstream produces `UpstreamFailed` noise in every dependent, so a flat list badly overstates the damage. Fix the roots first and re-check — most "failures" evaporate.
+4. **Fix, pre-flighted.** `LspCheckNode({nodeTypePath, sourcePath, proposedCode})` until `ok: true` → `Patch`/`Update` → `Compile` + `GetDiagnostics` for the real emit.
+5. **Re-sweep until the whole list reads `Ok`.** A red type you did not author is still an outage waiting for the next deploy. Fix it, or escalate it **by name** — never ship behind "my part is green".
+
+## What counts as a finding — warnings included
+
+| Signal | Why it is a prod risk | Fix |
+|---|---|---|
+| `status: Error` / `CompileError` | Refuses portal readiness; every instance hub parks 60 s, then faults | Fix the source |
+| `CS1061` / `CS0103` against framework surface | The API was removed or renamed under you — in-mesh source is not in CI (section above) | Port to the current API |
+| `stayed an untyped JsonElement … TypeRegistry lacks the $type discriminator` | `Content is X` fails ⇒ the view **renders empty**, reactive waits time out, layout areas "cannot be found" | `WithType(typeof(X), nameof(X))` on the **receiving** hub |
+| `Unregistered type … auto-registered under its SHORT name` | Works by luck; collides across namespaces | Register it explicitly |
+| `reconcile is NOT CONVERGING` | A write loop — every pass rewrites the same node | Fix the predicate, never ignore the line |
+| `CS0105` duplicate usings · `CS1570` malformed XML · `CS8632` nullable context | Camouflage — they bury the one diagnostic that matters | Clean them so the next sweep is readable |
+
+🚨 **The warnings you tolerate are the camouflage for the next error.** A fatal `CS1061` buried in a twelve-line block of `CS0105`s and `CS8632`s is a line everyone has learned to scroll past. Keep the diagnostic output clean and the real failure is unmissable — that is the whole reason warnings are in scope for this sweep.
+
+## The gate
+
+Every type from step 1 reads `Ok`, and the type-registry warnings are gone from the log. Only then is it shippable. Verifying compile status is not optional polish — it is the last thing standing between an in-mesh edit and a portal that will not start.
+
 # Mutations go through `GetMeshNodeStream(path).Update(...)`
 
 Every mesh-node mutation goes through `workspace.GetMeshNodeStream(path).Update(current => modified)`
