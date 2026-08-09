@@ -40,6 +40,27 @@ same bytes (marker refs `refs/ci-green/<tree>/<epoch>`, 24 h TTL; see the workfl
 still concludes `success`, main-cd still ships the image — ~22 min earlier. If main moved, the tree
 differs and the full suite runs; there is no way to skip an untested tree.
 
+> 🚨 **Read from the other end, that same mechanism is a trap: `conclusion: SUCCESS` on the check
+> suite can coexist with `Run tests = skipped`.** The tree was tested *earlier*, on the PR that
+> produced it — which is sound for "did this tree pass", but says **nothing** about a test the run
+> never executed. So a green suite is NOT evidence that a NEW test passed, and "this test is green on
+> main" is NOT evidence it is green at all if main's latest run reused a tree.
+>
+> This is not hypothetical: a PR merged on such a green introduced a racy test that had genuinely run
+> only once, and it then reddened an unrelated PR. Separately, "main is green so this failure is
+> mine" was nearly concluded from a main run that had skipped every shard and therefore never ran the
+> project in question.
+>
+> **Before treating any run as evidence a test passed, check the shard jobs' own conclusions:**
+>
+> ```bash
+> gh run view <run-id> --repo Systemorph/MeshWeaver --json jobs \
+>   --jq '[.jobs[] | select(.name | startswith("Run tests")) | .conclusion]'
+> ```
+>
+> All `skipped` ⇒ that run executed no tests. Go back to the run that actually did — or, for a PR
+> adding tests, require a run whose shards executed before believing the new test is green.
+
 ## The procedure
 
 ```bash
