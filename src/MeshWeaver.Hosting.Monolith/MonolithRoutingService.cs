@@ -82,7 +82,12 @@ internal class MonolithRoutingService(
         logger.LogWarning("No route found for {MessageType} → {Address}. Node: {NodePath}, NodeType: {NodeType}, Sender: {Sender}, ShuttingDown: {ShuttingDown}",
             delivery.Message.GetType().Name, address, node?.Path, node?.NodeType, delivery.Sender, isShuttingDown);
 
-        var errorType = isShuttingDown ? ErrorType.Failed : ErrorType.NotFound;
+        // 🚨 ShuttingDown, NOT Failed. Consumers with their own recovery machinery — chiefly
+        // SynchronizationStream's keep-alive + change-feed resubscribe latch — key on THIS member
+        // to ride the reject out instead of tearing down. Classifying a shutdown reject as Failed
+        // makes it read as terminal, which is the CI 30003419841 wedge: erroring the sync stream on
+        // this NACK killed the resubscribe latch and wedged every read of a mid-recycle NodeType.
+        var errorType = isShuttingDown ? ErrorType.ShuttingDown : ErrorType.NotFound;
         var senderNacked = delivery.Message is not DeliveryFailure
             && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs;
         if (senderNacked)
