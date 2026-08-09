@@ -707,6 +707,13 @@ jobs:
         set -euo pipefail
         tar -I 'zstd --long=27' -xf build-output-0.tar.zst
         rm -f build-output-0.tar.zst
+    - name: Is the plugins token configured?
+      id: token
+      env:
+        PLUGINS_REPO_TOKEN: ${{ secrets.PLUGINS_REPO_TOKEN }}
+      run: |
+        if [ -n "$PLUGINS_REPO_TOKEN" ]; then echo "present=true" >> "$GITHUB_OUTPUT"
+        else echo "present=false" >> "$GITHUB_OUTPUT"; fi
     - name: Check out MeshWeaver.Plugins
       id: plugins
       # A PAT/App token with read access to the private plugins repo. Absent (e.g. on a fork, or
@@ -759,10 +766,33 @@ jobs:
         # tolerated, NEW failures fail this PR. Same one-way contract the plugins CI uses, so the
         # two gates cannot disagree about what is acceptable.
         time dotnet "$TESTER" "$STAGE" --allow "$STAGE/plugin-gate.allow"
-    - name: Report a skipped gate
-      if: steps.plugins.outcome != 'success'
+    # 🚨 A gate that reports GREEN having tested nothing is the very failure shape it exists to
+    # end — that is how mw-plugin-test:latest went stale unnoticed in the first place. So the two
+    # reasons the checkout can fail are treated differently:
+    #   • a FORK PR genuinely cannot reach a private repo → skip, with a warning. Nothing the
+    #     contributor can do, and their change cannot be proven either way here.
+    #   • the SAME repo failing means PLUGINS_REPO_TOKEN is missing or expired → that is a
+    #     CONFIGURATION fault, and configuration faults must be loud. Failing is what gets the
+    #     secret provisioned; a warning would let the gate sit permanently inert and green.
+    # Not-yet-configured is the BOOTSTRAP state (this very PR introduces the gate, so the secret
+    # cannot exist before it merges). Warn loudly; do not block. Remove nothing here — the arm
+    # below is what keeps it honest once the secret exists.
+    - name: Warn — gate not yet armed
+      if: steps.token.outputs.present != 'true' && github.event.pull_request.head.repo.fork != true
       run: |
-        echo "::warning::MeshWeaver.Plugins could not be checked out (no PLUGINS_REPO_TOKEN, or a fork PR) — the cross-repo API gate did NOT run for this PR."
+        echo "::warning title=Plugin gate NOT armed::PLUGINS_REPO_TOKEN is not configured, so the cross-repo API gate did not run and this PR is UNVERIFIED against the plugins. Provision a read-access token for Systemorph/MeshWeaver.Plugins to arm it."
+    - name: Report a skipped gate (fork PR)
+      if: steps.plugins.outcome != 'success' && github.event.pull_request.head.repo.fork == true
+      run: |
+        echo "::warning::Fork PR — MeshWeaver.Plugins is unreachable, so the cross-repo API gate did not run."
+    # 🚨 Token CONFIGURED but the checkout still failed ⇒ expired, revoked, or wrong scope. That is
+    # a configuration FAULT, and configuration faults must be loud: a gate reporting green while
+    # testing nothing is exactly how mw-plugin-test:latest went stale unnoticed.
+    - name: Fail — gate armed but could not run
+      if: steps.token.outputs.present == 'true' && steps.plugins.outcome != 'success' && github.event.pull_request.head.repo.fork != true
+      run: |
+        echo "::error::PLUGINS_REPO_TOKEN is configured but checking out Systemorph/MeshWeaver.Plugins FAILED (expired, revoked, or insufficient scope). The cross-repo API gate did not run, so this PR is unverified against the plugins."
+        exit 1
 
   collect-results:
     name: "Consolidate test results"
