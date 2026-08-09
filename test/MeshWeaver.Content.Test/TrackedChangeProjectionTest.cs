@@ -239,6 +239,53 @@ public class TrackedChangeProjectionTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
+    /// A range wider than the read cap still shows the FULL redline — it is the endpoint diff — but
+    /// credits nobody. Loading a subset of the steps would leave a version-gap after the baseline,
+    /// and the consecutive-pair attribution would hand every edit across that gap to whoever made
+    /// the first surviving step: exactly the "attribute to the wrong person" this module refuses.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task Between_RangeWiderThanTheCap_KeepsTheRedlineButCreditsNobody()
+    {
+        var path = $"test/cap-{Guid.NewGuid():N}"[..20];
+        await NodeFactory.CreateNode(MeshNode.FromPath(path) with
+        {
+            Name = "Capped Report",
+            NodeType = MarkdownNodeType.NodeType,
+            State = MeshNodeState.Active,
+            Content = new MarkdownContent { Content = Baseline }
+        }).Should().Within(Step).Emit();
+
+        await EditAs(path, "alice", "grew steadily", "grew SEVENTEEN percent");
+        await EditAs(path, "bob", "stayed flat", "stayed FLATTISH");
+        await EditAs(path, "carol", "remains cautious", "remains OPTIMISTIC");
+
+        var versions = await WaitForVersions(path, 4).Should().Within(Step).Emit();
+        var current = await NodeAtVersion(path, versions.Max(v => v.Version)).Should().Within(Step).Emit();
+        var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
+        var oldest = versions.Min(v => v.Version);
+
+        // maxSteps = 2 while the range holds 3 versions (the create plus alice's and bob's edits),
+        // so the cap bites and attribution is dropped for the whole comparison.
+        var capped = await ChangeProjection
+            .Between(versionQuery, current, oldest, Mesh.JsonSerializerOptions, maxSteps: 2)
+            .Should().Within(Step).Emit();
+
+        capped.Should().HaveCount(3, "the redline is the endpoint diff — the read cap never narrows it");
+        capped.Should().AllSatisfy(c => c.Author.Should().BeEmpty(
+            "a partially-loaded history cannot say who made which edit, so it says nobody"));
+
+        // Same range, cap high enough to load every step: attribution comes back.
+        var attributed = await ChangeProjection
+            .Between(versionQuery, current, oldest, Mesh.JsonSerializerOptions, maxSteps: MaxStepsForFullRange)
+            .Should().Within(Step).Emit();
+        attributed.Select(c => c.Author).Order().Should().Equal("alice", "bob", "carol");
+    }
+
+    /// <summary>Comfortably above the 3 versions the cap test's range holds.</summary>
+    private const int MaxStepsForFullRange = 10;
+
+    /// <summary>
     /// Reverting a projected change is a NORMAL versioned write: the text goes back and the revert
     /// itself becomes the newest version — which is what makes "reject" auditable instead of a
     /// satellite quietly disappearing.

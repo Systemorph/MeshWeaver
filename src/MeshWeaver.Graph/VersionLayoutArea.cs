@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -442,11 +443,7 @@ public static class VersionLayoutArea
         stack = stack.WithView(Controls.Title(title, 2).WithStyle("margin: 0 0 16px 0;"));
 
         var isProse = IsMarkdownContent(originalNode, options) || IsMarkdownContent(modifiedNode, options);
-        // The redline is projected from MARKDOWN content specifically (ChangeProjection.CleanTextOf).
-        // A type whose prose lives in some other text field is prose for the diff editor's syntax
-        // highlighting but would render a redline with nothing in it — so it keeps the source diff.
-        var isMarkdown = !string.IsNullOrEmpty(MarkdownOverviewLayoutArea.GetMarkdownContent(originalNode))
-            || !string.IsNullOrEmpty(MarkdownOverviewLayoutArea.GetMarkdownContent(modifiedNode));
+        var isMarkdown = HoldsMarkdown(originalNode) || HoldsMarkdown(modifiedNode);
         var wantsSource = string.Equals(host.GetQueryStringParamValue("view"), "source", StringComparison.OrdinalIgnoreCase);
 
         stack = isMarkdown && !wantsSource
@@ -483,6 +480,21 @@ public static class VersionLayoutArea
     }
 
     /// <summary>
+    /// Whether the redline can speak for this node: the projection reads markdown SPECIFICALLY
+    /// (<see cref="ChangeProjection.CleanTextOf"/>), so a type whose prose lives in some other text
+    /// field is prose for the diff editor's syntax highlighting but would redline nothing.
+    /// <para>
+    /// A Markdown node counts even when it is EMPTY at both ends — an emptied or not-yet-written
+    /// document is still a document, and sending it to the source diff would show two blank panes
+    /// where the redline correctly shows "no content". The node type is the authority; the content
+    /// probe additionally catches markdown-shaped content under some other type.
+    /// </para>
+    /// </summary>
+    private static bool HoldsMarkdown(MeshNode node) =>
+        node.NodeType == MarkdownNodeType.NodeType
+        || !string.IsNullOrEmpty(MarkdownOverviewLayoutArea.GetMarkdownContent(node));
+
+    /// <summary>
     /// The tracked-change redline for the stated version pair: the document as of the TO version,
     /// with every hunk introduced since the FROM version marked up inline and carded with its
     /// author. Comments stay on the document's own page — this view answers one question.
@@ -491,7 +503,11 @@ public static class VersionLayoutArea
         string hubPath, MeshNode modifiedNode, JsonSerializerOptions options,
         long fromVersion, long? compareToVersion, bool canEdit) =>
         new CollaborativeMarkdownControl()
-            .WithValue(ExtractDiffContent(modifiedNode, options))
+            // GetMarkdownContent, NOT ExtractDiffContent: the projection derives its hunks from
+            // exactly this reader, and ExtractDiffContent falls back to serialized JSON when a
+            // markdown node is empty — which would put a JSON envelope on screen under a redline
+            // computed from prose.
+            .WithValue(MarkdownOverviewLayoutArea.GetMarkdownContent(modifiedNode))
             .WithNodePath(hubPath)
             .WithHubAddress(hubPath)
             .WithCanComment(false)
