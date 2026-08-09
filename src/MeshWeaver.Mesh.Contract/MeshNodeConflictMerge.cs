@@ -186,10 +186,10 @@ public static class MeshNodeConflictMerge
             latestJson = JsonSerializer.SerializeToNode(latest, latest.GetType(), options) as JsonObject;
             staleJson = JsonSerializer.SerializeToNode(stale, stale.GetType(), options) as JsonObject;
         }
-        catch (JsonException)
+        catch (Exception ex) when (IsSerializationFailure(ex))
         {
-            // Not hidden: unserializable content is REPORTED as an overwritten member so the
-            // activity-log entry names it, and the newer row is kept intact.
+            // Not hidden: content this serializer cannot project is REPORTED as an overwritten
+            // member, so the activity-log entry names it and the newer row is kept intact.
             overwritten.Add(nameof(MeshNode.Content));
             return latest;
         }
@@ -214,10 +214,27 @@ public static class MeshNodeConflictMerge
         {
             return latestJson.Deserialize(latest.GetType(), options) ?? latest;
         }
-        catch (JsonException)
+        catch (Exception ex) when (IsSerializationFailure(ex))
         {
             overwritten.Add(nameof(MeshNode.Content));
             return latest;
         }
     }
+
+    /// <summary>
+    /// The serialization failures that are an EXPECTED input condition here — content whose CLR type
+    /// this serializer cannot project to JSON and back. <see cref="JsonSerializer"/> documents both:
+    /// <see cref="NotSupportedException"/> when no compatible converter exists for the type or one of
+    /// its members, and <see cref="JsonException"/> for malformed/cyclic JSON. Both mean the same
+    /// thing for a merge — the content is not mergeable — so both are reported as an overwritten
+    /// member and the newer row is kept.
+    ///
+    /// <para>🚨 Deliberately NOT a blanket catch. Anything else — a custom converter throwing an
+    /// arbitrary exception — is a genuine fault, not an unmergeable input, and it must propagate.
+    /// Swallowing it would hide a defect behind a plausible-looking "latest wins", which is the exact
+    /// shape this whole change exists to eliminate. A loud failure is an acceptable outcome; a silent
+    /// wrong one is not.</para>
+    /// </summary>
+    private static bool IsSerializationFailure(Exception ex)
+        => ex is JsonException or NotSupportedException;
 }
