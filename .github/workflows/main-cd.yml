@@ -952,16 +952,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          # `gate` resolves the target for BOTH entry paths, so this names the right commit on a
+          # reconcile run too — where workflow_run.head_sha is empty and the alert would otherwise
+          # read "for commit ``". The fallbacks cover a failure IN gate, before it produced outputs.
+          HEAD_SHA: ${{ needs.gate.outputs.sha || github.event.workflow_run.head_sha || github.sha }}
+          REASON: ${{ needs.gate.outputs.reason }}
         run: |
           set -euo pipefail
           # Ensure the label exists (--force = update-or-create, idempotent).
           gh label create ci-failure --repo "$GITHUB_REPOSITORY" \
             --description "A main-branch CD run failed - no deployable image was published" \
             --color B60205 --force
-          body="CD failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) for commit \`${HEAD_SHA}\`.
+          body="CD failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) for commit \`${HEAD_SHA}\` (entered via \`${REASON:-unknown}\`).
 
-          No deployable image was published for this merge - every self-updating install stays on the PREVIOUS image until a CD run goes green. Triage the failed job in the linked run, fix (or re-run if infrastructure), and close this issue once CD is green."
+          No complete image set was published - publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set. Triage the failed job in the linked run. The 3-hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. Close this issue once CD is green."
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
             --limit 1 --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
