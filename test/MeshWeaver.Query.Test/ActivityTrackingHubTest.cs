@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Immutable;
-using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -92,6 +90,7 @@ public class ActivityTrackingHubTest(ITestOutputHelper output) : MonolithMeshTes
     {
         const string user = "dave";
         const string nodePath = "dave/MyDoc";
+        var activityPath = $"{user}/_UserActivity/{nodePath.Replace("/", "_")}";
 
         // ONBOARD-FIRST gate: activity tracking never creates a partition ahead of onboarding.
         await OnboardPartitionRoot(user);
@@ -109,6 +108,29 @@ public class ActivityTrackingHubTest(ITestOutputHelper output) : MonolithMeshTes
         // cache — so wherever the request is handled, the write goes through cache/{meshRootId}.
         connHub.Address.Should().NotBe(connHub.GetActivityTrackingHub().Address);
 
+        // 🚨 Wait on the WRITE'S OWN COMPLETION, not on a query poll (issue #993).
+        //
+        // HandleTrackActivity detaches its write on purpose — TrackLogin sits on the cold-login hot
+        // path and must not stall behind a node write — so Post returns while a three-round-trip
+        // pipeline (existence probe → onboard-gate storage read → CreateNode) is still running.
+        // The previous shape gave that pipeline a fixed 15 s and then asserted on
+        // IMeshService.Query, which is EVENTUALLY CONSISTENT: it asserted "the index caught up in
+        // time", not "the write finished", and burned its whole budget on CI (run 31301311379)
+        // with nothing to attribute it to. Per CqrsAndContentAccess.md, polling a query for a node
+        // you just caused to be written is the wrong primitive — and per AGENTS.md the wait belongs
+        // on the actual condition. ActivityWriteTracker IS that condition: the handler registers
+        // every detached write with it and clears the registration from a Finally.
+        //
+        // Subscribe BEFORE the Post. WhenSettled requires the path to ENTER and then LEAVE the
+        // in-flight set, so it cannot win the race against the handler's Begin(...) the way a bare
+        // Drain() after Post would (Drain completes immediately when nothing is in flight — that
+        // would be a deterministic FALSE PASS). Replay(1) holds the completion for the assertion's
+        // own subscribe below.
+        var tracker = connHub.GetActivityTrackingHub()
+            .ServiceProvider.GetRequiredService<ActivityWriteTracker>();
+        var settled = tracker.WhenSettled(activityPath).Replay(1);
+        using var settledSubscription = settled.Connect();
+
         connHub.Post(new TrackActivityRequest(
             NodePath: nodePath,
             UserId: user,
@@ -116,20 +138,17 @@ public class ActivityTrackingHubTest(ITestOutputHelper output) : MonolithMeshTes
             NodeType: "Markdown",
             Namespace: user));
 
-        // 🚨 Wait on the QUERY, not on GetMeshNodeStream(path). This looks like the wrong
-        // primitive — the query index is eventually consistent — but it is the only one that
-        // WAITS for a node that does not exist yet. Both authoritative reads terminate instead:
-        // ReadNode is a one-shot GetMeshNode that returns null on NotFound and completes, and
-        // GetMeshNodeStream(path) on a not-yet-created node likewise COMPLETES rather than staying
-        // open until the write lands. #772 switched to the stream and turned an occasional 15s
-        // timeout into a deterministic 250ms "completed without a value" on CI (afe2fc6ea) — the
-        // whole wait collapsed. Reverted; the poll is correct here precisely because it retries.
-        var node = await PollForFirst($"namespace:{user}/_UserActivity nodeType:UserActivity");
+        await settled.Should().Within(TimeSpan.FromSeconds(15)).Emit(
+            "the detached activity write must run to completion — a timeout here means the handler's " +
+            "pipeline stalled (see the MeshWeaver.Graph.ActivityTracking trace for which stage was last)");
 
-        node.Should().NotBeNull(
+        // Now read AUTHORITATIVELY. The write has terminated, so the node either exists or the
+        // handler skipped/failed the create — no eventual consistency in the assertion.
+        var node = await ReadNode(activityPath).Should().Match(n => n is not null,
             "a track posted to a connection-style hub must still land a UserActivity node — " +
             "the handler originates the write from the dedicated tracking hub, not the caller");
-        node!.Path.Should().Be($"{user}/_UserActivity/{nodePath.Replace("/", "_")}");
+
+        node!.Path.Should().Be(activityPath);
         node.NodeType.Should().Be("UserActivity");
 
         // 🚨 The write ran under the CALLER's identity, not system/empty. The handler builds
@@ -157,15 +176,4 @@ public class ActivityTrackingHubTest(ITestOutputHelper output) : MonolithMeshTes
 
         await ReadNode(user).Should().Match(n => n is { State: MeshNodeState.Active });
     }
-
-    private async Task<MeshNode?> PollForFirst(string query)
-        => await MeshQuery
-            .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
-            .Scan(ImmutableList<MeshNode>.Empty, (acc, c) =>
-                c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset
-                    ? c.Items.ToImmutableList()
-                    : acc.AddRange(c.Items))
-            .Where(list => list.Count > 0)
-            .Select(list => list[0])
-            .Should().Within(TimeSpan.FromSeconds(15)).Emit();
 }
