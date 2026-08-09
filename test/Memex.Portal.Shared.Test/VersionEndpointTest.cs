@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -137,16 +138,41 @@ public class VersionEndpointTest
     }
 
     /// <summary>
-    /// The projection itself, off a known assembly: both stamps are read from the assembly the build
-    /// produced — no poller, no node, no configuration key involved.
+    /// The projection itself, off an assembly THIS build stamped: both values come from assembly
+    /// metadata — no poller, no node, no configuration key involved.
     /// </summary>
     [Fact]
-    public void ReadBuildIdentity_reads_the_stamps_off_the_assembly()
+    public void ReadBuildIdentity_reads_the_stamps_off_a_build_assembly()
     {
-        var identity = Defaults.ReadBuildIdentity(typeof(VersionEndpointTest).Assembly);
+        var identity = Defaults.ReadBuildIdentity(typeof(BuildIdentity).Assembly);
 
         identity.Version.Should().NotBeNullOrWhiteSpace();
-        identity.Commit.Should().NotBeNullOrWhiteSpace();
+        identity.Commit.Should().NotBeNullOrWhiteSpace(
+            "AddCommitHashMetadata stamps every assembly built from this repo");
+    }
+
+    /// <summary>
+    /// The fallback that makes the endpoint answer correctly under a host that is not part of this
+    /// build — and this test run IS that case, which is what gives the assertion teeth.
+    ///
+    /// <para><c>test/Directory.Build.props</c> deliberately does NOT import the root props, so
+    /// <c>AddCommitHashMetadata</c> never runs for test projects and the entry assembly here carries
+    /// no <c>CommitHash</c>. Reading the entry assembly blindly would report the runner's <c>1.0.0</c>
+    /// and an empty commit; the fallback reports the real build instead. Production is the other
+    /// branch — <c>memex/Directory.Build.props</c> imports the root, so the portal executable IS
+    /// stamped and wins, which is what keeps this endpoint and the About tab in agreement.</para>
+    /// </summary>
+    [Fact]
+    public void Build_falls_back_to_a_stamped_assembly_when_the_host_is_not_part_of_this_build()
+    {
+        var entry = Assembly.GetEntryAssembly();
+        entry.Should().NotBeNull();
+
+        // Non-vacuity guard: the host really is unstamped, so the fallback really is exercised.
+        Defaults.ReadBuildIdentity(entry!).Commit.Should().BeEmpty();
+
+        Defaults.Build.Commit.Should().NotBeNullOrWhiteSpace();
+        Defaults.Build.Version.Should().NotBeNullOrWhiteSpace();
     }
 
     /// <summary>
