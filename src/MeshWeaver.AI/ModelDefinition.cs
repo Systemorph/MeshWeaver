@@ -127,25 +127,38 @@ public record ModelDefinition
     public bool? SupportsTools { get; init; }
 
     /// <summary>
-    /// Abstract SIZE label — which rung of the catalog this model is (see <see cref="ModelSize"/>).
-    /// An agent asks for a size (<see cref="AgentConfiguration.ModelTier"/>) and the resolver picks
-    /// the lowest-<see cref="Order"/> model carrying that label, so "which model is our large one"
-    /// is DATA on the node rather than a <c>ModelTier:*</c> config key a new environment must set.
+    /// USAGE tier — what this model is the deployment's choice FOR. The id (or an alias) of a
+    /// <c>nodeType:ModelTier</c> node: <c>utility</c>, <c>chat</c>, <c>reasoning</c>, <c>coding</c>
+    /// out of the box, plus whatever tiers this deployment added (see
+    /// <see cref="ModelTierNodeType"/>). An agent asks for a tier
+    /// (<see cref="AgentConfiguration.ModelTier"/>) and the resolver picks the lowest-<see cref="Order"/>
+    /// model carrying it, so "which model do we code with" is DATA on the mesh rather than a
+    /// <c>ModelTier:*</c> config key a new environment must set.
+    ///
+    /// <para>Deliberately a free-form <c>string</c>, never an enum. Two reasons: the set of tiers is
+    /// editable, so it cannot be a closed type; and an unknown label must cost a rung, never a round
+    /// — an unmatched string is a miss that falls through to the default, whereas an enum property
+    /// would throw during deserialisation and drop the whole model out of the catalog. The legacy
+    /// <c>heavy</c>/<c>standard</c>/<c>light</c> and <c>S</c>/<c>M</c>/<c>L</c>/<c>XL</c> spellings
+    /// resolve through the shipped tiers' aliases.</para>
     ///
     /// <para><c>null</c> = unlabelled, which is normal: a deployment does NOT have to populate every
-    /// size. A size nobody carries is a MISS and falls through to the deployment default, so
-    /// labelling one model is a valid setup.</para>
+    /// tier. A tier nobody carries is a MISS and falls through to the deployment default, so
+    /// labelling one model — or none — is a valid setup.</para>
     /// </summary>
-    [System.ComponentModel.Description("Size label: S, M, L, or XL")]
-    public ModelSize? Size { get; init; }
+    [System.ComponentModel.Description("Usage tier: utility, chat, reasoning, or coding")]
+    public string? Tier { get; init; }
 
     /// <summary>
-    /// <c>true</c> marks this entry a ROUTER (the "Auto" pseudo-model) rather than a model that can
-    /// serve a round itself: it inspects the ask and dispatches to a real model.
+    /// <c>true</c> marks this entry the ROUTER — the <b>Auto</b> pseudo-model, which is the DEFAULT
+    /// selection for a new thread. It never serves a round itself: it dispatches to a real model
+    /// (the tier the selected agent declares, else the deployment default — see
+    /// <c>AgentChatClient.ApplyStaleModelFallback</c>).
     ///
-    /// <para>A router is excluded from every automatic selection — the default-model fallback and
-    /// the size lookup — because selecting it there would resolve Auto to Auto. It is only ever
-    /// chosen EXPLICITLY, by a user picking it in the composer.</para>
+    /// <para>A router is excluded from every rung of tier resolution — the label lookup, the legacy
+    /// config lookup and the deployment default — because selecting it there would resolve Auto to
+    /// Auto. Being the composer default is the one place it IS chosen; dispatch happens immediately
+    /// afterwards, before any factory sees it.</para>
     /// </summary>
     [System.ComponentModel.Description("Router (Auto) — dispatches to a real model")]
     public bool? IsRouter { get; init; }
@@ -158,7 +171,8 @@ public record ModelDefinition
     {
         Name = Id,
         Provider = Provider,
-        Order = Order != 0 ? Order : factoryOrder
+        Order = Order != 0 ? Order : factoryOrder,
+        IsRouter = IsRouter == true
     };
 }
 

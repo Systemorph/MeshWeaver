@@ -426,16 +426,23 @@ public static class AgentPickerProjection
             .Select(list =>
             {
                 var ordered = list.Where(m => !string.IsNullOrEmpty(m.Path)).OrderBy(m => m.Order).ToList();
-                // Default to the lowest-Order model whose credentials actually RESOLVE — mirrors
+                // Default to the lowest-Order model that can actually SERVE — mirrors
                 // ChatClientCredentialResolver.ResolveDefaultModelId (the execution-time fallback), so the
                 // composer never DEFAULTS to a model with no provider/key configured (e.g. a "glm-5.2"
                 // catalog entry whose prices/provider were never entered). That divergence — composer picks
                 // lowest-Order, execution picks lowest-Order-that-resolves — is what surfaced as "selected
                 // model X unavailable, using default Y". Fall back to the first model so the composer is
                 // never left without a selection.
-                var resolvable = credResolver == null ? null
-                    : ordered.FirstOrDefault(m => credResolver.Resolve(m.Path!) != CredentialResolution.Missing);
-                return (resolvable ?? ordered.FirstOrDefault())?.Path;
+                //
+                // 🚦 A ROUTER (Auto) counts as serving even though it holds no credential of its own: it
+                // dispatches to a real model at execution time (AgentChatClient.ApplyStaleModelFallback).
+                // Auto ships at a very low Order precisely so it wins here — Auto is the DEFAULT selection
+                // for a new thread. Without this clause the credential rule would skip the one entry that
+                // is meant to be the default.
+                var servable = credResolver == null ? null
+                    : ordered.FirstOrDefault(m =>
+                        m.IsRouter || credResolver.Resolve(m.Path!) != CredentialResolution.Missing);
+                return (servable ?? ordered.FirstOrDefault())?.Path;
             });
 
         // harness → (default, ALL paths) so the master's stored harness is VALIDATED against the current
@@ -514,12 +521,29 @@ public static class AgentPickerProjection
     /// The master composer's stored model path IF it still resolves against the current catalog
     /// (its provider/key are configured), else <c>null</c> so the caller falls back to a valid default.
     /// A null resolver (no credential resolution available) trusts the stored value unchanged.
+    ///
+    /// <para>🧊 Mirrors <see cref="ValidOrDefault"/>'s rule for harness/agent: <b>a transiently-empty
+    /// catalog must NEVER wipe a good selection.</b> The credential snapshot is lazily warmed, and
+    /// before it lands every model reads as "no usable credential" — so without the readable-catalog
+    /// gate this method silently rewrites the user's stored model on any composer init that happens to
+    /// race the warm-up. That is a PERSISTED, lossy change caused by nothing but timing.</para>
     /// </summary>
+    /// <param name="modelPath">The stored selection.</param>
+    /// <param name="credResolver">The credential resolver, or null when none is registered.</param>
+    /// <returns>The stored path when it is still valid (or cannot yet be judged), else null.</returns>
     private static string? ValidMasterModel(string? modelPath, ChatClientCredentialResolver? credResolver)
-        => !string.IsNullOrEmpty(modelPath)
-           && (credResolver is null || credResolver.HasUsableCredential(modelPath))
-            ? modelPath
-            : null;
+    {
+        if (string.IsNullOrEmpty(modelPath)) return null;
+        if (credResolver is null) return modelPath;
+        // 🚦 Auto is ALWAYS valid: it holds no credential of its own and dispatches to a real model at
+        // execution time. Without this the credential check would reset every user's stored Auto
+        // selection to a concrete model on each composer init. Answered statically, so it holds during
+        // warm-up too (ChatClientCredentialResolver.IsRouterSelection).
+        if (credResolver.IsRouterSelection(modelPath)) return modelPath;
+        // Cannot tell yet ⇒ keep what the user chose.
+        if (!credResolver.HasReadableCatalog) return modelPath;
+        return credResolver.HasUsableCredential(modelPath) ? modelPath : null;
+    }
 
     /// <summary>
     /// The model picker queries: the system <c>Provider</c> catalog plus per-context / per-NodeType /
@@ -533,7 +557,7 @@ public static class AgentPickerProjection
         IEnumerable<string>? selectedProviderPaths = null,
         string? userPath = null)
     {
-        var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}";
+        var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}|{ModelTierNodeType.NodeType}";
         var queries = new List<string>
         {
             $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants{RegistryProjection}",

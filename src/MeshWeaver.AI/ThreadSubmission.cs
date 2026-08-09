@@ -280,6 +280,11 @@ internal static class ThreadSubmissionServer
         // short delay. Mirrors ThreadExecution.InitializeThreadLifecycle and
         // ActivityControlPlaneExtensions.WatchControlPlane.
         var serial = new System.Reactive.Disposables.SerialDisposable();
+        // 🚨 #991 — hold the PENDING re-establish so teardown cancels it. An uncancelled
+        // `Observable.Timer` sits on the process-wide TimerQueue (a strong GC root) and
+        // roots `Establish` → this closure → the thread hub for the whole delay, so a
+        // stream that faults as the hub tears down keeps the hub alive past disposal.
+        var pendingReEstablish = new System.Reactive.Disposables.SerialDisposable();
         var disposed = false;
         // 🚨 Stage 1 of the in-memory inbox channel. Resolve-or-create the per-thread
         // ThreadInboxChannel here (thread-hub init — single threaded, before any round),
@@ -381,14 +386,16 @@ internal static class ThreadSubmissionServer
                         "[SubmissionWatcher] stream errored for {ThreadPath} — re-establishing",
                         threadPath);
                     if (!disposed)
-                        System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1))
-                            .Subscribe(_ => Establish());
+                        pendingReEstablish.Disposable =
+                            System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1))
+                                .Subscribe(_ => Establish());
                 });
 
         Establish();
         return System.Reactive.Disposables.Disposable.Create(() =>
         {
             disposed = true;
+            pendingReEstablish.Dispose();
             serial.Dispose();
         });
     }
