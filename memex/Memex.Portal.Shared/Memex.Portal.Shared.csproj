@@ -56,5 +56,17 @@
     <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
     <PackageReference Include="Microsoft.Identity.Web" />
     <PackageReference Include="Microsoft.Identity.Web.UI" />
+    <PackageReference Include="SkiaSharp" />
+    <!-- The Linux natives are a RUNTIME dependency of the published image, so they must be
+         referenced here rather than only where the renderer is called. NoDependencies = no
+         fontconfig/freetype link, so nothing has to be apt-installed into the portal base. -->
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The share card draws its own text, so it carries its own font: the NoDependencies Skia
+         build has no system-font lookup at all, and the portal image has no fonts installed.
+         Open Sans is Apache-2.0, already shipped with the MAUI client. -->
+    <EmbeddedResource Include="Seo/OpenSans-Regular.ttf" LogicalName="Memex.Portal.Shared.Seo.OpenSans-Regular.ttf" />
   </ItemGroup>
 </Project>
