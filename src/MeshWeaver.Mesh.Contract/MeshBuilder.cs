@@ -200,6 +200,12 @@ public record MeshBuilder
             // ever opened a scope on and silently passed every write under a subtree
             // being deleted (#839's write-guard test caught it).
             .AddSingleton<Services.RecentlyDeletedRegistry>()
+            // The SAME instance, surfaced to the message pipeline (which sits below
+            // MeshWeaver.Mesh.Contract in the reference graph and therefore cannot see the
+            // registry type). MessageService reads it to classify a delivery abandoned by a
+            // dying hub: "the node was DELETED" is an authoritative NotFound, everything else
+            // stays the transient ShuttingDown. See IAddressTombstones for why (#1029).
+            .AddSingleton<IAddressTombstones>(sp => sp.GetRequiredService<Services.RecentlyDeletedRegistry>())
             // Controlled I/O pools — mesh-scoped governor over the shared
             // ThreadPool for genuinely-async / sync-blocking leaves (file system,
             // blob, …). Resolved by leaf adapters via IoPoolRegistry; dies with
