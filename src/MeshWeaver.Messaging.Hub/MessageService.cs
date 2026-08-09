@@ -303,9 +303,11 @@ public class MessageService : IMessageService
 
 
     /// <summary>
-    /// Posts a transient <see cref="ErrorType.ShuttingDown"/> <see cref="DeliveryFailure"/> for
-    /// <paramref name="delivery"/> through the PARENT hub — our own <see cref="Post"/> would
-    /// re-enter this service's shutdown gate and be dropped.
+    /// Posts a <see cref="DeliveryFailure"/> for <paramref name="delivery"/> through the PARENT
+    /// hub — our own <see cref="Post"/> would re-enter this service's shutdown gate and be
+    /// dropped. The failure is transient (<see cref="ErrorType.ShuttingDown"/>) or authoritative
+    /// (<see cref="ErrorType.NotFound"/>) depending on whether this address can still come back;
+    /// see the two 🚨 paragraphs below for the fork and why it matters.
     ///
     /// <para>Used by BOTH paths on which a hub going down abandons a delivery a sender is
     /// awaiting: the intake gate (a message arriving after RunLevel flipped) and disposal
@@ -338,12 +340,21 @@ public class MessageService : IMessageService
     /// ride-out then parks the consumer forever — no reactivation, no change-feed announce, no
     /// verdict — so a read that raced the teardown burns its whole budget and reports "unavailable"
     /// for a node that is provably gone, while its keep-alive heartbeats a nonexistent owner every
-    /// interval (issue #1029; reproduced end-to-end by
-    /// <c>PostDeleteReadReachesVerdictTest</c>). For a tombstoned address the NACK is therefore the
-    /// AUTHORITATIVE <see cref="ErrorType.NotFound"/>, phrased so the mesh's existing classifiers
-    /// (<c>MeshNodeStreamCache.IsMissingNodeFailure</c>, the delete cascade's not-found
-    /// normalisation) recognise it — and deliberately phrased to avoid every marker
-    /// <c>IsTransientOwnerFailure</c> matches on, so it cannot be mistaken for a retryable miss.</para>
+    /// interval (issue #1029). For a tombstoned address the NACK is therefore the AUTHORITATIVE
+    /// <see cref="ErrorType.NotFound"/>. The message's exact WORDING is contract, not prose — the
+    /// requirement and its consequences are stated where the string is built, below.</para>
+    ///
+    /// <para>Both halves of the fork are pinned, so neither can be collapsed into the other
+    /// unnoticed:
+    /// <list type="bullet">
+    ///   <item><c>MeshWeaver.Messaging.Hub.Test.DeletedAddressNackClassificationTest</c> — the
+    ///     NotFound half, plus the message phrases the classifiers match on;</item>
+    ///   <item><c>MeshWeaver.Messaging.Hub.Test.DeferredDeliveryNackedOnDisposeTest</c> — the
+    ///     ShuttingDown half (no tombstone ⇒ transient);</item>
+    ///   <item><c>MeshWeaver.Hosting.Monolith.Test.PostDeleteReadVerdictTest</c> — the end-to-end
+    ///     #1029 repro: create → read → delete → read, which before the fix sat silent for the
+    ///     reader's whole budget.</item>
+    /// </list></para>
     /// </summary>
     private void NackThroughParent(IMessageDelivery delivery, string reason)
     {
@@ -364,6 +375,31 @@ public class MessageService : IMessageService
         // Gone for good (node deleted) ⇒ authoritative NotFound; anything else ⇒ transient.
         // The delete source tombstones every planned path SYNCHRONOUSLY, before its response
         // returns, so this lookup is already authoritative for a delivery that raced the teardown.
+        //
+        // 🚨🚨 THE WORDING OF THE NotFound MESSAGE IS CONTRACT — do not reword it casually.
+        // The mesh classifies delivery failures by their MESSAGE TEXT, not only by ErrorType, and
+        // this one string has to satisfy BOTH sides of that classification:
+        //
+        //   MUST CONTAIN  "No node found"
+        //       matched by MeshNodeStreamCache.IsMissingNodeFailure, which is what turns this into
+        //       a DEFINITIVE absence for the reader (MeshOperations.FetchNode → FromReadFailure
+        //       reports `Not found`). Also matched by the delete cascade's not-found normalisation
+        //       in MeshExtensions (`isNotFound`). Drop the phrase and a provable absence degrades
+        //       back into "Unavailable — retry shortly", i.e. #1029 in a new costume.
+        //
+        //   MUST NOT CONTAIN any marker MeshNodeStreamCache.IsTransientOwnerFailure matches —
+        //       notably "is shutting down", but also "invalid activation", "Rejecting now",
+        //       "Forwarding failed", "target hub was not found", "No response received in hub",
+        //       "undeliverable". AreaErrorClassifier.IsTransientHubFailure mirrors that list. One
+        //       of those substrings anywhere in the sentence re-classifies this verdict as
+        //       retryable and puts every reader back to re-probing an address that will never
+        //       answer. Note how easily that happens: "…because the hub is shutting down" would
+        //       read fine to a human and silently undo the whole fix.
+        //
+        // 🚨 A violation is SILENT — no compiler error, no exception, just a read that goes back to
+        // waiting out its budget. DeletedAddressNackClassificationTest asserts both halves
+        // (Contain("No node found") / NotContain("shutting down")) precisely because nothing else
+        // can catch it.
         var (errorType, message) = IsAddressDeleted()
             ? (ErrorType.NotFound,
                 $"No node found at '{Address.Path}' — the node was deleted, so this address "
