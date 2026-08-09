@@ -42,7 +42,10 @@ export function instanceIdentity(inst: MeshInstance): InstanceIdentity {
       ? { icon: "🖥️", color: "#2ea043", kind: "Local · SQLite", tone: "local" }
       : u.includes("memex.localhost")
         ? { icon: "☸", color: "#d29922", kind: "Local · k8s", tone: "k8s" }
-        : u.includes("prod")
+        // Keep this token OUT of the words that appear in ordinary portal hostnames — it is
+        // tested BEFORE meshweaver.cloud, so a generic substring like "prod" would swallow
+        // every production host and label it "Client".
+        : u.includes("client")
           ? { icon: "🏢", color: "#a371f7", kind: "Client", tone: "client" }
           : u.includes("meshweaver.cloud")
             ? { icon: "☁️", color: "#4c8dff", kind: "Prod", tone: "prod" }
