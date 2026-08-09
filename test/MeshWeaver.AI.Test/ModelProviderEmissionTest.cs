@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Linq;
 using MeshWeaver.AI;
 using MeshWeaver.Mesh;
@@ -34,7 +34,7 @@ public class ModelProviderEmissionTest
                 ["Anthropic:Endpoint"] = "https://api.anthropic.com/v1/messages"
             },
             new LanguageModelCatalogSource("Anthropic", "Anthropic", 1))
-            .GetStaticNodes()
+            .SourceNodes()
             .ToList();
 
         var providerNode = nodes.Should().ContainSingle(n => n.NodeType == ModelProviderNodeType.NodeType).Subject;
@@ -67,7 +67,7 @@ public class ModelProviderEmissionTest
                 ["Anthropic:Endpoint"] = "https://api.anthropic.com/v1/messages"
             },
             new LanguageModelCatalogSource("Anthropic", "Anthropic", 1))
-            .GetStaticNodes()
+            .SourceNodes()
             .ToList();
 
         // Provider partition policy (pre-existing).
@@ -103,7 +103,7 @@ public class ModelProviderEmissionTest
                 ["Anthropic:Endpoint"] = "https://api.anthropic.com/v1/messages"
             },
             new LanguageModelCatalogSource("Anthropic", "Anthropic", 1))
-            .GetStaticNodes()
+            .SourceNodes()
             .ToList();
 
         var lmNodes = nodes.Where(n => n.NodeType == LanguageModelNodeType.NodeType).ToList();
@@ -131,7 +131,7 @@ public class ModelProviderEmissionTest
         var nodes = MakeProvider(
             new Dictionary<string, string?>(),
             new LanguageModelCatalogSource("Anthropic", "Anthropic", 1))
-            .GetStaticNodes()
+            .SourceNodes()
             .ToList();
 
         nodes.Should().ContainSingle(n => n.NodeType == ModelProviderNodeType.NodeType);
@@ -153,7 +153,7 @@ public class ModelProviderEmissionTest
                 ["Anthropic:Endpoint"] = "https://api.anthropic.com/v1/messages"
             },
             new LanguageModelCatalogSource("Anthropic", "Anthropic", 1))
-            .GetStaticNodes()
+            .SourceNodes()
             .ToList();
 
         nodes.Should().ContainSingle(n => n.NodeType == ModelProviderNodeType.NodeType);
