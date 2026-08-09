@@ -130,4 +130,49 @@ public class LogLineParserTest
         normalized.Should().Contain("{time}");
         normalized.Should().Contain("'{value}'");
     }
+
+    /// <summary>
+    /// A message that names WHO it is about must not fork the fingerprint per subject. Production
+    /// 2026-08-08: one ROUTER_TRAFFIC defect, reported once per target hub, produced ~50 incidents —
+    /// and would have produced ~50 tickets — because `target: Claims`, `target: Edu`, `target: X`
+    /// each normalized differently. `sender:` was already masked (it held a mesh path); `target:`
+    /// held a bare word and survived.
+    /// </summary>
+    [Fact]
+    public void Fingerprint_DoesNotForkOnTheSubjectOfTheMessage()
+    {
+        const string template =
+            "ROUTER_TRAFFIC: RawJson has the mesh hub as sender (sender: mesh/N-u6rl0oAUuc, target: {0}). "
+            + "The mesh hub is the ROUTER and must not execute work.";
+
+        var a = LogLineParser.Normalize(string.Format(template, "Claims"));
+        var b = LogLineParser.Normalize(string.Format(template, "Edu"));
+        var c = LogLineParser.Normalize(string.Format(template, "X"));
+
+        b.Should().Be(a);
+        c.Should().Be(a);
+        a.Should().Contain("target: {id}");
+    }
+
+    [Fact]
+    public void Normalize_LeavesOrdinaryProseAlone()
+    {
+        // The masking is keyed on a known label + a SINGLE token, so a real message keeps its words —
+        // over-masking would collapse genuinely different faults onto one fingerprint, which is the
+        // failure this system started with.
+        var normalized = LogLineParser.Normalize("Sequence contains no elements");
+
+        normalized.Should().Be("Sequence contains no elements");
+    }
+
+    [Fact]
+    public void Normalize_DoesNotDoubleMaskAnAlreadyMaskedValue()
+    {
+        // `sender:` is followed by a path that the path rule already turned into {path}; the
+        // identifier rule must not then rewrite it to {id} and undo the distinction.
+        var normalized = LogLineParser.Normalize("delivery (sender: rbuergi/Foo/Bar, target: Edu)");
+
+        normalized.Should().Contain("{path}");
+        normalized.Should().Contain("target: {id}");
+    }
 }
