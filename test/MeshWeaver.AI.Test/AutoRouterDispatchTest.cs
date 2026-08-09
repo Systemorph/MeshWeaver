@@ -86,13 +86,22 @@ public class AutoRouterDispatchTest(ITestOutputHelper output) : AITestBase(outpu
     /// <para>This test never warms the resolver — it asserts the snapshot IS cold first, so it cannot
     /// pass vacuously against a catalog that happened to load — and then requires both persisted forms
     /// of the router to be recognised anyway. It fails against a snapshot-only implementation.</para>
+    ///
+    /// <para>🧊 <b>Coldness here is OWNED, not hoped for.</b> The resolver is one this test constructs;
+    /// nothing else in the mesh has a reference to it, and a read cannot warm it (reads are pure —
+    /// <c>ChatClientCredentialResolver</c>'s ctor doc). So the snapshot is empty at the first assertion,
+    /// at the last, and at every one in between — the closing re-check proves it. Reading the SHARED
+    /// resolver instead is what made this test racy on CI run 31305125041: its own precondition read
+    /// opened the live catalog subscription, and the first emission landing between two adjacent lines
+    /// flipped <see cref="ChatClientCredentialResolver.HasReadableCatalog"/> to true mid-test.</para>
     /// </summary>
     [Fact(Timeout = 120_000)]
     public void RouterIsRecognisedAgainstAColdCatalog()
     {
-        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        // The test OWNS this resolver's warm state: deliberately NO EnsureSubscription(), and no
+        // other holder that could warm it behind the assertions.
+        using var resolver = new ChatClientCredentialResolver(Mesh);
 
-        // Precondition: deliberately NO EnsureSubscription() — nothing has warmed the snapshot.
         resolver.ReadTierCandidates().Should().BeEmpty(
             "this test is about the pre-warm window; if the catalog is already readable it proves nothing");
         resolver.HasReadableCatalog.Should().BeFalse(
@@ -112,6 +121,42 @@ public class AutoRouterDispatchTest(ITestOutputHelper output) : AITestBase(outpu
         resolver.IsRouterSelection("some-other/auto-model").Should().BeFalse();
         resolver.IsRouterSelection(null).Should().BeFalse();
         resolver.IsRouterSelection("").Should().BeFalse();
+
+        // The bracket that closes the precondition: EVERY assertion above was answered by a resolver
+        // that is STILL cold. Without this, a snapshot that warmed midway would leave the positive
+        // assertions passing for the wrong reason (the warm catalog carries the router node too).
+        resolver.HasReadableCatalog.Should().BeFalse(
+            "the catalog must have stayed cold for the whole test — a snapshot that warmed midway "
+            + "would let the router assertions pass off the catalog instead of the static rule");
+    }
+
+    /// <summary>
+    /// The other half of the same contract, and the reason coldness above is a CHOICE rather than
+    /// luck: the very same resolver becomes readable the moment its owner asks it to. Warming is an
+    /// explicit act — <see cref="ChatClientCredentialResolver.EnsureSubscription"/> — never a side
+    /// effect of a lookup, which is what let a background emission end the pre-warm window between two
+    /// adjacent assertions.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheTestOwnsTheWarmUp_ColdUntilItAsks()
+    {
+        using var resolver = new ChatClientCredentialResolver(Mesh);
+
+        // Reading — repeatedly, and every shape of read — cannot warm it.
+        for (var i = 0; i < 5; i++)
+        {
+            resolver.ReadTierCandidates().Should().BeEmpty();
+            resolver.ReadTiers().Should().BeEmpty();
+            resolver.ResolveDefaultModelId().Should().BeNull();
+            resolver.HasReadableCatalog.Should().BeFalse();
+        }
+
+        // …and one explicit ask makes it readable: the shipped router is in the live catalog.
+        resolver.EnsureSubscription();
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .Select(_ => resolver.ReadTierCandidates())
+            .Should().Within(30.Seconds()).Match(c => c.Any(m => m.IsRouter));
+        resolver.HasReadableCatalog.Should().BeTrue();
     }
 
     /// <summary>
