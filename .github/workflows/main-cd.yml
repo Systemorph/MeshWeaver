@@ -690,6 +690,159 @@ jobs:
           -p:ContainerRepository=mw-plugin-test
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
 
+  # ══════════════ GATE 1 — THE CANDIDATE IS VERIFIED AGAINST ITS DEPENDENTS ══════════════
+  # 🚨 THE GATE THAT WAS MISSING. Core deleted `AddTracking` on MessageHubConfiguration
+  # (eafd353ed); three NodeTypes in MeshWeaver.SocialMedia still called it; EVERY existing check
+  # was green — `dotnet build -c Release -warnaserror` never sees node source (<None> content),
+  # no test compiles in-mesh source, and each node repo's own "Compile every NodeType (vs core)"
+  # compiles against a PINNED core digest that still had the method, on triggers that fire when
+  # the PLUGIN changes and never when CORE does. Production found it instead: CompileError →
+  # dependents UpstreamFailed → DynamicTypePreWarmer REFUSING READINESS → hubs never activate →
+  # every request burns the 60 s activation budget, across all three portals.
+  #
+  # 🚨 THE PIN IS CORRECT AND STAYS. A moving `:latest` makes two runs of identical code disagree
+  # (MeshWeaver.Plugins, 2026-08-04: main green on sha256:10462f9a, the same code red on
+  # sha256:d8895c8a an hour later), which is why every node repo pins MW_IMAGE_DIGEST. The defect
+  # was never the pin — it is that NOTHING REBUILDS A DEPENDENT WHEN THE THING IT IS PINNED TO
+  # MOVES. So this job does not bump anyone's pin. It passes the candidate digest as a one-run
+  # OVERRIDE; the repo's committed pin stays the default for its own PRs (that is gate 2, which
+  # protects plugin authors from core and is deliberately unchanged).
+  #
+  # The image this verifies against is `mw-plugin-test`, because it IS the framework: the node
+  # repos unpack /app out of it for their compile ref set and run the tester from it. Verifying
+  # the same index that `promote` will later tag means the thing tested and the thing shipped are
+  # the same bytes, by construction.
+  #
+  # COST. It needs only the plugin-test leg, so it runs CONCURRENTLY with bake/portal/migration
+  # (~15 min) rather than after them — a node-repo run is ~13-15 min, so the CD critical path
+  # grows by single-digit minutes, not by a full node-repo CI. The `preview` path costs nothing
+  # extra: the layers are already in ACR under the staging tag.
+  #
+  # ⚠️ ARMING (see Doc/Architecture/CandidateReleaseGate). This dispatches workflows in OTHER
+  # repositories, which the default GITHUB_TOKEN cannot do. Until the maintainer creates
+  # NODE_REPO_DISPATCH_TOKEN the gate is INERT: it passes the candidate through — CD keeps
+  # delivering exactly as it does today — and says so with a ::warning:: on every single run.
+  # That is a LOUD skip, not a silent one, and it is deliberate: merging a gate that stops all
+  # delivery until a human mints a PAT would be worse than the hole it closes. Arm it only AFTER
+  # the node repos accept the override inputs, or every repo reports `blocked` and nothing ships.
+  candidate-gate:
+    name: "Gate 1: dependents compile against the candidate"
+    needs: [gate, plugin-test-image]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    # Generous but bounded: three node-repo CI runs go in parallel (~13-15 min each) and the
+    # script's own per-repo budget is 45 min. If this trips, a node repo is WEDGED — do not raise
+    # it, find what is not completing (AGENTS.md → "No band-aids").
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      # Exactly one of the two steps below runs, so `||` picks whichever produced a value. An
+      # empty `clean` (the job itself died) skips BOTH promote and preview and alerts — the
+      # candidate is not promoted on a gate that did not answer.
+      clean: ${{ steps.verify.outputs.clean || steps.unarmed.outputs.clean }}
+      digest: ${{ steps.digest.outputs.digest }}
+      armed: ${{ steps.arm.outputs.armed }}
+    env:
+      # 🚨 THE DEPENDENT SET. A node repo missing from this list is a repo the candidate is never
+      # verified against — the same blind spot in a new shape. Adding one is this line plus the
+      # node-repo patch in Doc/Architecture/CandidateReleaseGate.
+      NODE_REPOS: "Systemorph/MeshWeaver.SocialMedia,Systemorph/MeshWeaver.Plugins,Systemorph/MeshWeaver.Reinsurance"
+    steps:
+      - uses: actions/checkout@v6
+      - name: "Is the gate armed?"
+        id: arm
+        env:
+          DISPATCH_TOKEN: ${{ secrets.NODE_REPO_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$DISPATCH_TOKEN" ]; then
+            echo "armed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "armed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Ensure Azure CLI
+        if: steps.arm.outputs.armed == 'true'
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        if: steps.arm.outputs.armed == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # The candidate's IDENTITY is a digest, never a tag. The node repos pin by digest for the
+      # reason above, and a digest is also the only reference that cannot drift between this job
+      # reading it and a node repo pulling it ten minutes later.
+      - name: "Resolve the candidate digest"
+        id: digest
+        if: steps.arm.outputs.armed == 'true'
+        run: |
+          # No `-e`: a failing `az` inside a command substitution would abort the step BEFORE the
+          # explicit check below, and the run would be red with the CLI's stack trace instead of
+          # the one line that says which reference could not be resolved.
+          set -uo pipefail
+          DIGEST=$(az acr manifest show-metadata --registry meshweaver \
+            --name "mw-plugin-test:${{ needs.gate.outputs.staging_tag }}" \
+            --query digest -o tsv 2>/dev/null || true)
+          # Fail loudly. An empty digest would dispatch every node repo against `sha256:` and each
+          # would fail to pull — three red repos blaming the candidate for a registry read.
+          if [ -z "$DIGEST" ]; then
+            echo "::error::could not resolve the digest of mw-plugin-test:${{ needs.gate.outputs.staging_tag }}"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Candidate framework image: mw-plugin-test@$DIGEST"
+      - name: "Verify every node repo against the candidate"
+        id: verify
+        if: steps.arm.outputs.armed == 'true'
+        env:
+          # 🚨 NOT github.token. Cross-repo `POST /actions/workflows/{id}/dispatches` needs
+          # `actions: write` + `contents: read` on EACH node repo; the run token is scoped to this
+          # repository only. A fine-grained PAT (or a GitHub App installation token) limited to
+          # the three node repos is the least-privilege shape — see the doc.
+          GH_TOKEN: ${{ secrets.NODE_REPO_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/candidate-gate.py \
+            --repos "$NODE_REPOS" \
+            --workflow ci.yml \
+            --ref main \
+            --digest "${{ steps.digest.outputs.digest }}" \
+            --core-sha "${{ needs.gate.outputs.sha }}" \
+            --candidate-id "cand-${{ needs.gate.outputs.short_sha }}-${{ github.run_id }}" \
+            --result-json candidate-gate.json \
+            --report-md candidate-gate.md
+      # 🚨 A LOUD pass-through, never a silent one. A skipped compile gate is exactly how the
+      # 2026-07-21 outage shipped, so the unarmed state annotates every run and every summary.
+      - name: "NOT ARMED — promoting without dependent verification"
+        id: unarmed
+        if: steps.arm.outputs.armed != 'true'
+        run: |
+          set -euo pipefail
+          echo "clean=true" >> "$GITHUB_OUTPUT"
+          echo "::warning::Candidate gate is NOT ARMED (secret NODE_REPO_DISPATCH_TOKEN is unset). This candidate is being promoted WITHOUT verifying $NODE_REPOS against it — the AddTracking class of break can still reach production. See Doc/Architecture/CandidateReleaseGate."
+          {
+            echo "## ⚠️ Candidate gate NOT ARMED"
+            echo
+            echo "\`NODE_REPO_DISPATCH_TOKEN\` is unset, so **no node repo was verified against this candidate**"
+            echo "and the image was promoted anyway. Unverified repos: \`$NODE_REPOS\`."
+            echo
+            echo "Arm it per **Doc/Architecture/CandidateReleaseGate** — the node repos must accept the"
+            echo "override inputs *first*, or every repo reports \`blocked\` and nothing ships."
+          } >> "$GITHUB_STEP_SUMMARY"
+      # `preview` posts this onto the ci-failure issue, and it outlives the run's log retention.
+      - name: "Keep the report"
+        if: always() && steps.arm.outputs.armed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-gate-report
+          path: |
+            candidate-gate.md
+            candidate-gate.json
+          if-no-files-found: ignore
+
   # ─────────────────────────── portal-next (Next.js) ─────────────────────────
   # The React/Next.js portal. It is NOT a .NET project, so it cannot use the
   # `dotnet publish -t:PublishContainer` shape the other three legs share — it builds from
@@ -842,10 +995,17 @@ jobs:
   # tags per .NET repo per run go DOWN, 6 → 5 (staging index + its two RID variants + version +
   # sha, versus today's version/sha indexes plus four RID-suffixed variants) — and it would add a
   # delete permission and a second failure mode to the one job that must not have either.
+  # 🚨 PROMOTION IS THE PROTOCOL'S ONE POINTER WRITE. Two conditions, both necessary:
+  #   1. every leg built (all-or-nothing — a partial set is #1026), and
+  #   2. every node repo compiled against this candidate (gate 1 — a broken dependent is the
+  #      AddTracking outage).
+  # Fail either and the bytes stay in ACR as a PREVIEW under the staging + `preview-<sha>` tags:
+  # retained, addressable, and invisible to every self-updater. Nothing is rebuilt to recover —
+  # promotion is a manifest PUT, so a fixed dependent is one re-run away.
   promote:
     name: "Promote: tag the full set (all-or-nothing)"
-    needs: [gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image]
-    if: needs.gate.outputs.publish == 'true'
+    needs: [gate, candidate-gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image]
+    if: needs.gate.outputs.publish == 'true' && needs.candidate-gate.outputs.clean == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -941,6 +1101,91 @@ jobs:
             echo "- memex-portal-next \`$V_NEXT\`, \`$SHA\`, \`main\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # ────────────────────── THE OTHER TERMINAL STATE: PREVIEW ──────────────────────
+  # Core built fine; something downstream did not compile against it. The Candidate Release
+  # Protocol calls that state `Preview`: the artifact is REAL and RETAINED, it simply never moves
+  # the pointer instances follow. So this job does three things and then goes red:
+  #
+  #   1. tags the candidate `preview-<sha>` on every repository — an addressable name for a build
+  #      the author can pull and iterate against, without rebuilding anything (`imagetools create`
+  #      is a manifest PUT; the layers are already in ACR under the staging tag);
+  #   2. puts the FULL failure report — every broken NodeType in every node repo — onto the
+  #      `ci-failure` issue, because a report that lives only in a job summary is a report nobody
+  #      reads after the log retention window;
+  #   3. FAILS, so CD is red and `alert-on-failure` files the ledger entry. A run that shipped no
+  #      release must never be green — that is the signal the whole gate exists to produce.
+  #
+  # `preview-` prefix ON PURPOSE: VersionSelect.PlatformVersionTag requires `^\d+\.\d+\.\d+`, so a
+  # tag starting with a letter is invisible to every self-updater by construction. Do NOT be
+  # tempted by `3.0.0-ci.<n>-preview` — that IS dotted SemVer, and its alphanumeric last label
+  # sorts ABOVE the clean `-ci.<n>`, i.e. every install would roll onto the preview.
+  preview:
+    name: "Preview only: a dependent did not compile"
+    needs: [gate, candidate-gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image]
+    if: needs.gate.outputs.publish == 'true' && needs.candidate-gate.outputs.clean == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    env:
+      STAGING: ${{ needs.gate.outputs.staging_tag }}
+      SHA: ${{ needs.gate.outputs.short_sha }}
+    steps:
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: az acr login --name meshweaver
+      - name: "Publish the candidate as a preview"
+        run: |
+          set -euo pipefail
+          for repo in memex-portal-ai memex-migration memex-bake mw-plugin-test memex-portal-next; do
+            echo "→ $repo: preview-$SHA"
+            docker buildx imagetools create \
+              --tag "${{ env.ACR }}/$repo:preview-$SHA" \
+              "${{ env.ACR }}/$repo:$STAGING"
+          done
+      - uses: actions/download-artifact@v4
+        with:
+          name: candidate-gate-report
+        continue-on-error: true
+      - name: "Name every break on the ci-failure issue"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create ci-failure --repo "$GITHUB_REPOSITORY" \
+            --description "A main-branch CD run failed - no deployable image was published" \
+            --color B60205 --force >/dev/null
+          issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+          {
+            printf '<!-- candidate-preview:%s -->\n\n' "$SHA"
+            printf '🧪 **main `%s` published as a PREVIEW, not a release** ([run](%s)).\n\n' "$SHA" "$RUN_URL"
+            printf 'Core built clean, but the candidate did not verify against every node repo, so `memex-portal-ai:<version>` was NOT tagged and no install will roll onto this commit. The images exist as `preview-%s` in ACR — pull them to iterate; nothing needs rebuilding.\n\n' "$SHA"
+            # The full breadth-complete report: every repo, every broken NodeType. Missing only if
+            # the gate job died before writing it, in which case the run link is the fallback.
+            cat candidate-gate.md 2>/dev/null || printf '_(the gate report artifact is missing — open the run)_\n'
+          } > body.md
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body-file body.md
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --label ci-failure \
+              --title "CD: main \`$SHA\` is a preview — a dependent does not compile" --body-file body.md
+          fi
+      - name: "Fail: a preview is not a release"
+        run: |
+          echo "::error::main $SHA was published as a PREVIEW: at least one node repo did not compile against this candidate. The report names every break — fix them in the node repos (or in core), then merge again; the next CD run re-verifies."
+          exit 1
+
   # ─────────────────────────── DID IT ACTUALLY SHIP? ──────────────────────────
   # Belt and braces: `promote` PREVENTS a partial set, this CONFIRMS one landed. Assert the
   # IMAGES, never the green tick — 4f0c35cfc shipped memex-portal-ai:3.0.0-rc1.ci.2470 with no
@@ -958,10 +1203,14 @@ jobs:
   #
   # The assertion itself lives in .github/scripts/check-image-set.sh because `gate` asks the SAME
   # question to decide whether HEAD needs reconciling; the two must never disagree.
+  #
+  # 🚨 Also gated on the candidate gate being CLEAN. A preview run deliberately promotes nothing,
+  # so asserting the release tags there would report "an incomplete image set" for a run that
+  # behaved exactly as designed — the second-loudest possible way to teach people to ignore it.
   verify-images:
     name: "Verify every image shipped"
-    needs: [gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image, promote]
-    if: always() && needs.gate.outputs.publish == 'true'
+    needs: [gate, candidate-gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image, promote]
+    if: always() && needs.gate.outputs.publish == 'true' && needs.candidate-gate.outputs.clean == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -1006,15 +1255,17 @@ jobs:
   #   and not on cancellation.
   # - 🚨 EVERY job in this workflow is in `needs`. A job missing from this list fails SILENTLY,
   #   which is the whole failure mode this alerting exists to prevent: `gate` (a broken decision
-  #   ships nothing), `promote` (the all-or-nothing act — if it dies, the legs are green and the
-  #   release is unarmed), and `verify-images` (a registry MISSING an image, even when every
-  #   publish leg reported success).
+  #   ships nothing), `candidate-gate` (a gate that cannot answer must not let a candidate
+  #   through quietly), `promote` (the all-or-nothing act — if it dies, the legs are green and the
+  #   release is unarmed), `preview` (which fails BY DESIGN, and whose own comment carries the
+  #   per-NodeType detail this short one deliberately does not repeat), and `verify-images` (a
+  #   registry MISSING an image, even when every publish leg reported success).
   # - Idempotent: one open `ci-failure` issue collects repeat failures as comments; a new issue is
   #   only created when none is open (close the issue once CD is green again). The reconciler
   #   writes its attempt ledger to the same issue, so the whole story is in one place.
   alert-on-failure:
     name: "Alert: CD failed on main"
-    needs: [gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image, promote, verify-images]
+    needs: [gate, candidate-gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image, promote, preview, verify-images]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
