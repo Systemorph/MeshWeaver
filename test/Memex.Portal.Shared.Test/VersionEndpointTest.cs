@@ -95,8 +95,9 @@ public class VersionEndpointTest
     }
 
     /// <summary>
-    /// Non-vacuity guard: the pipeline really does refuse an unauthenticated caller. If this ever
-    /// passes, the anonymity assertion below is proving nothing.
+    /// Non-vacuity guard: the pipeline really does refuse an unauthenticated caller. Should this
+    /// route ever start answering instead, the anonymity assertion below would be proving nothing —
+    /// every route answers when nothing is guarding.
     /// </summary>
     [Fact]
     public async Task A_guarded_route_in_the_same_pipeline_refuses_an_anonymous_caller()
