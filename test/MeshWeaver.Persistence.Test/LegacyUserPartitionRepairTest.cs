@@ -47,7 +47,7 @@ public class LegacyUserPartitionRepairTest : IDisposable
     }
 
     /// <summary>The samples/Graph/Data/User/Alice.json shape, verbatim.</summary>
-    private const string LegacyAliceJson = """
+    private static readonly string LegacyAliceJson = """
         {
           "id": "Alice",
           "namespace": "User",

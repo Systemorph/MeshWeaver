@@ -31,7 +31,7 @@ public class ContentIndexingPipelineTest(ITestOutputHelper output) : MonolithMes
 {
     // Qualified collection path (node path + collection name) — the same shape MeshOperations.Upload
     // forms as `{prefix}/{collectionName}` and hands the indexing pipeline.
-    private const string Collection = TestPartition + "/IndexedContent";
+    private static readonly string Collection = TestPartition + "/IndexedContent";
 
     // Per-test-class temp backing dir so the FileSystem collection is real and re-readable.
     private readonly string _basePath = Path.Combine(

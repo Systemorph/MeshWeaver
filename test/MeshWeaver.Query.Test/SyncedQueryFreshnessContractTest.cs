@@ -36,7 +36,7 @@ public class SyncedQueryFreshnessContractTest(ITestOutputHelper output)
     // Isolated mesh per test method — each test owns its nodes + query id.
     protected override bool ShareMeshAcrossTests => false;
 
-    private const string Ns = $"{TestPartition}/FreshnessContract";
+    private static readonly string Ns = $"{TestPartition}/FreshnessContract";
 
     private static MeshNode Subject(string id, string name)
         => new(id, Ns) { Name = name, NodeType = "Markdown", State = MeshNodeState.Active };
