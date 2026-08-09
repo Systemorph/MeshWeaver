@@ -481,8 +481,26 @@ public class PostgreSqlSqlGenerator
         string tableName = "mesh_nodes",
         string? activityUserId = null,
         IReadOnlyList<string>? contentSchemas = null,
-        string? activityUserSchema = null)
+        string? activityUserSchema = null,
+        IReadOnlyList<string>? accessControlledSchemas = null)
     {
+        // 🚨 Which of these schemas can carry the per-schema access clause at all — i.e. which
+        // actually have a `user_effective_permissions` table. A schema without it makes the clause
+        // name a MISSING RELATION, so Postgres fails to plan the WHOLE statement with 42P01, and
+        // the caller absorbs 42P01 as "no rows": ONE such partition silently zeroed the entire
+        // cross-schema union, so every authenticated user's unscoped query came back empty no
+        // matter how healthy the other partitions were. (That is what made the #697 live-query test
+        // fail on CI only — CI accumulates such a partition, a small local container does not.)
+        //
+        // `null` = the caller did not resolve it → assume every schema is access-controlled, which
+        // is the pre-existing shape. The resolution MUST be a direct information_schema lookup over
+        // exactly these schemas: deriving it from `searchable_schemas` silently drops the pinned
+        // fast path (whose schema is never in that registry) and made granted cross-partition nodes
+        // disappear.
+        var accessControlled = accessControlledSchemas is null
+            ? null
+            : new HashSet<string>(accessControlledSchemas, StringComparer.OrdinalIgnoreCase);
+
         var (whereClause, parameters) = GenerateWhereClause(query);
         var whereCore = whereClause.StartsWith("WHERE ", StringComparison.Ordinal)
             ? whereClause[6..]
@@ -598,6 +616,24 @@ public class PostgreSqlSqlGenerator
                 selectSql += $" INNER JOIN {activityTable} act ON act.main_node = n.path" +
                              " AND act.node_type = 'Activity'";
 
+            // 🔒 FAIL CLOSED, and provably result-equivalent. A schema with no
+            // `user_effective_permissions` table is DROPPED from a filtered caller's union rather
+            // than contributed unfiltered. Dropping it removes no row that was ever visible: the
+            // clause's other half is `public.partition_access`, and the SAME function that builds
+            // a partition's `user_effective_permissions` is what populates its `partition_access`
+            // rows — so a schema lacking the table has no partition_access row either, and its
+            // branch could only ever have evaluated to zero rows. What it did instead was 42P01 the
+            // whole statement, which the reader turns into "no rows" for EVERY partition.
+            //
+            // Contributing it UNFILTERED (what public.search_across_schemas does for this case) is
+            // NOT the alternative: it publishes every row of an ungranted partition to every
+            // authenticated user — the leak PerSchemaAccessClauseLeakTests pins, and the same class
+            // #471/#385 RC3 closed by moving public_read INSIDE the partition gate.
+            if (accessControlled is not null
+                && !string.IsNullOrEmpty(userId)
+                && !accessControlled.Contains(schema))
+                continue;
+
             var accessClause = BuildPerSchemaAccessClause(userId, schema, uepTable, parameters);
             var mainNodeFilter = (isActivity || isAccessed) ? "n.main_node = n.path" : null;
 
@@ -643,6 +679,12 @@ public class PostgreSqlSqlGenerator
                     "ORDER BY cc.collection_path, cc.file_path)");
             }
         }
+
+        // Every branch was dropped (no schema in this fan-out can be access-filtered). Emit a
+        // statement that is valid on the wire and returns nothing, rather than an empty string —
+        // same outcome the caller already expects from an empty schema list.
+        if (parts.Count == 0)
+            return ("SELECT NULL::text AS id WHERE false", parameters);
 
         var sql = string.Join(" UNION ALL ", parts);
 
