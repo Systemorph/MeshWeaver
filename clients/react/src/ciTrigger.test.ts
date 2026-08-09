@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 
 // GUARD THE GUARD (issue #964).
@@ -15,8 +15,12 @@ import { describe, expect, it } from "vitest";
 // `../../src/...` read to a client package is itself a change under clients/**, so this job runs and
 // fails until the path filter covers the new input.
 
-const repoRoot = resolve(process.cwd(), "../..");
-const workflow = readFileSync(resolve(repoRoot, ".github/workflows/clients.yml"), "utf8");
+// Two forms of the same directory: `repoDir` is native (the base for fs calls and resolve()),
+// `repoRoot` is POSIX-normalized for the string comparisons — workflow `paths:` globs are always
+// "/"-separated, so comparing them against a Windows "\" path would match nothing.
+const repoDir = resolve(process.cwd(), "../..");
+const repoRoot = repoDir.split(sep).join("/");
+const workflow = readFileSync(resolve(repoDir, ".github/workflows/clients.yml"), "utf8");
 
 /**
  * The `paths:` list under each trigger. Parsed without a YAML dependency: find a `paths:` key, then
@@ -53,9 +57,10 @@ function crossTreeReads(): string[] {
     for (const entry of readdirSync(dir)) {
       if (entry === "node_modules" || entry === "dist" || entry === ".next" || entry === "gen") continue;
       const full = resolve(dir, entry);
-      // Client packages symlink node_modules; never follow a link out of the tree.
-      const st = statSync(full, { throwIfNoEntry: false });
-      if (!st) continue;
+      // lstat, not stat: some client packages commit a node_modules SYMLINK, and descending through
+      // a link can walk straight out of the repo (or into a cycle). Links are skipped outright.
+      const st = lstatSync(full, { throwIfNoEntry: false });
+      if (!st || st.isSymbolicLink()) continue;
       if (st.isDirectory()) {
         walk(full, pkgRoot);
         continue;
@@ -63,9 +68,12 @@ function crossTreeReads(): string[] {
       if (!/\.(ts|tsx|js|mjs|cjs|json|sh|yaml|yml)$/.test(entry)) continue;
       const text = readFileSync(full, "utf8");
       const keep = (abs: string) => {
-        if (!abs.startsWith(`${repoRoot}/src/`)) return; // only reads that leave clients/
+        // Compare in POSIX form — resolve() yields "\" on Windows, where a "/"-based startsWith
+        // would silently match nothing and report every input as uncovered.
+        const posix = abs.split(sep).join("/");
+        if (!posix.startsWith(`${repoRoot}/src/`)) return; // only reads that leave clients/
         if (!statSync(abs, { throwIfNoEntry: false })) return; // and only ones that really resolve
-        found.add(abs.slice(repoRoot.length + 1));
+        found.add(posix.slice(repoRoot.length + 1));
       };
       // A `../` reference is written relative to the FILE (import specifier) or to the PACKAGE ROOT
       // (`resolve(process.cwd(), …)`, an npm-script CLI arg). Try both bases and keep whichever
@@ -75,14 +83,14 @@ function crossTreeReads(): string[] {
         keep(resolve(dir, m[0]));
         keep(resolve(pkgRoot, m[0]));
       }
-      for (const m of text.matchAll(rootRef)) keep(resolve(repoRoot, m[1]));
+      for (const m of text.matchAll(rootRef)) keep(resolve(repoDir, m[1]));
     }
   };
   // Each immediate child of clients/ is a package; its root is the base for cwd-relative reads.
-  const clientsDir = resolve(repoRoot, "clients");
+  const clientsDir = resolve(repoDir, "clients");
   for (const pkg of readdirSync(clientsDir)) {
     const pkgRoot = resolve(clientsDir, pkg);
-    if (statSync(pkgRoot, { throwIfNoEntry: false })?.isDirectory()) walk(pkgRoot, pkgRoot);
+    if (lstatSync(pkgRoot, { throwIfNoEntry: false })?.isDirectory()) walk(pkgRoot, pkgRoot);
   }
   return [...found].sort();
 }
