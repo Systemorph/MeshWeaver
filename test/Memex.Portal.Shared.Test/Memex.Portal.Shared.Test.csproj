@@ -1,6 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <!-- VersionEndpointTest drives GET /api/version over a real HTTP pipeline (TestServer) to
+         prove it answers with NO authenticated session — the whole point of the endpoint. -->
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
+    <!-- MapDefaultEndpoints / MapVersionEndpoint live here, beside /health and /alive. -->
+    <ProjectReference Include="..\..\memex\aspire\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <!-- OAuthCodeStoreTest runs against a full monolith mesh (the store persists
          authorization codes as mesh nodes — the multi-replica safety contract). -->
