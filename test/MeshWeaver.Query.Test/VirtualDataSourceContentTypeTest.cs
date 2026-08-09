@@ -53,8 +53,8 @@ namespace MeshWeaver.Query.Test
     /// </summary>
     public class VirtualDataSourceContentTypeTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
     {
-        private const string SubscriberPath = $"{TestPartition}/EntrySubscriber";
-        private const string EntriesNamespace = $"{TestPartition}/Entries";
+        private static readonly string SubscriberPath = $"{TestPartition}/EntrySubscriber";
+        private static readonly string EntriesNamespace = $"{TestPartition}/Entries";
         private const string EntryCollection = nameof(EntryProjection);
 
         /// <summary>Workspace projection of a fact node — the EntryNode shape from the outage.</summary>

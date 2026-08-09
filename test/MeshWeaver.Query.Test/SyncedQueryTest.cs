@@ -60,7 +60,7 @@ public class SyncedQueryTest(ITestOutputHelper output)
                 return services;
             });
 
-    private const string SubjectsNamespace = $"{TestPartition}/SyncedQuerySubjects";
+    private static readonly string SubjectsNamespace = $"{TestPartition}/SyncedQuerySubjects";
 
     private static MeshNode MakeSubject(string id, string name)
         => new(id, SubjectsNamespace)

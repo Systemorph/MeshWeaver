@@ -34,7 +34,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string Namespace = $"{TestPartition}/CacheConcurrency";
+    private static readonly string Namespace = $"{TestPartition}/CacheConcurrency";
 
     [Fact(Timeout = 30_000)]
     public async Task GetQuery_ManyConcurrentCallersSameId_AllSeeSameSnapshot()
