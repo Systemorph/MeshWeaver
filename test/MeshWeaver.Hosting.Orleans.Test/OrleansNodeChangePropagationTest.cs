@@ -106,9 +106,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         // so MeshPlugin tools (Create/Patch/delegate_to_agent) get wired into every test agent.
         var siloHub = ((InProcessSiloHandle)Fixture.Cluster.Silos[0]).SiloHost.Services
             .GetRequiredService<IMessageHub>();
-        SharedOrleansFixture.SwappableFactory.SetInner(new NodeChangeTestChatClientFactory(siloHub));
-        try
-        {
+        Fixture.ChatFactory.SetInner(new NodeChangeTestChatClientFactory(siloHub));
         var client = GetClient();
 
         // 1. Create thread Ã¢â‚¬â€ exactly like ThreadChatView.SendMessageAsync does
@@ -228,11 +226,6 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         (docChange.VersionAfter ?? 0).Should().BeGreaterThan(docChange.VersionBefore ?? 0,
             "aggregated version should show progression from create to patch");
         Output.WriteLine($"Aggregated: {docChange.Path} {docChange.Operation} v{docChange.VersionBefore}Ã¢â€ â€™v{docChange.VersionAfter}");
-        }
-        finally
-        {
-            SharedOrleansFixture.SwappableFactory.Reset();
-        }
     }
 
     // Resubmit_AfterExecution_DoesNotDeadlock was split out into its own class
