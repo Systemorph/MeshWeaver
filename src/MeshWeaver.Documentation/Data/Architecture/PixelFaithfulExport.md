@@ -71,6 +71,19 @@ The browser prints the deck's own stage, so there is no document model to hang b
 
 If a deck needs a branded cover, the honest answer today is to make the cover a slide — where the deck's own CSS can style it far better than the document model could.
 
+### 🚨 The browser is inside the trust boundary — so the document denies everything
+
+This is the hazard that comes with server-side rendering, and it is not theoretical. The headless browser runs **as the portal**: it can reach internal services, private subnets and cloud metadata endpoints that the deck's author could never reach from their own browser, and it can read local files over `file:`. Slide bodies are **user-authored and pass raw HTML through verbatim**. An `<img src="http://169.254.169.254/…">` or a `Background: url(file:///…)` is all it would take.
+
+Two independent layers close it:
+
+1. **The print document's Content-Security-Policy** — `default-src 'none'`, with `img-src data:` / `font-src data:` / `style-src 'unsafe-inline'` and nothing else. Those are exactly what a pixel print legitimately needs: assets the composer has *already inlined* as `data:` URIs, the inline stylesheet, and the slides' own `style=""` attributes. Scripts, connections, frames, objects and every remote or `file:` origin are denied. The `<meta>` **must stay the first element in `<head>`** — a policy declared after content does not govern that content.
+2. **Process-level network denial** — the browser is launched with no name resolution (`--host-resolver-rules=MAP * ~NOTFOUND`) and every http/https request pointed at a dead proxy. A self-contained document has no legitimate use for either, so taking them away means a lost or bypassed policy still cannot reach a routable target.
+
+Each layer is tested **with the other neutralised**, and each test demands a live control leak before believing the protected run (`PixelRenderIsolationTests`). That is not ceremony: the first draft asserted the CSP while the process flags were quietly doing the blocking, and would have passed with no CSP at all. A CSP nobody tested is a comment.
+
+**What this costs.** A slide can no longer pull in a **remote** image (`<img src="https://example.com/logo.png">`). That is the intended trade — that fetch *is* the SSRF surface, and it was being made by the server, not by the reader. The supported way to put a picture in a deck is to store it alongside the slides, where the export inlines it and the PDF ends up self-contained anyway. If remote assets are ever genuinely wanted, the answer is **not** to widen the policy: it is to fetch them server-side against an allowlist, under the portal's own egress rules, and inline them like any other asset — a deliberate feature, not a relaxed directive.
+
 ### Assets are inlined, not linked
 
 Images in slides resolve to `api/content/{collection}/{path}` — an **access-controlled portal route**, which a `file://` document cannot fetch. So the export collects every such reference, reads it through `IContentService` **under the exporting user's identity**, and rewrites it to a `data:` URI. The printed deck is self-contained and contains only what that user could already read. An asset that cannot be read is left as a link and logged: a missing picture prints broken, exactly as it would on screen — it never fails the export.
