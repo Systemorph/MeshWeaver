@@ -1,8 +1,9 @@
 ---
 Name: Coupons administration tab
-Category: What's New
+Category: Feature
 Description: Platform admins manage the Store's coupon codes from Settings ▸ Administration ▸ Coupons.
 Icon: Sparkle
+Order: -20260802
 ---
 
 # Coupons administration tab

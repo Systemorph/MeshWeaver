@@ -1,8 +1,9 @@
 ---
 Name: Views that change shape now redraw correctly
-Category: What's New
+Category: Fix
 Description: A view whose child set changes between renders no longer leaves a duplicated or stale panel behind, and swapping an embedded area in place no longer freezes the page.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Views that change shape now redraw correctly

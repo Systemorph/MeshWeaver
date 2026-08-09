@@ -1,8 +1,9 @@
 ---
 Name: You are told when a different model answered your round
-Category: What's New
+Category: Fix
 Description: A round that gets moved onto a fallback model now records the model that actually answered, keeps the requested one alongside it, and fails outright when no model can serve.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # You are told when a different model answered your round

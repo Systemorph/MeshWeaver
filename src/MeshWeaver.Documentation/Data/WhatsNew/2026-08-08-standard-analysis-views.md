@@ -1,8 +1,9 @@
 ---
 Name: Standard analysis views ship as controls
-Category: What's New
+Category: Feature
 Description: KPI strips, excess-of-loss towers and paired comparison bars are framework controls now — declare typed rows, get the rendering.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Standard analysis views ship as controls

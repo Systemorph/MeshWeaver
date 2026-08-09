@@ -1,8 +1,9 @@
 ---
 Name: The web and mobile clients speak German, and render everything the portal renders
-Category: What's New
+Category: Feature
 Description: The Next.js and React Native clients now follow your language setting, the mobile app renders charts, pivot tables, dialogs, video and file browsing, and the chat side panel gained its missing buttons.
 Icon: Globe
+Order: -20260806
 ---
 
 # The web and mobile clients catch up with the portal

@@ -1,8 +1,9 @@
 ---
 Name: Chat rounds speak your language
-Category: What's New
+Category: Fix
 Description: Messages a chat round writes back — like "no language model can serve this round" — now appear in the language you picked, not always English.
 Icon: Sparkle
+Order: -20260808
 ---
 
 # Chat rounds speak your language

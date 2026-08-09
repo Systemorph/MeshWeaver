@@ -1,8 +1,9 @@
 ---
 Name: The standard agents and skills are part of every installation
-Category: What's New
+Category: Fix
 Description: The agents and skills MeshWeaver ships are now installed and published on every installation automatically, and an installation whose catalog went missing repairs itself on the next start.
 Icon: Bot
+Order: -20260807
 ---
 
 # The standard agents and skills are part of every installation

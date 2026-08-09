@@ -1,8 +1,9 @@
 ---
 Name: Two-way GitHub sync — your edits are kept, not overwritten
-Category: What's New
+Category: Feature
 Description: A GitHub sync source can now keep changes made on the server since the last sync, instead of overwriting them on update.
 Icon: Sparkle
+Order: -20260714
 ---
 
 # Two-way GitHub sync

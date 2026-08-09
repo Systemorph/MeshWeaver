@@ -1,8 +1,9 @@
 ---
 Name: About page, What's New feed & a top-bar light/dark toggle
-Category: What's New
+Category: Feature
 Description: An About page that pins the exact running build, this What's New feed, and a light/dark toggle moved into the top bar.
 Icon: Sparkle
+Order: -20260708
 ---
 
 # What's New — 8 July 2026
