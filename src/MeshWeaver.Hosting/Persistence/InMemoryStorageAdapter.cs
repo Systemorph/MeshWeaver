@@ -85,14 +85,35 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             // makes the in-memory adapter behave exactly like every serializing backend.
             if (node.HubConfiguration is not null)
                 node = node with { HubConfiguration = null };
-            if (!string.IsNullOrEmpty(node.Path))
+            if (string.IsNullOrEmpty(node.Path))
+                return Observable.Return<MeshNode?>(node);
+
+            // 🚨 VERSION-CONDITIONAL upsert — the in-memory twin of the Postgres
+            // `ON CONFLICT … WHERE target.version <= EXCLUDED.version` gate (#971). A single
+            // AddOrUpdate keeps whichever row carries the higher MeshNode.Version, so the decision is
+            // atomic against every concurrent writer of the same path — no read-then-write window for
+            // one to slip through. The dictionary IS the store of record here, so this is where the
+            // "a node's durable state never moves backward" invariant has to live; the in-process
+            // high-water filter above it is empty on a fresh replica and cannot be the guarantee.
+            var winner = _nodes.AddOrUpdate(
+                Norm(node.Path), node,
+                (_, existing) => existing.Version > node.Version ? existing : node);
+            if (!ReferenceEquals(winner, node))
             {
-                _nodes[Norm(node.Path)] = node;
-                _logger?.LogDebug("[InMemoryAdapter#{Id:X}] Write {Path} (count={Count})",
-                    GetHashCode(), Norm(node.Path), _nodes.Count);
-                try { _changes.OnNext(DataChangeNotification.Updated(Norm(node.Path), node)); } catch { /* never throw */ }
+                // Refused: the stored row is newer. Emit it (never the loser) so the write-integrity
+                // chain can merge into durable truth, and publish NOTHING — nothing changed, and a
+                // notification carrying the losing node would hand every subscriber the stale state
+                // the store just rejected.
+                _logger?.LogDebug(
+                    "[InMemoryAdapter#{Id:X}] Write {Path} REFUSED — incoming v{Incoming} is below stored v{Stored}",
+                    GetHashCode(), Norm(node.Path), node.Version, winner.Version);
+                return Observable.Return<MeshNode?>(winner);
             }
-            return Observable.Return(node);
+
+            _logger?.LogDebug("[InMemoryAdapter#{Id:X}] Write {Path} (count={Count})",
+                GetHashCode(), Norm(node.Path), _nodes.Count);
+            try { _changes.OnNext(DataChangeNotification.Updated(Norm(node.Path), node)); } catch { /* never throw */ }
+            return Observable.Return<MeshNode?>(node);
         });
 
     /// <inheritdoc />
