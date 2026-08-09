@@ -238,13 +238,24 @@ jobs:
         run: |
           set -euo pipefail
           # Latest run of the required check on this SHA (a re-run appends another).
-          concl=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100" \
+          # 🚨 STATUS as well as conclusion. A check that is still RUNNING has conclusion `null`,
+          # which is indistinguishable from "never ran" if you only read the conclusion — and the
+          # reconciler draws opposite conclusions from those two ("wait" vs "main cannot ship").
+          # Sorted by started_at, not completed_at: an in-progress run has no completed_at.
+          read -r status concl < <(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100" \
             --jq '[.check_runs[] | select(.name=="Consolidate test results")]
-                  | sort_by(.completed_at) | last | .conclusion // "missing"')
-          echo "Required check 'Consolidate test results' on $SHA → $concl"
+                  | sort_by(.started_at) | last // {}
+                  | "\(.status // "absent") \(.conclusion // "none")"')
+          # How long CI has had. Distinguishes "no check YET" (a merge seconds ago) from "no check
+          # EVER" (AGENTS.md trap #1) without a timer that retries anything.
+          committed=$(gh api "repos/${{ github.repository }}/commits/$SHA" --jq '.commit.committer.date')
+          age_min=$(( ( $(date -u +%s) - $(date -u -d "$committed" +%s) ) / 60 ))
+          echo "Required check 'Consolidate test results' on $SHA → $status/$concl (commit is ${age_min} min old)"
           echo "run conclusion (umbrella, informational) → ${{ github.event.workflow_run.conclusion }}"
-          echo "green=$([ "$concl" = "success" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "conclusion=$concl" >> "$GITHUB_OUTPUT"
+          echo "green=$([ "$status" = "completed" ] && [ "$concl" = "success" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "pending=$([ "$status" = "queued" ] || [ "$status" = "in_progress" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "conclusion=$status/$concl" >> "$GITHUB_OUTPUT"
+          echo "age_min=$age_min" >> "$GITHUB_OUTPUT"
       # The reconcile path only — a push always publishes and never needs to ask the registry.
       #
       # 🚨 Deliberately NOT also gated on the required check being green. The registry answer is
@@ -293,7 +304,9 @@ jobs:
           SHORT: ${{ steps.target.outputs.short_sha }}
           REASON: ${{ steps.target.outputs.reason }}
           GREEN: ${{ steps.required.outputs.green }}
+          PENDING: ${{ steps.required.outputs.pending }}
           CONCL: ${{ steps.required.outputs.conclusion }}
+          AGE_MIN: ${{ steps.required.outputs.age_min }}
           COMPLETE: ${{ steps.acr.outputs.complete }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           MAX_ATTEMPTS: "3"
@@ -325,19 +338,34 @@ jobs:
             exit 0
           fi
 
+          # 🚨 CRY WOLF AND THE LEDGER BECOMES NOISE. A tick landing in the ~22 min while
+          # Build-and-Test runs on a fresh merge sees an incomplete set and an unconcluded check —
+          # which is NORMAL, not a fault. So "still testing", and "merged moments ago, no check
+          # created yet", both mean WAIT, silently. Only a check that has actually concluded
+          # non-success, or one that is still absent long after CI should have reported, is the
+          # unhealable state worth waking someone for.
+          if [ "$PENDING" = "true" ] || { [ "$GREEN" != "true" ] && [ "$AGE_MIN" -lt 120 ]; }; then
+            decision false "⏳ \`Consolidate test results\` on $SHORT is \`$CONCL\` and the commit is ${AGE_MIN} min old — waiting for CI, nothing to reconcile yet"
+            exit 0
+          fi
+
+          # 🚨 UNHEALABLE, and it must not be silent. HEAD has no complete image set AND its
+          # required check has settled on something other than success (or never appeared at all,
+          # two hours on — AGENTS.md's trap #1). No amount of reconciling fixes that from here;
+          # only CI going green on HEAD does (a `gh workflow run "MeshWeaver Build and Test"
+          # --ref main` is enough — this reconciler reads the CHECK on the commit, not the event
+          # that produced it, so unlike the old push-gated CD it WILL pick that up on its next
+          # tick). Said ONCE per commit, then quiet — same discipline as the exhausted budget.
+          #
+          # Past this line the tick has something real to say, so it may touch the ledger. Nothing
+          # above it writes anything at all: a healthy tick, and a tick that is merely early, are
+          # both completely silent.
           gh label create ci-failure --repo "$GITHUB_REPOSITORY" \
             --description "A main-branch CD run failed - no deployable image was published" \
             --color B60205 --force >/dev/null
           issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
             --limit 1 --json number --jq '.[0].number // empty')
 
-          # 🚨 UNHEALABLE, and it must not be silent. HEAD has no complete image set AND its
-          # required check is not green — most often because Build-and-Test never ran on the merge
-          # commit at all. No amount of reconciling fixes that from here; only CI going green on
-          # HEAD does (a `gh workflow run "MeshWeaver Build and Test" --ref main` is enough — this
-          # reconciler reads the CHECK on the commit, not the event that produced it, so unlike the
-          # old push-gated CD it WILL pick that up on its next tick). Said ONCE per commit, then
-          # quiet — same discipline as the exhausted budget below.
           if [ "$GREEN" != "true" ]; then
             if [ -n "$issue" ] && [ "$(count_marker "$issue" "<!-- cd-blocked:$SHORT -->")" -eq 0 ]; then
               gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$(printf '%s\n\n%s\n\n%s' \
