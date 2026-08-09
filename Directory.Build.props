@@ -146,9 +146,18 @@
   <Target Name="_MeshWeaverGuardContainerLegProducedAnImage"
           AfterTargets="_PublishSingleContainer"
           Condition="'$(ContainerRegistry)' != '' and '$(ContainerArchiveOutputPath)' == ''">
+    <!-- Name the leg defensively. ComputeContainerBaseImage defaults ContainerRuntimeIdentifier from
+         RuntimeIdentifier (and multi-arch legs are handed it explicitly), so it is normally set by the
+         time we get here — but this message is the whole point of the target, and a diagnostic that
+         says "RuntimeIdentifier ''" would be worth nothing on the single-RID path this also guards. -->
+    <PropertyGroup>
+      <_MeshWeaverFailedLegRid>$(ContainerRuntimeIdentifier)</_MeshWeaverFailedLegRid>
+      <_MeshWeaverFailedLegRid Condition="'$(_MeshWeaverFailedLegRid)' == ''">$(RuntimeIdentifier)</_MeshWeaverFailedLegRid>
+      <_MeshWeaverFailedLegRid Condition="'$(_MeshWeaverFailedLegRid)' == ''">&lt;unspecified&gt;</_MeshWeaverFailedLegRid>
+    </PropertyGroup>
     <Error Condition="'$(GeneratedContainerDigest)' == '' or '$(GeneratedContainerManifest)' == '' or '$(GeneratedContainerConfiguration)' == '' or '$(GeneratedContainerMediaType)' == ''"
            Code="MW1026"
-           Text="Container publish for RuntimeIdentifier '$(ContainerRuntimeIdentifier)' reported success but produced NO image — CreateNewImage set no Manifest/Config/Digest. That task logs a swallowed cancellation as the bare warning 'The operation was canceled.' and still returns true, so the true fault is the warning IMMEDIATELY ABOVE this error, not this target. In CI it is a stalled connect (Microsoft.NET.Build.Containers hard-codes SocketsHttpHandler.ConnectTimeout=30s and drops the inner TimeoutException, so no host is logged): check the base registry '$(ContainerBaseRegistry)/$(ContainerBaseName):$(ContainerBaseTag)' and the output registry '$(ContainerRegistry)/$(ContainerRepository)', and look for a ~30 s gap in the timestamps before the warning. Do NOT respond by dropping a RID, disabling the image index, wrapping the publish in a retry, or suppressing this error — see issue #1026." />
+           Text="Container publish for RuntimeIdentifier '$(_MeshWeaverFailedLegRid)' reported success but produced NO image — CreateNewImage set no Manifest/Config/Digest. That task logs a swallowed cancellation as the bare warning 'The operation was canceled.' and still returns true, so the true fault is the warning IMMEDIATELY ABOVE this error, not this target. In CI it is a stalled connect (Microsoft.NET.Build.Containers hard-codes SocketsHttpHandler.ConnectTimeout=30s and drops the inner TimeoutException, so no host is logged): check the base registry '$(ContainerBaseRegistry)/$(ContainerBaseName):$(ContainerBaseTag)' and the output registry '$(ContainerRegistry)/$(ContainerRepository)', and look for a ~30 s gap in the timestamps before the warning. Do NOT respond by dropping a RID, disabling the image index, wrapping the publish in a retry, or suppressing this error — see issue #1026." />
   </Target>
   <!-- Two version channels — CONTINUOUS (CI) vs RELEASED (CD):
        • RELEASED  (-p:PublicRelease=true, the CD/release pipeline): clean $(PlatformVersion).
