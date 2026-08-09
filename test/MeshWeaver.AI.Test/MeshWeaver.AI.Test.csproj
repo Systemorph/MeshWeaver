@@ -45,6 +45,5 @@
   <ItemGroup>
     <Content Include="..\..\samples\Graph\Data\**\*" LinkBase="TestData" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="TestData\**\*" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

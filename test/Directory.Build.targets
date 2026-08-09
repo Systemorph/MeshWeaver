@@ -20,6 +20,16 @@
           Condition="'$(TargetDir)' != '' AND '$(DesignTimeBuild)' != 'true'">
     <Error Condition="!Exists('$(TargetDir)xunit.runner.json')"
            Text="No xunit.runner.json reached $(TargetDir). The Content includes in test/Directory.Build.props selected neither the shared default nor a project-local override, so this assembly would run under xUnit's built-in defaults (parallelizeTestCollections=true, threads=core count) instead of the suite's configured settings. Fix the includes in test/Directory.Build.props — do not suppress this error." />
+
+    <!-- appsettings.json rides the identical two-branch plumbing, so it needs the identical
+         guard. Its silent failure is quieter than the runner config's but cost more: the
+         project-local files are where a test project raises specific channels to Debug to
+         diagnose a CI-only flake, and a build that lands the shared Warning-only file instead
+         produces a green-looking run with no diagnostic output at all. That is exactly how the
+         #993 instrumentation in test/MeshWeaver.Query.Test/appsettings.json ran for over a week
+         emitting nothing on CI while working locally. -->
+    <Error Condition="!Exists('$(TargetDir)appsettings.json')"
+           Text="No appsettings.json reached $(TargetDir). The Content includes in test/Directory.Build.props selected neither the shared default nor the project-local file, so this assembly would run with no logging configuration — any per-project diagnostic channels would silently emit nothing. Fix the includes in test/Directory.Build.props — do not suppress this error." />
   </Target>
 
 </Project>
