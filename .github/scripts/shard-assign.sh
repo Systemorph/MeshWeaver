@@ -24,16 +24,37 @@
 # ALC-heaviest projects — onto shard 0 and made it the ~19-minute long pole of
 # every run.
 #
-# Weights are wall-clock SECONDS, the MAX over two green runs (30903428924 and
-# 30903158378, both 2026-08-04) so a shard is sized for the bad case, not the
-# average. The per-project `[CI] <name> exit=` markers in the test job's log ARE
-# the measurement: take the delta between each `::group::<name>` and its marker.
-# Re-measure when a project's runtime changes materially — the previous table
-# (2026-07-13) had drifted far enough to cost ~100 s of long pole (Monolith
-# 200→345, Data 25→73, PluginTester 60→8, Persistence 165→97).
+# Weights are wall-clock SECONDS. The per-project `[CI] <name> exit=` markers in
+# the test job's log ARE the measurement: take the delta between successive
+# markers (the first project's start is the `Run Tests` step's own start_at).
 #
-# The floor for ANY sharding is the heaviest single project: today
-# Hosting.Monolith.Test at 345 s. Adding shards below that buys nothing.
+# 🚨 Re-measure when a project's runtime changes materially. This table has now
+# drifted twice, and BOTH times the cost was paid on the long pole:
+#   * 2026-07-13 → 2026-08-04: Monolith 200→345, Data 25→73, Persistence 165→97.
+#   * 2026-08-04 → 2026-08-09: PluginCatalog 30→87 (+190%), PostgreSql 130→161,
+#     AI 263→177, Monolith 345→270, Content 91→74. The under-weighted entries are
+#     what hurt: shard 1 ran 7.4 min against a 5.4 min ideal, i.e. 2.0 min of pure
+#     imbalance on EVERY run, while shard 3 idled at 5.2.
+#
+# Current table: measured from run 31311680838 (2026-08-09). Simulating the LPT
+# below against those weights gives max 5.57 / min 5.42 min — a 0.15 min spread.
+#
+# ⚠️ Unlike the previous table this is ONE run, not the max over two: the second
+# green run's logs no longer carried the `[CI]` markers when this was measured, and
+# a fresh single measurement beats a stale two-run max by a wide margin. LPT is
+# robust to modest weight error — the failure mode it cannot absorb is a 190%
+# under-estimate like PluginCatalog's. Take the max over two runs at the next
+# re-measure.
+#
+# The floor for ANY sharding is the heaviest single SCHEDULABLE unit. Today that is
+# Hosting.Monolith.Test at 270 s — but it is split 2, so the real floor is ~135 s.
+# Adding shards below that buys nothing.
+#
+# Total measured work is ~32.5 min across 63 projects, so the ideal per-shard load is
+# 5.4 min at 6 shards, 8.1 at 4, 10.8 at 3. Cutting shard count therefore makes the
+# critical path WORSE while tests remain single-threaded — it only becomes attractive
+# once intra-project parallelism lands (see test/Directory.Build.props), because that
+# shrinks the 32.5 min, not the shard count.
 #
 # Unlisted projects get DEFAULT_WEIGHT — a deliberate over-estimate, since an
 # unlisted project is a NEW one whose cost nobody has measured yet.
@@ -59,69 +80,70 @@ DEFAULT_WEIGHT=10
 
 # "<seconds> <project-name>", heaviest first.
 WEIGHTS=$(cat <<'EOF'
-345 MeshWeaver.Hosting.Monolith.Test 2
-263 MeshWeaver.AI.Test 2
-239 MeshWeaver.Hosting.Orleans.Test
-130 MeshWeaver.Hosting.PostgreSql.Test
-104 MeshWeaver.Threading.Test
-97 MeshWeaver.Persistence.Test
-91 MeshWeaver.Content.Test
-73 MeshWeaver.FutuRe.Test
-73 MeshWeaver.Data.Test
-62 MeshWeaver.Acme.Test
-53 MeshWeaver.Security.Test
-51 MeshWeaver.GitSync.Test
-49 MeshWeaver.Autocomplete.Test
-49 MeshWeaver.Query.Test
-33 MeshWeaver.Auth.Test
-31 MeshWeaver.Graph.Test
-30 MeshWeaver.Hosting.Cosmos.Test
-30 MeshWeaver.PluginCatalog.Test
+270 MeshWeaver.Hosting.Monolith.Test 2
+214 MeshWeaver.Hosting.Orleans.Test
+177 MeshWeaver.AI.Test 2
+161 MeshWeaver.Hosting.PostgreSql.Test
+103 MeshWeaver.Threading.Test
+87 MeshWeaver.PluginCatalog.Test
+74 MeshWeaver.Content.Test
+73 MeshWeaver.Persistence.Test
+68 MeshWeaver.FutuRe.Test
+66 MeshWeaver.Data.Test
+62 MeshWeaver.GitSync.Test
+60 MeshWeaver.Security.Test
+59 MeshWeaver.Acme.Test
+57 MeshWeaver.Query.Test
+41 MeshWeaver.Auth.Test
+40 MeshWeaver.Autocomplete.Test
+33 MeshWeaver.Graph.Test
 27 MeshWeaver.NodeOperations.Test
-26 MeshWeaver.InstanceSync.Test
+26 MeshWeaver.Hosting.Cosmos.Test
+25 MeshWeaver.InstanceSync.Test
 22 MeshWeaver.Messaging.Hub.Test
-18 MeshWeaver.Layout.Test
+20 MeshWeaver.Import.Test
+20 MeshWeaver.Layout.Test
+17 MeshWeaver.Courses.Test
 15 MeshWeaver.Markdown.Test
-15 MeshWeaver.Import.Test
-14 MeshWeaver.Courses.Test
+14 MeshWeaver.MemexTemplate.Test
 12 MeshWeaver.PathResolution.Test
-12 MeshWeaver.ContentCollections.Indexing.Graph.Test
-12 MeshWeaver.MemexTemplate.Test
+9 MeshWeaver.ContentCollections.Indexing.Graph.Test
 9 MeshWeaver.Northwind.Test
+8 MeshWeaver.Hosting.Blazor.Test
 8 MeshWeaver.PluginTester.Test
 8 MeshWeaver.PythonDemo.Test
-7 MeshWeaver.ContentCollections.Indexing.PostgreSql.Test
 6 MeshWeaver.AccessControl.Test
-5 MeshWeaver.Hosting.Grpc.Test
+6 MeshWeaver.ContentCollections.Indexing.PostgreSql.Test
+6 MeshWeaver.Hosting.Grpc.Test
+5 MeshWeaver.ContentCollections.Test
 5 MeshWeaver.Todo.Test
-4 MeshWeaver.MathDemo.Test
+4 Memex.Portal.Shared.Test
 4 MeshWeaver.Hosting.Test
-3 Memex.Portal.Shared.Test
-3 MeshWeaver.Social.Test
+4 MeshWeaver.MathDemo.Test
 3 MeshWeaver.Hosting.Sqlite.Test
-3 MeshWeaver.Hosting.Blazor.Test
-3 MeshWeaver.ContentCollections.Test
-3 MeshWeaver.Documentation.Test
-2 MeshWeaver.Serialization.Test
-2 MeshWeaver.Markdown.Export.Test
-1 MeshWeaver.TestDomain
-1 MeshWeaver.Data.TestDomain
-1 MeshWeaver.Hub.Fixture
+3 MeshWeaver.Observability.Test
+3 MeshWeaver.Serialization.Test
+3 MeshWeaver.Social.Test
+2 MeshWeaver.Documentation.Test
+2 MeshWeaver.Maui.Integration.Test
 1 MeshWeaver.AI.Test.FakeCli
-1 MeshWeaver.Portal.E2E.Test
-1 MeshWeaver.Search.Test
-1 MeshWeaver.Reactive.Assertions.Test
-1 MeshWeaver.DataSetReader.Test
-1 MeshWeaver.Markdown.Collaboration.Test
-1 MeshWeaver.Maui.E2E.Test
-1 MeshWeaver.Maui.Abstractions.Test
-1 MeshWeaver.Maui.Integration.Test
-1 MeshWeaver.PluginImage.Test
-1 MeshWeaver.Hosting.Snowflake.Test
 1 MeshWeaver.Connection.SignalR.Test
-1 MeshWeaver.Speech.Test
 1 MeshWeaver.ContentCollections.Indexing.Test
-1 MeshWeaver.Kernel.Test
+1 MeshWeaver.DataSetReader.Test
+1 MeshWeaver.Hosting.Snowflake.Test
+1 MeshWeaver.Markdown.Collaboration.Test
+1 MeshWeaver.Markdown.Export.Test
+1 MeshWeaver.Portal.E2E.Test
+1 MeshWeaver.Reactive.Assertions.Test
+1 MeshWeaver.Search.Test
+1 MeshWeaver.Speech.Test
+0 MeshWeaver.Data.TestDomain
+0 MeshWeaver.Hub.Fixture
+0 MeshWeaver.Kernel.Test
+0 MeshWeaver.Maui.Abstractions.Test
+0 MeshWeaver.Maui.E2E.Test
+0 MeshWeaver.PluginImage.Test
+0 MeshWeaver.TestDomain
 EOF
 )
 
