@@ -4,7 +4,6 @@ using System.Data.Common;
 using System.Globalization;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Hosting.Embeddings;
@@ -89,7 +88,11 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
     private readonly IIoPool _ioPool;
     private readonly SnowflakeCapabilityHolder _capabilities;
     private readonly SnowflakeStorageOptions _options;
-    private readonly Subject<DataChangeNotification> _changes = new();
+    // 🚨 An IsolatedChangeFeed, NEVER a plain Subject<T>: Subject.OnNext delivers synchronously
+    // in subscription order, so ONE subscriber throwing (a synced query caught mid-teardown, with
+    // a disposed changeBuffer still attached) aborts delivery to every subscriber after it — and
+    // the publish sites' `catch { }` made that silent. Issues #889 (Postgres) and #1053 (in-memory).
+    private readonly IsolatedChangeFeed _changes;
 
     // Per-adapter cache of "does {schema}.content_chunks exist?" — drives whether the vector
     // search UNIONs the indexed-content branch. INSTANCE field (never static — the
@@ -109,7 +112,7 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
     /// via the <see cref="SnowflakeChangeFeedPoller"/> (Snowflake has no LISTEN/NOTIFY), which is
     /// attached to <see cref="ChangeObserver"/> by the hosting wiring.
     /// </remarks>
-    public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
+    public IObservable<DataChangeNotification> Changes => _changes;
 
     /// <summary>
     /// Internal hook for the <see cref="SnowflakeChangeFeedPoller"/> to push foreign-silo
@@ -146,6 +149,7 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         _partitionDefinition = partitionDefinition;
         _schemaName = partitionDefinition?.Schema;
         _logger = logger;
+        _changes = new IsolatedChangeFeed(logger, partitionDefinition?.Schema ?? "public");
         _readPool = readPool ?? IoPool.Unbounded;
         _ioPool = ioPool ?? IoPool.Unbounded;
         _capabilities = capabilities ?? new SnowflakeCapabilityHolder();
@@ -477,12 +481,9 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
             // Fire the in-process Changes feed so same-process synced-query subscribers re-emit
             // without waiting for the change-feed poller round-trip. The poller's origin-id
             // filter drops this silo's own event-log echoes, so there is no double-fire.
-            try
-            {
-                _changes.OnNext(DataChangeNotification.Updated(
-                    string.IsNullOrEmpty(node.Path) ? node.Id : node.Path, node));
-            }
-            catch { /* never throw — change feed is best-effort */ }
+            // No try/catch: IsolatedChangeFeed already isolates and LOGS a faulty observer.
+            _changes.OnNext(DataChangeNotification.Updated(
+                string.IsNullOrEmpty(node.Path) ? node.Id : node.Path, node));
             return node;
         });
 
@@ -907,8 +908,7 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         => _ioPool.Invoke(async ct =>
         {
             await DeleteAsyncCore(path, ct).ConfigureAwait(false);
-            try { _changes.OnNext(DataChangeNotification.Deleted(path)); }
-            catch { /* never throw — change feed is best-effort */ }
+            _changes.OnNext(DataChangeNotification.Deleted(path));
             return path;
         });
 
@@ -923,10 +923,7 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         {
             var removed = await DeleteAsyncCore(path, ct).ConfigureAwait(false) > 0;
             if (removed)
-            {
-                try { _changes.OnNext(DataChangeNotification.Deleted(path)); }
-                catch { /* never throw — change feed is best-effort */ }
-            }
+                _changes.OnNext(DataChangeNotification.Deleted(path));
             return removed;
         });
 

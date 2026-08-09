@@ -1,6 +1,5 @@
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using System.Text.Json;
 using Microsoft.Azure.Cosmos;
 using MeshWeaver.Mesh;
@@ -21,10 +20,16 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     private CosmosChangeFeedProcessor? _changeFeedProcessor;
     // Every Cosmos round-trip runs inside the I/O pool (Invoke), never a bare _ioPool.Invoke.
     private readonly IIoPool _ioPool;
-    private readonly Subject<DataChangeNotification> _changes = new();
+    // 🚨 An IsolatedChangeFeed, NEVER a plain Subject<T>: Subject.OnNext delivers synchronously
+    // in subscription order, so ONE subscriber throwing (a synced query caught mid-teardown, with
+    // a disposed changeBuffer still attached) aborts delivery to every subscriber after it — and
+    // the publish sites' `catch { }` made that silent. Issues #889 (Postgres) and #1053 (in-memory).
+    // No logger is wired on this adapter, so an isolated fault is not reported here; the fan-out
+    // guarantee still holds. Pass one the moment Cosmos plumbs an ILogger through.
+    private readonly IsolatedChangeFeed _changes = new(null, "cosmos");
 
     /// <inheritdoc />
-    public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
+    public IObservable<DataChangeNotification> Changes => _changes;
 
     /// <summary>
     /// Internal hook for <see cref="CosmosChangeFeedProcessor"/> to push
