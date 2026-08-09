@@ -74,6 +74,27 @@ public static class MessageHubExtensions
                     $"Observe<{typeof(TResponse).Name}>: unexpected response type {d.Message?.GetType().Name ?? "null"}"));
 
     /// <summary>
+    /// Records one stage on the handler-side trail of an awaited request (issue #981), from a
+    /// HANDLER that owes its reply from work it detached off the rule chain.
+    ///
+    /// <para>Use it at the terminal arms of that work — emitted / completed-empty / faulted — so a
+    /// pending-callback report can say which of the three happened instead of only "no reply yet".
+    /// A chain that completes EMPTY posts nothing and leaves the caller waiting forever; without a
+    /// stage recorded there it is indistinguishable from a chain that is merely slow.</para>
+    ///
+    /// <para>Cheap and safe to call unconditionally: it is a no-op unless some hub in this tree is
+    /// currently awaiting <paramref name="requestId"/>, and it never throws.</para>
+    /// </summary>
+    /// <param name="hub">The hub handling the request.</param>
+    /// <param name="requestId">The awaited request delivery's id — <c>request.Id</c>.</param>
+    /// <param name="stage">The stage description, e.g. <c>CREATE_CHAIN_COMPLETED_EMPTY</c>.</param>
+    public static void NoteRequestStage(this IMessageHub hub, string? requestId, string stage)
+    {
+        if (hub is MessageHub concrete)
+            concrete.NoteRequestStage(requestId, stage);
+    }
+
+    /// <summary>
     /// Appends a routing-configuration lambda to the hub configuration. The lambda
     /// is applied to the hub's <see cref="RouteConfiguration"/> at build time,
     /// letting callers register address routes and handlers.

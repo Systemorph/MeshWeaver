@@ -154,6 +154,86 @@ Find the **last** `MESSAGE_FLOW:` line that fired and look at what should have h
 
 ---
 
+## The handler-side fate trail — read it before reconstructing the table above by hand
+
+The table above is a manual reconstruction from `Trace`-level `MESSAGE_FLOW:` lines, which are off by
+default and invisible in CI. For a request **someone is still awaiting**, the framework now keeps that
+reconstruction for you: `RequestFateLedger` records the stages the delivery actually reached, and the
+trail is printed whenever a pending callback is reported.
+
+```
+[QUIESCE-TIMEOUT] client/475b…: 1 callback(s) still pending after 0.3s.
+  Pending: 0iFBGDmtTUyOnOgbHS3ezQ=SwallowedRequest@host/1(302ms)
+  handler-side fate (what happened to the delivery):
+    0iFBGDmtTUyOnOgbHS3ezQ=SwallowedRequest:
+      POSTED target=host/1@client/475b…(+0ms) → RECEIVED runLevel=Started@client/475b…(+0ms)
+      → ENQUEUED@client/475b…(+0ms) → RECEIVED runLevel=Started@mesh/1(+1ms)
+      → ROUTED onTarget=False state=Forwarded@mesh/1(+1ms) → RECEIVED runLevel=Started@host/1(+1ms)
+      → ROUTED onTarget=True state=Submitted@host/1(+1ms) → HANDLER_ENTER@host/1(+1ms)
+      → HANDLER_EXIT state=Processed@host/1(+1ms)
+```
+
+Each trail ends in a **verdict** (`⇒ …`) naming which failure shape it is, so you do not have to
+infer it from the stages. Verdict and stages share **one line**, deliberately: these records are
+read out of `/tmp/meshweaver-test-trace.log` with `grep`, and a newline before the verdict would let
+`grep <messageId>` return the evidence while hiding the conclusion.
+
+The first stage is always `AWAITING …`, written when the callback is registered. That guarantees a
+trail is never empty — so "`AWAITING` and nothing else" is a positive statement (nothing was ever
+posted under this correlation), not an absence of evidence.
+
+Read it by what is **missing**:
+
+| The trail shows | Verdict |
+|---|---|
+| No `RECEIVED` anywhere | Never delivered — a routing or post-pipeline problem, not a handler problem |
+| `RECEIVED` but no `ROUTED onTarget=True` | It kept being forwarded — no hub ever accepted it as its own |
+| `DEFERRED` / `DROPPED_*` / `SHED_AGGREGATE` as the last stage | The receiver took it and then parked or discarded it; the stage names which gate or breaker |
+| `HANDLER_EXIT state=Ignored` + `NO_HANDLER_MATCHED` | Delivered, but no handler matched the type |
+| `HANDLER_EXIT state=Processed` and **no** `RESPONSE_POSTED` | A handler ran and produced no reply for this correlation — the caller will wait forever |
+| `RESPONSE_POSTED` but the callback is still pending | The reply was posted and lost on the way home — chase the response delivery, not the handler |
+
+Three things to know before trusting it:
+
+- **It only covers awaited requests.** Entries exist for exactly the ids with a live `Observe`
+  callback and are dropped the moment one resolves — that is what keeps the ledger bounded. A
+  fire-and-forget post leaves no trail by design.
+- **It is scoped to one hub TREE.** The root hub creates the ledger and hosted hubs inherit it, so a
+  request that leaves the tree (another silo, another grain) records `POSTED` and then goes quiet.
+  That silence means "left this tree", not "vanished".
+- **It cannot see a reply sent under the WRONG correlation.** That case reads as
+  `HANDLER_EXIT` with no `RESPONSE_POSTED` — same as a handler that replied to nothing. If you
+  suspect it, look for a spurious `RESPONSE_POSTED` on a *different* request's trail.
+- **A long trail keeps its head and its TAIL**, suppressing the middle. The terminal stages decide
+  the verdict, so they are never the part that gets dropped.
+
+### When the handler replies from work it detached
+
+`HANDLER_ENTER` / `HANDLER_EXIT` bound the **rule chain** only. The canonical mesh handlers return
+`request.Processed()` immediately and owe their reply from a composed observable they subscribed and
+let run — so for those, `HANDLER_EXIT state=Processed` tells you nothing about whether a reply is
+coming. A handler that answers in 3 s, one that faults silently, and one whose chain completes EMPTY
+all look identical from the pipeline.
+
+Only the handler can split them, so it records its own terminal arms:
+
+```csharp
+hub.NoteRequestStage(request.Id, $"CREATE_CHAIN_EMITTED mode={mode}");   // produced a result
+hub.NoteRequestStage(request.Id, $"CREATE_CHAIN_ERROR {ex.GetType().Name}");
+hub.NoteRequestStage(request.Id, "CREATE_CHAIN_COMPLETED_EMPTY …");      // ← the silent one
+```
+
+`NoteRequestStage` is a no-op unless something is awaiting that id, so it is free to call
+unconditionally. **Add the `onCompleted` arm**: a chain that completes empty posts nothing, and
+without a stage there it is indistinguishable from one that is still running. `HandleCreateNodeRequest`
+is the worked example.
+
+The same block is printed by `[STALE-CALLBACK]` (every 5 s, for callbacks older than
+`MESHWEAVER_STALE_CALLBACK_MS`, default 30 s) — that is the one that fires while the mesh is still
+live, so a repro run that dials the env var down gets the handler side before teardown is involved.
+
+---
+
 ## The Cross-Hub Border — `JsonSynchronizationStream`
 
 `workspace.GetRemoteStream<TReduced, TReference>(addr, ref)` subscribes via a `SubscribeRequest` posted to the owning hub. If the owning hub has no handler for `SubscribeRequest` — or no matching reducer — the subscription receives a `DeliveryFailure` instead of a `SubscribeResponse`, and the `SynchronizationStream` errors out:
