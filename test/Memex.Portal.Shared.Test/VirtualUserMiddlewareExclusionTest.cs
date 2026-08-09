@@ -16,6 +16,9 @@ public class VirtualUserMiddlewareExclusionTest
     [InlineData("/static/images/logo.png")]
     [InlineData("/favicon.ico")]
     [InlineData("/mcp")]
+    // The anonymous build-identity endpoint: polled by machines that keep no cookie, so the VUser
+    // flow could only churn — and it must stay answerable when the mesh is unhealthy.
+    [InlineData("/api/version")]
     public async Task ExcludedPrefixes_SkipVirtualUserAssignment(string path)
     {
         var nextCalled = false;
@@ -39,6 +42,10 @@ public class VirtualUserMiddlewareExclusionTest
     [InlineData("/ACME/Overview")]
     [InlineData("/User/Alice")]
     [InlineData("/")]
+    // /api/version is excluded EXACTLY, so a route that merely starts with the same text is not.
+    // A prefix match here would silently exempt future routes nobody meant to exempt.
+    [InlineData("/api/versioning")]
+    [InlineData("/api/version/history")]
     public async Task NonExcludedPaths_AttemptVirtualUserAssignment(string path)
     {
         RequestDelegate next = _ => Task.CompletedTask;
