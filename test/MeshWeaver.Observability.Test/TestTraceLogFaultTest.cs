@@ -13,7 +13,8 @@ namespace MeshWeaver.Observability.Test;
 /// <c>ILogger.LogWarning(exception, …)</c> reached only xUnit's <c>ITestOutputHelper</c>
 /// (which the trx logger does not persist) and an opt-in per-method file that is off in CI.
 /// So a recurrence reported <c>Object reference not set to an instance of an object.</c> and
-/// nothing else. <see cref="TestTraceLog.AppendFault"/> is the sink that closes that gap.</para>
+/// nothing else. <see cref="TestTraceLog.AppendFault(string, LogLevel, string, Exception)"/>
+/// is the sink that closes that gap.</para>
 /// </summary>
 public class TestTraceLogFaultTest
 {
