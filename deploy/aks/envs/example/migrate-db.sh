@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# One-shot prod DB migration: dump memex.meshweaver.cloud's prod Postgres
-# (memexpostgres-d272wxvys4nvo, Entra-auth) and restore into the `memexcloud`
+# One-shot prod DB migration: dump portal.example.com's prod Postgres
+# (<prod-pg-server>, Entra-auth) and restore into the `exampledb`
 # database on the shared memexaks-pg Flexible Server.
 #
 # Runs a postgres:16 pod inside the cluster (the only place with line-of-sight to
 # BOTH the prod PG public endpoint — via the AKS egress IP, firewall-allowed — and
-# the private memexaks-pg at 10.42.18.4). Reads:
-#   TOKEN = an AAD access token for an Entra admin on the prod PG (rbuergi@systemorph.com)
+# the private memexaks-pg at <pg-private-ip>). Reads:
+#   TOKEN = an AAD access token for an Entra admin on the prod PG (<entra-admin@example.com>)
 #   PW    = the memexaks-pg `memexadmin` password
 # both provided as env on the `az aks command invoke` that runs this file.
 set -uo pipefail
@@ -34,18 +34,18 @@ spec:
           export PGSSLMODE=require
           echo "== dump prod (memex) =="
           PGPASSWORD="$TOKEN" pg_dump --no-owner --no-acl --verbose \
-            -h memexpostgres-d272wxvys4nvo.postgres.database.azure.com \
-            -U 'rbuergi@systemorph.com' -d memex -f /tmp/d.sql 2>/tmp/dump.err
+            -h <prod-pg-server>.postgres.database.azure.com \
+            -U '<entra-admin@example.com>' -d memex -f /tmp/d.sql 2>/tmp/dump.err
           echo "DUMP_EXIT=$?  bytes=$(wc -c </tmp/d.sql 2>/dev/null)"
           tail -3 /tmp/dump.err
-          echo "== restore -> memexcloud =="
+          echo "== restore -> exampledb =="
           PGPASSWORD="$PW" psql -v ON_ERROR_STOP=0 \
-            -h 10.42.18.4 -U memexadmin -d memexcloud -f /tmp/d.sql >/tmp/r.log 2>&1
+            -h <pg-private-ip> -U memexadmin -d exampledb -f /tmp/d.sql >/tmp/r.log 2>&1
           echo "RESTORE_PSQL_EXIT=$?"
           echo "-- restore errors (if any) --"
           grep -iE 'ERROR|FATAL' /tmp/r.log | grep -viE 'already exists|does not exist, skipping' | head -20 || true
-          echo "-- table counts in memexcloud --"
-          PGPASSWORD="$PW" psql -h 10.42.18.4 -U memexadmin -d memexcloud -tAc \
+          echo "-- table counts in exampledb --"
+          PGPASSWORD="$PW" psql -h <pg-private-ip> -U memexadmin -d exampledb -tAc \
             "select count(*) || ' tables' from information_schema.tables where table_schema not in ('pg_catalog','information_schema')" 2>&1
           echo "DONE"
       env:
