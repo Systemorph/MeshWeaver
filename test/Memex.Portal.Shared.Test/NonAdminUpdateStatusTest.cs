@@ -50,6 +50,14 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
     /// <summary>
     /// Seeds <c>Admin/UpdatePolicy</c> with a newer tag recorded, as System — the same identity the
     /// poller writes it under (<c>SelfUpdateHostedService.RecordAvailable</c>).
+    ///
+    /// <para>🚨 The System scope is opened and closed SYNCHRONOUSLY around the subscribe, the same
+    /// shape <see cref="PlatformUpdateStatus.Observe"/> uses and for the same reason: impersonation is
+    /// an <c>AsyncLocal</c>, and <c>Observable.Using</c> would dispose it on whichever thread the
+    /// create terminates on — never returning the calling thread's <c>Context</c> to what it was.
+    /// A seed that leaks <c>system-security</c> onto the test thread makes every later assertion run
+    /// as System and pass while proving nothing, which is exactly what the first draft of this class
+    /// did. (<c>MonolithMeshTestBase.SeedTopLevel</c> still has the leaky shape — worth a look.)</para>
     /// </summary>
     private Task<MeshNode> SeedPolicy(UpdatePolicyKind policy = UpdatePolicyKind.Continuous,
         string? latestAvailableTag = NewerTag)
@@ -62,7 +70,11 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
             State = MeshNodeState.Active,
             Content = new UpdatePolicyContent { Policy = policy, LatestAvailableTag = latestAvailableTag },
         };
-        return Observable.Using(() => Access.ImpersonateAsSystem(), _ => meshService.CreateNode(node))
+        return Observable.Create<MeshNode>(observer =>
+            {
+                using (Access.ImpersonateAsSystem())
+                    return meshService.CreateNode(node).Subscribe(observer);
+            })
             .FirstAsync()
             .Timeout(ReadBudget)
             .ToTask(TestContext.Current.CancellationToken);
@@ -72,11 +84,10 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
     /// Switches to a user with NO grants anywhere — the ordinary-viewer shape.
     ///
     /// <para>🚨 BOTH contexts, deliberately. Readers resolve identity as
-    /// <c>Context ?? CircuitContext</c>, and the request-scoped <c>Context</c> outranks the circuit.
-    /// The System scope <see cref="SeedPolicy"/> opens is an <c>AsyncLocal</c> set on THIS thread and
-    /// restored by Rx on whichever thread completes the create — so it does not come back here, and a
-    /// circuit-only switch would leave the test reading as <c>system-security</c> and quietly assert
-    /// nothing. (Same shape as <c>MonolithMeshTestBase.SeedTopLevel</c>.)</para>
+    /// <c>Context ?? CircuitContext</c>, so the request-scoped <c>Context</c> outranks the circuit —
+    /// a circuit-only switch can be shadowed by whatever last wrote <c>Context</c> and leave the test
+    /// asserting against the wrong user. Setting both makes the identity unambiguous no matter what
+    /// ran before; the <see cref="EffectivePermissions"/> guard in each test proves it took.</para>
     /// </summary>
     private void BecomeOrdinaryUser() => Become(new AccessContext
     {
