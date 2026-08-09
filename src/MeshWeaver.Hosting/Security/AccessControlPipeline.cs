@@ -35,6 +35,14 @@ public static class AccessControlPipeline
     private static readonly ConcurrentDictionary<Type, RequiresPermissionAttribute?> AttributeCache = new();
 
     /// <summary>
+    /// One (path, permission) check together with the outcome the fold reached for it. Carries the
+    /// tri-state (<see cref="PermissionCheckOutcome"/>) AND the identity of the check that produced
+    /// it, so the <see cref="DeliveryFailure"/> can name the exact path/permission that refused the
+    /// delivery — the whole point of running the checks in order.
+    /// </summary>
+    private sealed record EvaluatedCheck(string Path, Permission Permission, PermissionCheckOutcome Outcome);
+
+    /// <summary>
     /// Adds the access control pipeline step to a per-node hub. Checks
     /// <see cref="RequiresPermissionAttribute"/> on incoming messages and rejects
     /// unauthorized deliveries via <see cref="DeliveryFailure"/>. Also wires up
@@ -158,11 +166,10 @@ public static class AccessControlPipeline
                 // Sync-delivery shape (Doc/Architecture/AsynchronousCalls.md): the
                 // pipeline lambda returns delivery.Forwarded() immediately. The
                 // reactive chain runs each permission check via the IObservable<bool>
-                // surface (.HasPermission), short-circuits on the first denial, and
-                // either posts the rejection response or fires next from inside
-                // Subscribe — fire-and-forget for next.Invoke (its Task is not
+                // surface (.HasPermission), short-circuits on the first decisive
+                // outcome, and either posts the rejection response or fires next from
+                // inside Subscribe — fire-and-forget for next.Invoke (its Task is not
                 // observed by anyone since downstream handlers post their own response).
-                var decided = false;
                 // 🚨 Always pass an explicit userId (defaulting to Anonymous)
                 // — never the no-arg overload that would read accessService.Context,
                 // which can hold stale "system-security" from hub-init's
@@ -212,13 +219,52 @@ public static class AccessControlPipeline
                         // the handler body runs, and the pool hop flows ExecutionContext
                         // anyway. See HubPermissionExtensions.TakeDecisionOutsideGate.
                         .TakeDecisionOutsideGate()
-                        .Select(outcome => (Check: check, Outcome: outcome)))
+                        .Select(outcome => new EvaluatedCheck(check.Path, check.Permission, outcome)))
+                    // Concat, not Merge: the checks run ONE AT A TIME, in order — which is what
+                    // makes the termination below actually save the remaining evaluations, and
+                    // what makes the FIRST decisive outcome (not an arbitrary racing one) the
+                    // answer the caller gets.
                     .Concat()
+                    // 🚨 TERMINATES at the first decisive outcome — it does not merely ignore the
+                    // rest. Where+Take(1) disposes the Concat subscription, so the remaining
+                    // inner observables are never subscribed; CheckPermissionOutcome is built
+                    // inside Observable.Defer, so "never subscribed" means the fold never runs.
+                    // The guard this replaces (a `decided` bool consulted in all three Subscribe
+                    // callbacks) suppressed the duplicate POST while letting every remaining check
+                    // evaluate anyway. That is work whose result cannot change the answer, spent
+                    // at the exact moment the system is least able to afford it: an Undetermined
+                    // outcome means a degraded dependency (wedged access cache, unreachable
+                    // Postgres, hub mid-disposal), and every superfluous check re-hits it. This
+                    // repo has twice watched that shape become the outage — the 429 wedge that
+                    // leaked round hubs into a 502, and the NotFound storm that wedged a portal
+                    // (Doc/Architecture/ErrorPropagationAndWedges.md). Refusing early is both the
+                    // cheaper and the safer answer.
+                    .Where(evaluated => !evaluated.Outcome.IsGranted)
+                    .Take(1)
+                    // Exactly ONE decision emission, by construction: the check that refused the
+                    // delivery, or null meaning "every check was granted". The single-decision
+                    // invariant is now the SHAPE of the stream rather than a mutable flag three
+                    // callbacks have to remember to consult.
+                    .Select(evaluated => (EvaluatedCheck?)evaluated)
+                    .DefaultIfEmpty()
                     .Subscribe(
-                        result =>
+                        refusal =>
                         {
-                            if (decided || result.Outcome.IsGranted) return; // permitted or already rejected
-                            decided = true;
+                            if (refusal is null)
+                            {
+                                // All checks passed — invoke next. next is a cold
+                                // IObservable now; Subscribe to run the downstream side
+                                // effect (the old Task was hot/already-running).
+                                // onError is mandatory: a faulted downstream chain would
+                                // otherwise vanish unobserved inside the security pipeline.
+                                next.Invoke(delivery, ct).Subscribe(
+                                    _ => { },
+                                    ex => logger?.LogError(ex,
+                                        "AccessControlPipeline: downstream pipeline faulted after permission pass for {MessageType} on {Hub}",
+                                        delivery.Message.GetType().Name, hub.Address));
+                                return;
+                            }
+
                             var effectiveUser = userId ?? "(anonymous)";
 
                             // 🚨 The tri-state ends HERE, and this is the one place it is allowed
@@ -235,13 +281,13 @@ public static class AccessControlPipeline
                             // Both refuse the delivery — the fail-closed behaviour is UNCHANGED
                             // and `next` is not invoked on either leg. What changes is that the
                             // second one stops impersonating the first.
-                            var (errorType, message) = result.Outcome.IsUndetermined
+                            var (errorType, message) = refusal.Outcome.IsUndetermined
                                 ? (ErrorType.Unavailable,
-                                    $"Permission check unavailable for user '{effectiveUser}' on '{result.Check.Path}' "
-                                    + $"({result.Check.Permission}) — no verdict was reached, so this is NOT a statement "
-                                    + $"about this user's rights. Retry shortly. Cause: {result.Outcome.UndeterminedReason}")
+                                    $"Permission check unavailable for user '{effectiveUser}' on '{refusal.Path}' "
+                                    + $"({refusal.Permission}) — no verdict was reached, so this is NOT a statement "
+                                    + $"about this user's rights. Retry shortly. Cause: {refusal.Outcome.UndeterminedReason}")
                                 : (ErrorType.Unauthorized,
-                                    $"Access denied: user '{effectiveUser}' lacks {result.Check.Permission} permission on '{result.Check.Path}'");
+                                    $"Access denied: user '{effectiveUser}' lacks {refusal.Permission} permission on '{refusal.Path}'");
 
                             // Include the triggering message + sender so a denial on a rogue/reserved path
                             // (e.g. 'login') names its caller instead of being an unattributable warning.
@@ -258,8 +304,6 @@ public static class AccessControlPipeline
                         },
                         ex =>
                         {
-                            if (decided) return;
-                            decided = true;
                             // Reaching here means the fault escaped CheckPermissionOutcome's
                             // classifier — it came from the Rx machinery BETWEEN the folds
                             // (ToObservable / Concat / the TakeDecisionOutsideGate scheduler hop),
@@ -285,21 +329,6 @@ public static class AccessControlPipeline
                                     Message = message
                                 },
                                 o => o.ResponseFor(delivery));
-                        },
-                        () =>
-                        {
-                            if (decided) return;
-                            decided = true;
-                            // All checks passed — invoke next. next is a cold
-                            // IObservable now; Subscribe to run the downstream side
-                            // effect (the old Task was hot/already-running).
-                            // onError is mandatory: a faulted downstream chain would
-                            // otherwise vanish unobserved inside the security pipeline.
-                            next.Invoke(delivery, ct).Subscribe(
-                                _ => { },
-                                ex => logger?.LogError(ex,
-                                    "AccessControlPipeline: downstream pipeline faulted after permission pass for {MessageType} on {Hub}",
-                                    delivery.Message.GetType().Name, hub.Address));
                         });
 
                 return Observable.Return(delivery.Forwarded());
