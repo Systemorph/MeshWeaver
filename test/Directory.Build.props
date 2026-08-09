@@ -101,9 +101,39 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
-  <ItemGroup>
+  <!-- appsettings.json — EXACTLY the same two-mutually-exclusive-branches shape as
+       xunit.runner.json above, and for the same reason.
+
+       🚨 This used to be a single UNCONDITIONAL include of the shared file, linked to
+       `appsettings.json` in the output. Eleven test projects also ship their own
+       appsettings.json next to their .csproj, nine of which declared their own
+       `<Content Include="appsettings.json">`. Two Content items landing the same file name in
+       the same output directory is a duplicate-copy conflict whose winner MSBuild picks without
+       guaranteeing which — so those projects' logging configuration was decided by build order.
+
+       The cost was not hypothetical. test/MeshWeaver.Query.Test/appsettings.json raises
+       MeshWeaver.Graph / Hosting.Persistence / MeshNodeStreamCache to Debug specifically to
+       diagnose the ActivityTrackingHubTest.TrackActivity_InitiatedFromConnectionHub_LandsNode
+       flake (#993). Locally the project-local file wins and the channels are live; on CI run
+       31301311379 the failing test's captured Output was EMPTY for its full 15 s budget and the
+       whole run contained zero lines from any of those channels. The diagnostic added for that
+       flake had therefore never produced a single byte of evidence on the only platform where
+       the flake occurs.
+
+       Owning both branches here (rather than leaving the local copy to each .csproj) is what
+       makes them mutually exclusive; the per-project `<Content Include="appsettings.json">`
+       declarations were removed in the same change. The `VerifyXunitRunnerConfigCopied` target
+       in Directory.Build.targets guards BOTH files — despite its name it now errors if either
+       xunit.runner.json or appsettings.json fails to reach $(TargetDir), which is what stops
+       either two-branch selection from silently picking neither. -->
+  <ItemGroup Condition="!Exists('$(MSBuildProjectDirectory)/appsettings.json')">
     <Content Include="$(MSBuildThisFileDirectory)\appsettings.json">
       <Link>%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/appsettings.json')">
+    <Content Include="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
