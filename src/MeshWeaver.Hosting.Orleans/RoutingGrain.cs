@@ -182,47 +182,12 @@ internal class RoutingGrain(
         string addressPath,
         IStreamProvider streamProvider,
         IGrainFactory grainFactory)
-        => Observable.Defer(() =>
-        {
-            // Surface a failure back to the original sender as a DeliveryFailure MESSAGE so
-            // its hub.Observe(...) callback fires OnError instead of parking forever. Used for
-            // BOTH unresolvable paths (NotFound) AND a node that resolves but whose owning grain
-            // cannot service the delivery (Failed — an unmaterializable / unregistered node type,
-            // or an access/activation failure). The sender's hub matches the DeliveryFailure to
-            // its Observe(...) subject by RequestId and fires OnError. Without this the caller's
-            // callback parks until its client-side timeout and the GUI re-issues the request →
-            // the routing NotFound/Failed STORM (the 2026-06-08 prod event storm).
-            void PostFailureToSender(string failureMessage, ErrorType errorType)
-            {
-                if (delivery.Sender == null) return;
-                // [CanBeIgnored] messages (HeartBeatEvent, Shutdown/Dispose) are fire-and-forget: there is NO
-                // awaiting Observe callback to fail, so a DeliveryFailure for them is meaningless. It would be
-                // dropped as unhandled at the sender, or — for a permanently-gone owner that is heart-beaten
-                // every interval — re-posted forever, which IS the NotFound storm. Silently ignore, matching
-                // the monolith RoutingServiceBase.PostNotFound / NackRouteFailure guard so both routers agree.
-                if (delivery.Message is DeliveryFailure
-                    || delivery.Message?.GetType().HasAttribute<CanBeIgnoredAttribute>() == true)
-                    return;
-                var failureDelivery = new MessageDelivery<DeliveryFailure>(
-                    new DeliveryFailure(delivery, failureMessage) { ErrorType = errorType },
-                    new PostOptions(address)
-                        .WithTarget(delivery.Sender)
-                        .WithProperty(PostOptions.RequestId, delivery.Id),
-                    System.Text.Json.JsonSerializerOptions.Default);
-                streamProvider.GetStream<IMessageDelivery>(delivery.Sender.ToString())
-                    .OnNextAsync(failureDelivery)
-                    .ContinueWith(t =>
-                    {
-                        if (t.IsFaulted)
-                        {
-                            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_FAIL id={delivery.Id} ex={t.Exception?.InnerException?.Message ?? t.Exception?.Message}");
-                            logger.LogWarning(t.Exception, "[ROUTE] Failed to deliver {ErrorType} failure to sender {Sender}", errorType, delivery.Sender);
-                        }
-                        else
-                            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_OK id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
-                    }, TaskScheduler.Default);
-            }
+    {
+        void PostFailureToSender(string failureMessage, ErrorType errorType) =>
+            PostFailure(delivery, address, streamProvider, failureMessage, errorType);
 
+        return Observable.Defer(() =>
+        {
             // Config-driven memory-stream dispatch: any address-type prefix
             // declared as a static stream route goes via the cluster-wide
             // Orleans memory stream instead of grain activation. This is the
@@ -292,7 +257,66 @@ internal class RoutingGrain(
                     PostFailureToSender($"Path resolution for '{addressPath}' failed: {ex.Message}", ErrorType.Failed);
                     return Observable.Return(Unit.Default);
                 });
+        })
+        // 🚨 Composition-time faults must ALSO reach the sender. Everything above now runs OFF the
+        // turn, so a synchronous throw here (the classic one: `GetStream` NRE'ing out of
+        // PersistentStreamProvider.IsRewindable while the stream provider is still starting) no
+        // longer propagates out of RouteMessage to the caller's own error path — without this it
+        // would be logged and the sender would park forever. Terminal answer, always.
+        .Catch<Unit, Exception>(ex =>
+        {
+            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage ROUTE_FAULT id={delivery.Id} addr={addressPath} ex={ex.Message}");
+            logger.LogError(ex, "[ROUTE] Routing {Address} failed before the delivery could be attempted", addressPath);
+            PostFailureToSender($"Routing to '{addressPath}' failed: {ex.Message}", ErrorType.Failed);
+            return Observable.Return(Unit.Default);
         });
+    }
+
+    /// <summary>
+    /// Surfaces a failure back to the original sender as a <see cref="DeliveryFailure"/> MESSAGE so
+    /// its <c>hub.Observe(...)</c> callback fires OnError instead of parking forever. Used for BOTH
+    /// unresolvable paths (NotFound) AND a node that resolves but whose owning grain cannot service
+    /// the delivery (Failed — an unmaterializable / unregistered node type, or an access/activation
+    /// failure). The sender's hub matches the DeliveryFailure to its <c>Observe(...)</c> subject by
+    /// RequestId and fires OnError. Without this the caller's callback parks until its client-side
+    /// timeout and the GUI re-issues the request → the routing NotFound/Failed STORM (the
+    /// 2026-06-08 prod event storm).
+    /// </summary>
+    private void PostFailure(
+        IMessageDelivery delivery,
+        Address address,
+        IStreamProvider streamProvider,
+        string failureMessage,
+        ErrorType errorType)
+    {
+        if (delivery.Sender == null) return;
+        // [CanBeIgnored] messages (HeartBeatEvent, Shutdown/Dispose) are fire-and-forget: there is NO
+        // awaiting Observe callback to fail, so a DeliveryFailure for them is meaningless. It would be
+        // dropped as unhandled at the sender, or — for a permanently-gone owner that is heart-beaten
+        // every interval — re-posted forever, which IS the NotFound storm. Silently ignore, matching
+        // the monolith RoutingServiceBase.PostNotFound / NackRouteFailure guard so both routers agree.
+        if (delivery.Message is DeliveryFailure
+            || delivery.Message?.GetType().HasAttribute<CanBeIgnoredAttribute>() == true)
+            return;
+        var failureDelivery = new MessageDelivery<DeliveryFailure>(
+            new DeliveryFailure(delivery, failureMessage) { ErrorType = errorType },
+            new PostOptions(address)
+                .WithTarget(delivery.Sender)
+                .WithProperty(PostOptions.RequestId, delivery.Id),
+            System.Text.Json.JsonSerializerOptions.Default);
+        streamProvider.GetStream<IMessageDelivery>(delivery.Sender.ToString())
+            .OnNextAsync(failureDelivery)
+            .ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                {
+                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_FAIL id={delivery.Id} ex={t.Exception?.InnerException?.Message ?? t.Exception?.Message}");
+                    logger.LogWarning(t.Exception, "[ROUTE] Failed to deliver {ErrorType} failure to sender {Sender}", errorType, delivery.Sender);
+                }
+                else
+                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_OK id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
+            }, TaskScheduler.Default);
+    }
 
     /// <summary>
     /// The memory-stream leg of a route: post the delivery, and make ANY non-delivery — a fault OR
