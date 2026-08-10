@@ -95,7 +95,10 @@ ops.Export("org/acme/project")
               ex => logger.LogWarning(ex, "Export failed"));
 ```
 
-> The old `IMeshExportService` / `IMeshImportService` interfaces were **deleted** in the persistence cull (2026-05-12). The in-portal Export and Import *views* have not been rewired onto the new surface yet and currently report that; `MeshOperations.Export` / `.Import` are the working path.
+> There is no `IMeshExportService` / `IMeshImportService` — both were **deleted** in the persistence
+> cull (2026-05-12). The **Export** node-menu action opens `ExportLayoutArea`, but the view's download
+> path (`NodeExportView`) has not been rewired onto the new surface and reports so instead of
+> producing a file. `MeshOperations.Export` / `.Import` are the working path.
 
 ## Export–Import Round Trip
 
@@ -120,7 +123,7 @@ Import reads files from a directory or ZIP and creates nodes in the mesh. Three 
 | **Upload File** | Single `.md`, `.json`, `.yaml`, `.csv`, or `.html` file |
 | **Upload Folder (ZIP)** | Directory structure or ZIP archive |
 
-Single-file and folder uploads are parsed into `MeshNode`s by `FileFormatParserRegistry`, which picks a parser from the file extension.
+Import uses `FileFormatParserRegistry` to parse each file into a `MeshNode` based on its extension (`StaticRepoImporter` does the work for a repo-shaped import).
 
 ## Programmatic Import
 
@@ -134,6 +137,10 @@ ops.Import("org/acme/project", zipBytes)
               ex => logger.LogWarning(ex, "Import failed"));
 // summary is JSON: {status,exportRoot,targetNamespace,nodesImported,filesImported}
 ```
+
+> ⚠️ `ImportNodesRequest` / `ImportNodesResponse` are declared in `MeshWeaver.Mesh.Contract` and
+> registered in the type registry, but **no hub handles `ImportNodesRequest`** — posting one gets no
+> answer. Use `MeshOperations.Import` until a handler exists.
 
 ---
 
@@ -153,7 +160,7 @@ Copy duplicates a node and all its descendants to a new namespace. The source no
 
 ## Programmatic Copy
 
-`CopyNodeTree` is reactive and cold — the copy runs on `Subscribe`, and the single emission is the count of upserted nodes.
+`CopyNodeTree` returns `IObservable<int>` and is cold — the copy runs on `Subscribe`, and the single emission is the count of upserted nodes. Subscribe, don't await:
 
 ```csharp
 NodeCopyHelper.CopyNodeTree(
@@ -161,8 +168,9 @@ NodeCopyHelper.CopyNodeTree(
         sourcePath: "org/acme",
         targetNamespace: "org/backup",
         force: false)
-    .Subscribe(nodesCopied => logger.LogInformation("Copied {Count} nodes", nodesCopied),
-               ex => logger.LogWarning(ex, "Copy failed"));
+    .Subscribe(
+        nodesCopied => logger.LogInformation("Copied {Count} nodes", nodesCopied),
+        ex => logger.LogWarning(ex, "Copy failed"));
 ```
 
 `hub` may be any hub — it supplies the caller identity and reply address; every per-node request is routed to `hub.NodeOperationTarget()`. Permission checks live in the `CreateOrUpdateNodeRequest` handler, and `force: true` updates an existing target rather than deleting it.

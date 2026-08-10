@@ -41,6 +41,18 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
+    /// <summary>
+    /// The node PATH of the built-in default agent — the form the composer's picker
+    /// stores, so <c>AgentChatClient.ResolveSelectedAgent</c> resolves it by exact path.
+    /// <para>🚨 It must name an agent that actually SHIPS (<c>content/ai/Agent/*.md</c>).
+    /// These tests used to ask for <c>"Orchestrator"</c>, which was renamed to
+    /// <c>Assistant</c> in c31fd04da — since then no such agent has existed, so every
+    /// round could only ever produce the terminal "agent not found" error. The weak
+    /// assertions (any non-empty response text) accepted that error, and the
+    /// "Allocating agent..." placeholder, as success.</para>
+    /// </summary>
+    private const string DefaultAgentPath = "Agent/Assistant";
+
     private IMessageHub GetClient([CallerMemberName] string? name = null)
         => base.GetClient($"autoexec-{name}-{Guid.NewGuid():N}", "TestUser");
 
@@ -78,7 +90,7 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
         // submission watcher claims — see ThreadNodeType.BuildThreadWithMessages.
         var (threadNode, userMsgId, _) = ThreadNodeType.BuildThreadWithMessages(
             "TestUser", "Hello Orleans auto-execute!",
-            createdBy: "TestUser", agentName: "Orchestrator");
+            createdBy: "TestUser", agentName: DefaultAgentPath);
         var threadPath = threadNode.Path!;
         Output.WriteLine($"Thread: {threadPath}, user={userMsgId}");
 
@@ -89,22 +101,36 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
         Output.WriteLine("Thread created, waiting for execution...");
 
         // Subscribing to the thread stream also activates the per-thread hub
-        // (WatchForExecution → auto-execute dispatch). Wait for execution to settle.
-        var thread = await GetHubContent<MeshThread>(client, threadPath)
+        // (WatchForExecution → auto-execute dispatch). Wait for the watcher to
+        // claim and allocate the response cell. `Messages` only ever grows, so
+        // this predicate is monotonic — unlike `IsExecuting == false`, which is
+        // ALSO true in the pre-execution window and made the wait a coin flip.
+        var claimed = await GetHubContent<MeshThread>(client, threadPath)
             .Should().Within(30.Seconds())
-            .Match(t => t is { IsExecuting: false }
-                && t.Messages.Count >= 2);
-        Output.WriteLine("Thread execution complete");
+            .Match(t => t is { Messages.Count: >= 2 });
 
         // Response cell id is Messages[1] (user is [0], response is [1]) — the id
         // DispatchAfterClaim allocated for this round.
-        var responseMsgId = thread!.Messages[1];
+        var responseMsgId = claimed!.Messages[1];
         var responsePath = $"{threadPath}/{responseMsgId}";
+
+        // 🚨 The round-done gate is the response cell's TERMINAL Status write — the
+        // same signal the submission watcher treats as round-done. Waiting on "any
+        // non-empty Text" matched the "Allocating agent..." PLACEHOLDER the
+        // framework writes when it allocates the cell, so the test passed without
+        // any agent having run.
         var response = await GetHubContent<ThreadMessage>(client, responsePath)
             .Should().Within(30.Seconds())
-            .Match(m => !string.IsNullOrEmpty(m?.Text));
-        response!.Text.Should().NotBeNullOrEmpty("agent should have written response text");
+            .Match(m => m is { Status: ThreadMessageStatus.Completed });
+        response!.Text.Should().Contain("Echo:", "the echo agent should have written the response text");
         Output.WriteLine($"Response: {response.Text![..Math.Min(100, response.Text.Length)]}");
+
+        // Only NOW is "execution settled" a real observed condition: the terminal
+        // Status write has landed, so the thread must flip out of executing.
+        await GetHubContent<MeshThread>(client, threadPath)
+            .Should().Within(30.Seconds())
+            .Match(t => t is { IsExecuting: false });
+        Output.WriteLine("Thread execution complete");
 
         // Verify user cell exists.
         var userMsg = await GetHubContent<ThreadMessage>(client, $"{threadPath}/{userMsgId}")
@@ -128,7 +154,7 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
 
         var (threadNode, _, _) = ThreadNodeType.BuildThreadWithMessages(
             "TestUser", "Test routing to response grain",
-            createdBy: "TestUser", agentName: "Orchestrator");
+            createdBy: "TestUser", agentName: DefaultAgentPath);
         var threadPath = threadNode.Path!;
 
         await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser")))
@@ -146,14 +172,17 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
             .Should().Within(30.Seconds()).Match(t => t is { Messages.Count: >= 2 });
         var responsePath = $"{threadPath}/{claimed!.Messages[1]}";
 
-        // Wait for the response cell to have final text (not empty, not a placeholder).
+        // Wait for the response cell's TERMINAL Status write — the round-done gate.
+        // 🚨 Screening the text for placeholder PREFIXES is not enough: an agent
+        // selection failure also writes non-placeholder text (the "agent not found"
+        // error), so this passed on a round in which UpdateThreadMessageContent
+        // never routed anywhere. Assert the echo agent's actual output instead.
         var msg = await GetHubContent<ThreadMessage>(client, responsePath)
             .Should().Within(30.Seconds())
-            .Match(m => m?.Text is { Length: > 0 } text
-                && !text.StartsWith("Allocating")
-                && !text.StartsWith("Loading")
-                && !text.StartsWith("Generating"));
-        Output.WriteLine($"Response cell has final text: {msg!.Text![..Math.Min(80, msg.Text.Length)]}");
+            .Match(m => m is { Status: ThreadMessageStatus.Completed });
+        msg!.Text.Should().Contain("Echo:",
+            "the streamed agent output must reach the RESPONSE grain, not the thread grain");
+        Output.WriteLine($"Response cell has final text: {msg.Text![..Math.Min(80, msg.Text.Length)]}");
     }
 
     #region Echo LLM

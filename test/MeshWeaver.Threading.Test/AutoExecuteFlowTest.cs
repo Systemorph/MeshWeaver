@@ -63,14 +63,17 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error ?? "");
         Output.WriteLine("Thread created");
 
+        // 🚨 Name an agent that actually SHIPS. This asked for "Orchestrator", renamed to
+        // Assistant in c31fd04da — so the round could only ever produce the terminal
+        // "agent not found" error, which the old "any non-empty text" assertion accepted.
         var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
-            "Hello portal flow!", contextPath: ContextPath, agentName: "Orchestrator",
+            "Hello portal flow!", contextPath: ContextPath, agentName: "Agent/Assistant",
             timeout: 30.Seconds()).Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Response msg id: {responseMsgId}");
 
         var response = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
-            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming).Should().Within(30.Seconds()).Emit();
-        response.Text.Should().NotBeNullOrEmpty("agent should have written response");
+            m => m.Status == ThreadMessageStatus.Completed).Should().Within(30.Seconds()).Emit();
+        response.Text.Should().Contain("Echo:", "the echo agent should have written the response");
         Output.WriteLine($"Response: {response.Text[..Math.Min(80, response.Text.Length)]}");
     }
 

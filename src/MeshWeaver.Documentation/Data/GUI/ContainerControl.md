@@ -46,7 +46,7 @@ Every call to `WithView` appends a new named area to the container. The framewor
 |------------|-----------------|
 | Show fixed text, icons, or buttons | `WithView(UiControl?)` — pass a control directly |
 | Show content that re-renders when data changes | `WithView(IObservable<UiControl?>)` — pass a reactive stream |
-| Load data asynchronously before rendering | `WithView(async (host, ctx, ct) => …)` — pass an async function |
+| Load **non-mesh** data before rendering | `WithView(async (host, ctx, ct) => …)` — pass an async function. Never `await` hub-reachable work in it (mesh reads, permissions, other areas); route external I/O through an `IIoPool`. For mesh data, pass the path and bind — see [Data Binding](/Doc/GUI/DataBinding). |
 | Access the current data store at render time | `WithView((host, ctx, store) => …)` — pass a store function |
 | Pin content to a specific named slot | `WithView(control, "slotName")` — pass an area string |
 | Customise the slot with skins or options | `WithView(control, area => area.WithLabel("…"))` — pass an options lambda |

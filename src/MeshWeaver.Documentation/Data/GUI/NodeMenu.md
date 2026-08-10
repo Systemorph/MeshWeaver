@@ -162,12 +162,12 @@ private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> MoreActi
     ]);
 ```
 
-The built-in node menu does **not** use this pattern. `DefaultNodeMenuProvider` emits Edit, Pin, Move, Copy, Delete, Create, Import, Export and the rest as one **flat** list, grouped by `Order` band and rendered with `_separator` dividers rather than by nesting:
+The built-in node menu does **not** use this pattern. `DefaultNodeMenuProvider` (in `NodeMenuItemsExtensions`, registered alongside `DefaultMeshMenuProvider`) emits Edit, Pin, Move, Copy, Delete and the rest as one **flat** list — no `Children`, no "Actions" parent — grouped by `Order` band and rendered with `_separator` dividers rather than by nesting:
 
 | Order band | Section | Icons |
 |---|---|---|
 | 10–18 | edit / organize | ✏️ 🔖 ➡️ 📋 🗑️ |
-| 30–38 | content / history / sync | 📁 🕘 🔌 🔄 |
+| 30–38 | content / history / sync | 📁 🧾 🕘 🔌 🔄 |
 | 50 | lifecycle | ♻️ |
 
 Because the aggregator re-sorts every provider's items by `Order`, a plugin's item slots into the right section just by picking a number in that band — which is why the built-in set stays flat. Use `Children` when you genuinely want a hover sub-menu of your own.
