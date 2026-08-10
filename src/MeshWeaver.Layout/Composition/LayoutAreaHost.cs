@@ -69,6 +69,14 @@ public record LayoutAreaHost : IDisposable
     private readonly ILogger<LayoutAreaHost> logger;
 
     /// <summary>
+    /// The area this host actually renders: <see cref="LayoutAreaReference.Area"/> when the
+    /// reference names one, otherwise the DEFAULT area the ctor resolved. Kept so failure
+    /// paths always report a real area name — <c>Reference.Area</c> is <c>null</c> for every
+    /// default-area URL, which made render failures log "area (null)" (issue #1182).
+    /// </summary>
+    private readonly string resolvedArea;
+
+    /// <summary>
     /// Id of the EntityStore "data"-collection item carrying the phase-aware
     /// loading progress (<c>{ message, progress }</c>). Seeded by
     /// <see cref="BuildInitialization"/> ("Building layout…"), advanced by the
@@ -100,6 +108,7 @@ public record LayoutAreaHost : IDisposable
         // When Area is null/empty, resolve to the default area
         var isDefaultArea = string.IsNullOrEmpty(reference.Area);
         var resolvedArea = isDefaultArea ? ResolveDefaultArea() : reference.Area!;
+        this.resolvedArea = resolvedArea;
         var context = new RenderingContext(resolvedArea) { Layout = reference.Layout };
 
         // Capture the delivery-scoped AccessContext (AsyncLocal only) at construction time.
@@ -713,12 +722,21 @@ public record LayoutAreaHost : IDisposable
     private EntityStoreAndUpdates RenderRenderingError(
         RenderingContext context, EntityStoreAndUpdates cleared, Exception ex)
     {
-        logger.LogError(ex, "Rendering failed for area {Area}", Reference.Area);
+        // context.Area is ALWAYS the resolved area name — the ctor resolves a null/empty
+        // Reference.Area (a default-area URL) to the default area before building the
+        // RenderingContext. Logging Reference.Area here printed "Rendering failed for
+        // area (null)" for exactly those renders, hiding WHICH area failed (issue #1182).
+        var area = context.Area;
+        if (AreaErrorClassifier.IsAccessDenied(ex))
+            // A denial is a user-action outcome (the viewer lacks the right on the node
+            // being rendered), not an engineering fault — Warning, so error dashboards
+            // don't page / auto-file an incident for "user opened a node they cannot read".
+            logger.LogWarning(ex, "Rendering denied for area {Area}: {Message}", area, ex.Message);
+        else
+            logger.LogError(ex, "Rendering failed for area {Area}", area);
         try
         {
-            var errorControl = MeshWeaver.Layout.Controls.Markdown(
-                $"⚠️ **This area failed to render.**\n\n```\n{ex.Message}\n```");
-            var rendered = RenderArea(context, errorControl, cleared.Store);
+            var rendered = RenderArea(context, CreateRenderErrorControl(ex), cleared.Store);
             return new EntityStoreAndUpdates(
                 rendered.Store, cleared.Updates.Concat(rendered.Updates), Stream.StreamId);
         }
@@ -727,10 +745,25 @@ public record LayoutAreaHost : IDisposable
             // The error placeholder itself failed to render (extremely unlikely for a
             // Markdown control) — log and emit the cleared store rather than recursing
             // back into the Catch above.
-            logger.LogError(renderEx, "Failed to render the error placeholder for area {Area}", Reference.Area);
+            logger.LogError(renderEx, "Failed to render the error placeholder for area {Area}", area);
             return cleared;
         }
     }
+
+    /// <summary>
+    /// The visible control a faulted render surfaces (both the top-level Catch and the
+    /// nested-area <see cref="FailRendering(Exception, string?)"/> path). An access DENIAL
+    /// renders the standard localized access-denied presentation — the same
+    /// <c>error.accessDenied</c> copy the pages and layout areas use — instead of leaking
+    /// the internal permission banner (issue #1182); every other fault keeps the generic
+    /// error panel carrying the exception message so the cause stays visible.
+    /// </summary>
+    private UiControl CreateRenderErrorControl(Exception ex)
+        => AreaErrorClassifier.IsAccessDenied(ex)
+            ? Controls.Markdown(
+                $"**{this.Localize("error.accessDenied")}**\n\n{this.Localize("error.accessDeniedHint")}")
+            : Controls.Markdown(
+                $"⚠️ **This area failed to render.**\n\n```\n{ex.Message}\n```");
 
     /// <summary>
     /// Reactive render of a top-level area whose generator is an observable of
@@ -1160,8 +1193,11 @@ public record LayoutAreaHost : IDisposable
     }
 
     // Top-level render failures (the init observable's WithExceptionCallback and the
-    // main render subscription) surface on the area this host renders — Reference.Area.
-    private void FailRendering(Exception ex) => FailRendering(ex, Reference.Area);
+    // main render subscription) surface on the area this host renders. Use the RESOLVED
+    // area, not Reference.Area — the latter is null for default-area URLs, which both
+    // logged "area (null)" AND made the null-area guard below drop the visible error
+    // control entirely (issue #1182).
+    private void FailRendering(Exception ex) => FailRendering(ex, resolvedArea);
 
     /// <summary>
     /// 🚨 A render fault is SURFACED, never swallowed. The previous body only
@@ -1180,8 +1216,7 @@ public record LayoutAreaHost : IDisposable
         if (string.IsNullOrEmpty(area))
             return;
 
-        var errorControl = new MarkdownControl(
-            $"⚠️ **This area failed to render.**\n\n```\n{ex.Message}\n```");
+        var errorControl = CreateRenderErrorControl(ex);
 
         Stream.Update(current =>
         {

@@ -37,6 +37,19 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     private static IObservable<UiControl?> ThrowingObservableView(LayoutAreaHost host, RenderingContext ctx)
         => Observable.Throw<UiControl?>(new InvalidOperationException("BOOM_async_render"));
 
+    // Views whose render is DENIED — models the access layer throwing
+    // UnauthorizedAccessException while a view generator reads a node the viewer lacks
+    // Read on (issue #1182: "User 'carson' lacks Read permission on 'Profiles/RolandLinkedIn'").
+    // Both server-side failure paths must mask the internal banner behind the standard
+    // access-denied presentation: the sync throw (init pipeline → FailRendering) and the
+    // observable error (RenderObservable's Catch → RenderRenderingError).
+    private static IObservable<UiControl?> DeniedSyncView(LayoutAreaHost host, RenderingContext ctx)
+        => throw new UnauthorizedAccessException("User 'carson' lacks Read permission on 'Profiles/RolandLinkedIn'");
+
+    private static IObservable<UiControl?> DeniedObservableView(LayoutAreaHost host, RenderingContext ctx)
+        => Observable.Throw<UiControl?>(
+            new UnauthorizedAccessException("User 'carson' lacks Read permission on 'Profiles/RolandLinkedIn'"));
+
     /// <summary>
     /// A pathologically deep, self-similar control tree (a single-child stack
     /// nested far beyond <c>LayoutAreaHost.MaxRenderDepth</c>) ending in a leaf
@@ -102,6 +115,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView(RecursiveView, BuildDeeplyNestedStack())
                     .WithView(nameof(ThrowingSyncView), ThrowingSyncView)
                     .WithView(nameof(ThrowingObservableView), ThrowingObservableView)
+                    .WithView(nameof(DeniedSyncView), DeniedSyncView)
+                    .WithView(nameof(DeniedObservableView), DeniedObservableView)
             );
     }
 
@@ -235,6 +250,44 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             "a faulted render must surface a visible error control on the area, not stay null");
         text.Should().Contain(expectedCause,
             "the surfaced error must carry the underlying exception message so the cause is visible");
+    }
+
+    /// <summary>
+    /// Regression guard for issue #1182: a render DENIED by the access layer
+    /// (<see cref="UnauthorizedAccessException"/> from a view generator) must surface the
+    /// STANDARD access-denied presentation — the localized <c>error.accessDenied</c> copy the
+    /// pages use — never the generic "⚠️ This area failed to render." panel leaking the
+    /// internal permission banner ("User 'carson' lacks Read permission on '…'"). Covers both
+    /// server-side failure paths: the sync throw (init pipeline → <c>FailRendering</c>) and
+    /// the observable error (<c>RenderObservable</c>'s Catch → <c>RenderRenderingError</c>).
+    /// </summary>
+    [HubFact]
+    public Task DeniedSyncView_SurfacesAccessDenied_NotTheRawBanner()
+        => AssertDeniedViewSurfacesAccessDenied(nameof(DeniedSyncView));
+
+    [HubFact]
+    public Task DeniedObservableView_SurfacesAccessDenied_NotTheRawBanner()
+        => AssertDeniedViewSurfacesAccessDenied(nameof(DeniedObservableView));
+
+    private async Task AssertDeniedViewSurfacesAccessDenied(string view)
+    {
+        var reference = new LayoutAreaReference(view);
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        var control = await stream.GetControlStream(reference.Area!)
+            .Should().Within(10.Seconds()).Match(x => x is MarkdownControl);
+
+        var text = control.Should().BeOfType<MarkdownControl>().Subject.Markdown?.ToString() ?? string.Empty;
+        text.Should().Contain("Access denied",
+            "a denied render must show the standard access-denied presentation");
+        text.Should().NotContain("lacks Read permission",
+            "the internal permission banner (user id + node path) must be masked behind the standard copy");
+        text.Should().NotContain("failed to render",
+            "a denial is a designed outcome, not a render fault");
     }
 
     private static async Task<UiControl?> ViewWithProgress(LayoutAreaHost area, RenderingContext ctx, CancellationToken ct)
