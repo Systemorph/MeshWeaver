@@ -295,7 +295,7 @@ public class MeshOperations
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var caller = accessService?.Context ?? accessService?.CircuitContext;
 
-        // Single-node content read via GetDataRequest + MeshNodeReference + RegisterCallback.
+        // Single-node content read via GetDataRequest + MeshNodeReference + hub.Observe(...).
         // See Doc/Architecture/CqrsAndContentAccess.md — queries are for sets only.
         return TryResolveUnifiedPath(resolvedPath)
             .SelectMany(unified =>
@@ -1031,7 +1031,7 @@ public class MeshOperations
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "UpdateViaDataChange: Post/RegisterCallback failed for {Path}", node.Path);
+                logger.LogWarning(ex, "UpdateViaDataChange: Post/Observe failed for {Path}", node.Path);
                 Fail(ex);
             }
 
@@ -1104,7 +1104,7 @@ public class MeshOperations
         logger.LogInformation("Resolving Unified Path: address={Address}, remainder={Remainder}",
             addressPart, remainder);
 
-        // Fire the GetDataRequest and receive the response via RegisterCallback.
+        // Fire the GetDataRequest and receive the response via hub.Observe(...).
         // Observable.Create wraps the post/register pair so the caller can compose it
         // into the Get pipeline without ever awaiting — the callback completes the
         // observable from a non-hub thread. The outer Timeout enforces an upper
@@ -1956,7 +1956,7 @@ public class MeshOperations
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "PatchViaDataRequest: Post/RegisterCallback failed for {Path}", resolvedPath);
+                logger.LogWarning(ex, "PatchViaDataRequest: Post/Observe failed for {Path}", resolvedPath);
                 Fail(ex);
             }
 
@@ -2587,7 +2587,7 @@ public class MeshOperations
 
     /// <summary>
     /// Moves a node and its descendants to a new path. Posts <see cref="MoveNodeRequest"/>
-    /// and subscribes via <c>RegisterCallback</c> — no <c>AwaitResponse</c>, no <c>await</c>
+    /// and subscribes via <c>hub.Observe(...)</c> — no <c>await</c>
     /// on the hub scheduler.
     /// </summary>
     public IObservable<string> Move(string sourcePath, string targetPath)

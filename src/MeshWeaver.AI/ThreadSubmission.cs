@@ -24,8 +24,8 @@ namespace MeshWeaver.AI;
 ///   batched ingestion keeps one output cell per round.
 /// - Pure helpers <see cref="FindUnprocessedUserMessages"/> and <see cref="PlanNextRound"/>
 ///   are the unit-testable core.
-/// - Hard rule: no await, no IMeshService.QueryAsync, no Query, no client
-///   SubmitMessageRequest. Only Hub.Post + RegisterCallback + workspace stream writes.
+/// - Hard rule: no await, no IMeshService.Query, no client
+///   SubmitMessageRequest. Only Hub.Post + hub.Observe(...) + workspace stream writes.
 /// </summary>
 internal static class ThreadSubmission
 {
@@ -447,7 +447,7 @@ internal static class ThreadSubmissionServer
     /// <para><b>NOT a stopgap for the lost-message defect.</b> That defect — the non-atomic
     /// owner-side <c>PatchDataRequest</c> apply that read a handler-time snapshot and committed a
     /// deferred FULL-NODE replace, clobbering a concurrent writer's just-added field — is FIXED at
-    /// the root in <c>DataExtensions.ApplyMeshNodePatchAtomic</c> (the merge now applies onto the
+    /// the root in <c>DataExtensions.ApplyMeshNodePatchInTurn</c> (the merge now applies onto the
     /// LIVE node in one primary-stream turn). See
     /// <c>CrossHubPatchAtomicityTest.ConcurrentCrossHubPatches_DoNotDropAQueuedMessage</c>.</para>
     ///
@@ -497,7 +497,7 @@ internal static class ThreadSubmissionServer
                 "[SubmissionWatcher] lost-message invariant restored for {ThreadPath}: {Ids} were in "
                 + "Messages+UserMessageIds but neither ingested nor pending — re-marking ingested "
                 + "(concurrent cross-mirror RFC 7396 array-replace on IngestedMessageIds; the "
-                + "owner-side full-replace clobber is fixed in DataExtensions.ApplyMeshNodePatchAtomic)",
+                + "owner-side full-replace clobber is fixed in DataExtensions.ApplyMeshNodePatchInTurn)",
                 threadHub.Address.Path, string.Join(",", ingestedMissing));
 
         threadHub.GetWorkspace().GetMeshNodeStream().Update(n =>
@@ -701,7 +701,7 @@ internal static class ThreadSubmissionServer
     /// <summary>
     /// Creates the output cell, writes the committed round to the thread node, and
     /// fires off agent execution on the _Exec hosted hub. Non-blocking — all
-    /// Hub.Post + RegisterCallback; the workspace write is a synchronous fire-and-forget.
+    /// Hub.Post + hub.Observe(...); the workspace write is a synchronous fire-and-forget.
     ///
     /// Step 0 (new): for each unprocessed user id present in <see cref="MeshThread.PendingUserMessages"/>,
     /// create the satellite ThreadMessage cell. The client only writes the thread node;
@@ -1179,7 +1179,7 @@ internal static class ThreadSubmissionServer
                 return;
             }
 
-            // Step 1: create the assistant output cell (CreateNodeRequest → RegisterCallback).
+            // Step 1: create the assistant output cell (CreateNodeRequest → hub.Observe(...)).
             // Status=Streaming until the streaming loop transitions it to Completed/Cancelled/Error.
             var responseCell = new MeshNode(responseMsgId, threadPath)
             {

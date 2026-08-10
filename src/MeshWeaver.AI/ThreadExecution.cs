@@ -475,7 +475,7 @@ internal static class ThreadExecution
                     {
                         case ThreadExecutionStatus.Executing
                             when !string.IsNullOrEmpty(thread.ActiveMessageId):
-                            // Interrupted mid-round — the in-flight Task.Run is gone.
+                            // Interrupted mid-round — the in-flight pooled round is gone.
                             // 🚨 We STAY Executing and re-launch the streaming loop
                             // directly. We must NOT write Executing→StartingExecution:
                             // that is the exact inverse of the _Exec commit edge
@@ -1603,7 +1603,7 @@ internal static class ThreadExecution
                     var toolCallLog = ImmutableList<ToolCallEntry>.Empty;
                 var nodeChangeLog = ImmutableList<NodeChangeEntry>.Empty;
                 // toolCallLog + nodeChangeLog are mutated from 4 concurrent paths:
-                //   1. Streaming loop (Task.Run with await foreach over agent updates)
+                //   1. Streaming loop (pooled Ai I/O invoke, await foreach over agent updates)
                 //   2. FCC middleware (ChatClientAgentFactory's .Use(...) callback,
                 //      fires on FCC's invocation thread)
                 //   3. client.ForwardToolCall (alias for path 2 on test agents that
@@ -1871,14 +1871,15 @@ internal static class ThreadExecution
 
                 logger.LogInformation("[ThreadExec] STREAMING_START: threadPath={ThreadPath}, responsePath={ResponsePath}",
                     threadPath, responsePath);
-                // Run streaming on thread pool via Task.Run — the grain scheduler
+                // Streaming runs OFF the hub turn, on the bounded Ai I/O pool
+                // (IoPoolNames.Ai — see the aiPool.Invoke below). The grain scheduler
                 // stays FREE to process tool call responses, delegation callbacks, and
-                // workspace updates. Without this, tool calls deadlock: they await a
-                // response that needs the grain scheduler which is blocked by InvokeAsync.
+                // workspace updates. Without that offload, tool calls deadlock: they await
+                // a response that needs the grain scheduler the round is occupying.
                 //
-                // DelayDeactivation keeps the grain alive while the thread pool task runs.
-                // BeginAsyncOperation signals the grain keep-alive timer.
-                // After await Task.Run(...), execution returns to the grain scheduler.
+                // 🚨 NEVER Task.Run for this — an unbounded thread-pool hop whose
+                // continuations bounce back onto the grain scheduler is the pattern the
+                // I/O pool replaced; see the note at the aiPool.Invoke call site below.
                 //
                 // Reuse the CancellationTokenSource HandleSubmitMessage stored on the
                 // parent hub. Storing it here would be too late — a Stop click between
@@ -1888,9 +1889,9 @@ internal static class ThreadExecution
                 // HandleSubmitMessage), allocate a fresh one as a safety net.
                 var executionCts = parentHub.Get<CancellationTokenSource>()
                     ?? StoreNewCts(parentHub);
-                // Cancel Task.Run when the hub disposes (grain deactivation).
-                // Without this, OnDeactivateAsync waits up to 120s for the Task.Run
-                // that's stuck on an AI API call with no cancellation signal.
+                // Cancel the in-flight pooled round when the hub disposes (grain
+                // deactivation). Without this, teardown waits up to 120s for a round
+                // stuck on an AI API call with no cancellation signal.
                 // Guard against a disposal race: the round may already have completed and
                 // disposed its CTS (or another disposal path raced here), in which case
                 // Cancel() throws ObjectDisposedException — which, unhandled in
