@@ -24,7 +24,9 @@ So for the `Harness` catalog there is **exactly one** node at path `Harness`:
 @Harness/_Policy      nodeType=PartitionAccessPolicy   (publicRead)
 ```
 
-`HubConfiguration` is a C# delegate (`Func<MessageHubConfiguration, MessageHubConfiguration>`) — it cannot be persisted. So a **built-in** NodeType node resolves its `HubConfiguration` from the registered static type by name; a **dynamic** NodeType node compiles it from its `Source`/`HubConfigurationSource` (see [Static-Repo Import](/Doc/Architecture/StaticRepoImport)). Both are `nodeType:NodeType` nodes; they differ only in where the delegate comes from.
+`MeshNode.HubConfiguration` is a C# delegate (`Func<MessageHubConfiguration, MessageHubConfiguration>`) — it cannot be persisted. So a **built-in** NodeType node resolves it from the registered static type by name, via `NodeTypeDefinition.StaticTypeName`; a **dynamic** NodeType node compiles it at runtime from `NodeTypeDefinition.Configuration` (the lambda's C# **source text**, stored as a string) plus `NodeTypeDefinition.Sources` (see [Static-Repo Import](/Doc/Architecture/StaticRepoImport)). Both are `nodeType:NodeType` nodes; they differ only in where the delegate comes from — `StaticTypeName` set means "look it up", not "compile it".
+
+> ⚠️ `NodeTypeDefinition.Configuration` is **C# living inside a JSON string field**, so no `.cs`-shaped tool sees it: not `dotnet build`, not `grep --include='*.cs'`, not any compile gate that only scans `Source/`. When you rename or delete a framework symbol, search the node JSON too.
 
 ## The anti-pattern this replaces (why the loop happens)
 

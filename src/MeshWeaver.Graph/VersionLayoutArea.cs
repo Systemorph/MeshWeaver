@@ -649,7 +649,8 @@ public static class VersionLayoutArea
                 }
 
                 // For each affected path, fetch the version just before StartVersion in parallel.
-                // No await — each path's lookup is wrapped in Observable.FromAsync and merged.
+                // No await — GetVersionBefore is already reactive, so each path's lookup is
+                // merged straight in via SelectMany (no Task bridge, no Observable.FromAsync).
                 return activityLog.AffectedPaths
                     .ToObservable()
                     .SelectMany(path =>

@@ -25,6 +25,12 @@ public class LogIncidentMergeTest
         Status = status,
         Samples = ImmutableList.Create(new LogSample(T0, "pod-a", "old line")),
         Pods = ImmutableList.Create("pod-a"),
+        // A Filed incident ALWAYS carries its issue — the filer writes the status and the link in
+        // one go, and the link is what a recurrence is folded onto. A fixture that files without
+        // one describes a state the system cannot reach, and would have the recurrence ask for a
+        // comment on an issue that does not exist.
+        IssueNumber = status == LogIncidentStatus.Filed ? 1113 : null,
+        Repository = status == LogIncidentStatus.Filed ? "Systemorph/MeshWeaver" : null,
     };
 
     private static LogIncidentReport Repeat(
@@ -124,6 +130,34 @@ public class LogIncidentMergeTest
         // A portal restart mid-triage, or a transient triage failure, must not strand the incident.
         => LogIncidentIngestService.Merge(Existing(status), Repeat(), Options)
             .RequestedStatus.Should().Be(LogIncidentRequest.Triage);
+
+    [Theory]
+    [InlineData(LogIncidentStatus.New)]
+    [InlineData(LogIncidentStatus.Failed)]
+    [InlineData(LogIncidentStatus.Triaging)]
+    public void Merge_NeverReTriagesAnIncidentThatAlreadyHasAnIssue(LogIncidentStatus status)
+    {
+        // 🚨 The issue link outranks the status. A ticketed incident that later reads Failed — a
+        // recurrence comment that errored, or the stranded-triage reconcile marking it retryable —
+        // used to re-enter triage, and the agent's fresh draft then asked to File again. That chain
+        // filed ROUTER_TRAFFIC eight times in seven minutes on the watcher's first live run.
+        var ticketed = Existing(status) with
+        {
+            IssueNumber = 1113,
+            Repository = "Systemorph/MeshWeaver",
+        };
+
+        LogIncidentIngestService.Merge(ticketed, Repeat(), Options).RequestedStatus
+            .Should().Be(LogIncidentRequest.Comment,
+                "a fault that comes back belongs on the ticket it already has");
+    }
+
+    [Fact]
+    public void Merge_KeepsASuppressedIncidentQuietEvenWhenItWasTicketed()
+        => LogIncidentIngestService.Merge(
+                Existing(LogIncidentStatus.Suppressed) with { IssueNumber = 1113 }, Repeat(), Options)
+            .RequestedStatus.Should().Be(LogIncidentRequest.None,
+                "suppression is the operator's decision and outranks every other rule");
 
     [Theory]
     [InlineData(LogIncidentStatus.Triaging)]

@@ -9,7 +9,7 @@ Description: "Canonical pattern for all mesh-node mutations: use workspace.GetMe
 
 The single rule: mutate the target node's state via `workspace.GetMeshNodeStream(path).Update(current => modified)`. A server-side watcher on the owning hub picks up the change and dispatches any side-effect work. Results are published by writing back to the same node, and the synchronization protocol propagates them cluster-wide automatically.
 
-**Reads use the same stream.** Server-side, `IMeshNodeStreamCache` (`src/MeshWeaver.Hosting/MeshNodeStreamCache.cs`) hands out a single shared stream per node. Client-side, the Blazor view holds an `ISynchronizationStream<MeshNode>` (see [GUI Data Binding](/Doc/GUI/DataBinding)). Read and write share one stream — there is no separate read API to keep in sync.
+**Reads use the same stream.** `IMeshNodeStreamCache` (`src/MeshWeaver.Hosting/MeshNodeStreamCache.cs`) hands out a single shared handle per node path — server-side hubs and Blazor views alike resolve it through `GetMeshNodeStream(path)` (see [GUI Data Binding](/Doc/GUI/DataBinding)). Read and write share one stream — there is no separate read API to keep in sync.
 
 **Why this is mandatory, not merely preferred.** Every recent "hub becomes unresponsive after the second operation" CI failure — CodeEditRecompile, NodeTypeRelease, LinkedInPullActions, ThreadAgentIntegration in run 26036857424 — traced back to bespoke request/response handlers racing the watcher: two concurrent activities, leaked callbacks, wedged hub. The stream-based pattern is race-free by construction.
 <svg viewBox="0 0 760 310" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
@@ -123,7 +123,7 @@ The canonical reference for both helpers is [ActivityControlPlane.md](/Doc/Archi
 
 - The work is **triggered by a state change** (caller mutates input fields).
 - The result **belongs on the same node** (caller observes output fields on the same `MeshNode` it mutated).
-- You want **automatic cluster-wide propagation** — every silo that subscribes via `SyncedMeshNodeQuery` or a per-node remote stream sees the update without any explicit broadcast.
+- You want **automatic cluster-wide propagation** — every silo that subscribes via a synced query (`workspace.GetQuery`) or the node's own shared stream sees the update without any explicit broadcast.
 - You want **no cross-silo round-trip during grain activation** — the watcher runs in-grain on whichever silo owns the node.
 
 **Do not use it for:**
@@ -168,32 +168,39 @@ The caller writes the request *into* the thread node's state. `PendingUserMessag
 ### Server — the dispatch watcher
 
 ```csharp
-// MeshWeaver.AI/ThreadSubmission.cs — ThreadSubmissionServer.InstallServerWatcher
-return threadHub.WatchSubmission(
-    fingerprint:   Fingerprint,     // (IsExecuting, Messages.Count, IngestedMessageIds.Count, PendingUserMessages.Count)
-    needsDispatch: NeedsDispatch,   // !IsExecuting && (PendingUserMessages.Count > 0 || any UserMessageId not in IngestedMessageIds)
-    dispatch:      node => DispatchRoundObs(threadHub, node, logger),
+// The generic helper — use this for a NEW watcher:
+hub.WatchSubmission(
+    fingerprint:   node => /* the control-plane tuple that decides "actionable" */,
+    needsDispatch: node => /* predicate over that state */,
+    dispatch:      node => DoWork(node),          // IObservable<Unit>
     logger:        logger);
 ```
 
-The watcher subscribes once at hub init. `DistinctUntilChanged` on the fingerprint guarantees the same actionable state cannot fire twice — there is no `dispatching` flag, no `Throttle`, no reentrancy guard. `DispatchRoundObs` is an `IObservable<Unit>` that creates satellite cells, commits the round to the thread node, and posts to the `_Exec` hub; it composes via `SelectMany` into one round per emission. Failures in `dispatch` are logged and swallowed — the next state change retries naturally. See `ThreadSubmissionServer.InstallServerWatcher` in `MeshWeaver.AI/ThreadSubmission.cs` for the full live source.
+The watcher subscribes once at hub init. `DistinctUntilChanged` on the fingerprint guarantees the same actionable state cannot fire twice — there is no `dispatching` flag, no `Throttle`, no reentrancy guard; `dispatch` composes via `SelectMany` into one run per emission, and a failure is logged rather than killing the subscription (the next state change retries naturally).
+
+The thread's own watcher (`ThreadSubmissionServer.InstallServerWatcher` in `MeshWeaver.AI/ThreadSubmission.cs`) is the same pattern hand-composed, because it needs two extras the helper does not carry: a fault **re-establish** (a dead watcher would park the thread forever) and an explicit **owner-identity scope** around its writes. Its shape is `GetMeshNodeStream()` → `DistinctUntilChanged(SubmissionFingerprint)` (status + pending/ingested/user-message ids — deliberately excluding every streaming field, so an executing round does not wake it) → an **atomic claim** `Status: Idle → StartingExecution` through `stream.Update`. Single-flight falls out of that claim: the owner's action block serialises the concurrent emissions, the first lambda that sees `Idle` flips it, and every other lambda re-reads `Status != Idle` and bails. Read that method before copying it.
 
 ### Result publication
 
 The dispatched work writes its progress and final result back onto the same node (or a satellite node it owns) via `workspace.GetMeshNodeStream(path).Update(...)`. The result reaches every subscriber automatically:
 
 - **Local:** other subscribers on the same hub see the next emission of the `MeshNodeReference` reducer.
-- **Cross-silo / clients:** `SyncedMeshNodeQuery` and `GetRemoteStream<MeshNode, MeshNodeReference>` subscribers see the change via the synchronization protocol — no explicit broadcast needed.
+- **Cross-silo / clients:** synced-query subscribers (`workspace.GetQuery`) and every `GetMeshNodeStream(path)` handle see the change via the synchronization protocol — no explicit broadcast needed.
 
 ---
 
 ## Applied: Dynamic NodeType Compilation
 
-`INodeTypeService.EnrichWithNodeType`'s slow path now uses this pattern. `GetCompilationPathRequest` is retained as a fallback for hubs without a workspace / remote-stream reducer; the primary path is stream-based.
+`NodeTypeEnrichmentHelpers.EnrichWithNodeType`'s slow path uses this pattern: the caller flips
+`CompilationStatus` to `Pending` on the NodeType node and waits for a terminal status on the same
+stream.
 
-### Caller — `NodeTypeService.ResolveViaStream`
+### Caller — the trigger + observe pair
 
-> **Note:** The current production code in `NodeTypeService.cs` still uses an `Interlocked.CompareExchange(ref triggered, 1, 0)` flag to guard the one-shot `Pending` trigger. That is the imperative anti-pattern and is being migrated to the shape below. The example shows the **target** form: split the chain into a one-shot trigger pipeline and a terminal-status observation pipeline, both reactive.
+> **Note:** this is the *shape*, not a copy of a live method — there is no `NodeTypeService` type
+> in the tree. Split the chain into a one-shot trigger pipeline and a terminal-status observation
+> pipeline, both reactive; `.Take(1)` is what makes the trigger one-shot, so no `triggered` flag
+> and no `Interlocked.CompareExchange` is needed.
 
 ```csharp
 // Subscribe to the per-NodeType node via the shared handle.
@@ -225,9 +232,14 @@ return trigger.Merge(terminal!)
     .Timeout(TimeSpan.FromSeconds(30));
 ```
 
-### Server — `MeshDataSourceExtensions.InstallCompileWatcher`
+### Server — `NodeTypeCompilationHelpers.InstallCompileWatcher`
 
-> **Note:** The previous `InstallCompileWatcher` (`Throttle(50ms)` + `SelectMany` + a manual `Pending → Compiling` flip to dodge throttle's trailing-edge re-emission) was removed from `MeshDataSource.cs`. The shape below is the **target** if/when the per-NodeType compile watcher is re-introduced — `WatchSubmission` with `CompilationStatus` as the fingerprint makes the `Pending → Compiling` guard unnecessary, because `DistinctUntilChanged` already prevents re-firing on our own write.
+> **Note:** the live watcher is `NodeTypeCompilationHelpers.InstallCompileWatcher`
+> (`src/MeshWeaver.Graph/Configuration/`) — it is installed per NodeType hub and carries a good deal
+> more than the sketch below (kickoff, settle/registration waits, the `Unavailable` marker rules).
+> The shape below is the minimal pattern it is an instance of: `CompilationStatus` as the
+> fingerprint makes a `Pending → Compiling` throttle-guard unnecessary, because
+> `DistinctUntilChanged` already prevents re-firing on our own write.
 
 ```csharp
 hub.WatchSubmission(
@@ -247,7 +259,7 @@ hub.WatchSubmission(
 
 ### Cluster-wide cache propagation
 
-Every silo's `NodeTypeService` uses `SyncedMeshNodeQuery` to subscribe to all `Code` NodeType nodes. When the compiled result is written back, the synced query emits the new node state to every subscriber. Each silo's local `_hubConfigurations` cache picks up the new `(AssemblyLocation, HubConfiguration)` automatically — `EnrichWithNodeType`'s fast path then hits for that NodeType, and `OnActivateAsync` becomes synchronous.
+Every silo subscribes to the NodeType nodes through a synced query (`workspace.GetQuery` — see [Synced Mesh Node Queries](/Doc/Architecture/SyncedMeshNodeQueries)). When the compiled result is written back, the synced query emits the new node state to every subscriber, so each silo's local NodeType-configuration cache picks up the new `(AssemblyLocation, HubConfiguration)` automatically — `EnrichWithNodeType`'s fast path then hits for that NodeType, and grain activation stays synchronous.
 
 ---
 
@@ -257,21 +269,27 @@ The watcher dispatching the work **must** publish failure as well as success. A 
 
 > **Silent timeout is not acceptable.** The caller observes the same node's reducer. If the request never lands a response, the caller cannot distinguish "still working" from "broken".
 
-Conventional status shape:
+Conventional status shape — the live one is
+`MeshWeaver.Mesh.Contract/Services/CompilationStatus.cs`:
 
 ```csharp
-record CompilationStatus { Pending, Compiling, Ok, Failed, NodeNotFound, InvalidNodeType }
+enum CompilationStatus { Unknown, Pending, Compiling, Ok, Error, Unavailable }
 ```
 
-Caller observation chain:
+`Unavailable` is deliberately distinct from `Error`: it means "the state could not be
+determined" (a settle wait or registration lookup timed out) — an availability problem, never
+"the source is broken".
+
+Caller observation chain (`GetMeshNodeStream`, never `GetRemoteStream<MeshNode, …>` — that
+overload throws):
 
 ```csharp
-workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())
-    .Where(c => c.Value?.Content is Code code
-             && code.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Failed)
+workspace.GetMeshNodeStream(nodeTypePath)
+    .Where(node => node?.Content is NodeTypeDefinition def
+             && def.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
     .Take(1)
     .Timeout(TimeSpan.FromSeconds(60))
-    .Select(c => /* unwrap */);
+    .Subscribe(node => { /* … */ }, ex => logger.LogWarning(ex, "compile wait failed"));
 ```
 
 ---

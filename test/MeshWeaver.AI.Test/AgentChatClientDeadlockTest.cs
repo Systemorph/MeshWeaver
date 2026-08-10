@@ -32,6 +32,12 @@ namespace MeshWeaver.AI.Test;
 /// concurrently against the same mesh; under deadlock they hang past the wall-clock
 /// timeout, under the fix they all complete in &lt; 5 s.
 /// </summary>
+/// <remarks>
+/// Serialised via <see cref="ConcurrencyStressCollection"/>: eight <c>GetOrderedAgentsAsync</c> chains
+/// run at once and the verdict is a 15 s <c>WaitAsync</c> on all eight — a deadlock detector, so it
+/// must not be shared with three other classes on a 4-vCPU runner.
+/// </remarks>
+[Collection(ConcurrencyStressCollection.Name)]
 public class AgentChatClientDeadlockTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     /// <summary>Share Mesh/SP across [Fact]s â€” see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>

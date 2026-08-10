@@ -159,6 +159,8 @@ Response: *"Here's the organisation chart."*
 
 ## RenderArea
 
+> **MCP surface only.** `RenderArea` is declared on `McpMeshPlugin`, not on the in-portal `MeshPlugin` — so it is available to an agent connected over MCP, and **not** in the tool set an in-portal agent round receives. In-portal, use `NavigateTo` or `Get('.../area/Name')`.
+
 Returns a live, interactive layout area as an MCP-UI embedded resource.
 
 Hosts that support MCP-UI (Claude.ai web/desktop, ChatGPT Apps) render it inline as an iframe widget. Text-only hosts (such as the Claude Code CLI) receive a fallback URL instead.
@@ -251,6 +253,12 @@ Create('{"id": "NewProject", "namespace": "ACME", "name": "New Project", "nodeTy
 
 Replaces one or more existing nodes with new data. The **entire node** is replaced — this is not a merge/patch operation.
 
+> **Prefer `Patch` or `EditContent` for anything small.** Both are part of the same tool set:
+> - **`Patch(path, fields)`** — partial update of one node. Only the keys you send change; `content` deep-merges per RFC 7396, so you can set a single content field without resending the rest. A `null` member deletes that one key; setting the whole `content` to `null` is rejected.
+> - **`EditContent(path, oldText, newText, replaceAll)`** — anchored text edit inside a Markdown body or Code source. Send just the snippet plus enough surrounding context to be unique, instead of pushing a whole document through `Update`. Fails loudly when the text isn't found or isn't unique.
+>
+> `Update` is the right tool only when you genuinely mean to replace the node wholesale.
+
 ### Parameter
 
 `nodes` (string, required) — A JSON array of `MeshNode` objects with updated fields.
@@ -280,6 +288,8 @@ Update('[{"id": "ExistingProject", "namespace": "ACME", "name": "Renamed Project
 ## Delete
 
 Removes one or more nodes from the mesh by their paths.
+
+> **Delete is RECURSIVE.** Deleting a parent removes every descendant — pass the subtree root, there is no need to enumerate children, and passing a namespace root removes everything under it.
 
 ### Parameter
 

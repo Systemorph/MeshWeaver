@@ -15,6 +15,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
+// MeshWeaver.AI.Thread, not System.Threading.Thread (which the implicit usings bring in).
+using AiThread = MeshWeaver.AI.Thread;
+
 namespace MeshWeaver.Observability;
 
 /// <summary>
@@ -46,6 +49,17 @@ public sealed class LogIncidentControlPlane : BackgroundService
     private readonly ConcurrentDictionary<string, byte> inFlight = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Fingerprints with a stranded-triage RECONCILE in flight — a separate set from
+    /// <see cref="inFlight"/> on purpose. Sharing one would let a repair pass swallow the very
+    /// emission that carries the agent's <c>File</c> request: the agent's patch IS the node change
+    /// that produces that emission, so if nothing changes afterwards there is no second chance and
+    /// the ticket is never opened. Two sets means a reconcile can never mask a real request; they
+    /// still cannot collide on a write, because the queue runs items one at a time and the
+    /// reconcile re-reads the status inside its update lambda.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, byte> reconciling = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// Work queue. Items run ONE AT A TIME via <c>Select(Run).Concat()</c> — the sanctioned way to
     /// serialise without a lock or a semaphore (AGENTS.md → "No hand-woven async/concurrency
     /// primitives"). Serialising also keeps a burst of new fingerprints from opening a dozen
@@ -66,8 +80,15 @@ public sealed class LogIncidentControlPlane : BackgroundService
         this.logger = logger;
     }
 
-    /// <summary>One queued transition.</summary>
-    private record LogIncidentWork(string Path, LogIncident Incident, LogIncidentRequest Request);
+    /// <summary>
+    /// One queued transition. <paramref name="Reconcile"/> marks the internal repair pass rather
+    /// than a requested transition: nobody asks for it on the wire, the watcher notices a
+    /// <see cref="LogIncidentStatus.Triaging"/> incident and checks it against the thread it is
+    /// waiting for. It is deliberately NOT a <see cref="LogIncidentRequest"/> value — the request
+    /// enum is the control-plane contract an agent or an admin writes, and this is neither.
+    /// </summary>
+    private record LogIncidentWork(
+        string Path, LogIncident Incident, LogIncidentRequest Request, bool Reconcile = false);
 
     /// <inheritdoc />
     // The hosted-service boundary — the single sanctioned Task bridge. Everything inside is one
@@ -133,8 +154,28 @@ public sealed class LogIncidentControlPlane : BackgroundService
         {
             if (node.ContentAs<LogIncident>(hub.JsonSerializerOptions, logger) is not { } incident)
                 continue;
+
             if (incident.RequestedStatus == LogIncidentRequest.None)
+            {
+                // 🚨 Triaging is the one state nothing else can leave. The agent is supposed to
+                // write the draft and ask to File; if its round ends without doing that — the
+                // configured agent is not in this deployment's catalog, the model is down, the
+                // portal restarted mid-round — the incident sits in Triaging forever. NextRequest
+                // re-triages New and Failed, never Triaging (it cannot tell "in flight" from
+                // "stranded"), so it is invisible AND unrecoverable: it stays parked even after
+                // the missing dependency lands. That is how nineteen incidents accumulated on
+                // memex.systemorph.com while LogTriage was absent from the served agent catalog.
+                //
+                // The thread is the authority on whether the round is still running, so ask it.
+                // This is a reconcile against observable state, NOT a timer or a retry watchdog:
+                // it fires only on an emission that already carries a stranded-looking incident,
+                // and does nothing at all while the round is genuinely in flight.
+                if (NeedsTriageReconcile(incident) && reconciling.TryAdd(incident.Fingerprint, 0))
+                    queue.OnNext(new LogIncidentWork(
+                        node.Path, incident, LogIncidentRequest.Triage, Reconcile: true));
                 continue;
+            }
+
             if (!inFlight.TryAdd(incident.Fingerprint, 0))
                 continue;
             queue.OnNext(new LogIncidentWork(node.Path, incident, incident.RequestedStatus));
@@ -142,27 +183,39 @@ public sealed class LogIncidentControlPlane : BackgroundService
     }
 
     /// <summary>
+    /// Whether an incident looks stranded in <see cref="LogIncidentStatus.Triaging"/> and should be
+    /// checked against the thread it is waiting for. A thread path is required: without one there
+    /// is no evidence to reconcile against, and guessing would be a watchdog.
+    /// </summary>
+    internal static bool NeedsTriageReconcile(LogIncident incident) =>
+        incident.RequestedStatus == LogIncidentRequest.None
+        && incident.Status == LogIncidentStatus.Triaging
+        && incident.TriageThreadPath is { Length: > 0 };
+
+    /// <summary>
+    /// Runs one transition exactly as the work queue does — the seam the idempotency tests drive,
+    /// so they exercise the real claim + write path rather than a re-implementation of it.
+    /// </summary>
+    internal IObservable<Unit> RunRequest(string path, LogIncident incident, LogIncidentRequest request)
+        => Run(new LogIncidentWork(path, incident, request));
+
+    /// <summary>
     /// Performs one transition. Always completes — a failure is written onto the incident as
     /// <see cref="LogIncidentStatus.Failed"/> rather than left to fault the work loop, so one bad
     /// incident can never stop the others (AGENTS.md → "Wedges to zero").
+    ///
+    /// <para>Every transition CLAIMS the request first and then acts on what the claim granted —
+    /// never on <c>work.Incident</c>, which is the query snapshot that produced this work item and
+    /// is stale by the time it runs.</para>
     /// </summary>
     private IObservable<Unit> Run(LogIncidentWork work)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         return Observable.Using(
                 () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-                _ => work.Request switch
-                {
-                    LogIncidentRequest.Triage => Triage(work),
-                    LogIncidentRequest.File => Apply(work, filer.File(work.Incident)),
-                    LogIncidentRequest.Comment => Apply(work, filer.Comment(work.Incident)),
-                    LogIncidentRequest.Suppress => Apply(work, Observable.Return(work.Incident with
-                    {
-                        Status = LogIncidentStatus.Suppressed,
-                        RequestedStatus = LogIncidentRequest.None,
-                    })),
-                    _ => Observable.Return(Unit.Default),
-                })
+                _ => work.Reconcile
+                    ? ReconcileTriaging(work)
+                    : Claim(work).SelectMany(claim => Perform(work.Path, claim)))
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex, "Incident {Fingerprint}: {Request} failed",
@@ -179,32 +232,143 @@ public sealed class LogIncidentControlPlane : BackgroundService
                     return Observable.Return(Unit.Default);
                 });
             })
-            .Finally(() => inFlight.TryRemove(work.Incident.Fingerprint, out _));
+            .Finally(() => (work.Reconcile ? reconciling : inFlight)
+                .TryRemove(work.Incident.Fingerprint, out _));
     }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  The claim — what makes a transition happen at most once
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Consumes the request on the LIVE node and emits what this worker actually won.
+    ///
+    /// <para>🚨 The claim is a WRITE, and it lands BEFORE the outward mutation it guards — the
+    /// claim-the-guard-before-the-mutation rule (#826). Everything downstream keys off that write
+    /// having COMPLETED, so a second work item for the same incident finds the request already
+    /// consumed and stands down. Without it, the queue's guards are all in-process: the live query
+    /// is eventually consistent and re-emits the pre-write snapshot after
+    /// <see cref="inFlight"/> has been released, which is how #1124/#1125 and #1111/#1112 were each
+    /// opened twice inside one second.</para>
+    /// </summary>
+    private IObservable<LogIncidentClaim> Claim(LogIncidentWork work)
+    {
+        // Declined until the update lambda says otherwise: content that cannot be read never
+        // reaches the lambda (UpdateIncident skips it), and "we did not win" is the only safe
+        // reading of that. Assigned inside the lambda — which runs, on the node's serialised write
+        // queue, before this write completes — and read afterwards, exactly as the ingest path's
+        // fold captures its merged result.
+        var claim = new LogIncidentClaim(LogIncidentRequest.None, work.Incident);
+        return Write(work.Path, current => (claim = ClaimRequest(current, work.Request, options)).Incident)
+            .Select(_ =>
+            {
+                if (claim.Granted != work.Request)
+                    logger?.LogInformation(
+                        "Incident {Fingerprint}: {Request} resolved to {Granted} — the incident is "
+                        + "{Status} and carries issue {IssueNumber}",
+                        work.Incident.Fingerprint, work.Request, claim.Granted,
+                        claim.Incident.Status, claim.Incident.IssueNumber);
+                return claim;
+            });
+    }
+
+    /// <summary>
+    /// The rule that makes filing idempotent, applied to the incident's LIVE content at write time.
+    /// Pure, so the whole policy is testable without a mesh.
+    ///
+    /// <para>Two things can take a request away between the query emission that queued the work and
+    /// the moment it runs: another worker (or another replica) consuming it, and the incident having
+    /// been ticketed already. Both mean the same thing — do not perform this operation again.</para>
+    /// </summary>
+    /// <param name="current">The incident as it is at write time.</param>
+    /// <param name="request">What the work item was queued for.</param>
+    /// <param name="options">The recurrence policy (the comment rate limit).</param>
+    /// <returns>What this worker may perform, and the content the claim writes.</returns>
+    internal static LogIncidentClaim ClaimRequest(
+        LogIncident current, LogIncidentRequest request, LogWatchOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(options);
+
+        // Nothing left to consume — someone else already took this request.
+        if (request == LogIncidentRequest.None || current.RequestedStatus != request)
+            return new LogIncidentClaim(LogIncidentRequest.None, current);
+
+        // 🚨 Already ticketed ⇒ a File request can only mean "this fault came back". It belongs on
+        // the issue that exists, under the SAME rate limit a recurrence comment obeys — never in a
+        // second issue. A recurrence on a CLOSED issue reopens it (LogIncidentFiler.Comment): a
+        // defect that returns after someone closed its ticket is exactly what should notify.
+        if (request == LogIncidentRequest.File && current.IssueNumber is not null)
+            return new LogIncidentClaim(
+                LogIncidentIngestService.CommentDue(current, options, current.LastSeen)
+                    ? LogIncidentRequest.Comment
+                    : LogIncidentRequest.None,
+                current with
+                {
+                    Status = LogIncidentStatus.Filed,
+                    RequestedStatus = LogIncidentRequest.None,
+                    Error = null,
+                });
+
+        return new LogIncidentClaim(request, current with
+        {
+            Status = InFlightStatus(request) ?? current.Status,
+            RequestedStatus = LogIncidentRequest.None,
+            Error = null,
+        });
+    }
+
+    /// <summary>
+    /// The status that says "this transition is running", or null for a request whose operation
+    /// writes its own terminal status (<c>Comment</c> stays <c>Filed</c>, <c>Suppress</c> becomes
+    /// <c>Suppressed</c> when it lands).
+    ///
+    /// <para>A crash between the claim and the write-back parks the incident in the in-flight
+    /// status. That is recoverable and NOT a new dead end: the claim keys on
+    /// <see cref="LogIncident.RequestedStatus"/>, never on the status, so asking again — an admin in
+    /// the incident view, or the ingest path's retry rule for <c>Triaging</c> via the stranded-triage
+    /// reconcile — is honoured.</para>
+    /// </summary>
+    private static LogIncidentStatus? InFlightStatus(LogIncidentRequest request) => request switch
+    {
+        LogIncidentRequest.Triage => LogIncidentStatus.Triaging,
+        LogIncidentRequest.File => LogIncidentStatus.Filing,
+        _ => null,
+    };
+
+    /// <summary>Performs what the claim granted, against the content the claim wrote.</summary>
+    private IObservable<Unit> Perform(string path, LogIncidentClaim claim) => claim.Granted switch
+    {
+        LogIncidentRequest.Triage => Triage(path, claim.Incident),
+        LogIncidentRequest.File => Apply(path, filer.File(claim.Incident)),
+        LogIncidentRequest.Comment => Apply(path, filer.Comment(claim.Incident)),
+        LogIncidentRequest.Suppress => Apply(path, Observable.Return(claim.Incident with
+        {
+            Status = LogIncidentStatus.Suppressed,
+            RequestedStatus = LogIncidentRequest.None,
+        })),
+        // Nothing granted: the claim write already recorded whatever bookkeeping it owed.
+        _ => Observable.Return(Unit.Default),
+    };
 
     // ══════════════════════════════════════════════════════════════════════════
     //  Triage
     // ══════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Hands the incident to the triage agent. Marks the node <see cref="LogIncidentStatus.Triaging"/>
-    /// FIRST and only then starts the thread: the status write is what stops the next query
-    /// emission from starting a second thread for the same fault.
+    /// Hands the incident to the triage agent. The claim has already marked the node
+    /// <see cref="LogIncidentStatus.Triaging"/> and cleared the request — that write is what stops
+    /// the next query emission from starting a second thread for the same fault.
     ///
     /// <para>The agent is given the incident as its <c>MainNode</c>, so it reads the evidence from
     /// the node itself rather than from a prompt-stuffed copy, and writes its draft back to the
     /// same node. The thread path is recorded so the reasoning behind a ticket stays reachable.</para>
     /// </summary>
-    private IObservable<Unit> Triage(LogIncidentWork work)
+    private IObservable<Unit> Triage(string path, LogIncident incident)
     {
-        var fingerprint = work.Incident.Fingerprint;
+        var fingerprint = incident.Fingerprint;
 
-        return Write(work.Path, current => current with
-        {
-            Status = LogIncidentStatus.Triaging,
-            RequestedStatus = LogIncidentRequest.None,
-            Error = null,
-        }).Select(_ =>
+        return Observable.Defer(() =>
         {
             // 🚨 The thread hangs off the INCIDENT node, not the satellite namespace. Passing
             // `Admin/_LogIncident` here failed every triage in production with "No node found at
@@ -213,12 +377,12 @@ public sealed class LogIncidentControlPlane : BackgroundService
             // level). The incident IS the owner, so its thread lands at {incidentPath}/_Thread/{id}
             // and stays reachable from the ticket.
             hub.StartThread(
-                namespacePath: work.Path,
-                userText: Prompt(work.Incident),
+                namespacePath: path,
+                userText: Prompt(incident),
                 agentName: options.TriageAgent,
-                contextPath: work.Path,
-                mainNode: work.Path,
-                onCreated: thread => Write(work.Path, current =>
+                contextPath: path,
+                mainNode: path,
+                onCreated: thread => Write(path, current =>
                         current with { TriageThreadPath = thread.Path })
                     .Subscribe(
                         _ => { },
@@ -228,7 +392,7 @@ public sealed class LogIncidentControlPlane : BackgroundService
                 {
                     logger?.LogWarning("Incident {Fingerprint}: triage thread failed to start — {Error}",
                         fingerprint, error);
-                    Write(work.Path, current => current with
+                    Write(path, current => current with
                     {
                         Status = LogIncidentStatus.Failed,
                         Error = error,
@@ -237,9 +401,100 @@ public sealed class LogIncidentControlPlane : BackgroundService
                         ex => logger?.LogWarning(ex, "Incident {Fingerprint}: could not record the triage failure",
                             fingerprint));
                 });
-            return Unit.Default;
+            return Observable.Return(Unit.Default);
         });
     }
+
+    /// <summary>
+    /// Repairs an incident stranded in <see cref="LogIncidentStatus.Triaging"/>: if the round it is
+    /// waiting for has finished without producing anything actionable, record that as
+    /// <see cref="LogIncidentStatus.Failed"/> — a state the ingest path re-triages on the next
+    /// recurrence (<c>NextRequest</c>), so the incident recovers by itself once whatever was
+    /// missing is back.
+    ///
+    /// <para>Does nothing while the round is genuinely in flight, and nothing if the incident has
+    /// moved on in the meantime — the status is re-read INSIDE the update lambda, so a draft that
+    /// landed between the thread read and the write is never clobbered.</para>
+    ///
+    /// <para>A thread node that cannot be read at all is not swallowed: the error propagates to
+    /// <see cref="Run"/>, which records it on the incident as <c>Failed</c> with the reason. Failed
+    /// is retryable; stranded is not.</para>
+    /// </summary>
+    private IObservable<Unit> ReconcileTriaging(LogIncidentWork work)
+    {
+        var threadPath = work.Incident.TriageThreadPath!;
+        return hub.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Where(node => node is not null)
+            .Take(1)
+            .Timeout(ThreadReadTimeout)
+            .Select(node => node.ContentAs<AiThread>(hub.JsonSerializerOptions, logger))
+            .SelectMany(thread =>
+            {
+                if (thread is null || !RoundFinished(thread))
+                    return Observable.Return(Unit.Default);
+
+                logger?.LogWarning(
+                    "Incident {Fingerprint}: triage thread {Thread} finished without a draft — "
+                    + "marking the incident Failed so it is retried (triage agent '{Agent}')",
+                    work.Incident.Fingerprint, threadPath, options.TriageAgent);
+
+                return Write(work.Path, current =>
+                    StrandedTriageOutcome(current, threadPath, options.TriageAgent) ?? current);
+            });
+    }
+
+    /// <summary>
+    /// The rule the reconcile applies once the triage round is known to be over: an incident still
+    /// sitting in <see cref="LogIncidentStatus.Triaging"/> with nothing requested got nothing out of
+    /// its agent, so it FAILED — and <c>Failed</c> is a state the ingest path re-triages.
+    ///
+    /// <para>Returns null when there is nothing to do. That is the important half: the incident is
+    /// re-read at write time, so a draft that landed between the thread read and the write (status
+    /// moved on, or <c>RequestedStatus</c> now asks to File) leaves the incident untouched. The
+    /// reconcile must never be able to overwrite a successful triage it merely raced.</para>
+    /// </summary>
+    internal static LogIncident? StrandedTriageOutcome(
+        LogIncident current, string threadPath, string agentName) =>
+        current.Status == LogIncidentStatus.Triaging
+        && current.RequestedStatus == LogIncidentRequest.None
+            ? current with
+            {
+                Status = LogIncidentStatus.Failed,
+                RequestedStatus = LogIncidentRequest.None,
+                Error = StrandedTriageError(threadPath, agentName),
+            }
+            : null;
+
+    /// <summary>
+    /// How long the reconcile waits for the triage thread node to emit. This bounds a ONE-SHOT read
+    /// of a specific node (AGENTS.md → "Reads: GetMeshNodeStream(path) … Take(1).Timeout(…)"), it
+    /// does not bound the agent round — a running round simply reads as "not finished".
+    /// </summary>
+    private static readonly TimeSpan ThreadReadTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Whether the thread's execution round is over. <c>Idle</c> alone is not enough — a
+    /// just-created thread is Idle too, with its first message still queued — so the queue must be
+    /// drained AND at least one message must have been materialised into the conversation.
+    /// </summary>
+    internal static bool RoundFinished(AiThread thread) =>
+        thread.Status is ThreadExecutionStatus.Idle
+            or ThreadExecutionStatus.Cancelled
+            or ThreadExecutionStatus.Done
+        && thread.PendingUserMessages.IsEmpty
+        && thread.Messages.Count > 0;
+
+    /// <summary>
+    /// Why the incident failed, in terms an operator can act on. Names the most common cause first:
+    /// a triage agent that is configured but absent from the deployment's agent catalog produces
+    /// exactly this shape — a round that runs, says so in the thread, and writes nothing back.
+    /// Technical diagnostic text like <c>Error</c>'s other writers (an exception message), not UI
+    /// copy — the incident view labels are what carry translations.
+    /// </summary>
+    internal static string StrandedTriageError(string threadPath, string agentName) =>
+        $"Triage finished without a draft. Thread '{threadPath}' completed but nothing was written "
+        + $"back to the incident — most often the configured triage agent '{agentName}' is not "
+        + "present in this deployment's agent catalog. Retried on the next recurrence.";
 
     /// <summary>
     /// The one instruction the agent gets here. Deliberately short: the incident node IS the
@@ -262,8 +517,8 @@ public sealed class LogIncidentControlPlane : BackgroundService
     /// (occurrences, pods, samples — during an active incident, constantly). Projecting only the
     /// fields the filer owns keeps both writers correct.</para>
     /// </summary>
-    private IObservable<Unit> Apply(LogIncidentWork work, IObservable<LogIncident> operation) =>
-        operation.SelectMany(filed => Write(work.Path, current => current with
+    private IObservable<Unit> Apply(string path, IObservable<LogIncident> operation) =>
+        operation.SelectMany(filed => Write(path, current => current with
         {
             Status = filed.Status,
             RequestedStatus = filed.RequestedStatus,
@@ -284,3 +539,16 @@ public sealed class LogIncidentControlPlane : BackgroundService
             .FirstAsync()
             .Select(_ => Unit.Default);
 }
+
+/// <summary>
+/// The outcome of consuming an incident's <see cref="LogIncident.RequestedStatus"/>.
+/// </summary>
+/// <param name="Granted">What this worker may actually perform — never simply the request echoed
+/// back. <see cref="LogIncidentRequest.None"/> means "stand down": another worker already took it,
+/// or the incident is ticketed and the recurrence is inside the comment window. A
+/// <see cref="LogIncidentRequest.File"/> on an already-ticketed incident is granted as a
+/// <see cref="LogIncidentRequest.Comment"/>, which is what makes filing idempotent.</param>
+/// <param name="Incident">The content the claim writes: the request cleared and the in-flight
+/// status stamped on a grant, unchanged when nothing was granted (so a declined claim emits an
+/// empty patch and costs nothing).</param>
+internal sealed record LogIncidentClaim(LogIncidentRequest Granted, LogIncident Incident);

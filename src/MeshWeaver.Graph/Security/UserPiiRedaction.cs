@@ -25,7 +25,7 @@ namespace MeshWeaver.Graph.Security;
 /// value to every subscriber on a silo, so it cannot project per-reader. Redaction is therefore
 /// applied at the read surfaces that carry the caller's identity and actually expose the email:
 /// the MCP/agent single-node read (<c>MeshOperations.Get</c>) and the GUI visitor profile
-/// (<c>UserActivityLayoutAreas.BuildVisitorProfile</c>). Search/enumeration returns only a
+/// (the visitor-profile area in <c>UserActivityLayoutAreas</c>). Search/enumeration returns only a
 /// {path,name,nodeType,version,lastModified} projection and never carries the email.
 /// </para>
 /// </summary>

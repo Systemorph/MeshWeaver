@@ -195,6 +195,40 @@ Merge only on `COMPLETED/SUCCESS` for that suite. Two further gotchas:
 **Also check the clock before declaring a job stuck.** GitHub timestamps are UTC; a local-time
 comparison makes a healthy 7-minute build look like a 33-minute hang. `date -u` first.
 
+### 🚨🚨🚨 ABSOLUTE: A gate NEVER tests its own inputs — no skip-trapdoors
+
+**A CI gate must never carry `continue-on-error:` on the step that fetches its input, nor an
+`if:` that asks whether a secret/variable is set** (`if: ${{ vars.X != '' }}`,
+`if: steps.token.outputs.present == 'true'`, `if: steps.checkout.outcome == 'success'`).
+GitHub renders a **skipped job with the same grey/green tick as a passed one**, so "the gate never
+ran" and "the gate passed" become indistinguishable — and a required check that passes on no
+evidence is worse than a flaky one.
+
+This is not theoretical. The cross-repo plugin gate was built that shape and therefore **never ran
+once**: its checkout failed (the secret was unprovisioned), `continue-on-error` rewrote the failure
+to `success`, the compile step skipped, and the job reported green. #683 deleted
+`AiSettingsNodeType.AddSkillSource` with a live caller in the plugins repo and put **nine** plugin
+partitions on the compilation-error overlay in production; a separate `AddTracking` deletion broke
+`SocialMedia/Post` the same way.
+
+The shape instead:
+
+- **One `preflight` job** asserts every CI input that comes from outside the tree (secrets, repo
+  variables) and **fails RED naming exactly what to provision**. Adding an input = one line in its
+  `missing` array.
+- **Gates depend on it (`needs: [preflight, …]`) and run unconditionally** — no input-shaped `if:`.
+- **The ONE legitimate exemption is a FORK PR** (GitHub withholds org secrets by design). Express it
+  **once**, as a check on the *event* (`github.event.pull_request.head.repo.fork != true`) — never as
+  a "the secret is empty" check. At the job level those two look identical and only one is safe.
+- **Propagate into the required check.** `collect-results` runs with `always()` and is the ONLY
+  required status check, so it needs `preflight` in `needs` **plus an explicit fail step** — a
+  skipped dependency does not fail an `always()` job, which would re-open the trapdoor one level up.
+
+Legitimate `continue-on-error` (do not "fix" these): the `Publish Test Results` reporter (the TRX
+summarize step is the real gate; a GitHub-API 429 must not fail the run) and the green-marker
+push/prune (losing a marker costs a redundant run, never correctness). The test is *what does a
+failure here hide?* — nothing, for a reporter; everything, for a gate.
+
 ## 🚨 Postgres: One Schema Per Partition
 
 **`public.mesh_nodes` is empty by design.** Data lives in per-partition schemas (`acme.mesh_nodes`, `rbuergi.mesh_nodes`, etc.).

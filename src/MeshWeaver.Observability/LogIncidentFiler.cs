@@ -130,6 +130,11 @@ public sealed class LogIncidentFiler(
                     incident.Fingerprint, incident.Repository, number, reopened ? " (reopened)" : "");
                 return incident with
                 {
+                    // A comment that lands PROVES the issue exists and is current, so the incident
+                    // is Filed — even if it had been parked at Failed by an earlier error. Leaving
+                    // a stale Failed here is what let the ingest path re-triage a ticketed incident
+                    // and open a duplicate.
+                    Status = LogIncidentStatus.Filed,
                     RequestedStatus = LogIncidentRequest.None,
                     LastCommentedAt = incident.LastSeen,
                     OccurrencesAtLastComment = incident.Occurrences,
