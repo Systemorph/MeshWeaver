@@ -923,6 +923,9 @@ public static class MemexConfiguration
                         .AddInstancesAdminSettingsTab()
                         // Public privacy statement (Admin/Privacy, served anonymously at /privacy).
                         .AddPrivacySettingsTab()
+                        // Published to the web: every page a logged-out visitor can open, read from
+                        // the SAME enumeration /sitemap.xml renders, so the two cannot drift.
+                        .AddPublishedSettingsTab()
                         // About — exact running build (version + git commit) with a GitHub link. Ungated.
                         .AddAboutSettingsTab()
                         // What's New — per-entry release notes shipped as Doc/WhatsNew nodes. Ungated.

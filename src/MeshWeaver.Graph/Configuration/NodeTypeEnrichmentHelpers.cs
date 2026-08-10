@@ -1,6 +1,7 @@
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -422,65 +423,7 @@ internal static class NodeTypeEnrichmentHelpers
                 typeNode.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions)?.CompilationStatus,
                 typeNode.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions)?.LatestAssemblyCollection ?? "(null)",
                 typeNode.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions)?.LatestAssemblyPath ?? "(null)"))
-            // 🚨 Never SNAP an in-flight compile. A dynamic NodeType mid-recompile
-            // (Pending/Compiling) still carries its PREVIOUS HubConfiguration + the
-            // OLD LatestAssemblyPath, so the "has a usable config" clause below would
-            // match the transitional state — and the Take(1) would freeze the instance
-            // hub onto that stale/overlay config for its whole lifetime (it never
-            // re-enriches). This was the rbuergi/CatBond/AtlanticBond symptom: the
-            // framework-stale self-heal flips Ok→Pending→Compiling→Ok, an instance
-            // activating mid-cycle snapped the Compiling state, and ApplyStreamResult
-            // overlaid it (status≠Ok skips the framework-stale self-heal branch and
-            // falls to the bare "Compilation failed" overlay). Wait for a terminal
-            // state. A settled Ok-with-stale-framework is still allowed through
-            // (status==Ok) so ApplyStreamResult's framework-stale self-heal can run.
-            .Where(typeNode => !(typeNode.Content is NodeTypeDefinition inflight
-                                 && inflight.CompilationStatus is CompilationStatus.Pending
-                                                                or CompilationStatus.Compiling))
-            // Settled compile: Status=Ok MUST carry valid assembly fields
-            // (the strict check is what the self-heal above relies on —
-            // a stale Ok with null fields keeps the slow-path waiting until
-            // the healed Pending → Ok cycle completes). Other terminal
-            // states: HubConfiguration pre-populated (static provider),
-            // Status=Error, or content that isn't a NodeTypeDefinition at all.
-            .Where(typeNode => (typeNode.HubConfiguration != null
-                                && typeNode.Content is NodeTypeDefinition hcDef
-                                && !string.IsNullOrEmpty(hcDef.LatestAssemblyPath))
-                // No-compile-coming short-circuit. Mirrors the kickoff's skip
-                // condition in InstallCompileWatcher: when the NodeType has
-                // no source code anywhere to compile (no Configuration string,
-                // no HubConfiguration string, no Sources list) AND no settled
-                // compile state, no Pending will ever fire. Without this
-                // branch the slow-path would wait out the full SlowPathTimeout
-                // for a transition that's not coming. Test-seeded NodeTypes
-                // (CreatableTypesIntegrationTest) hit this routinely.
-                //
-                // The typeNode's HubConfiguration delegate doesn't round-trip
-                // through the synced stream, so we can't gate on it here —
-                // gate on "no source data" + "no settled compile" instead.
-                || (typeNode.Content is NodeTypeDefinition staticDef
-                    && (staticDef.CompilationStatus is null
-                        || staticDef.CompilationStatus == CompilationStatus.Unknown)
-                    && string.IsNullOrEmpty(staticDef.LatestAssemblyCollection)
-                    && string.IsNullOrEmpty(staticDef.LatestAssemblyPath)
-                    && string.IsNullOrWhiteSpace(staticDef.Configuration)
-                    && string.IsNullOrWhiteSpace(staticDef.HubConfiguration)
-                    && (staticDef.Sources is null || staticDef.Sources.Count == 0))
-                // Settled compile — Ok with assembly fields, Error, or Unavailable.
-                // The kickoff has flipped Pending and the activity is driving the
-                // transition. Take(1) here would otherwise snap a pre-compile
-                // null/Unknown emission and bind every per-instance hub to
-                // default config before the assembly even exists.
-                // Unavailable is terminal too: it means a driver already gave up
-                // determining the state, so waiting the full no-progress budget
-                // would only delay the (correct, retry-flavoured) overlay.
-                || (typeNode.Content is NodeTypeDefinition def
-                    && ((def.CompilationStatus == CompilationStatus.Ok
-                            && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
-                            && !string.IsNullOrEmpty(def.LatestAssemblyPath))
-                        || def.CompilationStatus is CompilationStatus.Error
-                                                 or CompilationStatus.Unavailable))
-                || typeNode.Content is not NodeTypeDefinition)
+            .Where(typeNode => IsCompileSettled(typeNode, meshHub.JsonSerializerOptions))
             .Take(1);
 
         // 🚨 Fresh-pod wedge fix: DON'T cut short an in-flight compile with a fixed
@@ -496,10 +439,96 @@ internal static class NodeTypeEnrichmentHelpers
                 typeStream, settled, SlowPathTimeout,
                 () => new TimeoutException(
                     $"NodeType '{nodeType}' has no compile in flight and did not settle " +
-                    $"within {SlowPathTimeout.TotalSeconds:0}s."))
+                    $"within {SlowPathTimeout.TotalSeconds:0}s."),
+                scheduler: null, options: meshHub.JsonSerializerOptions)
             .Finally(healSub.Dispose)
             .SelectMany(typeNode => ApplyStreamResult(
                 typeNode, node, nodeType, meshConfiguration, compilationService, meshHub, logger));
+    }
+
+    /// <summary>
+    /// Terminal-state predicate for the FIRST compile wait in <see cref="BuildSlowPath"/>: decides
+    /// whether an emission on the NodeType's stream is a state the instance may bind its
+    /// <c>HubConfiguration</c> to, or one the wait must sit past.
+    ///
+    /// <para>🚨 <b>Read the definition the way its CONSUMER reads it.</b> Every clause here used to
+    /// pattern-match <c>typeNode.Content is NodeTypeDefinition</c> — a CLR type test — while
+    /// <see cref="ApplyStreamResult"/>, which acts on whatever this admits, reads the same node with
+    /// <see cref="MeshNodeContentExtensions.ContentAs{T}"/>, which also recovers a
+    /// <see cref="JsonElement"/> / <c>JsonNode</c> / same-short-named foreign type. Those two
+    /// disagree exactly when the mirror holds Content in an UN-MATERIALIZED JSON shape — the normal
+    /// shape for a node that just crossed a sync stream or was just created (see
+    /// <c>ContentAs</c>'s own remarks: "a freshly created node's own stream carries it in that
+    /// shape until the materialization pipeline re-types it"). In that state every guard below was
+    /// skipped and the old trailing <c>|| Content is not NodeTypeDefinition</c> escape — meant for
+    /// "this path holds something that is not a NodeType at all" — admitted the emission as
+    /// SETTLED. <see cref="ApplyStreamResult"/> then deserialized the very same node successfully
+    /// and acted on a state this gate exists to reject: a pre-compile snapshot
+    /// (<c>CompilationStatus</c> null/Unknown) routes to <see cref="ApplyDefaultConfig"/>, so the
+    /// instance hub binds the mesh DEFAULT configuration for the grain's WHOLE lifetime (enrichment
+    /// binds once and never re-observes) — the NodeType's real areas, and a broken type's
+    /// compilation-error overlay, can then never appear on the instance's page. A Pending/Compiling
+    /// snapshot is frozen on the same one-way ticket.</para>
+    ///
+    /// <para>So the escape now means what it says: <c>ContentAs</c> could not produce a
+    /// <see cref="NodeTypeDefinition"/> at all. Split out (like <see cref="IsRecompileSettled"/>) so
+    /// the contract is unit-testable without a mesh — <c>CompileSettlePredicateTest</c>.</para>
+    /// </summary>
+    internal static bool IsCompileSettled(MeshNode typeNode, JsonSerializerOptions options)
+    {
+        var def = typeNode.ContentAs<NodeTypeDefinition>(options);
+
+        // Not a NodeTypeDefinition in ANY readable shape — a plain node at a path used as a type.
+        // Nothing to wait for; ApplyStreamResult applies the default config deliberately.
+        if (def is null)
+            return true;
+
+        // 🚨 Never SNAP an in-flight compile. A dynamic NodeType mid-recompile
+        // (Pending/Compiling) still carries its PREVIOUS HubConfiguration + the
+        // OLD LatestAssemblyPath, so the "has a usable config" clause below would
+        // match the transitional state — and the Take(1) would freeze the instance
+        // hub onto that stale/overlay config for its whole lifetime (it never
+        // re-enriches). This was the rbuergi/CatBond/AtlanticBond symptom: the
+        // framework-stale self-heal flips Ok→Pending→Compiling→Ok, an instance
+        // activating mid-cycle snapped the Compiling state, and ApplyStreamResult
+        // overlaid it (status≠Ok skips the framework-stale self-heal branch and
+        // falls to the bare "Compilation failed" overlay). Wait for a terminal
+        // state. A settled Ok-with-stale-framework is still allowed through
+        // (status==Ok) so ApplyStreamResult's framework-stale self-heal can run.
+        if (def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling)
+            return false;
+
+        // Static-provider terminal: HubConfiguration pre-populated AND assembly coordinates present.
+        if (typeNode.HubConfiguration != null && !string.IsNullOrEmpty(def.LatestAssemblyPath))
+            return true;
+
+        // No-compile-coming short-circuit. Mirrors the kickoff's skip condition in
+        // InstallCompileWatcher: when the NodeType has no source code anywhere to compile (no
+        // Configuration string, no HubConfiguration string, no Sources list) AND no settled compile
+        // state, no Pending will ever fire. Without this branch the slow-path would wait out the
+        // full SlowPathTimeout for a transition that's not coming. Test-seeded NodeTypes
+        // (CreatableTypesIntegrationTest) hit this routinely.
+        //
+        // The typeNode's HubConfiguration delegate doesn't round-trip through the synced stream, so
+        // we can't gate on it here — gate on "no source data" + "no settled compile" instead.
+        if (def.CompilationStatus is null or CompilationStatus.Unknown
+            && string.IsNullOrEmpty(def.LatestAssemblyCollection)
+            && string.IsNullOrEmpty(def.LatestAssemblyPath)
+            && string.IsNullOrWhiteSpace(def.Configuration)
+            && string.IsNullOrWhiteSpace(def.HubConfiguration)
+            && (def.Sources is null || def.Sources.Count == 0))
+            return true;
+
+        // Settled compile — Ok with assembly fields, Error, or Unavailable. The kickoff has flipped
+        // Pending and the activity is driving the transition. Admitting anything else here would
+        // snap a pre-compile null/Unknown emission and bind every per-instance hub to default
+        // config before the assembly even exists. Unavailable is terminal too: a driver already
+        // gave up determining the state, so waiting the full no-progress budget would only delay
+        // the (correct, retry-flavoured) overlay.
+        return (def.CompilationStatus == CompilationStatus.Ok
+                   && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
+                   && !string.IsNullOrEmpty(def.LatestAssemblyPath))
+               || def.CompilationStatus is CompilationStatus.Error or CompilationStatus.Unavailable;
     }
 
     /// <summary>
@@ -534,13 +563,18 @@ internal static class NodeTypeEnrichmentHelpers
         IObservable<MeshNode> settled,
         TimeSpan noProgressBudget,
         Func<Exception> onNoProgress,
-        System.Reactive.Concurrency.IScheduler? scheduler = null)
+        System.Reactive.Concurrency.IScheduler? scheduler = null,
+        System.Text.Json.JsonSerializerOptions? options = null)
     {
         // A compile is genuinely in flight for this NodeType — its terminal write is
         // guaranteed by RunCompile, so the wait is bounded by the compile FINISHING,
         // not a wall clock. Observing it DISARMS the no-progress deadline.
+        // Read the definition through ContentAs, not a CLR type test: an un-materialized
+        // (JsonElement / JsonNode) mirror snapshot is the normal shape off a sync stream, and a
+        // CLR test blinds this to an in-flight compile — see IsCompileSettled's remarks.
+        var opts = options ?? System.Text.Json.JsonSerializerOptions.Default;
         var compileInFlight = typeStream
-            .Where(t => t?.Content is NodeTypeDefinition d
+            .Where(t => t.ContentAs<NodeTypeDefinition>(opts) is { } d
                 && d.CompilationStatus is CompilationStatus.Pending
                                        or CompilationStatus.Compiling)
             .Take(1);
@@ -1024,12 +1058,14 @@ internal static class NodeTypeEnrichmentHelpers
                     ? staleVersion
                     : null;
                 return WaitForCompileSettled(typeStream, typeStream
-                .Where(typeNode => IsRecompileSettled(typeNode, gate, requireUsableBuild))
+                .Where(typeNode => IsRecompileSettled(
+                    typeNode, gate, requireUsableBuild, meshHub.JsonSerializerOptions))
                 .Take(1),
                 SlowPathTimeout,
                 () => new TimeoutException(
                     $"NodeType '{nodeType}' recompile did not settle and no compile is " +
-                    $"in flight (within {SlowPathTimeout.TotalSeconds:0}s)."))
+                    $"in flight (within {SlowPathTimeout.TotalSeconds:0}s)."),
+                scheduler: null, options: meshHub.JsonSerializerOptions)
                 .SelectMany(newTypeNode => ApplyStreamResult(
                     newTypeNode, node, nodeType, meshConfiguration,
                     compilationService, meshHub, logger, recompileAttempts + 1));
@@ -1071,9 +1107,16 @@ internal static class NodeTypeEnrichmentHelpers
     /// state; if no compile starts, the no-progress deadline surfaces the overlay.
     /// </summary>
     internal static bool IsRecompileSettled(
-        MeshNode typeNode, long? staleVersion, bool requireUsableBuild)
+        MeshNode typeNode, long? staleVersion, bool requireUsableBuild,
+        System.Text.Json.JsonSerializerOptions? options = null)
     {
-        if (typeNode.Content is not NodeTypeDefinition d)
+        // Read the definition through ContentAs — the same accessor ApplyStreamResult uses on
+        // whatever this admits. A CLR type test is blind to an un-materialized (JsonElement /
+        // JsonNode) mirror snapshot and would answer "settled" for EVERY one of them; see
+        // IsCompileSettled's remarks for the full mechanism.
+        var d = typeNode.ContentAs<NodeTypeDefinition>(
+            options ?? System.Text.Json.JsonSerializerOptions.Default);
+        if (d is null)
             return true; // not a NodeTypeDefinition — nothing left to wait on
 
         // An in-flight compile is transitional. Settling here would freeze the instance's
