@@ -42,30 +42,71 @@ public static class LegacyUserPartitionRepair
     /// <param name="write">The durable storage write; may emit null when no backend claims the
     /// node — the repaired root is still served (the next read repairs again).</param>
     /// <param name="logger">Optional logger; each repair logs once at Information.</param>
+    /// <param name="legacyPartitionExists">
+    /// Whether the legacy <c>User</c> partition exists at all — <see langword="false"/> means this
+    /// store never had one, so there is nothing to repair and the twin is never probed.
+    /// <see langword="null"/> (indeterminate) or a missing check probes, preserving the healing
+    /// behaviour for any backend that cannot answer. See the remark on <see cref="Repair"/>.
+    /// </param>
     public static IObservable<MeshNode?> ReadWithRepair(
         string path,
         Func<string, IObservable<MeshNode?>> read,
         Func<MeshNode, IObservable<MeshNode?>> write,
-        ILogger? logger)
+        ILogger? logger,
+        Func<IObservable<bool?>>? legacyPartitionExists = null)
         => read(path).SelectMany(node => node is null
-            ? Repair(path, existing: null, read, write, logger)
+            ? Repair(path, existing: null, read, write, logger, legacyPartitionExists)
             : IsUpgradableStubRoot(path, node)
                 // A satellite write (ApiToken, UserActivity) may have auto-anchored the legacy
                 // partition with a typeless stub — upgrade it from the legacy twin; when there is
                 // no legacy twin the stub itself stays the result.
-                ? Repair(path, node, read, write, logger).Select(repaired => repaired ?? node)
+                ? Repair(path, node, read, write, logger, legacyPartitionExists)
+                    .Select(repaired => repaired ?? node)
                 : Observable.Return<MeshNode?>(node));
 
+    /// <remarks>
+    /// 🚨 The legacy twin is probed ONLY when the legacy <c>User</c> partition can exist. On a
+    /// store that never had one the probe is not merely pointless — it is destructive: the
+    /// partition segment of <see cref="LegacyPathFor"/> is the literal <c>User</c>, so the read
+    /// lands on a schema that was never provisioned and the backend raises
+    /// <c>42P01 relation "user.mesh_nodes" does not exist</c> instead of answering "no twin". That
+    /// turns an ordinary root MISS into a faulted read, and because
+    /// <see cref="IsPartitionRootCandidate"/> matches EVERY bare segment — every Space and package
+    /// root, not just user partitions — it faults them all. Observed on a fresh install: the
+    /// startup import of Skill failed outright and Agent / Collaboration / DataModelling / Edu /
+    /// Essentials / Publish timed out, so their hubs never settled and pages bound to them
+    /// subscribed forever.
+    ///
+    /// <para>The partition's ABSENCE is the answer, not an error: no legacy partition means nobody
+    /// was ever onboarded into one, so there is nothing to repair. Indeterminate
+    /// (<see langword="null"/>) still probes — an unknown answer must not silently disable healing
+    /// on a store that genuinely is legacy.</para>
+    /// </remarks>
     private static IObservable<MeshNode?> Repair(
+        string path,
+        MeshNode? existing,
+        Func<string, IObservable<MeshNode?>> read,
+        Func<MeshNode, IObservable<MeshNode?>> write,
+        ILogger? logger,
+        Func<IObservable<bool?>>? legacyPartitionExists)
+    {
+        if (!IsPartitionRootCandidate(path))
+            return Observable.Return(default(MeshNode?));
+
+        return legacyPartitionExists is null
+            ? RepairFromLegacyTwin(path, existing, read, write, logger)
+            : legacyPartitionExists().Take(1).SelectMany(exists => exists is false
+                ? Observable.Return(default(MeshNode?))
+                : RepairFromLegacyTwin(path, existing, read, write, logger));
+    }
+
+    private static IObservable<MeshNode?> RepairFromLegacyTwin(
         string path,
         MeshNode? existing,
         Func<string, IObservable<MeshNode?>> read,
         Func<MeshNode, IObservable<MeshNode?>> write,
         ILogger? logger)
     {
-        if (!IsPartitionRootCandidate(path))
-            return Observable.Return(default(MeshNode?));
-
         return read(LegacyPathFor(path))
             .SelectMany(legacy =>
             {
@@ -95,8 +136,14 @@ public static class LegacyUserPartitionRepair
            && !path.Contains('/')
            && !path.StartsWith('_');
 
+    /// <summary>
+    /// The partition every legacy twin lives in — the literal first segment of
+    /// <see cref="LegacyPathFor"/>, which is what an existence check must be asked about.
+    /// </summary>
+    public const string LegacyPartition = "User";
+
     /// <summary>The legacy twin of a partition-root path.</summary>
-    public static string LegacyPathFor(string userId) => $"User/{userId}";
+    public static string LegacyPathFor(string userId) => $"{LegacyPartition}/{userId}";
 
     /// <summary>Only an Active node of type <c>User</c> with content is a repairable legacy user.</summary>
     public static bool IsRepairableLegacyUser(MeshNode? legacy)
