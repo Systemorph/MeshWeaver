@@ -147,8 +147,10 @@ public sealed class SpaceAdminInvariantValidator(IMessageHub hub, ILogger<SpaceA
 
     /// <summary>
     /// True when <paramref name="node"/>'s <see cref="AccessAssignment"/> content grants the
-    /// <c>Admin</c> role with <see cref="RoleAssignment.Denied"/> = false. Tolerates content
-    /// still carried as a <see cref="JsonElement"/> (source hub without the typed registry).
+    /// <c>Admin</c> role with <see cref="RoleAssignment.Denied"/> = false (the shared
+    /// <see cref="AccessAssignmentGuard.GrantsAdmin"/> predicate, so the system-owned sweep
+    /// counts admins the same way this invariant does). Tolerates content still carried as a
+    /// <see cref="JsonElement"/> (source hub without the typed registry).
     /// </summary>
     private bool GrantsAdmin(MeshNode? node)
     {
@@ -158,9 +160,7 @@ public sealed class SpaceAdminInvariantValidator(IMessageHub hub, ILogger<SpaceA
             JsonElement je => TryDeserialize(je),
             _ => null,
         };
-        return assignment?.Roles is { } roles
-            && roles.Any(r => !r.Denied
-                && string.Equals(r.Role, Role.Admin.Id, StringComparison.OrdinalIgnoreCase));
+        return AccessAssignmentGuard.GrantsAdmin(assignment);
     }
 
     private AccessAssignment? TryDeserialize(JsonElement je)
