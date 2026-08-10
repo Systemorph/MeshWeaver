@@ -157,6 +157,15 @@ public static class AIExtensions
             // AgentConfiguration content children — serialised inside an Agent node's content.
             .WithType(typeof(AgentPluginReference), nameof(AgentPluginReference))
             .WithType(typeof(AgentHandoff), nameof(AgentHandoff))
+            // SkillAction: the BEHAVIOUR half of a Skill node's content (SkillDefinition.Action).
+            // SkillDefinition is registered (SkillNodeType → WithContentType<SkillDefinition>) but its
+            // nested payload was not, so every hub serialised it via the resolver's unregistered
+            // fallback and logged "Unregistered type MeshWeaver.AI.SkillAction … auto-registered under
+            // its SHORT name". The auto short name is what is already persisted, so nameof() is the
+            // matching (non-breaking) registration — and registering it explicitly is what stops the
+            // discriminator depending on which hub happened to serialise the node first. Exactly the
+            // same reason AgentPluginReference / AgentHandoff are listed above.
+            .WithType(typeof(SkillAction), nameof(SkillAction))
             // MessageViewModel is not registered — handled as JsonElement on the wire.
             // SubmitMessageRequest / SubmitMessageResponse deleted 2026-05-25:
             // the only mutation API is workspace.GetMeshNodeStream(path).Update(...).

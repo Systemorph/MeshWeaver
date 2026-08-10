@@ -12,7 +12,8 @@ namespace MeshWeaver.Messaging.Serialization;
 public class ObjectPolymorphicConverter(
     ITypeRegistry typeRegistry,
     ILogger? logger = null,
-    SerializationDepthGuard? depthGuard = null) : JsonConverter<object>
+    SerializationDepthGuard? depthGuard = null,
+    MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry = null) : JsonConverter<object>
 {
     // Depth accounting across the NESTED serializer sessions this converter spawns (see
     // SerializationDepthGuard): without it a self-referencing graph recurses one C# stack level
@@ -150,10 +151,29 @@ public class ObjectPolymorphicConverter(
             }
             else if (!string.IsNullOrEmpty(typeName))
             {
-                // The payload carries a $type but THIS (receiving) hub has no registration for it, so it can
-                // only be read back as an untyped JsonElement (renders empty / reactive waits time out — the
-                // chat-vanish / untyped-storm class). A type must be registered in the RECEIVING hub as well
-                // as the sending one; warn once per type so the missing registration is found fast.
+                // 🚨 Self-heal BEFORE warning: a dynamically-compiled NodeType's content type can never be
+                // registered on this hub the static way. PolymorphicTypeInfoResolver deliberately refuses to
+                // adopt collectible-assembly types into a long-lived per-hub TypeRegistry (a per-compile CLR
+                // identity would poison every later $type resolution and pin the assembly), so the ONLY hub
+                // that can resolve "$type":"PluginContent" / "GuidelineReference" is the one whose
+                // MeshDataSource.WithContentType declared it. Every OTHER hub that receives the same node —
+                // the domain-agnostic cache hub, the routing hub, a sibling per-node hub — degraded it to a
+                // bare JsonElement here, and downstream `Content is X` / `as X` then silently failed
+                // ("renders empty", layout areas "cannot be found").
+                //
+                // IMeshContentTypeRegistry is the mesh-wide, options-independent $type→CLR-Type map that
+                // exists for exactly this. It was consulted at the two MeshNodeStreamCache seams but NOT
+                // here — the FIRST place the degrade happens — so a type the process demonstrably knew still
+                // arrived untyped. Deserialising to the concrete type explicitly is not "adopting" it: no
+                // registry entry is created on this hub, so none of the stale-identity/pinning reasoning
+                // above is violated. It is the same recovery ContentAs<T> performs at the consumer, done
+                // once, centrally, instead of being every consumer's problem.
+                var recovered = contentTypeRegistry?.TryRecover(cleanedElement, options);
+                if (recovered is not null)
+                    return recovered;
+
+                // Genuinely unresolvable anywhere in the process: a type must be registered in the RECEIVING
+                // hub as well as the sending one. Warn once per type so the missing registration is found fast.
                 WarnUnregisteredDeserialization(typeName!);
             }
         }
