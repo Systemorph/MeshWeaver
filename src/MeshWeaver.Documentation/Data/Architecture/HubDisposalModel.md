@@ -47,15 +47,19 @@ immediately and the waits happen reactively, off the action block.**
 
 ```
 Dispose()  (sync, void)                     ← caller never blocks
+   │  hostedHubs.CloseCreation()  (freezes the whole subtree, first)
+   │  messageService.CancelExecution()
    │  posts ShutdownRequest(Quiescing)
+   │  arms the reactive watchdog (Observable.Timer, TakeUntil(disposalCompleted))
    ▼
 HandleShutdownCore  (sync IMessageDelivery) ← runs on the action block, returns at once
-   ├─ Quiescing          → Observable.Interval poll (off-thread)
-   │                       → drain reactive dispose actions (CombineLatest, bounded)
-   │                       → posts DisposeHostedHubs
-   ├─ DisposeHostedHubs  → subscribe hostedHubs.DisposalCompleted → posts ShutDown
+   ├─ Quiescing          → Observable.Interval poll (off-thread), Amb'd with a
+   │                       Observable.Timer(QuiesceTimeout) deadline
+   │                       → OnQuiesceComplete → posts DisposeHostedHubs
+   ├─ DisposeHostedHubs  → hostedHubs.Dispose() + subscribe hostedHubs.DisposalCompleted
+   │                       → posts ShutDown
    └─ ShutDown           → CancelCallbacks + DisposeImpl + messageService.Dispose() (sync)
-                           → SignalDisposalCompleted()  → RunLevel = Dead
+                           → RunLevel = Dead → SignalDisposalCompleted()
 ```
 
 Each phase transition is a fresh `ShutdownRequest` posted back to the hub, so the
@@ -152,33 +156,16 @@ quiescingSubscription = drained
 > total-duration `Observable.Timer`**, raced against the drain signal with `Amb`.
 
 If the budget elapses with callbacks still pending, the hub sets the sticky
-`QuiescingTimedOut` flag and force-cancels them. **Tests treat
-`AnyHubQuiescingTimedOut()` as a dispose failure** — a leaked `Observe` subscription
-that never got its reply is a real bug, not a teardown oddity. Either path then
-runs the **reactive dispose-action drain** before posting `DisposeHostedHubs`.
+`QuiescingTimedOut` flag, records `QuiescingTimeoutDetail` and force-cancels them.
+**Tests treat `AnyHubQuiescingTimedOut()` as a dispose failure** — a leaked `Observe`
+subscription that never got its reply is a real bug, not a teardown oddity. Either
+path then posts `DisposeHostedHubs` from `OnQuiesceComplete`'s `finally`.
 
-### Dispose-action drain — await the registered cleanups reactively
-
-`OnQuiesceComplete` drains the reactive dispose actions registered via
-`RegisterForDisposal(Func<IMessageHub, IObservable<Unit>>)` and only advances to
-`DisposeHostedHubs` once they **all complete** (or a `DisposeActionDrainTimeout` cap
-elapses). This is where a cleanup that *must finish before teardown* — e.g. a final
-persistence flush of in-flight writes — is awaited, **reactively**:
-
-```csharp
-var completions = actions.Select(action =>
-    action(this)
-        .DefaultIfEmpty(Unit.Default)              // each contributes exactly one emission…
-        .Take(1)
-        .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default)));  // …so one fault can't stall the join
-disposeActionsSubscription = Observable
-    .CombineLatest(completions).Take(1)
-    .Timeout(DisposeActionDrainTimeout)
-    .Subscribe(_ => Advance(timedOut: false), _ => Advance(timedOut: true));
-```
-
-The action block is never blocked — `CombineLatest` subscribes the flush observables
-on the scheduler and `Advance` posts `DisposeHostedHubs` when they converge.
+> **There is no separate "dispose-action drain" phase.** Registered cleanups —
+> including the reactive `Func<IMessageHub, IObservable<Unit>>` ones — are run in the
+> **ShutDown** phase by `DisposeImpl`, and the reactive ones are **fired and not
+> awaited** (see the next-but-one section). Nothing between Quiescing and
+> DisposeHostedHubs waits for them.
 
 ### DisposeHostedHubs — join the children reactively
 
@@ -193,10 +180,13 @@ hostedHubsDisposalSubscription = hostedHubs.DisposalCompleted
     .Subscribe(_ => { }, _ => PostShutDownPhase(sw), () => PostShutDownPhase(sw));
 ```
 
-`HostedHubsCollection` itself is reactive: it disposes each child, then joins their
-`DisposalCompleted` streams with `Observable.CombineLatest` (per-child `Catch` so one
-wedged child can't stall the join) under a 10 s `Timeout`, and completes its own
-`ReplaySubject`. On completion **or** the cap, the owner advances to ShutDown — a
+`HostedHubsCollection` itself is reactive (`DisposeHubsReactive`): it disposes each
+child, then joins their `DisposalCompleted` streams with `Observable.CombineLatest`
+(per-child `Catch` so one wedged child can't stall the join) under a **5 s** `Timeout`,
+and completes its own `ReplaySubject`. It joins one extra leg — an **in-flight-creation
+drain** that waits for `inflightCreations` to reach zero and then disposes whatever a
+late construction produced, so a hub built during the teardown window is never leaked
+outside the snapshot. On completion **or** the cap, the owner advances to ShutDown — a
 hung child never blocks the parent.
 
 ### ShutDown — tear down and signal
