@@ -195,11 +195,51 @@ internal interface ICompilationCacheService
     NodeAssemblyLoadContext GetOrCreateLoadContextForPath(string nodeName, string dllPath);
 
     /// <summary>
+    /// Resolves a LIVE context for a scan and returns it already pinned — the atomic form of
+    /// "GetOrCreateLoadContext… then <see cref="NodeAssemblyLoadContext.Pin"/>".
+    /// <para>🚨 Resolve-then-Pin as two steps is a RACE, and losing it silently mis-binds a hub
+    /// for its whole lifetime. A concurrent recompile evicts the superseded context
+    /// (<c>EvictSupersededContexts</c> → <c>UnloadContext</c>) between the caller's resolve and
+    /// its pin, so the pin throws <see cref="ObjectDisposedException"/> on a reference that was
+    /// live one instruction earlier. <see cref="NodeAssemblyLoadContext.Pin"/> documents the
+    /// answer — "the caller must then re-resolve against the current context rather than scan a
+    /// doomed assembly" — but no caller implemented it, and the swallow downstream turned a
+    /// transient supersession into an authoritative EMPTY configuration list (issue #1151:
+    /// the freshly installed root hub bound the mesh defaults and served "Area not found" for
+    /// good, because a hub resolves its configuration exactly once, at activation).</para>
+    /// <para>Only this service can close that window: it owns the dictionary, so it is the only
+    /// component that can re-resolve. The loop terminates because the evictor removes the key
+    /// BEFORE disposing, so the next resolve constructs a fresh context.</para>
+    /// </summary>
+    PinnedScanContext PinForScan(string nodeName, string? dllPath);
+
+    /// <summary>
+    /// <see cref="PinForScan(string, string?)"/> for a release-keyed context.
+    /// </summary>
+    PinnedScanContext PinForScanOfRelease(NodeTypeRelease release, string releaseFolder);
+
+    /// <summary>
     /// Registers NuGet probing directories for a node. The node's AssemblyLoadContext
     /// consults these directories during Resolving events so transitive dependencies
     /// of resolved NuGet packages can be loaded at runtime.
     /// </summary>
     void RegisterProbingDirectories(string nodeName, System.Collections.Generic.IReadOnlyList<string> directories);
+}
+
+/// <summary>
+/// A load context together with the scan pin held on it: guaranteed live at the moment it was
+/// handed out, and kept un-unloadable until this handle is disposed. ALWAYS use in a
+/// <c>using</c> — the pin is what makes <c>Dispose</c>/<c>Unload</c> wait rather than tear the
+/// collectible LoaderAllocator out mid-metadata-resolution.
+/// </summary>
+internal readonly struct PinnedScanContext(NodeAssemblyLoadContext context, IDisposable pin)
+    : IDisposable
+{
+    /// <summary>The live, pinned context.</summary>
+    public NodeAssemblyLoadContext Context { get; } = context;
+
+    /// <summary>Releases the scan pin.</summary>
+    public void Dispose() => pin.Dispose();
 }
 
 /// <summary>
@@ -901,6 +941,58 @@ internal class CompilationCacheService(
             EvictSupersededContexts(nodeName, keepKey: dllPath);
 
         return ctx;
+    }
+
+    /// <summary>
+    /// How many times <see cref="PinForScan"/> re-resolves before giving up. One re-resolve is
+    /// enough for a single eviction; the extra attempts cover a burst of recompiles landing back
+    /// to back. Exhaustion rethrows, so a genuinely dying cache still surfaces rather than spins.
+    /// </summary>
+    private const int ScanPinReResolveAttempts = 3;
+
+    /// <inheritdoc />
+    public PinnedScanContext PinForScan(string nodeName, string? dllPath)
+        => PinResolved(
+            cacheKey: string.IsNullOrEmpty(dllPath) ? nodeName : dllPath!,
+            resolve: () => string.IsNullOrEmpty(dllPath)
+                ? GetOrCreateLoadContext(nodeName)
+                : GetOrCreateLoadContextForPath(nodeName, dllPath!));
+
+    /// <inheritdoc />
+    public PinnedScanContext PinForScanOfRelease(NodeTypeRelease release, string releaseFolder)
+        => PinResolved(
+            // Same key GetOrCreateLoadContextForRelease adds under.
+            cacheKey: release.Path,
+            resolve: () => GetOrCreateLoadContextForRelease(release, releaseFolder));
+
+    /// <summary>
+    /// Resolve → Pin as ONE operation, re-resolving when the context we resolved is already
+    /// unloading. See <see cref="ICompilationCacheService.PinForScan"/> for why two steps is a
+    /// race and why losing it is not survivable downstream.
+    /// </summary>
+    private PinnedScanContext PinResolved(string cacheKey, Func<NodeAssemblyLoadContext> resolve)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var context = resolve();
+            try
+            {
+                return new PinnedScanContext(context, context.Pin());
+            }
+            catch (ObjectDisposedException) when (attempt < ScanPinReResolveAttempts)
+            {
+                // Drop THIS instance if it is still the dictionary's value. The evictor removes
+                // before it disposes, so normally the key is already gone and the next resolve
+                // builds a fresh context — but the remove-less order must not be able to hand the
+                // same doomed context back, or this loop would spin instead of terminate.
+                _loadContexts.TryRemove(
+                    new KeyValuePair<string, NodeAssemblyLoadContext>(cacheKey, context));
+                logger.LogDebug(
+                    "Scan pin lost the race with an eviction of {CacheKey} (attempt {Attempt}) — "
+                    + "re-resolving against the current context",
+                    cacheKey, attempt);
+            }
+        }
     }
 
     /// <summary>
