@@ -35,8 +35,9 @@ public static partial class LogLineParser
     /// <param name="Severity">Error or Critical.</param>
     /// <param name="Category">The .NET log category.</param>
     /// <param name="EventId">The event id from the console header (<c>Category[0]</c>) — the log
-    /// SITE the code assigns, and the discriminator the incident identity leans on for bursts that
-    /// carry no exception or stack frame.</param>
+    /// SITE the code assigns. The incident identity uses it, together with the category and the
+    /// exception type, for bursts that carry no application stack frame; when a frame IS present
+    /// the frame locates the fault precisely and neither category nor event id participates.</param>
     /// <param name="Message">The message as logged (volatile parts intact).</param>
     /// <param name="NormalizedMessage">The message with volatile parts masked.</param>
     /// <param name="ExceptionType">The exception type name — read from the burst's own exception
