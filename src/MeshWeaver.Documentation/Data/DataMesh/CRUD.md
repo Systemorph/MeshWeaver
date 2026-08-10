@@ -171,14 +171,20 @@ Choose the right reference type for your query pattern:
 
 ## Unified Reference Paths
 
-Path-based references give a uniform addressing scheme across entity, content, and schema resources:
+Path-based references give a uniform addressing scheme across entity and content resources.
+The prefix is separated by a **colon**, and what follows it starts with the owning address —
+`{prefix}:{addressType}/{addressId}/…`. A path with no recognised colon prefix falls through to
+`area`, so a slash-separated `"data/TodoItems"` is parsed as an *area* reference, not data.
 
 ```csharp
-var todoRef       = "data:TodoItems/todo-1";   // specific entity
-var allTodosRef   = "data/TodoItems";           // entire collection
-var fileRef       = "content/uploads/doc.pdf";  // file content
-var schemaRef     = "schema/TodoItem";          // JSON schema
+var allTodosRef = "data:app/my-app/TodoItems";           // entire collection
+var todoRef     = "data:app/my-app/TodoItems/todo-1";    // specific entity
+var fileRef     = "content:app/my-app/uploads/doc.pdf";  // file content
+var areaRef     = "area:app/my-app/Dashboard";           // layout area
 ```
+
+The three recognised prefixes are `data:`, `area:` and `content:` (`ParseUnifiedPath`).
+There is no `schema:` prefix.
 
 ## Virtual Paths
 
@@ -448,12 +454,13 @@ var rows = new[]
     new { Type = "CollectionsReference", Purpose = "Multiple collections at once", Example = "new CollectionsReference(\"TodoItems\", \"Projects\")" },
 };
 
-var header = "<thead><tr><th>Reference Type</th><th>Purpose</th><th>Example</th></tr></thead>";
-var bodyRows = string.Join("", rows.Select(r =>
-    $"<tr><td><code>{r.Type}</code></td><td>{r.Purpose}</td><td><code>{r.Example}</code></td></tr>"));
-
-MeshWeaver.Layout.Controls.Html(
-    $"<table style='width:100%;border-collapse:collapse'>{header}<tbody>{bodyRows}</tbody></table>")
+MeshWeaver.Layout.Controls.DataGrid(rows)
+    .WithColumn(new MeshWeaver.Layout.DataGrid.PropertyColumnControl<string>
+        { Property = "type" }.WithTitle("Reference Type"))
+    .WithColumn(new MeshWeaver.Layout.DataGrid.PropertyColumnControl<string>
+        { Property = "purpose" }.WithTitle("Purpose"))
+    .WithColumn(new MeshWeaver.Layout.DataGrid.PropertyColumnControl<string>
+        { Property = "example" }.WithTitle("Example"))
 ```
 
 ---
