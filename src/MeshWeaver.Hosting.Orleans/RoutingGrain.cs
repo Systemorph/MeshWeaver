@@ -254,7 +254,14 @@ internal class RoutingGrain(
         return Observable.Defer(() =>
         {
             RoutingGrainTrace.Write($"RoutingGrain.RouteMessage RESOLVE_BEGIN id={delivery.Id} addr={addressPath}");
-            return pathResolver.ResolvePath(addressPath)
+            // 🚨 ResolveRoute, not ResolvePath: this branch reads ONLY Prefix/Remainder, so it
+            // may be served a cached entry whose NODE snapshot is stale. That is what keeps the
+            // per-message lookup a dictionary hit for hot-WRITTEN paths — with ResolvePath,
+            // every activity-log write invalidated the entry the NEXT routed message to that
+            // activity needed, each route then held an in-flight slot for a full storage query,
+            // and during the boot NodeType bake the window saturated at 64 while the bake's own
+            // stream waits timed out behind it (issue #1172's routing/compile feedback loop).
+            return pathResolver.ResolveRoute(addressPath)
                 .Take(1)
                 .Timeout(ResolveTimeout)
                 .Select(resolution =>
