@@ -398,6 +398,37 @@ public class PluginDependencyOrderTest(ITestOutputHelper output) : MonolithMeshT
             "a requirement of an UNSELECTED package is not pulled in either");
     }
 
+    /// <summary>
+    /// A PAID requirement is not a back door around source-scoped selection. An instance is
+    /// routinely granted commercial content (course catalogues, customer modules) that it may buy
+    /// but must never receive automatically — so a free package declaring a priced requirement gets
+    /// installed without it, and the paid package is named rather than silently acquired.
+    /// </summary>
+    [Fact]
+    public void ACommercialRequirement_IsNotPulledIn()
+    {
+        var catalog = new List<PackageManifest>
+        {
+            Manifest("FreePlug", preInstalled: true, "PaidCourse@^1.0.0"),
+            Manifest("PaidCourse", preInstalled: false) with { Price = 49m, Source = "Education" },
+            Manifest("CouponOnly", preInstalled: false) with { Price = -1m, Source = "Education" },
+            Manifest("AlsoFree", preInstalled: true, "CouponOnly@^1.0.0"),
+        };
+        var selected = catalog.Where(p => p.PreInstalled).ToList();
+
+        var closure = InstanceAutoRegistrationService
+            .DependencyClosure(catalog, selected, NullLogger.Instance)
+            .Select(p => p.Id)
+            .ToList();
+
+        closure.Should().Contain("FreePlug").And.Contain("AlsoFree");
+        closure.Should().NotContain("PaidCourse",
+            "a purchasable requirement must be acquired deliberately, never by a dependency edge");
+        closure.Should().NotContain("CouponOnly",
+            "coupon-only (negative price) is commercial too");
+        closure.Should().HaveCount(2);
+    }
+
     /// <summary>A requirement no configured source carries cannot strand the boot.</summary>
     [Fact]
     public void AnUnresolvableRequirement_IsSteppedOver_NotThrown()
