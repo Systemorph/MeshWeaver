@@ -97,6 +97,16 @@ public class PluginGateRunnerTest(ITestOutputHelper output)
         }
         """;
 
+    // ── a COMMERCIAL package: identical to the good one except it carries a price. `price: -1`
+    //    is the coupon-only shape the plugins repo's `Manufacturing` ships; any non-zero price
+    //    makes PackageEntitlement.IsCommercial true, which is the whole point of the fixture. ──
+
+    private const string PricedIndexJson =
+        """{"$type":"MeshNode","id":"Priced","namespace":"","path":"Priced","mainNode":"Priced","name":"Priced Plugin","nodeType":"Space","state":"Active","content":{"$type":"PluginManifest","description":"A commercial plugin.","price":-1,"currency":"CHF"}}""";
+
+    private const string PricedThingNodeTypeJson =
+        """{"$type":"MeshNode","id":"Thing","namespace":"Priced","path":"Priced/Thing","mainNode":"Priced/Thing","name":"Thing","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"A thing.","configuration":"config => config.WithContentType<Thing>().AddDefaultLayoutAreas()","includeGlobalTypes":true}}""";
+
     [Fact(Timeout = 300_000)]
     public async Task GoodPackage_CompilesRendersAndExecutesTestsGreen_ExitsZero()
     {
@@ -168,6 +178,39 @@ public class PluginGateRunnerTest(ITestOutputHelper output)
             var widget = report.Packages.Single(p => p.Id == "Widget");
             widget.Success.Should().BeTrue(
                 $"the good package must stay green; log:\n{log}");
+        }
+        finally
+        {
+            TryDelete(repo);
+        }
+    }
+
+    [Fact(Timeout = 300_000)]
+    public async Task CommercialPackage_InstallsAndGatesGreen()
+    {
+        var repo = CreateRepo(root =>
+        {
+            WriteFile(root, "Priced/index.json", PricedIndexJson);
+            WriteFile(root, "Priced/Thing.json", PricedThingNodeTypeJson);
+            WriteFile(root, "Priced/Thing/Source/Thing.cs", ThingSource);
+        });
+        try
+        {
+            var (report, log) = await RunGate(repo);
+
+            var priced = report.Packages.Single(p => p.Id == "Priced");
+            // The regression this pins: the gate installs as an EXPLICIT global admin. With no
+            // authorizing principal PackageEntitlement (#830) refuses every priced package, and
+            // the gate reported `PackageAuthorizationException` without compiling a line of it —
+            // i.e. it silently stopped covering commercial packages altogether.
+            priced.InstallError.Should().BeNull(
+                $"a commercial package must install through the gate; log:\n{log}");
+            log.Should().NotContain("PackageAuthorizationException");
+
+            var thing = priced.NodeTypes.Single(t => t.Path == "Priced/Thing");
+            thing.Compile.Should().Be(CheckOutcome.Passed,
+                $"the priced package's type must actually be compiled; detail: {thing.CompileDetail}");
+            report.ExitCode.Should().Be(0, $"all green must exit 0; log:\n{log}");
         }
         finally
         {
