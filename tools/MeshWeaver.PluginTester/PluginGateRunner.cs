@@ -373,8 +373,16 @@ public static class PluginGateRunner
             services.AddLogging(logging =>
             {
                 logging.SetMinimumLevel(minLevel);
-                if (minLevel < LogLevel.Warning)
-                    logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss.fff "; });
+                // 🚨 ALWAYS attach the provider, including at the default Warning level. It used to
+                // be attached only when the level was turned DOWN (`minLevel < Warning`), so a gate
+                // run at its default verbosity emitted the report and NOTHING else — every
+                // framework Warning was written to a logger with no sinks. When the gate went RED
+                // on CI ("No renderer is registered for area `Tests` on hub `Store`", 2026-08-10)
+                // the run therefore carried zero evidence of WHY the instance was bound to the
+                // fallback config, and the failure could not be diagnosed from the job log at all.
+                // Warning volume is a handful of lines per run — the trace levels are still opt-in
+                // through MW_LOG_LEVEL.
+                logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss.fff "; });
                 foreach (var category in (Environment.GetEnvironmentVariable("MW_LOG_CATEGORIES") ?? "")
                          .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     logging.AddFilter(category, minLevel);
