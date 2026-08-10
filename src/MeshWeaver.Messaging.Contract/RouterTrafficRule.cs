@@ -7,6 +7,12 @@ namespace MeshWeaver.Messaging;
 /// pipeline. The detector's whole value is that it fires on exactly the right traffic: a false
 /// ERROR trains people to mute the channel, and a missed one is how a router-starvation wedge stays
 /// invisible. That is worth pinning directly rather than through a running hub.</para>
+///
+/// <para>🚨 "An END" means an end of the DELIVERY — the address it is addressed TO and the address
+/// it came FROM. It is NOT the hub currently handling it: every hosted hub's non-local delivery is
+/// routed UP through <c>parentHub.DeliverMessage(delivery)</c>, and that parent is almost always the
+/// root mesh hub, so feeding this the RECEIVING hub's address type reports every routing HOP — the
+/// router's actual job — as a violation.</para>
 /// </summary>
 public static class RouterTrafficRule
 {
@@ -14,7 +20,11 @@ public static class RouterTrafficRule
     /// The role the mesh hub plays in this delivery, or <c>null</c> when it is not an end of it (or
     /// when the message is routing liveness rather than work).
     /// </summary>
-    /// <param name="targetAddressType">Address type of the hub receiving the delivery.</param>
+    /// <param name="targetAddressType">
+    /// Address type of the delivery's TARGET — the address it is addressed to. Never the address
+    /// type of the hub that happens to be handling the delivery: a hub the delivery is merely
+    /// routed THROUGH is not an end of it.
+    /// </param>
     /// <param name="senderAddressType">Address type of the sender, if any.</param>
     /// <param name="message">The message being delivered.</param>
     /// <returns><c>"target"</c>, <c>"sender"</c>, <c>"sender AND target"</c>, or <c>null</c>.</returns>
