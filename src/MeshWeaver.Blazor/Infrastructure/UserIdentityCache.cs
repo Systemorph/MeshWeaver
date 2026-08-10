@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -60,6 +61,56 @@ public readonly record struct UserIdentityLookup(MeshNode? Node, string? Unavail
             ? Unknown
             : Unavailable("the mesh user index has not received its first snapshot yet");
     }
+
+    /// <summary>
+    /// Turns an <b>Unavailable</b> lookup back into a PENDING QUESTION instead of a verdict: emits
+    /// the first <b>determinate</b> answer (Found or Unknown) and nothing before it.
+    ///
+    /// <para>🚨 This is the whole fix for the latched-degraded-identity defect. "The index cannot
+    /// answer yet" is not a result to cache — and the thing being waited for is ALREADY an
+    /// observable event, because the index is filled by a live <c>nodeType:User</c> query
+    /// subscription. So the unavailable leg does not need a timer, a poll, a retry loop or a
+    /// <c>Subject</c>: it falls through to the very same emission the success path rides
+    /// (<see cref="UserIdentityCache.IndexChanged"/>) and re-asks the same
+    /// <see cref="Classify"/> question. Same chain, one extra lap.</para>
+    ///
+    /// <para><b>The <c>StartWith</c> closes the sample-then-subscribe race.</b> A caller reaches
+    /// here BECAUSE its own <see cref="UserIdentityCache.Lookup"/> came back unavailable; between
+    /// that call and this subscription the snapshot may already have landed, and its emission would
+    /// be gone. Re-asking at subscribe time (inside
+    /// <see cref="Observable.Defer{TResult}(Func{IObservable{TResult}})"/>, so it is
+    /// per-subscription and not captured once) means the window cannot swallow the answer.</para>
+    ///
+    /// <para><b><c>Take(1)</c> is sanctioned here</b> and is not the live-view mistake: this
+    /// restores a ONE-SHOT resolution that the success path also performs exactly once. It is not
+    /// feeding a data-bound view, and once the index is determinate the degraded state is over —
+    /// any later refinement is an explicit write by whoever made it (onboarding calls
+    /// <c>CircuitAccessHandler.UpdateUserContext</c>), never this chain firing again.</para>
+    ///
+    /// <para><b>Unknown terminates it too</b> — deliberately. "This email has no mesh User node" IS
+    /// an answer, and the caller's seeded fallback is the correct response to it; continuing to
+    /// listen would leave a subscription open for every never-onboarded visitor.</para>
+    ///
+    /// <para>Pure and dependency-free for the same reason <see cref="Classify"/> is: the temporal
+    /// behaviour is testable with a virtual-time scheduler, no mesh, hub or query subscription
+    /// required — and the unavailable window is exactly the window a live-mesh test cannot hold
+    /// open.</para>
+    /// </summary>
+    /// <param name="indexChanged">Fires once per applied index snapshot/delta — for the real cache,
+    /// <see cref="UserIdentityCache.IndexChanged"/>, which emits only AFTER the change is applied.</param>
+    /// <param name="lookup">Re-asks the classified question. Called at subscribe time and once per
+    /// <paramref name="indexChanged"/> emission.</param>
+    public static IObservable<UserIdentityLookup> UntilDetermined(
+        IObservable<Unit> indexChanged,
+        Func<UserIdentityLookup> lookup)
+    {
+        ArgumentNullException.ThrowIfNull(indexChanged);
+        ArgumentNullException.ThrowIfNull(lookup);
+        return Observable
+            .Defer(() => indexChanged.Select(_ => lookup()).StartWith(lookup()))
+            .Where(l => !l.IsUnavailable)
+            .Take(1);
+    }
 }
 
 /// <summary>
@@ -78,8 +129,26 @@ public sealed class UserIdentityCache : IDisposable
     private readonly ConcurrentDictionary<string, MeshNode> _byEmail =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly IDisposable _subscription;
+    private readonly IDisposable _faultWatch;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly ILogger<UserIdentityCache> _logger;
+
+    /// <summary>
+    /// Fires once per index snapshot/delta, AFTER it has been applied to <see cref="_byEmail"/>.
+    ///
+    /// <para>This is the observable event that makes an UNAVAILABLE lookup recoverable without any
+    /// new machinery: the index is filled by a live query subscription, so "ask again when the
+    /// index learns something" is already an event this object receives. Callers compose it via
+    /// <see cref="UserIdentityLookup.UntilDetermined"/> rather than re-subscribing the query.</para>
+    ///
+    /// <para>🚨 <c>Apply</c> runs INSIDE the multicast source (a <c>Select</c> ahead of
+    /// <see cref="Observable.Publish{TSource}(IObservable{TSource})"/>), not in a subscriber. That
+    /// is what guarantees every observer of this stream sees an index that ALREADY contains the
+    /// change it is being told about — an ordering that a second <c>Subscribe</c> alongside the
+    /// cache's own could not promise. It also keeps the upstream at exactly ONE subscription no
+    /// matter how many circuits are waiting.</para>
+    /// </summary>
+    public IObservable<Unit> IndexChanged { get; }
 
     /// <summary>
     /// Set once the first <c>Initial</c>/<c>Reset</c> snapshot has been applied. Until then the
@@ -113,19 +182,35 @@ public sealed class UserIdentityCache : IDisposable
         // partition — so email→User resolution returned null and Index.razor
         // routed to the raw email ("No node found at 'rbuergi@systemorph.com'").
         // Drop the namespace constraint and fan out across user partitions.
-        _subscription = mesh
+        // Apply sits INSIDE the multicast source so the index is updated before ANY observer is
+        // notified, and so the upstream query keeps exactly one subscription however many waiters
+        // (see IndexChanged). Publish + Connect, not Publish().RefCount(): the cache's connection
+        // is unconditional and lives for the object's lifetime, so the index keeps filling even
+        // while nobody is waiting on it — a RefCount that dropped to zero would tear the query down.
+        var applied = mesh
             .Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User"))
-            .Subscribe(
-                Apply,
-                ex =>
-                {
-                    // Record the fault so lookups report UNAVAILABLE rather than answering
-                    // "unknown user" forever off an index that will never fill (#974). Still
-                    // logged — this is a classification, not a swallow.
-                    Volatile.Write(ref _subscriptionFailure,
-                        $"user index subscription failed: {ex.GetType().Name}: {ex.Message}");
-                    _logger.LogWarning(ex, "UserIdentityCache subscription failed");
-                });
+            .Select(change =>
+            {
+                Apply(change);
+                return Unit.Default;
+            })
+            .Publish();
+        IndexChanged = applied;
+        _faultWatch = applied.Subscribe(
+            _ => { },
+            ex =>
+            {
+                // Record the fault so lookups report UNAVAILABLE rather than answering
+                // "unknown user" forever off an index that will never fill (#974). Still
+                // logged — this is a classification, not a swallow.
+                Volatile.Write(ref _subscriptionFailure,
+                    $"user index subscription failed: {ex.GetType().Name}: {ex.Message}");
+                _logger.LogWarning(ex, "UserIdentityCache subscription failed");
+            });
+        // Connect LAST: the fault watcher is already attached, and Publish's subject replays its
+        // terminal notification to late subscribers, so a waiter that arrives after a failure is
+        // told the index is dead instead of waiting on it forever.
+        _subscription = applied.Connect();
     }
 
     private void Apply(QueryResultChange<MeshNode> change)
@@ -230,6 +315,20 @@ public sealed class UserIdentityCache : IDisposable
         return false;
     }
 
+    /// <summary>
+    /// Waits for the index to reach a VERDICT for <paramref name="email"/> — Found or a definitive
+    /// Unknown — and emits it exactly once. Nothing is emitted while the answer is merely
+    /// unavailable; see <see cref="UserIdentityLookup.UntilDetermined"/> for why that is the whole
+    /// point and why it needs no timer or retry loop.
+    /// </summary>
+    /// <param name="email">The email whose mesh <c>User</c> node is being resolved.</param>
+    public IObservable<UserIdentityLookup> WhenDetermined(string email) =>
+        UserIdentityLookup.UntilDetermined(IndexChanged, () => Lookup(email));
+
     /// <summary>Disposes the underlying query subscription, stopping further cache updates.</summary>
-    public void Dispose() => _subscription.Dispose();
+    public void Dispose()
+    {
+        _subscription.Dispose();
+        _faultWatch.Dispose();
+    }
 }

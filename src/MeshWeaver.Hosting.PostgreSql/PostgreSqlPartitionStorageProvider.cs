@@ -422,10 +422,10 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     /// </list>
     /// Fast positive: a namespace we've already registered or CREATE'd this session
     /// answers <c>true</c> with no round-trip. Otherwise a single read-only
-    /// <c>information_schema.schemata</c> query at the reactive leaf
-    /// (<see cref="Observable.FromAsync{TResult}(System.Func{System.Threading.CancellationToken, System.Threading.Tasks.Task{TResult}})"/>) —
-    /// this is a genuine existence query, NOT partition routing, so the leaf async
-    /// I/O is the sanctioned reactive boundary. The schema resolves by
+    /// <c>information_schema.schemata</c> query at the reactive leaf, run on this
+    /// adapter's <c>IIoPool</c> (<c>_ioPool.Invoke(...)</c>) — <b>never</b>
+    /// <c>Observable.FromAsync</c>, which is forbidden outside <c>IoPool</c>; the pool
+    /// IS the sanctioned reactive boundary. The schema resolves by
     /// <c>lower(namespace)</c>, exact for user/space partitions (schema == lower(id));
     /// the namespace≠schema <c>_</c>-prefix globals are exempted by the guard before
     /// it ever calls this, and the named system schemas (admin/auth/portal/kernel/doc)

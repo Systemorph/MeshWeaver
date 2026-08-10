@@ -93,7 +93,15 @@ public class PortalApplication : IDisposable
         // from this hub is attributed to the user regardless of thread. Read from the
         // per-circuit accessor (written by CircuitAccessHandler) — NOT the mesh-wide
         // persistentCircuitContext, which is shared across circuits and cleared per activity.
-        var circuitUser = circuitContextAccessor.UserContext;
+        //
+        // 🚨 Read the accessor PER POST, never snapshot it here. The hub's config factory runs once,
+        // on first creation, so a snapshot pins whatever identity happened to be resolved at that
+        // instant for the whole circuit. Two writers legitimately refine it afterwards —
+        // onboarding, and the degraded-identity repair when the mesh user index could not answer on
+        // open — and with a snapshot neither reached the portal hub: it kept stamping the seeded
+        // identity, so every layout/agent/model subscribe it made afterwards carried the DEFAULT
+        // locale and rendered English for a viewer whose profile says otherwise.
+        Func<AccessContext?> circuitUser = () => circuitContextAccessor.UserContext;
 
         Hub = hub.GetHostedHub(AddressExtensions.CreatePortalAddress(portalId),
             c =>
@@ -112,12 +120,16 @@ public class PortalApplication : IDisposable
     /// <param name="config">The base hub configuration to extend.</param>
     /// <param name="routingService">Registered to provide the navigation stream on hub initialization.</param>
     /// <param name="navigationService">Handles <c>NavigationRequest</c> messages by calling <c>NavigateTo</c>.</param>
-    /// <param name="circuitUser">When non-null, a post-pipeline step stamps this user on every outbound message that lacks an access context.</param>
+    /// <param name="circuitUser">When non-null, a post-pipeline step stamps the user it returns on
+    /// every outbound message that lacks an access context. A PROVIDER, not a value: the circuit's
+    /// identity can be refined after this hub is configured (onboarding, and the repair for a
+    /// circuit that opened before the mesh user index could answer), and those refinements must
+    /// reach the posts this hub makes afterwards. Returning null stamps nothing.</param>
     /// <param name="errorSink">When non-null, un-awaited delivery failures are pushed to this sink instead of being silently logged.</param>
     /// <returns>The modified hub configuration.</returns>
     public static MessageHubConfiguration DefaultPortalConfig(MessageHubConfiguration config,
         IRoutingService routingService, INavigationService navigationService,
-        AccessContext? circuitUser = null, PortalErrorSink? errorSink = null)
+        Func<AccessContext?>? circuitUser = null, PortalErrorSink? errorSink = null)
     {
         // Surface un-awaited failed posts originating from this portal hub to the GUI as a
         // modal (PortalErrorModal subscribes to the sink). Awaited failures already surface
@@ -138,10 +150,23 @@ public class PortalApplication : IDisposable
         // the request's identity via ResponseFor) we leave it untouched. When it does not, we
         // stamp the circuit user — so the portal hub's layout/agent/model subscribes are
         // attributed to the logged-in user and RLS returns their data instead of denying.
+        //
+        // 🚨 The user is a PROVIDER, resolved per post, not a value captured when the hub was
+        // configured. The circuit's identity is legitimately refined AFTER the hub exists (an
+        // onboarding that resolves the username; the repair that runs when the mesh user index
+        // could not answer on circuit open), and a captured value made those refinements invisible
+        // to every post this hub made for the rest of the circuit — wrong Name, wrong time zone and
+        // wrong UI language on a viewer whose profile says otherwise. A null from the provider is
+        // the same "no circuit user" case a null value used to be, and stamps nothing.
         if (circuitUser is not null)
             config = config.AddPostPipeline(syncPipeline =>
                 syncPipeline.AddPipeline((d, next) =>
-                    next(d.AccessContext is null ? d.SetAccessContext(circuitUser) : d)));
+                {
+                    if (d.AccessContext is not null)
+                        return next(d);
+                    var user = circuitUser();
+                    return next(user is null ? d : d.SetAccessContext(user));
+                }));
         // Every polymorphic UiControl subtype the portal may receive from a remote layout stream
         // has to be visible to this hub's TypeRegistry so PolymorphicTypeInfoResolver can build
         // the JsonDerivedType mapping for UiControl deserialization. Without this the sub-hub's
