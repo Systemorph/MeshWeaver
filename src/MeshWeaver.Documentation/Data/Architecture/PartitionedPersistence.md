@@ -69,17 +69,20 @@ The routing layer sits between the existing scoped wrappers (`PersistenceService
 ## Routing Layer
 
 ```
-PersistenceService (scoped, unchanged)
-  └─> RoutingPersistenceServiceCore (singleton)
-        ├─> "ACME"    → per-partition IStorageService
-        ├─> "Contoso" → per-partition IStorageService
-        └─> ...        (auto-provisioned on first access)
+IStorageAdapter  =  PersistenceService (singleton)
+  └─> bundles every registered IPartitionStorageProvider
+        ├─> "ACME"    → that provider's IStorageAdapter
+        ├─> "Contoso" → that provider's IStorageAdapter
+        └─> ...        (pure delegation by path — no cache, no init, no factory wrapper)
 
-MeshQuery (scoped, unchanged)
-  └─> RoutingMeshQueryProvider (singleton)
-        ├─> "ACME"    → per-partition IMeshQueryProvider
-        └─> "Contoso" → per-partition IMeshQueryProvider
+IMeshQueryCore  =  MeshQuery (singleton)
+  └─> fans out across every registered IMeshQueryProvider
+        ├─> StorageAdapterMeshQueryProvider   (pedestrian exact-path probe — always present)
+        ├─> the backend's native provider     (PostgreSqlMeshQuery / CosmosMeshQuery / …)
+        └─> StaticNodeQueryProvider           (built-in catalogs)
 ```
+
+There is no `RoutingPersistenceServiceCore` and no `RoutingMeshQueryProvider`. `PersistenceService` delegates by path across the registered providers; query routing is the `MeshQuery` fan-in described in [Query Result Scoring](/Doc/Architecture/QueryResultScoring).
 
 ## Path Segment Extraction
 
@@ -108,22 +111,37 @@ The `PathPartition.GetFirstSegment` utility extracts the routing key from any no
 | Query with namespace | Parse namespace, route to partition |
 | Query without namespace | Fan out to all partitions, deduplicate |
 
-## Auto-Provisioning
+## 🚨 Provisioning is EXPLICIT — "no partition, no write"
 
-When a node is saved whose first segment matches no registered partition, the factory provisions the backend automatically:
+**A write to an unprovisioned partition is refused; it does not conjure a schema.** Lazy
+`CREATE SCHEMA`-on-first-write was deleted from both PostgreSQL write paths
+(`PostgreSqlPathRoutingAdapter.RouteWrite` / `CreateAdapterForTable`) because *any* unrecognised
+first path segment — NodeType names, reserved words, request URLs — spawned a ghost schema in
+production. A write to a partition that does not exist now faults with `42P01`.
+
+The one sanctioned entry point is on `IPartitionStorageProvider`:
 
 ```csharp
-// First save to "NewOrg/..." triggers provisioning
-await persistence.SaveNodeAsync(
-    MeshNode.FromPath("NewOrg/Department/Team"),
-    options);
-// The factory creates:
-// - PostgreSQL: CREATE SCHEMA IF NOT EXISTS "neworg"
-// - Cosmos: CreateContainerIfNotExistsAsync("neworg-nodes", ...)
-// - FileSystem: Directory.CreateDirectory("baseDir/NewOrg")
+// Reactive, idempotent (promise-cached), and POOLED on the pg:{adapter} IIoPool.
+provider.EnsurePartitionProvisioned(@namespace)      // IObservable<Unit>
+        .SelectMany(_ => /* now write */)
+        .Subscribe(_ => { }, ex => logger.LogWarning(ex, "provision+write failed"));
+
+provider.PartitionExists(@namespace)                 // IObservable<bool?>  (null = indeterminate)
 ```
 
-On startup, `InitializeAsync` discovers existing partitions and restores the routing table.
+🚨 **Do NOT declare a `PartitionDefinition` node to force a schema into existence.** The router
+lowercases a path's first segment (`seg.ToLowerInvariant()`), but a `PartitionDefinition` whose
+`Schema` is left null provisions the name **verbatim** — so `"Agent"` creates schema `Agent` while
+every write targets `agent`, and you get `42P01` anyway.
+
+The schema DDL runs inside the `IIoPool`, never `Observable.FromAsync` — see
+[Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling).
+
+Creating a **partition-owning node** (a `NodeType` with `OwnsPartition` — `User`, `Space`) is the
+one place provisioning happens implicitly, and it is a deliberate, single trigger:
+`OwnsPartitionProvisioningValidator` requires the node to be top-level and provisions the schema
+*before* the root write. See [Partition Storage Routing](/Doc/Architecture/PartitionStorageRouting).
 
 # Where Partitions Come From
 
@@ -156,7 +174,7 @@ Each provider also declares which **query contexts** it participates in (`search
 
 ## 2. PartitionDefinition nodes (config-time, declared)
 
-Nodes whose `Content` is a `PartitionDefinition` declare a partition explicitly. `RoutingPersistenceServiceCore.InitializeAsync` collects every `PartitionDefinition` from `IStaticNodeProvider`s and `MeshConfiguration.Nodes`, then calls `IPartitionedStoreFactory.InitializeDefaultPartitionsAsync(...)` so each backend can pre-create its store (PostgreSQL `CREATE SCHEMA`, Cosmos container, etc.).
+Nodes whose `Content` is a `PartitionDefinition` declare a partition explicitly — a provider surfaces one through its `PartitionDefinition` property so consumers (Global Settings, the Schema view) can list it. 🚨 **A `PartitionDefinition` node is a *description*, not a provisioning trigger** — see the warning under "Provisioning is EXPLICIT" above: leaving `Schema` null provisions the namespace verbatim while writes go to the lowercased name, which is a `42P01` waiting to happen. To make a not-yet-provisioned partition writable, subscribe `EnsurePartitionProvisioned(namespace)`.
 
 ```csharp
 new MeshNode("ACME", "")
@@ -166,7 +184,7 @@ new MeshNode("ACME", "")
     {
         Namespace = "ACME",
         Schema = "acme",
-        TableMappings = PartitionDefinition.StandardTableMappings
+        TableMappings = PartitionDefinition.DefaultSegmentTableMappings()
     }
 }
 ```
@@ -175,13 +193,13 @@ Use this when a domain has its own backing store (PostgreSQL schema, Cosmos cont
 
 ## 3. Backend discovery (runtime, automatic)
 
-`IPartitionedStoreFactory.DiscoverPartitionsAsync` scans the backing store for partitions that already exist:
+A wildcard provider answers for partitions that already exist in the backing store, discovered by scanning it:
 
 - **File system** — top-level directories
 - **PostgreSQL** — schemas containing a `mesh_nodes` table
 - **Cosmos** — containers ending in `-nodes`
 
-Discovered partitions are auto-registered without an explicit `PartitionDefinition`. Use this when the storage layout already encodes partition boundaries (deployed environments, restored backups).
+Discovered partitions are served without an explicit `PartitionDefinition`. Use this when the storage layout already encodes partition boundaries (deployed environments, restored backups). **Discovery finds partitions that exist; it does not create them.**
 
 ## 4. Static-provider seed nodes (read-only fallback)
 
@@ -215,7 +233,7 @@ See [Test State Isolation](/Doc/Architecture/TestStateIsolation) for the test-fi
 
 ## PartitionDefinition
 
-Each partition is defined by a `PartitionDefinition` that specifies its namespace, data source, schema, and table mappings. Per-tenant partitions (Space, User) are created lazily on first write by the routing adapter — no explicit `Partition` MeshNode is emitted. System-level partitions (Admin, Auth, Portal, Kernel, global satellites like `_Access`) are registered statically by `DefaultPartitionProvider`. Tenant partitions use `StandardTableMappings` to route satellite node types to dedicated tables.
+Each partition is defined by a `PartitionDefinition` that specifies its namespace, data source, schema, and table mappings. Per-tenant partitions (Space, User) are provisioned by **`OwnsPartitionProvisioningValidator`** when the partition-owning node is created — **not** lazily on first write (that path was deleted; see "Provisioning is EXPLICIT" above) — and no explicit `Partition` MeshNode is emitted. `DefaultPartitionProvider` seeds only `Admin` and `Auth`; the `Portal` / `Kernel` session partitions were removed (compilation and script execution are Activities inside the owning partition). Tenant partitions get their satellite routing from `PartitionDefinition.DefaultSegmentTableMappings()`.
 
 ## Satellite Sub-Namespaces
 
@@ -281,44 +299,43 @@ def.ResolveTable("ACME/Projects/Alpha/_Thread/abc123")// → "threads"
 
 Satellite tables share the same schema as `mesh_nodes` (including a `main_node` column for back-reference to the parent entity) and are indexed on `main_node` for efficient per-entity queries.
 
-## StandardTableMappings
+## Default table mappings
 
-`PartitionDefinition.StandardTableMappings` defines the default satellite routing for content partitions:
+The static `PartitionDefinition.StandardTableMappings` / `NodeTypeToSuffix` dictionaries are **gone**. The defaults now come from `SatelliteTableMapping.Defaults` (`src/MeshWeaver.Mesh.Contract/SatelliteTableMapping.cs`), surfaced as:
 
 ```csharp
-public static Dictionary<string, string> StandardTableMappings => new()
-{
-    ["_Activity"]     = "activities",
-    ["_UserActivity"] = "user_activities",
-    ["_Thread"]       = "threads",
-    ["_Tracking"]     = "annotations",
-    ["_Approval"]     = "approvals",
-    ["_Access"]       = "access",
-    ["_Comment"]      = "comments",
-};
+PartitionDefinition.DefaultSegmentTableMappings()    // segment  → table, for TableMappings
+PartitionDefinition.DefaultNodeTypeTableMappings()   // nodeType → table, for NodeTypeTableMappings
 ```
 
-System partitions (Admin, Portal, Kernel) typically have no `TableMappings` and store all nodes in `mesh_nodes`.
+A partition with no `TableMappings` stores every node in `mesh_nodes`.
 
 # Backend Implementations
 
-## IPartitionedStoreFactory
+## IPartitionStorageProvider
 
-Each backend implements this interface:
+Each backend implements this interface (`src/MeshWeaver.Mesh.Contract/Services/IPartitionStorageProvider.cs`). It is **reactive**, not `Task`-based — there is no `IPartitionedStoreFactory` / `PartitionedStore` pair:
 
 ```csharp
-public interface IPartitionedStoreFactory
+public interface IPartitionStorageProvider
 {
-    Task<PartitionedStore> CreateStoreAsync(
-        string firstSegment, CancellationToken ct = default);
-    Task<IReadOnlyList<string>> DiscoverPartitionsAsync(
-        CancellationToken ct = default);
-}
+    string Name { get; }                       // diagnostics / partition listings
+    bool   IsReadOnly { get; }                 // read-only seed ⇒ excluded from the write chain
+    IStorageAdapter Adapter { get; }           // Write returns null = "not my path, try the next"
+    PartitionDefinition? PartitionDefinition => null;
+    int    Priority => 0;                      // claim precedence within a specificity band
 
-public record PartitionedStore(
-    IStorageService PersistenceCore,
-    IMeshQueryProvider? QueryProvider);
+    IObservable<Unit>  EnsurePartitionProvisioned(string @namespace);
+    IObservable<bool?> PartitionExists(string @namespace);   // null = indeterminate
+    IObservable<Unit>  DeletePartition(string @namespace);
+}
 ```
+
+Two details that are load-bearing:
+
+- **`Adapter.Write` returning `null` means "not my path"** — that is how `PersistenceService` walks the chain, not an exception.
+- **`Priority` exists because registration order is not enough.** Durable backends (Postgres, FileSystem, Cosmos, AzureBlob) return `100` so they always beat the in-memory wildcard catch-all (default `0`) that `AddOrleansMeshServices` registers as a baseline. Without it, a host that wired its durable backend *after* the Orleans defaults silently persisted every node into RAM — acked, searchable nowhere, gone on restart (2026-06-11 prod create-loss).
+- **`PartitionExists` returns `bool?`** — `null` means "this provider cannot tell". Callers OR-fold across providers rather than reading an indeterminate answer as "no" (see `PartitionWriteGuardValidator`).
 
 ## File System
 
@@ -345,24 +362,23 @@ Database
 │   ├── mesh_nodes
 │   ├── activities
 │   └── ...
-├── schema "admin"                   ← System partition (no satellite tables)
+├── schema "admin"                   ← Platform partition (version tracking, invites, admin grants)
 │   ├── mesh_nodes
-│   └── node_type_permissions        ← 🪦 legacy, empty, read by nothing (#953)
-├── schema "user"                    ← User partition (with satellite tables)
-│   ├── mesh_nodes
-│   ├── activities
-│   ├── user_activities
-│   ├── threads
-│   ├── tracking
-│   ├── approvals
 │   ├── access
-│   ├── comments
-│   └── node_type_permissions        ← 🪦 legacy, empty, read by nothing (#953)
-├── schema "portal"                  ← Portal sessions (no satellite tables)
+│   └── user_effective_permissions   ← per-schema, denormalized permission fold
+├── schema "auth"                    ← access-object lookup MIRROR (trigger-written only)
 │   └── mesh_nodes
-└── schema "kernel"                  ← Kernel sessions (no satellite tables)
-    └── mesh_nodes
+└── schema "rbuergi"                 ← a user partition (same shape as a Space partition)
+    ├── mesh_nodes
+    ├── activities
+    ├── user_activities
+    ├── threads
+    ├── approvals
+    ├── access
+    └── comments
 ```
+
+> The pre-V27 shared `"user"` schema is **gone** (V27/V31 renamed and unified it into `auth`; every user now has their own partition named after their userId), and the `portal` / `kernel` session schemas were removed with the legacy partitions. `public.mesh_nodes` is empty by design — `public` holds the shared tables (`partition_access`, the top-level index matview, the `ensure_partition_schema` proc). **Nothing writes to `auth` from application code** — `PartitionWriteGuardValidator` blocks it; a trigger populates it.
 
 Schema names are sanitized: lowercased, non-alphanumeric characters replaced with underscore, digit-leading names prefixed with underscore.
 
@@ -383,7 +399,8 @@ Register the backend once in `ConfigureServices`; the routing wrappers are wired
 ## File System
 
 ```csharp
-services.AddPartitionedFileSystemPersistence(baseDirectory);
+// MeshBuilder extension, not IServiceCollection:
+builder.AddPartitionedFileSystemPersistence(baseDirectory);
 ```
 
 ## PostgreSQL
@@ -398,18 +415,18 @@ services.AddPartitionedPostgreSqlPersistence(connectionString);
 services.AddPartitionedCosmosPersistence(cosmosClient, databaseName);
 ```
 
-Each registration method calls `AddPartitionedCoreAndWrapperServices()`, which registers:
+Each registration method calls `AddPartitionedCoreAndWrapperServices()` (idempotent — guarded by a `CoreAndWrapperServicesMarker`), which registers:
 
-- `RoutingPersistenceServiceCore` as `IStorageService`
-- `RoutingMeshQueryProvider` as `IMeshQueryProvider`
-- `StaticNodeQueryProvider` for static node providers
-- Scoped `PersistenceService` and `MeshQuery` wrappers
+- `PersistenceService` as the singleton `IStorageAdapter`, bundling every `IPartitionStorageProvider`
+- `StorageAdapterMeshQueryProvider` as an `IMeshQueryProvider` — deliberately `AddSingleton`, **not** `TryAddSingleton`: `TryAdd` is first-wins by service type, so a backend that registered its own `IMeshQueryProvider` first would silently drop the pedestrian exact-path probe (symptom: `PathResolver` returns null for partition-scoped path queries)
+- `StaticNodeQueryProvider` for the built-in catalogs
+- `MeshQuery` as `IMeshQueryCore`, and a no-op `IVersionQuery` that PostgreSQL / FileSystem override
 
 # Key Design Decisions
 
 **Full paths preserved everywhere.** No path stripping occurs. `Cornerstone/Article` is stored with that full path inside the Cornerstone partition. This simplifies the implementation and eliminates path-translation bugs.
 
-**Thread-safe provisioning.** `RoutingPersistenceServiceCore` uses `ConcurrentDictionary` with a `SemaphoreSlim` to ensure each partition is provisioned exactly once, even under concurrent access.
+**Provisioned exactly once, without a lock.** `EnsurePartitionProvisioned` is a **promise-cache**: the `pool.Run(...)` observable is stashed in an *instance* `ConcurrentDictionary<schema, IObservable<Unit>>` (`PostgreSqlPartitionStorageProvider._provisioned`), which is `ReplaySubject`-backed — the first caller kicks the DDL off on the `pg:{adapter}` pool (capped at 1, so the gate *is* the single Npgsql connection) and every later subscriber replays the completed result. 🚨 **There is no `SemaphoreSlim`, and adding one would be a bug**: a hand-rolled async gate parks the hub's single-threaded action block and deadlocks. See [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling).
 
 **Scoped fan-out for search.** When searching across all partitions (`parentPath == null`), each partition's search is scoped to its own first segment to avoid duplicate results from shared storage adapters.
 
@@ -420,16 +437,18 @@ Each registration method calls `AddPartitionedCoreAndWrapperServices()`, which r
 | File | Purpose |
 |---|---|
 | `src/MeshWeaver.Hosting/Persistence/PathPartition.cs` | `GetFirstSegment` utility |
-| `src/MeshWeaver.Hosting/Persistence/IPartitionStorageProvider.cs` | Sequential rule contract + `PartitionContexts` |
+| `src/MeshWeaver.Mesh.Contract/Services/IPartitionStorageProvider.cs` | Provider contract (`EnsurePartitionProvisioned`, `PartitionExists`, `DeletePartition`) + `PartitionContexts` |
+| `src/MeshWeaver.Mesh.Contract/Services/IStorageAdapter.cs` | The adapter surface every provider hands out |
+| `src/MeshWeaver.Hosting/Persistence/PersistenceService.cs` | The singleton `IStorageAdapter` that bundles the providers |
 | `src/MeshWeaver.Hosting/Persistence/EmbeddedResourceStorageAdapter.cs` | Embedded-resource adapter |
 | `src/MeshWeaver.Hosting/Persistence/EmbeddedResourcePartitionStorageProvider.cs` | Embedded-resource provider |
+| `src/MeshWeaver.Hosting/Persistence/FileSystemPartitionStorageProvider.cs` | File-system provider |
+| `src/MeshWeaver.Hosting/Persistence/InMemoryPartitionStorageProvider.cs` | In-memory provider |
 | `src/MeshWeaver.Hosting/Persistence/PartitionConfigurationExtensions.cs` | Fluent `MeshBuilder.Add*Partition` extensions |
-| `src/MeshWeaver.Hosting/Persistence/IPartitionedStoreFactory.cs` | Backend factory contract |
-| `src/MeshWeaver.Hosting/Persistence/RoutingPersistenceServiceCore.cs` | Routing singleton |
-| `src/MeshWeaver.Hosting/Persistence/Query/RoutingMeshQueryProvider.cs` | Query routing |
-| `src/MeshWeaver.Hosting/Persistence/FileSystemPartitionedStoreFactory.cs` | File-system factory |
-| `src/MeshWeaver.Hosting/Persistence/PersistenceExtensions.cs` | DI helpers |
-| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionedStoreFactory.cs` | PostgreSQL factory |
+| `src/MeshWeaver.Hosting/Persistence/PersistenceExtensions.cs` | DI helpers (`AddPartitionedCoreAndWrapperServices`) |
+| `src/MeshWeaver.Hosting/Persistence/Query/StorageAdapterMeshQueryProvider.cs` | Pedestrian exact-path query provider |
+| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionStorageProvider.cs` | PostgreSQL provider (schema provisioning promise-cache) |
+| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPathRoutingAdapter.cs` | PostgreSQL path → schema/table routing |
 | `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlExtensions.cs` | PostgreSQL DI helpers |
-| `src/MeshWeaver.Hosting.Cosmos/CosmosPartitionedStoreFactory.cs` | Cosmos DB factory |
+| `src/MeshWeaver.Hosting.Cosmos/CosmosPartitionStorageProvider.cs` | Cosmos DB provider |
 | `src/MeshWeaver.Hosting.Cosmos/PersistenceExtensions.cs` | Cosmos DB DI helpers |

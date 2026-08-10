@@ -188,4 +188,4 @@ A freshly created node gets `Version = 1` unless the caller explicitly supplied 
 
 ## What This Is Not
 
-This is in-mesh change tracking for the live `MeshNode` graph. It is entirely unrelated to **data versioning** of the *content* held by NodeTypes — historical queries, time-travel, and `@path@V{n}` snapshots are a separate concern covered in [DataVersioning](/Doc/Architecture/DataVersioning).
+This is in-mesh change tracking for the live `MeshNode` graph. It is entirely unrelated to **data versioning** of the *content* held by NodeTypes — historical queries, time-travel, and the `{path}@V{n}` snapshot convention are a separate concern covered in [DataVersioning](/Doc/Architecture/DataVersioning) (which is a guide to backend mechanisms, not a framework API).

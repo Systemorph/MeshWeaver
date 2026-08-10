@@ -7,11 +7,11 @@ Icon: Delete
 
 # Image Cleanup — ACR & local Docker
 
-Every AKS code update builds a portal (and sometimes migration) image with a unique tag and
-**pushes it straight to ACR** (`meshweaver.azurecr.io`). `dotnet publish -t:PublishContainer` talks to
-the registry directly — it does **not** create a local Docker image — so dev tags pile up on **ACR**,
-not on your machine. A busy week leaves dozens of `featurefix-<sha>` tags in `memex-portal-ai`. This
-page is how to clear them out safely.
+Images pile up on **ACR** (`meshweaver.azurecr.io`), not on your machine. Two sources feed it: every
+green merge to `main` publishes a `3.0.0-ci.<n>` version tag (plus a git-sha and per-RID tags) via
+`main-cd.yml`, and any manual `dotnet publish -t:PublishContainer` pushes whatever tag you named. That
+publish talks to the registry directly — it does **not** create a local Docker image. This page is how
+to clear the accumulation out safely.
 
 > 🚨 **The golden rule:** never delete an image that any deployment references. A tag that looks "old"
 > by name or date may still be **live** in another namespace. Always build the keeper list from what is
@@ -23,7 +23,15 @@ The repos under `meshweaver.azurecr.io`:
 |---|---|---|
 | `memex-portal-ai` | The portal image — one tag per deploy | Where the bloat is; prune aggressively |
 | `memex-migration` | The DB-migration image | A few tags; keep the live one + `latest` |
+| `memex-bake` | NodeType pre-compilation (bake) job image | Keep the tags matching live/kept portal versions |
+| `memex-portal-next` | The `portal-next` client image | Keep the tags matching live/kept portal versions |
+| `mw-plugin-test` | Plugin-CI test image (also published to GHCR) | Keep the newest; not deployment-critical |
 | `memex-portal-ai-base` | The custom runtime **base** image every portal build layers on | **Never delete `latest`** — it breaks every future build |
+
+> 🚨 `memex-portal-ai`, `memex-migration`, `memex-bake`, `mw-plugin-test` and `memex-portal-next` form the
+> **five-image set** that `.github/scripts/check-image-set.sh` asserts is complete for a given commit, and
+> CD's reconciler republishes when it is not. Deleting one leg's tag for a commit makes that commit look
+> unpublished to the reconciler. Prune whole versions, never one repo's tag in isolation.
 
 ---
 
@@ -32,13 +40,20 @@ The repos under `meshweaver.azurecr.io`:
 List every image referenced by a live Deployment in **all** namespaces on the shared cluster. The
 cluster is private — `kubectl` only via `az aks command invoke`.
 
+**Query every namespace, never a hand-written list** — the cluster runs at least three portal
+namespaces (`portalNamespaces` in `deploy/aks/infra/main.bicep` is `memex`, `prod`, `memex-cloud`), and a
+loop that names only some of them silently omits a live image from the keeper list, which is exactly how
+you delete something in use:
+
 ```bash
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "\
-  for ns in memex memex-cloud; do \
-    echo \"[\$ns]\"; \
-    kubectl -n \$ns get deploy -o jsonpath='{range .items[*]}{.spec.template.spec.containers[0].image}{\"\n\"}{end}'; \
-  done"
+  kubectl get deploy,statefulset,job,cronjob -A \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{\"\t\"}{.spec.template.spec.containers[*].image}{\"\n\"}{end}' \
+  | sort -u"
 ```
+
+`-A` covers namespaces added since this page was written. Include Jobs and StatefulSets too — the
+migration ships as a **Job**, so a `get deploy`-only sweep misses the `memex-migration` tag entirely.
 
 Everything that prints is a **hard keeper**. Example output shape:
 

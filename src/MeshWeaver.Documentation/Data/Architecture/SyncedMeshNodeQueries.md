@@ -10,7 +10,7 @@ icon: /static/NodeTypeIcons/document.svg
 
 `workspace.GetQuery(id, params string[] queries)` is the single correct way to consume a live collection of `MeshNode`s in MeshWeaver. Every chat dropdown, catalog, picker, and security stream you'll write goes through it.
 
-Get this wrong and you spend an afternoon debugging "the dropdown is empty even though MCP search returns 9 results" — that's a real bug we hit twice in one day, both times because someone replaced `workspace.GetQuery` with `IMeshService.Query`. This page explains what the API gives you for free, when to reach for it, and exactly how it breaks when bypassed.
+Get this wrong and you spend an afternoon debugging "the dropdown is empty even though MCP search returns 9 results" — a real bug we hit twice in one day, both times because someone hand-rolled the merge over `IMeshService.Query` instead of calling `workspace.GetQuery`. This page explains what the API gives you for free, when to reach for it, and exactly how it breaks when bypassed.
 
 ---
 
@@ -36,15 +36,16 @@ collection.Subscribe(snapshot =>
 
 ## What you get for free
 
-`SyncedQueryMeshNodes` (the engine behind `GetQuery`) provides five guarantees that are easy to mis-implement when rolling your own:
+`SyncedQueryMeshNodes` (the engine behind `GetQuery`) plus the cache that hosts it provide guarantees that are easy to mis-implement when rolling your own:
 
 | Guarantee | What it means |
 |---|---|
 | **Path-keyed dedup** | Each node appears exactly once, keyed by `MeshNode.Path`. Overlapping queries never produce duplicate rows. |
-| **All-Initial gating** | The snapshot only emits once *every* underlying query has produced its first `Initial` event. You never see partial state; empty-snapshot filtering in your subscriber is unnecessary. |
-| **Provider fan-out** | Every `IMeshQueryProvider` registered on the hub contributes — including `StaticNodeQueryProvider`, which surfaces built-in agents, language models, embedded markdown, and similar. **This is the property that broke when someone used `IMeshQueryCore.Query` directly** — `Core` only invokes the in-memory provider, silently hiding all static nodes. |
-| **`Replay(1).RefCount()` sharing** | The first subscriber triggers upstream per-query subscriptions; later subscribers replay the cached snapshot instantly. All subscribers going away pauses the upstream. The cache key makes `workspace.GetQuery(id)` idempotent — same observable instance on every re-mount. |
-| **Delete fast-path** | Deletes published via `IMeshChangeFeed` bypass the per-provider debounce and update the synced collection synchronously. Without this, cache-driven queries can stay stale after a delete for several seconds. |
+| **Initial gating** | The fold emits nothing until the upstream query has produced its first `Initial` / `Reset`. Pre-`Initial` side-channel events (a change-feed delete, an external `NotifyDeleted`) still fold into the dictionary — they are just not *emitted* early, so a `Replay(1)` consumer can never cache an empty first snapshot ("Selected agent 'X' was not found among the available agents ([])", issue #201). |
+| **Provider fan-out** | Every registered `IMeshQueryProvider` contributes — including `StaticNodeQueryProvider`, which surfaces built-in agents, language models, embedded markdown, and similar. `MeshQuery` aggregates them for **both** its secured and its unsecured (`IMeshQueryCore`) surface, so the synced query — which goes through `IMeshQueryCore` itself — sees static nodes too. |
+| **Typed `Content`** | Each emitted node's `Content` is round-tripped through the **caller hub's** `JsonSerializerOptions`. The process-wide cache hub knows only framework types, so a synced query built without the caller's options hands back raw `JsonElement` and every `is T` cast fails silently (the "empty typed catalog" bug). |
+| **`Replay(1).AutoConnect(1)` sharing** | The first subscriber connects the upstream; later subscribers replay the cached snapshot instantly. The upstream then stays connected for the cache's lifetime — `RefCount()` was tried and **reverted**, because dropping to zero subscribers disconnected the upstream while keeping the replay buffer, so a later `Take(1)` after a runtime write served a stale snapshot. The cache key makes `workspace.GetQuery(id)` idempotent — same observable instance on every re-mount. |
+| **Delete fast-path** | Deletes published via `IMeshChangeFeed` are folded in as synthetic `Removed` events, independent of the upstream provider's own `Removed` (which the persistence change-notifier and security-filter chain can debounce or stall). |
 
 ---
 <svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
@@ -59,7 +60,7 @@ collection.Subscribe(snapshot =>
   <text x="100" y="57" text-anchor="middle" fill="#cfd8dc" font-size="11">.GetQuery(id, queries…)</text>
   <rect x="220" y="10" width="150" height="36" rx="8" fill="#283593"/>
   <text x="295" y="24" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">Per-workspace cache</text>
-  <text x="295" y="40" text-anchor="middle" fill="#b0bec5" font-size="11">Replay(1).RefCount()</text>
+  <text x="295" y="40" text-anchor="middle" fill="#b0bec5" font-size="11">Replay(1).AutoConnect(1)</text>
   <rect x="220" y="58" width="150" height="26" rx="8" fill="#283593"/>
   <text x="295" y="75" text-anchor="middle" fill="#b0bec5" font-size="11">key → same IObservable</text>
   <line x1="180" y1="42" x2="218" y2="42" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
@@ -118,15 +119,16 @@ collection.Subscribe(snapshot =>
 |---|---|
 | Live list of MeshNodes for a UI dropdown / picker | `workspace.GetQuery(id, queries...)` ← here |
 | Live list of MeshNodes for a derived synced collection | `workspace.GetQuery(id, queries...)` ← here |
-| One-shot "give me all nodes matching X right now" | `IMeshService.QueryAsync` |
+| One-shot "give me all nodes matching X right now" | `IMeshService.Query<T>(request).Take(1)` (tests may bridge with the `MeshWeaver.Fixture` `QueryAsync` extension) |
 | Read a specific node by path (especially after a write) | `workspace.GetMeshNodeStream(path)` — see [CqrsAndContentAccess](/Doc/Architecture/CqrsAndContentAccess) |
-| Autocomplete / prefix search | `IMeshService.AutocompleteAsync` |
+| Autocomplete / prefix search | `IMeshService.Autocomplete(...)` (returns `IObservable<IReadOnlyCollection<QueryResult>>`) |
 
 > **The rule of thumb:** if you would otherwise call `IMeshService.Query` and manually merge multiple query streams' `QueryResultChange<T>` events into a path-keyed dictionary — stop. That is exactly what `GetQuery` does, correctly, already. Using `Query` directly for this purpose is **always** a bug because:
 >
-> - You'll forget to gate on every per-query Initial → the dropdown flashes empty before the slowest query finishes.
+> - You'll forget the Initial gate → the dropdown flashes empty and a `Replay(1)` consumer caches that empty snapshot.
 > - You'll re-implement the path-keyed merge slightly differently → duplicates when two queries overlap.
-> - You'll subscribe to `IMeshQueryCore` (or a single provider) rather than the full `IMeshQueryProvider` enumeration → static nodes are invisible. **This produced an empty Agent dropdown even though MCP `nodeType:Agent` returned 9 entries.**
+> - You'll deserialise `Content` with the wrong hub's `JsonSerializerOptions` → `Content` arrives as `JsonElement`, every `is T` cast fails, and the dropdown is empty even though the snapshot has items.
+> - You'll open a fresh upstream per subscriber instead of sharing the cached one.
 
 ---
 
@@ -158,15 +160,20 @@ hub.GetQuery($"nav-above:{path}", $"path:{path} scope:ancestors is:main");
 > real nodes below a path, skipping empty namespace segments. See
 > [Query Syntax](/Doc/DataMesh/QuerySyntax) and [Mesh Search](/Doc/GUI/MeshSearch).
 
-### Multi-query gating rule
+### Multi-query shape
 
-> 🚨 **CRITICAL — Every query in a single `GetQuery` call MUST carry the same `nodeType:` filter.** Vary only namespace and scope. Mixing different `nodeType:` filters across queries in one call breaks the all-Initial gate — the synced collection never emits its first snapshot.
->
-> The canonical shape is what `AgentPickerProjection.BuildModelQueries` produces: one nodeType filter, varying namespaces and scopes. `BuildAgentQuery` collapses its whole union into a **single** query via the `namespace:A|B|C` exact-membership alternation (see [Query Syntax](/Doc/DataMesh/QuerySyntax)), so the gating rule is trivially satisfied. See [ModelProviders.md](/Doc/Architecture/ModelProviders) for a worked multi-query example.
+Every string you pass lands in **one** `MeshQueryRequest` (`FromQueries`), and the query engine
+unions their hits by path before the fold sees them — so there is a single `Initial`, and mixing
+different `nodeType:` filters across the strings does **not** stall the gate. Prefer the narrowest
+set of strings that expresses the union, and prefer collapsing a namespace fan-out into one string:
+`BuildAgentQuery` folds its whole union into a **single** query via the `namespace:A|B|C`
+exact-membership alternation (see [Query Syntax](/Doc/DataMesh/QuerySyntax)), which is cheaper than
+N strings. `AgentPickerProjection.BuildModelQueries` is the worked multi-string example — one
+nodeType filter, varying namespaces and scopes. See [ModelProviders.md](/Doc/Architecture/ModelProviders).
 
 ### 🚨🚨 Run `GetQuery` on a hub LOCAL to the context — never a server-side layout hub
 
-`hub.GetQuery` / `workspace.GetQuery` apply **per-user RLS keyed off the hub's `AccessContext`** (the cache is keyed by `(id, userId)`; the secured upstream filters per-result under that identity — see [Access Control](/Doc/Architecture/AccessControl)). So **the hub you call it on decides whose data you see.** A query that touches **partition-scoped** namespaces (e.g. the agent registry's `{user}/Agent` + `{space}/Agent`) MUST run on a hub that carries the right identity:
+`hub.GetQuery` / `workspace.GetQuery` apply **per-user RLS keyed off the hub's `AccessContext`**: the shared upstream runs as System (it is process-wide infrastructure), and the caller's overload wraps it in a per-subscriber filter that captures `AccessService.Context` at wrap time and drops every node that identity lacks `Read` on (`WrapWithPerUserRls`; System / no-identity callers short-circuit to the raw upstream). So **the hub you call it on decides whose data you see** — see [Access Control](/Doc/Architecture/AccessControl). A query that touches **partition-scoped** namespaces (e.g. the agent registry's `{user}/Agent` + `{space}/Agent`) MUST run on a hub that carries the right identity:
 
 | Context | Hub to use | Identity it carries |
 |---|---|---|
@@ -179,13 +186,18 @@ hub.GetQuery($"nav-above:{path}", $"path:{path} scope:ancestors is:main");
 
 ## Caching by id
 
-The `id` parameter is a key into a per-workspace registry:
+The `id` parameter is a key into the **process-wide** `IMeshNodeStreamCache` registry (the legacy
+per-workspace `ConditionalWeakTable` was deleted — one registry, one set of upstream subscriptions,
+no matter how many workspaces ask):
 
 ```csharp
 var first  = workspace.GetQuery("my-id", "namespace:Agent nodeType:Agent");
-var second = workspace.GetQuery("my-id");      // no-args overload — same instance
-ReferenceEquals(first, second).Should().BeTrue();
+var second = workspace.GetQuery("my-id");      // lookup-only overload — same upstream
 ```
+
+Both resolve the **same cached upstream** (one `SyncedQueryMeshNodes`, one set of provider
+subscriptions). Don't assert `ReferenceEquals` on what comes back: for a real user identity each
+call returns a fresh per-subscriber RLS wrapper around that shared upstream.
 
 **Pick stable ids** — `$"chat-picker:{contextPath}"`, not `Guid.NewGuid()`. Reusing the same id across re-mounts means the upstream subscription (and the provider Initial wave) is reused rather than cycled on every component re-render. A fresh Guid on every call forfeits this entirely.
 
@@ -256,13 +268,13 @@ When you build a settings tab that lists MeshNodes the user can act on — API t
 
 ```csharp
 // ❌ WRONG — refresh-counter pattern. Every revoke / delete writes a tick
-//   into a data stream so the view re-queries QueryAsync. Stale for ~50–200ms
+//   into a data stream so the view re-runs a one-shot query. Stale for ~50–200ms
 //   after each write; spurious empty flashes on Initial.
 const string tokenListRefreshId = "apiTokenListRefresh";
 host.UpdateData(tokenListRefreshId, DateTimeOffset.UtcNow.Ticks);
 stack = stack.WithView((h, _) =>
     h.Stream.GetDataStream<long>(tokenListRefreshId)
-        .SelectMany(_ => tokenService.GetTokensForUser(userId)));   // re-fires QueryAsync each tick
+        .SelectMany(_ => tokenService.GetTokensForUser(userId)));   // re-runs the query each tick
 
 // ✅ RIGHT — bind directly to the synced query. New tokens appear on
 //   CreateNode commit, revokes flip rows when IsRevoked changes,
@@ -272,7 +284,8 @@ stack = stack.WithView((h, _) =>
         .Select(tokens => BuildTokenList(tokens)));
 ```
 
-Inside the service, `GetTokensForUser` simply wraps the synced query:
+Inside such a service, the accessor is nothing but a projected synced query (illustrative shape —
+`CopilotModelCatalog.Models` and `GitHubSyncService`'s config accessors are the live examples):
 
 ```csharp
 public IObservable<IReadOnlyList<ApiTokenInfo>> GetTokensForUser(string userId)
@@ -351,14 +364,14 @@ foreach (var q in queries)
     MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(q))
         .Subscribe(change => MergeIntoMyDictionary(change));
 }
-// Loses provider fan-out, all-Initial gating, dedup, and the workspace
-// cache. Will be silently broken for static nodes.
+// Loses the Initial gate, the path-keyed dedup, the caller-typed Content,
+// and the shared cached upstream.
 
 // 🛑 Don't bypass workspace.GetQuery and instantiate SyncedQueryMeshNodes directly
 var typeSource = new SyncedQueryMeshNodes(workspace, "id", queries);
 typeSource.StreamUpdates().Subscribe(...);
-// Skips the per-workspace registry — every subscriber gets a fresh
-// upstream wave. Use workspace.GetQuery instead.
+// Skips the process-wide registry — every subscriber gets a fresh upstream
+// wave, and Content is typed with the wrong hub's options. Use workspace.GetQuery.
 
 // 🛑 Don't use a fresh Guid as the cache id
 workspace.GetQuery(Guid.NewGuid(), "...")
@@ -370,6 +383,6 @@ workspace.GetQuery(Guid.NewGuid(), "...")
 ## See also
 
 - [AddingANewNodeType](/Doc/Architecture/AddingANewNodeType) — how to introduce a new node type so its instances surface in synced queries
-- [CqrsAndContentAccess](/Doc/Architecture/CqrsAndContentAccess) — when to use synced queries vs `GetMeshNodeStream` (single-node) vs `QueryAsync` (one-shot)
+- [CqrsAndContentAccess](/Doc/Architecture/CqrsAndContentAccess) — when to use synced queries vs `GetMeshNodeStream` (single-node) vs a one-shot `Query<T>(…).Take(1)`
 - [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls) — `IObservable` patterns and why you never `await` inside hub-reachable code
 - [ModelProviders](/Doc/Architecture/ModelProviders) — worked example of `BuildAgentQueries` / `BuildModelQueries` using the multi-query pattern correctly

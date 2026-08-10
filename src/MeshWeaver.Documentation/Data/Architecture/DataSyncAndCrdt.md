@@ -91,6 +91,7 @@ When a subscriber receives an owner frame (`UpdateStream`):
 
 ```
 ANY FRAME (Patch or Full) : drop it if  Version < Current.Version
+                            …unless a Full is consuming the resubscribe latch (below)
 ```
 
 A **Patch** is a delta computed against a *specific base version*; applying a
@@ -108,7 +109,20 @@ owner's `Hub.Version` (§2). A legitimate re-assertion can never carry a version
 *below* `Current`: a reject→ROLLBACK Full re-asserts the owner's CURRENT state,
 stamped with its current (higher-or-equal) version, so it still lands (§6); only
 a genuinely older snapshot can be below `Current`, and that is exactly what we
-drop. **The corollary is unforgiving:** if even one frame is stamped from a
+drop.
+
+**The one sanctioned exception: the rebased-resubscribe Full.** A grain that
+idle-recycles resets its `Hub.Version` to ~0, so the fresh snapshot it sends to a
+mirror that *asked* for one carries a frame version below the mirror's cached
+(pre-recycle) value — and the guard above would drop it, orphaning the mirror
+(#325 symptom 2, multi-replica only). So a version-gated resubscribe — issued
+**only** when the change feed announced a node version *higher* than the mirror
+holds — arms a one-shot latch (`SynchronizationStream.ExpectResubscribeFull`).
+The next `Full` consumes the latch, is accepted despite the regression, and the
+mirror adopts the owner's re-based clock. Only a `Full` consumes it (a stray
+reordered patch is still dropped), and because the latch is armed only when the
+mirror is genuinely behind, it can never let a stale snapshot clobber a newer
+optimistic write. **The corollary is unforgiving:** if even one frame is stamped from a
 *different* clock — e.g. the init/base frame stamped with `Host.Version` while
 the render content rides `Hub.Version` — the version order breaks and the guard
 discards real content. That was the layout-area "stuck on *Building layout…*"
@@ -228,6 +242,7 @@ mirror and the convergence rules above hold.
 | Owner assigns strictly increasing versions per stream — including the init/base frame | `SynchronizationStream.OwnerVersion`; `StreamVersionMonotonicityTest` |
 | A subscriber never mints a version | `UpdateStream` adopt-only; `StreamUpdateIdentityTest` |
 | Stale **patch** AND stale **Full** dropped (`Version < Current`) | `SynchronizationStream.UpdateStream` guard |
+| …except a Full consuming the version-gated resubscribe latch | `SynchronizationStream.ExpectResubscribeFull`; `TwoSiloRecycleConvergenceTest` |
 | A late layout-area subscriber gets its render content, not just the base frame | `DataChangeStreamUpdateTest.DataChangeRequest_ShouldUpdateLayoutAreaViews` |
 | Disjoint concurrent string edits merge | `StringDeltaTest`, `StreamConflictResolutionTest` |
 | A changed string field (incl. nested) ships only its splice | `StringDeltaPatchTest` |
@@ -255,11 +270,12 @@ owning hub — never a parallel persistence/query mirror.
 through two sources (its sync stream *and* a query/persistence mirror), the
 workspace sees two value-equal frames and something downstream must suppress the
 redundant one. That suppression — a value-equality check in `SetCurrent` — is a
-band-aid, and a harmful one: it also swallows a **legitimate** re-assertion (a
-roll-back `Full` whose value happens to equal what an upstream stream still
-holds), stranding a subscriber that optimistically diverged (`§6`). With a single
-source there are no value-equal redundant frames, so no dedup is needed, and the
-roll-back `Full` propagates unimpeded.
+band-aid, and it once swallowed a **legitimate** re-assertion: a roll-back `Full`
+whose value happened to equal what an upstream stream still held, stranding a
+subscriber that had optimistically diverged (`§6`). That specific hole is closed
+— `SetCurrent` now value-dedups **patches only**, and a `Full` always applies —
+but the dedup itself is still the symptom of a double-source. With a single
+source there are no value-equal redundant frames at all.
 
 > **Rule.** If you find yourself adding (or relying on) a value-equality dedup on
 > a sync stream, you have a **double-source** — fix the source, not the symptom.
