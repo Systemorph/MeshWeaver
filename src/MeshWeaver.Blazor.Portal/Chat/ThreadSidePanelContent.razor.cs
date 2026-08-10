@@ -158,10 +158,16 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     {
         if (_observedComposerPath != path) return;
         _composerObserver?.Dispose();
+        // Bounded retry for the transient owner miss (idle-collected composer grain whose
+        // reactivation outruns the request budget → "No response received in hub … target hub was
+        // not found"): the stream cache forwards it for the CALLER to retry. Without this, one
+        // transient miss silently killed the observer for the circuit's whole lifetime — Send from
+        // the composer then never navigated to the created thread.
         _composerObserver = Hub.GetMeshNodeStream(path)
             .Select(n => ThreadComposerNodeType.ComposerOf(n, Hub.JsonSerializerOptions, _logger)?.OpenThreadPath)
             .Where(p => !string.IsNullOrEmpty(p))
             .DistinctUntilChanged()
+            .RetryAreaWithBackoff(AreaErrorClassifier.ShouldRetryArea)
             .Subscribe(
                 threadPath => InvokeAsync(() =>
                 {
@@ -194,7 +200,8 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
                     selectedThreadPath = threadPath;
                     StateHasChanged();
                 }),
-                ex => _logger?.LogDebug(ex, "[ThreadSidePanel] composer observer errored for {Path}", path));
+                ex => _logger?.LogWarning(ex,
+                    "[ThreadSidePanel] composer observer for {Path} gave up after bounded retries — Send-click navigation is inert until the panel rebinds", path));
     }
 
     /// <summary>

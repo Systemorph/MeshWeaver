@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -8,6 +10,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -61,6 +64,26 @@ public record UpdatePolicyContent
     /// <summary>When the poller last recorded <see cref="LatestAvailableTag"/>.</summary>
     [Browsable(false)]
     public DateTimeOffset? CheckedAt { get; init; }
+
+    /// <summary>
+    /// Combo-verification verdicts per candidate tag — what the Candidate Release Protocol's
+    /// instance gate found when it ran this instance's module set inside a candidate image
+    /// (<c>mw-combo-verify</c>). Written via
+    /// <see cref="UpdatePolicyNodeType.RecordVerification"/> (upsert by tag, newest first, bounded
+    /// at <see cref="UpdatePolicyNodeType.MaxRecordedVerifications"/>); the admin Updates tab joins
+    /// this against <see cref="LatestAvailableTag"/> so a blocked upgrade reads "cannot update to
+    /// X — these modules do not compile/test against it" instead of an eternal "update available".
+    /// Not user-editable.
+    /// </summary>
+    [Browsable(false)]
+    public ImmutableList<ComboVerification> ComboVerifications { get; init; } = [];
+
+    /// <summary>The recorded verdict for <paramref name="tag"/>, when one exists.</summary>
+    public ComboVerification? VerificationFor(string? tag) =>
+        string.IsNullOrEmpty(tag)
+            ? null
+            : ComboVerifications.FirstOrDefault(v =>
+                string.Equals(v.CandidateTag, tag, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>
@@ -147,6 +170,51 @@ public static class UpdatePolicyNodeType
                             ? Observable.Return(NodePath)
                             : Observable.Throw<string>(ex));
                 }));
+    }
+
+    /// <summary>How many combo verdicts <c>Admin/UpdatePolicy</c> retains. Candidates supersede
+    /// fast; the node must never grow without bound.</summary>
+    public const int MaxRecordedVerifications = 8;
+
+    /// <summary>
+    /// Records a combo-verification verdict on <c>Admin/UpdatePolicy</c> (as System — the same
+    /// identity the poller's bookkeeping writes under): upsert by
+    /// <see cref="ComboVerification.CandidateTag"/>, newest <see cref="ComboVerification.VerifiedAt"/>
+    /// first, bounded at <see cref="MaxRecordedVerifications"/>. Touches ONLY the verification
+    /// field; the admin-chosen policy is preserved. Cold — subscribe to run the write.
+    ///
+    /// <para>🚨 The System scope is opened and closed SYNCHRONOUSLY around the subscribe (the
+    /// <see cref="PlatformUpdateStatus"/> shape, and for its reason: impersonation is an
+    /// <c>AsyncLocal</c>, and <c>Observable.Using</c> would dispose it on whichever thread the
+    /// sequence terminates on, leaving the caller running as System).</para>
+    /// </summary>
+    public static IObservable<Unit> RecordVerification(IMessageHub hub, ComboVerification verdict)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var jsonOptions = hub.JsonSerializerOptions;
+        return Observable.Create<Unit>(observer =>
+        {
+            using (AccessContextScope.AsSystem(accessService))
+                return hub.GetWorkspace().GetMeshNodeStream(NodePath)
+                    .Update(node =>
+                    {
+                        var cur = ParseContent(node.Content, jsonOptions);
+                        var verifications = cur.ComboVerifications
+                            .RemoveAll(v => string.Equals(
+                                v.CandidateTag, verdict.CandidateTag,
+                                StringComparison.OrdinalIgnoreCase))
+                            .Add(verdict)
+                            .OrderByDescending(v => v.VerifiedAt)
+                            .Take(MaxRecordedVerifications)
+                            .ToImmutableList();
+                        return node with
+                        {
+                            Content = cur with { ComboVerifications = verifications },
+                        };
+                    })
+                    .Select(_ => Unit.Default)
+                    .Subscribe(observer);
+        });
     }
 
     /// <summary>Parses the policy content from a node (handles both typed content and raw

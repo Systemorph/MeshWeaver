@@ -133,12 +133,23 @@ public abstract record StreamMessage(string StreamId);
 /// <param name="Change">The raw JSON payload of the change.</param>
 /// <param name="ChangeType">The shape of the change (full, patch, instance, …).</param>
 /// <param name="ChangedBy">Identifier of the actor that made the change, if known.</param>
+/// <param name="BasedOnVersion">The <see cref="Version"/> of the change the producer SENT
+/// immediately before this one on the same stream, or <c>-1</c> when unknown (first frame,
+/// or a producer that predates the field). This chains consecutive frames so a receiver can
+/// DETECT a lost frame: a <see cref="ChangeType.Patch"/> whose <c>BasedOnVersion</c> does not
+/// match the version the receiver last applied means a frame between them never arrived
+/// (the transport is at-most-once — an Orleans memory stream drops a frame published before
+/// the subscriber attached, and can drop under pressure), and the receiver must request a
+/// fresh snapshot instead of silently tracking the owner at a permanent deficit
+/// (issue #1081: the compile-error overlay frame vanished mid-burst and the mirror sat on
+/// "awaiting first data" forever while later patches kept applying cleanly).</param>
 public abstract record JsonChange(
     string StreamId,
     long Version,
     [property: PreventLogging] RawJson Change,
     ChangeType ChangeType,
-    string? ChangedBy
+    string? ChangedBy,
+    long BasedOnVersion = -1
 ) : StreamMessage(StreamId);
 /// <summary>
 /// Event published when the data behind a stream has changed.
@@ -148,13 +159,16 @@ public abstract record JsonChange(
 /// <param name="Change">The raw JSON payload of the change.</param>
 /// <param name="ChangeType">The shape of the change (full, patch, instance, …).</param>
 /// <param name="ChangedBy">Identifier of the actor that made the change, if known.</param>
+/// <param name="BasedOnVersion">Version of the previously sent frame on this stream
+/// (loss-detection chain — see <see cref="JsonChange"/>), or <c>-1</c> when unknown.</param>
 public record DataChangedEvent(
     string StreamId,
     long Version,
     RawJson Change,
     ChangeType ChangeType,
-    string? ChangedBy
-) : JsonChange(StreamId, Version, Change, ChangeType, ChangedBy);
+    string? ChangedBy,
+    long BasedOnVersion = -1
+) : JsonChange(StreamId, Version, Change, ChangeType, ChangedBy, BasedOnVersion);
 /// <summary>
 /// Stream-sync request that applies a JSON change to a subscribed stream.
 /// </summary>
@@ -163,13 +177,16 @@ public record DataChangedEvent(
 /// <param name="Change">The raw JSON payload of the change.</param>
 /// <param name="ChangeType">The shape of the change (full, patch, instance, …).</param>
 /// <param name="ChangedBy">Identifier of the actor that made the change, if known.</param>
+/// <param name="BasedOnVersion">Version of the previously sent frame on this stream
+/// (loss-detection chain — see <see cref="JsonChange"/>), or <c>-1</c> when unknown.</param>
 public record PatchDataChangeRequest(
     string StreamId,
     long Version,
     RawJson Change,
     ChangeType ChangeType,
-    string? ChangedBy
-) : JsonChange(StreamId, Version, Change, ChangeType, ChangedBy);
+    string? ChangedBy,
+    long BasedOnVersion = -1
+) : JsonChange(StreamId, Version, Change, ChangeType, ChangedBy, BasedOnVersion);
 
 /// <summary>
 /// Request to subscribe to a stream of changes for the given workspace reference.
