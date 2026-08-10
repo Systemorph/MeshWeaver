@@ -3,6 +3,7 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -190,10 +191,52 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
         // Terminal indicator: a Succeeded activity renders a "✓ Done" status line,
         // never a spinner (pinned control-shape: ActivityProgressViewTest).
         var indicatorArea = rootControl.Areas[0].Area!.ToString()!;
-        await stream.GetControlStream(indicatorArea)
-            .Should().Within(30.Seconds()).Match(c => c is LabelControl l
-                && l.Data is not null
-                && l.Data.ToString()!.Contains("Done"));
+        try
+        {
+            await stream.GetControlStream(indicatorArea)
+                .Should().Within(30.Seconds()).Match(c => c is LabelControl l
+                    && l.Data is not null
+                    && l.Data.ToString()!.Contains("Done"));
+        }
+        catch (MeshWeaver.Reactive.Assertions.ObservableAssertionException ex)
+        {
+            // 🚨 CI-only flake diagnosis (runs 31401910253 / 31407254207-2 / 31414605989): the
+            // indicator emitted exactly ONE control in 30s — the stale Running-state spinner —
+            // although this test had ALREADY observed Status=Succeeded on the node stream before
+            // subscribing. That single message cannot separate the two failure worlds, which
+            // need opposite fixes:
+            //   • node REGRESSED (a late write rolled Status back to Running) → write-order bug
+            //     upstream of the render;
+            //   • node still Succeeded but the render/sync pipeline LOST the re-render frame →
+            //     layout-sync bug.
+            // Re-read the authoritative node AT FAILURE TIME and put its state into the thrown
+            // message, so the next CI sighting names its world instead of burning another triage.
+            ActivityLog? logNow = null;
+            try
+            {
+                logNow = (await workspace.GetMeshNodeStream(activityPath)
+                        .Where(n => n is not null)
+                        .Select(n => n!.Content as ActivityLog)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .FirstAsync().ToTask());
+            }
+            catch (Exception readEx)
+            {
+                throw new Xunit.Sdk.XunitException(
+                    $"{ex.Message}\nFAILURE-TIME NODE STATE: unreadable ({readEx.GetType().Name}: "
+                    + $"{readEx.Message}) — the owner did not answer, pointing at the owner hub, "
+                    + "not the render pipeline.", ex);
+            }
+            throw new Xunit.Sdk.XunitException(
+                $"{ex.Message}\nFAILURE-TIME NODE STATE: Status={logNow?.Status}, "
+                + $"Messages={logNow?.Messages.Count}, End={logNow?.End:o}. "
+                + (logNow?.Status == ActivityStatus.Succeeded
+                    ? "Node is (still) Succeeded ⇒ the render/sync pipeline lost the terminal "
+                      + "re-render frame (layout-sync bug)."
+                    : "Node is NOT Succeeded although this test already observed Succeeded before "
+                      + "subscribing ⇒ a later write regressed the node (write-order bug)."), ex);
+        }
 
         // The captured output line renders as one of the log rows' message labels
         // (BuildLog: one horizontal [level-tag, message] row per LogMessage).
