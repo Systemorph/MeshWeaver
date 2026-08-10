@@ -192,8 +192,15 @@ public class Workspace : IWorkspace
     /// <inheritdoc />
     public IObservable<T[]?>? GetStream<T>()
     {
-        var collection = DataContext.GetTypeSource(typeof(T));
-        if (collection == null)
+        // 🚨 EXACT type source, never the base-walking DataContext.GetTypeSource(Type).
+        // That walk is a WRITE-path affordance — WorkspaceOperations.ClassifyForRouting stores a
+        // derived instance into its base's collection, and ImportManager falls back to the base
+        // explicitly. Used as the READ guard it admitted a type that owns NO collection of its
+        // own, and the very next line resolves the collection name through TypeRegistry, which
+        // does NOT walk: the mismatch threw "Type X is unknown." straight out of the caller's
+        // layout-area render ("Rendering failed for area X") instead of returning the documented
+        // null that every caller already handles with `?? Observable.Return(...)`.
+        if (DataContext.GetCollectionName(typeof(T)) == null)
             return null;
         // Hub already past Started → SynchronizationStream..ctor would throw
         // ObjectDisposedException synchronously and the exception would
