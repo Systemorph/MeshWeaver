@@ -277,8 +277,13 @@ internal static class ThreadSubmissionServer
         // silently — a dead watcher means the resubmit is never claimed and the
         // thread parks forever (the live-path "observer dies" deadlock behind
         // Resubmit_AfterExecution_DoesNotDeadlock). On fault, re-establish after a
-        // short delay. Mirrors ThreadExecution.InitializeThreadLifecycle and
-        // ActivityControlPlaneExtensions.WatchControlPlane.
+        // short delay.
+        //
+        // 🚨 This is a HAND-ROLLED loop, NOT
+        // ActivityControlPlaneExtensions.SubscribeWithReEstablish / WatchControlPlane —
+        // it does NOT inherit their terminal fault classification and re-establishes on
+        // EVERY fault, including an own-node-gone NotFound. Converting it is a separate
+        // change; only the SCHEDULING is shared, via ReEstablishSchedule.Arm.
         var serial = new System.Reactive.Disposables.SerialDisposable();
         // 🚨 #991 — hold the PENDING re-establish so teardown cancels it. An uncancelled
         // `Observable.Timer` sits on the process-wide TimerQueue (a strong GC root) and
@@ -286,6 +291,14 @@ internal static class ThreadSubmissionServer
         // stream that faults as the hub tears down keeps the hub alive past disposal.
         var pendingReEstablish = new System.Reactive.Disposables.SerialDisposable();
         var disposed = false;
+        // 🚨 Resolve the workspace ONCE, at install time, while the hub's DI scope is
+        // alive. Re-resolving inside Establish() (GetWorkspace() is
+        // ServiceProvider.GetRequiredService<IWorkspace>()) put a live
+        // ObjectDisposedException source on the re-establish path: a timer tick that beat
+        // the disposal flag threw straight out of the Rx OnNext handler on a thread-pool
+        // thread — unhandled, process-fatal. IWorkspace is scoped per hub, so hoisting
+        // resolves the identical instance.
+        var workspace = threadHub.GetWorkspace();
         // 🚨 Stage 1 of the in-memory inbox channel. Resolve-or-create the per-thread
         // ThreadInboxChannel here (thread-hub init — single threaded, before any round),
         // so check_inbox (Stage 2) and the round-end reconcile resolve the same instance.
@@ -293,7 +306,7 @@ internal static class ThreadSubmissionServer
         // messages that arrive mid-round WITHOUT writing the thread node — the node write
         // that used to happen here (and in check_inbox) is what raced the round and wedged.
         var inboxChannel = ThreadInboxChannel.For(threadHub);
-        void Establish() => serial.Disposable = threadHub.GetWorkspace().GetMeshNodeStream()
+        void Establish() => serial.Disposable = workspace.GetMeshNodeStream()
             // 🚨 React ONLY to control-plane changes — Status, and the pending / ingested /
             // user-message id sets. A running round emits hundreds of StreamingText / Messages
             // updates; without this filter the watcher re-ran ReconcileUserMessageIds (an
@@ -339,7 +352,6 @@ internal static class ThreadSubmissionServer
                 triggerNode =>
                 {
                     logger?.LogDebug("[SubmissionWatcher] DISPATCH_TRIGGERED for {ThreadPath}", threadPath);
-                    var workspace = threadHub.GetWorkspace();
                     // 🚨 Re-stamp the thread OWNER's identity for the claim own-write (see the
                     // identity note at the top of this method). The .Update().Subscribe() below
                     // posts the UpdateStreamRequest SYNCHRONOUSLY on this thread, so capturing the
@@ -385,10 +397,11 @@ internal static class ThreadSubmissionServer
                     logger?.LogWarning(ex,
                         "[SubmissionWatcher] stream errored for {ThreadPath} — re-establishing",
                         threadPath);
-                    if (!disposed)
-                        pendingReEstablish.Disposable =
-                            System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1))
-                                .Subscribe(_ => Establish());
+                    // Re-checks `disposed` at FIRE time (not only here at arm time) and
+                    // routes a synchronous Establish() throw to the logger instead of onto
+                    // the timer's thread-pool thread. See ReEstablishSchedule.
+                    pendingReEstablish.Disposable = ReEstablishSchedule.Arm(
+                        () => disposed, Establish, logger, "SubmissionWatcher", threadPath);
                 });
 
         Establish();
