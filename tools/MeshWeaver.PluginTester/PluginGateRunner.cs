@@ -284,17 +284,19 @@ public static class PluginGateRunner
                 };
                 if (!type.DeclaresTestsArea)
                     return Observable.Return(afterRender with { Tests = CheckOutcome.Skipped });
-                return ResolveTestsHost(harness, type.Path)
-                    // Bounded: the host lookup queries the (eventually consistent) index and may
-                    // create a node — both are message round-trips with no budget of their own, and
-                    // an unbounded wait here would spend the whole JOB timeout and report nothing.
-                    // Same budget as the render it feeds; a resolve is sub-second when it works.
+                return CreateTestsProbe(harness, type.Path)
+                    .Select(hostPath => new TestsHost(
+                        hostPath,
+                        $"{hostPath} — the probe instance the gate created for this check"))
+                    // Bounded: creating the probe is a CreateNode round-trip with no budget of its
+                    // own, so an unbounded wait here would spend the whole JOB timeout and report
+                    // nothing. Same budget as the render it feeds; the create is sub-second when it
+                    // works.
                     .Timeout(options.RenderTimeout)
                     .Catch((TimeoutException _) => Observable.Return(new TestsHost(
                         Path: null,
-                        Description: $"unresolved — no Tests host within " +
-                                     $"{options.RenderTimeout.TotalSeconds:F0}s (neither a shipped " +
-                                     $"instance of {type.Path} nor a created probe)")))
+                        Description: $"unresolved — no probe instance under {type.Path} within " +
+                                     $"{options.RenderTimeout.TotalSeconds:F0}s")))
                     .SelectMany(host => (host.Path is null
                             ? Observable.Return(new AreaVerdict(
                                 CheckOutcome.Failed, "no host to execute the Tests area on"))
@@ -312,65 +314,53 @@ public static class PluginGateRunner
                     .Catch((Exception ex) => Observable.Return(afterRender with
                     {
                         Tests = CheckOutcome.Failed,
-                        TestsDetail = $"could not resolve a Tests host: " +
+                        TestsDetail = $"could not create the Tests probe: " +
                                       $"{ex.GetType().Name}: {ex.Message}",
                     }));
             });
 
-    /// <summary>The node whose hub runs a type's <c>Tests</c> area, and how the gate picked it.</summary>
-    /// <param name="Path">The host node's path; null when no host could be resolved.</param>
-    /// <param name="Description">The human-readable account printed in the report.</param>
+    /// <summary>The node whose hub ran a type's <c>Tests</c> area.</summary>
+    /// <param name="Path">The host node's path; null when no host could be created.</param>
+    /// <param name="Description">The human-readable account printed in the report — so a
+    /// <c>No renderer is registered for area `Tests` on hub X</c> can be read without guessing
+    /// which node X was (issue #1077).</param>
     private sealed record TestsHost(string? Path, string Description);
 
     /// <summary>
-    /// The node whose hub serves the type's <c>Tests</c> area: the area is registered by the
-    /// type's compiled configuration, which runs on INSTANCE hubs (the type node itself is
-    /// served by the NodeType editor). Prefers an instance the package ships; otherwise creates
-    /// a throwaway probe instance under the type path (system-impersonated — the same footing
-    /// as the install).
+    /// The Tests probe ALWAYS runs on a freshly created instance, never on a shipped one.
     ///
-    /// <para>🚨 The two branches are NOT equivalent, so the report names which one ran. A shipped
-    /// instance can be a node whose hub was activated earlier in the install — e.g. a package ROOT
-    /// retyped to the package's own NodeType, activated while it was still the Space placeholder —
-    /// and an instance hub never re-binds its configuration, so it can serve only the framework's
-    /// default areas while the type's own are missing. A freshly created probe cannot be in that
-    /// state. That is the difference between the same commit's green and red gate runs, and
-    /// without the host in the report the RED reads as "the plugin is broken" (issue #1077).</para>
+    /// <para>🚨 This is a correctness requirement, not tidiness. A shipped instance (e.g. the
+    /// Store root) is installed early in the run, so its hub activates mid-import — BEFORE this
+    /// type's compile produced its release — and a hub never rebinds on its own: it keeps serving
+    /// only the framework areas, and the type's Tests view is absent for the rest of the run.
+    /// That surfaced as <c>No renderer is registered for area `Tests`</c> (latched as an instant
+    /// red before AreaProbe treated not-found as transient, and as
+    /// <c>Tests area never became available within 120s</c> after). Recycling the shipped host
+    /// instead (DisposeRequest, then probe) trades this for a subscribe-vs-teardown race the raw
+    /// probe stream has no recovery for — the platform's stream cache absorbs exactly that race,
+    /// but the tester's <c>GetRemoteStream</c> path deliberately bypasses the cache.</para>
+    ///
+    /// <para>A fresh node's hub activates on FIRST ACCESS — the probe's own subscription — which
+    /// is after the compile gate passed, so it binds the release just verified, deterministically.
+    /// The Tests-area convention (self-contained static suites that throw on failure) is what
+    /// makes the host instance interchangeable.</para>
     /// </summary>
-    private static IObservable<TestsHost> ResolveTestsHost(GateMesh harness, string typePath)
+    private static IObservable<string> CreateTestsProbe(GateMesh harness, string typePath)
     {
         var meshService = harness.ServiceProvider.GetRequiredService<IMeshService>();
-        return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{typePath}"))
-            .Take(1)
-            .SelectMany(change =>
-            {
-                var shipped = change.Items
-                    .Where(n => n.Path != typePath && n.State == MeshNodeState.Active)
-                    .OrderBy(n => n.Path, StringComparer.Ordinal)
-                    .FirstOrDefault();
-                if (shipped is not null)
-                    return Observable.Return(new TestsHost(
-                        shipped.Path,
-                        $"{shipped.Path} — an instance of {typePath} already in the mesh " +
-                        $"({change.Items.Count} candidate(s)); its hub may predate this install"));
-
-                var probePath = $"{typePath}/GateProbe";
-                var probe = new MeshNode("GateProbe", typePath)
-                {
-                    Name = "Gate Probe",
-                    NodeType = typePath,
-                    MainNode = probePath,
-                    State = MeshNodeState.Active,
-                };
-                var access = harness.ServiceProvider.GetRequiredService<AccessService>();
-                return Observable.Using(
-                        () => access.ImpersonateAsSystem(),
-                        _ => meshService.CreateNode(probe))
-                    .Select(created => new TestsHost(
-                        created.Path,
-                        $"{created.Path} — a throwaway probe instance the gate created " +
-                        $"(no instance of {typePath} was visible)"));
-            });
+        var probePath = $"{typePath}/GateProbe";
+        var probe = new MeshNode("GateProbe", typePath)
+        {
+            Name = "Gate Probe",
+            NodeType = typePath,
+            MainNode = probePath,
+            State = MeshNodeState.Active,
+        };
+        var access = harness.ServiceProvider.GetRequiredService<AccessService>();
+        return Observable.Using(
+                () => access.ImpersonateAsSystem(),
+                _ => meshService.CreateNode(probe))
+            .Select(created => created.Path);
     }
 
     /// <summary>
@@ -412,8 +402,16 @@ public static class PluginGateRunner
             services.AddLogging(logging =>
             {
                 logging.SetMinimumLevel(minLevel);
-                if (minLevel < LogLevel.Warning)
-                    logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss.fff "; });
+                // 🚨 ALWAYS attach the provider, including at the default Warning level. It used to
+                // be attached only when the level was turned DOWN (`minLevel < Warning`), so a gate
+                // run at its default verbosity emitted the report and NOTHING else — every
+                // framework Warning was written to a logger with no sinks. When the gate went RED
+                // on CI ("No renderer is registered for area `Tests` on hub `Store`", 2026-08-10)
+                // the run therefore carried zero evidence of WHY the instance was bound to the
+                // fallback config, and the failure could not be diagnosed from the job log at all.
+                // Warning volume is a handful of lines per run — the trace levels are still opt-in
+                // through MW_LOG_LEVEL.
+                logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss.fff "; });
                 foreach (var category in (Environment.GetEnvironmentVariable("MW_LOG_CATEGORIES") ?? "")
                          .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     logging.AddFilter(category, minLevel);
