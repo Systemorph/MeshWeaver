@@ -323,9 +323,9 @@ pipeline has ever type-checked it.
 | Compiled by `dotnet build` / CI | **Never.** It is content, not code — no `<Compile>` item, no `-warnaserror`, no test | Compiled at runtime by `RunCompile` |
 | Edited by | git | in-mesh edit, `Patch`, GitSync import |
 
-The two **drift**. A node carries its own version history, so the mesh can hold source that is
-*older* than the repo's: a repo grep comes back clean while the deployed mesh still calls the API
-you removed. Treat the repo file as a seed, never as the answer to "what will the portal compile?"
+🚨 **The `configuration` lambda is C# inside a JSON string field**, so it is not reached by any
+`.cs`-shaped search or build. A `grep --include='*.cs'` for a deleted symbol comes back clean while
+three NodeTypes still call it from their JSON. Search the node JSON too.
 
 ### The failure cascade
 
