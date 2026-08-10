@@ -230,8 +230,30 @@ public class ContentService : IContentService
             CreateCollection(config)
                 .Catch((Exception ex) =>
                 {
-                    logger.LogWarning(ex, "Creating content collection '{Collection}' failed", name);
                     collections.TryRemove(name, out _);
+
+                    // 🚨 A hub-disposal fault is NOT "no such collection". The hub is being
+                    // recycled, so it cannot host the collection's SynchronizationStream right
+                    // now — but the collection is configured and the node is coming straight back.
+                    // Collapsing that into null made every caller report the terminal "Target
+                    // content collection 'content' not found", which is a lie the caller cannot
+                    // recover from: the plugin installer read it as a real failure and declared a
+                    // package's committed binaries lost rather than asking again a moment later
+                    // (StaleStampRootBindingTest, the test that turned main red — the trail was
+                    // "Creating content collection 'content' failed: HubDisposingException"
+                    // logged as a warning, then a not-found the caller acted on). Rethrow so the
+                    // TRANSIENT verdict survives to the messaging layer, which classifies it as
+                    // ErrorType.ShuttingDown; the cache entry is already evicted, so the next
+                    // access builds a fresh pipeline against the reactivated hub.
+                    if (HubDisposingException.IsHubDisposal(ex))
+                    {
+                        logger.LogDebug(ex,
+                            "Content collection '{Collection}' could not be created because its hub is "
+                            + "recycling — surfacing as transient, not as a missing collection", name);
+                        return Observable.Throw<ContentCollection?>(ex);
+                    }
+
+                    logger.LogWarning(ex, "Creating content collection '{Collection}' failed", name);
                     return Observable.Return<ContentCollection?>(null);
                 })
                 .Replay(1)
