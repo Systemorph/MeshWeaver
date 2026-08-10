@@ -690,6 +690,20 @@ public static class PackageInstaller
     /// </summary>
     private static readonly TimeSpan RootTypeSettleTimeout = TimeSpan.FromSeconds(90);
 
+    /// <summary>How long one liveness probe of the root waits before it counts as "still down".</summary>
+    private static readonly TimeSpan RootPingTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>Pause between liveness probes, so a fail-fast DeliveryFailure cannot spin the loop.</summary>
+    private static readonly TimeSpan RootPingRetryDelay = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// Overall budget for the root to come back after its recycle, before the publish goes ahead
+    /// regardless. A recycle is milliseconds; this is the graceful sink for a wedged teardown, and
+    /// is deliberately far below the hub's own request timeout so a miss is diagnosable rather than
+    /// indistinguishable from the 60 s hang this wait exists to prevent.
+    /// </summary>
+    private static readonly TimeSpan RootReadyTimeout = TimeSpan.FromSeconds(20);
+
     /// <summary>
     /// The path of the NodeType <paramref name="root"/> declares, but ONLY when that type is one
     /// this very package installs — those are the only types that can still be carrying the
@@ -762,57 +776,6 @@ public static class PackageInstaller
     /// completes in a few milliseconds and the wait ends the instant it does.
     /// </summary>
     private static readonly TimeSpan RootRecycleTimeout = TimeSpan.FromSeconds(30);
-
-    /// <summary>
-    /// Recycles the retyped root's hub — and WAITS for that teardown to complete before the
-    /// install goes on to touch the root again.
-    ///
-    /// <para>🚨 The wait is the point. This recycle used to be fire-and-forget, so the install's
-    /// very next steps — the warm, then the CONTENT publish — raced the teardown they had just
-    /// asked for. Both of them ACTIVATE the root (routing a message to a node address creates its
-    /// hub), so a package with content assets reliably posted its
-    /// <c>SyncContentFilesRequest</c> into a hub that the queued <c>DisposeRequest</c> then tore
-    /// down underneath it, mid-activation. Measured on CI (run 31390882509, the merge that turned
-    /// main red): the sync reached the root at <c>runLevel=Starting</c> and was dead 94 ms later,
-    /// the installer burned the full 60 s hub timeout, and the committed asset never landed —
-    /// "the package's nodes are installed but its binaries are not being served". The sibling
-    /// symptom is the caller's: <c>Install</c> returned while the recycle was still in flight, so
-    /// a render of the freshly installed root raced the same teardown.</para>
-    ///
-    /// <para>Sequenced, not retried: we take the live instance BEFORE posting and then observe
-    /// its own <see cref="IMessageHub.DisposalCompleted"/>, so the install resumes exactly when
-    /// the old hub is gone and the next touch activates the FINAL one. Nothing to poll, nothing
-    /// to sleep. When there is no local instance (nothing was ever activated, or the hub lives on
-    /// another silo) the post stays fire-and-forget as before — there is no teardown here to wait
-    /// for. A timeout degrades to the old behaviour rather than failing the install: the package's
-    /// nodes are already written by this point.</para>
-    /// </summary>
-    private static IObservable<Unit> RecycleRoot(IMessageHub hub, string? rootPath, ILogger? logger)
-    {
-        if (string.IsNullOrWhiteSpace(rootPath))
-            return Observable.Return(Unit.Default);
-
-        var address = new Address(rootPath!);
-        // Captured BEFORE the post: after it, the address may already resolve to nothing (or, in
-        // a later round, to the replacement) and we would wait on the wrong instance — or on none.
-        var live = hub.GetHostedHub(address, HostedHubCreation.Never);
-        hub.Post(new DisposeRequest(), o => o.WithTarget(address));
-        if (live is null)
-            return Observable.Return(Unit.Default);
-
-        return live.DisposalCompleted
-            .Take(1)
-            .Timeout(RootRecycleTimeout)
-            .Catch<Unit, Exception>(exception =>
-            {
-                logger?.LogWarning(exception,
-                    "[PackageInstaller] the recycle of root {Root} did not complete in {Timeout}; "
-                    + "continuing — the warm and the content publish may race its teardown",
-                    rootPath, RootRecycleTimeout);
-                return Observable.Return(Unit.Default);
-            })
-            .DefaultIfEmpty(Unit.Default);
-    }
 
     /// <summary>
     /// Whether the CONTENT publish may touch <paramref name="rootPath"/> yet — the gate in front
@@ -911,6 +874,89 @@ public static class PackageInstaller
     /// correctly. Deliberately NOT a wait: the installer runs on the mesh that is compiling, so
     /// holding here would trade a mis-binding for a stalled install.</para>
     /// </summary>
+    /// <summary>
+    /// Recycles the retyped partition root and waits for it to come back — the ORDERED replacement
+    /// for the fire-and-forget <c>DisposeRequest</c> that used to be posted at write time.
+    ///
+    /// <para>🚨 Two things were wrong with posting it there, and they compound. It was MISTIMED:
+    /// the in-package NodeType still advertised the compile stamp the repo COMMITTED, so the
+    /// re-activation the recycle invites bound the fallback configuration for the new hub's
+    /// lifetime — exactly what #1101 stopped the warm from doing. And it OUTLIVED the install: the
+    /// teardown was still running when Install returned, so the next touch of the root — the
+    /// content publish, a client's <c>SubscribeRequest</c>, anything — landed mid-teardown and got
+    /// <c>HubDisposingException</c>. Both halves of <c>StaleStampRootBindingTest</c> are that
+    /// failure ("cannot create '/content/'" and "cannot create 'LayoutAreaReference { Area =
+    /// Tests }'"), and in both the reply died with the hub, so the caller waited out its full
+    /// request timeout for work that never happened.</para>
+    ///
+    /// <para>So the recycle now runs where it can do its job: after the type's rebuild has settled
+    /// (<see cref="MayPublishIntoRoot"/> is that wait, and it answers promptly for a type whose
+    /// rebuild produced nothing loadable — there is nothing worth rebinding to, so the recycle is
+    /// skipped), and it WAITS for the root to answer before the install proceeds. Called only when
+    /// the placeholder dance actually ran, i.e. when there is a placeholder binding to replace.</para>
+    /// </summary>
+    private static IObservable<Unit> SettleRetypedRoot(
+        IMessageHub hub, string? rootPath, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
+    {
+        if (string.IsNullOrWhiteSpace(rootPath))
+            return Observable.Return(Unit.Default);
+
+        return MayPublishIntoRoot(hub, rootPath!, nodes, logger)
+            .SelectMany(rebindable =>
+            {
+                if (!rebindable)
+                {
+                    logger?.LogInformation(
+                        "[PackageInstaller] not recycling root {Root}: its in-package NodeType has no "
+                        + "build an instance could load, so a fresh hub would bind the fallback too. "
+                        + "The rebind watcher recycles it once the type compiles.", rootPath);
+                    return Observable.Return(Unit.Default);
+                }
+
+                hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(rootPath!)));
+                return WaitForRootReady(hub, rootPath!, logger);
+            });
+    }
+
+    /// <summary>
+    /// Waits until <paramref name="rootPath"/>'s hub answers a <see cref="PingRequest"/>.
+    ///
+    /// <para>Ordering is the whole primitive: the ping is enqueued on the root BEHIND any
+    /// <c>DisposeRequest</c> already in flight, so it cannot be answered by the hub that is going
+    /// away — only by the one that comes after, and answering it IS that re-activation. A rejected
+    /// or undelivered ping means the teardown is still running, so it retries. The
+    /// <see cref="RootReadyTimeout"/> is a graceful sink, never a wedge: a root that never answers
+    /// is logged and the install carries on.</para>
+    /// </summary>
+    private static IObservable<Unit> WaitForRootReady(
+        IMessageHub hub, string rootPath, ILogger? logger)
+    {
+        var address = new Address(rootPath);
+        return Observable.Defer(Probe)
+            .Repeat()
+            .Where(alive => alive)
+            .FirstAsync()
+            .Timeout(RootReadyTimeout)
+            .Select(_ => Unit.Default)
+            .Catch((Exception exception) =>
+            {
+                logger?.LogWarning(exception,
+                    "[PackageInstaller] root {Root} never answered after its recycle — continuing; "
+                    + "whatever touches it next may still land on a hub that is tearing down",
+                    rootPath);
+                return Observable.Return(Unit.Default);
+            });
+
+        IObservable<bool> Probe() =>
+            hub.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(address))
+                .Take(1)
+                .Timeout(RootPingTimeout)
+                .Select(_ => true)
+                // The delay bounds the retry loop: a DeliveryFailure answers immediately, and
+                // re-subscribing on it with no pause would spin the hub for the whole budget.
+                .Catch<bool, Exception>(_ => Observable.Return(false).Delay(RootPingRetryDelay));
+    }
+
     private static IObservable<Unit> WarmInstalledRoots(
         IMessageHub hub, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
     {
@@ -1045,7 +1091,13 @@ public static class PackageInstaller
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         return MayPublishIntoRoot(hub, rootPath!, nodes, logger)
             .SelectMany(mayPublish => mayPublish
-                ? Publish()
+                // The root must not be TEARING DOWN when the publish lands, or
+                // ContentService.CreateCollection throws HubDisposingException — no byte written —
+                // and the ImportContentResponse the handler still posts dies with the hub, so the
+                // caller waits out its whole 60 s request timeout for assets that never landed.
+                // SettleRetypedRoot has normally already done this; the probe costs one ping when
+                // the root is up, and covers the call sites that do not run it.
+                ? WaitForRootReady(hub, rootPath!, logger).SelectMany(_ => Publish())
                 : Observable.Return(0));
 
         IObservable<int> Publish() => ContentAssetMapper.ToContentSyncs(rootPath!, assets)
@@ -1065,10 +1117,13 @@ public static class PackageInstaller
                 // 🚨 "The address may reactivate (recycle / restart); retry to get the
                 // authoritative answer" is not advice — it is the framework's TRANSIENT verdict,
                 // and this is the one consumer that used to throw it away and declare the
-                // package's binaries lost. A root is recycled TWICE during an install: once by
-                // the installer itself (now sequenced, see RecycleRoot) and once by the framework's
-                // NodeTypeRebindWatcher when the change feed reports the retype — that second one
-                // belongs to nobody and is what this publish lands in.
+                // package's binaries lost. A root is recycled TWICE during an install: once by the
+                // installer itself (sequenced by SettleRetypedRoot, and probed again by
+                // WaitForRootReady just above) and once by the framework's NodeTypeRebindWatcher
+                // when the change feed reports the retype. That second one belongs to nobody and
+                // can land AFTER the readiness probe has passed, which is why the proactive wait
+                // needs this reactive backstop behind it — the probe answers "is it up now", not
+                // "will it still be up when the bytes arrive".
                 //
                 // Not a blind retry, and nothing to sleep on: the re-ask waits for the exact
                 // teardown that rejected it (that hub instance's own DisposalCompleted) and then
@@ -1825,9 +1880,24 @@ public static class PackageInstaller
                     // of intent; it is not load-bearing. If the symptom ever reappears, check all
                     // three: is the hub recycled, is the resolution for the bare root path serving
                     // a real node, and did the rebind watcher see the retype?
-                    .SelectMany(rest => RecycleRoot(
-                            hub, placeholderRoot is not null ? root?.Path : null, logger)
-                        .Select(_ => rest))
+                    //
+                    // 🚨 …and it no longer happens HERE. A fire-and-forget teardown posted at write
+                    // time outlives the install and is a race handed to whoever touches the root
+                    // next — the installer's own content publish, a client's SubscribeRequest,
+                    // anything — which lands mid-teardown and gets HubDisposingException: no bytes
+                    // written, or an area that never renders, plus a caller left waiting on a reply
+                    // that died with the hub. Both halves of StaleStampRootBindingTest are exactly
+                    // that (red on main from 2026-08-10): "cannot create '/content/'" for the
+                    // package that ships assets, "cannot create 'LayoutAreaReference { Area =
+                    // Tests }'" for the one that does not.
+                    //
+                    // It is also MISTIMED here: at this point the in-package type still advertises
+                    // the compile stamp the repo COMMITTED, so the re-activation this recycle
+                    // invites would bind the fallback for the new hub's lifetime — the very thing
+                    // #1101 stopped the warm from doing. The recycle now runs once that type has a
+                    // build an instance can load, and WAITS for the root to come back. See
+                    // SettleRetypedRoot below.
+                    .Select(rest => rest)
                     // A placeholder's write is bookkeeping, not content — its FINAL retype in
                     // stage 2 is the root's one counted write (keeps Written ≤ node count).
                     .Select(rest => (IList<(string Path, bool Wrote)>)(placeholderRoot is null ? rootWrites : [])
@@ -1858,6 +1928,13 @@ public static class PackageInstaller
                         logger, nodes.Select(n => n.Path))
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, nodes.Length, moduleManifest, authorizingUserId))
+                    // The retyped root's recycle, moved here from the write stage and made ORDERED
+                    // (see the note there). Only now can it do its job: the in-package type has had
+                    // its rebuild, so the hub that comes back binds the package's own configuration
+                    // instead of the fallback — and the install no longer returns while a teardown
+                    // it started is still running.
+                    .SelectMany(_ => SettleRetypedRoot(
+                        hub, placeholderRoot is not null ? root?.Path : null, nodes, logger))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
                     // …then the package's committed binaries (course videos/posters) into the
                     // warmed root's content collection — the half of "publish" that merging used
