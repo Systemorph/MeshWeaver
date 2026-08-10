@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
@@ -50,33 +51,53 @@ public class PathResolutionCachePoisonTest
             => (IObservable<QueryResultChange<T>>)(object)_behaviour(Interlocked.Increment(ref _calls));
     }
 
+    /// <summary>
+    /// A WRITABLE partition provider (<see cref="IsReadOnly"/> false) whose partition
+    /// definitively EXISTS. Both are required for the bare-partition-root placeholder
+    /// synthesis (<c>PathResolutionService.SynthesizePartitionRoot</c>) to fire.
+    /// </summary>
+    private sealed class ExistingWritablePartitionProvider : IPartitionStorageProvider
+    {
+        public string Name => "test-writable";
+        public bool IsReadOnly => false;
+        public IStorageAdapter Adapter => throw new NotSupportedException("not used by path resolution");
+        public IObservable<bool?> PartitionExists(string @namespace) => Observable.Return<bool?>(true);
+    }
+
     private static (PathResolutionService Svc, SequencedQueryCore Query) BuildService(
-        Func<int, IObservable<QueryResultChange<MeshNode>>> behaviour)
+        Func<int, IObservable<QueryResultChange<MeshNode>>> behaviour,
+        IMeshChangeFeed? changeFeed = null,
+        IEnumerable<IPartitionStorageProvider>? partitionProviders = null)
     {
         var hub = Substitute.For<IMessageHub>();
         var sp = Substitute.For<IServiceProvider>();
         hub.ServiceProvider.Returns(sp);
         hub.JsonSerializerOptions.Returns(new JsonSerializerOptions());
         // A registered change feed is what ENABLES caching (without it the service
-        // resolves uncached). Real InProcessMeshChangeFeed — no writes fire in this test.
-        sp.GetService(typeof(IMeshChangeFeed)).Returns(new InProcessMeshChangeFeed());
+        // resolves uncached). Real InProcessMeshChangeFeed — pass one in to drive
+        // invalidation from the test; the default is never published to.
+        sp.GetService(typeof(IMeshChangeFeed)).Returns(changeFeed ?? new InProcessMeshChangeFeed());
         // No AccessService → ImpersonateAsSystem() is a no-op (Disposable.Empty).
 
         var query = new SequencedQueryCore(behaviour);
-        var svc = new PathResolutionService(hub, query, Array.Empty<IPartitionStorageProvider>());
+        var svc = new PathResolutionService(hub, query,
+            partitionProviders ?? Array.Empty<IPartitionStorageProvider>());
         return (svc, query);
     }
 
+    private static QueryResultChange<MeshNode> Snapshot(params MeshNode[] items) =>
+        new() { ChangeType = QueryChangeType.Initial, Items = items };
+
     private static IObservable<QueryResultChange<MeshNode>> InitialWith(string id, string ns) =>
-        Observable
-            .Return(new QueryResultChange<MeshNode>
-            {
-                ChangeType = QueryChangeType.Initial,
-                Items = new List<MeshNode> { new(id, ns) { NodeType = "Markdown" } }
-            })
-            // Live queries stay open after the Initial snapshot; ResolveSegmentsCore
-            // takes the first Initial and disposes, so the trailing Never is never observed.
-            .Concat(Observable.Never<QueryResultChange<MeshNode>>());
+        Answer(Snapshot(new MeshNode(id, ns) { NodeType = "Markdown" }));
+
+    /// <summary>
+    /// One Initial snapshot, then open forever. Live queries stay open after the Initial
+    /// snapshot; <c>ResolveSegmentsCore</c> takes the first Initial and disposes, so the
+    /// trailing Never is never observed.
+    /// </summary>
+    private static IObservable<QueryResultChange<MeshNode>> Answer(QueryResultChange<MeshNode> snapshot) =>
+        Observable.Return(snapshot).Concat(Observable.Never<QueryResultChange<MeshNode>>());
 
     [Fact(Timeout = 30000)]
     public async Task HungFirstQuery_DoesNotPoisonCache()
@@ -125,5 +146,102 @@ public class PathResolutionCachePoisonTest
         }
         Assert.Equal("A/B", synchronous!.Prefix);
         Assert.Equal(callsAfterFirst, query.Calls); // no extra query on the cache hit
+    }
+
+    /// <summary>
+    /// 🚨 A SYNTHESIZED bare-partition-root placeholder is a FABRICATION, not an observed
+    /// fact, and must never be cached.
+    ///
+    /// <para>When a single-segment path matches nothing but its partition exists,
+    /// <c>ResolveSegmentsCore</c> fabricates a placeholder <see cref="MeshNode"/> so the
+    /// grain can still answer Ping (<c>PartitionRootActivationTest</c>). That placeholder
+    /// carries <b>no NodeType and no Content</b>. Caching it pins the fabrication exactly the
+    /// way caching a <c>null</c> pins a permanent 404 — the hazard the positive-only cache
+    /// exists to avoid, wearing a disguise: once pinned, every later activation of the
+    /// partition root routes on a NodeType-less node, so <c>EnrichWithNodeType</c> takes its
+    /// silent <c>string.IsNullOrEmpty(nodeType)</c> branch and binds the mesh
+    /// <c>DefaultNodeHubConfiguration</c> — the root then serves ONLY the framework's default
+    /// layout areas and none of its real NodeType's, with no log line and no self-heal.
+    /// That is the plugin gate's <c>Store/Catalog</c> RED: "No renderer is registered for
+    /// area `Tests` on hub `Store`", listing exactly the 37 default areas.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task SynthesizedPartitionRoot_IsNotCached()
+    {
+        // Query #1: the root's write has not reached the read index yet (eventually
+        // consistent — the install writes the node through the owning hub's DEBOUNCED
+        // persist). Query #2: the real, TYPED root is visible.
+        var (svc, query) = BuildService(
+            call => call == 1
+                ? Answer(Snapshot())
+                : Answer(Snapshot(new MeshNode("Store") { NodeType = "Store/Catalog" })),
+            partitionProviders: new IPartitionStorageProvider[] { new ExistingWritablePartitionProvider() });
+
+        var synthesized = await svc.ResolvePath("Store")
+            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        Assert.NotNull(synthesized);
+        Assert.Equal("Store", synthesized!.Prefix);
+        // The fabrication: a bare node with no NodeType — enough to answer Ping, never
+        // enough to bind the root's real hub configuration.
+        Assert.Null(synthesized.Node!.NodeType);
+
+        // The fabrication must NOT have been pinned: the next resolution re-queries and
+        // returns the REAL typed root. Before the fix this returns the cached placeholder
+        // (NodeType null) forever — nothing ever invalidates it, because the create event
+        // that would have fired already fired while the first query was in flight.
+        var real = await svc.ResolvePath("Store")
+            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        Assert.NotNull(real);
+        Assert.Equal("Store", real!.Prefix);
+        Assert.Equal("Store/Catalog", real.Node!.NodeType);
+        Assert.True(query.Calls >= 2, "the synthesized placeholder must not be served from cache");
+    }
+
+    /// <summary>
+    /// 🚨 Fill-after-invalidate: a resolution computed from a PRE-change snapshot must never
+    /// be committed to the cache after the change event for that key has already run.
+    ///
+    /// <para>The invalidation hook removes matching keys from the cache — but a resolution
+    /// that is still IN FLIGHT is not in the cache yet, so the event sweeps nothing and the
+    /// query's stale answer is added AFTERWARDS. Nothing removes it again (the write that
+    /// would have invalidated it has already happened), so the path is pinned to the
+    /// pre-change answer for the rest of the process. Here <c>A/B</c> is created while its
+    /// resolution query is open; the query answers with the pre-create snapshot (only the
+    /// ancestor <c>A</c> matched → remainder <c>B</c> → routing NACKs NotFound), and every
+    /// later resolution must NOT be served that answer.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task InvalidationDuringInFlightQuery_DoesNotPinThePreChangeAnswer()
+    {
+        var feed = new InProcessMeshChangeFeed();
+        // Query #1 is held open by the test so the change event lands mid-flight.
+        var inFlight = new Subject<QueryResultChange<MeshNode>>();
+        var (svc, query) = BuildService(
+            call => call == 1 ? inFlight : InitialWith("B", "A"),
+            changeFeed: feed);
+
+        AddressResolution? stale = null;
+        using var subscription = svc.ResolvePath("A/B").Take(1).Subscribe(r => stale = r);
+
+        // The node is CREATED while the resolution query is open. The cache holds nothing
+        // for "A/B" yet, so this invalidation sweeps nothing.
+        feed.Publish(MeshChangeEvent.Created(new MeshNode("B", "A") { NodeType = "Markdown" }));
+
+        // …and only now does the in-flight query answer, from its PRE-create snapshot:
+        // only the ancestor "A" exists, so "A/B" resolves to prefix "A" remainder "B".
+        inFlight.OnNext(Snapshot(new MeshNode("A")));
+        Assert.NotNull(stale);
+        Assert.Equal("A", stale!.Prefix);
+        Assert.Equal("B", stale.Remainder);
+
+        // That answer must not have been pinned. A fresh resolution re-queries and finds
+        // the created node. Before the fix this replays the stale ancestor match forever —
+        // the "row was written and then answered `No node found` forever" failure mode.
+        var fresh = await svc.ResolvePath("A/B")
+            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        Assert.NotNull(fresh);
+        Assert.Equal("A/B", fresh!.Prefix);
+        Assert.Null(fresh.Remainder);
+        Assert.True(query.Calls >= 2, "the pre-change answer must not be served from cache");
     }
 }
