@@ -37,8 +37,13 @@ public class CosmosStorageAdapterFactory(
         var partitionsContainer = serviceProvider.GetKeyedService<Container>(opts.PartitionsContainerName);
         logger?.LogDebug("partitions={Found}", partitionsContainer != null);
 
+        // The change feed's logger comes from the SAME provider — an IsolatedChangeFeed built with a
+        // null logger reports a dropped/faulting observer NOWHERE, which is the silence it exists to
+        // end (the regression the Postgres provider already carries a comment about).
+        var adapterLogger = serviceProvider.GetService<ILogger<CosmosStorageAdapter>>();
+
         if (nodesContainer != null && partitionsContainer != null)
-            return new CosmosStorageAdapter(nodesContainer, partitionsContainer);
+            return new CosmosStorageAdapter(nodesContainer, partitionsContainer, logger: adapterLogger);
 
         // Fallback: create CosmosClient manually from connection string (non-Aspire scenarios)
         var connectionString = opts.ConnectionString
@@ -58,7 +63,8 @@ public class CosmosStorageAdapterFactory(
         var database = cosmosClient.GetDatabase(opts.DatabaseName);
         return new CosmosStorageAdapter(
             database.GetContainer(opts.NodesContainerName),
-            database.GetContainer(opts.PartitionsContainerName));
+            database.GetContainer(opts.PartitionsContainerName),
+            logger: adapterLogger);
     }
 }
 
