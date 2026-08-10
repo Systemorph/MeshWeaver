@@ -80,6 +80,17 @@ public sealed class AiSourcesInstallHook(IMessageHub hub) : IPartitionInstallHoo
             .Select(nodes => (IReadOnlyList<string>)nodes
                 .Select(n => n.Id)
                 .Where(id => !string.IsNullOrEmpty(id))
+                // 🚨 Drop the node-type DEFINITION. UserNodeType.CreateMeshNode registers itself
+                // self-referentially — id "User" AND nodeType "User" — so `nodeType:User` returns
+                // the definition alongside the real users, and its Id reads as a user called
+                // "User". Everything downstream then targets that name: AiSettingsNodeType.PathFor
+                // yields "User/_Memex/AiSettings", whose partition segment is the literal "User",
+                // so the write lands on schema "user" — never provisioned, because no such user
+                // was ever onboarded. Postgres answers 42P01 and the hook fails for EVERY
+                // partition it registers ("Registering Collaboration sources for user User
+                // failed"). A real user is always keyed by their principal id (rbuergi), never by
+                // the type's own name.
+                .Where(id => !string.Equals(id, UserNodeType, StringComparison.OrdinalIgnoreCase))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList());
 
