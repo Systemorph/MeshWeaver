@@ -143,10 +143,10 @@ public static class PackageInstaller
                         nodes.Select(n => n.Path))
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, nodes.Length, authorizingUserId: authorizingUserId))
-                    .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
+                    .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
                     // …then the package's committed binaries, into the warmed root's content
                     // collection — the half of "publish" that merging used to leave undone (#848).
-                    .SelectMany(_ => SyncPackageContent(hub, partition, sourceFolder, files, logger))
+                    .SelectMany(_ => SyncPackageContent(hub, partition, sourceFolder, files, nodes, logger))
                     .SelectMany(_ => RunInstallHooks(hub, partition!, logger))
                     .Select(_ => result);
             });
@@ -673,13 +673,146 @@ public static class PackageInstaller
             },
         };
 
+    /// <summary>
+    /// Budget for the single READ that decides whether a self-typed root may be warmed yet. This
+    /// is a snapshot of the type's current state, never a wait for a compile — the installer must
+    /// not hold on Roslyn (the compile activity it just kicked runs on the same mesh), so an
+    /// unanswered read simply means "don't warm this one".
+    /// </summary>
+    private static readonly TimeSpan RootTypeProbeTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Backstop for <see cref="MayPublishIntoRoot"/> — the wait before the CONTENT publish touches
+    /// a self-typed root. Unlike the warm's probe this genuinely waits for the in-package type's
+    /// rebuild, because the publish is the point of the step, not an optimisation. The wait ends
+    /// as soon as the type has a loadable build OR its rebuild has run and settled without one, so
+    /// this cap is only ever reached when the type never even starts compiling.
+    /// </summary>
+    private static readonly TimeSpan RootTypeSettleTimeout = TimeSpan.FromSeconds(90);
+
+    /// <summary>
+    /// The path of the NodeType <paramref name="root"/> declares, but ONLY when that type is one
+    /// this very package installs — those are the only types that can still be carrying the
+    /// compile stamp the node repo COMMITTED at this point in the install. Read off the nodes we
+    /// just wrote, never off the mesh: reading the root is the very activation these gates exist
+    /// to defer. Null means "nothing about to be rebuilt — touching this root is safe".
+    /// </summary>
+    private static string? InPackageTypeOf(string root, IReadOnlyCollection<MeshNode> nodes)
+    {
+        var declaredType = nodes
+            .FirstOrDefault(n => string.Equals(n.Path, root, StringComparison.Ordinal))?.NodeType;
+        if (string.IsNullOrEmpty(declaredType))
+            return null;
+        return nodes.Any(n => n.Content is NodeTypeDefinition
+                && string.Equals(n.Path, declaredType, StringComparison.OrdinalIgnoreCase))
+            ? declaredType
+            : null;
+    }
+
+    /// <summary>
+    /// Whether the CONTENT publish may touch <paramref name="rootPath"/> yet — the gate in front
+    /// of <see cref="SyncPackageContent"/>, and the second half of the warm's guard above.
+    ///
+    /// <para>🚨 The publish posts its <c>SyncContentFilesRequest</c> to the ROOT's address, and
+    /// routing a message to a node that has no hub yet ACTIVATES one
+    /// (<c>RoutingServiceBase.RouteImpl</c> → <c>CreateHub</c> →
+    /// <c>IMeshNodeHubFactory.ResolveHubConfiguration</c>). So the publish is a root-activating
+    /// touch exactly like the warm, running a few lines after it: the guard the warm gained is
+    /// bypassed the moment a package carries a single byte of <c>content/**</c>. Same door, same
+    /// mis-binding.</para>
+    ///
+    /// <para>Unlike the warm the publish is the POINT of the step, so this WAITS for the type's
+    /// rebuild rather than giving up on the first read — a healthy self-typed package publishes
+    /// normally, a fraction of a second later, into a root that then binds its own configuration.
+    /// The wait ends the moment the type has a loadable build, or the moment a rebuild has RUN and
+    /// settled without producing one (a committed stale stamp whose source no longer compiles).
+    /// </para>
+    ///
+    /// <para>In that second case the answer is <c>false</c> and the publish is SKIPPED — because
+    /// sending it is strictly worse than not sending it. Activating a root whose type is
+    /// ABI-stale-with-a-failed-rebuild parks the enrichment on its framework-stale heal for the
+    /// full slow-path budget, which is the same 60 s as the hub's request timeout: measured, the
+    /// install burned 60.9 s and the sync was abandoned at the sender, its files landing (or not)
+    /// on whichever side of that dead heat the machine happened to fall. A skip is deterministic,
+    /// immediate, and recoverable — the assets are published by the next install once the type
+    /// compiles, which for a package under auto-update is the very next poll. The log names the
+    /// type so the cause is the package's compile error, not a mystery 404.</para>
+    /// </summary>
+    private static IObservable<bool> MayPublishIntoRoot(
+        IMessageHub hub, string rootPath, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
+    {
+        var declaredType = InPackageTypeOf(rootPath, nodes);
+        if (declaredType is null)
+            return Observable.Return(true);
+
+        // Fold the type's stream into "has a compile been in flight since we started?" so a
+        // rebuild that ends WITHOUT a loadable build is recognised as a final answer instead of
+        // waited out to the cap.
+        return hub.GetWorkspace().GetMeshNodeStream(declaredType)
+            .Where(node => node is not null)
+            .Scan((Compiled: false, Loadable: false, Settled: false), (state, node) =>
+            {
+                var inFlight = node.Content is NodeTypeDefinition def
+                    && def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling;
+                var compiled = state.Compiled || inFlight;
+                var loadable = node.HasLoadableBuild();
+                return (compiled, loadable, loadable || (compiled && !inFlight));
+            })
+            .Where(state => state.Settled)
+            .Take(1)
+            .Timeout(RootTypeSettleTimeout)
+            .Select(state => state.Loadable)
+            .Catch<bool, Exception>(_ => Observable.Return(false))
+            .Do(loadable =>
+            {
+                if (!loadable)
+                    logger?.LogWarning(
+                        "[PackageInstaller] not publishing content assets into root {Root}: its NodeType "
+                        + "{Type} has no build this framework can load, so the publish would activate the "
+                        + "root against a type that cannot configure it — a request that parks for the "
+                        + "whole slow-path budget and is then abandoned. Fix the type's compile error; the "
+                        + "next install publishes the assets.",
+                        rootPath, declaredType);
+            });
+    }
+
+    /// <summary>
+    /// Activates the roots this install just wrote, so a freshly installed package is not dark
+    /// until someone navigates to it.
+    ///
+    /// <para>🚨 Warming a root is not a read — it ACTIVATES its hub, and a hub's NodeType
+    /// enrichment binds ONCE for the hub's lifetime. So a root may only be warmed once its type
+    /// can actually produce a configuration. For a SELF-TYPED root (the Store shape: root
+    /// <c>Store</c> is nodeType <c>Store/Catalog</c>, defined by a child of the same package) the
+    /// type is, at this moment, still carrying the compile stamp the node repo COMMITTED —
+    /// <c>compilationStatus: Ok</c> with a months-old <c>compiledFrameworkVersion</c> and an
+    /// assembly this mesh has never seen. Warming into that state made the outcome a race between
+    /// the per-NodeType hub's framework-stale kickoff (which flips Pending, so enrichment WAITS for
+    /// the rebuild) and this activation (which, if it wins, snaps the stale <c>Ok</c>, spends the
+    /// single self-heal retry and can end on the silent defaults-only fallback). Measured margin on
+    /// a developer machine: 13 ms. A loaded CI runner loses it, and the root then serves only the
+    /// generic areas — "No renderer is registered for area <c>Tests</c> on hub <c>Store</c>", the
+    /// plugin gate's Store/Catalog RED (2026-07-29, recurred 2026-08-10 on three different PRs).
+    /// The recycle a few lines above exists precisely so the root re-activates against its FINAL
+    /// type; warming before that type is loadable defeated it.</para>
+    ///
+    /// <para>So: when a root is typed by a NodeType this very package installs, SKIP the warm
+    /// unless that type currently has a build an instance could load
+    /// (<see cref="MeshDataSourceExtensions.AwaitLoadableBuild"/>, read once, bounded by
+    /// <see cref="RootTypeProbeTimeout"/>). Skipping is the safe answer, and it is cheap: warming
+    /// is only an optimisation against "the root stays dark until something touches it", whereas a
+    /// warm into an unloadable type PINS the wrong configuration. The next real access — the gate's
+    /// render, a visitor, the next install — activates the root against the rebuilt type and binds
+    /// correctly. Deliberately NOT a wait: the installer runs on the mesh that is compiling, so
+    /// holding here would trade a mis-binding for a stalled install.</para>
+    /// </summary>
     private static IObservable<Unit> WarmInstalledRoots(
-        IMessageHub hub, IEnumerable<string> paths, ILogger? logger)
+        IMessageHub hub, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
     {
         var workspace = hub.GetWorkspace();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var roots = paths
-            .Select(path => path.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault())
+        var roots = nodes
+            .Select(n => n.Path.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault())
             .Where(root => !string.IsNullOrWhiteSpace(root))
             .Select(root => root!)
             .Distinct(StringComparer.Ordinal)
@@ -687,14 +820,46 @@ public static class PackageInstaller
         if (roots.Length == 0)
             return Observable.Return(Unit.Default);
 
+        // True when warming this root now cannot pin the wrong configuration: either its type is
+        // not one this package defines (nothing about to be rebuilt), or that type already has a
+        // build an instance could load. One bounded READ — never a wait for a compile.
+        IObservable<bool> MayWarm(string root)
+        {
+            var declaredType = InPackageTypeOf(root, nodes);
+            if (declaredType is null)
+                return Observable.Return(true);
+            return workspace.GetMeshNodeStream(declaredType)
+                .Where(node => node is not null)
+                .Take(1)
+                .Timeout(RootTypeProbeTimeout)
+                .Select(node => node.HasLoadableBuild())
+                .Catch<bool, Exception>(_ => Observable.Return(false))
+                .Do(loadable =>
+                {
+                    if (!loadable)
+                        logger?.LogInformation(
+                            "[PackageInstaller] not warming root {Root}: its NodeType {Type} has no "
+                            + "build this framework can load yet (the repo's committed compile stamp "
+                            + "is being rebuilt). Warming now would bind the root to the fallback "
+                            + "configuration for its hub's lifetime; the first real access after the "
+                            + "rebuild binds it correctly.",
+                            root, declaredType);
+                });
+        }
+
         return roots
             .Select(root => Observable
                 .Using(
                     () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-                    _ => workspace.GetMeshNodeStream(root)
-                        .Where(node => node is not null)
-                        .Take(1)
-                        .Timeout(WarmTimeout))
+                    _ => MayWarm(root)
+                        .SelectMany(mayWarm => mayWarm
+                            ? workspace.GetMeshNodeStream(root)
+                                .Where(node => node is not null)
+                                .Take(1)
+                                .Timeout(WarmTimeout)
+                                .Select(_ => true)
+                            : Observable.Return(false)))
+                .Where(warmed => warmed)
                 .Select(_ => root)
                 .Catch<string, Exception>(exception =>
                 {
@@ -748,10 +913,15 @@ public static class PackageInstaller
     /// collection mounted (tests, a minimal host) answers "collection not found", and by this point the
     /// nodes have already landed — throwing would leave the package half-written. The written count is
     /// logged so an incomplete publish is visible rather than silent.</para>
+    ///
+    /// <para>🚨 The post ACTIVATES the root's hub (see <see cref="MayPublishIntoRoot"/>), so it is
+    /// gated on the root's in-package NodeType having a build an instance can load — the same
+    /// condition the warm consults. Gating INSIDE this method rather than at its three call sites
+    /// is deliberate: a call site that forgot would silently reopen the door.</para>
     /// </summary>
     private static IObservable<int> SyncPackageContent(
         IMessageHub hub, string? rootPath, string? sourceFolder,
-        IReadOnlyList<PackageFile> files, ILogger? logger)
+        IReadOnlyList<PackageFile> files, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
     {
         if (string.IsNullOrWhiteSpace(rootPath))
             return Observable.Return(0);
@@ -768,7 +938,12 @@ public static class PackageInstaller
             return Observable.Return(0);
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        return ContentAssetMapper.ToContentSyncs(rootPath!, assets)
+        return MayPublishIntoRoot(hub, rootPath!, nodes, logger)
+            .SelectMany(mayPublish => mayPublish
+                ? Publish()
+                : Observable.Return(0));
+
+        IObservable<int> Publish() => ContentAssetMapper.ToContentSyncs(rootPath!, assets)
             // Impersonated per post, like every other installer write: the pipeline hops schedulers
             // and an ambient impersonation does not survive those hops (see Upsert).
             .Select(sync => Observable.Using(
@@ -942,7 +1117,7 @@ public static class PackageInstaller
                 }
                 return WriteInstalledRecord(
                         hub, manifest, installedFromRef, all.Length, authorizingUserId: authorizingUserId)
-                    .SelectMany(_ => WarmInstalledRoots(hub, all.Select(n => n.Path), logger))
+                    .SelectMany(_ => WarmInstalledRoots(hub, all, logger))
                     .Select(_ => result);
             });
     }
@@ -1514,20 +1689,25 @@ public static class PackageInstaller
                     // synthesized resolutions are never cached, and a fill that lands after its
                     // own invalidation is discarded (PathResolutionCachePoisonTest).
                     //
-                    // 🚨 …and it recurred AGAIN on 2026-08-10 (gate run 31361446933) on a commit
-                    // that already carried that fix, with the same available-areas list: exactly
-                    // ConfigureDefaultNodeHub's set (AddDefaultLayoutAreas + Invite), so the hub
-                    // was serving the mesh DEFAULT configuration — not Store/Catalog's, not even
-                    // the Space placeholder's. The residual is that a hub, once activated, is
-                    // pinned by address in Mesh.GetHostedHub and never re-reads its node's
-                    // NodeType: fixing the RESOLUTION does not un-pin the HUB the bad resolution
-                    // already activated. This Dispose is the only thing that does, and it is
-                    // fire-and-forget AND conditional on the placeholder dance having run. So when
-                    // the symptom reappears, check THREE things: is the resolution for the bare
-                    // root path serving a real node, did this recycle run, and is the live hub the
-                    // one activated inside the provisioning window? Issue #1077 carries the
-                    // analysis; the plugin gate now names the node that hosted the failing area,
-                    // which is what makes the third question answerable from CI alone.
+                    // 🚨 …and it recurred AGAIN on a build carrying that fix (#1104) — plugin-gate
+                    // run 31361446933, whose available-areas list was EXACTLY
+                    // ConfigureDefaultNodeHub's set (AddDefaultLayoutAreas + Invite) and not one
+                    // area of the node's real type. That list IS the fingerprint: it says the hub
+                    // bound the mesh DEFAULT configuration, not a stale type and not the Space
+                    // placeholder, which is what distinguishes this defect from a compile failure.
+                    // It recurred because fixing RESOLUTION cannot help a hub a bad resolution has
+                    // ALREADY activated: GetHostedHub pins by address and the hub never re-reads
+                    // its NodeType. That is why this Post is no longer where the guarantee lives.
+                    // It is fire-and-forget, conditional on the placeholder dance having run, and
+                    // available to nobody but this installer — while ANY writer can retype a node.
+                    // The framework now un-pins on its own: every activation arms
+                    // NodeTypeRebindWatcher, which recycles the hub the first time the mesh change
+                    // feed reports a different NodeType for its path. This Post stays as the fast
+                    // path (it recycles immediately rather than on the feed hop) and as the marker
+                    // of intent; it is not load-bearing. If the symptom ever reappears, check all
+                    // three: is the hub recycled, is the resolution for the bare root path serving
+                    // a real node, and did the rebind watcher see the retype? Issue #1077 carries
+                    // the gate-side analysis that isolated the un-pin half.
                     .Select(rest =>
                     {
                         if (placeholderRoot is not null && root is not null)
@@ -1564,13 +1744,13 @@ public static class PackageInstaller
                         logger, nodes.Select(n => n.Path))
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, nodes.Length, moduleManifest, authorizingUserId))
-                    .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
+                    .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
                     // …then the package's committed binaries (course videos/posters) into the
                     // warmed root's content collection — the half of "publish" that merging used
                     // to leave undone (#848).
                     .SelectMany(_ => SyncPackageContent(
                         hub, manifest.TargetPartition ?? manifest.Id,
-                        manifest.SourceFolder ?? manifest.Id, files, logger))
+                        manifest.SourceFolder ?? manifest.Id, files, nodes, logger))
                     .Select(_ => result);
             }));
             });
@@ -1754,14 +1934,14 @@ public static class PackageInstaller
                         logger, nodes.Select(n => n.Path))
                     .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
                         newManifest.Files.Count, newManifest, authorizingUserId))
-                    .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
+                    .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
                     // A changed BINARY is a changed file like any other: manifest.lock hashes the
                     // `content/**` assets too, so a re-cut video is in `changedFiles` and an
                     // unchanged one never travels. This is what keeps the incremental path cheap
                     // even for a course carrying tens of MB of video (#848).
                     .SelectMany(_ => SyncPackageContent(
                         hub, manifest.TargetPartition ?? manifest.Id,
-                        manifest.SourceFolder ?? manifest.Id, changedFiles, logger))
+                        manifest.SourceFolder ?? manifest.Id, changedFiles, nodes, logger))
                     .Select(_ => result);
             });
     }

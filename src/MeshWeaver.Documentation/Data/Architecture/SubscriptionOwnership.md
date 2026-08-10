@@ -60,6 +60,14 @@ The same shape, with a re-establish rather than a flush, is what `ActivityContro
 
 Same *shape*, not the same *code*: the three thread watchers are hand-rolled loops that share only the scheduling (`ReEstablishSchedule.Arm`, which re-reads the `disposed` flag when the timer fires and sinks a synchronous re-establish throw into the logger). They do **not** route through `SubscribeWithReEstablish` and so do **not** have its terminal fault classification — an own-node-gone `NotFound` or poisoned content re-establishes there rather than stopping. Converting them is open work; don't read the shared shape as shared behaviour.
 
+### The best-held timer is the one never armed: teardown is not a fault
+
+Holding the schedule correctly bounds the leak; not arming it at all removes the window. The fault a watcher is overwhelmingly most likely to see is its **own hub tearing down**: from the first instant of `Dispose`, `HostedHubsCollection` freezes hosted-hub creation, so the own-node stream cannot build the `sync/` sub-hub it needs and every subscribe throws `HubDisposingException` naming that hub. `SubscribeWithReEstablish` classifies that case (`IsOwnHubDisposing(ex, address)`) as **terminal** and logs it at Debug — the watcher is registered for its hub's disposal, so dying with the hub is the contract, and the next activation installs a fresh one.
+
+Getting this wrong is expensive twice over. Treated as transient it re-arms a 1 s timer whose closure graph reaches the hub currently being collected — precisely the #991 root, arming it at the one moment the hub is meant to become unreachable. And it reports routine shutdown as an ERROR: in memex-cloud every per-NodeType hub teardown emitted three `… faulted on <path> — re-establishing` lines, joined by one per short-lived schema-probe hub (`_schema_validation/{guid}`, `$model-probe/{guid}` — a hub created and disposed in the same breath, so its watchers were installed straight into a disposing hub).
+
+The classification is **address-scoped, not a bare `HubDisposingException.IsHubDisposal`**: another hub going down is genuinely transient for us (that address may reactivate — a sources watcher reads source nodes owned by other hubs), so it must still re-establish. Only *our own* address ending is the end of the watcher.
+
 ## Sub-shape 2 — held, but pinning an owner that may never be disposed
 
 This is the shape a static rule cannot see, and it is the majority of the sites that have actually leaked. The subscription **is** assigned to a field. It reads as owned. The defect is that nothing the *owner's* teardown runs ever disposes that field.

@@ -462,19 +462,18 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// placeholder, and the fabrication outlived every later write.
     /// Repro: <c>PathResolutionCachePoisonTest.SynthesizedPartitionRoot_IsNotCached</c>.</para>
     ///
-    /// <para>🚨 NOT cached is not the same as NOT pinned, and the difference is still open.
-    /// The identical symptom recurred on 2026-08-10 (gate run 31361446933) on a commit that
-    /// already carried the no-cache fix, listing exactly this default set again. Whoever routes
-    /// on a synthesized resolution ACTIVATES a hub, and that hub is pinned by address in
-    /// <c>Mesh.GetHostedHub</c> — an instance hub never re-reads its node's NodeType, so it keeps
-    /// serving the default configuration for the life of the process even though every later
-    /// RESOLUTION is now correct. The fabrication is no longer the thing that outlives the write;
-    /// the HUB it activated is. So when this symptom reappears, check THREE things: is the
-    /// resolution for the bare root path serving a real node, was the hub recycled after the root
-    /// was retyped (<c>PackageInstaller</c> posts a <c>DisposeRequest</c> — fire-and-forget, and
-    /// only when the placeholder dance ran), and is the live hub the one that was activated inside
-    /// the provisioning window? Issue #1077 carries the analysis; the plugin gate now prints WHICH
-    /// node hosted the failing area, which is what makes that third question answerable.</para>
+    /// <para>🚨 <b>Not caching it is necessary, not sufficient — and that is now covered.</b> The
+    /// same symptom recurred on a build that already carried the no-cache fix (#1104) — plugin-gate
+    /// run 31361446933, again listing EXACTLY this default set and not one area of the node's real
+    /// type, which is the fingerprint to recognise it by — because a hub the fabrication had
+    /// ALREADY activated stays pinned: <c>Mesh.GetHostedHub</c> is keyed by address, routing
+    /// short-circuits on it for a hosted address, and the hub never re-reads its NodeType.
+    /// <i>Not cached is not not-pinned.</i> Repairing resolution can only help the NEXT activation.
+    /// The un-pin is the framework's job and lives in <c>NodeTypeRebindWatcher</c>: every
+    /// activation watches the mesh change feed for its own path and recycles the hub the first time
+    /// the node reports a different NodeType. So the two halves are: this method must not PIN a
+    /// fabrication (here), and a hub bound to one must be able to LET GO of it (there).
+    /// Issue #1077 carries the gate-side analysis that isolated the second half.</para>
     /// </summary>
     private IObservable<AddressResolution?> SynthesizePartitionRoot(string[] segments)
     {
