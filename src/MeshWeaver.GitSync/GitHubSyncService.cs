@@ -840,7 +840,9 @@ public sealed class GitHubSyncService
         };
         // Carry the caller's identity (captured in UpdateConfig before the async ReadConfig hop) on
         // the create — otherwise RLS denies Create on {space}/_GitSync when the AsyncLocal is gone.
-        return hub.Observe<CreateOrUpdateNodeResponse>(
+        // Off-router issuing (NodeOperationIssuingHub): the DI root mesh hub must be neither end
+        // of the exchange, nor execute the target-less request (ROUTER_TRAFFIC).
+        return hub.NodeOperationIssuingHub().Observe<CreateOrUpdateNodeResponse>(
                 new CreateOrUpdateNodeRequest(node),
                 o => ctx is null ? o : o.WithAccessContext(ctx))
             .FirstAsync()
