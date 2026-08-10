@@ -724,6 +724,60 @@ public static class PackageInstaller
     }
 
     /// <summary>
+    /// How many times the content publish re-asks a root that answered "I am recycling". Two
+    /// recycles can hit one install (the installer's own and the framework's rebind watcher), so
+    /// this only has to outlast those; it is a guard against an unforeseen recycle LOOP, never a
+    /// budget to be widened. Each re-ask is gated on an observed teardown completing, so the
+    /// attempts cannot spin.
+    /// </summary>
+    private const int RootRecycleReAsks = 4;
+
+    /// <summary>
+    /// Whether a publish failure is the framework's TRANSIENT recycle verdict — the node is
+    /// coming back and the honest response is to ask again — rather than a real failure.
+    /// Typed on <see cref="ErrorType.ShuttingDown"/> / <see cref="HubDisposingException"/>, never
+    /// on message text, so an application error can never be mistaken for a recycle.
+    /// </summary>
+    private static bool IsRootRecycling(Exception exception)
+    {
+        for (var e = exception; e is not null; e = e.InnerException)
+        {
+            if (e is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
+                return true;
+            if (HubDisposingException.IsHubDisposal(e))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Completes once the teardown that just rejected a publish has finished, so the re-ask lands
+    /// on a fresh activation instead of racing the same dying instance. Event-driven: it observes
+    /// that hub instance's <see cref="IMessageHub.DisposalCompleted"/>. When nothing is there to
+    /// wait for — no local instance, or one that is not disposing (the recycle already finished,
+    /// or the hub lives on another silo) — the re-ask proceeds immediately.
+    /// </summary>
+    private static IObservable<Unit> RootTeardownSettled(IMessageHub hub, string rootPath)
+    {
+        var live = hub.GetHostedHub(new Address(rootPath), HostedHubCreation.Never);
+        if (live is null || !live.IsDisposing)
+            return Observable.Return(Unit.Default);
+        return live.DisposalCompleted
+            .Take(1)
+            .Timeout(RootRecycleTimeout)
+            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+            .DefaultIfEmpty(Unit.Default);
+    }
+
+    /// <summary>
+    /// How long the install waits for a root recycle it issued to actually finish. Generous
+    /// because it is only ever reached when a hub's teardown itself wedges; the normal case
+    /// completes in a few milliseconds and the wait ends the instant it does.
+    /// </summary>
+    private static readonly TimeSpan RootRecycleTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Whether the CONTENT publish may touch <paramref name="rootPath"/> yet — the gate in front
     /// of <see cref="SyncPackageContent"/>, and the second half of the warm's guard above.
     ///
@@ -1060,6 +1114,27 @@ public static class PackageInstaller
                     ? response.FilesImported
                     : throw new InvalidOperationException(
                         response.Error ?? "content sync failed without an error message"))
+                // 🚨 "The address may reactivate (recycle / restart); retry to get the
+                // authoritative answer" is not advice — it is the framework's TRANSIENT verdict,
+                // and this is the one consumer that used to throw it away and declare the
+                // package's binaries lost. A root is recycled TWICE during an install: once by the
+                // installer itself (sequenced by SettleRetypedRoot, and probed again by
+                // WaitForRootReady just above) and once by the framework's NodeTypeRebindWatcher
+                // when the change feed reports the retype. That second one belongs to nobody and
+                // can land AFTER the readiness probe has passed, which is why the proactive wait
+                // needs this reactive backstop behind it — the probe answers "is it up now", not
+                // "will it still be up when the bytes arrive".
+                //
+                // Not a blind retry, and nothing to sleep on: the re-ask waits for the exact
+                // teardown that rejected it (that hub instance's own DisposalCompleted) and then
+                // asks the address again, which activates the FINAL hub. Only a typed transient
+                // is re-asked — an application failure, a bad path, a missing collection all still
+                // fail on the first answer, so a genuinely broken publish cannot hide in a loop.
+                .RetryWhen(faults => faults
+                    .Select((fault, attempt) => (fault, attempt))
+                    .SelectMany(f => IsRootRecycling(f.fault) && f.attempt < RootRecycleReAsks
+                        ? RootTeardownSettled(hub, sync.NodePath)
+                        : Observable.Throw<Unit>(f.fault)))
                 .Catch<int, Exception>(exception =>
                 {
                     logger?.LogWarning(exception,
@@ -1795,13 +1870,18 @@ public static class PackageInstaller
                     // synthesized resolutions are never cached, and a fill that lands after its
                     // own invalidation is discarded (PathResolutionCachePoisonTest).
                     //
-                    // 🚨 …and it recurred AGAIN on a build carrying that fix (#1104), because
-                    // fixing RESOLUTION cannot help a hub a bad resolution has ALREADY activated:
-                    // GetHostedHub pins by address and the hub never re-reads its NodeType. That
-                    // is why this Post is no longer where the guarantee lives. It is fire-and-
-                    // forget, conditional on the placeholder dance having run, and available to
-                    // nobody but this installer — while ANY writer can retype a node. The
-                    // framework now un-pins on its own: every activation arms
+                    // 🚨 …and it recurred AGAIN on a build carrying that fix (#1104) — plugin-gate
+                    // run 31361446933, whose available-areas list was EXACTLY
+                    // ConfigureDefaultNodeHub's set (AddDefaultLayoutAreas + Invite) and not one
+                    // area of the node's real type. That list IS the fingerprint: it says the hub
+                    // bound the mesh DEFAULT configuration, not a stale type and not the Space
+                    // placeholder, which is what distinguishes this defect from a compile failure.
+                    // It recurred because fixing RESOLUTION cannot help a hub a bad resolution has
+                    // ALREADY activated: GetHostedHub pins by address and the hub never re-reads
+                    // its NodeType. That is why this Post is no longer where the guarantee lives.
+                    // It is fire-and-forget, conditional on the placeholder dance having run, and
+                    // available to nobody but this installer — while ANY writer can retype a node.
+                    // The framework now un-pins on its own: every activation arms
                     // NodeTypeRebindWatcher, which recycles the hub the first time the mesh change
                     // feed reports a different NodeType for its path. This Post stays as the fast
                     // path (it recycles immediately rather than on the feed hop) and as the marker
