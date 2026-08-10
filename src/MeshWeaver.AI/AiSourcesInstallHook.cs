@@ -80,6 +80,14 @@ public sealed class AiSourcesInstallHook(IMessageHub hub) : IPartitionInstallHoo
             .Select(nodes => (IReadOnlyList<string>)nodes
                 .Select(n => n.Id)
                 .Where(id => !string.IsNullOrEmpty(id))
+                // 🚨 Drop the NodeType DECLARATION node. `User` is self-typed — the node that
+                // DEFINES the type carries `nodeType: User` too — so a pathless `nodeType:User`
+                // query returns it alongside the real accounts. Treated as a user it resolves to a
+                // partition literally named "User", which no instance provisions, and every install
+                // logged `42P01: relation "user.mesh_nodes" does not exist` once per package. The
+                // per-user Catch swallowed it, so the only visible trace was the noise — and a
+                // stray `vuser` partition on any instance where the same query shape ran for VUser.
+                .Where(id => !string.Equals(id, UserNodeType, StringComparison.OrdinalIgnoreCase))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList());
 
