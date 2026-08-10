@@ -186,6 +186,17 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     private volatile bool creationClosed;
 
     /// <summary>
+    /// True once creation has been frozen — either by this collection's own disposal or by an
+    /// ANCESTOR hub's <see cref="CloseCreation"/> cascade, which flips this at the FIRST instant
+    /// of the ancestor's <c>Dispose()</c>, strictly before the owning hub's own disposal phase
+    /// reaches it. Because the freeze cascades through the whole subtree and is one-way, this is
+    /// the authoritative "this hub is part of a shutdown" signal for a hub whose own
+    /// <c>IsDisposing</c> has not flipped yet (its <c>DisposeRequest</c> arrives only in the
+    /// ancestor's DisposeHostedHubs phase, potentially seconds later).
+    /// </summary>
+    internal bool IsCreationFrozen => creationClosed || disposalStarted;
+
+    /// <summary>
     /// One-way switch flipped by the OWNING hub the moment its disposal begins
     /// (<c>MessageHub.Dispose</c>). The collection's own <see cref="Dispose"/> only runs
     /// in the DisposeHostedHubs phase — potentially seconds later — leaving a window in

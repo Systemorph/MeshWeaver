@@ -916,8 +916,19 @@ public static class JsonSynchronizationStream
         return reduced;
     }
     private static IObservable<TChange?> ToDataChanged<TReduced, TChange>(
-        this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) where TChange : JsonChange =>
-        stream
+        this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) where TChange : JsonChange
+    {
+        // Loss-detection chain (issue #1081): every emitted frame carries the Version of the frame
+        // emitted immediately BEFORE it on this same forwarding subscription (-1 for the first).
+        // The receive side (SynchronizationStream.UpdateStream) compares a Patch's BasedOnVersion
+        // against the version it last applied: a mismatch proves a frame was lost in transport
+        // (at-most-once memory streams) and triggers a fresh-snapshot resync instead of tracking
+        // the owner forever at a silent deficit. Serial by construction — the Synchronize() below
+        // makes Select single-threaded, so the closure variable needs no interlocking. Frames that
+        // are SKIPPED here (value-equal, no updates) never enter the chain, so legitimate version
+        // gaps from skipped frames do not false-trigger a resync.
+        var lastSentVersion = -1L;
+        return stream
             .Synchronize()
             .Where(predicate)
             .Select(x =>
@@ -946,13 +957,16 @@ public static class JsonSynchronizationStream
                     }
                     stream.Set(currentJson);
                     logger.LogDebug("Generated full DataChangedEvent for stream {StreamId}", stream.ClientId);
-                    return (TChange?)Activator.CreateInstance(
+                    var fullEvent = (TChange?)Activator.CreateInstance(
                         typeof(TChange),
                         stream.ClientId,
                         x.Version,
                         new RawJson(currentJson.ToString() ?? string.Empty),
                         ChangeType.Full,
-                        x.ChangedBy ?? string.Empty);
+                        x.ChangedBy ?? string.Empty,
+                        lastSentVersion);
+                    lastSentVersion = x.Version;
+                    return fullEvent;
                 }
                 else
                 {
@@ -983,28 +997,35 @@ public static class JsonSynchronizationStream
                             x.Value, x.Value?.GetType() ?? typeof(object),
                             stream.Host.JsonSerializerOptions);
                         stream.Set(currentJson);
-                        return (TChange?)Activator.CreateInstance(
+                        var resyncFull = (TChange?)Activator.CreateInstance(
                             typeof(TChange),
                             stream.ClientId,
                             x.Version,
                             new RawJson(currentJson.Value.ToString() ?? string.Empty),
                             ChangeType.Full,
-                            x.ChangedBy ?? string.Empty);
+                            x.ChangedBy ?? string.Empty,
+                            lastSentVersion);
+                        lastSentVersion = x.Version;
+                        return resyncFull;
                     }
                     stream.Set(currentJson);
-                    return (TChange?)Activator.CreateInstance
+                    var patchEvent = (TChange?)Activator.CreateInstance
                     (
                         typeof(TChange),
                         stream.ClientId,
                         x.Version,
                         new RawJson(patchJson),
                         x.ChangeType,
-                        x.ChangedBy ?? string.Empty
+                        x.ChangedBy ?? string.Empty,
+                        lastSentVersion
                     );
+                    lastSentVersion = x.Version;
+                    return patchEvent;
                 }
 
 
             });
+    }
 
 
 

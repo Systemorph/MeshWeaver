@@ -243,11 +243,33 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
 
     /// <summary>
     /// Extracts the user ID from the validation context.
-    /// First checks explicit request identity (CreatedBy/UpdatedBy/DeletedBy),
-    /// then falls back to AccessContext (the logged-in user).
+    /// A recursive-delete cascade leg executed under the delivery-stamped SYSTEM
+    /// context acts as system; otherwise the explicit request identity
+    /// (CreatedBy/UpdatedBy/DeletedBy) is checked first, then the AccessContext
+    /// (the logged-in user).
     /// </summary>
     private static string? GetUserId(NodeValidationContext context)
     {
+        // 🚨 A CASCADE-LEG delete executed under the SYSTEM context acts as system, even
+        // though DeletedBy carries the original caller for the audit trail. The recursive
+        // delete authorizes the WHOLE subtree up front under the caller (root permission
+        // check + the [RequiresPermission(Delete)] gate on every descendant's pre-flight
+        // ValidateDeleteRequest) and then commits under the system identity — because the
+        // plan contains the subtree's own _Access grant satellites, and re-deriving the
+        // principal from DeletedBy here re-decided that authorization MID-COMMIT against
+        // state the cascade itself was deleting, aborting the subtree half-deleted
+        // (issue #1128, "partial-deleted=31"). BOTH signals are required:
+        //  • CascadeRootPath — only the subtree fan-out stamps it; and
+        //  • the SYSTEM AccessContext — carried on the DELIVERY by the fan-out's explicit
+        //    WithAccessContext stamp and threaded into this context by the delete handler.
+        // A leaked ambient "system-security" (the bootstrap-ImpersonateAsSystem AsyncLocal
+        // residue AccessControlPipeline.ResolveIdentity documents) has CascadeRootPath null
+        // and therefore never matches — DeletedBy/CreatedBy stay authoritative for every
+        // direct request, exactly as before (RlsIntegrationTests' DeletedBy shape).
+        if (context.Request is DeleteNodeRequest { CascadeRootPath: not null }
+            && context.AccessContext?.ObjectId == WellKnownUsers.System)
+            return WellKnownUsers.System;
+
         // Check explicit request identity first
         var requestUserId = context.Request switch
         {
