@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Runtime.Loader;
 using System.Threading;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -97,6 +98,19 @@ public class NodeAlcUnloadTeardownOrderingTest(ITestOutputHelper output) : Monol
     /// <summary>Stamped from inside <c>IoPool.Drain</c> — the pool token's cancellation callback.</summary>
     private const string DrainAllStartedMark = "drain-all:started";
 
+    /// <summary>
+    /// Stamped from a collectible context's own <c>Unloading</c> event — the moment the
+    /// LoaderAllocator is actually released, as opposed to the moment someone ASKED for it.
+    ///
+    /// <para>🚨 The <c>UnloadNodeContexts</c> marker alone is no longer sufficient, and pinning
+    /// only that would let this guard pass while the hazard it exists to prevent walks back in.
+    /// A context is now LEASED for the lifetime of every hub running its types, and
+    /// <c>NodeAssemblyLoadContext.Dispose</c> DEFERS the unload while any lease is held — so the
+    /// call and the unload are two different events at two different times, and it is the second
+    /// one that frees memory under a running thread. Stamp the event the runtime raises.</para>
+    /// </summary>
+    private const string UnloadedMarkPrefix = "unloaded:";
+
     /// <summary>Stamped on the calling thread the instant <see cref="IoPoolRegistry.DrainAll"/> returns.</summary>
     private const string DrainAllReturnedMark = "drain-all:returned";
 
@@ -178,6 +192,21 @@ public class NodeAlcUnloadTeardownOrderingTest(ITestOutputHelper output) : Monol
     }
 
     /// <summary>
+    /// Hooks every collectible <c>DynamicNode_*</c> context alive right now so its REAL unload is
+    /// stamped. The handler holds only the log, never the context, so nothing here keeps a
+    /// LoaderAllocator alive past its time.
+    /// </summary>
+    private static void StampRealUnloads(TeardownOrderLog orderLog)
+    {
+        foreach (var context in AssemblyLoadContext.All
+                     .Where(a => a.Name?.StartsWith("DynamicNode_", StringComparison.Ordinal) == true))
+        {
+            var name = context.Name!;
+            context.Unloading += _ => orderLog.Mark(UnloadedMarkPrefix + name);
+        }
+    }
+
+    /// <summary>
     /// A genuine pooled I/O leaf that parks until the pool token is cancelled. Registering on that
     /// token means the stamp is written by <c>IoPool.Drain</c>'s own <c>_poolCts.Cancel()</c> — the
     /// mark is produced INSIDE <see cref="IoPoolRegistry.DrainAll"/>, not by test bookkeeping. It
@@ -255,6 +284,28 @@ public class NodeAlcUnloadTeardownOrderingTest(ITestOutputHelper output) : Monol
 
         await CompileProbeNodeTypeAsync(ProbeNodeTypeId);
 
+        // 🚨 An INSTANCE of the probe type, activated — without one the ALC is never LEASED, and
+        // the lease-release path (the one that now performs the deferred unload) is not exercised
+        // at all. With it, teardown disposes this hub inside MessageHub.DisposeImpl, releasing the
+        // last lease there; if that release unloaded inline it would free the LoaderAllocator
+        // before DrainAll joins the parked leaf below — the #613 inversion, re-entered through the
+        // lease. This is what makes the "unloaded:" assertion an oracle rather than a formality.
+        var instancePath = $"{TestPartition}/alc-order-probe-instance";
+        await MeshService.CreateNode(new MeshNode("alc-order-probe-instance", TestPartition)
+        {
+            Name = "ALC order probe instance",
+            NodeType = $"type/{ProbeNodeTypeId}",
+            State = MeshNodeState.Active,
+        }).Should().Within(30.Seconds()).Emit();
+
+        await Mesh.GetMeshNodeStream(instancePath)
+            .Where(node => node is not null)
+            .FirstAsync()
+            .Timeout(30.Seconds())
+            .ToTask();
+
+        StampRealUnloads(orderLog);
+
         // Park a real leaf on its own pool and wait until it actually holds a slot, so DrainAll has
         // something to cancel + join (and something to stamp with).
         var probePool = ioPools.Get(ProbePoolName);
@@ -305,6 +356,24 @@ public class NodeAlcUnloadTeardownOrderingTest(ITestOutputHelper output) : Monol
         unloadMarks.Should().NotBeEmpty(
             "every per-node hub reclaims its collectible ALC on disposal, so teardown must call " +
             "UnloadNodeContexts at least once");
+
+        // 🚨 The REAL unloads, not just the requests. With lifetime leases the two are separate
+        // events: Dispose records the request while any hub still runs the assembly, and the last
+        // lease release performs the Unload. It is the Unload that frees the LoaderAllocator under
+        // a live thread, so it is the Unload that must sit behind DrainAll.
+        var realUnloads = marks
+            .Select((mark, index) => (mark, index))
+            .Where(m => m.mark.StartsWith(UnloadedMarkPrefix, StringComparison.Ordinal))
+            .ToImmutableArray();
+
+        var prematureUnloads = realUnloads
+            .Where(m => m.index < drainAllReturnedAt).Select(m => m.mark).ToArray();
+        prematureUnloads.Should().BeEmpty(
+            "a collectible node AssemblyLoadContext may only be UNLOADED once IoPoolRegistry.DrainAll() "
+            + "has cancelled and JOINED every pooled leaf — and with lifetime leases the unload no "
+            + "longer coincides with the UnloadNodeContexts call, so releasing the last lease must "
+            + "obey the same phase rule (MeshDataSource.ReleaseNodeTypeLease). Unloaded too early: "
+            + $"{string.Join(", ", prematureUnloads)}");
 
         var premature = unloadMarks.Where(m => m.index < drainAllReturnedAt).Select(m => m.mark).ToArray();
         premature.Should().BeEmpty(
