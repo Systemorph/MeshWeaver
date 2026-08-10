@@ -444,6 +444,13 @@ public class MessageService : IMessageService
         }
     }
 
+    /// <summary>
+    /// Marks a delivery whose AUTHORITATIVE, typed <see cref="DeliveryFailure"/> has already been
+    /// posted, so <see cref="ReportFailure"/> does not post a second, weaker one for the same
+    /// request.
+    /// </summary>
+    public const string FailureAlreadyReported = "FailureAlreadyReported";
+
     private IMessageDelivery ReportFailure(IMessageDelivery delivery, ErrorType errorType = ErrorType.Unknown)
     {
         var error = delivery.Properties.TryGetValue("Error", out var e) ? e?.ToString() : null;
@@ -451,6 +458,26 @@ public class MessageService : IMessageService
             "Message delivery failed for {MessageType} (ID: {MessageId}) in {Address}: {Error}",
             delivery.Message.GetType().Name, delivery.Id, Address,
             error ?? "(no error details)");
+
+        // 🚨 ONE request, ONE failure response. A caller's Observe(...) resolves on the FIRST
+        // DeliveryFailure it sees, so posting a second one for the same delivery makes the
+        // classification a coin toss — and this one is unclassified by default.
+        //
+        // That is exactly how a broken NodeType lost its diagnosis: the fallback-hub NACK path
+        // posts a typed failure (ErrorType.CompilationFailed + NodeTypePath, so the caller can act)
+        // and then returns delivery.Failed(reason); the very next check here sees State == Failed
+        // and posted a SECOND DeliveryFailure carrying the same prose from Properties["Error"] but
+        // ErrorType.Unknown. Whichever landed first won, so the same code intermittently reported
+        // CompilationFailed or Unknown — indistinguishable from any other failure
+        // (OrleansBrokenNodeTypeAccessTest).
+        if (delivery.Properties.ContainsKey(FailureAlreadyReported))
+        {
+            logger.LogDebug(
+                "Typed DeliveryFailure already posted for {MessageType} (ID: {MessageId}) in {Address} — "
+                + "suppressing the unclassified follow-up",
+                delivery.Message.GetType().Name, delivery.Id, Address);
+            return delivery;
+        }
 
         // Don't post DeliveryFailure during shutdown - recipients are likely also disposing
         // and the messages just clog the pipeline
@@ -1386,6 +1413,7 @@ public class MessageService : IMessageService
                 var reason = $"{nackPolicy.Reason} (inbound type '{jsonType}' is not registered in this hub's TypeRegistry)";
                 logger.LogWarning("Unhandled {JsonType} in fallback hub {Address} - answering {ErrorType} NACK: {Reason}",
                     jsonType, Address, nackPolicy.ErrorType, reason);
+                var nackPosted = false;
                 try
                 {
                     Post(new DeliveryFailure(delivery)
@@ -1394,13 +1422,20 @@ public class MessageService : IMessageService
                         NodeTypePath = nackPolicy.NodeTypePath,
                         Message = reason
                     }, new PostOptions(Address).ResponseFor(delivery));
+                    nackPosted = true;
                 }
                 catch (Exception ex)
                 {
                     logger.LogError(ex, "Failed to post fallback NACK for '{JsonType}' (ID: {MessageId}) in {Address}",
                         jsonType, delivery.Id, Address);
                 }
-                return delivery.Failed(reason);
+                // 🚨 Mark ONLY when the typed NACK actually went out. The marker suppresses the
+                // unclassified follow-up, so setting it after a THROWN post would leave the caller
+                // with no failure response at all — turning a swallowed exception into the silent
+                // park this whole NACK path exists to prevent. Suppress the duplicate, never the
+                // only answer.
+                var failed = delivery.Failed(reason);
+                return nackPosted ? failed.WithProperty(FailureAlreadyReported, true) : failed;
             }
 
             return ReportFailure(delivery.Failed(failureMessage));

@@ -284,10 +284,19 @@ public static class MeshExtensions
     /// the hub scheduler — with no concurrency bound). The claim was stale and advertised a banned
     /// pattern to the next reader; corrected here rather than left for someone to copy.</para>
     ///
-    /// <para>🚨 The response is posted from a composed observable, so a chain that terminates
-    /// WITHOUT posting leaves the requester's <c>hub.Observe</c> callback pending forever. That is
-    /// the shape issue #981 is chasing; the <c>RequestFateLedger</c> trail distinguishes it from a
-    /// chain that is merely slow — see <c>Doc/Architecture/DebuggingMessageFlow</c>.</para>
+    /// <para>🚨 <b>Every terminal path answers — that is an invariant, not a best effort (#981).</b>
+    /// The response is posted from a composed observable, so a chain that terminates WITHOUT posting
+    /// would leave the requester's <c>hub.Observe</c> callback pending forever. Two things close that:
+    /// <list type="number">
+    ///   <item>a declined write (the <c>null</c> try-then-claim sentinel) FAULTS via
+    ///     <see cref="RequireClaimedWrite"/> instead of being filtered away, so the single-adapter
+    ///     path answers exactly like the composite <c>PersistenceService</c> already did;</item>
+    ///   <item>the terminal <c>onCompleted</c> arm posts a failure when — and only when — nothing
+    ///     emitted AND nothing answered, so an empty completion can never be silent.</item>
+    /// </list>
+    /// Every terminal post goes through the local <c>Respond</c>, which is what makes (2) exact.
+    /// The <c>RequestFateLedger</c> trail still distinguishes a terminated chain from a merely slow
+    /// one — see <c>Doc/Architecture/DebuggingMessageFlow</c>.</para>
     /// See <c>Doc/Architecture/AsynchronousCalls</c>.
     /// </summary>
     private static IMessageDelivery HandleCreateNodeRequest(
@@ -303,11 +312,29 @@ public static class MeshExtensions
         // event before the storage write has committed.
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
 
+        // 🚨 #981 — the ONE place a terminal CreateNodeResponse leaves this handler.
+        //
+        // The reply is owed by a DETACHED reactive chain (this handler returns Processed()
+        // immediately), and that chain has several branches that post a failure and then return
+        // Observable.Empty. So "the chain completed without emitting" is NOT the same question as
+        // "the requester was left unanswered" — and only the second one is a defect. Recording the
+        // answer here is what lets the terminal backstop below be EXACT: it fires only when nothing
+        // at all answered, so a branch that already posted a Fail is never answered twice and a
+        // success is never converted into a spurious failure.
+        //
+        // Every terminal post in this handler goes through here. A future branch that posts and
+        // returns Empty therefore suppresses the backstop automatically — the invariant does not
+        // depend on anyone remembering which branches can precede an empty completion.
+        var responded = false;
+        void Respond(CreateNodeResponse response)
+        {
+            responded = true;
+            hub.Post(response, o => o.ResponseFor(request));
+        }
+
         if (meshConfig == null)
         {
-            hub.Post(
-                CreateNodeResponse.Fail("MeshConfiguration not available", NodeCreationRejectionReason.Unknown),
-                o => o.ResponseFor(request));
+            Respond(CreateNodeResponse.Fail("MeshConfiguration not available", NodeCreationRejectionReason.Unknown));
             return request.Processed();
         }
 
@@ -323,11 +350,9 @@ public static class MeshExtensions
                 "[CreateNode] REFUSED {Path}: no IStorageAdapter on hub {Hub} — the create would be acked but never persisted. " +
                 "Register persistence (AddPartitioned*Persistence / AddInMemoryPersistence) on this hub's service provider.",
                 request.Message.Node.Path, hub.Address);
-            hub.Post(
-                CreateNodeResponse.Fail(
-                    $"No storage adapter on hub '{hub.Address}' — refusing to create '{request.Message.Node.Path}' because it could not be persisted.",
-                    NodeCreationRejectionReason.Unknown),
-                o => o.ResponseFor(request));
+            Respond(CreateNodeResponse.Fail(
+                $"No storage adapter on hub '{hub.Address}' — refusing to create '{request.Message.Node.Path}' because it could not be persisted.",
+                NodeCreationRejectionReason.Unknown));
             return request.Processed();
         }
 
@@ -355,10 +380,8 @@ public static class MeshExtensions
         // 0. Path validation (sync — fail-fast).
         if (string.IsNullOrWhiteSpace(node.Id) || string.IsNullOrWhiteSpace(node.Path))
         {
-            hub.Post(
-                CreateNodeResponse.Fail("Node path and Id must not be empty",
-                    NodeCreationRejectionReason.ValidationFailed),
-                o => o.ResponseFor(request));
+            Respond(CreateNodeResponse.Fail("Node path and Id must not be empty",
+                NodeCreationRejectionReason.ValidationFailed));
             return request.Processed();
         }
 
@@ -367,11 +390,9 @@ public static class MeshExtensions
         // means no AddMeshDataSource / GetDataRequest handler), so it's always a caller bug.
         if (string.IsNullOrWhiteSpace(node.NodeType) && node.Content == null)
         {
-            hub.Post(
-                CreateNodeResponse.Fail(
-                    "Node must have a NodeType or Content set; bare nodes are not allowed.",
-                    NodeCreationRejectionReason.ValidationFailed),
-                o => o.ResponseFor(request));
+            Respond(CreateNodeResponse.Fail(
+                "Node must have a NodeType or Content set; bare nodes are not allowed.",
+                NodeCreationRejectionReason.ValidationFailed));
             return request.Processed();
         }
 
@@ -388,9 +409,7 @@ public static class MeshExtensions
         if (ActivityNodeGuard.IsOwnerless(node, out var ownerlessReason))
         {
             logger.LogError("[CreateNode] REFUSED ownerless Activity {Path}: {Reason}", node.Path, ownerlessReason);
-            hub.Post(
-                CreateNodeResponse.Fail(ownerlessReason, NodeCreationRejectionReason.InvalidPath),
-                o => o.ResponseFor(request));
+            Respond(CreateNodeResponse.Fail(ownerlessReason, NodeCreationRejectionReason.InvalidPath));
             return request.Processed();
         }
 
@@ -415,9 +434,7 @@ public static class MeshExtensions
         if (AccessAssignmentGuard.IsScopeInvalid(node, out var scopeReason))
         {
             logger.LogError("[CreateNode] REFUSED mis-scoped AccessAssignment {Path}: {Reason}", node.Path, scopeReason);
-            hub.Post(
-                CreateNodeResponse.Fail(scopeReason, NodeCreationRejectionReason.InvalidPath),
-                o => o.ResponseFor(request));
+            Respond(CreateNodeResponse.Fail(scopeReason, NodeCreationRejectionReason.InvalidPath));
             return request.Processed();
         }
 
@@ -476,17 +493,14 @@ public static class MeshExtensions
                         // a phantom row update.
                         var saveObs = persistence != null
                             ? persistence.WriteAndPublishUpdated(confirmedNode, hub.JsonSerializerOptions, changeFeed)
-                                .Where(n => n is not null)
-                                .Select(n => n!)
+                                .RequireClaimedWrite(hub, request.Id, persistence, confirmedNode.Path)
                             : Observable.Return(confirmedNode);
                         return saveObs.Select(savedConfirmed => (mode: "confirm", node: savedConfirmed));
                     }
                     // Node exists & not a confirmation → fail.
-                    hub.Post(
-                        CreateNodeResponse.Fail(
-                            $"Node already exists at path: {node.Path}",
-                            NodeCreationRejectionReason.NodeAlreadyExists),
-                        o => o.ResponseFor(request));
+                    Respond(CreateNodeResponse.Fail(
+                        $"Node already exists at path: {node.Path}",
+                        NodeCreationRejectionReason.NodeAlreadyExists));
                     return Observable.Empty<(string mode, MeshNode node)>();
                 }
 
@@ -544,7 +558,7 @@ public static class MeshExtensions
                 //     SelectMany so root + grant are in place by the time RLS / the write-guard run.
                 //     See EnsurePartitionBootstrap.
                 // 2. Validators → 3. NodeType existence → 4-7. Enrich + save + change feed + version
-                return EnsurePartitionBootstrap(hub, node, capturedRequest, logger)
+                return EnsurePartitionBootstrap(hub, node, capturedRequest, logger, request.Id)
                     // 1d. A SYSTEM-OWNED space grants nobody write access. Sequenced AFTER the
                     //     bootstrap (which may have just created the partition) and ahead of the
                     //     validators, and folded into the same rejection tuple so the failure is
@@ -561,11 +575,9 @@ public static class MeshExtensions
                             logger.LogWarning(
                                 "Validator rejected node creation at {Path}: {Error}",
                                 node.Path, validationError.Value.ErrorMessage);
-                            hub.Post(
-                                CreateNodeResponse.Fail(
-                                    validationError.Value.ErrorMessage ?? "Validation failed",
-                                    validationError.Value.Reason),
-                                o => o.ResponseFor(request));
+                            Respond(CreateNodeResponse.Fail(
+                                validationError.Value.ErrorMessage ?? "Validation failed",
+                                validationError.Value.Reason));
                             return Observable.Empty<(string mode, MeshNode node)>();
                         }
 
@@ -596,11 +608,9 @@ public static class MeshExtensions
                         {
                             if (!typeExists)
                             {
-                                hub.Post(
-                                    CreateNodeResponse.Fail(
-                                        $"NodeType '{node.NodeType}' is not registered",
-                                        NodeCreationRejectionReason.InvalidNodeType),
-                                    o => o.ResponseFor(request));
+                                Respond(CreateNodeResponse.Fail(
+                                    $"NodeType '{node.NodeType}' is not registered",
+                                    NodeCreationRejectionReason.InvalidNodeType));
                                 return Observable.Empty<(string mode, MeshNode node)>();
                             }
 
@@ -643,8 +653,7 @@ public static class MeshExtensions
                                 // see the confirm branch above for the rationale.
                                 var saveObs = persistence != null
                                     ? persistence.WriteAndPublishCreated(enriched, hub.JsonSerializerOptions, changeFeed)
-                                        .Where(n => n is not null)
-                                        .Select(n => n!)
+                                        .RequireClaimedWrite(hub, request.Id, persistence, enriched.Path)
                                         .Do(s => logger.LogDebug("[CreateNode] step=save-emit path={Path} version={Version}",
                                             s.Path, s.Version))
                                     : Observable.Return(enriched);
@@ -741,29 +750,24 @@ public static class MeshExtensions
                                     resultNode.Path);
                                 CompensateFailedCreate(hub, resultNode, mode, logger)
                                     .Subscribe(
-                                        outcome => hub.Post(
-                                            CreateNodeResponse.Fail(
-                                                $"Create failed in a post-creation step: {ex.Message} {outcome}",
-                                                NodeCreationRejectionReason.Unknown),
-                                            o => o.ResponseFor(request)),
+                                        outcome => Respond(CreateNodeResponse.Fail(
+                                            $"Create failed in a post-creation step: {ex.Message} {outcome}",
+                                            NodeCreationRejectionReason.Unknown)),
                                         // The compensation itself already converts its own faults into
                                         // an outcome string; this branch exists so a response goes out
                                         // even if it faults on a path we did not foresee — never a
                                         // silent swallow, never a caller left waiting.
-                                        compensationEx => hub.Post(
-                                            CreateNodeResponse.Fail(
-                                                $"Create failed in a post-creation step: {ex.Message} "
-                                                + $"Rolling back '{resultNode.Path}' FAILED ({compensationEx.Message}) — "
-                                                + "the partially-created node is still present and must be removed manually.",
-                                                NodeCreationRejectionReason.Unknown),
-                                            o => o.ResponseFor(request)));
+                                        compensationEx => Respond(CreateNodeResponse.Fail(
+                                            $"Create failed in a post-creation step: {ex.Message} "
+                                            + $"Rolling back '{resultNode.Path}' FAILED ({compensationEx.Message}) — "
+                                            + "the partially-created node is still present and must be removed manually.",
+                                            NodeCreationRejectionReason.Unknown)));
                             },
                             () =>
                             {
                                 logger.LogDebug("[CreateNode] step=post-handlers-done path={Path} — posting Ok", resultNode.Path);
                                 hub.NoteRequestStage(request.Id, "CREATE_POST_HANDLERS_DONE");
-                                hub.Post(CreateNodeResponse.Ok(resultNode),
-                                    o => o.ResponseFor(request));
+                                Respond(CreateNodeResponse.Ok(resultNode));
                             });
                 },
                 ex =>
@@ -772,45 +776,108 @@ public static class MeshExtensions
                     if (ex is InvalidOperationException)
                     {
                         logger.LogWarning(ex, "Node creation failed for path {Path}", node.Path);
-                        hub.Post(
-                            CreateNodeResponse.Fail(ex.Message, NodeCreationRejectionReason.ValidationFailed),
-                            o => o.ResponseFor(request));
+                        Respond(CreateNodeResponse.Fail(ex.Message, NodeCreationRejectionReason.ValidationFailed));
                     }
                     else
                     {
                         logger.LogError(ex, "Unexpected error during node creation at {Path}", node.Path);
-                        hub.Post(
-                            CreateNodeResponse.Fail($"Unexpected error: {ex.Message}",
-                                NodeCreationRejectionReason.Unknown),
-                            o => o.ResponseFor(request));
+                        Respond(CreateNodeResponse.Fail($"Unexpected error: {ex.Message}",
+                            NodeCreationRejectionReason.Unknown));
                     }
                 },
                 () =>
                 {
-                    // 🔍 DIAGNOSTIC ONLY (#981) — this arm deliberately does NOT post a response.
+                    // 🚨 THE NO-SILENT-HANG BACKSTOP (#981).
                     //
-                    // The chain can complete WITHOUT emitting: the two save paths filter with
-                    // `.Where(n => n is not null)`, and several branches return
-                    // `Observable.Empty<(string, MeshNode)>()`. Most of those branches post a Fail
-                    // first, so an empty completion is USUALLY answered — but if any of them ever
-                    // completes empty without having posted, this Subscribe has no onCompleted arm
-                    // and the requester's callback stays pending forever, which is exactly the
-                    // #981 signature (`CreateNodeRequest@mesh/<self>`, unanswered, queues empty).
+                    // This chain owes the reply, and it can terminate WITHOUT emitting: several
+                    // branches return `Observable.Empty<(string, MeshNode)>()`, and every upstream
+                    // leaf (the existence Read, EnsurePartitionBootstrap, the validators, the
+                    // NodeType Exists probe, the save) is an adapter-supplied observable that is
+                    // free to complete empty. Most of those branches post a Fail first — those are
+                    // ANSWERED and must be left alone. What must never happen is the remainder:
+                    // termination with no answer, which leaves the requester's `hub.Observe`
+                    // callback pending FOREVER. That is the #981 signature exactly
+                    // (`CreateNodeRequest@mesh/<self>`, unanswered, every queue empty, nothing
+                    // wedged on an action block) — a hang is never a legitimate outcome, so the
+                    // backstop is the invariant, not a guess.
                     //
-                    // Recording it here is what settles the open binary question — "does the chain
-                    // complete slowly, or terminate without responding?" — because the stage is
-                    // written at the instant of termination. Posting a response from here would be
-                    // a FIX, and a guessed one: which response is correct depends on WHY the chain
-                    // went empty, and that is unknown until a capture names the branch. So this
-                    // arm observes and does not act.
-                    if (!emitted)
-                        hub.NoteRequestStage(request.Id,
-                            $"CREATE_CHAIN_COMPLETED_EMPTY path={node.Path} "
-                            + "(chain terminated without emitting — no response posted from here)");
+                    // 🚨 It is gated on BOTH flags, and each guard is load-bearing:
+                    //   • `emitted`   — the chain produced a node, so the reply is owed by the
+                    //                   post-creation Subscribe above, whose own arms both answer.
+                    //                   Answering here would race a success into a failure.
+                    //   • `responded` — a branch already answered (already-exists, validation,
+                    //                   unknown NodeType). Answering again would post a SECOND
+                    //                   response for one correlation.
+                    // So the only case left is genuinely unanswerable-otherwise, and the only
+                    // correct answer for it is a failure: nothing emitted ⇒ no node was created
+                    // ⇒ no Ok can ever be right.
+                    if (emitted || responded)
+                        return;
+                    hub.NoteRequestStage(request.Id,
+                        $"CREATE_CHAIN_COMPLETED_EMPTY path={node.Path} (unanswered — replying Fail)");
+                    logger.LogError(
+                        "[CreateNode] chain for {Path} COMPLETED WITHOUT emitting a node and without posting a "
+                        + "response — answering Fail so the caller is not left waiting. Find the upstream that "
+                        + "completed empty (a Where that dropped the only element, an Observable.Empty branch, or "
+                        + "a storage leaf that completed without emitting).",
+                        node.Path);
+                    Respond(CreateNodeResponse.Fail(
+                        $"Could not create '{node.Path}': the create pipeline terminated without producing a node "
+                        + "and without reporting a reason. This is a defect in the create chain, not a rejection of "
+                        + "the request — retrying is unlikely to help until it is fixed.",
+                        NodeCreationRejectionReason.Unknown));
                 });
 
         return request.Processed();
     }
+
+    /// <summary>
+    /// Turns <see cref="IStorageAdapter.Write"/>'s DECLINE sentinel into the SAME speaking fault the
+    /// composite <c>PersistenceService.Write</c> already raises for the identical condition — and
+    /// records <c>CREATE_SAVE_DECLINED</c> on the request's fate trail so a capture names the adapter
+    /// that declined instead of just saying the chain went empty (#981, #1011).
+    ///
+    /// <para><b>The asymmetry this removes.</b> <c>null</c> from <c>Write</c> is the documented
+    /// try-then-claim sentinel — "this adapter does not own this path", NOT "the write succeeded".
+    /// <c>PersistenceService</c> folds it across its writable providers and, when every one declines,
+    /// THROWS <i>"Could not save '{path}': no writable storage provider accepted the node."</i>, which
+    /// the create handler's <c>onError</c> arm answers correctly. But the resolved
+    /// <see cref="IStorageAdapter"/> is not always that composite: the non-partitioned wirings resolve
+    /// a single adapter (decorated), and several of those decline by contract —
+    /// <c>PathFilteringStorageAdapter</c> for a non-matching path, <c>PostgreSqlPathRoutingAdapter</c>
+    /// / <c>SnowflakePathRoutingAdapter</c> for an unroutable partition, <c>RoutingProxyAdapter</c>
+    /// when no partition hub claims the path, <c>StaticNodeStorageAdapter</c> always. The old
+    /// <c>.Where(n => n is not null)</c> dropped that null, the chain completed empty, and no response
+    /// was ever posted — so ONE condition either failed cleanly or HUNG FOREVER depending purely on
+    /// which adapter the hub happened to resolve. Whether a caller gets an answer must not depend on
+    /// the storage wiring underneath it.</para>
+    ///
+    /// <para>The fault is an <see cref="InvalidOperationException"/> for the same reason: that is what
+    /// <c>PersistenceService</c> throws, so both paths now produce a byte-identically-shaped
+    /// <c>CreateNodeResponse.Fail(…, ValidationFailed)</c> from the one <c>onError</c> arm.</para>
+    /// </summary>
+    /// <param name="save">The adapter write (already composed with its change-feed publish).</param>
+    /// <param name="hub">The hub handling the request — used to record the ledger stage.</param>
+    /// <param name="requestId">The awaited request's delivery id.</param>
+    /// <param name="adapter">The adapter that produced the sentinel, named in the fault + stage.</param>
+    /// <param name="path">The path that was not claimed.</param>
+    /// <returns>The saved node, or a fault naming the declining adapter. Never a silent completion.</returns>
+    private static IObservable<MeshNode> RequireClaimedWrite(
+        this IObservable<MeshNode?> save,
+        IMessageHub hub,
+        string? requestId,
+        IStorageAdapter adapter,
+        string path)
+        => save.SelectMany(saved =>
+        {
+            if (saved is not null)
+                return Observable.Return(saved);
+            hub.NoteRequestStage(requestId,
+                $"CREATE_SAVE_DECLINED adapter={adapter.GetType().Name} path={path}");
+            return Observable.Throw<MeshNode>(new InvalidOperationException(
+                $"Could not save '{path}': the storage adapter '{adapter.GetType().Name}' declined the write "
+                + "(the try-then-claim null sentinel — no writable storage provider accepted the node)."));
+        });
 
     /// <summary>
     /// COMPENSATING ROLLBACK for a create whose CRITICAL post-creation step failed (#638) —
@@ -1304,8 +1371,13 @@ public static class MeshExtensions
     /// grant-less altogether, or any combination) is repaired on the next child create —
     /// nothing is permanently cached as "bootstrapped".</para>
     /// </summary>
+    /// <param name="requestId">
+    /// The awaited create delivery's id, or <c>null</c> for callers with no correlation to report
+    /// against (the batch create). Used ONLY to record <c>BOOTSTRAP_PERM_*</c> stages on the
+    /// <c>RequestFateLedger</c>; <c>NoteRequestStage</c> is a no-op when nothing awaits the id.
+    /// </param>
     private static IObservable<System.Reactive.Unit> EnsurePartitionBootstrap(
-        IMessageHub hub, MeshNode node, CreateNodeRequest request, ILogger logger)
+        IMessageHub hub, MeshNode node, CreateNodeRequest request, ILogger logger, string? requestId = null)
     {
         // Central mesh hub only — see remarks.
         if (!ReferenceEquals(hub, hub.GetMeshHub()))
@@ -1408,15 +1480,67 @@ public static class MeshExtensions
                 // permission fold's CombineLatest gate makes every shared gate the
                 // (synchronous, by contract) fan-out touches half of a lock-order inversion.
                 // See HubPermissionExtensions.TakeDecisionOutsideGate.
+                // 🔍 #981 — the stage that splits "the fold is STILL RUNNING" from "the fold
+                // TERMINATED". Every capture so far shows the create's chain subscribed and no
+                // terminal stage after it, which is ambiguous precisely here: this permission fold
+                // is the one place in the create path that can legitimately take SECONDS (a
+                // cold-start synced query on a fresh partition), and it is bounded at 15 s — well
+                // above the 2 s quiescing budget that DETECTS the pending callback. So a capture
+                // that ends at BOOTSTRAP_PERM_AWAIT is a create waiting on a slow-but-healthy
+                // authorization probe, and one that reaches a verdict/timeout/empty stage is not.
+                // Without this pair the two are indistinguishable in the trail.
+                hub.NoteRequestStage(requestId,
+                    $"BOOTSTRAP_PERM_AWAIT partition={partition} user={effectiveUser}");
                 return hub.CheckPermission(partition, effectiveUser, Permission.Create)
                     .TakeDecisionOutsideGate()
                     .Timeout(TimeSpan.FromSeconds(15))
                     .Catch<bool, Exception>(ex =>
                     {
+                        hub.NoteRequestStage(requestId,
+                            $"BOOTSTRAP_PERM_FAULTED {ex.GetType().Name}");
                         logger.LogDebug(ex,
                             "[PartitionBootstrap] authorization probe for {User} on '{Partition}' faulted; skipping heal",
                             effectiveUser, partition);
                         return Observable.Return(false);
+                    })
+                    // 🚨 An authorization probe that COMPLETES WITHOUT A VERDICT must not vanish.
+                    //
+                    // `TakeDecisionOutsideGate()` is `Take(1).SelectMany(...)`, and the `.Timeout`
+                    // above CANNOT catch this case: Timeout faults on SILENCE, not on a clean
+                    // finish. So a fold that completes without emitting would sail past every bound
+                    // in this chain, EnsurePartitionBootstrap would emit nothing, and the create's
+                    // whole chain would terminate unanswered — the same shape as the
+                    // `.Where(n => n is not null)` that used to swallow a declined write.
+                    //
+                    // Today this is UNREACHABLE through the shipped evaluator, and the reason is
+                    // worth writing down because it is also why a STALL is the realistic failure:
+                    // the fold rides `SyncedQueryMeshNodes`, whose `allChanges` merges a
+                    // `Subject` that is never completed — so that substrate can never complete at
+                    // all, only stall (which the Timeout above does catch). But
+                    // `EffectivePermissionsDelegate` is a DI extension point: an evaluator that
+                    // answers `Observable.Empty<Permission>()` is a legal implementation, and the
+                    // framework must not hang because one did. Fail CLOSED with the same verdict
+                    // the faulted-fold arm already produces, and say so loudly — a guard that is
+                    // inert today costs nothing and removes an entire silent-hang class.
+                    .Select(verdict => (bool?)verdict)
+                    .DefaultIfEmpty(null)
+                    .Select(verdict =>
+                    {
+                        if (verdict is null)
+                        {
+                            hub.NoteRequestStage(requestId,
+                                $"BOOTSTRAP_PERM_COMPLETED_EMPTY partition={partition} user={effectiveUser}");
+                            logger.LogError(
+                                "[PartitionBootstrap] the authorization probe for {User} on '{Partition}' COMPLETED "
+                                + "WITHOUT A VERDICT — treating it as denied (heal skipped) so the create still "
+                                + "answers. An EffectivePermissionsDelegate must emit a decision; find the evaluator "
+                                + "that completed empty.",
+                                effectiveUser, partition);
+                            return false;
+                        }
+                        hub.NoteRequestStage(requestId,
+                            $"BOOTSTRAP_PERM_VERDICT authorized={verdict.Value}");
+                        return verdict.Value;
                     })
                     .SelectMany(authorized =>
                     {
