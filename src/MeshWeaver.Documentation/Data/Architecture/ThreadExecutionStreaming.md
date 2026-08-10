@@ -44,7 +44,7 @@ The writer, the layout area, and the Blazor view all touch the **same** per-mess
   <text x="380" y="135" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#b2dfdb">broadcasts patches</text>
   <rect x="570" y="70" width="160" height="80" rx="10" fill="#6a1b9a"/>
   <text x="650" y="104" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Blazor View</text>
-  <text x="650" y="122" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#e1bee7">GetRemoteStream</text>
+  <text x="650" y="122" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#e1bee7">GetMeshNodeStream</text>
   <text x="650" y="139" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#ce93d8">re-renders on emit</text>
   <line x1="180" y1="110" x2="288" y2="110" stroke="currentColor" stroke-opacity=".55" stroke-width="2" marker-end="url(#arr)"/>
   <text x="234" y="103" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".65">RFC 7396 patch</text>
@@ -143,8 +143,8 @@ The `Overview` method is a pure factory: given a thread-message hub path, return
 ```csharp
 public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleControl, ThreadMessageBubbleView>
 {
-    private ISynchronizationStream<MeshNode>? _nodeStream;
-
+    // No view-local stream field: the shared IMeshNodeStreamCache entry IS the handle,
+    // and AddBinding owns the subscription's lifetime.
     private string? Role        { get; set; }
     private string? AuthorName  { get; set; }
     private string? messageText { get; set; }
@@ -200,8 +200,8 @@ Key shape:
 | `parentHub.Post(new UpdateThreadMessageContent { ... }, o => o.WithTarget(...))` per chunk | Two-hop write per chunk; the receiving hub's action block activates 30+ times during a single streaming run | `responseStream.Update(node => node with { Content = ... })` on a long-lived stream |
 | `host.SubscribeToDataStream(dataKey, syncStream.Select(... => ThreadMessageViewModel.FromMessage(m)))` | Layout-area-as-republisher; content goes through three intermediaries before the view sees it | `new ThreadMessageBubbleControl { NodePath = ... }` — the view subscribes directly |
 | `new ThreadMessageBubbleControl().WithText(new JsonPointerReference($"{dataPointer}/text"))` | Bind-by-value through a layout data section; freezes if the republish chain stalls | `new ThreadMessageBubbleControl { NodePath = path }` — bind-by-path |
-| Re-opening `_stream` per chunk | Defeats the long-lived subscription; causes per-chunk `SubscribeRequest` churn | Open once at execution start, dispose at end |
-| `await meshService.QueryAsync<MeshNode>($"path:{messagePath}").FirstOrDefaultAsync()` before appending text | Lagged catalog read + manual append + write back = lost-update race | Closure-state text accumulator + `_stream.Update` ships the whole text |
+| `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(path, …)` for a node by path | Opens a **second** upstream handle whose writes the GUI's shared handle never sees — a real, since-fixed bug | `GetMeshNodeStream(path)` — the one process-wide `IMeshNodeStreamCache` entry |
+| `await meshService.QueryAsync<MeshNode>($"path:{messagePath}").FirstOrDefaultAsync()` before appending text | Lagged catalog read + manual append + write back = lost-update race | Closure-state text accumulator + `GetMeshNodeStream(path).Update(...)` ships the whole text |
 
 ## Cross-references
 
@@ -209,4 +209,4 @@ Key shape:
 - [Per-Hub TaskScheduler](/Doc/Architecture/OrleansTaskScheduler) — the threading model that keeps writer, reader, and per-node hub on independent schedulers.
 - [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) — the decision matrix listing `GetMeshNodeStream(path).Update(...)` as the streaming-write primitive.
 - [Data Binding](/Doc/GUI/DataBinding) — the bind-by-path / bind-by-value contract applied here to thread messages.
-- `src/MeshWeaver.Blazor/Components/CollaborativeMarkdownView.razor.cs:70-146` — the canonical `_nodeStream` template; the thread-message view uses the same shape.
+- `src/MeshWeaver.Blazor/Components/CollaborativeMarkdownView.razor.cs` — the canonical node-bound view: `BindData` wraps `Hub.GetMeshNodeStream(BoundNodePath)` in `AddBinding(...)` to read, and calls `Hub.GetMeshNodeStream(BoundNodePath).Update(...)` to write. The thread-message view uses the same shape. (No view-local stream field — the shared cache entry IS the handle.)

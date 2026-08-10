@@ -161,12 +161,15 @@ The kernel's script context exposes `Mesh`. Call `Mesh.ServiceProvider.GetRequir
 **2. Avoid `await` on hub-reachable services in hot paths.**
 Scripts run on the kernel's action block. `await meshService.CreateNodeAsync` inside a loop serialises the hub. Prefer `meshService.CreateNode(node).Subscribe(...)` — it returns `IObservable<MeshNode>`, not `Task<MeshNode>`.
 
-**3. Wrap external `Task`-returning primitives at the boundary with `Observable.FromAsync`.**
+**3. Push external `Task`-returning primitives onto an `IIoPool`.**
 For blob reads:
 ```csharp
-Observable.FromAsync(() => contentService.GetContentAsync(...)).Subscribe(...)
+var pool = Mesh.ServiceProvider.GetRequiredService<IoPoolRegistry>().Get(IoPoolNames.Blob);
+pool.Invoke(ct => contentService.GetContentAsync(..., ct)).Subscribe(...);
 ```
-This keeps the kernel's action block free while the fetch runs on the task pool.
+The pool runs the call **off** the kernel's action block with `ConfigureAwait(false)`, and bounds how many such calls are in flight at once.
+
+> 🚨 **Never `Observable.FromAsync`.** It looks like the same thing and is not: a bare `FromAsync` runs the function's synchronous prologue on the **subscribing** thread — the kernel's action block, when you subscribe mid-script — and applies no concurrency bound at all. That is the deadlock-and-exhaustion class `IIoPool` exists to remove, which is why `Observable.FromAsync` is forbidden everywhere in `src/` outside `IoPool` itself. Use `Invoke` for a `Task<T>` leaf, `InvokeBlocking` for a sync-blocking or CPU leaf, `InvokeStream` for an `IAsyncEnumerable<T>`. See [Controlled IO Pooling](/Doc/Architecture/ControlledIoPooling).
 
 **4. Log liberally.**
 `Log.LogInformation(...)` / `LogWarning(...)` / `LogError(...)` append to the run's ActivityLog. Agents and users watching the log have no other window into what the script is doing — tell them.

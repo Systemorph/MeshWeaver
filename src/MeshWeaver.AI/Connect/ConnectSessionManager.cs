@@ -21,8 +21,9 @@ namespace MeshWeaver.AI.Connect;
 /// (<c>Kill(entireProcessTree: true)</c>).</para>
 ///
 /// <para>Reactive end-to-end: the strategies expose cold observables and this manager subscribes
-/// inline; the only <c>Task</c> bridge is inside the strategies, at the subprocess / SDK boundary
-/// (<c>Observable.FromAsync</c>).</para>
+/// inline; the only <c>Task</c> bridge is inside the strategies, at the subprocess / SDK boundary,
+/// and it runs on the <c>Process</c> <c>IIoPool</c> (<c>Invoke</c> / <c>InvokeBlocking</c>) —
+/// never <c>Observable.FromAsync</c>, which is forbidden outside <c>IoPool</c>.</para>
 /// </summary>
 public sealed class ConnectSessionManager : IDisposable
 {

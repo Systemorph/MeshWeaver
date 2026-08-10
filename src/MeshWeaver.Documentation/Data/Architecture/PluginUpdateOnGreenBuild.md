@@ -143,7 +143,7 @@ install-time seed.
 
 | Symptom | Cause |
 |---|---|
-| Nothing happens on a green build | The webhook does not send **Workflow runs**; or no catalog's `SourceRepoPath` matches the repo; or the run's conclusion was not `success` — only completed+successful runs are recorded; or the run was **not on the repository's default branch** — a green PR-branch build is unmerged code and is deliberately never recorded (fail-closed: a payload with no readable branch records nothing either). |
+| Nothing happens on a green build | The webhook does not send **Workflow runs**; or no catalog's `SourceRepoPath` matches the repo; or the run's conclusion was not `success` — only completed+successful runs are recorded; or the run was **not triggered by a push** (`workflow_run` also fires for `pull_request`, `schedule`, `workflow_dispatch`, … — none of those record); or the run was **not on the repository's default branch** — a green PR-branch build is unmerged code and is deliberately never recorded (fail-closed: a payload with no readable branch records nothing either). |
 | A notification per green run, nothing changed | A module's `manifest.lock` is missing or unparseable, so `ModuleVersion` is null and the legacy commit-sha comparison applies — every commit looks like a change. Fix the module's CI to emit the sidecar. |
 | Build node updates but no installation reacts | The package is not installed on that instance. A catalog lists far more packages than any instance installs; only packages with an install record are considered. |
 
