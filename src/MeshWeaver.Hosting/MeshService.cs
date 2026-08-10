@@ -50,6 +50,29 @@ internal sealed class MeshService(
     private Address NodeOperationTarget => _nodeOperationTarget ??= hub.NodeOperationTarget();
 
     /// <summary>
+    /// The hub the node-operation request is POSTED FROM (and whose action block observes the
+    /// response). Normally the caller's own hub — but when that hub is the ROOT MESH HUB it is the
+    /// mesh's ROUTER, and the router must be neither end of a delivery: a request posted there
+    /// reaches its handler stamped <c>Sender = mesh/{id}</c>, which is exactly what the
+    /// <c>ROUTER_TRAFFIC</c> detector reports. Issuing on the dedicated node-operation execution
+    /// hub instead keeps request AND response entirely off the router (both ends are that hub, so
+    /// the post is local and never routed at all).
+    ///
+    /// <para>Identity is unaffected: <see cref="ConfigurePost"/> stamps the caller's captured
+    /// <c>AccessContext</c> on the delivery explicitly, and the <c>CreatedBy</c>/<c>DeletedBy</c>/
+    /// <c>RequestedBy</c> fields carry it in the request itself — neither depends on which hub the
+    /// post originates from.</para>
+    ///
+    /// <para>Cached alongside <see cref="_nodeOperationTarget"/>: the parent chain is stable for
+    /// this scoped service's lifetime.</para>
+    /// </summary>
+    private IMessageHub? _issuingHub;
+    private IMessageHub IssuingHub => _issuingHub ??=
+        string.Equals(hub.Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal)
+            ? hub.NodeOperationExecutionHub() ?? hub
+            : hub;
+
+    /// <summary>
     /// Per-call timeout ceiling. Every CRUD observable is bounded by this so a lost response
     /// (routing failure, deleted hub, stuck handler) surfaces as TimeoutException within
     /// a few seconds instead of hanging forever. Default 30s, configurable via
@@ -109,7 +132,7 @@ internal sealed class MeshService(
             if (string.IsNullOrEmpty(request.CreatedBy)
                 && captured?.ObjectId is { Length: > 0 } callerId)
                 request = request with { CreatedBy = callerId };
-            return hub.Observe(request, o => ConfigurePost(o, captured))
+            return IssuingHub.Observe(request, o => ConfigurePost(o, captured))
                 .SelectMany(d =>
                 {
                     var r = d.Message;
@@ -138,7 +161,7 @@ internal sealed class MeshService(
             if (string.IsNullOrEmpty(request.CreatedBy)
                 && captured?.ObjectId is { Length: > 0 } callerId)
                 request = request with { CreatedBy = callerId };
-            return hub.Observe(request, o => ConfigurePost(o, captured))
+            return IssuingHub.Observe(request, o => ConfigurePost(o, captured))
                 .SelectMany(d =>
                 {
                     var r = d.Message;
@@ -181,7 +204,7 @@ internal sealed class MeshService(
             if (string.IsNullOrEmpty(request.RequestedBy)
                 && captured?.ObjectId is { Length: > 0 } callerId)
                 request = request with { RequestedBy = callerId };
-            return hub.Observe(request, o => ConfigurePost(o, captured))
+            return IssuingHub.Observe(request, o => ConfigurePost(o, captured))
                 .SelectMany(d =>
                 {
                     var r = d.Message;
@@ -209,7 +232,7 @@ internal sealed class MeshService(
             if (string.IsNullOrEmpty(request.DeletedBy)
                 && captured?.ObjectId is { Length: > 0 } callerId)
                 request = request with { DeletedBy = callerId };
-            return hub.Observe(request, o => ConfigurePost(o, captured))
+            return IssuingHub.Observe(request, o => ConfigurePost(o, captured))
                 .SelectMany(d =>
                 {
                     var r = d.Message;
@@ -239,7 +262,7 @@ internal sealed class MeshService(
                 IncludeDescendants = includeDescendants,
                 IncludeSatellites = includeSatellites
             };
-            return hub.Observe(req, o => ConfigurePost(o, captured))
+            return IssuingHub.Observe(req, o => ConfigurePost(o, captured))
                 .SelectMany(d =>
                 {
                     var r = d.Message;
