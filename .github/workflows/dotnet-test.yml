@@ -196,12 +196,19 @@ jobs:
   # unprovisioned credential into a SKIPPED job — and GitHub renders a skipped job
   # with the same grey/green tick as a passed one. "The gate never ran" and "the gate
   # passed" become indistinguishable, and a required check that passes on no evidence
-  # is worse than a flaky one. That is not theoretical: the cross-repo plugin gate
-  # below sat inert-and-green from the day it was added (PLUGINS_REPO_TOKEN was never
-  # provisioned) — long enough for #683 to delete `AiSettingsNodeType.AddSkillSource`
-  # with a live caller in the plugins repo and take out nine plugin partitions in
-  # production, and for a separate `AddTracking` deletion to break SocialMedia/Post
-  # the same way.
+  # is worse than a flaky one.
+  #
+  # That is not theoretical, and the cost has already been paid. The cross-repo plugin
+  # gate below sat inert-and-green from the day it was added — its checkout failed for
+  # want of a credential, `continue-on-error` rewrote that failure to `success`, and the
+  # compile step skipped. So #683's deletion of `AiSettingsNodeType.AddSkillSource`
+  # merged UNVERIFIED while the plugins repo's `Store/Plugin/Source/Localizer.cs` still
+  # called it. The break surfaced only when the mesh recompiled `Store/Plugin` in
+  # production: CS0117, and since every plugin declares `requires: Store`, every
+  # `nodeType:Store/Plugin` partition (Edu, Agent, Skill, Essentials, Collaboration,
+  # DataModelling, Feedback, Instances, Publish) fell back to the compilation-error
+  # overlay. A separate `AddTracking` deletion broke `SocialMedia/Post` the same way.
+  # `Store` is in VITAL_MODULES precisely so an armed gate would have failed #683.
   #
   # The contract, in three lines:
   #   * a missing input is a RED job naming exactly what to provision — never a skip;
@@ -336,6 +343,24 @@ jobs:
                 # build) simply contributes nothing to its shard's tarball.
                 [ -d "$d" ] && echo "$d"
               done | sort -u > ".build-paths-$i.txt"
+          # 🚨 Shard 0 additionally carries the PLUGIN TESTER — the ONE non-test bin that
+          # travels. tools/MeshWeaver.PluginTester (mw-plugin-test.dll) is a TOOL, so the
+          # test-project sweep above never picks it up; but the plugin-gate job reuses THIS
+          # artifact instead of rebuilding, and that reuse is exactly what keeps the gate
+          # inside its 12-minute budget. While the gate sat unarmed the omission was
+          # invisible — the FIRST armed run died on "mw-plugin-test.dll not in the build
+          # output — the gate cannot run", having tested nothing, which is the very shape
+          # that job exists to prevent. The run loop iterates shard-assign.sh's project
+          # list (not the extracted tree), so this extra bin is inert for the tests.
+          # Missing here is a BUILD fault, not a tolerable absence: the solution builds
+          # this project, so fail loudly rather than ship an artifact the gate cannot use.
+          if [ "$i" -eq 0 ]; then
+            if [ ! -d tools/MeshWeaver.PluginTester/bin ]; then
+              echo "::error::tools/MeshWeaver.PluginTester/bin is missing — the plugin gate would have nothing to run."
+              exit 1
+            fi
+            echo tools/MeshWeaver.PluginTester/bin >> ".build-paths-$i.txt"
+          fi
           # zstd -T0 = all cores. --long=27 (128 MiB match window) dedupes ACROSS
           # files: the self-contained test bins each carry near-identical copies
           # of the same framework + MeshWeaver DLLs, which the default 8 MiB
@@ -775,17 +800,26 @@ jobs:
         tar -I 'zstd --long=27' -xf build-output-0.tar.zst
         rm -f build-output-0.tar.zst
     # 🚨 NO `continue-on-error` HERE, EVER. This job only runs on a non-fork (see the job `if`),
-    # and preflight has already proven the deploy key is present — so on this path the checkout
-    # succeeding is a precondition, not a hope. A failure now means the key was revoked, replaced,
-    # or lost its access: a CONFIGURATION FAULT, and configuration faults must be loud. The
-    # previous shape (`continue-on-error` + `if: steps.plugins.outcome == 'success'`) turned every
-    # such fault into a green job that tested nothing.
+    # and `preflight` has already proven the deploy key is present — so on this path the checkout
+    # succeeding is a PRECONDITION, not a hope. A failure now means the key was revoked, replaced,
+    # or lost its access: a CONFIGURATION FAULT, and configuration faults must be loud. The shape
+    # this replaces (`continue-on-error` + `if: steps.plugins.outcome == 'success'` on the compile,
+    # plus an "is the credential set?" probe) turned every such fault into a GREEN job that tested
+    # nothing — and it did, on every run, from the day the gate was added until the key was
+    # provisioned. See the preflight job for the full account.
     #
-    # `ssh-key` = the private half of a read-only DEPLOY KEY scoped to this one repo. Deliberately
-    # not a PAT (minted against a person, and it expires — a gate that silently disarms when
-    # someone's token lapses is the failure this job exists to prevent) and not the org GitHub App
-    # (installed org-wide with write scopes; its private key here would let any workflow — including
-    # one added by a PR — mint org-wide write tokens).
+    # 🚨 A READ-ONLY DEPLOY KEY, deliberately — not a PAT and not the org's GitHub App.
+    # This gate needs exactly one capability: read Systemorph/MeshWeaver.Plugins. A deploy key
+    # grants precisely that and nothing else, so a secret readable by every workflow run in this
+    # repo cannot be turned into anything wider. The alternatives were both worse:
+    #   • a fine-grained PAT is minimal too, but it is minted against a PERSON, inherits their
+    #     account's lifecycle, and EXPIRES — a gate that silently disarms when someone's token
+    #     lapses is the failure shape this whole job exists to prevent;
+    #   • the org's `meshweaver-cloud` App is installed on ALL repos with write scopes (it drives
+    #     self-update and the issues/PR/webhook integrations), so putting its private key here
+    #     would let any workflow — including one added by a PR — mint org-wide write tokens.
+    # Rotate/revoke by deleting the key on the plugins repo (Settings → Deploy keys) and
+    # replacing PLUGINS_REPO_SSH_KEY here; nothing else depends on it.
     - name: Check out MeshWeaver.Plugins
       uses: actions/checkout@v6
       with:
