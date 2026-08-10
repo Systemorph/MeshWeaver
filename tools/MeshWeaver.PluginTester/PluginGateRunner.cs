@@ -113,7 +113,13 @@ public static class PluginGateRunner
             {
                 options.Output.WriteLine($"── {package.Id}: installing {files.Count} file(s)…");
                 var types = DiscoverNodeTypes(package, files);
-                return PackageInstaller.Install(harness.Mesh, package, files, snapshot.CommitSha)
+                // The authorizing principal is EXPLICIT — see GateMesh.AuthorizingUserId. Passing
+                // nothing means "nobody authorized this", which PackageEntitlement refuses for any
+                // priced package; the gate would then report a commercial package as failed
+                // without ever having compiled a line of it.
+                return PackageInstaller
+                    .Install(harness.Mesh, package, files, snapshot.CommitSha,
+                        authorizingUserId: GateMesh.AuthorizingUserId)
                     .SelectMany(install =>
                     {
                         options.Output.WriteLine(
@@ -128,7 +134,8 @@ public static class PluginGateRunner
                             // Runs after the compile gates so an enriched NodeType (compile stamps)
                             // is the realistic re-install input.
                             .SelectMany(typeResults => PackageInstaller
-                                .Install(harness.Mesh, package, files, snapshot.CommitSha)
+                                .Install(harness.Mesh, package, files, snapshot.CommitSha,
+                                    authorizingUserId: GateMesh.AuthorizingUserId)
                                 .Select(second => new PackageResult(package.Id)
                                 {
                                     NodeCount = install.Total,
@@ -432,21 +439,49 @@ public static class PluginGateRunner
 
         // Root-scope Admin for everyone: the gate is a throwaway single-user mesh; the install
         // itself runs system-impersonated, this grant is what lets the render client READ.
+        //
+        // 🚨 …AND the same grant on the Admin PARTITION, which is a different thing and is what
+        // makes the gate's principal a GLOBAL ADMIN. `hub.IsGlobalAdmin(userId)` reads
+        // `Permission.All` at scope `Admin` — an AccessAssignment in `Admin/_Access` — and a ROOT
+        // grant is deliberately not that shape (AccessControl.md → "The Admin partition"). Without
+        // it the gate could install nothing commercial: PackageEntitlement (#830) refuses a priced
+        // package unless the authorizing principal is a global admin, so `Manufacturing`
+        // (price -1 CHF, coupon-only) failed the MeshWeaver.Plugins gate with
+        // `PackageAuthorizationException` the moment that repo's image pin moved onto eb330e1a2 —
+        // not because anything about the package was broken, but because the harness had no
+        // admin to offer. Mirrors TestUsers.PublicAdminAccess, which seeds both scopes.
         private static MeshNode[] RootAdminAccess() =>
         [
-            new(WellKnownUsers.Public + "_Access", "_Access")
+            GateAdminAccess(""),
+            GateAdminAccess(AdminPartition),
+        ];
+
+        /// <summary>The Admin partition — the scope <c>IsGlobalAdmin</c> evaluates.</summary>
+        private const string AdminPartition = "Admin";
+
+        /// <summary>
+        /// The gate principal (<see cref="WellKnownUsers.Public"/>) — the identity that AUTHORIZES
+        /// every install in a gate run. A CI gate is an attended, operator-run check, so it presents
+        /// an admin rather than installing as "nobody" (which
+        /// <see cref="PackageEntitlement.Authorize"/> correctly refuses for priced packages).
+        /// </summary>
+        public static string AuthorizingUserId => WellKnownUsers.Public;
+
+        private static MeshNode GateAdminAccess(string ns) =>
+            // Root-scope assignments live at "_Access" (not ""), so the security service maps them
+            // to scope "" — an empty namespace would land them at "Public_Access" with no scope.
+            new(WellKnownUsers.Public + "_Access", ns.Length > 0 ? ns + "/_Access" : "_Access")
             {
                 NodeType = "AccessAssignment",
                 Name = "Public Access",
-                MainNode = "",
+                MainNode = ns,
                 Content = new AccessAssignment
                 {
                     AccessObject = WellKnownUsers.Public,
                     DisplayName = "Public",
                     Roles = [new RoleAssignment { Role = "Admin" }],
                 },
-            },
-        ];
+            };
 
         private static IMessageHub CreateClient(IMessageHub mesh)
         {
