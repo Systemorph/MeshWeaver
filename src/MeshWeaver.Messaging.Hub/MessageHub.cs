@@ -1278,7 +1278,11 @@ public sealed class MessageHub : IMessageHub
     {
         // The rule itself is a pure predicate — see RouterTrafficRule, where it is unit-tested.
         // Target = where the delivery is ADDRESSED, not where it is currently being handled.
-        var role = RouterTrafficRule.RoleOf(delivery.Target?.Type, delivery.Sender?.Type, delivery.Message);
+        // isResponse: the RequestId correlation marks a delivery that ANSWERS a request — the shape
+        // of the routing layer's own undeliverable-mail NACK, which posts from the mesh hub via
+        // ResponseFor (see RouterTrafficRule.RoleOf's isResponse doc).
+        var role = RouterTrafficRule.RoleOf(delivery.Target?.Type, delivery.Sender?.Type, delivery.Message,
+            delivery.Properties.ContainsKey(PostOptions.RequestId));
         if (role is null)
             return;
 
