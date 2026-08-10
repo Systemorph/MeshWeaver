@@ -186,6 +186,69 @@ jobs:
           echo "- TTL: \`${CI_GREEN_TTL_SECONDS}s\`"
         } >> "$GITHUB_STEP_SUMMARY"
 
+  # ─────────────────────────── PREFLIGHT ───────────────────────────
+  # ONE place that asserts every CI INPUT this workflow needs from outside the tree
+  # (repo secrets and variables). It exists so that no gate downstream ever has to
+  # defend itself against a missing input.
+  #
+  # 🚨 THE BUG CLASS IT REMOVES — "skip-trapdoors". The shape it replaces was a
+  # per-gate `continue-on-error:` plus an "is the secret set?" branch, which turns an
+  # unprovisioned credential into a SKIPPED job — and GitHub renders a skipped job
+  # with the same grey/green tick as a passed one. "The gate never ran" and "the gate
+  # passed" become indistinguishable, and a required check that passes on no evidence
+  # is worse than a flaky one. That is not theoretical: the cross-repo plugin gate
+  # below sat inert-and-green from the day it was added (PLUGINS_REPO_TOKEN was never
+  # provisioned) — long enough for #683 to delete `AiSettingsNodeType.AddSkillSource`
+  # with a live caller in the plugins repo and take out nine plugin partitions in
+  # production, and for a separate `AddTracking` deletion to break SocialMedia/Post
+  # the same way.
+  #
+  # The contract, in three lines:
+  #   * a missing input is a RED job naming exactly what to provision — never a skip;
+  #   * gates then run UNCONDITIONALLY. No gate may test its own inputs.
+  #   * the ONE legitimate exemption — a fork PR cannot read org secrets — is expressed
+  #     HERE, once, as a FORK check. Never as a "the secret is empty" check: at the job
+  #     level those two are indistinguishable, and only one of them is safe.
+  #
+  # Adding an input? Add a line to `missing` below and nothing else.
+  preflight:
+    name: "Required CI inputs"
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+    - name: "Assert every required secret / variable is present"
+      env:
+        PLUGINS_REPO_SSH_KEY: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+        IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+      run: |
+        set -euo pipefail
+        # The one sanctioned exemption. GitHub withholds org secrets from fork runs BY
+        # DESIGN, and every gate that needs one carries the same fork check at its job
+        # level, so nothing downstream runs half-armed.
+        if [ "${IS_FORK:-}" = "true" ]; then
+          echo "Fork PR — org secrets are withheld by design; the gates that need them do not run."
+          echo "Fork PR: secret-dependent gates are not applicable." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        missing=()
+        [ -n "${PLUGINS_REPO_SSH_KEY:-}" ] || missing+=("PLUGINS_REPO_SSH_KEY (secret) — private half of the read-only deploy key on Systemorph/MeshWeaver.Plugins. Used by the 'Plugins compile against this PR' gate to check that repo out.")
+        if [ "${#missing[@]}" -ne 0 ]; then
+          for m in "${missing[@]}"; do
+            echo "::error title=Missing required CI input::$m"
+          done
+          {
+            echo "### ❌ Missing required CI input(s)"
+            echo
+            for m in "${missing[@]}"; do echo "- $m"; done
+            echo
+            echo "Provision them under **Settings → Secrets and variables → Actions**, then re-run."
+            echo "This job fails rather than letting the gates that need them skip: a skipped gate is"
+            echo "indistinguishable from a passing one, which is how an unarmed gate ships a regression."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
+        echo "All required CI inputs are present."
+
   # ───────────────────────────── BUILD ─────────────────────────────
   # Compile the whole solution exactly once and package every TEST project's
   # bin output (self-contained: CopyLocal puts each test's full dependency
@@ -679,10 +742,14 @@ jobs:
   # 0's build output, so it costs a download and the tester run, not a rebuild.
   plugin-gate:
     name: "Plugins compile against this PR"
-    needs: build
-    # Never block on the gate when the plugins checkout is unavailable (a fork PR has no access
-    # to the private repo). Skipping is correct there: a fork cannot break the private repo's
-    # consumers in a way this run could prove either way.
+    # `preflight` is what guarantees the credential exists, so nothing in this job needs to
+    # check for it. If preflight fails, this job skips — and `collect-results` turns that skip
+    # into a RED required check (see its "Fail if a required CI input is missing" step).
+    needs: [preflight, build]
+    # The ONE legitimate reason this gate does not run: a fork PR has no access to the private
+    # plugins repo (nor to any org secret). A fork cannot break the private repo's consumers in
+    # a way this run could prove either way. Expressed as a FORK check — never as a
+    # "is the credential set?" check, which is the same shape with none of the safety.
     if: needs.build.result == 'success' && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     # ⏱️ WALL-CLOCK: this job depends on `build` — the SAME dependency the test shards have — so it
@@ -707,28 +774,27 @@ jobs:
         set -euo pipefail
         tar -I 'zstd --long=27' -xf build-output-0.tar.zst
         rm -f build-output-0.tar.zst
-    - name: Is the plugins token configured?
-      id: token
-      env:
-        PLUGINS_REPO_TOKEN: ${{ secrets.PLUGINS_REPO_TOKEN }}
-      run: |
-        if [ -n "$PLUGINS_REPO_TOKEN" ]; then echo "present=true" >> "$GITHUB_OUTPUT"
-        else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+    # 🚨 NO `continue-on-error` HERE, EVER. This job only runs on a non-fork (see the job `if`),
+    # and preflight has already proven the deploy key is present — so on this path the checkout
+    # succeeding is a precondition, not a hope. A failure now means the key was revoked, replaced,
+    # or lost its access: a CONFIGURATION FAULT, and configuration faults must be loud. The
+    # previous shape (`continue-on-error` + `if: steps.plugins.outcome == 'success'`) turned every
+    # such fault into a green job that tested nothing.
+    #
+    # `ssh-key` = the private half of a read-only DEPLOY KEY scoped to this one repo. Deliberately
+    # not a PAT (minted against a person, and it expires — a gate that silently disarms when
+    # someone's token lapses is the failure this job exists to prevent) and not the org GitHub App
+    # (installed org-wide with write scopes; its private key here would let any workflow — including
+    # one added by a PR — mint org-wide write tokens).
     - name: Check out MeshWeaver.Plugins
-      id: plugins
-      # A PAT/App token with read access to the private plugins repo. Absent (e.g. on a fork, or
-      # before the secret is provisioned) the gate reports SKIPPED rather than failing — an
-      # unavailable input is not evidence of a break.
-      continue-on-error: true
       uses: actions/checkout@v6
       with:
         repository: Systemorph/MeshWeaver.Plugins
         ref: main
         path: plugins-repo
-        token: ${{ secrets.PLUGINS_REPO_TOKEN }}
+        ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
         fetch-depth: 1
     - name: "Compile + run the VITAL plugins against this PR"
-      if: steps.plugins.outcome == 'success'
       env:
         # 🚨 The vital organs only — NOT the whole repo. This gate sits in the PR critical path,
         # so it buys the most breakage-detection per minute rather than maximum coverage:
@@ -766,39 +832,14 @@ jobs:
         # tolerated, NEW failures fail this PR. Same one-way contract the plugins CI uses, so the
         # two gates cannot disagree about what is acceptable.
         time dotnet "$TESTER" "$STAGE" --allow "$STAGE/plugin-gate.allow"
-    # 🚨 A gate that reports GREEN having tested nothing is the very failure shape it exists to
-    # end — that is how mw-plugin-test:latest went stale unnoticed in the first place. So the two
-    # reasons the checkout can fail are treated differently:
-    #   • a FORK PR genuinely cannot reach a private repo → skip, with a warning. Nothing the
-    #     contributor can do, and their change cannot be proven either way here.
-    #   • the SAME repo failing means PLUGINS_REPO_TOKEN is missing or expired → that is a
-    #     CONFIGURATION fault, and configuration faults must be loud. Failing is what gets the
-    #     secret provisioned; a warning would let the gate sit permanently inert and green.
-    # Not-yet-configured is the BOOTSTRAP state (this very PR introduces the gate, so the secret
-    # cannot exist before it merges). Warn loudly; do not block. Remove nothing here — the arm
-    # below is what keeps it honest once the secret exists.
-    - name: Warn — gate not yet armed
-      if: steps.token.outputs.present != 'true' && github.event.pull_request.head.repo.fork != true
-      run: |
-        echo "::warning title=Plugin gate NOT armed::PLUGINS_REPO_TOKEN is not configured, so the cross-repo API gate did not run and this PR is UNVERIFIED against the plugins. Provision a read-access token for Systemorph/MeshWeaver.Plugins to arm it."
-    - name: Report a skipped gate (fork PR)
-      if: steps.plugins.outcome != 'success' && github.event.pull_request.head.repo.fork == true
-      run: |
-        echo "::warning::Fork PR — MeshWeaver.Plugins is unreachable, so the cross-repo API gate did not run."
-    # 🚨 Token CONFIGURED but the checkout still failed ⇒ expired, revoked, or wrong scope. That is
-    # a configuration FAULT, and configuration faults must be loud: a gate reporting green while
-    # testing nothing is exactly how mw-plugin-test:latest went stale unnoticed.
-    - name: Fail — gate armed but could not run
-      if: steps.token.outputs.present == 'true' && steps.plugins.outcome != 'success' && github.event.pull_request.head.repo.fork != true
-      run: |
-        echo "::error::PLUGINS_REPO_TOKEN is configured but checking out Systemorph/MeshWeaver.Plugins FAILED (expired, revoked, or insufficient scope). The cross-repo API gate did not run, so this PR is unverified against the plugins."
-        exit 1
 
   collect-results:
     name: "Consolidate test results"
     # plugin-gate is a NEEDS so this required check cannot go green while the plugins are
-    # broken by this PR — that is the whole point of the gate (see its step below).
-    needs: [precheck, build, test, plugin-gate]
+    # broken by this PR — that is the whole point of the gate (see its step below). preflight
+    # is a NEEDS for the same reason one level up: this job is the repo's ONLY required status
+    # check, so anything that must block a merge has to be able to fail it.
+    needs: [precheck, preflight, build, test, plugin-gate]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -962,4 +1003,16 @@ jobs:
       if: needs.plugin-gate.result == 'failure'
       run: |
         echo "::error::MeshWeaver.Plugins does not compile against this PR — see the 'Plugins compile against this PR' job. A public API change here breaks plugin node source that is Roslyn-compiled at runtime from the plugins repo."
+        exit 1
+
+    # ── …and a missing CI INPUT decides it too ──────────────────────────────────────────────
+    # 🚨 Closing the last skip-trapdoor. A preflight failure SKIPS plugin-gate (a skipped `needs`
+    # skips its dependents), and this job's `always()` would otherwise report that as a pass —
+    # "Consolidate test results" is the repo's only required status check, so an unprovisioned
+    # credential would once again read as a green merge-ready PR while the cross-repo gate
+    # tested nothing. Same lesson as the step above: `needs:` alone is NOT enough under always().
+    - name: Fail if a required CI input is missing
+      if: needs.preflight.result != 'success'
+      run: |
+        echo "::error::A required CI input is missing or the preflight could not run — see the 'Required CI inputs' job. Gates that depend on it did not run, so this run proves nothing about them."
         exit 1
