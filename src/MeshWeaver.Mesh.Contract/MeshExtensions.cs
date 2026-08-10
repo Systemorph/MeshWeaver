@@ -3244,6 +3244,12 @@ public static class MeshExtensions
             //
             // `Observe(request, options)` registers the AsyncSubject BEFORE posting, so the response
             // is buffered no matter how early it lands, and the trail records every stage.
+            //
+            // Identity is unaffected by the swap. The overload re-seeds emissions from the AMBIENT
+            // context, which is exactly what is unreliable on this thread (MeshService.CreateNode's
+            // note) — but nothing here leans on it: `inner.CreatedBy` pins the identity as a request
+            // FIELD, the post stamps `inboundCtx` explicitly, `ApplyUpdateViaStream` opens its own
+            // `SwitchAccessContext(inboundCtx)`, and PostOk/PostFail are `ResponseFor` posts.
             hub.Observe(inner, o =>
                 {
                     var withTarget = o.WithTarget(hub.Address);
