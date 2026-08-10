@@ -41,6 +41,16 @@ public sealed record NodeTypeResult(string Path, string Package)
     /// <summary>The Tests verdict detail (the pass/fail summary, or the red rows).</summary>
     public string? TestsDetail { get; init; }
 
+    /// <summary>
+    /// WHICH node hosted the <c>Tests</c> run, and how the gate picked it — a shipped instance or
+    /// the throwaway probe it created. A type's <c>Tests</c> area is served by INSTANCE hubs, never
+    /// by the type node, so "Area not found" is only diagnosable together with the host: without
+    /// this line the 2026-08-10 <c>Store/Catalog</c> RED was read as "the probe landed on a type
+    /// path" when it had in fact landed on a correctly-typed shipped instance whose hub was serving
+    /// the mesh default configuration (issue #1077).
+    /// </summary>
+    public string? TestsHost { get; init; }
+
     /// <summary>True when no gate check failed.</summary>
     public bool Success =>
         Compile != CheckOutcome.Failed
@@ -117,13 +127,15 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
                     output.WriteLine(Indent(type.CompileDetail));
                 if (type.RenderDetail is not null)
                     output.WriteLine(Indent(type.RenderDetail));
+                if (type.TestsHost is not null)
+                    output.WriteLine(Indent($"Tests host: {type.TestsHost}"));
                 if (type.TestsDetail is not null)
                     output.WriteLine(Indent(type.TestsDetail));
             }
         }
         if (verdict is null)
         {
-            output.WriteLine(Success ? "ALL GREEN." : "GATE FAILED.");
+            output.WriteLine(Success ? "ALL GREEN." : $"{FailedPrefix} {GateVerdict.Headline(this)}.");
             return;
         }
         foreach (var entry in verdict.Stale)
@@ -135,8 +147,17 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
             ? verdict.KnownDebt.Count == 0
                 ? "ALL GREEN."
                 : $"GREEN — {verdict.KnownDebt.Count} known-debt failure(s) allowed (shrinking list)."
-            : $"GATE FAILED — {verdict.NewFailures.Count} new failure(s), {verdict.Stale.Count} stale allow entr(ies).");
+            : $"{FailedPrefix} {GateVerdict.Headline(this, verdict)} — " +
+              $"{verdict.NewFailures.Count} new failure(s), {verdict.Stale.Count} stale allow entr(ies).");
     }
+
+    /// <summary>
+    /// The stable prefix of the ONE line CI lifts verbatim into its failure annotation. The whole
+    /// line is the message — no parsing, so the annotation cannot drift out of step with the
+    /// verdict. Changing this literal changes the workflow's grep: keep the two in step
+    /// (<c>.github/workflows/dotnet-test.yml</c>, the plugin-gate step).
+    /// </summary>
+    public const string FailedPrefix = "GATE FAILED —";
 
     private static string Label(PackageResult package, GateVerdict? verdict)
     {
