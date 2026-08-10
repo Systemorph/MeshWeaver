@@ -115,22 +115,38 @@ internal static class OrleansClusterDisposal
     /// <summary>
     /// The gate every cluster teardown passes through — BOUNDED, not <see cref="IoPool.Unbounded"/>.
     ///
-    /// <para>🚨 Unbounded was the cross-test starvation. Each disposal is made hot immediately so the
-    /// next class's cluster can start, which is correct — but with no bound, every cluster this
-    /// assembly ever built could be shutting down AT ONCE underneath the class currently running.
-    /// Silo shutdown is not cheap, and on a 4-vCPU runner those overlapping teardowns starve the
-    /// live test's render: it waits on a stream that never gets scheduled and dies on its own
-    /// 30s Timeout. That is the shard-0 Orleans flake — a DIFFERENT test each run, because the
-    /// victim is simply whoever is running when enough teardowns pile up.</para>
+    /// <para>Unbounded meant every cluster this assembly ever built could be shutting down AT ONCE
+    /// underneath the class currently running. Each disposal is made hot immediately so the next
+    /// class's cluster can start, which is correct — but silo shutdown is not cheap, so the bound
+    /// keeps teardown from competing with the suite.</para>
     ///
-    /// <para>Reproduced with <c>DOTNET_PROCESSOR_COUNT=4</c> (the runner's shape): the whole project
-    /// fails there and passes unconstrained, and the victim class passes ALONE under the same
-    /// constraint — so it is the overlap, not the test.</para>
+    /// <para>🚨 The previous wording claimed this bound IS the shard-0 Orleans flake fix. It is not,
+    /// and the flake is NOT resource contention. Measured 2026-08-10 on the real 4-vCPU runner, whole
+    /// project per iteration (<c>Flake repro (manual)</c>): with <c>maxParallelThreads:4</c> it failed
+    /// at iteration 3/6 (OrleansDelegationTest.Resubmit_AfterDelegation_DoesNotDeadlock); with the
+    /// suite-wide SERIAL config it failed at iteration 2/6 (OrleansSubmitFromIdleTest +
+    /// ThreadStartWedgeReproTest). Removing the parallelism changes nothing.</para>
+    ///
+    /// <para>Nor is the process starved when it happens. Across five serial local runs of the whole
+    /// project the PASSING tests keep an identical profile — median 0.57-0.62 s, p90 1.33-1.84 s,
+    /// 131-136 s in total — whether the run is green at ~136 s or red at ~230 s. The entire extra
+    /// wall-clock of a red run is the victim's own 45 s budget. Everything else runs at full speed
+    /// while exactly one test waits.</para>
+    ///
+    /// <para>What it actually looks like, with the silo logger finally wired (see
+    /// <c>DynamicCompilationSiloConfigurator</c>): the victim creates its node, and then the silo
+    /// logs NOTHING for the whole 45 s — no <c>[ACTIVATE]</c>, no <c>[ENRICH-DIAG]</c>, no
+    /// <c>[COMPILE-TRACE]</c> — while other Information-level lines keep flowing. The request never
+    /// reaches the grain. The victim rotates because it is whoever asks during the window, and the
+    /// class recovers instantly afterwards (OrleansBrokenNodeTypeAccessTest's second test passes in
+    /// 2.26 s right after the first has burned 46.6 s; the class ALONE runs both in 3.2 s). Do not
+    /// re-derive "starvation" from the rotating names — that has now been asserted and refuted
+    /// three times.</para>
     ///
     /// <para>Bounding is the framework's own prescription for this ("concurrency bounding channels
     /// through <c>IIoPool</c>"), not a tuning knob: it keeps teardown off the xUnit thread — which is
-    /// what avoids the original deadlock — while stopping it from competing with the suite. Legs of
-    /// different clusters never wait on each other, so a bound cannot deadlock the drain.</para>
+    /// what avoids the original deadlock. Legs of different clusters never wait on each other, so a
+    /// bound cannot deadlock the drain.</para>
     /// </summary>
     private static readonly IIoPool DisposalPool = new IoPool(2);
 
