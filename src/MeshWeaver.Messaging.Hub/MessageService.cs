@@ -444,6 +444,13 @@ public class MessageService : IMessageService
         }
     }
 
+    /// <summary>
+    /// Marks a delivery whose AUTHORITATIVE, typed <see cref="DeliveryFailure"/> has already been
+    /// posted, so <see cref="ReportFailure"/> does not post a second, weaker one for the same
+    /// request.
+    /// </summary>
+    public const string FailureAlreadyReported = "FailureAlreadyReported";
+
     private IMessageDelivery ReportFailure(IMessageDelivery delivery, ErrorType errorType = ErrorType.Unknown)
     {
         var error = delivery.Properties.TryGetValue("Error", out var e) ? e?.ToString() : null;
@@ -451,6 +458,26 @@ public class MessageService : IMessageService
             "Message delivery failed for {MessageType} (ID: {MessageId}) in {Address}: {Error}",
             delivery.Message.GetType().Name, delivery.Id, Address,
             error ?? "(no error details)");
+
+        // 🚨 ONE request, ONE failure response. A caller's Observe(...) resolves on the FIRST
+        // DeliveryFailure it sees, so posting a second one for the same delivery makes the
+        // classification a coin toss — and this one is unclassified by default.
+        //
+        // That is exactly how a broken NodeType lost its diagnosis: the fallback-hub NACK path
+        // posts a typed failure (ErrorType.CompilationFailed + NodeTypePath, so the caller can act)
+        // and then returns delivery.Failed(reason); the very next check here sees State == Failed
+        // and posted a SECOND DeliveryFailure carrying the same prose from Properties["Error"] but
+        // ErrorType.Unknown. Whichever landed first won, so the same code intermittently reported
+        // CompilationFailed or Unknown — indistinguishable from any other failure
+        // (OrleansBrokenNodeTypeAccessTest).
+        if (delivery.Properties.ContainsKey(FailureAlreadyReported))
+        {
+            logger.LogDebug(
+                "Typed DeliveryFailure already posted for {MessageType} (ID: {MessageId}) in {Address} — "
+                + "suppressing the unclassified follow-up",
+                delivery.Message.GetType().Name, delivery.Id, Address);
+            return delivery;
+        }
 
         // Don't post DeliveryFailure during shutdown - recipients are likely also disposing
         // and the messages just clog the pipeline
@@ -480,12 +507,14 @@ public class MessageService : IMessageService
                 // every other caller's behaviour. See /async + the no-handler path in MessageHub.FinishDelivery.
                 Post(new DeliveryFailure(delivery, message) { ErrorType = errorType },
                     new PostOptions(Address).ResponseFor(delivery));
-                // The sender has now been answered. Record that ON the delivery — the same marker
-                // IMessageDelivery.FailedAndNacked sets — so no later stage answers the same request a
-                // second time. Only on the path that actually posted: the shutdown short-circuit and the
-                // suppressed-control-traffic branch below answer nobody, and a Post that threw did not
-                // either, so none of them may claim the sender was nacked.
-                delivery = delivery.WithProperty(IMessageDelivery.SenderNackedProperty, true);
+                // We have now answered this request, so carry the SAME marker the typed-NACK sites
+                // set. Without it the on-target reporter posts a second time for any delivery that
+                // reached ReportFailure from INSIDE UnpackIfNecessary (the generic registry-hint
+                // path below returns a still-Failed delivery, and the caller reports it again).
+                // Only on the path that actually posted: the suppression check and shutdown
+                // short-circuit above answer nobody, the control-traffic branch below answers
+                // nobody, and a Post that threw did not answer either.
+                delivery = delivery.WithProperty(FailureAlreadyReported, true);
             }
             catch (Exception ex)
             {
@@ -1006,29 +1035,23 @@ public class MessageService : IMessageService
 
     /// <summary>
     /// Reports a delivery that failed ON TARGET — i.e. in <see cref="UnpackIfNecessary"/>, before any
-    /// handler saw it — extending it the same two courtesies <see cref="ReportRoutingFailure"/> gives
-    /// the routing branch, both read off the delivery rather than re-derived here:
-    /// <list type="bullet">
-    ///   <item><see cref="IMessageDelivery.SenderWasNacked"/> — the failing site already answered the
-    ///     sender itself. The fallback-hub (<see cref="UnhandledMessageNack"/>) path does exactly that,
-    ///     posting a typed <see cref="ErrorType.CompilationFailed"/> NACK naming the broken NodeType.
-    ///     Reporting again sent the sender a SECOND <see cref="DeliveryFailure"/> for the one request —
-    ///     same message text, but the generic <see cref="ErrorType.Unknown"/> and no NodeTypePath — so
-    ///     a caller's <c>Observe(...).FirstAsync()</c> resolved on whichever answer won the race. That
-    ///     is the non-deterministic <c>CompilationFailed</c>/<c>Unknown</c> flip behind the
-    ///     <c>OrleansBrokenNodeTypeAccessTest</c> / <c>BrokenNodeTypeAccessTest</c> CI failures.</item>
-    ///   <item><see cref="IMessageDelivery.GetFailureErrorType"/> — the verdict the failing site
-    ///     recorded, which it reached WHERE the condition was known. Falling back to
-    ///     <see cref="ErrorType.Unknown"/> keeps every unclassified site's historical behaviour.</item>
-    /// </list>
+    /// handler saw it — keeping the verdict the FAILING SITE recorded, exactly as
+    /// <see cref="ReportRoutingFailure"/> does for the routing branch.
+    ///
+    /// <para>A site that knows why it failed records that with
+    /// <see cref="IMessageDelivery.Failed(string, ErrorType)"/>, because the classification is decided
+    /// where the condition is known and never re-derived downstream by pattern-matching prose. This
+    /// path used to call <see cref="ReportFailure"/> raw, so the recorded verdict was silently
+    /// discarded and every on-target failure reached the sender as the default
+    /// <see cref="ErrorType.Unknown"/> — the routing branch honoured the site, the on-target branch
+    /// did not. <see cref="ErrorType.Unknown"/> stays the fallback, so a site that classified nothing
+    /// behaves exactly as before.</para>
+    ///
+    /// <para>Suppressing a DUPLICATE answer is handled inside <see cref="ReportFailure"/> via
+    /// <see cref="FailureAlreadyReported"/>; this method does not repeat that check.</para>
     /// </summary>
-    private IMessageDelivery ReportOnTargetFailure(IMessageDelivery delivery)
-    {
-        if (delivery.SenderWasNacked)
-            return delivery;
-
-        return ReportFailure(delivery, delivery.GetFailureErrorType(ErrorType.Unknown));
-    }
+    private IMessageDelivery ReportOnTargetFailure(IMessageDelivery delivery) =>
+        ReportFailure(delivery, delivery.GetFailureErrorType(ErrorType.Unknown));
 
     private static string GetMessageType(IMessageDelivery delivery)
     {
@@ -1403,12 +1426,12 @@ public class MessageService : IMessageService
             if (string.Equals(jsonType, nameof(DeliveryFailure), StringComparison.Ordinal))
             {
                 logger.LogWarning("Suppressing DeliveryFailure-on-DeliveryFailure ping-pong: {Message}", failureMessage);
-                // FailedAndNacked, NOT Failed — "swallow without responding" only holds if the
-                // reporter downstream is told no answer is owed. Plain Failed() left it owing one,
-                // and since this delivery's Message is RawJson (not DeliveryFailure), ReportFailure's
-                // own type guard could not see what it was: the guard logged its suppression and a
-                // DeliveryFailure went out regardless — feeding the very ping-pong it names.
-                return delivery.FailedAndNacked(failureMessage);
+                // "Swallow without responding" only holds if the reporter downstream is told no
+                // answer is owed. Plain Failed() left it owing one, and since this delivery's
+                // Message is RawJson (not DeliveryFailure), ReportFailure's own type guard could not
+                // see what it was: the guard logged its suppression and a DeliveryFailure went out
+                // regardless — feeding the very ping-pong it names.
+                return delivery.Failed(failureMessage).WithProperty(FailureAlreadyReported, true);
             }
 
             // Fallback-hub contract (UnhandledMessageNack): on a hub standing in for
@@ -1437,12 +1460,10 @@ public class MessageService : IMessageService
                     logger.LogError(ex, "Failed to post fallback NACK for '{JsonType}' (ID: {MessageId}) in {Address}",
                         jsonType, delivery.Id, Address);
                 }
-                // FailedAndNacked, NOT Failed: this site just answered the sender itself with the
-                // policy's typed diagnosis. Plain Failed() declares the opposite ("whoever finishes
-                // this delivery owes the sender a DeliveryFailure"), which made the on-target reporter
-                // post a SECOND, generic Unknown NACK for the same request — and the caller then saw
-                // whichever of the two arrived first.
-                return delivery.FailedAndNacked(reason);
+                // The typed NACK above IS this request's failure response. Mark it so the
+                // Failed-state check on the way out does not post an unclassified second one and
+                // race it to the caller's subject.
+                return delivery.Failed(reason).WithProperty(FailureAlreadyReported, true);
             }
 
             return ReportFailure(delivery.Failed(failureMessage));
