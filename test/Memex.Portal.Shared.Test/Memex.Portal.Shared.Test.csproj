@@ -5,6 +5,16 @@
     <PackageReference Include="Microsoft.AspNetCore.TestHost" />
   </ItemGroup>
   <ItemGroup>
+    <!-- DbVersionHealthCheckTest pins the REAL DbVersionGate.cs source. The aspire portal
+         exe (Memex.Portal.Distributed) cannot be project-referenced without dragging its
+         whole hosting closure + its appsettings into the test output (duplicate-config
+         trap), so the single file is compiled in — same pattern the Layout/FutuRe tests
+         use for in-mesh sources. Npgsql + the health-check abstractions are already in
+         this project's closure (Memex.Portal.Shared → Hosting.PostgreSql; ServiceDefaults
+         → Microsoft.AspNetCore.App). -->
+    <Compile Include="..\..\memex\aspire\Memex.Portal.Distributed\DbVersionGate.cs" Link="Distributed\DbVersionGate.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
     <!-- MapDefaultEndpoints / MapVersionEndpoint live here, beside /health and /alive. -->
     <ProjectReference Include="..\..\memex\aspire\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
