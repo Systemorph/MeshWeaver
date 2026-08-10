@@ -44,6 +44,13 @@ namespace MeshWeaver.AI.Test;
 /// have been caught here under load, since N parallel Patches all want to await
 /// hub-backed operations on a single hub scheduler.
 /// </summary>
+/// <remarks>
+/// Serialised via <see cref="ConcurrencyStressCollection"/> for
+/// <c>Patch_ConcurrentUpdates_NoDeadlock</c>: ten patches fired in parallel, asserted to finish in
+/// under 45 s specifically so lock contention short of a full deadlock still fails. That assertion
+/// only means what it says when the box is not already four-way oversubscribed.
+/// </remarks>
+[Collection(ConcurrencyStressCollection.Name)]
 public class PatchWorkspaceAckTest : MonolithMeshTestBase
 {
     /// <summary>Share Mesh/SP across [Fact]s â€” see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
