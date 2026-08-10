@@ -24,7 +24,7 @@ How to change what runs at **portal.example.com**, from "instant, no redeploy" t
 | API server | **private** (`…privatelink…azmk8s.io`) | `kubectl`/`helm` from outside the VNet **cannot reach it** — use `az aks command invoke` or an in-VNet runner/VPN |
 | Key Vault CSI | `azureKeyvaultSecretsProvider` add-on **enabled** (identity clientId `6c9dcc8d-…`) | secrets can come from Key Vault, keyless |
 | Key Vault | `Systemorph` (`https://systemorph.vault.azure.net`) | holds `AzureFoundry-ApiKey` (set) |
-| Images | `ghcr.io/systemorph/memex-portal-ai:latest` (+ lean `memex-portal`, `memex-migration`) | built **only by CI** (`release-images.yml`) on a `v*.*.*` **tag push** |
+| Images | Live pods pull from **ACR `meshweaver.azurecr.io`**. The chart's *default* is `ghcr.io/systemorph/memex-portal-ai:latest`, which the AKS deploy script repoints to ACR | Two CI channels build them, plus a manual path — see below |
 | portal-ai base | bakes `@anthropic-ai/claude-code` + `@github/copilot` CLIs | the `claude` CLI is present in the running pod |
 | AI model picker | fed by `ModelProvider` / `LanguageModel` **mesh nodes** | see [Setting Up Model Providers](/Doc/AI/ModelProviderSetup) |
 
@@ -96,7 +96,10 @@ Claude is **not** a shared org key. Each user connects the co-hosted **Claude Co
 
 Anything in `.cs` (e.g. the Claude Code PTY fix, the static-catalog behaviour) only ships in a **new image**:
 
-1. **Build + push (CI only):** push a `v*.*.*` tag → `release-images.yml` builds `memex-portal-ai:<version>` + `:latest` and pushes to GHCR. There is no supported local build path for the prod images.
+1. **Build + push.** Three paths, and the normal one is the first:
+   - **Continuous (default):** merge to `main` → `main-cd.yml` builds and pushes `3.0.0-ci.<n>` to **ACR** (`meshweaver.azurecr.io`). This is what the portals self-update onto. It also runs on a 3-hourly reconcile schedule and `workflow_dispatch`.
+   - **Official release:** push a `v*.*.*` tag → `release-images.yml` builds the clean-version images, pushes to **GHCR**, and mirrors them into ACR.
+   - **Manual (break-glass):** `dotnet publish -t:PublishContainer` straight to ACR — see [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) §1. 🚨 Only usable with the self-updater paused, because a non-SemVer tag is not a self-update candidate and the poller will roll the Deployment back off it.
 2. **Roll the cluster to it.** Because the API server is private, run server-side via `az aks command invoke`:
 
 ```bash
@@ -128,7 +131,7 @@ az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
 | Make a model the org-wide default + agent tier | B (Helm config) | yes |
 | Keep the key out of git | C (Key Vault + CSI) | yes |
 | Let users use Claude on their own subscription | D (Claude Code) | code → E |
-| Ship a `.cs` change | E (tag → CI image → command invoke) | yes |
+| Ship a `.cs` change | E (merge to main → CI image → self-update, or `command invoke`) | yes |
 
 ## Related
 

@@ -75,9 +75,19 @@ There are two distinct failure modes — one is a deadlock, the other is a stale
 
 ### 1. Deadlock — shared scheduling infrastructure
 
-The Blazor circuit dispatcher and the mesh hub's `ActionBlock` both pump messages through scheduling primitives that, under load, can end up serialising work onto the same thread. Awaiting a hub round-trip inside a Blazor component method blocks the dispatcher waiting for a response that has to flow *back through that same dispatcher*. Under any concurrent load — multiple users, parallel queries from one page, even rapid keystrokes — this deadlocks deterministically.
+Awaiting a hub round-trip inside a Blazor component method parks the circuit's dispatcher on a
+response that must itself be delivered through scheduling the circuit participates in. Whether a
+given await *actually* closes the cycle depends on which schedulers the two sides land on, so this
+is a **latent** deadlock, not one that reproduces on every call — which is exactly what makes it
+dangerous: it passes in development and closes under concurrency (multiple users, parallel queries
+from one page, rapid keystrokes).
 
-This is the same root cause as the hub-handler deadlock described in [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls), with one extra layer: the awaiting context is the Blazor circuit rather than a hub `ActionBlock`. The deadlock surface is real even though the path is shorter.
+This is the same root cause as the hub-handler deadlock described in [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls), with one extra layer: the awaiting context is the Blazor circuit rather than a hub `ActionBlock`.
+
+**Do not treat "I couldn't make it hang locally" as evidence that an await is safe here** — the
+observed production failure of this shape was not a clean hang but a *storm*: a blocked circuit
+turned a mishandled read into repeated re-requests that wedged a partition hub and took the portal
+with it. Failure mode §2 below is independently sufficient to forbid the pattern anyway.
 
 ### 2. Stale data — `Task<T>` is a snapshot, not a subscription
 
@@ -260,8 +270,8 @@ The `await foreach` iterates a `ChannelReader` — that is not a hub round-trip 
 | ❌ Wrong | ✅ Right |
 |---|---|
 | `var x = await mesh.QueryAsync<T>("path:X").FirstOrDefaultAsync()` | `mesh.GetMeshNode(path).Subscribe(n => UpdateState(n))` for a known path; `mesh.Query<T>(req).Subscribe(...)` for set queries |
-| `var r = await Hub.AwaitResponse<R>(req)` | `Hub.Observe(req).Subscribe(r => …, ex => …)` |
-| `Hub.RegisterCallback(d, r => { … })` | `Hub.Observe(d).Subscribe(r => …, ex => …)` |
+| `var r = await Hub.Observe<R>(req).FirstAsync().ToTask()` | `Hub.Observe(req).Subscribe(r => …, ex => …)` |
+| `var d = Hub.Post(req, o); Hub.Observe(d).Subscribe(…)` | `Hub.Observe(req, o).Subscribe(r => …, ex => …)` — pass the REQUEST. `Observe(delivery)` registers the response subject AFTER the post, and a reply landing in that window is dropped |
 | `var x = await stream.FirstAsync().ToTask()` | `stream.Take(1).Subscribe(x => UpdateState(x))` |
 | `var x = await meshService.UpdateNode(node).FirstAsync()` | `meshService.UpdateNode(node).Subscribe(n => …, ex => …)` |
 | `return Task.FromResult(_items.ToArray())` (callback returning a snapshot) | Bind directly to `_items`; Subscribe pushes updates and `StateHasChanged` re-renders |

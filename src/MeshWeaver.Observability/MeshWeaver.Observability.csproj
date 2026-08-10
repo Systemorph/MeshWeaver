@@ -16,4 +16,8 @@
     <ProjectReference Include="..\MeshWeaver.Observability.Contract\MeshWeaver.Observability.Contract.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="MeshWeaver.Observability.Test" />
+  </ItemGroup>
+
 </Project>
