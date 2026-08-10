@@ -24,7 +24,7 @@ export interface MeshOps {
   submitMessage(threadPath: string, userText: string, opts?: ThreadSubmitOptions): Promise<string | null>;
   /** Field-level partial node update (RFC 7396) — control-plane flips like requestedStatus. */
   patch(path: string, fields: Record<string, unknown>): void;
-  /** Optional mesh query — feeds the agent/model selectors (nodeType:Agent / nodeType:Model). */
+  /** Optional mesh query — feeds the agent/model selectors (nodeType:Agent / nodeType:LanguageModel). */
   search?(query: string, basePath?: string, limit?: number): Promise<Record<string, unknown>[]>;
 }
 ```
@@ -71,7 +71,7 @@ const canSend = !!ops && text.trim().length > 0 && !isExecuting && (!!threadPath
 
 — disabled while the text is whitespace-only or the thread is executing. Enter sends, Shift+Enter inserts a newline.
 
-The **agent / model dropdowns** populate from the mesh when the ops expose `search` (`nodeType:Agent` / `nodeType:Model`); the selection defaults to the thread's embedded `composer` (the single source of the round's selection), and an explicit pick folds back into the composer on submit — so the choice sticks for the next round, in either frontend.
+The **agent / model dropdowns** populate from the mesh when the ops expose `search` (`nodeType:Agent` / `nodeType:LanguageModel`); the selection defaults to the thread's embedded `composer` (the single source of the round's selection), and an explicit pick folds back into the composer on submit — so the choice sticks for the next round, in either frontend.
 
 ## Rendering it
 

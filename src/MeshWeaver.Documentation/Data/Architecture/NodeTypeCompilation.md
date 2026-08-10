@@ -125,9 +125,11 @@ required.
 
 ### Explicit — Create Release
 
-The GUI's **Create Release** button posts a `CreateReleaseRequest` to the NodeType
-hub; `MeshDataSource.HandleCreateRelease` calls the same `RunCompile`. Use this to
-capture a named release with author-written `ReleaseNotes`.
+**The one entry point is `hub.RequestNodeTypeRelease(nodeTypePath, …)`** (`MeshWeaver.Graph/NodeTypeReleaseExtensions.cs`) — GUI, agents, and tests all call it. It writes the trigger onto the NodeType node via `stream.Update`: `RequestedReleaseAt` (a timestamp, so repeated requests are distinct), plus `RequestedReleaseForce` to bypass the "sources match the last compile" short-circuit and `RequestedReleaseBy` to attribute the release to the caller. The per-NodeType release watcher dispatches only while `RequestedReleaseAt > LastReleaseRequestHandledAt` — an idempotent CAS — and lands on the same `RunCompile`.
+
+> 🚨 **Do not post `CreateReleaseRequest` from new code.** The legacy request/handler pair (`MeshDataSource.HandleCreateRelease`) still exists for already-migrated callers, but the canonical surface is the `stream.Update` trigger above. See [RequestViaStreamUpdate](/Doc/Architecture/RequestViaStreamUpdate).
+
+Use this to capture a named release with author-written `ReleaseNotes`.
 
 ### Re-triggering after a source edit
 

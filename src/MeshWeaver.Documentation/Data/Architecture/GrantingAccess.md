@@ -157,7 +157,7 @@ mcp update --nodes '[{
 }]'
 ```
 
-> **Note:** `mcp patch` does **not** update `mainNode` — it is an indexed column and the patch operation ignores it. Always use `mcp update` with a full node body when you need to change `mainNode`.
+> **Note:** `mcp patch` **does** apply `mainNode` — it is in `MeshOperations.PatchableFields` alongside `name`, `description`, `icon`, `category`, `order`, `content`, `preRenderedHtml`, and the write boundary re-validates the merged node. (It did not, until 2026-08-05: seven `{"mainNode":"…"}` patches against root-scoped grants each returned "Patched" and changed nothing, leaving a mesh-wide escalation in place. `Patch` now **refuses** any key outside that list rather than reporting a success it did not perform — so if a patch is silently dropped again, you get an error, not a lie.) `mcp update` with a full node body still works and is what the block above shows.
 
 ---
 
@@ -171,7 +171,7 @@ mcp create --node '{
   "namespace": "Admin/_Access",
   "name": "rbuergi — Admin",
   "nodeType": "AccessAssignment",
-  "mainNode": "",
+  "mainNode": "Admin",
   "content": {
     "$type": "AccessAssignment",
     "accessObject": "rbuergi",
@@ -183,7 +183,9 @@ mcp create --node '{
 
 `PermissionEvaluator`'s global-admin short-circuit turns `Permission.All` at scope `Admin` into the platform-admin gates (`hub.IsGlobalAdmin()`, admin tabs, invites, config).
 
-> 🚨 **Never grant at the root `_Access` namespace.** A root-level `Admin` assignment is the *data-superuser* shape — standing `Permission.All` on every partition's data — and is deliberately **not** how platform admins are provisioned. Platform admins manage the platform; emergency cross-partition data access goes through explicit elevation (break-glass), never a standing grant. See [AccessControl](/Doc/Architecture/AccessControl) → "The Admin partition".
+> 🚨 **Never grant at the root `_Access` namespace, and never leave `mainNode` empty.** A root-level `Admin` assignment is the *data-superuser* shape — standing `Permission.All` on every partition's data — and is deliberately **not** how platform admins are provisioned. Platform admins manage the platform; emergency cross-partition data access goes through explicit elevation (break-glass), never a standing grant. See [AccessControl](/Doc/Architecture/AccessControl) → "The Admin partition".
+
+> **This is enforced at the write boundary.** `AccessAssignmentGuard.IsScopeInvalid` (`src/MeshWeaver.Mesh.Contract/Services/AccessAssignmentGuard.cs`) refuses any `AccessAssignment` whose `mainNode` disagrees with the scope its path encodes — so `Admin/_Access/{id}` with `mainNode: ""` is rejected with *"has an EMPTY MainNode … this grants ROOT (every partition), not 'Admin'"*. A deliberately consistent root grant (`_Access/{id}` **and** `mainNode: ""`) still passes, because the test harness uses that shape; the access-control UI never offers it (`AccessAssignmentGuard.CanGrantAt` returns false at root).
 
 ---
 
@@ -221,9 +223,12 @@ After creating or updating an assignment, run through this checklist:
 4. **Optional SQL sanity check:**
    ```sql
    select * from "rbuergi".access where namespace = 'rbuergi/_Access';
-   select * from public.user_effective_permissions where user_id = 'rbuergi';
+   -- user_effective_permissions is PER PARTITION SCHEMA (there is no global one):
+   select * from "rbuergi".user_effective_permissions where user_id = 'rbuergi';
+   -- partition_access, by contrast, IS shared and lives in public:
+   select * from public.partition_access where user_id = 'rbuergi';
    ```
-   The first query should show the row; the second should show rebuilt permission rows for the partition.
+   The first query should show the row; the second should show rebuilt permission rows for the partition, and the third the partition's read entry.
 
 ---
 
@@ -232,7 +237,8 @@ After creating or updating an assignment, run through this checklist:
 | Symptom | Likely cause |
 |---|---|
 | `Access denied` despite an AccessAssignment existing | `mainNode` is empty for a non-root assignment |
-| Permissions still wrong after editing the assignment | Used `mcp patch` instead of `mcp update`; patch silently ignores `mainNode` |
+| The write is refused with *"has an EMPTY MainNode … this grants ROOT"* | `AccessAssignmentGuard` doing its job — set `mainNode` to the scope the path encodes |
+| `Error: cannot patch … 'x' is not patchable` | Only `name`, `description`, `icon`, `category`, `order`, `content`, `preRenderedHtml`, `mainNode` are patchable; use `mcp update` with a full node for anything else |
 | Search finds the assignment but it has no effect | Namespace doesn't end in `/_Access` — node landed in the wrong table |
 | `Public→Admin` works but per-user denials fail in a test | Tests must use a per-user `accessObject`, not a Public assignment whose union bypasses negative-permission assertions |
 
@@ -244,5 +250,6 @@ After creating or updating an assignment, run through this checklist:
 |---|---|
 | `src/MeshWeaver.Graph/Configuration/AccessAssignmentNodeType.cs` | NodeType definition and post-create handler that rebuilds permissions |
 | `src/MeshWeaver.Graph/Security/RlsNodeValidator.cs` | Read-side enforcer that surfaces `Access denied` |
-| `src/MeshWeaver.Hosting/Security/PermissionEvaluator.cs` | Synced query that aggregates AccessAssignments per user |
+| `src/MeshWeaver.Mesh.Contract/Security/PermissionEvaluator.cs` | Synced query that aggregates AccessAssignments per user |
+| `src/MeshWeaver.Mesh.Contract/Services/AccessAssignmentGuard.cs` | Write-boundary guard: `mainNode` must equal the scope the path encodes |
 | `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs` | `access_changed` trigger that rebuilds `partition_access` and `user_effective_permissions` |

@@ -63,7 +63,8 @@ Before consolidation, every cancel button rolled its own five-line lambda — a 
 ## The extension surface
 
 ```csharp
-using MeshWeaver.Mesh;
+using MeshWeaver.Mesh;   // HubActivityExtensions
+using MeshWeaver.Data;   // ActivityStatus, ActivityLog
 
 // Cancel a running activity.
 // Patches RequestedStatus = Cancelled. The activity hub's WatchControlPlane
@@ -78,6 +79,13 @@ hub.RequestActivityStatus(activityPath, ActivityStatus.Cancelled);
 // Both accept an optional onError callback for one-shot error signalling:
 hub.CancelActivity(activityPath, onError: msg => ShowToast(msg));
 ```
+
+`CancelActivity` is a thin alias — it calls `RequestActivityStatus(path, ActivityStatus.Cancelled, onError)`. The single implementation guards twice inside the `Update` lambda and **silently returns the node unchanged** in both cases:
+
+- the node's `Content` does not materialise as a typed `ActivityLog`, or
+- `RequestedStatus` already equals the requested value (the request is in flight).
+
+A silent no-op is the correct outcome for a duplicate request, but it also means a cancel against a node whose content is not an `ActivityLog` does nothing and reports nothing — `onError` fires only when the `Update` itself faults, never for either guard. If a cancel appears to be ignored, check the node's content type first.
 
 `hub` can be any `IMessageHub`: a click context's `ctx.Host.Hub`, a test fixture's `Mesh`, an MCP plugin's captured hub, or even the activity hub itself patching its own status from within a worker. The extension routes the write through `hub.GetWorkspace().GetMeshNodeStream(activityPath).Update(...)`, which auto-dispatches based on who is calling:
 
@@ -112,17 +120,29 @@ Tests bridge to `Task` exactly once at the assertion edge — see [WritingTests]
 
 ## What the activity hub does in response
 
-When `RequestedStatus` flips, the activity hub's `WatchControlPlane` subscription fires on the value change. This subscription is registered via `MessageHubConfiguration.WithInitialization(...)` in the activity NodeType's `HubConfiguration`, and it runs on the hub's own action block:
+When `RequestedStatus` flips, the activity hub's `WatchControlPlane` subscription fires on the value change (it projects `RequestedStatus` off the hub's OWN node stream through `DistinctUntilChanged`, so the callback sees changes, not every emission). The subscription is installed from a `MessageHubConfiguration.WithInitialization(...)` callback in the activity NodeType's `HubConfiguration`:
 
 ```csharp
-threadHub.WatchControlPlane(requested =>
+var subscription = hub.WatchControlPlane(requested =>
 {
+    // requested is ActivityStatus? — null means "no pending request"
+    // (never set, or cleared after a transition).
     if (requested == ActivityStatus.Cancelled)
     {
         cts.Cancel();   // trips the stored CancellationToken
     }
 });
+hub.RegisterForDisposal(subscription);   // the watcher's lifetime IS the hub's
 ```
+
+Two things the signature makes non-optional:
+
+- **The callback parameter is `ActivityStatus?`.** `null` is a real value — it means no request is pending — so never treat the callback as "a transition was requested".
+- **`WatchControlPlane` returns an `IDisposable` you must register with the hub's lifetime** (`hub.RegisterForDisposal(...)`). Drop it and the subscription outlives the hub.
+
+The handler runs on whatever scheduler the upstream stream emits on — in practice the hub's own action block. Treat it as hub-reachable code: no `await`, compose follow-up work as `IObservable` chains.
+
+The subscription is **self-healing but not infinitely retrying**. It is established through `SubscribeWithReEstablish`, which re-establishes after ~1 s on a transient fault but stops permanently on two classes: own-node content that cannot be deserialized (re-subscribing would replay the same poisoned emission at 1 Hz), and a routing `NotFound` on its own node (the node is gone — re-subscribing is the resubscribe storm that took prod down on 2026-06-10). Both terminal cases are logged loudly rather than retried.
 
 The running script receives the cancellation, throws `OperationCanceledException`, and the executor's normal terminal path writes `Status = Cancelled` back to the activity's MeshNode. The same stream the cancel button is bound to ticks one final time with the terminal state, and the UI re-renders — the cancel button disappears without any additional coordination.
 
