@@ -41,10 +41,22 @@ data:
   #   image stalls the rollout with the previous image still serving, instead of erroring
   #   in front of users. Only a type that WAS working can gate — a pre-existing broken type
   #   is logged and skipped, so one abandoned NodeType can't freeze every future deploy.
+  #   And only a real VERDICT gates: a compile error, or a dependent blocked by one. A type
+  #   the sweep could not evaluate (a timeout — or a dependent of something that timed out)
+  #   is reported as unevaluated and named in the /health payload, never counted as a
+  #   regression. That distinction is what makes the gate safe to arm while cross-silo
+  #   source resolution (core #694) is still imperfect.
   #
-  # ⚠️ Enabling GateReadiness REQUIRES a startupProbe budget covering a full COLD bake
-  #    (~90 s per NodeType, sequential). See probes.startup in values — turning the gate on
-  #    without raising it means Kubernetes kills the pod mid-bake, every time, forever.
+  # ⚠️ GateReadiness has THREE prerequisites; missing any one makes it silently useless:
+  #    1. PreWarm__DynamicTypes must ALSO be true — the gate reads state only the sweep
+  #       writes, so gate-without-sweep is permanently green. The portal logs that
+  #       combination at Critical on startup.
+  #    2. A startupProbe ON /health with a budget covering a full COLD bake (~90 s per
+  #       NodeType, sequential). See probes.startup in values — turning the gate on without
+  #       raising it means Kubernetes kills the pod mid-bake, every time, forever. Nothing
+  #       else reads the gate: a namespace probing /alive or /healthz ignores it entirely.
+  #    3. strategy.maxUnavailable: 0 — the gate works by making the NEW pod refuse
+  #       readiness, which protects nothing if the serving pod was already deleted.
   PreWarm__DynamicTypes: "{{ .Values.config.memex_portal.PreWarm__DynamicTypes }}"
   PreWarm__GateReadiness: "{{ .Values.config.memex_portal.PreWarm__GateReadiness }}"
   Deployment__Orleans__Clustering: "{{ .Values.config.memex_portal.Deployment__Orleans__Clustering }}"

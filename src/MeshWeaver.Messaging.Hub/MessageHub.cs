@@ -806,7 +806,11 @@ public sealed class MessageHub : IMessageHub
                     logger.LogError(ex, "Failed to post fallback NACK for {MessageType} (ID: {MessageId}) in {Address}",
                         delivery.Message.GetType().Name, delivery.Id, Address);
                 }
-                return delivery.Failed(nackPolicy.Reason);
+                // The typed NACK above IS this request's failure response — mark it so no
+                // unclassified follow-up is posted for the same delivery (see
+                // MessageService.FailureAlreadyReported).
+                return delivery.Failed(nackPolicy.Reason)
+                    .WithProperty(MessageService.FailureAlreadyReported, true);
             }
 
             // Check if this is a request that expects a response

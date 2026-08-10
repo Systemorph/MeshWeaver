@@ -210,6 +210,32 @@ public class NodeTypeBakeGateStateTest
     }
 
     /// <summary>
+    /// 🚨 The depth-1 hole. Refusing to gate on a DIRECT timeout is worth nothing if the same
+    /// unevaluated upstream gates through its dependents instead: a timed-out shared source turned
+    /// every previously-healthy dependent into <see cref="PreWarmStatus.UpstreamFailed"/>, which
+    /// gates — so the 2026-08-02 memex-cloud stall came straight back one hop downstream.
+    ///
+    /// <para>The warmer now distinguishes the two cascades, and a dependent of something that was
+    /// never evaluated is itself never evaluated. "I don't know" propagates as "I don't know".</para>
+    /// </summary>
+    [Fact]
+    public void UpstreamUnevaluatedOnAPreviouslyHealthyType_DoesNotGate()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome("Dependent", PreWarmStatus.UpstreamUnevaluated, "blocked by Slow/Up")
+        {
+            WasHealthyBeforeBake = true
+        });
+        state.MarkComplete("done");
+
+        state.Phase.Should().Be(BakePhase.Complete);
+        state.Regressions.Should().BeEmpty();
+        state.Unevaluated.Keys.Should().Contain("Dependent");
+        state.Detail.Should().Contain("Dependent").And.Contain("not evaluated");
+    }
+
+    /// <summary>
     /// The leniency is scoped to timeouts ONLY. Roslyn rejecting the type is a verdict, and it must
     /// still stall the rollout — otherwise the gate stops being a gate.
     /// </summary>

@@ -95,10 +95,14 @@ public sealed class DynamicTypePreWarmerHostedService(
                         case PreWarmStatus.AlreadyBaked: Interlocked.Increment(ref alreadyBaked); break;
                         case PreWarmStatus.CompileError: Interlocked.Increment(ref errored); break;
                         case PreWarmStatus.TimedOut: Interlocked.Increment(ref timedOut); break;
-                        // A type skipped because its upstream failed is not a FAULT — it is a
-                        // deliberate, reported outcome. Counting it as one made the summary read
-                        // like the warmer had crashed N times when one dependency was broken.
-                        case PreWarmStatus.UpstreamFailed: Interlocked.Increment(ref skipped); break;
+                        // A type skipped because its upstream failed — or because its upstream was
+                        // never evaluated — is not a FAULT; it is a deliberate, reported outcome.
+                        // Counting it as one made the summary read like the warmer had crashed N
+                        // times when one dependency was broken. (Which of the two it was is not
+                        // lost: the gate files UpstreamUnevaluated under "not evaluated" and names
+                        // it in the health payload, while UpstreamFailed gates.)
+                        case PreWarmStatus.UpstreamFailed:
+                        case PreWarmStatus.UpstreamUnevaluated: Interlocked.Increment(ref skipped); break;
                         default: Interlocked.Increment(ref faulted); break;
                     }
                 },
