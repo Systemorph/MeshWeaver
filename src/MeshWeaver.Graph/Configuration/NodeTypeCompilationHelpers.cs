@@ -44,8 +44,11 @@ public record DispatchCompileTrigger(MeshNode PendingNode);
 ///
 /// <para>Reactive end-to-end — no <c>await</c>, no <c>.ToTask()</c> at this
 /// layer; the only Task is buried inside
-/// <see cref="IMeshNodeCompilationService.CompileAndGetConfigurations"/>
-/// which wraps the Roslyn invocation as <c>Observable.FromAsync</c>.</para>
+/// <see cref="IMeshNodeCompilationService.CompileAndGetConfigurations"/>, which
+/// offloads the Roslyn invocation to the ThreadPool under a wall-clock bound
+/// (<c>BoundLeg(ct =&gt; OnThreadPool(...))</c>). <b>Not</b> <c>Observable.FromAsync</c>,
+/// which is forbidden outside <c>IoPool</c> — it would run the whole synchronous
+/// Roslyn Emit on the subscribing hub's action block.</para>
 /// </summary>
 internal static class NodeTypeCompilationHelpers
 {
@@ -623,7 +626,7 @@ internal static class NodeTypeCompilationHelpers
                 // WrapWithPerUserRls short-circuit — no CheckPermission, no
                 // self-call, no cycle. Observable.Using keeps the System scope
                 // alive for the LIVE subscription, not just the GetSources build
-                // call. Repro: OrleansSourcesWatcherDeadlockTest.
+                // call.
                 return Observable.Using(
                     () => accessService?.ImpersonateAsSystem()
                           ?? System.Reactive.Disposables.Disposable.Empty,

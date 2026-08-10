@@ -105,24 +105,31 @@ Because instructions live in the mesh, updating business rules requires no code 
 
 ## Agents as Data Elements
 
-Agents are stored as ordinary nodes in the mesh hierarchy, alongside the data they act on:
+Agents are stored as ordinary nodes in the mesh, in a **flat, well-known `Agent` namespace per partition**:
 
 ```
-Insurance/
-  Claims/
-    Agent/              <- Agents for this node
-      Researcher
-      Worker
-      ClaimsProcessor   <- Custom agent for claims
-    Submissions/
-      ...
+Agent/                  <- platform defaults (shipped)
+  Assistant
+  Worker
+rbuergi/Agent/          <- the user's own agents + overrides
+  ClaimsProcessor
+acme/Agent/             <- the space's agents
+  Underwriter
 ```
 
-When a task is invoked, MeshWeaver selects the **lowest agent in the hierarchy that is marked as an entry agent**. This gives you:
+Resolution is a **tiered registry query**, not a hierarchy walk. `AgentPickerProjection.BuildRegistryQuery` emits a single exact-membership alternation over the user's, the space's, and the current node type's partition namespaces plus the platform default, with the platform tier always present and listed last:
 
-- Problem-specific agents at the leaves for fine-grained control
-- Generic fallback agents at higher levels for broad coverage
-- The ability to override behaviour at any level without touching code
+```
+namespace:{user}/Agent|{space}/Agent|{typePartition}/Agent|Agent   nodeType:Agent
+```
+
+There is **no `scope:descendants` and no graph search** on this query, and **no "entry agent" flag** — an agent placed at `Insurance/Claims/Agent/ClaimsProcessor` is not discovered by it. What you get is:
+
+- Per-user and per-space agents that **override a platform agent of the same name** — precedence is resolved from each result's own partition (most specific wins), never from the order of the query rows
+- A platform tier that is always present as the fallback
+- Default selection by node `Order` (the `-1` convention puts an agent first)
+
+> **Skills are the exception, deliberately.** `BuildSkillQueries` emits *separate* queries and scopes the space's and the node type's partitions to the **whole subtree** (`path:{partition} scope:descendants nodeType:Skill`), because a space or plugin ships skills wherever its content is organised. A subtree scope and an exact-namespace membership cannot be folded into one clause, which is why skills cost one extra query per layer. The user's own skills stay flat at `{user}/Skill`.
 
 # Multi-Agent Collaboration
 
@@ -154,7 +161,7 @@ flowchart TB
 | Agent | Model Size | Purpose |
 |-------|------------|---------|
 | **Orchestrator** | Standard | Understands the situation, plans the work, dispatches sub-tasks |
-| **Researcher** | Small LM (GPT-3.5, Haiku) | Gathers context and searches data cheaply |
+| **Researcher** | Small / cheap model (e.g. a Haiku-class model) | Gathers context and searches data cheaply |
 | **Worker** | Medium | Performs CRUD operations and executes dispatched write steps |
 | **Custom** | Configurable | Domain-specific tasks — claims processing, underwriting, etc. |
 
@@ -189,7 +196,7 @@ This skill imports claims from external sources.
 - claimReference, policyNumber, lossDate, description
 ```
 
-Skills are context-aware and discoverable. An agent handling a claims task will find and follow `Insurance/Claims/Skill/import.md` automatically — no wiring needed.
+Skills are context-aware and discoverable **within a partition subtree**. When the active context or node type is in the `Insurance` partition, the skill layer for that partition is `path:Insurance scope:descendants nodeType:Skill` — so `Insurance/Claims/Skill/import.md` is found wherever it sits under `Insurance`, no wiring needed. It is *not* found from an unrelated partition; the subtree layers are keyed to the context and node-type partitions plus the user's own flat `{user}/Skill` and the platform `Skill` defaults.
 
 # MeshPlugin Tools
 
@@ -331,18 +338,20 @@ flowchart RL
 
 ### MCP Server Tools
 
-The MCP server exposes the same operations as the internal MeshPlugin, so external AI systems get full mesh access:
+The MCP server exposes the same core operations as the internal MeshPlugin, so external AI systems get full mesh access. (The live surface is larger than this table — it also carries `patch`, `move`, `copy`, `upload`, `autocomplete`, `execute_script`, `render_area`, `compile` / `get_diagnostics`, the `lsp_*` pre-flight tools, and the version/recycle tools. Enumerate the server's own tool list rather than treating this as exhaustive.)
 
 | Tool | Description |
 |------|-------------|
-| **Get** | Retrieve nodes by path. Supports `@` shorthand, `/*` for children, and Unified Path prefixes (`schema:`, `model:`) |
+| **Get** | Retrieve nodes by path. Supports `@` shorthand, `/*` for children, and the Unified Path segments (`…/schema/`, `…/model/`) shown above |
 | **Search** | Query nodes using GitHub-style syntax with optional base path scoping |
 | **Create** | Create new nodes from JSON MeshNode objects |
 | **Update** | Update existing nodes (pass a JSON array of complete MeshNode objects) |
 | **Delete** | Delete nodes by path (pass a JSON array of path strings) |
 | **NavigateTo** | Returns a browser URL to view a node in the MeshWeaver UI |
 
-> **External vs. internal NavigateTo**: When called from an external system, `NavigateTo` returns a URL such as `https://app.example.com/node/Insurance%2FClaims` rather than rendering inline, because external consumers operate outside the MeshWeaver UI.
+> **External vs. internal NavigateTo**: When called from an external system, `NavigateTo` returns a URL rather than rendering inline, because external consumers operate outside the MeshWeaver UI.
+>
+> 🚨 **The URL shape is `{baseUrl}/{meshpath}` — nothing else.** The mesh path is appended directly, with **no `/node/` segment** and **no URL-escaping of the path separators**: `https://app.example.com/Insurance/Claims`, never `https://app.example.com/node/Insurance%2FClaims`. A leading `@` is stripped; an empty path returns the base URL alone.
 
 **Example — Claude Code using MeshWeaver MCP:**
 ```
@@ -391,7 +400,7 @@ This keeps agents thin at start-up and rich in context by the time they act.
 | Benefit | How it works |
 |---------|-------------|
 | **Adaptability** | Agents read instructions from the mesh; update rules without touching code |
-| **Hierarchical override** | Deploy specialised agents at any level; generic agents fall back naturally |
+| **Tiered override** | A user's or space's `Agent` namespace overrides a platform agent of the same name; the platform tier is the always-present fallback |
 | **Collaboration** | Orchestrator + researcher + worker pattern keeps each model sized for its task |
 | **Custom agents** | Create domain-specific Agent nodes without writing new agent code |
 | **Bidirectional MCP** | Connect any external AI tool inbound; expose MeshWeaver outbound |

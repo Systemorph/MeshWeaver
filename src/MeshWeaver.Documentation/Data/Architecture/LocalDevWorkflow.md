@@ -48,7 +48,7 @@ When you change code in `Memex.Portal.Distributed` (or any project it references
   <text x="380" y="299" text-anchor="middle" fill="#a5d6a7" font-size="12" font-weight="bold">② Dashboard restart</text>
   <text x="380" y="317" text-anchor="middle" fill="#81c784" font-size="10">Resources → ⋯ → Restart · ~10 s</text>
   <rect x="520" y="278" width="210" height="48" rx="8" fill="#2a1f1a" stroke="#f57c00" stroke-width="1.5"/>
-  <text x="625" y="299" text-anchor="middle" fill="#ffb74d" font-size="12" font-weight="bold">③ Stop-Process</text>
+  <text x="625" y="299" text-anchor="middle" fill="#ffb74d" font-size="12" font-weight="bold">③ Kill process</text>
   <text x="625" y="317" text-anchor="middle" fill="#ffa726" font-size="10">Kill &amp; Aspire auto-restarts · ~5 s</text>
 </svg>
 
@@ -58,7 +58,7 @@ When you change code in `Memex.Portal.Distributed` (or any project it references
 |---|---|---|
 | `dotnet watch --project memex/aspire/Memex.AppHost` | Seconds | Default. File save triggers a per-resource restart automatically. |
 | Dashboard UI: Resources → ⋯ → **Restart** | ~10 s | Watch isn't running, or it missed a change. |
-| `Stop-Process Memex.Portal.Distributed` | ~5 s | Last resort — dashboard hangs or AppHost is wedged. |
+| Kill the portal process (`pkill -f Memex.Portal.Distributed`) | ~5 s | Last resort — dashboard hangs or AppHost is wedged. |
 
 > **Do NOT** kill the whole `aspire` / `Memex.AppHost` process unless you changed AppHost wiring itself. A full restart costs 30–60 s, rebuilds every resource, re-launches the Postgres and blob-storage containers, and invalidates the dashboard's browser-token URL.
 
@@ -117,11 +117,13 @@ projects, or recovery from a wedged stack — use the explicit stop → rebuild 
 steps people miss (and that cause the "I rebuilt but it still runs old code" / "my build won't
 compile, file in use" loops) are in **bold**:
 
-```powershell
+On macOS/Linux (zsh/bash):
+
+```bash
 # 1. Stop Aspire — AND force-kill, because `aspire stop` can exit while leaving the
 #    AppHost + portal processes alive:
 aspire stop
-Get-Process Memex.AppHost,Memex.Portal.Distributed,aspire -ErrorAction SilentlyContinue | Stop-Process -Force
+pkill -f Memex.AppHost; pkill -f Memex.Portal.Distributed
 
 # 2. 🚨 RELEASE THE BUILD LOCKS. Lingering MSBuild / VB-C# compiler-server nodes keep
 #    obj/*.dll open AFTER the AppHost is gone — that is the cause of the rebuild failing with
@@ -136,6 +138,12 @@ dotnet build memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.cspr
 
 # 4. Start fast, reusing the build from step 3 (no second compile):
 aspire start --no-build --project memex/aspire/Memex.AppHost
+```
+
+On Windows (PowerShell), step 1's force-kill is instead:
+
+```powershell
+Get-Process Memex.AppHost,Memex.Portal.Distributed,aspire -ErrorAction SilentlyContinue | Stop-Process -Force
 ```
 
 > **Why `--no-build` is safe here:** step 3 already produced current binaries for the portal and
@@ -178,11 +186,14 @@ This is equivalent to running `dotnet build` and relaunching the resource proces
 
 ## Option 3 — Process kill (last resort)
 
+```bash
+pkill -f Memex.Portal.Distributed                                                   # macOS / Linux
+```
 ```powershell
-Get-Process Memex.Portal.Distributed -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process Memex.Portal.Distributed -ErrorAction SilentlyContinue | Stop-Process -Force   # Windows
 ```
 
-Aspire's resource watcher polls process state; when it detects the exit it restarts the resource within ~5 s. Use this when the dashboard UI is unresponsive (for example, a layout area is hung in JS and is blocking dashboard rendering), or when you want to confirm a clean cold-start.
+Aspire's resource watcher notices the exit and restarts the resource, typically within a few seconds. Use this when the dashboard UI is unresponsive (for example, a layout area is hung in JS and is blocking dashboard rendering), or when you want to confirm a clean cold-start.
 
 ---
 
@@ -192,19 +203,20 @@ Aspire's resource watcher polls process state; when it detects the exit it resta
 |---|---|---|
 | `Memex.AppHost` | You changed AppHost wiring | 30–60 s + container relaunch |
 | `aspire` (CLI) | You're switching projects | New dashboard token URL required |
-| `dcp` × N | They crashed (`Get-Process dcp`) | AppHost may not recover; full restart needed |
+| `dcp` × N | They crashed (`pgrep -l dcp`, or `Get-Process dcp` on Windows) | AppHost may not recover; full restart needed |
 | Postgres / blob containers | You need a clean database | Full Aspire restart + migration replay |
 
 ---
 
 ## When `aspire mcp` doesn't see your AppHost
 
-If `mcp__aspire__list_apphosts` returns `[]` even though Aspire is running, the AppHost was started via `dotnet run` rather than `aspire run`. Only `aspire run` registers with the discovery file that the MCP server reads.
+If `mcp__aspire__list_apphosts` returns `[]` even though Aspire is running, the AppHost was started via `dotnet run`. Only the **`aspire` CLI** writes the discovery file the MCP server reads — both `aspire run` and `aspire start` do; `dotnet run` does not.
 
-Fix — stop the current AppHost and restart with:
+Fix — stop the current AppHost and restart with either CLI form:
 
 ```bash
-aspire run --project memex/aspire/Memex.AppHost
+aspire run --project memex/aspire/Memex.AppHost     # foreground
+aspire start --project memex/aspire/Memex.AppHost   # background daemon
 ```
 
 After this, MCP tools (`list_resources`, `list_traces`, `list_structured_logs`, `execute_resource_command`) all work against the running AppHost.

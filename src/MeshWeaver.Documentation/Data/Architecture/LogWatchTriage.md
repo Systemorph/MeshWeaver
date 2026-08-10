@@ -41,19 +41,28 @@ GitHub App credential already live.
 
 ## One fault, one ticket
 
-The fingerprint is `sha256(category, exception type, normalized message head, top application
-frame)`, truncated to 16 hex characters. Four details make it collapse the right things and only
-the right things:
+The fingerprint (`StructuralLogIncidentIdentity.Compute`) is
+`sha256(category, eventId, discriminator)` truncated to **16 hex characters** (the first 8 bytes),
+where the discriminator is `"{exceptionType}|{topFrame}"` — or whichever of the two is present, or
+the empty string when neither is. Four details make it collapse the right things and only the right
+things:
 
-- **The message is normalized** — guids, timestamps, paths (filesystem *and* mesh-node), quoted
-  literals, hex blobs and bare numbers are masked. `rbuergi/Foo/7a2f…` and `acme/Bar/91bc…` are one
-  fault, so a defect that every tenant hits opens one ticket rather than one per tenant.
+- **🚨 The message text is NOT hashed — deliberately, and this is the part that changed.** Earlier
+  revisions folded a *normalized* message (guids, timestamps, paths, quoted literals, hex blobs and
+  bare numbers masked) into the identity. That still fanned out: the varying subject sits in an
+  arbitrary position that no masking rule reliably anticipates, and one defect produced ~50
+  incidents. The message is now structurally excluded. It is still normalized and *carried* on the
+  report (`NormalizedMessage`), it just does not contribute to identity.
+- **Category + `EventId` identify the log SITE**, and are the whole identity for a bare diagnostic
+  with no exception and no frame — so every burst from one site is one incident.
 - **The exception type is part of the identity.** The same log line can precede different failures;
   folding them together would hide the second bug behind the first one's already-filed ticket.
-- **The top frame excludes framework code** and drops its `:line NNN` suffix, so an unrelated edit
-  above the faulting line does not fork the fingerprint into a second ticket.
+- **The top frame excludes framework code** (`System.` / `Microsoft.` prefixes are skipped) and
+  drops its `in /path/file.cs:line NNN` suffix, so an unrelated edit above the faulting line does
+  not fork the fingerprint into a second ticket.
 - **Namespace and pod are NOT in the fingerprint.** The same defect on two pods is one ticket; the
-  pods are recorded on the incident instead.
+  pods are recorded on the incident instead — and so a defect every tenant hits opens one ticket
+  rather than one per tenant.
 
 The fingerprint is also the incident's node id, so redelivery is idempotent by construction. That
 is what lets the watcher retry freely.
@@ -82,13 +91,80 @@ The lifecycle runs on the `Status` / `RequestedStatus` control-plane pair
 
 | `RequestedStatus` | Set by | The control plane does |
 |---|---|---|
-| `Triage` | ingest (first sighting, or a repeat of a `New`/`Failed` incident) | marks `Triaging`, starts a LogTriage thread with the incident as `MainNode` |
-| `File` | the triage agent | resolves the repository, opens the issue as the GitHub App, records `IssueUrl` |
-| `Comment` | ingest (repeat of a `Filed` incident, at most once per `CommentInterval`) | comments the recurrence; reopens the issue first if it had been closed |
+| `Triage` | ingest (first sighting, or a repeat of an un-ticketed `New`/`Failed` incident) | marks `Triaging`, starts a LogTriage thread with the incident as `MainNode` |
+| `File` | the triage agent | marks `Filing`, resolves the repository, opens the issue as the GitHub App, records `IssueNumber`/`IssueUrl` |
+| `Comment` | ingest (repeat of a ticketed incident, at most once per `CommentInterval`) | comments the recurrence; reopens the issue first if it had been closed |
 | `Suppress` | the triage agent, or an admin | marks `Suppressed` — occurrences keep counting, tickets stop |
 
 Because the state lives in the mesh, a portal restart mid-triage strands nothing: the node still
 says what it is waiting for and the next query emission picks it up.
+
+### One fault, one ticket — for the fault's whole life
+
+Deduplicating at the *fingerprint* is only half the promise. The other half is that the incident is
+**filed at most once**, and the control plane enforces it in two places.
+
+**The claim.** Every transition consumes `RequestedStatus` in a write against the incident's LIVE
+content, and that write lands *before* the GitHub call it guards (the
+claim-the-guard-before-the-mutation rule). A second work item for the same incident finds the
+request already cleared and stands down. Without it the only guards are in-process: the incident
+query is eventually consistent, so it re-emits the pre-write snapshot after the in-flight set has
+been released — which is how two issues were opened for one fault inside the same second on the
+watcher's first live run.
+
+**The issue link outranks the status.** `NextRequest` checks `IssueNumber` *before* the
+`New`/`Failed` retry rule, and a `File` request that arrives on an already-ticketed incident is
+granted as a `Comment` instead. Both close the same chain: a recurrence parks a ticketed incident at
+`Failed` (a comment that errored, or the stranded-triage reconcile marking it retryable), ingest
+re-triages it, the agent drafts again and asks to `File` — and a second issue appears. That chain
+filed `ROUTER_TRAFFIC` eight times in seven minutes.
+
+A recurrence is therefore always folded onto the ticket that exists:
+
+- One comment per `CommentInterval` (default 6 h), whatever asked for it — a `File` request landing
+  on a ticketed incident obeys the same bound a `Comment` request does, so a continuously-firing
+  fault cannot turn its own issue into a feed.
+- A **closed** issue is reopened first (`ReopenOnRecurrence`). A defect that returns after someone
+  closed its ticket is exactly what should notify.
+- A comment that lands writes the incident back to `Filed`, clearing a stale `Failed` — leaving it
+  is what let ingest re-triage a ticketed incident in the first place.
+
+The claim keys on `RequestedStatus`, never on the status, so the in-flight statuses (`Triaging`,
+`Filing`) are not dead ends: a crash between the claim and the write-back parks the incident there,
+and asking again — an admin in the incident view, or the stranded-triage reconcile below — is
+honoured.
+
+### The one state nothing requests: `Triaging`
+
+`Triaging` is entered by the control plane and is supposed to be left by the **agent**, which writes
+its draft and asks to `File`. Nothing in the table above can leave it, and the ingest path's retry
+rule re-triages `New` and `Failed` but never `Triaging` — it cannot tell "the round is running"
+from "the round died". So a round that ends without writing back parks the incident permanently:
+invisible, un-ticketed, and still parked after the cause is fixed. That is what a missing triage
+agent looks like — nineteen incidents accumulated that way on `memex.systemorph.com` while
+`LogTriage` was absent from the served agent catalog.
+
+The control plane therefore **reconciles** a `Triaging` incident against the thread it is waiting
+on. This is not a timer or a retry watchdog: it fires only on a query emission that already carries
+a stranded-looking incident, and it asks the only authority there is — the thread node.
+
+- Round still running (`Executing`, or queued input not yet drained) ⇒ nothing happens.
+- Round over and the incident still `Triaging` with nothing requested ⇒ `Failed`, with an `Error`
+  naming the configured agent and the thread. `Failed` is re-triaged on the next recurrence, so the
+  incident heals itself once the missing dependency is back.
+- The incident moved on in the meantime (a draft landed, `RequestedStatus` now asks to `File`) ⇒
+  nothing happens. The status is re-read at write time, so a successful triage the reconcile merely
+  raced is never overwritten.
+
+### Where the triage agent comes from
+
+`TriageAgent` is a **name**, resolved against the mesh's agent catalog at run time — a name with no
+agent behind it fails inside the thread, not at startup. On a portal that catalog is the `Agent`
+partition, served from the database and filled by the pre-installed **`Agent` plugin**
+(`MeshWeaver.Plugins/Agent/`); the framework's `content/ai/Agent` copy serves only the in-memory
+hosts (tests, monolith, MAUI). An agent added to one copy and not the other therefore resolves in
+every test host and in no deployment — the parity gate `scripts/check-agent-parity.py` in
+MeshWeaver.Plugins exists to make that impossible.
 
 ## Repository routing
 

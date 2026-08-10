@@ -333,7 +333,7 @@ to refresh). See `GitHubWebhookProcessor`.
 
 ## 7. Operator setup (enabling the feature)
 
-Two pieces of server configuration enable GitHub Sync:
+Server configuration for GitHub Sync — the first two are required, the rest optional:
 
 1. **A GitHub OAuth App per portal host.** Register one under the GitHub organization
    (Settings → Developer settings → OAuth Apps → New). Set the **Authorization callback
@@ -369,8 +369,28 @@ Two pieces of server configuration enable GitHub Sync:
    ```
 
    Keep it in the Key Vault and surface it as `GitHub__Webhook__Secret`. Deliveries are
-   HMAC-verified against it; absent the secret the endpoint returns 503 and issue nodes
-   refresh only on an explicit sync.
+   HMAC-verified (`X-Hub-Signature-256`) against it; absent the secret the endpoint logs a
+   warning and returns **503**, and issue nodes refresh only on an explicit sync.
+
+4. **A GitHub App (optional — machine identity for server-side sync).** Operations that run
+   with no signed-in user — the plugin registry's sync of the plugins repo, boot imports —
+   authenticate as a **GitHub App installation** rather than someone's personal OAuth token.
+   The host binds `GitHub:App` next to `GitHub:OAuth`; left unconfigured,
+   `GitHubSyncService.ResolveAuth` simply skips the App fallback and only user credentials work.
+
+   ```jsonc
+   "GitHub": { "App": {
+     "ClientId": "Iv23li…",          // the App's client id
+     "PrivateKey": "<PEM>",          // Key Vault → GitHub__App__PrivateKey
+     "InstallationId": 12345678,     // or set InstallationOwner and let it resolve
+     "InstallationOwner": "<org>"
+   } }
+   ```
+
+   Note the transport split this enables: bulk push/fetch goes over the **git protocol**
+   (`GitProtocolRepoClient`), because the REST path cost one request *per file* and a single
+   large-repo sync exhausted the App installation's hourly rate budget. Refs, PRs and issues
+   stay on the Octokit REST client.
 
 All GitHub HTTP and serialization run through the controlled I/O pool — see
 [ControlledIoPooling.md](/Doc/Architecture/ControlledIoPooling).

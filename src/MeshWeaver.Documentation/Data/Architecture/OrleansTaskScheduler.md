@@ -18,10 +18,14 @@ Tags:
 
 Every hub is an actor. Each actor has two components:
 
-- A **single-threaded `ActionBlock<>`** (`MaxDegreeOfParallelism = 1`) that processes messages serially.
-- A **`TaskScheduler`** onto which the action block dispatches its work.
+- A **single-threaded turn loop** — `MessageService`'s lock-guarded FIFO queue plus a
+  `draining` re-entrancy flag, which processes messages strictly one at a time. (This
+  replaced a TPL Dataflow `ActionBlock` with `MaxDegreeOfParallelism = 1`; "action block"
+  survives as the name for the same guarantee. See
+  [Observable Hub Pipeline](/Doc/Architecture/ObservableHubPipeline).)
+- A **`TaskScheduler`** (`turnScheduler`) onto which each drain run is dispatched.
 
-Two hubs can never share an action block. Two hubs *can* share a `TaskScheduler` — and that sharing is precisely the failure mode this design exists to eliminate. When two hubs share a single-threaded scheduler, they collapse into one effective actor: an `await` inside one hub's handler queues a continuation that must run on the same thread the other hub's handler is already holding. Tool-call responses can't be delivered while a streaming handler is waiting for them. The result is a deadlock.
+Two hubs can never share a turn loop. Two hubs *can* share a `TaskScheduler` — and that sharing is precisely the failure mode this design exists to eliminate. When two hubs share a single-threaded scheduler, they collapse into one effective actor: an `await` inside one hub's handler queues a continuation that must run on the same thread the other hub's handler is already holding. Tool-call responses can't be delivered while a streaming handler is waiting for them. The result is a deadlock.
 
 The rule is simple:
 
@@ -80,7 +84,7 @@ Orleans installs a per-grain `TaskScheduler` so that everything happening "insid
 - **Activity attribution** — idle-deactivation timing measures actual grain work, not work that bounced through the thread pool.
 - **`RequestContext` flow** — state set inside a grain method propagates through `await` continuations.
 - **Distributed-tracing scopes** — spans are correctly attributed to the grain.
-- **Lifecycle hooks** — `OnActivate` / `OnDeactivate` fire on the grain scheduler and see consistent grain state.
+- **Lifecycle hooks** — `OnActivateAsync` / `OnDeactivateAsync` fire on the grain scheduler and see consistent grain state.
 - **Single-threaded grain semantics** — only one continuation runs at a time (`[Reentrant]` notwithstanding).
 
 If the root grain hub's action block ran on `TaskScheduler.Default` instead, Orleans would observe only the entry-point grain method call and miss all subsequent work the hub processes after picking up a message.
@@ -107,28 +111,25 @@ public record MessageHubConfiguration
 }
 ```
 
-Inside `MessageService`, both action blocks are wired to the same resolved scheduler:
+`MessageService` resolves it once and holds it as `turnScheduler`, then starts every drain
+run on it:
 
 ```csharp
-var blockOptions = new ExecutionDataflowBlockOptions
-{
-    TaskScheduler          = hub.Configuration.TaskScheduler ?? TaskScheduler.Default,
-    MaxDegreeOfParallelism = 1   // actor semantics — one message at a time
-};
+private TaskScheduler turnScheduler = TaskScheduler.Default;
+// …during construction:
+turnScheduler = hub.Configuration.TaskScheduler ?? TaskScheduler.Default;
 
-deliveryAction = new ActionBlock<Func<Task<IMessageDelivery>>>(async x =>
-    {
-        try { await x.Invoke(); }
-        catch (Exception ex) { logger.LogError(ex, "...", address); }
-    },
-    blockOptions);
-
-executionBlock = new ActionBlock<Func<CancellationToken, Task>>(
-    f => f.Invoke(default),
-    blockOptions);
+// Each drain run STARTS on turnScheduler, so a handler observes
+// TaskScheduler.Current == the hub's configured scheduler:
+private void ScheduleDrainOne() =>
+    Task.Factory.StartNew(DrainOne, CancellationToken.None,
+        TaskCreationOptions.DenyChildAttach, turnScheduler);
 ```
 
-`MaxDegreeOfParallelism = 1` is what enforces the actor invariant. The scheduler determines *where* those serial tasks run.
+The **queue + `draining` flag** is what enforces the actor invariant (one turn at a time,
+FIFO, self-posts to the back) — there is no `MaxDegreeOfParallelism` knob any more. The
+scheduler determines *where* those serial turns run. There is likewise no separate
+`executionBlock`: execution requests run on this same loop.
 
 ## What this fixes — the cross-hub deadlock
 
@@ -151,9 +152,9 @@ async IMessageDelivery Handle(...) {
 }
 ```
 
-The `await foreach` holds hub X's action block and prevents it from processing the next message. If the response that advances `MoveNextAsync` also needs to be processed by hub X, the hub is busy holding its own handler's task — a same-hub deadlock.
+The `await foreach` holds hub X's turn and prevents it from processing the next message. If the response that advances `MoveNextAsync` also needs to be processed by hub X, the hub is busy holding its own handler's task — a same-hub deadlock.
 
-The sanctioned mitigation is `Task.Run` to detach the long-running body from the action block. That pattern is used by `ThreadExecution.ExecuteMessageAsync` for streaming bodies that contain awaits needing the actor's own scheduler to complete. See [Thread Execution Streaming](/Doc/Architecture/ThreadExecutionStreaming) for the worked example.
+The default answer is **`IIoPool`** — `pool.Invoke` / `pool.InvokeStream` / `pool.InvokeBlocking` — which offloads *and* bounds *and* is joinable at mesh teardown ([Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling)). `ThreadExecution`'s agent-streaming loop is the one place in `src/` that uses a bare `Task.Run` instead, deliberately: the loop re-enters the grain scheduler on every tool-call response, so it must not sit behind a pool permit. It pays for that with explicit compensations at the seam — a `CancellationTokenSource` registered via `RegisterForDisposal` (without it, grain deactivation waits up to 120 s on a `Task.Run` stuck in an AI API call) plus `DelayDeactivation`/`BeginAsyncOperation` to keep the grain alive. Treat that as a **narrowly-scoped exception with a cost**, not the default; the same file's non-streaming leaf carries the comment *"I/O pool — NEVER `Task.Run`, NEVER inline on the hub turn."* See [Thread Execution Streaming](/Doc/Architecture/ThreadExecutionStreaming) for the worked example.
 
 ## `SubscribeOn(TaskPoolScheduler.Default)` inside a grain-hosted service
 
@@ -206,22 +207,32 @@ That is the query-in-render trap:
    wedges (even `/healthz`). Confirmed offenders: `Doc/DataMesh/SocialMedia/Post` (List area) and
    `Doc/DataMesh/PythonPandasNode/PandasExplorer`.
 
-**The fix — one reactive seam.** `LayoutAreaHost` wraps the render subscription with
-`.SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)` — the identical move made at
-`MeshQuery.Query` and `IMeshNodeStreamCache.GetQuery` (the section just above). The generator, and
-every observable it subscribes in-render, now runs **off the grain turn**, which is immediately free
-to route + answer the round-trip. A pure Rx scheduler operator — **no `async` / `await` / `Task`.**
+**The fix — one reactive seam.** `LayoutAreaHost` routes every render subscribe through
+`ScheduleRenderSubscribe`, the same move made at `MeshQuery.Query` and
+`IMeshNodeStreamCache.GetQuery` (the section just above). The generator, and every observable it
+subscribes in-render, now runs **off the grain turn**, which is immediately free to route + answer
+the round-trip. A pure Rx scheduler operator — **no `async` / `await` / `Task`.**
 
 ```csharp
-// LayoutAreaHost.BuildInitialization — the top-level render subscription:
-var renderSubscription = BuildRenderObservable(context, baseStore)
-    .SubscribeOn(TaskPoolScheduler.Default)   // ← subscribe OFF the owning (grain) hub's turn
-    .Subscribe(PushRenderResult, FailRendering);
-
-// The same hop guards every nested container/dialog/editor sub-area render in LayoutAreaHost.RenderArea,
-// because those subscribes are reached from UpdateArea, which runs ON the hub turn (Stream.Update →
-// UpdateStreamRequest). A nested area that queries in-render must be off-hub too.
+// LayoutAreaHost.ScheduleRenderSubscribe — wrapped around every render subscribe
+// (BuildInitialization's top-level one AND every nested container/dialog/editor sub-area
+// render reached from UpdateArea, which runs ON the hub turn via Stream.Update →
+// UpdateStreamRequest):
+private IObservable<T> ScheduleRenderSubscribe<T>(IObservable<T> source) =>
+    renderSubscribeScheduler is { } scheduler
+        ? scheduler.SubscribeThroughPool(source)               // ← preferred: TRACKED + cancellable
+        : source.SubscribeOn(TaskPoolScheduler.Default);       // ← fallback: hubs with no I/O pools
 ```
+
+🚨 **The pooled variant is not a nicety — a bare `SubscribeOn(TaskPoolScheduler.Default)` is
+invisible to mesh teardown.** During disposal that hop keeps executing on a ThreadPool thread
+*after* the hub's Autofac `LifetimeScope` is disposed (→ `ObjectDisposedException` from a menu
+renderer's `GetService`) and, for a node whose render touches types compiled into a collectible
+`AssemblyLoadContext`, *after* that ALC is unloaded (→ a native use-after-unload crash: the
+`FutuRe.Test` exit=139). `SubscribeThroughPool` makes the subscribe a tracked, cancellable leaf on
+the mesh's drainable `Layout` I/O pool, so `IoPoolRegistry.DrainAll()` cancel+joins it *before* the
+scope disposes. The bare fallback is only taken on hubs with no I/O pools registered (bare
+messaging-only hubs / `HubTestBase`), which compile no collectible ALCs.
 
 **Why it can't reintroduce ordering bugs.** The render *output* (`PushRenderResult` / `UpdateArea`)
 never touches the hub directly — it calls `Stream.Update(...)`, which posts an `UpdateStreamRequest`
@@ -258,17 +269,23 @@ rules came out of fixing it:
    continuation resumes on the **current** `TaskScheduler` (the action block when you
    subscribed mid-handler), so it comes right back onto the blocked turn.
 
-2. **`Task.Run`, not the IoPool, for a CPU leaf that re-enters or must not gate.**
-   `_ioPool.Run` was *worse* here for two reasons: (a) its `SemaphoreSlim` gate
-   serialised the compile against itself — the activity-driven and request-driven
-   compiles both took the `Compile` pool slot and the synchronous single-flight
-   re-entered / parked on `WaitAsync` (an **idle** wait — `dotnet-stack` shows no
-   blocked thread, the missed-observation signature); (b) `SubscribeOn(TaskPoolScheduler.Default)
-   + ConfigureAwait(false)` hops threads and **drops the AccessContext** exactly like
-   `Task.Run`. `Task.Run` schedules on `TaskScheduler.Default` (the thread pool) with no
-   gate and no current-scheduler capture. Bridge it to `IObservable` with
-   `Observable.Create` + `Task.Run` + `ContinueWith(…, TaskScheduler.Default)` — never
-   `FromAsync`, never `Task.ToObservable`.
+2. **The NodeType compile is the one measured exception where `Task.Run` beat the pool.**
+   `MeshNodeCompilationService` runs the Roslyn compile via `Task.Run` (its `OnThreadPool`
+   helper), and its own comment records why: `_ioPool.Run` "re-entered/parked on the Compile
+   pool's `SemaphoreSlim` gate (idle 40s wait)" — the activity-driven and request-driven
+   compiles both wanted the same `Compile` pool slot, and the wait is *idle*, so
+   `dotnet-stack` shows no blocked thread (the missed-observation signature). `Task.Run`
+   schedules on `TaskScheduler.Default` with no gate and no current-scheduler capture.
+   **Do not generalise this into "prefer `Task.Run` for CPU work"** — everywhere else the
+   [`IIoPool`](/Doc/Architecture/ControlledIoPooling) rule stands, precisely because a bare
+   `Task.Run` is invisible to `IoPoolRegistry.DrainAll()` at teardown. Whichever you use,
+   never `Observable.FromAsync` and never `Task.ToObservable` for a leaf you want off the
+   turn.
+
+   > ⚠️ Two things about that exception are worth re-measuring before you copy it: the
+   > compile is also **bounded** by `RoslynCompileTimeout` (an unbounded leaf parked the type
+   > at `Compiling` for the life of the activation), and a self-serialising pool gate is a
+   > *design* choice — the pool being capped at 1 is the thing to revisit, not the pool.
 
 3. **🚨 Re-establish the login *inside* the offload.** Whichever way you hop threads
    (`Task.Run` or the IoPool), the `AccessService` identity (an `AsyncLocal`) does **not**

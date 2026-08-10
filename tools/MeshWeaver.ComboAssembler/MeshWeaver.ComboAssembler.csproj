@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- The Candidate Release Protocol's combo assembler: `mw-combo-assemble <combo.json> <work-root>`
+         materialises an instance's combo (as InstanceComboReader states it) into the repo-root
+         layout `mw-plugin-test` verifies. -->
+    <AssemblyName>mw-combo-assemble</AssemblyName>
+    <RootNamespace>MeshWeaver.ComboAssembler</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- Same multi-arch pair as mw-plugin-test; Directory.Build.props' ProduceReferenceAssembly
+         gate handles the RID-leg race. -->
+    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
+  </ItemGroup>
+</Project>

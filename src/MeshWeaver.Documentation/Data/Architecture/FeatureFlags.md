@@ -13,9 +13,10 @@ A flag declares which capabilities a deployment ships — independent of whether
 key happens to be present. **A disabled flag is the operator's intent and wins even if a key is
 configured.**
 
-> **No-regression default.** Every flag defaults to its permissive value, so an **absent**
-> `Features` section preserves current behaviour. Operators turn capabilities *off* (or opt *in*
-> to invitation-only) explicitly.
+> **No-regression default.** Every flag defaults to its no-change value, so an **absent**
+> `Features` section preserves current behaviour: the capability toggles default to `true`, and the
+> two opt-ins (`Onboarding:InvitationOnly`, `StaticRepoSync:Partitions`) default to off/empty.
+> Operators turn capabilities *off* (or opt *in*) explicitly.
 
 ---
 
@@ -52,11 +53,17 @@ Configuration is layered (last wins):
 | `Features:Ai:Providers:AzureFoundry` | bool | `true` | Ships the Azure AI Foundry provider. |
 | `Features:Ai:Providers:AzureOpenAI` | bool | `true` | Ships the Azure OpenAI provider. |
 | `Features:Ai:Providers:OpenAI` | bool | `true` | Ships the OpenAI provider. |
+| `Features:Ai:Providers:OpenAICompatible` | bool | `true` | Ships the generic OpenAI-wire provider type (OpenRouter, Groq, Together, a local vLLM, …) — always user-supplied base URL + key, no system default. |
+| `Features:Ai:Providers:OpenRouter` | bool | `true` | Ships OpenRouter (`https://openrouter.ai/api/v1`). System-default endpoint, no model ids; requires an API key. Rides the OpenAI-compatible factory. |
 | `Features:Ai:Clis:ClaudeCode` | bool | `true` | Deploys the co-hosted Claude Code CLI **runtime** (per-user Connect login). The harness is NOT offered to users by default: its catalog node is install-gated (`Harness.RequiresInstall`) — a user opts in by installing the Claude Code plugin from the Store, which localizes the harness node into `{user}/Harness`. |
 | `Features:Ai:Clis:Copilot` | bool | `true` | Deploys the co-hosted GitHub Copilot CLI **runtime**. Same per-user install gate as Claude Code. |
 | `Features:Onboarding:AllowSelfOnboarding` | bool | `true` | When `false`, registration is **closed** — only the first-ever user may onboard. |
 | `Features:Onboarding:InvitationOnly` | bool | `false` | When `true`, only an email with a Pending invitation may onboard. See [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding). |
 | `Features:Orleans:Clustering` | string | `AzureTables` | Cluster-membership provider: `AzureTables`, `AdoNet` (PostgreSQL), or `Localhost` (single in-process silo; dev only). |
+| `Features:SignalR` | bool | `true` | Opens the SignalR mesh transport (`/signalr`) for external participants (native clients). `false` closes the connection surface. |
+| `Features:Grpc` | bool | `true` | Opens the gRPC mesh transport (`meshweaver.v1.Mesh/Open` + gRPC-web) for foreign-language participants and the React GUI. Symmetric with `SignalR`. |
+| `Features:StaticRepoSync:Partitions` | string[] | `[]` | Partitions whose build-time static content is **materialized into and served from the database** instead of the in-memory read-only static provider (e.g. `["Doc","Agent","Provider","Harness","Skill"]` — what the default Helm deployment sets). Empty = every partition keeps the in-memory provider. Matching is case-insensitive; `Model` is a legacy alias for `Provider`. See [Static Repo Import](/Doc/Architecture/StaticRepoImport). |
+| `Features:StaticRepoSync:Modes:{Partition}` | enum | *(source default)* | Per-partition prune policy for that import: `FullReplace` (mirror), `Additive` (keep user-added nodes), `UpsertOnly` (never prune). Unlisted partitions use their source's default — `FullReplace` for most, but the built-in AI catalogs (Skill/Agent/Provider/Harness) default to `Additive`. Distinct from the per-**node** `SyncBehavior`. |
 
 A related, separate section — `Email` — configures outbound system mail (used by invitations). It
 is documented in [Invitation-Only Onboarding → Email](/Doc/Architecture/InvitationOnlyOnboarding#sending-email-microsoft-graph).
@@ -79,8 +86,9 @@ if (features.Ai.Clis.ClaudeCode)
 ```
 
 `MemexFeatureOptions.HasAnyChatCapability` is `true` when the deployment ships at least one provider
-**or** one CLI. When false the portal has no built-in chat via catalog sources (users may still
-bring their own keys via Model Providers) — surfaced as a startup warning, not a hard failure.
+**or** one CLI — so disabling *every* provider takes all six `Providers` flags, not just the four
+named API vendors. When it is false the portal has no built-in chat via catalog sources (users may
+still bring their own keys via Model Providers) — surfaced as a startup warning, not a hard failure.
 
 API providers work **bring-your-own-key** (users add endpoint + key per provider under
 **Settings → Models**); see [Model Providers](/Doc/Architecture/ModelProviders). The co-hosted CLIs require the

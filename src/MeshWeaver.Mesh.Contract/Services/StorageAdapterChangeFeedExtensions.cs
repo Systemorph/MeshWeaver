@@ -9,8 +9,9 @@ namespace MeshWeaver.Mesh.Services;
 /// <see cref="IMeshChangeFeed"/> publish so that — by construction — the
 /// <see cref="MeshChangeEvent"/> is only emitted AFTER the adapter's observable
 /// has signalled completion (which the FileSystem, InMemory, and Postgres
-/// adapters all gate on the durable commit via
-/// <see cref="System.Reactive.Linq.Observable.FromAsync{T}(System.Func{System.Threading.CancellationToken, System.Threading.Tasks.Task{T}})"/>).
+/// adapters all gate on the durable commit, bridging their async leaf through a
+/// bounded <c>IIoPool</c> — never <c>Observable.FromAsync</c>, which is forbidden
+/// outside <c>IoPool</c>).
 ///
 /// <para><b>Why a helper, not just convention.</b> The old shape required every
 /// call site to subscribe to the storage write, capture the saved node in a

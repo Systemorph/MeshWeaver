@@ -11,22 +11,25 @@ This is **one of two deploy routes**. Use it for the **.NET Aspire `test` / `pro
 
 ## Deployment Modes
 
-The AppHost supports four modes, selected via `--mode <mode>`:
+The AppHost's four primary modes, selected via `--mode <mode>` (default `local`):
 
 | Mode | PostgreSQL | Blob Storage | Orleans | Portal name |
 |---|---|---|---|---|
 | `local` | Docker pgvector container | Azurite emulator | Emulated (in-process) | memex-local |
-| `test` | Azure (memex-test) | Azure (meshweavermemextest) | Azure | memex-test |
-| `prod` | Azure (memex) | Azure (meshweavermemex) | Azure | memex-prod |
+| `test` | Azure (memex-test) | Azure — provisioned by Aspire | Azure | memex-test |
+| `prod` | Azure (memex) | Azure — provisioned by Aspire | Azure | memex-prod |
 | `monolith` | FileSystem (standalone) | — | — | memex-monolith |
+
+Two further modes exist for running the AppHost **locally against deployed Azure resources**: `local-test` and `local-prod`. They alone attach to the *existing* storage accounts `meshweavermemextest` / `meshweavermemex` via `RunAsExisting` + Azure Identity (`az login`, no secrets), and they need `ConnectionStrings:memex` set to the Azure PostgreSQL so provisioning is bypassed. Deployed `test`/`prod` do **not** use those accounts — Aspire provisions storage for them.
 
 ## Prerequisites
 
 1. **Azure CLI** authenticated — `az login`
-2. **Aspire CLI** installed — `dotnet tool install -g aspire`
+2. **Aspire CLI** installed — `dotnet tool install -g Aspire.Cli`
 3. **Docker** running (builds container images)
 4. **Secrets** configured in the AppHost project (see [Deployment.md](/Doc/Architecture/Deployment) → Secrets Management)
 5. **dotnet-script** installed for the post-deploy DB version check — `dotnet tool install -g dotnet-script`
+6. **`AZURE_USER_PRINCIPAL_NAME` exported** — your AAD UPN (e.g. `you@example.com`). `tools/deploy.sh` exits 64 immediately without it, and `check-db-version.csx` throws: the DB check connects to Postgres as your AAD identity, and the UPN is the Postgres username. The signed-in user must be a Postgres AAD admin (or in a group that is).
 
 ## 🚨 Always use `tools/deploy.sh` — never bare `aspire deploy`
 
@@ -49,27 +52,27 @@ The AppHost supports four modes, selected via `--mode <mode>`:
   <line x1="350" y1="66" x2="398" y2="66" stroke="currentColor" stroke-opacity=".55" stroke-width="1.5" marker-end="url(#arr)"/>
   <rect x="400" y="40" width="160" height="52" rx="10" fill="#1e88e5"/>
   <text x="480" y="60" text-anchor="middle" fill="#fff" font-weight="bold">Step 2</text>
-  <text x="480" y="76" text-anchor="middle" fill="#fff" font-size="11">Poll db-migration</text>
-  <text x="480" y="89" text-anchor="middle" fill="#fff" font-size="11">exit code via az CLI</text>
+  <text x="480" y="76" text-anchor="middle" fill="#fff" font-size="11">Discover Postgres</text>
+  <text x="480" y="89" text-anchor="middle" fill="#fff" font-size="11">FQDN via az CLI</text>
   <line x1="560" y1="66" x2="608" y2="66" stroke="currentColor" stroke-opacity=".55" stroke-width="1.5" marker-end="url(#arr)"/>
   <rect x="610" y="40" width="130" height="52" rx="10" fill="#1e88e5"/>
   <text x="675" y="60" text-anchor="middle" fill="#fff" font-weight="bold">Step 3</text>
-  <text x="675" y="76" text-anchor="middle" fill="#fff" font-size="11">check-db-version</text>
-  <text x="675" y="89" text-anchor="middle" fill="#fff" font-size="11">db_version ≥ 15</text>
+  <text x="675" y="76" text-anchor="middle" fill="#fff" font-size="11">Poll check-db-version</text>
+  <text x="675" y="89" text-anchor="middle" fill="#fff" font-size="11">every 15s, 10 min cap</text>
   <rect x="400" y="115" width="160" height="42" rx="10" fill="#e53935"/>
-  <text x="480" y="133" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">Non-zero exit code?</text>
-  <text x="480" y="149" text-anchor="middle" fill="#fff" font-size="11">Fail + dump 100 log lines</text>
+  <text x="480" y="133" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">FQDN not resolved?</text>
+  <text x="480" y="149" text-anchor="middle" fill="#fff" font-size="11">Fail (exit 2)</text>
   <line x1="480" y1="92" x2="480" y2="115" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
   <line x1="675" y1="92" x2="675" y2="136" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5"/>
   <rect x="610" y="115" width="130" height="42" rx="10" fill="#e53935"/>
-  <text x="675" y="133" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">Version mismatch?</text>
-  <text x="675" y="149" text-anchor="middle" fill="#fff" font-size="11">Fail deploy</text>
+  <text x="675" y="133" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">Deadline hit?</text>
+  <text x="675" y="149" text-anchor="middle" fill="#fff" font-size="11">Fail + dump 100 log lines</text>
   <text x="380" y="195" text-anchor="middle" font-size="13" font-weight="bold" fill="currentColor" fill-opacity=".75">Portal-side safeguards (runtime)</text>
   <line x1="380" y1="200" x2="380" y2="208" stroke="currentColor" stroke-opacity=".4" stroke-width="1"/>
   <rect x="100" y="215" width="230" height="72" rx="10" fill="#43a047"/>
   <text x="215" y="235" text-anchor="middle" fill="#fff" font-weight="bold">DbVersionGate</text>
   <text x="215" y="252" text-anchor="middle" fill="#fff" font-size="11">IHostedService at startup</text>
-  <text x="215" y="267" text-anchor="middle" fill="#fff" font-size="11">Checks db_version ≥ 15</text>
+  <text x="215" y="267" text-anchor="middle" fill="#fff" font-size="11">One-shot: db_version ≥ ExpectedDbVersion</text>
   <text x="215" y="281" text-anchor="middle" fill="#fff" font-size="11">Stops app if below → revision Failed</text>
   <rect x="430" y="215" width="230" height="72" rx="10" fill="#43a047"/>
   <text x="545" y="235" text-anchor="middle" fill="#fff" font-weight="bold">DbVersionHealthCheck</text>
@@ -89,27 +92,34 @@ Running `aspire deploy` on its own **silently passes when the db-migration conta
 The wrapper script closes that gap in three steps:
 
 1. Runs `aspire deploy --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode <prod|test>` (the command Aspire docs sanction).
-2. After Aspire returns, polls `az containerapp replica list -n db-migration -g <rg>` until the replica reaches `Terminated`, then reads `lastTerminationState.exitCode`. A non-zero exit fails the deploy and dumps the last 100 log lines.
-3. Runs `tools/check-db-version.csx` to assert `admin.mesh_nodes.db_version >= 15` against the deployed DB via AAD-authenticated psql — catching the edge case where the migration container exited 0 but crashed inside a `try/catch` that swallowed the exception.
+2. Discovers the deployed Postgres FQDN — `az postgres flexible-server list -g <rg> --query "[0].fullyQualifiedDomainName"` — because the server name carries a random suffix that changes whenever the resource group is reprovisioned.
+3. **Polls the database, not the container**: loops `dotnet script tools/check-db-version.csx -- <mode> <pg-fqdn>` every 15 s against a 10-minute deadline. First success exits 0; on deadline it fails the deploy and dumps `az containerapp logs show -n db-migration --tail 100`.
+
+> **It deliberately does NOT poll the container's exit code.** `db-migration` is deployed as a regular Container App, not a Container Apps *Job*, and Container Apps treats *any* exit — including `exit 0` — as a crash and restarts it. The replica never reaches `Terminated`, `lastTerminationState.exitCode` flickers between `null` and `0` across restarts, and a successful migration is indistinguishable from a crash loop. `db_version` in the database is the only authoritative completion signal, and polling it is an end-to-end check rather than a proxy for one.
 
 Two additional safeguards run inside the portal itself:
 
-- **`DbVersionGate`** (`Memex.Portal.Distributed/DbVersionGate.cs`) — an `IHostedService` that queries `admin.mesh_nodes.db_version` at portal startup and calls `IHostApplicationLifetime.StopApplication()` if the version is missing or below `ExpectedDbVersion = 15`. Container Apps then marks the revision `Failed` and routes no traffic to it.
+- **`DbVersionGate`** (`Memex.Portal.Distributed/DbVersionGate.cs`) — an `IHostedService` that queries `admin.mesh_nodes.db_version` **once** at portal startup and calls `IHostApplicationLifetime.StopApplication()` if the version is missing or below `ExpectedDbVersion`. It does not wait or retry. Container Apps then marks the revision `Failed` and routes no traffic to it.
 - **`DbVersionHealthCheck`** — a live healthcheck wrapping the same query, surfacing any drift if someone manually runs a partial migration via `psql` after startup.
 
-> **Keep these in sync.** Bump `DbVersionGate.ExpectedDbVersion` and the `ExpectedVersion` constant in `tools/check-db-version.csx` in lock-step with the highest `Vxx_*.cs` migration file in `memex/aspire/Memex.Database.Migration/Migrations/`.
+> **Read the constants; don't trust a number quoted here.** The gate compares against `DbVersionGate.ExpectedDbVersion` and the script against the `ExpectedVersion` constant in `tools/check-db-version.csx`. A completed migration writes `MigrationRunner.LatestVersion` — the highest `Version` in `MigrationRegistry.All`.
+>
+> ⚠️ **These three are currently drifted** (`ExpectedDbVersion = 32`, `check-db-version.csx = 26`, highest registered migration `V51`), contrary to the "bump in lock-step with the highest `Vxx_*.cs`" instruction in both constants' comments. Both gates are minimums, so they pass — but a database stranded anywhere in V27–V51 clears both and neither the deploy gate nor the startup gate will notice. Verify the actual constants before relying on either as a migration check.
 
-> **Why not gate this inside `aspire deploy` itself?** Aspire 13.2.x has no first-party API for a deploy-time callback that can poll a provisioned resource and fail the pipeline. The required `DeployingCallbackAnnotation` + `IReportingTask.FailAsync` surface ships in **Wave 14**. When the project upgrades to 14.x, the bash poller can move into `Memex.AppHost/Program.cs` as an annotation on the `db-migration` resource, and `tools/deploy.sh` can collapse back to a thin alias.
+> **Why not gate this inside `aspire deploy` itself?** At the time the wrapper was written, Aspire exposed no first-party API for a deploy-time callback that can poll a provisioned resource and fail the pipeline (nor `PublishAsAzureContainerJob`, which would remove the crash-loop ambiguity above); the note in `tools/deploy.sh` attributes both to a later "Wave 14". The repo is now on **Aspire 13.4.6** (`Directory.Packages.props`) and no `DeployingCallbackAnnotation` appears anywhere in the tree, so the bash poller is still the mechanism. Re-check the Aspire release notes before assuming this can collapse into an AppHost annotation.
 
 ## Verifying a Deployment
 
-`tools/deploy.sh` already runs the version gate automatically. If you ran `aspire deploy` directly, verify manually:
+`tools/deploy.sh` already runs the version gate automatically. If you ran `aspire deploy` directly, verify manually — **the Postgres FQDN is required**, as a second argument or via `PG_HOST` (the script throws without it; it is not discoverable from the mode alone because the server name carries a reprovision-random suffix):
 
 ```bash
-dotnet script tools/check-db-version.csx -- prod
+export AZURE_USER_PRINCIPAL_NAME=you@example.com
+PG_HOST=$(az postgres flexible-server list -g prod-memex \
+  --query "[0].fullyQualifiedDomainName" -o tsv)
+dotnet script tools/check-db-version.csx -- prod "$PG_HOST"
 ```
 
-Expect `✅ db_version=15 (>= 15)`. After verification, open the portal URL, check the Aspire dashboard for service health, and review Application Insights for startup telemetry.
+Success prints `✅ db_version=<n> (>= <ExpectedVersion>)` and exits 0. After verification, open the portal URL, check the Aspire dashboard for service health, and review Application Insights for startup telemetry.
 
 ## Container Apps infrastructure
 

@@ -17,11 +17,12 @@ Every element in the mesh — data records, type definitions, users, threads, co
 
 ```csharp
 public record MeshNode(
-    string Id,           // Local identifier within its namespace
-    string? Namespace    // Parent path (null for root)
+    [property: Key] string Id,                       // Local identifier within its namespace
+    [property: Editable(false)] string? Namespace = null   // Parent path (null/empty at the root)
 )
 {
-    public string Path => $"{Namespace}/{Id}";  // Full canonical path
+    // A root-level node's Path is just its Id — no leading separator.
+    public string Path => string.IsNullOrEmpty(Namespace) ? Id : $"{Namespace}/{Id}";
     public string? NodeType { get; init; }       // Path of this node's type definition
     public object? Content { get; init; }        // Typed payload
 }
@@ -63,7 +64,7 @@ Each level is itself a node with its own type, content, and access policy. The h
 
 | Path | Namespace | Id |
 |------|-----------|-----|
-| `Underwriting` | `/` | `Underwriting` |
+| `Underwriting` | *(null/empty — root)* | `Underwriting` |
 | `Underwriting/Submissions` | `Underwriting` | `Submissions` |
 | `Claims/CLM-2024-001` | `Claims` | `CLM-2024-001` |
 | `Finance/Close` | `Finance` | `Close` |
@@ -262,21 +263,22 @@ When the platform resolves a path, it follows a deterministic sequence:
 
 ## Template Nodes
 
-Nodes can serve as **templates** for virtual instances. Rather than pre-creating thousands of leaf nodes, you declare a single template node:
+Nodes can serve as **templates** for virtual instances. Rather than pre-creating thousands of leaf
+nodes, a single ancestor node backs every path beneath it: resolution walks the path and takes the
+**longest existing prefix**, reporting how many segments it consumed
+(`IStorageAdapter.FindBestPrefixMatch` → `(MeshNode? Node, int MatchedSegments)`; `ResolvePath`
+builds on it). So a `Type/Claim`-typed node at `Insurance/Claims` serves
 
-```json
-{
-  "id": "claim",
-  "addressSegments": 2,
-  "nodeType": "Type/Claim"
-}
-```
-
-This template matches any path with two additional segments below it, for example:
 - `Insurance/Claims/CLM-2024-001`
 - `Insurance/Claims/CLM-2024-002`
 
-Virtual nodes inherit the template's full hub configuration. The mesh instantiates them on demand — no pre-population required.
+with the unmatched tail carried as the virtual instance's key. Virtual nodes inherit the template's
+full hub configuration; the mesh instantiates them on demand — no pre-population required.
+
+> ⚠️ **`addressSegments` is not a real field.** It appears in some older sample node JSON
+> (`samples/Graph/Data/*.json`), but `MeshNode` declares no such property and the hub's
+> `UnmappedMemberHandling = Skip` means it is parsed and discarded. Setting it changes nothing —
+> the prefix walk above is the actual mechanism.
 
 ---
 

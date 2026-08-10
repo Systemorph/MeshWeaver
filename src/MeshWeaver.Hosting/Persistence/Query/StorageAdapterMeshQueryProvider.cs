@@ -79,7 +79,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // filtering on the secured IMeshQueryProvider surface goes through
         // INodeValidator instead, which has no back-reference into the
         // synced-query path. GetEffectivePermissions-style filtering for
-        // non-MeshNode results is intentionally dropped — IMeshService.QueryAsync
+        // non-MeshNode results is intentionally dropped — IMeshService.Query
         // results are MeshNodes today, and any future non-MeshNode projection
         // should declare an INodeValidator if it needs gating.
         AccessService? accessService = null,

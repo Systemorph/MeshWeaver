@@ -166,9 +166,11 @@
        • CONTINUOUS (default — CI pipeline and local dev): append a build number, e.g.
          3.0.0-rc1.ci.21901, so continuous packages are DISTINGUISHABLE from the release and a
          local-deploy build always carries a build number.
-       InformationalVersion always carries +build.<ticks> so NodeTypeCompilationHelpers.FrameworkVersion
-       is distinct every build (NodeType cache invalidation), released or continuous. A direct
-       -p:Version=… still overrides everything (escape hatch). -->
+       Under CIRun — released or continuous alike — InformationalVersion carries +build.<ticks> so
+       NodeTypeCompilationHelpers.FrameworkVersion is distinct every build (NodeType cache
+       invalidation); local builds keep it stable to preserve incremental. See the 🚨 note on the
+       InformationalVersion property below before touching that stamp. A direct -p:Version=… still
+       overrides everything (escape hatch). -->
   <PropertyGroup Condition="'$(Version)' == ''">
     <!-- Build number. CI (CIRun=true): seconds-since-midnight / 2 (~2s granularity) so continuous
          packages are distinguishable. LOCAL DEV: a STABLE 0 — a per-build number re-stamps
@@ -202,8 +204,30 @@
     <Version Condition="'$(PublicRelease)' == 'true'">$(PlatformVersion)</Version>
     <Version Condition="'$(PublicRelease)' != 'true'">$(PlatformVersion)$(_CiSep)ci.$(_CiBuildNumber)</Version>
     <!-- CI appends +build.<ticks> so each continuous build's InformationalVersion is unique; LOCAL
-         keeps it stable (= $(Version)) so AssemblyInfo isn't regenerated every build. ABI identity
-         is the Graph MVID now, not this string, so a stable local value is safe. -->
+         keeps it stable (= $(Version)) so AssemblyInfo isn't regenerated every build (a per-build
+         stamp regenerates AssemblyInfo.cs and destroys incremental builds — see _BuildNumber above).
+
+         🚨 THIS TICKS STAMP IS LOAD-BEARING ABI SAFETY, NOT COSMETICS. It is easy to read the MVID
+         switch as "the version string no longer affects ABI identity" and delete the stamp. It does
+         affect it: this attribute is compiled INTO every assembly, MeshWeaver.Graph included, so
+         under CIRun the ticks are exactly what makes Graph's MVID — and therefore
+         NodeTypeCompilationHelpers.FrameworkVersion — differ on every CI build. That is what forces
+         a full NodeType recompile on every deployed build.
+
+         Removing the stamp would make the MVID content-stable, and a content-stable MVID is NOT a
+         sufficient staleness signal, for two independent reasons:
+           • A NodeType's compile reference set is AppContext's TRUSTED_PLATFORM_ASSEMBLIES — EVERY
+             assembly in the image (MeshNodeCompilationService.GetDefaultReferences), not just
+             Graph's dependency closure. A breaking change in an assembly Graph never references is
+             still inside that reference set, and a stable Graph MVID would declare the stale
+             NodeType assemblies valid and LOAD them across it.
+           • AssemblyVersion is pinned at 3.0.0.0 (issue #143, below), so runtime assembly binding
+             will not catch the mismatch either — nothing else stands between a stale NodeType
+             assembly and being loaded.
+         So: anyone removing the ticks stamp MUST, in the SAME change, widen FrameworkVersion to
+         cover the WHOLE reference set (e.g. a hash over the TPA closure). Do not remove one without
+         the other. Cost/benefit of the current scheme: deploy/CHANGE-PROPAGATION.md#the-bake-tax
+         (a full bake is ~10 min on the largest mesh — measured, not the hours once assumed). -->
     <InformationalVersion Condition="'$(CIRun)' == 'true'">$(Version)+build.$([System.DateTime]::UtcNow.Ticks)</InformationalVersion>
     <InformationalVersion Condition="'$(CIRun)' != 'true'">$(Version)</InformationalVersion>
     <!-- 🔴 AssemblyVersion is STABLE (3.0.0.0) — it is the RUNTIME ASSEMBLY-BINDING identity, so it

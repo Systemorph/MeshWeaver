@@ -23,11 +23,19 @@ cracked the `TodoDataChangeWorkflowTest` bulk hang. It has three tools, in the
 order you should reach for them.
 
 > TL;DR of that investigation: the write succeeded fast, but its **response was
-> gated on the debounced persistence flush** (a 200 ms `Timer`), which gets
-> thread-pool-starved during a synchronous test wait in bulk — so the reply only
-> arrived when `FlushOnDispose` forced the flush at teardown. The fix was to write
-> via `stream.Update` (completes on the in-memory echo, not the flush). Two real
-> `TimerQueue` disposal leaks were found along the way with ClrMD.
+> gated on the debounced persistence flush** (`MeshNodeTypeSource.DebounceInterval`,
+> 200 ms) — so the reply only arrived when `FlushOnDispose` forced the flush at
+> teardown. The fix was to write via `stream.Update` (completes on the in-memory echo,
+> not the flush). Two real `TimerQueue` disposal leaks were found along the way with ClrMD.
+>
+> ⚠️ **What was measured versus what was inferred.** The observed facts are the timings
+> below: handler `ENTER → EXIT` in 10 ms, reply at `runLevel=Quiescing` ~12 s later, only
+> in bulk. *Why* the 200 ms timer callback did not fire earlier was never pinned down —
+> thread-pool starvation was the hypothesis, and it is no longer even reachable in that
+> form, because the test assertions no longer block a thread (they `SubscribeOn` the pool
+> and are `await`ed; see [Reactive Test Assertions](/Doc/Architecture/ReactiveTestAssertions)).
+> Trust the **fingerprint** — "reply lands at Quiescing, consistently, only under load" —
+> and the fix; do not carry the mechanism forward as established.
 
 ---
 
@@ -38,7 +46,10 @@ Disposal posts a cascade of `ShutdownRequest`s. Before you assume a runaway loop
 
 ```bash
 MESHWEAVER_MSG_TRACE=1 dotnet test <project> --filter <Test> --no-build
-TRACE="$TEMP/meshweaver-msg-trace.log"     # %TEMP%/meshweaver-msg-trace.log
+# Path.GetTempPath() + meshweaver-msg-trace.log. NOTE: $TEMP is a Windows variable and expands
+# to the empty string in a POSIX shell — on macOS the file is under $TMPDIR (a per-user
+# /var/folders/… directory), on Linux under /tmp.
+TRACE="$(ls "${TMPDIR:-/tmp}"/meshweaver-msg-trace.log)"
 
 # Histogram by message type (counts LINES — ~7 phase-lines per message)
 grep -aoE "msg=[A-Za-z0-9_]+" "$TRACE" | sort | uniq -c | sort -rn
@@ -52,20 +63,27 @@ grep -a "msg=ShutdownRequest" "$TRACE" \
 
 Interpretation:
 
-- **~3 distinct `ShutdownRequest` per hub** (`Started → Quiescing → DisposeHostedHubs`)
+- **~3 distinct `ShutdownRequest` per hub** (`Quiescing → DisposeHostedHubs → ShutDown`)
   = a **normal finite cascade**. A 96-hub mesh shutting down = ~300 distinct
   ShutdownRequests ≈ ~2000 trace *lines*. That is NOT a loop. (The Todo case looked
   like "2121 ShutdownRequest" but was 303 distinct messages × 7 phase-lines.)
-- **Dozens per hub** = a real **version-chase loop**: `MessageHub.HandleShutdownCore`
-  re-posts the `ShutdownRequest` whenever `request.Version != Version - 1` (a message
-  arrived after shutdown was posted). If new traffic keeps bumping `Version` during
-  teardown (e.g. a stream resubscribing, a flush echo), it never settles. Find the
-  *other* message that keeps arriving (filter the disposal window, histogram
-  non-`ShutdownRequest` types) and stop it at the source — gate resubscription on
-  `RunLevel > Started`.
+- **Dozens or thousands per hub** = the **version-chase repost storm**. Read
+  `MessageHub.ShutdownTurnsHandled`: a healthy disposal handles exactly three, and a value
+  in the thousands is that storm's signature.
 
-A disposal **watchdog** that force-completes after N seconds is masking this, not
-fixing it (see §3 for why the watchdog itself can leak).
+  🚨 **The gate that caused it has been REMOVED — do not go looking for "the other message".**
+  `HandleShutdownCore` used to require `request.Version == Version - 1` and repost on mismatch.
+  Because `++Version` runs for *every* message, any concurrent traffic between a repost and its
+  re-handle pushed `Version` past the one-step window, so the gate never converged and
+  self-sustained (2,820 reposts on a single `consumer/1` hub under the 2-core security tests;
+  140k `ShutdownRequest` turns suite-wide). It also added nothing: duplicates are handled by the
+  per-phase `RunLevel` idempotency guards, and the three phases are causally chained and
+  FIFO-ordered. The regression test is
+  `MessageHubTest.Dispose_UnderContinuousLoad_DoesNotStormShutdownRequests`. If you see a storm
+  today, it is a *new* defect — do not re-derive the old diagnosis.
+
+A disposal **watchdog** that force-completes after N seconds is masking a non-quiescing cascade,
+not fixing it (see §3 for why the watchdog itself can leak).
 
 ---
 
@@ -84,9 +102,9 @@ state=Processed` in **10 ms**, but the `UpdateNodeResponse` reached the caller
 caller's disposal*. That timing fingerprint ("reply arrives at Quiescing, ~12 s,
 consistently") means the handler's async work was **gated on something that only
 runs at teardown** — here the debounced persistence flush (`MeshNodeTypeSource`'s
-200 ms `Timer`), which `FlushOnDispose` forces. In bulk, the synchronous test wait
-pins a thread-pool thread and the timer callback can't fire, so the write parks
-until disposal.
+200 ms `Timer`), which `FlushOnDispose` forces. Why the timer callback did not fire
+on its own cadence under bulk load was never established; what the trace does prove
+is the *dependency*, and that is enough to fix it.
 
 **Fix the contract, not the timeout.** Writing via `stream.Update` completes on the
 in-memory workspace **echo**, never the persistence flush, so it doesn't depend on a
@@ -123,6 +141,11 @@ captured `this` (the 25 s watchdog — it pinned the whole graph for 25 s after 
 disposal). Another run surfaced
 `TimerQueue → TimerCallback → MeshNodeTypeSource → Workspace → MessageHub` — a
 debounce `Timer` re-armed by a flush-echo `UpdateImpl` *during* Quiescing.
+
+**Both are fixed in-tree** — the watchdog is an `Observable.Timer` on `DefaultScheduler`
+now (`MessageHub.cs` carries the "🚨 Reactive, NOT a `Task.Delay`" note at the site), and
+`MeshNodeTypeSource` gates its re-arm behind the `FlushOnDispose` flag. They are reproduced
+here as the two *shapes* to recognise in a fresh chain, not as live bugs to hunt.
 
 **Fail only on real leaks.** The probe distinguishes a **static / `TimerQueue` /
 GC-handle** root (a true leak that accumulates) from a **stack** root — a disposal
