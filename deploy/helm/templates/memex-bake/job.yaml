@@ -7,8 +7,9 @@
 # 🚨 WHY THIS EXISTS. Every image roll changes the framework identity (Graph's MVID), and that
 # identity is part of the assembly store's filename AND its lookup glob — so a new image misses the
 # whole compile cache BY DESIGN (ABI safety). Left to the portal, that guaranteed miss is paid
-# lazily, unordered, on user requests, after the pod is already serving: ~90 s of cold Roslyn per
-# NodeType on somebody's page load. Paid here it is paid once, on a container nobody is waiting for.
+# lazily, unordered, on user requests, after the pod is already serving: ~2.4 s of cold Roslyn per
+# NodeType on somebody's page load (measured 2026-08-10, production Loki, three portals). Paid here
+# it is paid once, on a container nobody is waiting for.
 #
 # 🚦 AND IT IS THE GATE. The job exits non-zero when a NodeType that USED TO compile no longer does,
 # so a broken type is discovered before any traffic moves. A type that was already broken beforehand
@@ -34,8 +35,10 @@ spec:
   # would be indistinguishable from a clean one. Fix the type and re-run the upgrade.
   backoffLimit: 0
   ttlSecondsAfterFinished: {{ .Values.bake.ttlSecondsAfterFinished }}
-  # A full cold bake is ~90 s per NodeType, strictly sequential. Sized generously: hitting this
-  # deadline kills the bake mid-flight and reports failure for work that was merely slow.
+  # A full cold bake is ~2.4 s per NodeType, strictly sequential (measured 2026-08-10) — ~10 min on
+  # the largest mesh we run. The default 3600 s is that worst case plus Job overhead, x4: hitting
+  # this deadline kills the bake mid-flight and reports failure for work that was merely slow, so
+  # the headroom is wide on purpose. Full derivation in values.yaml (bake.activeDeadlineSeconds).
   activeDeadlineSeconds: {{ .Values.bake.activeDeadlineSeconds }}
   template:
     metadata:
