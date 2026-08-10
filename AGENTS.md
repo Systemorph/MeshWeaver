@@ -41,7 +41,7 @@ Full PR/merge gate: the `pullrequest` skill (CI must be GREEN before merge — m
 
 ## 🚨🚨🚨 ABSOLUTE: Green CI does NOT mean the mesh compiles — in-mesh source is invisible to `dotnet build`
 
-**Every `.cs` stored in a mesh node — NodeType `Source/*.cs`, Scripts, layout areas — compiles at RUNTIME in the portal, NEVER in CI.** The repo's node trees are `<None>` content (`samples/Graph/MeshWeaver.Samples.Graph.csproj`), so **12k+ lines of C# under `samples/Graph/Data/` and `content/` are never type-checked by any build or any test.** Worse, **the deployed mesh's copy outranks the repo's** — a node carries its own version history and drifts from the file that seeded it, so reading the repo file does NOT tell you what the portal will compile.
+**Every `.cs` stored in a mesh node — NodeType `Source/*.cs`, Scripts, layout areas — compiles at RUNTIME in the portal, NEVER in CI.** The repo's node trees are `<None>` content (`samples/Graph/MeshWeaver.Samples.Graph.csproj`), so **12k+ lines of C# under `samples/Graph/Data/` and `content/` are never type-checked by any build or any test.** Worse, **a NodeType's `configuration` lambda is C# stored in a JSON string field** — so it is invisible to every `.cs`-shaped habit at once: `grep --include='*.cs'`, `dotnet build`, and any compile gate that only scans `Source/`. When you delete a framework symbol, search the node **JSON** too.
 
 **A framework-version bump recompiles EVERY dynamic NodeType** (`HasUsableBuild` rule 3), so breakage never trickles in — the whole accumulated backlog detonates on one deploy. A NodeType left at `CompileError` **refuses portal readiness** and parks every instance hub for the full **60 s** activation budget: hung pages, failed liveness probes, dropped silos.
 
