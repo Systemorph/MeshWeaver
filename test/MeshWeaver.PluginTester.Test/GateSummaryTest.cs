@@ -192,19 +192,25 @@ public class GateSummaryTest
     [Fact]
     public void TestsHost_IsPrinted_SoAreaNotFoundIsDiagnosable()
     {
-        // "No renderer is registered for area `Tests` on hub `Store`" is unreadable without
-        // knowing WHY the gate probed `Store`: a type's Tests area is served by instance hubs, so
-        // the host is either an instance already in the mesh or a probe the gate created — and
-        // only the first can carry a hub activated before the install finished.
+        // "No renderer is registered for area `Tests` on hub `X`" is unreadable without knowing
+        // which node X was — a type's Tests area is served by INSTANCE hubs, never by the type
+        // node, so the hub named in the error is never the type under test. Reading the original
+        // failure without this line produced the wrong conclusion twice over: that the gate had
+        // probed a type path (it had not), and that the plugin was broken (it was not).
+        //
+        // The string is the shape PluginGateRunner.RenderGate actually emits for the probe host
+        // CreateTestsProbe returns — keep the two in step, or this documents a host that cannot
+        // occur.
         var report = Report(Type("Store/Catalog",
             CheckOutcome.Passed, CheckOutcome.Passed, CheckOutcome.Failed) with
         {
-            TestsHost = "Store — an instance of Store/Catalog already in the mesh",
+            TestsHost = "Store/Catalog/GateProbe — the probe instance the gate created for this check",
         });
 
         var summary = Summarize(report);
 
-        Assert.Contains("Tests host: Store — an instance of Store/Catalog already in the mesh",
+        Assert.Contains(
+            "Tests host: Store/Catalog/GateProbe — the probe instance the gate created for this check",
             summary, StringComparison.Ordinal);
     }
 }
