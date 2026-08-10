@@ -70,11 +70,16 @@ app.MapMeshWeaverSignalRHubs();          // maps SignalRConnectionHub at /signal
 public sealed class SignalRConnectionHub(IMessageHub hub, SignalRConnectionRegistry registry) : Hub
 {
     public const string EndPoint = "signalr";
-    public void Connect(Address address) => registry.Connect(address, Context.ConnectionId);   // inbound routing
-    public void DeliverMessage(IMessageDelivery delivery) => hub.DeliverMessage(delivery);      // client → mesh
+    public void Connect(string addressJson) { /* deserialize with the hub's options → registry.Connect(address, Context.ConnectionId) */ }
+    public void DeliverMessage(string deliveryJson) { /* deserialize with the hub's options → hub.DeliverMessage(delivery) */ }
     public override Task OnDisconnectedAsync(Exception? e) { registry.Disconnect(Context.ConnectionId); return base.OnDisconnectedAsync(e); }
 }
 ```
+
+🚨 **Note the parameter types: both wire methods take a `string`, not `Address` / `IMessageDelivery`.**
+Deserialization happens *inside* the method using the hub's own `JsonSerializerOptions`. That is
+deliberate — it means the mesh envelope is never handed to SignalR's protocol negotiation, so the
+server does not need its SignalR protocol configured to match the client's.
 
 **`SignalRConnectionRegistry`** (mesh-scoped singleton, instance state only — never `static`, see [No Static State](/Doc/Architecture/NoStaticState)) bridges routing to the socket. `Connect` registers a route for the participant's address; every delivery the mesh routes there is **pushed** to that connection. The push is genuine socket I/O, so it runs off the routing/hub scheduler and is bounded through the **Http `IIoPool`** — never a bare `async`/`Observable.FromAsync` (see [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling)):
 
@@ -119,7 +124,7 @@ return ioPool.Invoke(async c =>
 
 ## Two things to get right
 
-- **Serializer symmetry.** Both ends must serialize the mesh envelope with the hub's `JsonSerializerOptions` — the client sets it on its `JsonHubProtocol`; the server's SignalR must mirror it so the `Connect(Address)` handshake and `IMessageDelivery` payloads deserialize. `delivery.Package()` converts the message to a `RawJson` envelope, which keeps deliveries transport-tolerant.
+- **Serializer symmetry.** Both ends must serialize the mesh envelope with the hub's `JsonSerializerOptions`, so the mesh `Address` and `IMessageDelivery` converters round-trip. The server sidesteps SignalR's protocol entirely by taking `string` payloads and deserializing with its own options (above); the client sets the options on its `JsonHubProtocol` for the emissions it receives. `delivery.Package()` converts the message to a `RawJson` envelope, which keeps deliveries transport-tolerant.
 - **Identity.** The WebSocket authenticates the user (Bearer token → `AccessContext`); messages injected via `DeliverMessage` must carry that identity so RLS holds on the server side. See [Access Context Propagation](/Doc/Architecture/AccessContextPropagation). The push direction runs through `IIoPool`, which is an identity hole by design — the *mesh* read/write under the participant's address is what carries identity, not the pool leaf.
 
 ## Why this is the native-portal foundation

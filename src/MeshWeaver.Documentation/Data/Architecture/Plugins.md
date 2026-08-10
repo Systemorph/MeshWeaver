@@ -19,14 +19,19 @@ Compilation](/Doc/Architecture/NodeTypeCompilation), and the mesh's node/version
 ## A plugin is mesh nodes
 
 A node repo is exactly the on-disk shape the sample partitions use — a `*.json` per node plus its
-`Source/` (and `Test/`) C# — e.g. the Slide type:
+`Source/` (and `Test/`) C# — e.g. the `Publish` plugin and its Slide type:
 
 ```text
-Slides/index.json                 the plugin ROOT — nodeType "Store/Plugin", content PluginContent (INSIDE the folder)
-Slides/Slide.json                 a NodeType node (Content = NodeTypeDefinition{ configuration })
-Slides/Slide/Source/*.cs          the content type + layout areas — compiled live
-Slides/Slide/Test/*.cs            the type's own tests — compiled together with Source
+Publish/index.json                the plugin ROOT — nodeType "Store/Plugin", content PluginContent (INSIDE the folder)
+Publish/Slide/index.json          a NodeType node (Content = NodeTypeDefinition{ configuration })
+Publish/Slide/Source/*.cs         the content type + layout areas — compiled live
+Publish/Slide/Test/*.cs           the type's own tests — compiled together with Source
+Publish/manifest.lock             CI-maintained content fingerprint (per-file sha256 + moduleVersion)
 ```
+
+A child NodeType may equally be a sibling `Widget.json` next to a `Widget/Source/` folder (the shape
+`Edu/` and `LinkedIn/` use) — `index.json` inside the folder and a sibling `<Type>.json` are both
+valid. Only the **plugin root** must be `index.json` inside the folder (below).
 
 The plugin folder is the unit of import, so its partition root lives **inside** it as `index.json`
 (the `NodeFileMapper` mapping GitSync uses) — a sibling `<Plugin>.json` outside the folder would not
@@ -38,7 +43,7 @@ be part of the partition.
 | The "kind" (content vs code) | the child's **NodeType** — a NodeType-with-`Source/` vs plain content |
 | The "version" | the **node's version**, mesh-tracked, bumped on every change — nobody hand-bumps a field |
 | The "installer" | **GitSync** — `GitHubSyncService.ImportFromGitHub` / `StaticRepoImporter` |
-| "what to install" | the **StaticRepoSync partition list** |
+| "what to install" | the registry's per-instance **`PluginGrant`** (entitlement) plus the installation's `PluginCatalog:InstallByDefault` / `InstallPreInstalledPackages` (what it actually installs) |
 
 ### The plugin root is a `Store/Plugin` node
 
@@ -47,8 +52,13 @@ carrying a **`PluginContent`** (the cover `Body`, `Description`, `Video`/`Poster
 social preview, `EntryPoint`, `MarketingPath`, `SetupPath`, `InstallPaths`, price). Card-level
 identity (Name, the one-line Description tagline, Icon, Category) stays on the node itself. The
 `Store/Plugin` type owns the install funnel: the anonymous cover, the auto-gated children
-(`AddPluginGating`) and the store card. The canonical reference for the repo shape is
-**`MeshWeaver.Plugins/AGENTS.md`**.
+(`AddPluginGating`) and the store card.
+
+> 🚨 `Store/Plugin`, `PluginContent` and `AddPluginGating` are **not framework code in this repo** —
+> they are themselves a dynamic node type, shipped by the `Store` plugin in
+> **`Systemorph/MeshWeaver.Plugins`** (`Store/Plugin/Source/*.cs`) and compiled live on the mesh.
+> Grepping this repository for them finds nothing by design. The canonical reference for the repo
+> shape is **`MeshWeaver.Plugins/AGENTS.md`**.
 
 - **Exception — a `Space` root** is correct only when the root's own content IS a partition-level
   `NodeTypeDefinition` compiling a shared `Source/` model (e.g. `UWDeepfield`, in
@@ -74,27 +84,35 @@ credential, syncs the plugins repo into its mesh, and re-serves plugins over HTT
 installation pulls from the registry, never from git — the credential is **encapsulated in the
 registry**, exactly like npm / NuGet (the registry has source access; clients just speak HTTP).
 
-The surface is two **public** endpoints on the registry (`PluginRegistryEndpoints`), backed by its
-configured git source (the plugins repo):
+The surface is two endpoints on the registry (`PluginRegistryEndpoints`), backed by its configured
+git sources (the plugins repo). They are **not public**: a caller presents its registered instance
+key (`Authorization: Bearer mwi_…`), and both the listing and the file fetch are scoped to that
+instance's admin-owned `PluginGrant`. Without a valid key the request is **401** —
+`PluginCatalog:RequireInstanceKey` defaults to `true`, so a registry that configures nothing refuses
+anonymous callers.
 
 | Verb | Returns |
 |---|---|
-| `GET /api/plugins` | `{ packages:[PackageManifest…] }` — the curated modules from the configured source (node-native `<Plugin>/index.json` **Store/Plugin** roots by default) |
+| `GET /api/plugins` | `{ packages:[PackageManifest…] }` — the calling instance's granted modules from the configured sources (node-native `<Plugin>/index.json` **Store/Plugin** roots by default) |
 | `POST /api/plugins/files` `{id}` | `{ files:[{relativePath, content}…] }` — the files that plugin (by id) ships |
 
-A consuming instance browses this from its **Plugin Catalog** admin tab (Settings ▸ Administration,
-platform admins only) and installs on click: the package's files are parsed into nodes and upserted
-locally — a **Code** package synthesizes its `NodeType` + `Source` Code and compiles live; a
-**Content** package imports its folder. The registry ships the **capability**, never data *instances*
-— and no GitHub credential lives on the consumer at all. Full reference: [Plugin
-Registry](/Doc/Architecture/PluginRegistry).
+A consuming instance reads this through `RegistryPackageSource` and installs — from the **Store**
+(the `PluginCatalog` node's Catalog area) on a click, or unattended on first boot via
+`PluginCatalog:InstallByDefault` / `InstallPreInstalledPackages`. Either way the package's files are
+parsed into nodes and upserted locally — a **Code** package synthesizes its `NodeType` + `Source`
+Code and compiles live; a **Content** package imports its folder. The registry ships the
+**capability**, never data *instances* — and no GitHub credential lives on the consumer at all. Full
+reference: [Plugin Registry](/Doc/Architecture/PluginRegistry).
 
 ## Dynamic node types — a module that compiles itself
 
 A **NodeType node** whose `Source/*.cs` defines its content type + layout areas is a **dynamic node
 type**: the mesh compiles it with Roslyn on install and serves instances immediately. Proven examples
-shipped this way: **Slide**, and the education types **Edu/Course**, **Edu/Module**, **Edu/Exercise**
-(each compiles live and renders — verified by `EduNodeTypesCompileTest`).
+shipped this way: **Publish/Slide**, the whole **Store** (including `Store/Plugin` itself), and the
+education types **Edu/Lesson**, **Edu/Module**, **Edu/Exercise**, **Edu/Quiz**. Each is gated in the
+plugins repo's own CI (`Plugin Catalog CI` → *Compile every NodeType* via `scripts/compile-check.py`,
+then *Compile + render node repos* which imports each repo into a real portal image and runs its
+in-node tests) — that compile is **never** covered by this repository's `dotnet build` or test suite.
 
 Rules the runtime compile enforces (each load-bearing when migrating a compiled module):
 
@@ -102,7 +120,7 @@ Rules the runtime compile enforces (each load-bearing when migrating a compiled 
 - **Public surface only** — an `internal` helper in a framework assembly is invisible to the compiled
   node-type assembly (inline an equivalent).
 - **Identity is the install path** — a dynamic type's instances carry the NodeType node's path
-  (`Edu/Course`), so logic that matches "my type" derives it from the node, never a hardcoded name.
+  (`Edu/Lesson`), so logic that matches "my type" derives it from the node, never a hardcoded name.
 - **Read foreign content untyped** — a sibling type compiled in another assembly resolves to a
   `JsonElement` here; read its fields off the JSON rather than referencing the foreign type.
 - **`Test/*.cs` is plain C#** — the compile references only the runtime + loaded MeshWeaver

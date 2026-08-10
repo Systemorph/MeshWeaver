@@ -623,7 +623,7 @@ internal static class NodeTypeCompilationHelpers
                 // WrapWithPerUserRls short-circuit — no CheckPermission, no
                 // self-call, no cycle. Observable.Using keeps the System scope
                 // alive for the LIVE subscription, not just the GetSources build
-                // call. Repro: OrleansSourcesWatcherDeadlockTest.
+                // call.
                 return Observable.Using(
                     () => accessService?.ImpersonateAsSystem()
                           ?? System.Reactive.Disposables.Disposable.Empty,

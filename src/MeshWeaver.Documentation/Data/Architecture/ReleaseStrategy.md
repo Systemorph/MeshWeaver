@@ -40,7 +40,7 @@ a reviewer enforce (c)+(d). The checklist is in `.github/pull_request_template.m
 
 | | Precondition | Enforced by |
 |---|---|---|
-| **a** | **Build is green with warnings-as-errors** | The target: the `Build` job builds the restored tree with `-warnaserror`, so a compiler warning can't merge. **Staged** — the flag is currently commented in `dotnet-test.yml` because the codebase still emits ~130 pre-existing compiler warnings (broken XML-doc crefs CS1574/CS0419, platform-compat CA1416, a few CS4014/nullable). Flip it on (append `-warnaserror`) after that burn-down. Doc-completeness warnings (CS1591/CS1573/CS1712) are suppressed centrally (`Directory.Build.props` `NoWarn`); NuGet restore advisories (NU19xx) surface in the separate restore step, not this gate. |
+| **a** | **Build is green with warnings-as-errors** | **Live.** `dotnet-test.yml`'s build step runs `dotnet build --no-restore -c Release -p:CIRun=true -warnaserror`, and `Directory.Build.props` additionally sets `TreatWarningsAsErrors=true` centrally — so a compiler warning cannot merge. Doc-*completeness* warnings (CS1591/CS1573/CS1712) and the NU1510 restore advisory are suppressed centrally (`NoWarn`); NuGet **vulnerability** advisories (NU1901–NU1904) stay visible as warnings via `WarningsNotAsErrors`, so a newly-disclosed transitive CVE doesn't fail every unrelated PR. Doc-*quality* warnings (CS1574/CS0419/CS1570) are NOT suppressed — they fail the gate. |
 | **b** | **Tests are green** | The sharded suite + the consolidated *Test Results* check (`dotnet-test.yml`). |
 | **c** | **Reviewed (AI _or_ human)** | A required approving review (branch protection). We don't care whether the reviewer is a person or an AI. `.github/CODEOWNERS` requests an owner. |
 | **d** | **Review comments dealt with** | "Require conversation resolution before merging" (branch protection). We expect at least one comment or code change tied to the review. |
@@ -53,26 +53,33 @@ a reviewer enforce (c)+(d). The checklist is in `.github/pull_request_template.m
 
 ## 2. Versions: current-build vs official
 
-The one number is `PlatformVersion` in `Directory.Build.props` (today `3.0.0`). Every build derives
-its version from it ([details](/Doc/Architecture/ReleaseProcess)):
+The one number is `PlatformVersion` in `Directory.Build.props` — **today `3.0.0-rc1`**. Every build
+derives its version from it ([details](/Doc/Architecture/ReleaseProcess)):
 
-- **Current build (continuous):** `3.0.0-ci.<n>` — the default. `<n>` is the **GitHub Actions run
+- **Current build (continuous):** `3.0.0-rc1.ci.<n>` — the default. `<n>` is the **GitHub Actions run
   number** (monotonic), so newer builds always sort higher. 🔴 This monotonicity is load-bearing: the
   self-updater picks the *newest* version, and the old seconds-since-midnight build number reset at
   midnight (a morning build would sort below the prior evening's). Do not revert it.
-- **Official release:** clean `3.0.0` — built with `-p:PublicRelease=true`, fired by pushing a
-  `v3.0.0` tag.
+- **Official release:** clean `3.0.0-rc1` — built with `-p:PublicRelease=true` (or, on the tag-driven
+  workflows, an explicit `-p:Version=`), fired by pushing a `v3.0.0-rc1` tag.
+
+> 🚨 **Keep the pre-release label on the core.** A bare `3.0.0` default would make every continuous
+> build `3.0.0-ci.<n>`, which sorts **below** the already-published `3.0.0-preview1` (SemVer §11.4
+> compares pre-release identifiers ASCII-lexically, and `"ci" < "preview1"`) — the self-updater would
+> pin to `preview1` and never roll forward again. See
+> [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) §1.
 
 ### Cutting an official release and starting the next line
 
 This is the only time you edit `Directory.Build.props`:
 
-1. **Cut the official `3.0.0`:** push tag `v3.0.0`. `release-images.yml` + `release-packages.yml`
-   build the clean `3.0.0` artifacts and **push them to ACR** (and GHCR/NuGet). Stable installs pick
-   it up.
-2. **Start `3.1`:** bump `PlatformVersion` to `3.1.0` in `Directory.Build.props`. Continuous builds
-   are now `3.1.0-ci.<n>`. (Because `3.1.0 > 3.0.0`, the new line dominates the comparison — a
-   `3.1.0-ci.1` is newer than any `3.0.0-ci.<n>`.)
+1. **Cut the official release:** push the matching `v$(PlatformVersion)` tag (today `v3.0.0-rc1`).
+   `release-images.yml` + `release-packages.yml` build the clean artifacts, push the images to GHCR
+   and **mirror them into ACR** (`az acr import`), and push the packages to nuget.org. Stable
+   installs pick it up.
+2. **Start the next line:** bump `PlatformVersion` in `Directory.Build.props` (e.g. `3.1.0-rc1`).
+   Continuous builds are now `3.1.0-rc1.ci.<n>`. (Because `3.1.0 > 3.0.0`, the new line dominates the
+   comparison — a `3.1.0-rc1.ci.1` is newer than any `3.0.0-rc1.ci.<n>`.)
 
 ---
 
@@ -83,12 +90,21 @@ string** — that tag is what each install compares.
 
 | Channel | Trigger | Version baked + image tag | Workflow |
 |---|---|---|---|
-| **Continuous** | green merge to `main` | `3.0.0-ci.<run#>` (+ short SHA + moving `main`) | `main-cd.yml` |
-| **Official** | push `v*.*.*` tag | clean `3.0.0` (+ `latest`) — GHCR **and** mirrored into ACR via `az acr import` | `release-images.yml` |
+| **Continuous** | green merge to `main` | `3.0.0-rc1.ci.<run#>` (+ short SHA + moving `main`) | `main-cd.yml` |
+| **Official** | push `v*.*.*` tag | clean `3.0.0-rc1` (+ `latest`) — GHCR **and** mirrored into ACR via `az acr import` | `release-images.yml` |
 
 So "build produces all images, with or without a build number," and a running install only has to
 list ACR tags and pick the best per its policy. (`main-cd.yml` still rolls the environments once as
 the bootstrap; steady-state updates are the self-updater below.)
+
+Two properties of the continuous leg matter to a reader of tags:
+
+- **Only the version tag is selectable.** `VersionSelect.PlatformVersionTag` requires
+  `^\d+\.\d+\.\d+`, so the moving `main` pointer and the per-run `staging-<sha>-<run_id>` tag are
+  invisible to every self-updater by construction.
+- **Publication is all-or-nothing.** Each leg pushes only its staging tag; the `promote` job applies
+  the real tags after all five legs succeed, ending with `memex-portal-ai:<version>` — the single
+  write the self-updater acts on.
 
 ---
 
@@ -173,20 +189,26 @@ not `kubectl set image` by hand. The manual [AKS runbook](/Doc/Architecture/Depl
 
 | Step | Action | What ships | Who rolls to it |
 |---|---|---|---|
-| **a** | **Merge to `main`** (preconditions §1 green) | `main-cd.yml` builds the **multi-arch** image set (amd64 + arm64), tags it `3.0.0-ci.<run#>` (+ short SHA + moving `main`), pushes to **ACR** | **Continuous** installs (dev/test) |
-| **b** | **Push tag `v3.0.0`** | `release-images.yml` + `release-packages.yml` build the clean `3.0.0` multi-arch images (GHCR, mirrored into **ACR** via `az acr import`) + NuGet packages | **Stable** installs (prod) |
-| **c** | **Bump `PlatformVersion`** to the next line (`3.1.0`) in `Directory.Build.props` | continuous builds become `3.1.0-ci.<n>` | opens the next development line |
+| **a** | **Merge to `main`** (preconditions §1 green) | `main-cd.yml` builds the **multi-arch** image set (amd64 + arm64), tags it `3.0.0-rc1.ci.<run#>` (+ short SHA + moving `main`), pushes to **ACR** | **Continuous** installs (dev/test) |
+| **b** | **Push tag `v3.0.0-rc1`** | `release-images.yml` + `release-packages.yml` build the clean `3.0.0-rc1` multi-arch images (GHCR, mirrored into **ACR** via `az acr import`) + NuGet packages | **Stable** installs (prod) |
+| **c** | **Bump `PlatformVersion`** to the next line (e.g. `3.1.0-rc1`) in `Directory.Build.props` | continuous builds become `3.1.0-rc1.ci.<n>` | opens the next development line |
 
 ```bash
 # (a) ship a continuous build — just merge; CI builds + pushes the image set
 git switch main && git pull
 
-# (b) cut the official release — push an immutable, annotated tag
-git tag v3.0.0 && git push origin v3.0.0
+# (b) cut the official release — push an immutable, annotated tag matching PlatformVersion
+git tag v3.0.0-rc1 && git push origin v3.0.0-rc1
 
 # (c) open the next line — the ONLY time you edit Directory.Build.props:
-#     <PlatformVersion …>3.1.0</PlatformVersion>   (commit on a normal PR)
+#     <PlatformVersion …>3.1.0-rc1</PlatformVersion>   (commit on a normal PR)
 ```
+
+> **(a) can look shipped and produce no image.** CD reacts to *MeshWeaver Build and Test* completing
+> on a `push` to main — a hand-kicked `workflow_dispatch` of that workflow turns main green and CD
+> still skips. Verify the IMAGE (`.github/scripts/check-image-set.sh <short-sha>`), and re-drive CD
+> with `gh workflow run main-cd.yml --ref main` if it is missing (it also self-heals HEAD on a
+> 3-hourly schedule).
 
 (a) and (b) are **independent**: a merge always ships a continuous build; a tag always ships a
 clean release. (c) follows (b) once per release line. The version mechanics behind each step are in

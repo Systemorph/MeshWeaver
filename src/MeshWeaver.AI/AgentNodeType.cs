@@ -70,7 +70,7 @@ public static class AgentNodeType
         // while Doc — which has no IStaticNodeProvider — imported 161/0). Gating only the storage
         // provider (the prior state) was the gap. The "Agent" NodeType definition itself stays via
         // AddMeshNodes(CreateMeshNode()) above, so the import's NodeType-existence check still
-        // resolves. See OrleansStaticRepoImportStaticBackedTest.
+        // resolves.
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<BuiltInAgentProvider>();

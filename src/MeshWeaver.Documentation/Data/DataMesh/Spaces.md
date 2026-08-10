@@ -130,12 +130,12 @@ on the **Space node's content** — you never create a second node for it.
 
 | Field (`content.…`) | Shows up as |
 |---|---|
-| `name` | The large title in the header. |
+| *(node `Name`)* | The large title in the header. This lives on the **MeshNode**, not in `content` — the `Space` content carries no `name`, so patching `content.name` silently does nothing. |
 | `description` | Sub-title under the name (one line, markdown allowed). |
 | `logo` | The 100×100 header image. An **`https://…` URL** *or* a file in the Space's `content` collection. Falls back to the node icon, then to initials. |
 | `body` | The main page content — **markdown**. This is your "overview text". |
 | `website`, `email`, `location` | Small linked stats in the header row. |
-| `icon` | Fluent icon name used where no logo is set (default `Building`). |
+| `icon` | A **renderable** value used where no logo is set — an image URL, an inline `<svg>`, or an emoji. Never a Fluent icon name: a bare name like `Building` cannot render as an image and shows as text or a broken image. Defaults to `/static/NodeTypeIcons/space.svg`. |
 
 The body is resolved as **`node.PreRenderedHtml` → `content.body` → default welcome
 text**. So to replace the generic starter text, just set `content.body`. Leaving it
@@ -157,7 +157,7 @@ Treat `content.body` as the front door. A strong one usually has:
 
 ### Embedding the namespace catalog (the search that expands by namespace)
 
-The catalog is the `Children` layout area: a mesh search in **namespace-tree** mode,
+The catalog is the `Search` layout area: a mesh search in **namespace-tree** mode,
 scoped to the Space's own partition, that lets you drill into sub-namespaces with
 lazy-loaded counts and a search box. It is **not** hard-wired into the page — it lives
 in the body as a **deletable `@@`-embed** (the default welcome page ships one), so the
