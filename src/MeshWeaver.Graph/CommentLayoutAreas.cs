@@ -30,7 +30,7 @@ public static class CommentLayoutAreas
     ///   <item><b>Current-value shadows</b> (<see cref="Editing"/>, <see cref="Text"/>, …) — every
     ///     sub-view stream re-subscribed on a re-render starts with <c>.StartWith(shadow)</c>, because
     ///     the transient <c>/data</c> seed does NOT reliably replay to a second subscription (see the
-    ///     same defense in <c>EditorExtensions.BuildToggleableProperty</c>). Without the shadow the
+    ///     same defense in <c>EditorExtensions</c>' inline-edit toggles). Without the shadow the
     ///     re-rendered sub-view never emits and the PREVIOUSLY rendered content sticks — the
     ///     "comment only appears after a page refresh" bug.</item>
     /// </list>
@@ -282,7 +282,7 @@ public static class CommentLayoutAreas
 
                 // StartWith(shadow): a re-subscribed sub-view gets no reliable /data replay — it
                 // must default to the session's current state and then react (same defense as
-                // EditorExtensions.BuildToggleableProperty), or the re-rendered area never emits
+                // EditorExtensions' inline-edit toggles), or the re-rendered area never emits
                 // and the previously rendered (stale) content sticks until a refresh.
                 return h.Stream.GetDataStream<bool>(editStateId)
                     .StartWith(session.Editing)

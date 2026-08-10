@@ -55,10 +55,10 @@ public static class MessageHubExtensions
     /// <summary>
     /// Posts <paramref name="request"/> and observes the typed response.
     /// <para>
-    /// Pre-registers the callback BEFORE posting (via the framework's
-    /// <c>AwaitResponse(object, Func&lt;PostOptions,PostOptions&gt;, Func&lt;IMessageDelivery,object?&gt;, CancellationToken)</c>
-    /// primitive which uses <see cref="PostOptions.WithMessageId"/>) so a synchronously-handled
-    /// response can't slip through before the callback is registered. Emits exactly one
+    /// Registers the response subject BEFORE posting (<c>MessageHub.Observe</c> allocates the
+    /// message id, calls <c>GetOrAddResponseSubject(messageId, …)</c>, and only THEN posts with
+    /// <see cref="PostOptions.WithMessageId"/>) so a synchronously-handled response can't slip
+    /// through before the subject exists — an unmatched correlation id is DROPPED. Emits exactly one
     /// <see cref="IMessageDelivery{TResponse}"/> on the response, or <c>OnError</c> for
     /// <see cref="DeliveryFailureException"/> / <see cref="TimeoutException"/>.
     /// </para>

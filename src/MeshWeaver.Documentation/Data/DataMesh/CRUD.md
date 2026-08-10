@@ -171,14 +171,20 @@ Choose the right reference type for your query pattern:
 
 ## Unified Reference Paths
 
-Path-based references give a uniform addressing scheme across entity, content, and schema resources:
+Path-based references give a uniform addressing scheme across entity and content resources.
+The prefix is separated by a **colon**, and what follows it starts with the owning address —
+`{prefix}:{addressType}/{addressId}/…`. A path with no recognised colon prefix falls through to
+`area`, so a slash-separated `"data/TodoItems"` is parsed as an *area* reference, not data.
 
 ```csharp
-var todoRef       = "data:TodoItems/todo-1";   // specific entity
-var allTodosRef   = "data/TodoItems";           // entire collection
-var fileRef       = "content/uploads/doc.pdf";  // file content
-var schemaRef     = "schema/TodoItem";          // JSON schema
+var allTodosRef = "data:app/my-app/TodoItems";           // entire collection
+var todoRef     = "data:app/my-app/TodoItems/todo-1";    // specific entity
+var fileRef     = "content:app/my-app/uploads/doc.pdf";  // file content
+var areaRef     = "area:app/my-app/Dashboard";           // layout area
 ```
+
+The three recognised prefixes are `data:`, `area:` and `content:` (`ParseUnifiedPath`).
+There is no `schema:` prefix.
 
 ## Virtual Paths
 
@@ -293,33 +299,30 @@ Deleting a **node** (as opposed to an entity in a collection) is a lifecycle ope
 
 # Data Validation
 
-Attach validators to enforce business rules before any change is applied. The workspace calls every registered validator and returns `DataValidationResult.Failed(...)` to the caller if any rule is violated.
+Attach validators to enforce business rules before any change is applied. The workspace calls every registered validator and returns `DataValidationResult.Invalid(...)` to the caller if any rule is violated.
 
 ```csharp
 public class TodoValidator : IDataValidator
 {
-    public List<DataOperation> SupportedOperations =>
+    // Reactive, never Task<T> — this runs on the hub.
+    public IReadOnlyCollection<DataOperation> SupportedOperations { get; } =
         [DataOperation.Create, DataOperation.Update];
 
-    public Task<DataValidationResult> ValidateAsync(
-        DataValidationContext context,
-        CancellationToken ct)
+    public IObservable<DataValidationResult> Validate(DataValidationContext context)
     {
         if (context.Entity is TodoItem todo && string.IsNullOrEmpty(todo.Title))
-            return Task.FromResult(
-                DataValidationResult.Failed("Title is required"));
+            return Observable.Return(
+                DataValidationResult.Invalid("Title is required"));
 
-        return Task.FromResult(DataValidationResult.Success());
+        return Observable.Return(DataValidationResult.Valid());
     }
 }
 ```
 
-Register validators in the data configuration:
+Register validators in DI — the workspace resolves every registered `IDataValidator`:
 
 ```csharp
-.AddData(data => data
-    .WithValidator<TodoValidator>()
-)
+services.AddScoped<IDataValidator, TodoValidator>();
 ```
 
 ---
@@ -336,9 +339,9 @@ Restrict operations based on user context. Access restrictions run before valida
         (action, context, accessCtx) =>
         {
             if (action == AccessAction.Read)
-                return Task.FromResult(true);          // anyone can read
+                return Observable.Return(true);          // anyone can read
 
-            return Task.FromResult(accessCtx.UserContext != null); // writes require login
+            return Observable.Return(accessCtx.UserContext != null); // writes require login
         },
         "RequireAuthForWrites"
     )
@@ -354,8 +357,8 @@ Restrict operations based on user context. Access restrictions run before valida
         {
             var todo = ctx as TodoItem;
             // Only the owner may modify their own todos
-            return Task.FromResult(
-                todo?.OwnerId == accessCtx.UserContext?.UserId
+            return Observable.Return(
+                todo?.OwnerId == accessCtx.UserContext?.ObjectId
             );
         }, "OwnerOnly")
     )
@@ -373,17 +376,18 @@ A complete data source setup showing multiple types, a virtual path, a validator
     .AddSource(src => src
         .WithType<TodoItem>(type => type
             .WithKey(todo => todo.Id)
-            .WithInitialData(async (ref, ct) =>
-                await LoadTodosFromDatabaseAsync(ct))
+            .WithInitialData(() => LoadTodos())
         )
         .WithType<Project>(type => type
             .WithKey(proj => proj.Id)
         )
     )
     .WithVirtualPath("Dashboard", ComputeDashboard)
-    .WithValidator<TodoValidator>()
     .WithAccessRestriction(RequireAuthentication, "Auth")
 )
+
+// Validators are registered in DI, not on the data configuration:
+services.AddScoped<IDataValidator, TodoValidator>();
 ```
 
 ---
@@ -430,7 +434,7 @@ sequenceDiagram
 ## Best Practices
 
 1. **Use typed observables** — prefer `GetObservable<T>()` over raw streams for compile-time safety.
-2. **Check the response** — inspect `DataChangeResponse.Error` for validation failures before assuming success.
+2. **Check the response** — inspect `DataChangeResponse.Status` (`Committed` / `Failed`) before assuming success; the detail is in `.Log`. Note a `Warning` status still COMMITS.
 3. **Batch related changes** — group inserts, updates, and deletes into a single `DataChangeRequest` for atomic delivery.
 4. **Register validators** — enforce data integrity at the data layer rather than in each call site.
 5. **Protect with access restrictions** — declare who may read or write each type alongside the type configuration.
@@ -450,12 +454,13 @@ var rows = new[]
     new { Type = "CollectionsReference", Purpose = "Multiple collections at once", Example = "new CollectionsReference(\"TodoItems\", \"Projects\")" },
 };
 
-var header = "<thead><tr><th>Reference Type</th><th>Purpose</th><th>Example</th></tr></thead>";
-var bodyRows = string.Join("", rows.Select(r =>
-    $"<tr><td><code>{r.Type}</code></td><td>{r.Purpose}</td><td><code>{r.Example}</code></td></tr>"));
-
-MeshWeaver.Layout.Controls.Html(
-    $"<table style='width:100%;border-collapse:collapse'>{header}<tbody>{bodyRows}</tbody></table>")
+MeshWeaver.Layout.Controls.DataGrid(rows)
+    .WithColumn(new MeshWeaver.Layout.DataGrid.PropertyColumnControl<string>
+        { Property = "type" }.WithTitle("Reference Type"))
+    .WithColumn(new MeshWeaver.Layout.DataGrid.PropertyColumnControl<string>
+        { Property = "purpose" }.WithTitle("Purpose"))
+    .WithColumn(new MeshWeaver.Layout.DataGrid.PropertyColumnControl<string>
+        { Property = "example" }.WithTitle("Example"))
 ```
 
 ---
