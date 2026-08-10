@@ -166,6 +166,29 @@ instance's install records, materialise each module at its recorded `ModuleVersi
 already tag per module, e.g. `Store/v1.0.15`), assemble that set, and run the tool inside the
 **candidate** image. Same executable, different input.
 
+### 🚨 Blocker: an instance does not currently RECORD its combo
+
+The gate cannot verify a combination the instance cannot state. Measured on memex-cloud:
+
+- **The module SET is knowable** — every installed module is a top-level `Store/Plugin` node
+  (`nodeType:Store/Plugin`, 40+ of them).
+- **The module VERSIONS are NOT.** `Plugins/*` — the partition `PackageInstaller` writes its
+  `Package` records into (`InstalledPartition = "Plugins"`, `PackageNodeType = "Package"`) — contains
+  only `_Policy`. There are no install records, so nothing pins `ModuleVersion` per module. The
+  plugin root node's `PluginContent` carries no version either.
+
+The reason is that these modules arrived by **GitSync / repo import**, not through `PackageInstaller`.
+Only the installer path writes a `PackageManifest` record; the sync path does not. So on this portal
+"which version of each module am I running" has no answer on the instance.
+
+**Consequence for implementation order.** Building the combo assembler first would produce a gate that
+verifies *the latest of each repo* — which is emphatically NOT the instance's combo, and would give
+exactly the false confidence this whole design exists to remove. The first task is therefore to make
+**every** path that lands a module on an instance record what it landed: module id + `ModuleVersion` +
+source ref, in one place, whether it came from the installer or from sync.
+
+Only then is the combo identifiable, and only then is verifying it meaningful.
+
 **Therefore the surge pod is NOT sufficient on its own.** `DynamicTypePreWarmer` compiles this
 instance's NodeTypes on the candidate image, which is the right *scope* — but it is compile-only and
 it runs after the pod is already up. It is a good last line; it is not the combo check, and it must
