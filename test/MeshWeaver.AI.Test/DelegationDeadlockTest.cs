@@ -28,6 +28,13 @@ namespace MeshWeaver.AI.Test;
 /// ThreadPool drain (TCS-backed). The parent grain still awaits completion, but its
 /// await is on a TCS set from a non-hub thread, which never captures the grain scheduler.
 /// </summary>
+/// <remarks>
+/// Serialised via <see cref="ConcurrencyStressCollection"/>: the repro runs the tool on its own
+/// dedicated single-threaded pump (<c>SingleThreadSyncContext</c>) and decides on 10 s / 5 s
+/// budgets. A pinned thread plus a five-second deadlock budget is exactly the pairing that stops
+/// meaning anything once three other classes share the runner.
+/// </remarks>
+[Collection(ConcurrencyStressCollection.Name)]
 public class DelegationDeadlockTest
 {
     private static readonly AgentConfiguration AgentA = new() { Id = "AgentA" };
