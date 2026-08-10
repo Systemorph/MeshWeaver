@@ -37,6 +37,15 @@ public class CircuitAccessHandler : CircuitHandler
     private AccessContext? _userContext;
 
     /// <summary>
+    /// Live only while this circuit opened on a DEGRADED identity — i.e. the mesh user index could
+    /// not answer, so the circuit is running on the email-local-part seed with default time zone
+    /// and language. It completes on the first determinate answer (which upgrades the context) and
+    /// is disposed by <see cref="UpdateUserContext"/> and on circuit close. Null on every circuit
+    /// that resolved normally, which is the overwhelming majority.
+    /// </summary>
+    private IDisposable? _identityRecovery;
+
+    /// <summary>
     /// Initializes a new instance of the <c>CircuitAccessHandler</c> class.
     /// </summary>
     /// <param name="hub">The message hub used to resolve the <c>AccessService</c> and mesh services.</param>
@@ -68,6 +77,13 @@ public class CircuitAccessHandler : CircuitHandler
     /// </summary>
     public void UpdateUserContext(AccessContext context)
     {
+        // An explicit write SUPERSEDES a pending degraded-identity repair. Onboarding calls this
+        // with an identity it just established authoritatively; letting the index-watcher fire
+        // afterwards would re-derive the same user from a staler source, and could clobber a
+        // refinement onboarding made deliberately. Disposing is also what stops the watcher
+        // outliving the reason it existed.
+        _identityRecovery?.Dispose();
+        _identityRecovery = null;
         _userContext = context;
         // Carry the resolved user on the per-circuit accessor so the per-circuit portal
         // hub stamps it on every post (the SOURCE of the never-null AccessContext invariant).
@@ -88,7 +104,8 @@ public class CircuitAccessHandler : CircuitHandler
         // Circuit.Id is unique per circuit and constant for the circuit's lifetime.
         _circuitContextAccessor.SetCircuitId(circuit.Id);
 
-        _userContext = await ResolveUserContextAsync();
+        var resolved = await ResolveUserContextAsync();
+        _userContext = resolved.Context;
 
         // Carry the resolved user on the per-circuit accessor. PortalApplication reads it
         // when it builds the per-circuit portal hub so the hub stamps the circuit user on
@@ -109,6 +126,13 @@ public class CircuitAccessHandler : CircuitHandler
         // user's session with the connection up/down churn below and any anonymous-gate redirect.
         _circuitLogger.LogInformation("Circuit opened: id={CircuitId}, user={UserId}",
             circuit.Id, _userContext?.ObjectId ?? "(anonymous)");
+
+        // 🚨 The circuit opened on a DEGRADED identity. Start the repair LAST, after _userContext
+        // and the accessor are set: the chain re-asks at subscribe time, so it can complete
+        // synchronously right here, and anything that assigned _userContext afterwards would undo
+        // the upgrade it just made.
+        if (resolved.UnresolvedEmail is { } pendingEmail)
+            StartIdentityRecovery(pendingEmail);
     }
 
     /// <summary>
@@ -163,6 +187,11 @@ public class CircuitAccessHandler : CircuitHandler
         accessService?.ClearPersistentCircuitContext();
         _circuitContextAccessor.SetUserContext(null);
         _userContext = null;
+        // The degraded-identity watcher (if this circuit ever had one) dies with the circuit —
+        // otherwise it would hold a subscription on the mesh user index for a circuit that no
+        // longer exists, which is exactly the per-circuit accumulation that wedged the portal.
+        _identityRecovery?.Dispose();
+        _identityRecovery = null;
 
         // 🚨 Dispose the per-circuit portal hub (portal/<circuitId>) — this is the ONE
         // exactly-once teardown point for it. Circuit close is terminal for the id (Blazor
@@ -187,7 +216,18 @@ public class CircuitAccessHandler : CircuitHandler
         return Task.CompletedTask;
     }
 
-    private async Task<AccessContext?> ResolveUserContextAsync()
+    /// <summary>
+    /// One circuit-open identity resolution. <paramref name="UnresolvedEmail"/> is non-null ONLY on
+    /// the degraded leg — the mesh user index could not answer, so <paramref name="Context"/> is the
+    /// email-local-part seed with default time zone and language, and the identity must be re-asked
+    /// rather than kept. It is a separate field, not something inferred from the context, because
+    /// "seeded" and "resolved" are otherwise indistinguishable by inspection: the seed's ObjectId is
+    /// usually the same string the real answer produces, and it is Name / TimeZoneId / Locale that
+    /// silently differ.
+    /// </summary>
+    private readonly record struct ResolvedIdentity(AccessContext? Context, string? UnresolvedEmail);
+
+    private async Task<ResolvedIdentity> ResolveUserContextAsync()
     {
         try
         {
@@ -203,12 +243,16 @@ public class CircuitAccessHandler : CircuitHandler
                 // circuit's reads flow through normal RLS: DENIED on private nodes, and still
                 // allowed on PublicRead content (Doc/login) because `publicGrant` is OR'd in for
                 // every identity (PermissionEvaluator). Shaped like VirtualUserMiddleware's guest.
-                return new AccessContext
-                {
-                    ObjectId = WellKnownUsers.Anonymous,
-                    Name = "Guest",
-                    IsVirtual = true
-                };
+                return new ResolvedIdentity(
+                    new AccessContext
+                    {
+                        ObjectId = WellKnownUsers.Anonymous,
+                        Name = "Guest",
+                        IsVirtual = true
+                    },
+                    // Nothing to re-ask: an unauthenticated circuit has no email, and the anonymous
+                    // VUser is the ANSWER here, not a degraded stand-in for one.
+                    null);
 
             var email = user.FindFirstValue(ClaimTypes.Email)
                         ?? user.FindFirstValue("email")
@@ -239,48 +283,147 @@ public class CircuitAccessHandler : CircuitHandler
             {
                 var lookup = TryLoadMeshUser(email);
                 if (lookup.IsUnavailable)
+                {
                     // 🚨 NOT "this user has no node" (#974). On this leg the circuit keeps the
                     // email-local-part ObjectId AND silently falls back to UTC + English, because
                     // TimeZoneId/Locale are read off the profile below. Naming the condition is
                     // what lets an operator see why a German user got an English portal for the
                     // first seconds after a restart, instead of hunting a phantom profile bug.
+                    //
+                    // 🚨 And it is only "for the first seconds" BECAUSE of the re-ask below. An
+                    // unavailable index is a question that has not been answered yet, never a
+                    // verdict — so the seed must not become the circuit's permanent identity. The
+                    // caller hands this email to StartIdentityRecovery, which waits on the index's
+                    // own live query emission and then re-runs ApplyMeshUser: the SAME projection
+                    // the success path a few lines down applies, reached one lap later.
                     _logger.LogWarning(
                         "CircuitAccessHandler: mesh user index UNAVAILABLE for {Email} ({Reason}) — "
-                        + "using the email local-part for the partition key and default time zone / "
-                        + "language. This is NOT evidence the user is unknown.",
+                        + "seeding the partition key from the email local-part and defaulting time "
+                        + "zone / language until the index answers. This is NOT evidence the user "
+                        + "is unknown.",
                         email, lookup.UnavailableReason);
-                if (lookup.Node is { } meshUser)
-                {
-                    // Resolve the viewer's display time zone from their profile ONCE here,
-                    // where the context is built. It then rides on the AccessContext to every
-                    // render path — the Blazor circuit AND server-side hub layout areas — so
-                    // stored-UTC timestamps display in the viewer's local time via
-                    // AccessService.ToDisplayTime. Unset (never signed in on a browser yet) →
-                    // stays null → renders UTC.
-                    // The viewer's UI language is resolved from the same profile read, for the
-                    // same reason and along the same path: it rides on the AccessContext so
-                    // AccessService.Localize translates identically on the circuit and on
-                    // server-side hub renders. Unset → stays null → renders English.
-                    var profile = meshUser.ContentAs<User>(_hub.JsonSerializerOptions);
-                    var timeZoneId = profile?.TimeZoneId;
-                    var locale = profile?.Locale;
-                    context = context with
-                    {
-                        ObjectId = meshUser.Id,
-                        Name = meshUser.Name ?? meshUser.Id,
-                        TimeZoneId = string.IsNullOrWhiteSpace(timeZoneId) ? context.TimeZoneId : timeZoneId,
-                        Locale = string.IsNullOrWhiteSpace(locale) ? context.Locale : locale
-                    };
+                    return new ResolvedIdentity(context, email);
                 }
+                if (lookup.Node is { } meshUser)
+                    context = ApplyMeshUser(context, meshUser, _hub.JsonSerializerOptions);
             }
 
-            return context;
+            return new ResolvedIdentity(context, null);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to resolve user context from AuthenticationState");
-            return null;
+            return default;
         }
+    }
+
+    /// <summary>
+    /// Projects a resolved mesh <c>User</c> node onto a seeded context — the ONE place the
+    /// authoritative identity is read, shared by the circuit-open success path and by the
+    /// degraded-identity repair so the two can never drift apart.
+    ///
+    /// <para>Resolves the viewer's display time zone from their profile so it rides on the
+    /// AccessContext to every render path — the Blazor circuit AND server-side hub layout areas —
+    /// and stored-UTC timestamps display in the viewer's local time via
+    /// <c>AccessService.ToDisplayTime</c>. Unset (never signed in on a browser yet) → stays null
+    /// → renders UTC.</para>
+    ///
+    /// <para>The viewer's UI language is resolved from the same profile read, for the same reason
+    /// and along the same path: it rides on the AccessContext so <c>AccessService.Localize</c>
+    /// translates identically on the circuit and on server-side hub renders. Unset → stays null →
+    /// renders English. 🚨 This is why an unanswered lookup must not be latched: defaulting to
+    /// English because an index was slow gives a German viewer an English portal for the whole
+    /// circuit, which is precisely what resolving explicitly off <c>AccessContext.Locale</c>
+    /// (rather than an ambient culture) exists to prevent.</para>
+    ///
+    /// <para>Public and static so the projection is testable on its own — it is a pure function of
+    /// (seed, node), with no circuit, hub or authentication state involved.</para>
+    /// </summary>
+    /// <param name="seed">The context built from the authentication claims.</param>
+    /// <param name="meshUser">The authoritative mesh <c>User</c> node for that identity.</param>
+    /// <param name="options">Serializer options used to read the node's <c>User</c> content.</param>
+    public static AccessContext ApplyMeshUser(
+        AccessContext seed,
+        MeshNode meshUser,
+        System.Text.Json.JsonSerializerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(seed);
+        ArgumentNullException.ThrowIfNull(meshUser);
+        var profile = meshUser.ContentAs<User>(options);
+        var timeZoneId = profile?.TimeZoneId;
+        var locale = profile?.Locale;
+        return seed with
+        {
+            ObjectId = meshUser.Id,
+            Name = meshUser.Name ?? meshUser.Id,
+            TimeZoneId = string.IsNullOrWhiteSpace(timeZoneId) ? seed.TimeZoneId : timeZoneId,
+            Locale = string.IsNullOrWhiteSpace(locale) ? seed.Locale : locale
+        };
+    }
+
+    /// <summary>
+    /// The repair for a circuit that opened on a degraded identity: waits for the mesh user index
+    /// to reach a VERDICT for <paramref name="email"/> and, if it finds the node, re-projects the
+    /// context through <see cref="ApplyMeshUser"/> and publishes it through the existing
+    /// <see cref="UpdateUserContext"/> hook.
+    ///
+    /// <para>🚨 No timer, no poll, no retry loop, no widened timeout. The index is filled by a live
+    /// <c>nodeType:User</c> query, so the thing being waited for is ALREADY an observable event;
+    /// the unavailable leg simply falls through to it (<see cref="UserIdentityCache.IndexChanged"/>)
+    /// and re-asks the same question. A definitive "no such user" ends the wait too — the seed is
+    /// the right answer to that, and onboarding owns the identity from there via its own
+    /// <see cref="UpdateUserContext"/> call.</para>
+    /// </summary>
+    private void StartIdentityRecovery(string email)
+    {
+        UserIdentityCache? cache;
+        try
+        {
+            cache = _hub.ServiceProvider.GetService<UserIdentityCache>();
+        }
+        catch (Exception ex)
+        {
+            // Same edge TryLoadMeshUser guards: resolving from a hub whose DI scope is mid-disposal
+            // throws. Nothing to repair against, and the circuit is going away anyway.
+            _logger.LogWarning(ex,
+                "CircuitAccessHandler: cannot watch the mesh user index for {Email}", email);
+            return;
+        }
+
+        if (cache is null)
+            // No index registered at all is a static configuration fact, not a transient outage —
+            // there is nothing that could ever answer, so there is nothing to wait for.
+            return;
+
+        // The chain re-asks at subscribe time, so it can complete INSIDE this Subscribe call — in
+        // which case UpdateUserContext runs before the assignment below and the handle it clears is
+        // still null. Harmless: Take(1) disposes the subscription on completion, so what gets
+        // assigned afterwards is an inert handle. The disposal in UpdateUserContext is for the case
+        // it exists for — a repair still PENDING when onboarding writes an identity of its own.
+        _identityRecovery = cache.WhenDetermined(email)
+            .Subscribe(
+                lookup =>
+                {
+                    // A determinate MISS is a real answer: this email has no mesh User node. The
+                    // seeded context stays, and it is correct.
+                    if (lookup.Node is not { } meshUser)
+                        return;
+                    // The circuit may have closed, or onboarding may have written a context, while
+                    // the index was filling. _userContext is the live value in both cases.
+                    if (_userContext is not { } current)
+                        return;
+                    UpdateUserContext(ApplyMeshUser(current, meshUser, _hub.JsonSerializerOptions));
+                    // Information, and it PAIRS with the Warning above: an operator who sees the
+                    // degradation must be able to see whether it healed. Bounded by that Warning's
+                    // own volume — at most one of each per degraded circuit.
+                    _circuitLogger.LogInformation(
+                        "Circuit identity re-resolved from the mesh user index: user={UserId}, "
+                        + "locale={Locale}, timeZone={TimeZone}",
+                        _userContext?.ObjectId, _userContext?.Locale, _userContext?.TimeZoneId);
+                },
+                ex => _logger.LogWarning(ex,
+                    "CircuitAccessHandler: the mesh user index faulted while re-resolving {Email}; "
+                    + "the circuit keeps its seeded identity", email));
     }
 
     /// <summary>

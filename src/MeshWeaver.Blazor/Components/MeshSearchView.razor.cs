@@ -64,10 +64,13 @@ public partial class MeshSearchView : IDisposable
     };
 
     // ----- Delete affordance + keyboard navigation state -----
-    // Per-node delete permission (canonical hub.CheckPermission(path, Permission.Delete) snapshot).
-    // Absent / false ⇒ no trash affordance for that path (fail-closed).
+    // Per-node delete VERDICT (canonical hub.CheckPermissionOutcome(path, Permission.Delete)).
+    // Absent / false ⇒ no trash affordance for that path (fail-closed). Only a real verdict is ever
+    // written: an undetermined fold leaves the entry absent rather than forging a `false`.
     private readonly Dictionary<string, bool> _canDeleteByPath =
         new(StringComparer.OrdinalIgnoreCase);
+    // Paths whose probe is in flight or answered — one probe per path. An undetermined outcome
+    // releases its entry so the next result batch can re-ask; see RecordDeleteOutcome.
     private readonly HashSet<string> _permissionRequested =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly List<IDisposable> _affordanceSubscriptions = new();
@@ -1613,11 +1616,22 @@ public partial class MeshSearchView : IDisposable
 
     /// <summary>
     /// Resolves the per-node delete permission for the given result nodes via the canonical
-    /// <c>hub.CheckPermission(path, Permission.Delete)</c> surface (the same gate
-    /// <see cref="MeshWeaver.Graph.DeleteLayoutArea"/> uses). Bounded snapshot — <c>Take(1)</c>
-    /// + <c>Timeout</c>, fail-closed to "no delete" so a stuck lookup never offers a trash we
-    /// cannot honour. Idempotent: each path is probed at most once per component instance.
-    /// Skipped entirely on a picker selection surface (no manage affordance there).
+    /// <c>hub.CheckPermissionOutcome(path, Permission.Delete)</c> surface (the same gate
+    /// <see cref="MeshWeaver.Graph.DeleteLayoutArea"/> uses, in its classified form). One verdict
+    /// per path, fail-closed to "no delete" so a lookup that has not answered never offers a trash
+    /// we cannot honour. Idempotent: each path has at most one probe IN FLIGHT per component
+    /// instance. Skipped entirely on a picker selection surface (no manage affordance there).
+    ///
+    /// <para>🚨 <b>No <c>Timeout</c>, and no <c>Catch(_ =&gt; false)</c>.</b> That pair fabricated a
+    /// verdict — and <c>_permissionRequested</c> then latched it, so a probe that merely took
+    /// longer than ten seconds cost the user their delete affordance for the rest of the component's
+    /// life, with no way to re-ask. It is the exact shape issue #974 removed from
+    /// <c>AccessControlPipeline</c>, whose reasoning applies unchanged here: the permission fold
+    /// rides the live <c>AccessAssignment</c> synced stream, so a slow answer is an answer that has
+    /// not arrived yet, not a denial. Waiting on the stream IS the recovery — it emits when the
+    /// fold resolves, however long that takes. A ceiling only narrows the window in which the bug
+    /// is visible. If the fold genuinely never emits, that is a framework bug to surface, not one
+    /// to paper over with a deny.</para>
     /// </summary>
     private void ResolveDeletePermissions(IEnumerable<MeshNode> nodes)
     {
@@ -1631,17 +1645,61 @@ public partial class MeshSearchView : IDisposable
                 continue;
 
             var capturedPath = path;
-            var sub = Hub.CheckPermission(capturedPath, Permission.Delete)
+            var sub = Hub.CheckPermissionOutcome(capturedPath, Permission.Delete)
+                // Take(1) — a snapshot, and the fold never completes on its own. Sanctioned here
+                // (not TakeDecisionOutsideGate): the continuation is a pure UI projection that
+                // queues onto the renderer, it does no storage I/O and publishes no change.
                 .Take(1)
-                .Timeout(TimeSpan.FromSeconds(10))
-                .Catch((Exception _) => Observable.Return(false))
-                .Subscribe(canDelete => InvokeAsync(() =>
-                {
-                    _canDeleteByPath[capturedPath] = canDelete;
-                    StateHasChanged();
-                }));
+                .Subscribe(
+                    outcome => InvokeAsync(() =>
+                    {
+                        if (RecordDeleteOutcome(outcome, capturedPath, _canDeleteByPath, _permissionRequested))
+                            StateHasChanged();
+                    }),
+                    // A fault that escapes the classifier is still not a verdict. Un-latch so the
+                    // next result batch re-asks instead of inheriting a decision nobody made.
+                    _ => InvokeAsync(() => _permissionRequested.Remove(capturedPath)));
             _affordanceSubscriptions.Add(sub);
         }
+    }
+
+    /// <summary>
+    /// Folds ONE classified probe outcome into the affordance state, and reports whether the UI
+    /// changed.
+    ///
+    /// <para>The whole point is the <b>Undetermined</b> leg (#974): a fold that reached no verdict
+    /// records NOTHING. It writes no entry — so <see cref="CanDelete"/> stays false and the surface
+    /// remains fail-closed — and it releases the <paramref name="requested"/> latch, so the next
+    /// batch of results re-asks. Writing <c>false</c> there would be fail-closed too, and a LIE:
+    /// indistinguishable from a real denial, permanent, and invisible. Fail-closed and honest are
+    /// not in tension; the shape this replaces was fail-closed and dishonest.</para>
+    ///
+    /// <para>A real verdict — granted or denied — is recorded and stays latched: it is an answer,
+    /// and re-asking it would just re-run the fold for every render.</para>
+    ///
+    /// <para>Static and dependency-free so the tri-state fold is testable without a component, a
+    /// circuit or a renderer.</para>
+    /// </summary>
+    /// <param name="outcome">The classified result of one permission check.</param>
+    /// <param name="path">The node path the probe was about.</param>
+    /// <param name="canDeleteByPath">Verdict store backing <see cref="CanDelete"/>.</param>
+    /// <param name="requested">In-flight/answered latch that keeps each path to one probe.</param>
+    /// <returns>True when a verdict was recorded and the affordance must be re-rendered.</returns>
+    internal static bool RecordDeleteOutcome(
+        PermissionCheckOutcome outcome,
+        string path,
+        IDictionary<string, bool> canDeleteByPath,
+        ISet<string> requested)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        if (outcome.IsUndetermined)
+        {
+            requested.Remove(path);
+            return false;
+        }
+
+        canDeleteByPath[path] = outcome.IsGranted;
+        return true;
     }
 
     /// <summary>First click on the trash arms the inline confirm for that card.</summary>
