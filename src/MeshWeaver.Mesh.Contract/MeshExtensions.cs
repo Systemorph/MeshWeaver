@@ -168,8 +168,10 @@ public static class MeshExtensions
     /// <c>MeshService</c> used to post to <c>GetMeshHub()</c> unconditionally — so that isolation
     /// bought nothing. This walk is what makes it real.</para>
     ///
-    /// <para>Falls back to the mesh root whenever no ancestor opted in — which is still the common
-    /// case (a per-node hub rendering a layout area), so that traffic behaves exactly as before.</para>
+    /// <para>When NO ancestor opted in — the common case for a per-node hub (a thread hub creating
+    /// its <c>_Notification</c> satellite, a NodeType <c>Source</c> hub writing a compile activity)
+    /// — the operation lands on the mesh's dedicated OFF-ROUTER execution hub
+    /// (<see cref="NodeOperationFallbackTarget"/>), never on the router itself.</para>
     /// </summary>
     /// <param name="hub">The hub issuing the operation.</param>
     /// <returns>The address to target.</returns>
@@ -189,8 +191,102 @@ public static class MeshExtensions
                 break;
             current = parent;
         }
-        return hub.GetMeshHub().Address;
+        return NodeOperationFallbackTarget(hub);
     }
+
+    /// <summary>
+    /// Address-id prefix of the mesh's dedicated node-operation execution hub. A <c>portal/</c>
+    /// address on purpose: <c>portal</c> is already a stream-routed address type
+    /// (<c>MeshConfiguration.DefaultStreamRoutedAddressTypes</c>), so on Orleans the RoutingGrain
+    /// dispatches to it over the cluster-wide memory stream exactly as it does for the MCP session
+    /// hubs and the gRPC transport hub — no new address type, no new routing rule.
+    /// </summary>
+    private const string NodeOperationHubPrefix = "nodeops-";
+
+    /// <summary>
+    /// The address of <paramref name="mesh"/>'s dedicated node-operation execution hub. Pure
+    /// address arithmetic — it does NOT materialise the hub, so it is safe to call from inside a
+    /// node-operation handler (materialising re-enters <c>GetHostedHub</c>).
+    /// </summary>
+    private static Address NodeOperationHubAddress(IMessageHub mesh) =>
+        AddressExtensions.CreatePortalAddress($"{NodeOperationHubPrefix}{mesh.Address.Id}");
+
+    /// <summary>
+    /// True when <paramref name="hub"/> is the mesh's ONE central node-operation execution hub —
+    /// i.e. the hub the <see cref="NodeOperationTarget"/> FALLBACK resolves to for every caller
+    /// that declared no execution hub of its own.
+    ///
+    /// <para>That used to be the mesh hub itself, so the invariants that must run exactly once per
+    /// create (above all <see cref="EnsurePartitionBootstrap"/>) tested <c>ReferenceEquals(hub,
+    /// hub.GetMeshHub())</c>. Now the fallback is <c>portal/nodeops-{meshId}</c>, and the mesh hub
+    /// still qualifies for the teardown path where that hub cannot be materialised — so the test is
+    /// "is this the central execution hub", never "is this the router".</para>
+    ///
+    /// <para>Deliberately does NOT match the OTHER execution hubs (the static-repo <c>import</c>
+    /// hub, an MCP session hub, a Blazor portal hub): those opted in explicitly, provision their
+    /// own roots, and must not redo the central bootstrap — exactly as before.</para>
+    /// </summary>
+    private static bool IsCentralNodeOperationHub(IMessageHub hub)
+    {
+        var mesh = hub.GetMeshHub();
+        return ReferenceEquals(hub, mesh) || hub.Address.Equals(NodeOperationHubAddress(mesh));
+    }
+
+    /// <summary>
+    /// The mesh's ONE dedicated node-CRUD execution hub — <c>portal/nodeops-{meshId}</c>, hosted by
+    /// the mesh hub, created on first use and shared thereafter.
+    ///
+    /// <para>🚨 This exists because the previous fallback was <c>hub.GetMeshHub().Address</c>, i.e.
+    /// THE ROUTER. Every per-node hub (thread, NodeType <c>Source</c>, activity) has no
+    /// <see cref="WithNodeOperationExecution"/> ancestor, so every create/delete/move it issued ran
+    /// on the mesh hub's single-threaded action block AND its response came back stamped
+    /// <c>Sender = mesh/{id}</c>. Both halves are exactly what <c>ROUTER_TRAFFIC</c> reports —
+    /// production 2026-08 logged <c>"RawJson has the mesh hub as sender (sender: mesh/…, target:
+    /// …/Source/FNodeTypeAtomicSolution)"</c> once per per-node hub, which is why it was the single
+    /// largest source of ERROR lines: the "sender" role is reported by the RECEIVING hub, so the
+    /// count scales with the number of node hubs, not with the number of message types.</para>
+    ///
+    /// <para>Safe to target because it carries NO per-node access pipeline: a
+    /// <c>CreateNodePermissionAttribute</c> anchors its check at the RECEIVING hub's path, which is
+    /// why <see cref="WithNodeOperationExecution"/> must never land on a per-node hub (the learner
+    /// course-install denial). <c>portal/nodeops-{meshId}</c> is an infrastructure hub with no node
+    /// of its own — the same shape as the MCP session hub and the Blazor portal hub, both of which
+    /// already execute node CRUD off the router.</para>
+    ///
+    /// <para>Returns <c>null</c> only when the hub cannot be materialised (the mesh is already
+    /// tearing down); callers then fall back to the mesh address — the historical behaviour, and at
+    /// that point the operation is being dropped anyway.</para>
+    /// </summary>
+    /// <param name="hub">Any hub in the mesh; the execution hub is resolved from its mesh root.</param>
+    /// <returns>The shared execution hub, or <c>null</c> while the mesh is disposing.</returns>
+    public static IMessageHub? NodeOperationExecutionHub(this IMessageHub hub)
+    {
+        var mesh = hub.GetMeshHub();
+        // Teardown: never materialise a hub during disposal (HostedHubsCollection refuses it and
+        // logs a warning). The caller falls back to the historical target so the shutdown path
+        // behaves as before.
+        if (mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+            return null;
+
+        var routingService = mesh.ServiceProvider.GetService<IRoutingService>();
+        return mesh.GetHostedHub(
+            NodeOperationHubAddress(mesh),
+            config => config
+                // Same wiring as SessionHubResolver's MCP session hub: its own IWorkspace (the
+                // node-operation handlers reach mesh-node streams through it) plus the routing
+                // registration that makes responses land here cross-silo.
+                .AddData()
+                .WithNodeOperationExecution()
+                .WithInitialization(h =>
+                {
+                    if (routingService is not null)
+                        h.RegisterForDisposal(routingService.RegisterStream(h));
+                }),
+            HostedHubCreation.Always);
+    }
+
+    private static Address NodeOperationFallbackTarget(IMessageHub hub)
+        => hub.NodeOperationExecutionHub()?.Address ?? hub.GetMeshHub().Address;
 
     /// <summary>
     /// Registers handlers for mesh node operations. Idempotent — calling twice on the
@@ -1267,9 +1363,12 @@ public static class MeshExtensions
     /// <para><b>Gated to stay inside the existing security + partition model — it never
     /// implicitly creates a partition for someone who couldn't create there anyway:</b></para>
     /// <list type="bullet">
-    ///   <item><b>Central mesh hub only.</b> Off-router create handlers — the static-repo import
-    ///     hub (which already provisions its own roots and runs as System) and per-node hubs —
-    ///     don't redo it.</item>
+    ///   <item><b>Central node-operation hub only</b> (<see cref="IsCentralNodeOperationHub"/> —
+    ///     the mesh's dedicated <c>portal/nodeops-{meshId}</c> execution hub, which is what the
+    ///     <see cref="NodeOperationTarget"/> fallback resolves to; the mesh hub itself still counts
+    ///     for the teardown path). Other create handlers — the static-repo import hub (which
+    ///     already provisions its own roots and runs as System), MCP session / portal hubs, and
+    ///     per-node hubs — don't redo it.</item>
     ///   <item><b>Host uses the Space partition model.</b> Skips entirely when the <c>Space</c>
     ///     node type is not registered (a host serving raw / doc / embedded partitions has its
     ///     own root mechanism — forcing a <c>Space</c> root there is wrong, and would fail the
@@ -1307,8 +1406,8 @@ public static class MeshExtensions
     private static IObservable<System.Reactive.Unit> EnsurePartitionBootstrap(
         IMessageHub hub, MeshNode node, CreateNodeRequest request, ILogger logger)
     {
-        // Central mesh hub only — see remarks.
-        if (!ReferenceEquals(hub, hub.GetMeshHub()))
+        // Central node-operation hub only — see remarks and IsCentralNodeOperationHub.
+        if (!IsCentralNodeOperationHub(hub))
             return Observable.Return(System.Reactive.Unit.Default);
 
         // Skip the two node shapes the bootstrap itself writes: a partition root (empty
