@@ -348,4 +348,116 @@ public class PluginDependencyOrderTest(ITestOutputHelper output) : MonolithMeshT
         def.CompilationStatus.Should().Be(CompilationStatus.Ok,
             $"the dependent must compile against its dependency's shared source; error: {def.CompilationError}");
     }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  The UNATTENDED closure — a requirement is SELECTED, not merely ordered
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private static PackageManifest Manifest(string id, bool preInstalled, params string[] requires) =>
+        new()
+        {
+            Id = id,
+            Source = "Plugins",
+            PreInstalled = preInstalled,
+            Requires = requires.ToImmutableList(),
+        };
+
+    /// <summary>
+    /// THE atioz DEFECT (2026-08-10). The boot pass selected the pre-installed baseline and ORDERED
+    /// it, which quietly assumes every requirement is itself selected. It is not: every pre-installed
+    /// package declares <c>requires: ["Store@^1.0.0"]</c> while <c>Store</c> is
+    /// <c>preInstalled: false</c>. The instance installed 8 packages that all need the Store, never
+    /// installed the Store, and therefore had no install record for it, no declared-access pass, a
+    /// partition only <c>system-security</c> could read — and no catalog page to install it from.
+    /// </summary>
+    [Fact]
+    public void PreInstalledSelection_PullsInARequirementThatIsNotItselfPreInstalled()
+    {
+        var catalog = new List<PackageManifest>
+        {
+            Manifest("Agent", preInstalled: true, "Store@^1.0.0"),
+            Manifest("Skill", preInstalled: true, "Store@^1.0.0"),
+            Manifest("Store", preInstalled: false),
+            Manifest("Chess", preInstalled: false, "Store@^1.0.0", "Training@^1.0.0"),
+            Manifest("Training", preInstalled: false),
+        };
+        var selected = catalog.Where(p => p.PreInstalled).ToList();
+
+        var closure = InstanceAutoRegistrationService
+            .DependencyClosure(catalog, selected, NullLogger.Instance)
+            .Select(p => p.Id)
+            .ToList();
+
+        closure.Should().Contain("Store",
+            "the baseline's requirement must be installed even though nothing selects it directly");
+        closure.Should().HaveCount(3);
+        closure.Should().Contain("Agent").And.Contain("Skill");
+        closure.Should().NotContain("Chess",
+            "a package nobody selected and nobody requires stays out");
+        closure.Should().NotContain("Training",
+            "a requirement of an UNSELECTED package is not pulled in either");
+    }
+
+    /// <summary>
+    /// A PAID requirement is not a back door around source-scoped selection. An instance is
+    /// routinely granted commercial content (course catalogues, customer modules) that it may buy
+    /// but must never receive automatically — so a free package declaring a priced requirement gets
+    /// installed without it, and the paid package is named rather than silently acquired.
+    /// </summary>
+    [Fact]
+    public void ACommercialRequirement_IsNotPulledIn()
+    {
+        var catalog = new List<PackageManifest>
+        {
+            Manifest("FreePlug", preInstalled: true, "PaidCourse@^1.0.0"),
+            Manifest("PaidCourse", preInstalled: false) with { Price = 49m, Source = "Education" },
+            Manifest("CouponOnly", preInstalled: false) with { Price = -1m, Source = "Education" },
+            Manifest("AlsoFree", preInstalled: true, "CouponOnly@^1.0.0"),
+        };
+        var selected = catalog.Where(p => p.PreInstalled).ToList();
+
+        var closure = InstanceAutoRegistrationService
+            .DependencyClosure(catalog, selected, NullLogger.Instance)
+            .Select(p => p.Id)
+            .ToList();
+
+        closure.Should().Contain("FreePlug").And.Contain("AlsoFree");
+        closure.Should().NotContain("PaidCourse",
+            "a purchasable requirement must be acquired deliberately, never by a dependency edge");
+        closure.Should().NotContain("CouponOnly",
+            "coupon-only (negative price) is commercial too");
+        closure.Should().HaveCount(2);
+    }
+
+    /// <summary>A requirement no configured source carries cannot strand the boot.</summary>
+    [Fact]
+    public void AnUnresolvableRequirement_IsSteppedOver_NotThrown()
+    {
+        var catalog = new List<PackageManifest> { Manifest("Agent", true, "Missing@^1.0.0") };
+
+        var closure = InstanceAutoRegistrationService
+            .DependencyClosure(catalog, catalog, NullLogger.Instance)
+            .Select(p => p.Id)
+            .ToList();
+
+        closure.Should().Equal("Agent");
+    }
+
+    /// <summary>A requirement cycle terminates instead of spinning — each package expands once.</summary>
+    [Fact]
+    public void ARequirementCycle_Terminates()
+    {
+        var catalog = new List<PackageManifest>
+        {
+            Manifest("A", preInstalled: true, "B@^1.0.0"),
+            Manifest("B", preInstalled: false, "A@^1.0.0"),
+        };
+
+        var closure = InstanceAutoRegistrationService
+            .DependencyClosure(catalog, [catalog[0]], NullLogger.Instance)
+            .Select(p => p.Id)
+            .ToList();
+
+        closure.Should().Equal("A", "B");
+    }
 }
