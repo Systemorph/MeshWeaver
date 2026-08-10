@@ -356,6 +356,33 @@ and finds nothing. The `NotifyAsync ENTER` line stamps `msg=...` with the JSON `
 
 For test setup specifically: `MessageHubConfiguration.TypeRegistry` is mutable per call (`WithType` returns the same instance), so `configuration.TypeRegistry.AddAITypes();` (discarded return) is sufficient — but the call must reach **the configuration of every hub that serializes the message**, including hosted sub-hubs like `{path}/_Exec` and any cross-cutting `ConfigureDefaultNodeHub` chain.
 
+### Auto-registration warms only the SERIALISING hub
+
+A type nobody registered explicitly still gets a short-name `$type`: `PolymorphicTypeInfoResolver`
+auto-registers an unregistered, non-collectible type the first time a hub writes one (it logs a
+`Warning` naming the hub). That entry lands in **that hub's** registry only — `GetOrAddType` writes
+the local map and never the parent, and a child registry can read its parent but not the reverse.
+
+So *which hub does the writing* decides where the mesh learns a content type. Move a workload to a
+different hub and every hub whose registry chained to the old one starts reading that content back as
+an untyped `JsonElement`: `Content is T` goes false, validators stop firing, views render empty.
+The tell is a pair of lines — `Unregistered type … on hub A` followed by
+`Received '$type':'…' which is NOT registered in this (receiving) hub` on some hub B.
+
+When two hubs must be **one** serialization identity, share the registry rather than registering
+twice:
+
+```csharp
+mesh.GetHostedHub(address, config => config
+    .WithTypeRegistry(mesh.TypeRegistry)   // FIRST — before AddData()/WithType/WithHandler
+    .AddData());
+```
+
+`WithTypeRegistry` carries anything the configuration already registered over to the shared registry
+(and never clobbers an entry the shared one already owns), so a call made out of order still cannot
+lose a registration. It is deliberately rare: the mesh's node-operation execution hub uses it because
+node CRUD serializes node `Content` on behalf of the whole mesh.
+
 ---
 
 ## Common Gotchas

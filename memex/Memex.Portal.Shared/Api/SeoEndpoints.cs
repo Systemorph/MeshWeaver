@@ -22,6 +22,15 @@ namespace Memex.Portal.Shared.Api;
 /// plus each store plugin's declared public segments (the marketing brochures). Fail-open to an
 /// empty sitemap — a mesh hiccup must never turn into a 500 for a crawler.
 /// </summary>
+/// <summary>
+/// One page that is live on the public internet: the node, and the path a logged-out visitor
+/// reaches it at. Produced by <see cref="SeoEndpoints.EnumeratePublished"/>.
+/// </summary>
+/// <param name="Node">The published node.</param>
+/// <param name="Path">Its mesh path, which is also its public URL path — publishing never moves a
+/// node, so this is the same path it has always had.</param>
+public sealed record PublishedPage(MeshNode Node, string Path);
+
 public static class SeoEndpoints
 {
     /// <summary>Node types whose top-level mains are sitemap candidates.</summary>
@@ -117,13 +126,31 @@ public static class SeoEndpoints
     /// each gated through the REAL anonymous permission check, public-segment children of store
     /// plugins verified to exist before listing. Cold; never errors (fail-open to fewer URLs).
     /// </summary>
-    public static IObservable<string> BuildSitemap(IMessageHub hub, string baseUrl)
+    public static IObservable<string> BuildSitemap(IMessageHub hub, string baseUrl) =>
+        EnumeratePublished(hub)
+            .Select(pages => Render(baseUrl, pages.Select(p => (p.Node, p.Path)).ToList()))
+            .Catch<string, Exception>(_ => Observable.Return(Render(baseUrl, [])));
+
+    /// <summary>
+    /// 🚨 THE ONE DEFINITION OF "PUBLISHED TO THE WEB" — every page a logged-out visitor may open.
+    ///
+    /// <para>There is no separate flag, and deliberately no <c>Www/</c> namespace: a node is
+    /// published because it carries an explicit <b>Anonymous Read grant</b>, and that grant is what
+    /// <see cref="AnonymousGate"/> already fails closed on. Moving public content under a path
+    /// prefix would rewrite every public URL — every shared link, every canonical, every
+    /// <c>og:url</c> — which is the opposite of what publishing well requires.</para>
+    ///
+    /// <para>So "which nodes are on the internet" is a QUERY, not a location, and this is it. The
+    /// sitemap renders it as XML for crawlers; <c>PublishedSettingsTab</c> renders the same list for
+    /// a human. Two views, one truth — they cannot drift.</para>
+    /// </summary>
+    public static IObservable<IReadOnlyList<PublishedPage>> EnumeratePublished(IMessageHub hub)
     {
         var mesh = hub.ServiceProvider.GetService<IMeshService>();
         var adapter = hub.ServiceProvider.GetService<IStorageAdapter>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         if (mesh is null || adapter is null)
-            return Observable.Return(Render(baseUrl, []));
+            return Observable.Return<IReadOnlyList<PublishedPage>>([]);
 
         // Candidate enumeration runs as System (an anonymous HTTP entry has no query identity);
         // ANONYMOUS readability is then decided per node by the fail-closed gate — the sitemap
@@ -150,9 +177,14 @@ public static class SeoEndpoints
                             : Observable.Return<IReadOnlyList<(MeshNode, string)>>([])))
                     .ToObservable().Concat().ToList()
                     .Select(pages => pages.SelectMany(p => p).ToList()))
-            .Select(pages => Render(baseUrl, pages.DistinctBy(p => p.Item2).ToList()))
+            // PagesOf yields UNNAMED (MeshNode, string) tuples, so address them positionally.
+            .Select(pages => (IReadOnlyList<PublishedPage>)pages
+                .DistinctBy(p => p.Item2)
+                .Select(p => new PublishedPage(p.Item1, p.Item2))
+                .ToList())
             .Timeout(TimeSpan.FromSeconds(20))
-            .Catch<string, Exception>(_ => Observable.Return(Render(baseUrl, [])));
+            .Catch<IReadOnlyList<PublishedPage>, Exception>(_ =>
+                Observable.Return<IReadOnlyList<PublishedPage>>([]));
     }
 
     // The sitemap pages of one anonymous-readable root: the root itself plus, for store

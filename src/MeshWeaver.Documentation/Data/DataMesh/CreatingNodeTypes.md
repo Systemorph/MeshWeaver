@@ -273,8 +273,8 @@ The JSON file in the parent namespace wires everything together. The `configurat
 | `WithContentType<T>()` | Registers the content record for the editor form |
 | `AddData(...)` | Configures the `MeshDataSource` with reference data and virtual types |
 | `AddSource(source => source.WithType<T>(...))` | Registers types in the data source |
-| `WithInitialData(T[] items)` | Seeds reference data from a static array |
-| `WithInitialData(Func<CancellationToken, Task<IEnumerable<T>>>)` | Seeds data from an async loader (e.g., CSV) |
+| `WithInitialData(IEnumerable<T> items)` | Seeds reference data from a static collection |
+| `WithInitialData(Func<IObservable<IEnumerable<T>>>)` | Seeds data from a reactive loader (e.g., CSV — see Step 4). There is **no** `Task`-returning overload |
 | `AddLayout(...)` | Configures views and layout areas |
 
 ---
