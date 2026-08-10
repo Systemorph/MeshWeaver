@@ -74,7 +74,7 @@ The `--render Fireworks` flag tells the markdown renderer to (a) execute the cel
 
 ## Two things to call out
 
-- `Log` is one of the two globals every script gets (the other is `Mesh`, an `IMessageHub`). Each `Log.LogInformation(...)` call appends a `LogMessage` to the activity's `ActivityLog.Messages` list and flushes a snapshot through the activity hub's workspace — that's what subscribers react to.
+- `Log` is one of the **four** globals every script gets (`MeshScriptGlobals`): `Mesh` (an `IMessageHub`), `Log`, `Ct` (the script's `CancellationToken` — see below), and `Inputs` (an `IReadOnlyDictionary<string, JsonElement>` forwarded from `ExecuteScriptRequest.Inputs`, empty for the plain REPL / launch-button case). Each `Log.LogInformation(...)` call appends a `LogMessage` to the activity's `ActivityLog.Messages` list and flushes a snapshot through the activity hub's workspace — that's what subscribers react to.
 - The expression on the last line is the script's **return value**. It's both stored on the activity log AND rendered in the named layout area (`Fireworks`).
 
 ## Where activities live for "real" runs
@@ -103,11 +103,13 @@ await Mesh.GetWorkspace()
     .Take(1)
     .ToTask(Ct);                               // ← cancellable
 Log.LogInformation("Phase 2: crunching numbers…");
-await ComputeAsync(Ct);                        // ← cancellable
+await MyOwnWork(Ct);                           // ← your own async step, cancellable
 Log.LogInformation("Phase 3: rendering report…");
 return MeshWeaver.Layout.Controls.Markdown("Done.");
 ```
 
-If the user cancels at "Phase 2", the wait inside `ComputeAsync` throws `OperationCanceledException`, the script unwinds, the activity flips to `Failed` with a cancellation message in the log, and the `🎆 fireworks` never appear.
+If the user cancels at "Phase 2", the wait inside `MyOwnWork` throws `OperationCanceledException`, the script unwinds, and the executor flips the activity to **`Cancelled`** (`KernelExecutor` distinguishes `OperationCanceledException` from a genuine fault, which flips to `Failed`) — so the `🎆 fireworks` never appear.
+
+> `Ct` matters precisely because without it the script only observes cancellation at `await` **resume** points. That is fine for short awaits and useless for a 30-second `Task.Delay` — which will run to completion after the user has already pressed Cancel.
 
 The Activity Overview's Cancel button (and the running-activities stripe on any Code node) wire this exact patch — you don't need to do anything special on the UI side beyond rendering an existing layout area.

@@ -121,10 +121,12 @@ vec?.Search(queryText, options, namespacePath: "@graph", topK: 20)
 Every node write has generated an embedding vector since the PG adapter shipped:
 
 ```csharp
-// PostgreSqlStorageAdapter.WriteAsyncCore (paraphrased)
-var embeddingText = $"{node.Name} {node.NodeType}";
-var vec = await _embeddingProvider.GenerateEmbeddingAsync(embeddingText);
-// embeddingVector goes into the INSERT as $13
+// PostgreSqlStorageAdapter.BuildUpsertAsync (paraphrased) — shared by
+// WriteAsyncCore (single command) and WriteMany (batched), so the two can't drift.
+var embeddingText = string.Join(" ",
+    new[] { node.Name, node.NodeType }.Where(s => !string.IsNullOrEmpty(s)));
+var embeddingVector = await _embeddingProvider.GenerateEmbeddingAsync(embeddingText);
+// bound to the `embedding` column of the INSERT … ON CONFLICT upsert
 ```
 
 Before vector search was wired, that column was write-only — the embedding HTTP call was paid per write, but the stored vectors were never read. Now the same model that generated vectors at write time generates the query embedding (the provider is injected from the same DI registration), and the closed loop yields meaningful cosine similarity.
@@ -141,13 +143,13 @@ Vector search depends on three things being in place:
 
 The dimension `{dim}` is configured via `PostgreSqlStorageOptions.EmbeddingDimensions`.
 
-> **The provider's `Dimensions` must match the column type, or you will get an Npgsql cast error on the Vector parameter.** The schema initializer migrates the column automatically when dimensions change — see `PostgreSqlSchemaInitializer.cs:408-419`.
+> **The provider's `Dimensions` must match the column type, or you will get an Npgsql cast error on the Vector parameter.** The schema initializer migrates the column automatically when dimensions change — it reads the current `atttypmod` off `mesh_nodes.embedding` and, on a mismatch, runs `DROP INDEX idx_mn_embedding; ALTER TABLE mesh_nodes ALTER COLUMN embedding TYPE vector({dim}) USING NULL;` then rebuilds the HNSW index (`PostgreSqlSchemaInitializer`, in both the base-schema and per-partition DDL blocks).
 
 ---
 
 ## Fallback when no embedding provider is registered
 
-`NullEmbeddingProvider.GenerateEmbeddingAsync` returns `null`. The intercept detects this and falls through to the existing `GenerateTextSearchClause` ILIKE path, so callers still get results instead of an empty page. Tests that do not wire an embedding provider get the regular ILIKE behaviour automatically.
+When `AddEmbeddings` registers nothing, `PostgreSqlMeshQuery` holds a **null** `IEmbeddingProvider`, so the vector intercept is skipped outright and the query takes the `GenerateTextSearchClause` ILIKE path. The intercept is also skipped when a provider *is* registered but returns `null` for this query (a transient failure) — same fallback, so callers get results instead of an empty page. `NullEmbeddingProvider` is the **write**-side stand-in: `PostgreSqlStorageAdapter` substitutes `NullEmbeddingProvider.Instance` when no provider is injected, and its `GenerateEmbeddingAsync` returns `null`, leaving the `embedding` column NULL. Tests that do not wire an embedding provider get the regular ILIKE behaviour automatically.
 
 ---
 
@@ -159,7 +161,7 @@ The dimension `{dim}` is configured via `PostgreSqlStorageOptions.EmbeddingDimen
 |---|---|---|---|
 | `AzureFoundry` *(default)* | `AzureFoundryEmbeddingProvider` | Cohere `embed-v4` via Azure AI Foundry (cloud) | `Endpoint` **and** `ApiKey` |
 | `Ollama` / `OpenAICompatible` | `OllamaEmbeddingProvider` | any OpenAI-compatible `/v1/embeddings` — e.g. a local **Ollama** | `Endpoint` (+ `Model`); no key |
-| *(none — no `Endpoint`)* | `NullEmbeddingProvider` | — | falls through to the ILIKE path |
+| *(none — no `Endpoint`, or `AzureFoundry` without `ApiKey`)* | *(nothing registered)* | — | falls through to the ILIKE path; the adapter writes NULL embeddings via `NullEmbeddingProvider.Instance` |
 
 `AddEmbeddings` registers nothing when `Endpoint` is empty (so search stays on ILIKE), and the default cloud path additionally needs an `ApiKey`. The same `EmbeddingOptions` is bound by **both** the portal (`Memex.Portal.Distributed/Program.cs`) and the migration (`Memex.Database.Migration/Program.cs`) — they must agree, because the migration sizes the pgvector column from `Embedding:Model` and the portal generates the query vectors.
 
@@ -170,7 +172,7 @@ The dimension `{dim}` is configured via `PostgreSqlStorageOptions.EmbeddingDimen
 | `Embedding:Provider` | backend selector (table above) |
 | `Embedding:Endpoint` | provider URL — for Ollama the OpenAI-compatible base, e.g. `http://ollama:11434/v1` |
 | `Embedding:Model` | model name; drives the column dimension |
-| `Embedding:ApiKey` | required for `AzureFoundry`; ignored by Ollama (a dummy bearer is sent) |
+| `Embedding:ApiKey` | required for `AzureFoundry` (without it nothing is registered); optional for the OpenAI-compatible provider — it is sent as the bearer when set, and a dummy `ollama` bearer is used when unset |
 | `Embedding:Dimensions` | override; otherwise auto-derived from `Model` |
 | `Embedding:TimeoutSeconds` | OpenAI-compatible request timeout (default 30) — a finite bound so a hung leaf never pins an `IIoPool` slot |
 
@@ -191,21 +193,32 @@ The local/self-host stack already runs **Ollama on the host** for the chat model
    ```
    In the helm chart these flow through `config.memex_portal.Embedding__*` and `config.memex_migration.Embedding__*`.
 3. **Restart the portal.** Schema init (`PostgreSqlSchemaInitializer`, run by the portal on connect — *not only* by the migration job) sees the new dimension and re-migrates: `DROP INDEX idx_mn_embedding; ALTER TABLE mesh_nodes ALTER COLUMN embedding TYPE vector(1024) USING NULL;` then rebuilds the HNSW index. This runs for the base schema **and** every already-provisioned partition.
-4. **Re-embed existing content** — see the warning below. This step is mandatory, not optional.
+4. **Run the migration** so existing rows get embedded — see "Re-embedding existing content" below. Search keeps working without it (hybrid recall), but pre-existing rows are lexical-only until it runs.
 
-> **Why not just point the cloud provider at Azure from local?** `AzureFoundryEmbeddingProvider` builds its `EmbeddingsClient` with **no timeout**. If the configured endpoint is unreachable from the cluster, every bare-text query blocks on the embedding round-trip for the HttpClient default (~100 s) — search appears **frozen**. `OllamaEmbeddingProvider` sets a finite timeout for exactly this reason. Never wire embeddings at an endpoint the cluster can't reach.
+> **Why not just point the cloud provider at Azure from local?** `AzureFoundryEmbeddingProvider` constructs its `EmbeddingsClient` with **no explicit timeout or retry configuration**, so it inherits the Azure SDK defaults (a per-attempt network timeout plus automatic retries) rather than a short bound. If the configured endpoint is unreachable from the cluster, every bare-text query blocks on the embedding round-trip long enough that search appears **frozen**. `OllamaEmbeddingProvider` sets a finite `HttpClient.Timeout` (`Embedding:TimeoutSeconds`, default 30 s) for exactly this reason. Never wire embeddings at an endpoint the cluster can't reach.
 
-### 🚨 The re-embed requirement (don't skip)
+### Re-embedding existing content
 
-Registering *any* provider flips a switch: bare-text queries stop using ILIKE and route to the vector path, whose SQL hard-filters `WHERE embedding IS NOT NULL` (`PostgreSqlSqlGenerator.GenerateVectorSearchQuery`). The per-row ILIKE fallback does **not** exist — ILIKE only returns if the *provider itself* fails for the query embedding.
+Rows are embedded **only at node-write time** (`PostgreSqlStorageAdapter.BuildUpsertAsync`), so on a stack that previously had no provider every existing row's `embedding` is NULL — and the column re-migration in step 3 nulls anything that was there. Two mechanisms keep that from breaking search:
 
-So a row is searchable only once it has an embedding, and embeddings are written **only at node-write time** (`PostgreSqlStorageAdapter.WriteAsyncCore`). On a stack that previously had no provider, every existing row's `embedding` is NULL. The column re-migration in step 3 also nulls anything that was there. Consequences:
+**1. Hybrid recall — un-embedded rows do not disappear.** When the query carries a bare-text term, `GenerateVectorSearchQuery` makes a row eligible if it has an embedding **OR** it lexically matches the term:
 
-- **New / edited nodes** embed automatically and become vector-searchable.
-- **Pre-existing, untouched nodes** stay NULL → they **vanish from search** until re-written.
-- There is **no general mesh-node backfill** today. `DocumentationBackfill` (in the migration) re-embeds only the `doc` schema; ordinary mesh nodes have no equivalent.
+```sql
+WHERE (n.embedding IS NOT NULL
+       OR LOWER(COALESCE(n.name,''))        LIKE '%' || LOWER(@lexTerm) || '%'
+       OR LOWER(COALESCE(n.id,''))          LIKE '%' || LOWER(@lexTerm) || '%'
+       OR LOWER(COALESCE(n.description,'')) LIKE '%' || LOWER(@lexTerm) || '%')
+```
 
-Therefore: enabling a provider **without** first re-embedding existing content makes search *worse* (empty results instead of ILIKE substring hits). A one-time re-embed — iterate every partition's `mesh_nodes`/satellite rows with a NULL embedding, compute the vector via the provider on the `IIoPool`, and `UPDATE` the column — is the missing piece that makes "turn on local vectors" actually deliver. Treat the provider config and the backfill as a single change set.
+Only a *pure-semantic* call (no lexical term — i.e. `IVectorSearchProvider.Search` invoked with no text to blend) keeps the embedding-only filter. The `ORDER BY` then puts an exact name match first, then name-prefix, then id-prefix, then name-substring, with cosine distance breaking ties inside each tier — so typing an exact node name cannot be buried past the `LIMIT` by a semantically closer neighbour.
+
+**2. `MeshNodeEmbeddingBackfill` — the general backfill exists.** The migration (`Memex.Database.Migration/Program.cs`) runs `DocumentationBackfill` (the `doc` schema) **and** `MeshNodeEmbeddingBackfill`, which walks *every* schema holding a `mesh_nodes` table, reconciles the `embedding` column to the provider's dimension (resizing + rebuilding the HNSW index), and embeds every row with a NULL embedding from `name + node_type` — the same text the write path uses. It runs whenever a provider is configured, is idempotent (only NULL-embedding rows are touched), and logs-and-skips individual embedding failures rather than aborting the migration.
+
+Consequences:
+
+- **New / edited nodes** embed automatically.
+- **Pre-existing, untouched nodes** are still findable lexically immediately, and become semantically rankable once the backfill migration has run.
+- Enabling a provider is therefore an **enhancement, not a cliff** — but until the backfill runs, older rows only match on name/id/description substrings.
 
 ### Apple Intelligence / on-device — not a fit here
 
@@ -219,7 +232,7 @@ There is no Apple service you can call from a containerized .NET portal to get e
 
 **Embedding text is Name + NodeType only.** Content body is not embedded today. Two nodes with the same Name and different Content rank identically. Extending `WriteAsyncCore`'s `embeddingText` to include body content is the right fix — but be aware that re-embedding full content on every write is expensive.
 
-**No hybrid path yet.** The routing decision is binary: `TextSearch` present → vector; otherwise → regular SQL. A hybrid path (issue both, merge by score) is a meaningful product improvement and is deferred.
+**Routing is binary; recall inside the vector path is hybrid.** The *route* decision is still all-or-nothing — `TextSearch` present (+ a provider) → vector SQL; otherwise → regular SQL. But the vector SQL itself is hybrid: it ORs in a lexical `LIKE` on name/id/description and ranks exact/prefix name matches ahead of pure-semantic neighbours (see "Re-embedding existing content"). What is still missing is issuing both *queries* and merging by score across providers.
 
 **Per-user access control is honoured.** `VectorSearchAsync` applies the same access-control WHERE clause via the `userId` parameter that regular `QueryAsync` uses — the HNSW index ranks the access-filtered subset, not the full table.
 

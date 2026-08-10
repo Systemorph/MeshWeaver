@@ -62,8 +62,9 @@ lock) see [StaticRepoImport.md](/Doc/Architecture/StaticRepoImport). This page t
 
 Today a synced collection's source *and* target both answer queries (and both get
 persisted). That double-source is why a value-equality **dedup** exists on the
-sync stream — and that dedup is harmful: it also swallows a legitimate roll-back
-`Full` (see [DataSyncAndCrdt.md §6, §10](/Doc/Architecture/DataSyncAndCrdt)). Fix the *source*,
+sync stream at all — a band-aid that once also swallowed a legitimate roll-back
+`Full` (that hole is closed: `SetCurrent` value-dedups patches only — see
+[DataSyncAndCrdt.md §6, §10](/Doc/Architecture/DataSyncAndCrdt)). Fix the *source*,
 not the symptom:
 
 | Role | Sync | Query | Persistence |
@@ -88,45 +89,48 @@ participation excludes them.
 
 ## 3. Version gating — sync only when out of date
 
-A sync must be **idempotent and cheap on the hot path** (every boot). The target's
-**partition main node** (`namespace="", id={Partition}`) records what's installed:
+A sync must be **idempotent and cheap on the hot path** (every boot). What records
+"this exact source content is already installed" is a **content-addressed Activity
+node** — `{Partition}/_Activity/import-{fingerprint}` — whose `Succeeded` status is
+the durable checkpoint. The id *is* the fingerprint, so the marker doubles as the
+cross-replica lock: concurrent replicas racing the same import converge on one
+execution.
 
-```jsonc
-// MeshNode { Namespace="", Id="Agent" }.Content
-{ "importedSourceHash": "<fingerprint>", "importedAt": "<utc>", "nodeCount": 12 }
-```
+On init, compute the source's fingerprint and look for that marker:
 
-On init, compute the source's fingerprint/version and compare:
-
-- **Equal** → done. No sync, no work — **and the source isn't loaded/served**
-  (the shipped DLL / remote pull / git clone never happens for content).
-- **Not installed or different** → run the sync (seed/update + prune), then stamp
-  the main node with the new fingerprint.
+- **Succeeded marker present** → done. No sync, no work — **and the source isn't
+  loaded/served** (the shipped DLL / remote pull / git clone never happens for
+  content). The importer still verifies the partition root + governance nodes, and
+  self-heals with a full re-import if a content sentinel is missing.
+- **Absent (or a forced re-import)** → run the sync (upsert + prune per the
+  source's `SyncMode`), then write the marker.
 
 The fingerprint is order-independent and changes iff a node is added, removed, or
 modified — `PartitionSourceFingerprint.Compute(nodes, versioned)`. Versioned
-sources hash `(path, version)`; unversioned ones hash `(path, contentHash)`. The
-run is a content-addressed Activity (`{Partition}/_Activity/import-{fingerprint}`)
-so concurrent replicas converge to one execution — full mechanism in
-[StaticRepoImport.md](/Doc/Architecture/StaticRepoImport).
+sources hash `(path, version)`; unversioned ones hash `(path, contentHash)`. Full
+mechanism in [StaticRepoImport.md](/Doc/Architecture/StaticRepoImport).
 
 ---
 
 ## 4. Source kinds
 
 The source is an abstraction (`IStaticRepoSource`: a `Partition`, a `Versioned`
-flag, and `EnumerateSourceNodes()` returning authored nodes **with content**). The
-same target pipeline accepts any source that can enumerate nodes:
+flag, a `SyncMode`, and `EnumerateSourceNodes()` returning authored nodes **with
+content**). The same target pipeline accepts any source that can enumerate nodes.
+`SyncMode` decides what the import **prunes** after upserting: `FullReplace`
+(default — mirror the partition to the repo) or `Additive` (leave unmatched nodes
+alone, which is what lets a user's own skills survive a re-import).
 
 ### a. Platform static repo — *available today*
-MeshNodes shipped in an assembly (agents, models, docs). Implement
+MeshNodes shipped in an assembly (models, skills, harnesses, docs). Implement
 `IStaticRepoSource`, enumerate from your in-memory provider:
 
 ```csharp
-public sealed class AgentStaticRepoSource(BuiltInAgentProvider provider) : IStaticRepoSource
+public sealed class SkillStaticRepoSource(BuiltInSkillProvider provider) : IStaticRepoSource
 {
-    public string Partition => "Agent";
-    public bool Versioned => false;            // agent .md has no version → hash content
+    public string Partition => SkillNodeType.RootNamespace;
+    public bool Versioned => false;            // skill .md has no version → hash content
+    public PartitionSyncMode SyncMode => PartitionSyncMode.Additive;  // user skills survive
     public IReadOnlyList<MeshNode> EnumerateSourceNodes() =>
         provider.GetStaticNodes()
             .Where(n => !n.Segments.Skip(1).Any(s => s.StartsWith('_'))) // content only; skip _Access governance
@@ -134,8 +138,12 @@ public sealed class AgentStaticRepoSource(BuiltInAgentProvider provider) : IStat
 }
 ```
 
-Real examples: `AgentStaticRepoSource`, `ModelStaticRepoSource`,
-`DocumentationStaticRepoSource`.
+Real examples: `ModelStaticRepoSource`, `SkillStaticRepoSource`,
+`HarnessStaticRepoSource` (registered together by
+`AiContentSources.AddBuiltInAiContentSources`) and `DocumentationStaticRepoSource`.
+There is deliberately **no** Agent source in the framework: the built-in agents
+moved to the `Agent` plugin, so the `Agent` partition is served from the DB but
+filled by the plugin, not by this binary.
 
 ### b. A node/partition on another instance — *same abstraction, planned*
 The source enumerates nodes pulled from a **remote mesh** (another portal/instance)
@@ -187,7 +195,7 @@ from the DB like any other node.
 2. **Register it in DI** (it's discovered via
    `hub.ServiceProvider.GetServices<IStaticRepoSource>()`):
    ```csharp
-   builder.ConfigureServices(s => s.AddSingleton<IStaticRepoSource, AgentStaticRepoSource>());
+   builder.ConfigureServices(s => s.AddSingleton<IStaticRepoSource, SkillStaticRepoSource>());
    ```
 3. **Let init run it.** `StaticRepoImporter.ImportAll(hub)` ("sync context init")
    imports every registered source on boot — no-op when none is registered, and a
@@ -202,14 +210,28 @@ served from the DB like any other node.
 
 ---
 
-## 6. Declarative sync config (admin partition) — and breaking it
+## 6. Declarative sync config — what exists, and the proposed shape
 
-Hard-coding sources in DI (§5.2) is the bootstrap path. The richer model is
-**sync config as data**: the sync sources live as MeshNodes in the **admin
-partition**, so you add, change, or stop a sync at runtime — no redeploy.
+Hard-coding sources in DI (§5.2) is the bootstrap path, and it is what the
+**`IStaticRepoSource`** pipeline described above uses today.
+
+**What exists today.** Config-as-data already works for the *pull-from-elsewhere*
+sync engines, one config node per source, edited through the standard node-content
+editor: GitSync's config satellites (`gitsync-cfg:{path}`) and instance sync's
+`{space}/_Sync/{sourceId}` registrations ([InstanceSync](/Doc/Architecture/InstanceSync)).
+Both surface on the platform-admin **Partitions** page through the
+`IPartitionSyncSourceProvider` seam (`PartitionSyncAdminLayoutArea`), which is also
+where a partition is flipped between *Synced* and *Not synced* — that flip sets the
+partition root's `SyncBehavior` to `ExcludeThisAndChildren`, decoupling it from
+static-repo import.
+
+**What is proposed** (design, not implemented): the same treatment for the
+static-repo pipeline — a `PartitionSync`-shaped config node in the **admin
+partition**, so you add, change, or stop a *partition* sync at runtime with no
+redeploy:
 
 ```jsonc
-// MeshNode { Namespace="admin", Id="sync-doc", NodeType="PartitionSync" }.Content
+// PROPOSED — MeshNode { Namespace="Admin", Id="sync-doc", NodeType="PartitionSync" }.Content
 {
   "targetPartition": "Doc",
   "source":  "github",
@@ -233,27 +255,31 @@ Bumping the sync to a newer release is one edit to the config node's `ref` (or, 
 the default, it falls out of the deployed binary's `PlatformVersion`) — the next
 boot sees a new fingerprint and re-syncs; everything in between is a no-op.
 
-The sync engine **queries the admin partition** for `PartitionSync` nodes and runs
-each through the same source→target pipeline (§1), fingerprint-gated (§3). A
-config node says *"synchronize this partition from there"* — it is itself an
-ordinary **target** node (queried + persisted in the admin partition); it
-*configures* a source, it is not one.
+In that shape the sync engine would **query the admin partition** for
+`PartitionSync` nodes and run each through the same source→target pipeline (§1),
+fingerprint-gated (§3). A config node says *"synchronize this partition from
+there"* — it is itself an ordinary **target** node (queried + persisted in the
+admin partition); it *configures* a source, it is not one.
 
 ### Breaking the sync — taking over a partition
 
-Because the sync is declarative, it is **revocable**. To **take over** a partition
-(own it locally, stop tracking the upstream), break the sync:
+Because a declarative sync is data, it is **revocable**. To **take over** a
+partition (own it locally, stop tracking the upstream), break the sync:
 
-- **`enabled: false`** (or delete the config node) → the engine stops syncing that
-  partition. The persisted nodes stay; they are now locally authoritative and your
-  edits survive.
-- **Re-enable** → sync resumes; the next out-of-date fingerprint **full-replaces**
-  from the source (prune + upsert), so any local "take-over" edits to synced nodes
-  are overwritten. That's the contract: a partition is *either* synced-from-source
-  *or* locally owned — breaking the link is how you switch from the former to the
-  latter.
+- **Today, for static-repo import:** flip the partition to *Not synced* on the
+  Partitions page — that sets the root's `SyncBehavior = ExcludeThisAndChildren`,
+  and the importer leaves the whole partition alone. The persisted nodes stay; they
+  are now locally authoritative and your edits survive. (Per-node `SyncBehavior`
+  claims/protects individual nodes in any mode.)
+- **In the proposed config-node shape:** `enabled: false` (or delete the config
+  node) does the same for that source.
+- **Re-enable** → sync resumes; the next out-of-date fingerprint prunes + upserts
+  according to the source's `SyncMode`, so under `FullReplace` any local
+  "take-over" edits to synced nodes are overwritten. That's the contract: a
+  partition is *either* synced-from-source *or* locally owned — breaking the link
+  is how you switch from the former to the latter.
 
-This is the clean ownership switch: ship a partition synced from GitHub, and any
+This is the clean ownership switch: ship a partition synced from a repo, and any
 deployment can **break the sync and make it its own**.
 
 ---
@@ -263,7 +289,7 @@ deployment can **break the sync and make it its own**.
 - **Source bleeding into runtime reads.** If queries still return the source copy
   *and* the target copy, you re-introduce the double-source the dedup hides. The
   source must be sync-only (§2).
-- **No version gate.** Without the main-node fingerprint compare, you re-import on
+- **No version gate.** Without the fingerprint-marker check, you re-import on
   every boot — wasted work and write amplification across replicas.
 - **Enumerating from the live mesh.** `EnumerateSourceNodes()` must read the
   authored content (assembly / remote / git) — never the live mesh you're writing
@@ -274,7 +300,7 @@ deployment can **break the sync and make it its own**.
 
 ---
 
-## 7. See also
+## 8. See also
 
 - [GitHubSync.md](/Doc/Architecture/GitHubSync) — the user-facing manual for connecting a
   Space to GitHub: export ("sync back"), import / re-import at a commit, the per-user OAuth
