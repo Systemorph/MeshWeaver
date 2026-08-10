@@ -82,6 +82,14 @@ public sealed class DbVersionGate(
                 "Refusing to start the portal.");
             lifetime.StopApplication();
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Host startup was aborted (shutdown raced startup) — not a migration
+            // problem. Honor the IHostedService cancellation contract and let the host
+            // finish tearing down; logging this Critical + StopApplication would
+            // misreport an ordinary shutdown as "DB version check failed unexpectedly".
+            throw;
+        }
         catch (Exception ex)
         {
             // Any other connection / auth error — also fail closed. Better to
@@ -119,9 +127,23 @@ public sealed class DbVersionHealthCheck(NpgsqlDataSource dataSource) : IHealthC
                 : HealthCheckResult.Unhealthy(
                     $"db_version={version} < expected {DbVersionGate.ExpectedDbVersion}");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return HealthCheckResult.Unhealthy("db_version check threw", ex);
         }
+        // A cancellation is NOT a database failure and must not be folded into the
+        // Unhealthy("db_version check threw", ex) entry above — DefaultHealthCheckService
+        // logs that entry at Error, which auto-filed a production incident for a probe
+        // that was merely cancelled mid-query (issue #1183). The health-check framework
+        // already classifies OperationCanceledException by token, so PROPAGATE it:
+        //   • caller-cancelled (probe deadline hit / client disconnect / shutdown):
+        //     DefaultHealthCheckService.RunCheckAsync's own filter
+        //     `catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)`
+        //     does NOT match, the exception flows to the middleware, and the (already
+        //     abandoned) probe request ends without a fail-level report;
+        //   • cancelled without the caller asking (a registration timeout / an internal
+        //     Npgsql token): that same filter DOES match and reports the standard
+        //     "A timeout occurred while running check." Unhealthy entry — a legible
+        //     reason for a genuine timeout.
     }
 }
