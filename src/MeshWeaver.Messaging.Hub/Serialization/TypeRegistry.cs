@@ -65,6 +65,23 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
 
     private readonly KeyFunctionBuilder keyFunctionBuilder = new();
 
+    /// <summary>
+    /// Copies the registrations this registry OWNS — its own map, never the inherited ones reachable
+    /// through its parent — into <paramref name="target"/>.
+    ///
+    /// <para>Serves <c>MessageHubConfiguration.WithTypeRegistry</c>: a configuration that adopts a
+    /// SHARED registry must not silently drop the types it registered before the swap. Skips every
+    /// type the target's own chain already resolves, so an existing registration there — including a
+    /// key function attached via <c>WithKeyFunction</c>, which a bare <c>WithType</c> would replace —
+    /// is never clobbered. Seeded basic types are therefore a no-op on both sides.</para>
+    /// </summary>
+    internal void CopyOwnRegistrationsTo(ITypeRegistry target)
+    {
+        foreach (var (name, definition) in typeByName)
+            if (!target.TryGetCollectionName(definition.Type, out _))
+                target.WithType(definition.Type, name);
+    }
+
     public ITypeRegistry WithType(Type type) => WithType(type, FormatType(type));
 
     public ITypeRegistry WithType(Type type, string typeName)

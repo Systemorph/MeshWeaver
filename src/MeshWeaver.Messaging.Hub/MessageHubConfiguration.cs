@@ -227,8 +227,42 @@ public record MessageHubConfiguration
     /// The type registry for this hub, mapping CLR types to their serialization type names. Seeded
     /// from the parent's registry (when present) plus the address type; extended via
     /// <see cref="WithType{T}"/> / <see cref="WithType"/> and the <c>WithHandler</c> registrations.
+    ///
+    /// <para>OWNED by this hub unless <see cref="WithTypeRegistry"/> replaced it with a shared one.</para>
     /// </summary>
-    public ITypeRegistry TypeRegistry { get; }
+    public ITypeRegistry TypeRegistry { get; private init; }
+
+    /// <summary>
+    /// Makes this hub SHARE <paramref name="typeRegistry"/> rather than own a private child of the
+    /// parent's — the one seam by which two hubs can be the same serialization identity.
+    ///
+    /// <para>🚨 Why this exists. A hub's registry LEARNS types as a serialization side effect:
+    /// <c>PolymorphicTypeInfoResolver</c> auto-registers an unregistered (non-collectible) type under
+    /// its short name the first time that hub writes one. That warms ONLY the serialising hub —
+    /// <c>TypeRegistry.GetOrAddType</c> writes into the local map, never into the parent. So moving a
+    /// workload onto a different hub silently moves where the mesh learns its content types with it,
+    /// and every OTHER hub whose registry chains to the old one (a child registry can read its
+    /// parent, never the reverse) reads the type back as an untyped <c>JsonElement</c>:
+    /// <c>Content is T</c> goes false, validators stop firing, views render empty. Sharing the
+    /// registry keeps the learning where the rest of the mesh can see it.</para>
+    ///
+    /// <para>Order-independent on purpose: registrations this configuration already owns are carried
+    /// over to <paramref name="typeRegistry"/>, so a <c>WithType</c> / <c>AddData</c> that ran before
+    /// this call is not silently discarded. Existing entries in the target chain are never
+    /// clobbered — a shared registry's own registration (including a custom key function) wins.</para>
+    /// </summary>
+    /// <param name="typeRegistry">The registry to share — normally the mesh hub's own.</param>
+    /// <returns>A configuration whose hub resolves <paramref name="typeRegistry"/> as its <c>ITypeRegistry</c>.</returns>
+    public MessageHubConfiguration WithTypeRegistry(ITypeRegistry typeRegistry)
+    {
+        ArgumentNullException.ThrowIfNull(typeRegistry);
+        if (ReferenceEquals(TypeRegistry, typeRegistry))
+            return this;
+        if (TypeRegistry is TypeRegistry owned)
+            owned.CopyOwnRegistrationsTo(typeRegistry);
+        return this with { TypeRegistry = typeRegistry };
+    }
+
     /// <summary>
     /// Builds the DI service collection for the hub: registers the <c>IMessageHub</c>, its hosted-hubs
     /// collection, the type registry, the parent-hub reference, and an <c>AccessService</c> when the
