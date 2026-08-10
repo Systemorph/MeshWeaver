@@ -366,7 +366,9 @@ Use `FullyQualifiedName~` — it is the only `--filter` property this repo uses 
 
 ## References
 
-- [Reactive Test Assertions](/Doc/Architecture/ReactiveTestAssertions) — assertion API, the pooled-subscribe rule, genuinely-async catalogue
+- [Negative Controls](/Doc/Architecture/NegativeControls) — a pin is only a pin if it fails against the defect; the procedure, and three tests that passed while proving nothing
+- [AsyncLocal Across Scheduler Hops](/Doc/Architecture/AsyncLocalAcrossHops) — why a diagnostic can be dead while `IsEnabled(Debug)` reads true, and why silo-side `ILogger` is unreliable in Orleans tests
+- [Reactive Test Assertions](/Doc/Architecture/ReactiveTestAssertions) — assertion API, §2 "await the assertion, never block", §3 genuinely-async catalogue
 - [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — why hub-reachable code is `IObservable<T>`, never `Task<T>`
 - [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) — why `ReadNode` is the right read after a write
 - [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow) — reading the framework's own trace when a test hangs
