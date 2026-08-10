@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reflection;
 using System.Runtime.Loader;
 using MeshWeaver.ServiceProvider;
@@ -142,6 +143,22 @@ internal interface ICompilationCacheService
     /// </summary>
     /// <param name="nodeName">Sanitized node name (e.g. <c>SanitizeNodeName(node.Path)</c>).</param>
     void UnloadNodeContexts(string nodeName);
+
+    /// <summary>
+    /// 🚨 Takes a LIFETIME lease on every context currently holding <paramref name="nodeName"/>'s
+    /// compiled assembly, for a hub that runs its types. A NodeType's ALC is shared by every
+    /// INSTANCE hub of that type, so <see cref="UnloadNodeContexts"/> (the NodeType hub disposing —
+    /// idle eviction, recycle, the restart after a recompile) and the per-recompile superseded-context
+    /// eviction both target an assembly other hubs are still executing. Unloading it then reclaims
+    /// nothing — <c>Unload</c> is cooperative — but raises <c>Unloading</c>, which evicts those types
+    /// from <c>TypeRegistry</c> and leaves every live instance hub throwing
+    /// <c>"Type T is unknown."</c> from <c>Workspace.GetStream&lt;T&gt;()</c>. Holding a lease for the
+    /// hub's lifetime defers the unload to the moment the last such hub goes away — which is when the
+    /// runtime could have collected the context anyway.
+    /// </summary>
+    /// <param name="nodeName">Sanitized name of the NODE TYPE whose assembly the hub runs.</param>
+    /// <returns>A handle to dispose on hub teardown; never null, no-op when nothing is loaded.</returns>
+    IDisposable LeaseNodeContexts(string nodeName);
 
     /// <summary>
     /// Gets the release folder path for a node and release key.
@@ -294,6 +311,73 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
             if (Interlocked.Exchange(ref _released, 1) == 0)
                 Interlocked.Decrement(ref ctx._pins);
         }
+    }
+
+    // LIFETIME leases (distinct from the millisecond scan _pins above): one per live hub whose
+    // compiled code comes from this context. Dispose() defers the Unload while any is held; the
+    // last release performs it. See Lease().
+    private int _leases;
+    private bool _unloadRequested;
+
+    /// <summary>
+    /// Takes a LIFETIME lease on this context for a hub that runs its compiled types. While any
+    /// lease is held, <see cref="Dispose"/> records the request and returns WITHOUT calling
+    /// <see cref="System.Runtime.Loader.AssemblyLoadContext.Unload"/>; releasing the last lease
+    /// performs the deferred unload.
+    ///
+    /// <para>🚨 Why deferring is not a leak — and why unloading early is a BUG. A NodeType's
+    /// assembly is shared by every INSTANCE hub of that type, and <c>Unload()</c> is COOPERATIVE:
+    /// it never rips out loaded types, so the collectible LoaderAllocator is freed only once the
+    /// last managed reference — i.e. the last live hub — is gone. Calling <c>Unload()</c> while
+    /// those hubs still run therefore reclaims NOTHING; all it does early is raise
+    /// <c>Unloading</c>, and the caches that listen tear themselves down under hubs that still
+    /// need them. <c>TypeRegistry.EvictLoadContext</c> is the one that bites: it drops every entry
+    /// belonging to this context, so a live instance hub keeps a <c>DataContext</c> whose type
+    /// sources still resolve (they hold the <see cref="Type"/> handles) against a registry that has
+    /// forgotten the names — and its next <c>Workspace.GetStream&lt;T&gt;()</c> throws
+    /// <c>"Type T is unknown."</c> for the rest of that hub's life. That is the /Store page outage;
+    /// <c>NodeTypeAlcSharedWithInstancesTest</c> is the repro.</para>
+    ///
+    /// <para>Leases are still granted while an unload is pending (a hub may activate on the current
+    /// assembly after the NodeType hub went away) but never after it has actually run — then the
+    /// caller must re-resolve against the current context.</para>
+    /// </summary>
+    /// <returns>A handle whose disposal releases the lease; disposing it twice is a no-op.</returns>
+    public IDisposable Lease()
+    {
+        lock (_loadLock)
+        {
+            if (_disposed)
+                return NullLease.Instance;
+            _leases++;
+            return new LeaseScope(this);
+        }
+    }
+
+    private void ReleaseLease()
+    {
+        bool unloadNow;
+        lock (_loadLock)
+            unloadNow = --_leases == 0 && _unloadRequested && !_disposed;
+
+        if (unloadNow)
+            Dispose();
+    }
+
+    private sealed class LeaseScope(NodeAssemblyLoadContext ctx) : IDisposable
+    {
+        private int _released;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+                ctx.ReleaseLease();
+        }
+    }
+
+    private sealed class NullLease : IDisposable
+    {
+        public static readonly NullLease Instance = new();
+        public void Dispose() { }
     }
 
     public NodeAssemblyLoadContext(string nodeName, string? dllPath, ILogger? logger = null)
@@ -459,6 +543,18 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         {
             if (_disposed)
                 return;
+
+            // A hub is still executing this assembly (see Lease()). Unloading now would reclaim
+            // nothing — Unload is cooperative — while raising Unloading under the caches those hubs
+            // depend on. Record the request; the last lease release re-enters here and unloads.
+            if (_leases > 0)
+            {
+                _unloadRequested = true;
+                _logger?.LogDebug(
+                    "Deferring unload of AssemblyLoadContext {ContextName}: {Leases} live hub(s) still run its types",
+                    Name, _leases);
+                return;
+            }
 
             _disposed = true;
             _loadedAssembly = null;
@@ -989,6 +1085,28 @@ internal class CompilationCacheService(
         if (keysToUnload.Count > 0)
             logger.LogDebug("Unloaded {Count} AssemblyLoadContext(s) for disposed node {NodeName}",
                 keysToUnload.Count, nodeName);
+    }
+
+    /// <inheritdoc />
+    public IDisposable LeaseNodeContexts(string nodeName)
+    {
+        if (_disposed || string.IsNullOrEmpty(nodeName))
+            return Disposable.Empty;
+
+        // Same match as UnloadNodeContexts/InvalidateCache: the dictionary key may be the sanitized
+        // name, a full DLL path or a release path, while NodeName always carries the owning NodeType.
+        var leases = _loadContexts
+            .Where(kvp => string.Equals(kvp.Key, nodeName, StringComparison.Ordinal)
+                       || string.Equals(kvp.Value.NodeName, nodeName, StringComparison.Ordinal))
+            .Select(kvp => kvp.Value.Lease())
+            .ToArray();
+
+        if (leases.Length == 0)
+            return Disposable.Empty;
+
+        logger.LogDebug("Leased {Count} AssemblyLoadContext(s) of {NodeName} for a hub that runs its types",
+            leases.Length, nodeName);
+        return new CompositeDisposable(leases);
     }
 
     /// <inheritdoc />
