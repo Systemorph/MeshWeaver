@@ -41,7 +41,7 @@ Full PR/merge gate: the `pullrequest` skill (CI must be GREEN before merge — m
 
 ## 🚨🚨🚨 ABSOLUTE: Green CI does NOT mean the mesh compiles — in-mesh source is invisible to `dotnet build`
 
-**Every `.cs` stored in a mesh node — NodeType `Source/*.cs`, Scripts, layout areas — compiles at RUNTIME in the portal, NEVER in CI.** The repo's node trees are `<None>` content (`samples/Graph/MeshWeaver.Samples.Graph.csproj`), so **12k+ lines of C# under `samples/Graph/Data/` and `content/` are never type-checked by any build or any test.** Worse, **the deployed mesh's copy outranks the repo's** — a node carries its own version history and drifts from the file that seeded it, so reading the repo file does NOT tell you what the portal will compile.
+**Every `.cs` stored in a mesh node — NodeType `Source/*.cs`, Scripts, layout areas — compiles at RUNTIME in the portal, NEVER in CI.** The repo's node trees are `<None>` content (`samples/Graph/MeshWeaver.Samples.Graph.csproj`), so **12k+ lines of C# under `samples/Graph/Data/` and `content/` are never type-checked by any build or any test.** Worse, **a NodeType's `configuration` lambda is C# stored in a JSON string field** — so it is invisible to every `.cs`-shaped habit at once: `grep --include='*.cs'`, `dotnet build`, and any compile gate that only scans `Source/`. When you delete a framework symbol, search the node **JSON** too.
 
 **A framework-version bump recompiles EVERY dynamic NodeType** (`HasUsableBuild` rule 3), so breakage never trickles in — the whole accumulated backlog detonates on one deploy. A NodeType left at `CompileError` **refuses portal readiness** and parks every instance hub for the full **60 s** activation budget: hung pages, failed liveness probes, dropped silos.
 
@@ -120,27 +120,33 @@ gh pr merge PR_NUMBER --merge
 
 **If `FORBIDDEN`**: re-authenticate with `! gh auth login`.
 
-### 🚨 A merged fix can look SHIPPED while producing no image — CD only reacts to a PUSH
+### 🚨 A merged fix can look SHIPPED while producing no image — verify the IMAGE, never the tick
 
-`main-cd.yml` builds and pushes the deployment images, and **every image job is gated on**:
-
-```yaml
-github.event.workflow_run.conclusion == 'success' &&
-github.event.workflow_run.event == 'push' &&          # <-- the trap
-github.event.workflow_run.head_branch == 'main'
-```
-
-Two ways that leaves a merged change undeployed, both of them SILENT:
+`main-cd.yml` builds and pushes the deployment images. Its `workflow_run` path is still gated on
+`event == 'push' && head_branch == 'main'` — that gate is what stops a **fork's** pull_request run
+(whose `head_branch` can also be "main") from publishing untrusted code with this repo's secrets,
+so never relax it. Two consequences that trip people up, both SILENT:
 
 1. **No Build-and-Test run on main at all.** CD reacts to that workflow completing; if it never ran
-   on the merge commit (a CI incident, a stalled queue), CD sits `SKIPPED` forever with nothing to
-   react to. Merged, green PR, no image, portals never move.
-2. **You "fixed" it with `workflow_dispatch` — which can never ship.** The obvious repair is
-   `gh workflow run "MeshWeaver Build and Test" --ref main`. That RUNS and it genuinely tests the
-   merge commit (`workflow_dispatch` never reuses a green tree), so main ends up showing a **green
-   Build-and-Test**. But its `event` is `workflow_dispatch`, not `push`, so CD **still** skips. You
-   now have the most convincing possible "it shipped" signal — green main — and no image.
-   `main-cd.yml` has no `workflow_dispatch` trigger of its own, so CD cannot be kicked directly.
+   on the merge commit (a CI incident, a stalled queue), CD sits `SKIPPED` with nothing to react to.
+2. **`workflow_dispatch` of Build-and-Test can never ship.** `gh workflow run "MeshWeaver Build and
+   Test" --ref main` RUNS and genuinely tests the merge commit, so main shows a **green
+   Build-and-Test** — but its `event` is `workflow_dispatch`, not `push`, so CD still skips. The
+   most convincing possible "it shipped" signal, and no image.
+
+**Neither is terminal any more.** CD carries a **reconciler**: a 3-hourly `schedule` (plus its own
+`workflow_dispatch`) resolves main's tip through the API, asks ACR whether that commit has the
+complete five-image set, and publishes only when it does not — bounded at 3 attempts per commit,
+with every attempt and the final give-up written to the `ci-failure` issue. So:
+
+- **To kick CD by hand: `gh workflow run main-cd.yml --ref main`** (it heals HEAD; it can never
+  publish an untested tree — it re-checks `Consolidate test results` on the commit it resolved).
+- It heals **HEAD, not the commit that failed** — deliberately. The version tag comes from the
+  BUILDING run's number, so re-publishing older code would mint a higher `-ci.<n>` for it and roll
+  every install *backwards* past `VersionSelect`'s monotonic-build-number assumption.
+- **Publication is all-or-nothing**: each leg pushes only a non-selectable `staging-<sha>-<run_id>`
+  tag, and the `promote` job applies the real tags only after all five legs succeed, ending with
+  `memex-portal-ai:<version>` — the single write the self-updater acts on.
 
 **Before believing something is deployed, check the IMAGE, never the green tick:**
 
@@ -148,11 +154,11 @@ Two ways that leaves a merged change undeployed, both of them SILENT:
 az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl get deploy -A -o custom-columns=NS:.metadata.namespace,IMAGE:.spec.template.spec.containers[0].image --no-headers | grep memex-portal-ai"
+.github/scripts/check-image-set.sh <short-sha>   # the exact assertion CD itself makes
 ```
 
-If no new tag exists, the only thing that produces one is a **real push to main** — i.e. the next PR
-merge. Then the portals self-update on their 6 h poll (`SelfUpdateOptions.PollInterval`), or
-immediately after `kubectl rollout restart` (the poll fires on startup via `StartWith(-1L)`).
+Then the portals self-update on their 6 h poll (`SelfUpdateOptions.PollInterval`), or immediately
+after `kubectl rollout restart` (the poll fires on startup via `StartWith(-1L)`).
 
 ### 🚨 "Is the build finished?" — filter by WORKFLOW, never wait for all check suites
 

@@ -31,8 +31,20 @@ The only route that produces a new **image** and restarts pods.
 | Rollout: `maxSurge 1` / `maxUnavailable 0` — the new pod must pass `/health` before the old drains | boot-bound | |
 | **NodeType bake** — only if the framework MVID changed (below) | see [bake](#the-bake-tax) | |
 
-**CI gates CD**: the CD workflow only fires on `workflow_run.conclusion == success` for a push to
-`main`. A red build publishes nothing, so a broken core never reaches an image.
+**CI gates CD**: CD's `gate` job publishes only when `Consolidate test results` — the repo's single
+required check — is `success` on the target commit. A red build publishes nothing, so a broken core
+never reaches an image. (It keys on the required check, not the run's umbrella `conclusion`: one
+starved job that never ran a step poisons that conclusion and would silently stop delivery.)
+
+**CD publishes all-or-nothing, and reconciles.** Each image leg pushes only a non-selectable
+`staging-<sha>-<run_id>` tag; a `promote` job applies the real tags once every leg has succeeded,
+ending with `memex-portal-ai:<version>` — the one tag the in-pod self-updater acts on. So a leg
+that dies can no longer leave a portal increment the bake gate never certified (#1026). And a CD
+failure is no longer terminal: a 3-hourly schedule (plus `gh workflow run main-cd.yml --ref main`)
+asks whether main's HEAD has the complete set in ACR and publishes only if it does not, bounded at
+3 attempts per commit with every attempt written to the `ci-failure` issue. It heals **HEAD**, never
+the commit that failed — the version tag comes from the building run's number, so re-publishing
+older code would mint a higher `-ci.<n>` and roll installs backwards.
 
 > **CD publishes four images**, and the `memex-bake` leg alone took **12m23s** of that 28m38s
 > *(measured 2026-07-28)* — it is a full portal-sized dependency closure, because reference fidelity
