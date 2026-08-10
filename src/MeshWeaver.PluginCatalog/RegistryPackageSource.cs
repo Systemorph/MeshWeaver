@@ -46,7 +46,8 @@ public sealed class RegistryPackageSource : IPackageSource
         _registryUrl = (registryUrl ?? "").TrimEnd('/');
         _token = (token ?? "").Trim();
         _httpPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
-        _http = hub.ServiceProvider.GetService<IHttpClientFactory>()?.CreateClient("plugin-registry") ?? SharedHttp;
+        _http = hub.ServiceProvider.GetService<IHttpClientFactory>()
+            ?.CreateClient(InstanceRegistrationClient.HttpClientName) ?? SharedHttp;
     }
 
     private sealed record ListResponse(IReadOnlyList<PackageManifest>? Packages);
