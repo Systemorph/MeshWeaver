@@ -43,8 +43,21 @@ public class OrleansMeshTests(ITestOutputHelper output) : OrleansSharedTestBase(
         client.Post(new DisposeRequest(), o => o.WithTarget(address));
         await Task.Delay(500, TestContext.Current.CancellationToken);
 
-        response = await client
-            .Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(new CancellationTokenSource(20.Seconds()).Token);
+        // The probe can land while the hub is STILL disposing (under CI load disposal takes
+        // longer than the 500ms above). The hub answers that window with the documented
+        // TRANSIENT ShuttingDown NACK — "the address may reactivate … the sender's next probe
+        // gets the authoritative answer" (MessageService dispose-reject). Ride it out exactly
+        // as the contract prescribes: re-probe on ShuttingDown, bounded by the SAME 20s budget
+        // (no widened bound — a hub that never reactivates still fails loudly).
+        response = await Observable
+            .Defer(() => client
+                .Observe(new PingRequest(), o => o.WithTarget(address))
+                .FirstAsync())
+            .RetryWhen(errors => errors.SelectMany(ex =>
+                ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown }
+                    ? Observable.Timer(TimeSpan.FromMilliseconds(200))
+                    : Observable.Throw<long>(ex)))
+            .ToTask(new CancellationTokenSource(20.Seconds()).Token);
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<PingResponse>();
     }

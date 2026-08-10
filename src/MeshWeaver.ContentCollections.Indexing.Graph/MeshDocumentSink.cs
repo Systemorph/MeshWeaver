@@ -59,7 +59,10 @@ public sealed class MeshDocumentSink(IMessageHub hub) : IDocumentSink
 
         // Cold: the side effect runs on Subscribe (driven by ContentIndexingService.WriteDocumentBranch).
         // FirstAsync() completes after the single response; map to Unit per the IDocumentSink contract.
-        return hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
+        // Off-router issuing: the indexing pipeline can hold the DI root mesh hub — a target-less
+        // CreateOrUpdateNodeRequest posted there runs on the router (ROUTER_TRAFFIC).
+        return hub.NodeOperationIssuingHub()
+            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
             .FirstAsync()
             .SelectMany(delivery =>
             {

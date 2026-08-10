@@ -229,10 +229,21 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         Output.WriteLine($"📤 Sending DataChangeRequest to change status: {taskToUpdate.Status} → {updatedTask.Status}");
 
+        // 🚨 No `.Skip(1)` here. The control stream REPLAYS the current control to a new
+        // subscriber, and the assertion below only subscribes AFTER the Post — under CI load
+        // the host applies the change and re-renders BEFORE that subscribe, so the replayed
+        // "first" emission is already the POST-update control. Skip(1) then discards the only
+        // frame that will ever match and the wait dies on a quiet stream (shard-2 red, run
+        // 31413326343). Filter on the EMISSION SHAPE instead (the repo rule for change
+        // feeds). "Contains InProgress" alone is NOT that shape — task-2 is already
+        // InProgress in the INITIAL frame; the update's signature is task-1 leaving
+        // Pending, i.e. NO task Pending any more. That predicate is race-free on both
+        // orderings: the pre-update frame still shows task-1 Pending and never matches.
         var updatedControlStream = stream
             .GetControlStream(nameof(TaskListView))
-            .Skip(1)
-            .Where(x => x != null && x.ToString().Contains("Status:** InProgress"));
+            .Where(x => x != null
+                && x.ToString().Contains("Status:** InProgress")
+                && !x.ToString().Contains("Status:** Pending"));
         client.Post(changeRequest, o => o.WithTarget(CreateHostAddress()));
 
         // Step 5: Verify that layout area updates to show the change

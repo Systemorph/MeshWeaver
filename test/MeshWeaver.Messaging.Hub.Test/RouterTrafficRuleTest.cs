@@ -62,4 +62,28 @@ public class RouterTrafficRuleTest
         Assert.Null(RouterTrafficRule.RoleOf("Mesh", "portal", new object()));
         Assert.Null(RouterTrafficRule.RoleOf("meshx", "portal", new object()));
     }
+
+    /// <summary>
+    /// The routing layer's own undeliverable-mail NACK: <c>RoutingServiceBase.PostNotFound</c> /
+    /// <c>NackRouteFailure</c> post a <c>DeliveryFailure</c> FROM the mesh hub via <c>ResponseFor</c>,
+    /// so its sender is honestly <c>mesh/{id}</c> — routing duty, not work. The structural signal is
+    /// the request-id correlation (<c>isResponse</c>), because the payload is opaque at the detector
+    /// (a routed NACK arrives packed as <c>RawJson</c>). Production shape: issue #1113's
+    /// <c>"RawJson has the mesh hub as sender"</c> line for a bounced read of a missing node.
+    /// </summary>
+    [Fact]
+    public void ARoutersOwnNack_IsRoutingDuty_AndSilent() =>
+        Assert.Null(RouterTrafficRule.RoleOf("portal", Mesh, new object(), isResponse: true));
+
+    /// <summary>
+    /// The exclusion must not widen: a response ADDRESSED AT the router proves the router ISSUED a
+    /// request (the violation the issuing seam removes); a NON-response from the router is the
+    /// router originating work; and a router-to-router response is work either way.
+    /// </summary>
+    [Theory]
+    [InlineData(Mesh, "ApiToken", true, "target")]   // response back to a router-issued request
+    [InlineData("portal", Mesh, false, "sender")]    // router originating work (no correlation)
+    [InlineData(Mesh, Mesh, true, "sender AND target")]
+    public void OnlyTheRoutersOwnAnswer_IsExcluded(string target, string sender, bool isResponse, string expected) =>
+        Assert.Equal(expected, RouterTrafficRule.RoleOf(target, sender, new object(), isResponse));
 }

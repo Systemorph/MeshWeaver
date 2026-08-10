@@ -118,7 +118,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// Subscribes an observer to the stream's change items, replaying the most recent change immediately.
     /// </summary>
     /// <param name="observer">The observer to receive change items.</param>
-    /// <returns>A disposable that ends the subscription; a no-op disposable if the underlying store is disposed.</returns>
+    /// <returns>A disposable that ends the subscription. On a DISPOSED stream the store is
+    /// completed (never disposed — #1170/#1171), so a late subscriber receives any replayed
+    /// last value — there is none if the stream was disposed before it ever published — and
+    /// then graceful completion, instead of a silent no-op.</returns>
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
         // Fallback creation-context capture: a stream constructed off the subscriber's
@@ -136,7 +139,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
         catch (ObjectDisposedException e)
         {
-            logger.LogDebug("[SYNC_STREAM] Subscribe failed for {StreamId} - Store is disposed: {Exception}", StreamId, e.Message);
+            // Not the store (completed on disposal, never disposed): this is the OBSERVER's
+            // own teardown throwing out of the synchronous replay/completion delivery inside
+            // Subscribe — e.g. a disposed Blazor circuit. Benign during teardown.
+            logger.LogDebug("[SYNC_STREAM] Subscribe failed for {StreamId} - observer disposed during replay: {Exception}", StreamId, e.Message);
             return new AnonymousDisposable(() => { });
         }
     }
@@ -672,12 +678,16 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
     /// <summary>
-    /// Completes the stream, signalling no further change items to subscribers.
+    /// Completes the stream, signalling no further change items to subscribers. Safe at any
+    /// point of teardown: the store is COMPLETED on disposal, never disposed (#1170/#1171),
+    /// and a completed subject ignores further terminal notifications per the Rx grammar — so
+    /// a completion draining out of a concurrently-disposing upstream chain lands as a no-op.
+    /// (The previous <c>!Store.IsDisposed</c> pre-check was check-then-act across threads and
+    /// could not close that window; with the store never disposed, no window exists.)
     /// </summary>
     public void OnCompleted()
     {
-        if (!Store.IsDisposed)
-            Store.OnCompleted();
+        Store.OnCompleted();
     }
 
     /// <summary>
@@ -687,7 +697,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// <param name="error">The error to propagate.</param>
     public void OnError(Exception error)
     {
-        if (!Store.IsDisposed)
+        // Gate on the stream's own disposal flag (set-once under disposeLock), NOT the
+        // subject's state: a disposed stream must not fault its (already-disposing) hub's
+        // startup or reopen its gate. The store itself is completion-terminated on disposal
+        // and ignores a racing OnError per the Rx grammar, so the branch below is safe even
+        // when disposal lands concurrently after this check.
+        if (!isDisposed)
         {
             // Classify the failure to avoid the log dashboard pageant where every
             // teardown / transient-timeout cascade dumps full stack traces 5×.
@@ -734,8 +749,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
         else
         {
-            // Store already disposed — benign during teardown, never log Warning.
-            logger.LogDebug("[SYNC_STREAM] OnError skipped for {StreamId} - Store is disposed", StreamId);
+            // Stream already disposed — benign during teardown, never log Warning.
+            logger.LogDebug("[SYNC_STREAM] OnError skipped for {StreamId} - stream is disposed", StreamId);
         }
     }
 
@@ -845,12 +860,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 StreamId);
             try
             {
-                if (!Store.IsDisposed)
-                    Store.OnError(ex);
+                // Safe on a disposed stream: the store is completion-terminated on disposal,
+                // never disposed, and a terminated subject ignores OnError (Rx grammar).
+                Store.OnError(ex);
             }
             catch
             {
-                // Store may already be terminated — best effort.
+                // A subscriber's OnError handler may throw — best effort.
             }
         }
     }
@@ -1306,6 +1322,33 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 RequestFreshSnapshot();
                 return;
             }
+            // 🚨 LOSS DETECTION (issue #1081). The owner chains consecutive frames: each
+            // DataChangedEvent carries the Version of the frame SENT immediately before it
+            // (JsonSynchronizationStream.ToDataChanged). The transport underneath (Orleans
+            // memory streams) is at-most-once — a frame published before the subscriber's
+            // stream subscription attached, or dropped under pressure, simply never arrives,
+            // and NOTHING re-sends it. Before this check, that loss was invisible: later
+            // patches kept applying cleanly on top (they touch other areas/entities), so the
+            // mirror tracked the owner forever at a constant deficit — the measured shape of
+            // the wedge: the owner pushed the compile-error-overlay Full (v6, the one frame
+            // the test waits for), the client applied v1–v5 and then v7, v8; the page sat on
+            // "awaiting first data" for the full 45s detector with no error anywhere. A Patch
+            // whose BasedOnVersion is NOT the version we last applied proves the gap; the only
+            // sound reaction is a fresh authoritative snapshot from the owner (event-driven,
+            // storm-gated by _resyncInFlight — no timer, no retry loop). Applies to
+            // DataChangedEvent (owner→mirror) only: a PatchDataChangeRequest's chain is stamped
+            // by the SENDING mirror and is not comparable to this stream's applied version.
+            // Fulls need no gap check — a Full re-establishes the complete state, and a LOST
+            // Full is caught here by the first Patch that chained onto it.
+            if (delivery.Message is DataChangedEvent { BasedOnVersion: >= 0 } chained
+                && chained.BasedOnVersion != Current.Version)
+            {
+                logger.LogWarning(
+                    "[SYNC_STREAM] Frame loss detected for {StreamId}: incoming Patch v{In} chains onto v{Based} but the last applied frame is v{Cur} — a frame was lost in transport; requesting fresh snapshot from {Owner}",
+                    StreamId, delivery.Message.Version, chained.BasedOnVersion, Current.Version, StreamIdentity.Owner);
+                RequestFreshSnapshot();
+                return;
+            }
             try
             {
                 (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
@@ -1435,7 +1478,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
 
     /// <summary>
-    /// Disposes the stream: completes and disposes the underlying store and tears down the hosted hub.
+    /// Disposes the stream: completes the underlying store and tears down the hosted hub.
     /// Idempotent.
     /// </summary>
     public void Dispose()
@@ -1446,8 +1489,22 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 return;
             isDisposed = true;
         }
+        // COMPLETE the store — deliberately do NOT dispose it (#1170/#1171). OnCompleted
+        // detaches every subscriber, and per the Rx grammar a completed subject silently
+        // ignores any further OnNext/OnError/OnCompleted — exactly the recognized-shutdown
+        // outcome an in-flight teardown delivery needs. Disposing the subject instead made
+        // it THROW: during MessageHub shutdown, sync hubs dispose in parallel (each disposal
+        // action on its own action block), and one stream's completion (this very line, on
+        // thread 1) drains through the Synchronize chain wired by CreateReducedStream
+        // (WorkspaceStreams.cs, `.Subscribe(reducedStream)`) into a sibling stream's
+        // OnCompleted while that sibling's own Dispose runs on thread 2. The sibling's
+        // `!Store.IsDisposed` pre-check was check-then-act, so a Store.Dispose() landing
+        // inside the window turned the benign completion into the ObjectDisposedException
+        // logged as "Error during shutdown of hub sync/…" / "Hub sync/… disposal faulted".
+        // Nothing is leaked by not disposing: completion drops all observer references, and
+        // the 1-item replay buffer is equally reachable via `current` for the stream's
+        // remaining lifetime.
         Store.OnCompleted();
-        Store.Dispose();
         if (Hub is not null && Hub.RunLevel <= MessageHubRunLevel.Started)
             Hub.Dispose();
     }

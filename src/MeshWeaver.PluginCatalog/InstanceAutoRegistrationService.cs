@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.AI;
+using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -201,7 +202,26 @@ public sealed class InstanceAutoRegistrationService(
                 return Observable.Return(Unit.Default);
             });
 
-        subscriptions.Add(registered
+        // 🚨 Sequenced AFTER the host's boot bake, when one is registered (#1114). Both phases
+        // write through per-node hubs (phase 2 upserts every package's partition ROOT via the
+        // owning hub's stream), and on a pre-warming host a framework roll leaves every dynamic
+        // NodeType ABI-stale: activating such a root mid-bake parks its enrichment on the type's
+        // rebuild, which queues BEHIND the sweep's ~240 sequential compiles — far past the
+        // cross-hub Update's 30 s initial-state bound. The observed shape was every default
+        // package aborting with "no initial state arrived for '{package}' within 30s" on every
+        // pod boot, leaving the instance with no default plugins until the next boot re-ran the
+        // identical race. Waiting on the bake's one-shot completion signal is ordering on the
+        // actual precondition — no timer, no retry, replayed to late subscribers; a host without
+        // the pre-warm has no PreWarmCompletion registered and proceeds exactly as before.
+        var bakeSettled = hub.ServiceProvider.GetService<PreWarmCompletion>()?.Completed
+            ?? Observable.Return(Unit.Default);
+
+        subscriptions.Add(bakeSettled
+            .Take(1)
+            // Hop off whatever thread settled the bake (the sweep's completion callback, or the
+            // ApplicationStarted callback on a no-bake host) before the install chain runs.
+            .ObserveOn(TaskPoolScheduler.Default)
+            .SelectMany(_ => registered)
             .SelectMany(_ => InstallDefaults(options))
             // 🚨 SubscribeOn the thread pool, NOT the host-startup thread. The chain is synchronous
             // right up to its first genuinely-async leaf (an in-memory or already-cached source
