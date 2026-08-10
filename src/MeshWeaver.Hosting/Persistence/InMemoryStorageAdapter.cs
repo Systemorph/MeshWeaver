@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -22,10 +21,20 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
     private readonly ConcurrentDictionary<string, MeshNode> _nodes;
     private readonly ConcurrentDictionary<string, List<object>> _partitionObjects;
     private readonly ILogger? _logger;
-    private readonly Subject<DataChangeNotification> _changes = new();
+    // 🚨 An IsolatedChangeFeed, NEVER a plain Subject<T> — the same rule the Postgres adapters
+    // follow, and for the same reason (issue #889 there, issue #1053 here). Subject.OnNext delivers
+    // synchronously in subscription order, so ONE subscriber throwing aborts delivery to every
+    // subscriber AFTER it; the publish sites' `catch { }` then made that silent. The thrower is not
+    // hypothetical: every live synced query owns a `persistence.Changes → changeBuffer` pipeline,
+    // and a pipeline caught in its teardown window has a DISPOSED changeBuffer while its feed
+    // subscription is still delivering (ObjectDisposedException). One-shot queries — QueryAsync,
+    // autocomplete, path resolution — open and tear one down constantly, so the window is hit
+    // whenever a write lands during a teardown. Symptom: a LIVE children query that silently stops
+    // re-emitting after a create that completed successfully.
+    private readonly IsolatedChangeFeed _changes;
 
     /// <inheritdoc />
-    public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
+    public IObservable<DataChangeNotification> Changes => _changes;
 
     /// <summary>
     /// Creates an adapter with its own fresh, case-insensitive backing
@@ -56,6 +65,9 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         _nodes = nodes;
         _partitionObjects = partitionObjects;
         _logger = logger;
+        // The logger is passed on DELIBERATELY: an isolated fault that nobody logs is the silence
+        // this feed exists to end (see PostgreSqlPartitionStorageProvider's null-logger regression).
+        _changes = new IsolatedChangeFeed(logger, "in-memory");
     }
 
     private static string Norm(string? path) => path?.Trim('/') ?? "";
@@ -112,7 +124,11 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
 
             _logger?.LogDebug("[InMemoryAdapter#{Id:X}] Write {Path} (count={Count})",
                 GetHashCode(), Norm(node.Path), _nodes.Count);
-            try { _changes.OnNext(DataChangeNotification.Updated(Norm(node.Path), node)); } catch { /* never throw */ }
+            // No try/catch: IsolatedChangeFeed already isolates and LOGS a faulty observer, so a
+            // throw escaping here would be a bug in the feed itself, not a subscriber's fault to
+            // swallow. The `catch { }` this replaces is precisely what made the dropped
+            // notification invisible.
+            _changes.OnNext(DataChangeNotification.Updated(Norm(node.Path), node));
             return Observable.Return<MeshNode?>(node);
         });
 
@@ -121,7 +137,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         => Observable.Defer(() =>
         {
             _nodes.TryRemove(Norm(path), out var removed);
-            try { _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed)); } catch { /* never throw */ }
+            _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed));
             return Observable.Return(path);
         });
 
@@ -136,9 +152,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         {
             var won = _nodes.TryRemove(Norm(path), out var removed);
             if (won)
-            {
-                try { _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed)); } catch { /* never throw */ }
-            }
+                _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed));
             return Observable.Return(won);
         });
 

@@ -270,9 +270,10 @@ public static class PersistenceExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services)
     {
-        // The in-memory adapter owns its own change-feed Subject and surfaces
-        // it via IStorageAdapter.Changes — synced-query providers subscribe
-        // there. No standalone IDataChangeNotifier service needed.
+        // The in-memory adapter owns its own IsolatedChangeFeed and surfaces it via
+        // IStorageAdapter.Changes — synced-query providers subscribe there. No standalone
+        // IDataChangeNotifier service needed. (An IsolatedChangeFeed, never a plain Subject:
+        // see the field comment on InMemoryStorageAdapter for the fan-out abort it prevents.)
         services.TryAddSingleton<IStorageAdapter>(sp =>
             new InMemoryStorageAdapter(
                 sp.GetService<ILogger<InMemoryStorageAdapter>>()));
