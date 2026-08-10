@@ -420,9 +420,12 @@ public sealed class GitHubWebhookProcessor
             repoUrl, completion.Branch, headSha, completion.WorkflowName, completion.RunNumber, path);
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        // Off-router issuing: the webhook processor holds the DI root mesh hub — a target-less
+        // CreateOrUpdateNodeRequest posted there runs on the router (ROUTER_TRAFFIC).
         return Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
-                _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)).FirstAsync())
+                _ => hub.NodeOperationIssuingHub()
+                    .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)).FirstAsync())
             .SelectMany(d =>
             {
                 if (!d.Message.Success)
@@ -490,9 +493,11 @@ public sealed class GitHubWebhookProcessor
                 Content = merged,
             };
             var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+            // Off-router issuing — same reason as RecordBuildCompletion above.
             return Observable.Using(
                     () => accessService.ImpersonateAsSystem(),
-                    _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)).FirstAsync())
+                    _ => hub.NodeOperationIssuingHub()
+                        .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)).FirstAsync())
                 .SelectMany(d => d.Message.Success
                     ? Observable.Return(d.Message.Node ?? node)
                     : Observable.Throw<MeshNode>(new InvalidOperationException(
