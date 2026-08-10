@@ -282,9 +282,30 @@ public sealed record DataContext : IDisposable
         // forever, a path-resolution storm that GC-thrashed the portal (2026-06-26
         // prod wedge). Time-box it so a hang reaches the SAME terminal failed state
         // as a fault — mirroring MessageHub.HandleInitialize's .Timeout(StartupTimeout).
-        Task.WhenAny(allInit, Task.Delay(InitializationTimeout))
+        //
+        // The delay is CANCELLED by Dispose(): a hub disposed mid-init (normal for
+        // transient probe hubs — $model-probe/$schema-probe live for one read) must not
+        // leave this watchdog armed to fire minutes post-mortem (issue #1122: the 120s
+        // timer fired 90s AFTER the probe hub was disposed and stamped a fail-level
+        // "TIMED OUT … FAILED state" on a hub that no longer existed).
+        watchdogCancellation = new CancellationTokenSource();
+        Task.WhenAny(allInit, Task.Delay(InitializationTimeout, watchdogCancellation.Token))
             .ContinueWith(_ =>
             {
+                // Recognized shutdown, NOT a failure: the hub was disposed (or its subtree
+                // frozen by an ancestor's disposal) while its data sources were still
+                // initializing. The disposal pipeline already answers all traffic
+                // (ErrorType.ShuttingDown); recording InitializationError / erroring the data
+                // streams / registering a rejection handler here would stamp fail-level FAILED
+                // residue onto a hub that is already gone.
+                if (Hub.IsShuttingDown)
+                {
+                    logger.LogDebug(
+                        "DataContext initialization for {Address} ended by hub disposal — recognized "
+                        + "shutdown outcome, no failure state recorded.", Hub.Address);
+                    return;
+                }
+
                 Exception? failure = null;
                 if (!allInit.IsCompleted)
                 {
@@ -374,9 +395,28 @@ public sealed record DataContext : IDisposable
     public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;
     private readonly List<Task> tasks = new();
     private readonly List<WorkspaceReference> initialized = new();
-    /// <summary>Disposes every configured data source.</summary>
+    // Cancels the init-watchdog Task.Delay armed in OpenInitializationGate. Assigned there
+    // (never at config time, so record with-ers copying this field pre-arm is harmless) and
+    // cancelled by Dispose so a hub disposed mid-init doesn't keep a live timer whose
+    // continuation would fire minutes after the hub is gone (issue #1122).
+    private CancellationTokenSource? watchdogCancellation;
+    /// <summary>Disposes every configured data source and disarms the init watchdog.</summary>
     public void Dispose()
     {
+        // Disarm the init watchdog FIRST: DataContext.Dispose only runs during hub teardown
+        // (Workspace.Dispose), so from here on "init did not complete" is a shutdown outcome,
+        // not a timeout. Cancelling completes the Task.WhenAny immediately; its continuation
+        // observes Hub.IsShuttingDown and records nothing.
+        try
+        {
+            watchdogCancellation?.Cancel();
+            watchdogCancellation?.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Dispose raced a second Dispose call — the watchdog is already disarmed.
+        }
+
         foreach (var dataSource in DataSourcesById.Values)
         {
             dataSource.Dispose();
