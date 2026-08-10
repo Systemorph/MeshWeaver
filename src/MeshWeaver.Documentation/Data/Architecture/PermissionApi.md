@@ -85,6 +85,15 @@ Whenever the user's permissions change *or* the node content changes, the combin
 | `hub.CheckPermission(path, userId, permission)` | `IObservable<bool>` | Admin tooling, server-to-server checks |
 | `hub.GetEffectivePermissions(path)` | `IObservable<Permission>` | Render a permission summary for the ambient user |
 | `hub.GetEffectivePermissions(path, userId)` | `IObservable<Permission>` | Inspect another user's effective rights |
+| `hub.CheckPermissionOutcome(path, userId, permission)` | `IObservable<PermissionCheckOutcome>` | You must tell **denied** apart from **could not decide** |
+
+### "Denied" vs "couldn't decide"
+
+`CheckPermission` collapses to a `bool`, and a fold that *faults* (a storage hiccup, a hub whose DI scope is disposing) surfaces as `OnError` on the stream — not as `false`. If your call site turns any non-`true` into an "Access denied" screen, an entitled user gets told to request permissions they already hold.
+
+`CheckPermissionOutcome` is the one place that distinction is made: it classifies the verdict as `Granted` / `Denied` / `Undetermined` (carrying the reason). `IsGranted` is `false` on the undetermined leg, so a consumer that ignores the tri-state still fails **closed**. Use it wherever the UI or the caller reports *why* access was refused; never re-derive the difference from a `false` or an exception message upstream.
+
+`Permission.None` is a special case in both overloads: it short-circuits to `true` without consulting the evaluator.
 
 ## See also
 

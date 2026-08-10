@@ -101,21 +101,28 @@ hub.ResubmitMessage(
     userMessageId: "abc12345",
     newUserText: "Add an item about the API redesign — focus on auth.");
 
-// 4. Truncate Messages at the given message id (the watcher reconciles
-//    IngestedMessageIds and rewrites the response cells).
+// 4. Truncate Messages AT the given message id (drops that id and everything
+//    after it) and recursively delete the removed cell nodes — unlinking alone
+//    would orphan them in the partition.
 hub.DeleteFromMessage(threadPath, atMessageId);
 
 // 5. Mark the thread terminal (Done) or re-open it (Idle). Refuses to act
-//    while a round is in flight — the CAS check lives in the Update lambda.
+//    while a round is in flight — the guard lives in the Update lambda.
 hub.MarkThreadDone(threadPath, done: true);
 
-// 6. Record a one-shot submission failure. The watcher materialises an error
-//    cell from the pending entry on the thread node.
+// 6. Record a one-shot submission failure. Creates the error cell node, then
+//    chains a single stream.Update that appends the user-message id and the
+//    error-cell id to Messages. No intent field, no watcher.
 hub.RecordSubmissionFailure(
     threadPath, userMessageId, userText, errorMessage);
+
+// 7. Submit the thread's OWN composer (Thread.Composer) as the next message —
+//    one atomic stream.Update that queues the message and empties the draft.
+//    Falls back to the composer's persisted MessageContent when userText is null.
+hub.SubmitComposer(threadPath, userText: null, contextPath: navContext);
 ```
 
-Internally, every method calls `hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(…)`, which auto-routes based on the caller's identity:
+Every method except `StartThread` writes through `hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(…)` (`RecordSubmissionFailure` chains it after a `CreateNode` for the error cell). `StartThread` has no node to update yet, so it posts a `CreateNodeRequest` — sanctioned node-lifecycle, not a mutation. `Update` auto-routes based on the caller's identity:
 
 - **Same hub as the thread**: the write goes through its local data source directly.
 - **Any other hub**: the write routes via the process-wide `IMeshNodeStreamCache` as an RFC-7396 JSON-merge patch. The thread hub's single-threaded action block serialises every mirror's write — no races, no field clobbering.
@@ -154,8 +161,8 @@ Tests bridge to `Task` exactly once at the assertion edge — see [WritingTests]
 
 When `Content.PendingUserMessages` becomes non-empty AND `Status` is `Idle` or `Cancelled` (a stopped round re-dispatches like `Idle`), the submission watcher — installed via `ThreadSubmission.InstallServerWatcher` during thread hub initialization — takes over:
 
-1. Drains `PendingUserMessages` into `Messages` (one round per dispatch, matching Claude Code's turn structure).
-2. Allocates the response cell node.
+1. Drains **every** entry in `PendingUserMessages` into `Messages` — the whole queue becomes ONE round (`ThreadSubmission.ComputeDrainIds`); the agent sees the drained list as a multi-message turn.
+2. Allocates **one** response cell node for the round. Its id is derived deterministically from the drained ids + each drained message's `Timestamp`/`Text` (`DeriveDeterministicResponseId`) — never a fresh `Guid` — so a re-dispatch of the same logical round reuses the same cell instead of minting duplicates.
 3. Flips `Status = Executing` (so `IsExecuting` becomes true).
 4. Invokes `ThreadExecution.ExecuteMessageAsync(execHub, RoundParams, AccessContext?)` **directly as a method** — no message dispatch.
 
@@ -166,14 +173,15 @@ When `Content.PendingUserMessages` becomes non-empty AND `Status` is `Idle` or `
 `ThreadExecutionStatus` follows a well-defined lifecycle:
 
 ```
-Idle ──► StartingExecution ──► Executing ──► Idle
-                                    │
-                                    └──► Cancelled
+Idle ──► StartingExecution ──► Executing ──► Idle ──► Done
+                                    │                  │
+                                    └──► Cancelled     └──► Idle (re-opened)
 ```
 
 Key properties:
 
-- There is **no** transient `Completing` status — terminal writes are atomic.
+- The enum is `Idle = 0`, `StartingExecution`, `Executing`, `Cancelled = 3`, `Done = 4`. `Done` is the user-marked terminal state (`hub.MarkThreadDone`) — threads at `Done` are hidden from default catalogs (`-content.status:Done`) and a new submission re-opens the thread at `Idle`.
+- There is **no** transient `Completing` status — terminal writes are atomic. (`Cancelled` occupies the int slot the removed transient state used to hold.)
 - `Cancelled` is a distinct, visible terminal status that re-dispatches like `Idle` when new input is queued.
 - Cancellation is requested by setting `RequestedStatus = Cancelled` (GUI Stop button, or a parent cancelling a sub-thread). The cancel watcher cancels the CTS; the streaming loop's terminal write flips `Status → Cancelled` and clears `RequestedStatus`.
 
@@ -239,27 +247,58 @@ signature: continuous work then silence = missed observation, not a lock.
 The chat composer's **single top-level choice is the harness** — the execution
 environment a round runs under. There are three (`MeshWeaver.AI.Harnesses`):
 
-| Harness | Constant | Resolves to |
+| Harness | Id constant (value) | Runs the round via |
 |---|---|---|
-| `MeshWeaver` | `Harnesses.MeshWeaver` | the user's chosen agent + model (the agent/model selectors are shown) |
-| `Claude Code` | `Harnesses.ClaudeCode` | the single built-in agent whose `GroupName == "Claude Code"` |
-| `GitHub Copilot` | `Harnesses.Copilot` | the single built-in agent whose `GroupName == "GitHub Copilot"` |
+| MeshWeaver | `Harnesses.MeshWeaver` (`"MeshWeaver"`) | the native agent + model path — `AgentChatClient` over the model-provider factory chain (the agent/model selectors are shown) |
+| Claude Code | `Harnesses.ClaudeCode` (`"ClaudeCode"`) | the `claude` CLI via the Claude Agent SDK (`MeshWeaver.AI.ClaudeCode`) |
+| GitHub Copilot | `Harnesses.Copilot` (`"Copilot"`) | the Copilot CLI (`MeshWeaver.AI.Copilot`) |
 
-"Harness" is **not a new execution concept** — it is a grouping over the existing
-agent selection (`AgentConfiguration.GroupName`). Picking a non-MeshWeaver harness
-resolves to that group's one agent and hides the agent/model dropdowns; picking
-MeshWeaver reveals them so the user can choose among the MeshWeaver-group agents +
-models. Routing to the concrete `IChatClientFactory` is unchanged — it still keys
-off the resolved agent's `PreferredModel`.
+> The id constants are **path-safe slugs without spaces** (`"ClaudeCode"`, not
+> `"Claude Code"`) — they are used verbatim as the harness node id (`Harness/{Id}`),
+> and a space in that path once produced a NotFound → resubscribe storm. The friendly
+> label lives on `Harness.DisplayName`; the picker shows that, never the id.
 
-Selection has **one home — the composer** (`Thread.Composer`, a `ThreadComposer`): the
+A harness **is** a first-class execution concept, not merely a grouping. `IHarness`
+(`src/MeshWeaver.AI/Harness.cs`) is a DI-registered runtime contract — one per harness
+assembly — and `BuiltInHarnessProvider` projects each into a `nodeType:Harness`
+catalog node so the picker and routing share one source of truth. Its key member is
+`IChatClient? CreateChatClient(HarnessExecutionContext)`:
+
+- **CLI harnesses return their own `IChatClient`** and thereby **bypass the model-provider
+  factory chain entirely** — `ThreadExecution` logs `Harness '{Harness}' → {Client}
+  (bypassing provider chain)`. This is deliberate: routing a CLI harness through a
+  provider produced the "harness selected → Azure `DeploymentNotFound`" failure.
+- **The MeshWeaver harness returns `null`**, which falls through to the unchanged
+  agent/model path (`AgentChatClient` + `IChatClientFactory`).
+- A harness that is unregistered, not installed for this user, or throws while building
+  its client **falls back to the default MeshWeaver agent path** (logged, no retry — so no
+  storm). It never crashes the round.
+
+Whether the agent/model dropdowns are shown is driven by `Harness.SupportsAgentSelection`
+(`true` for MeshWeaver, `false` for both CLI harnesses), and a harness may also own its
+own slash-commands (`IHarness.Commands`, e.g. `/login` · `/logout` against its
+`AuthProvider`). Separately, an agent node's `Category` is projected onto
+`AgentDisplayInfo.GroupName` and used to **group the agent picker** by harness — that
+grouping is a display concern and is not what routes a round.
+
+The CLI harnesses set `Harness.RequiresInstall`: they need a per-user CLI login, so they
+are not in the global catalog and must be installed into `{user}/Harness` before they
+appear in that user's picker. Execution re-checks the picked node still exists
+(`HarnessNodeType.ResolveInstalledHarness`), so an uninstall revokes the harness even for
+a composer that already selected it.
+
+The sticky selection lives on the composer (`Thread.Composer`, a `ThreadComposer`): the
 data-bound `Harness` / `AgentName` / `ModelName` fields the in-thread selectors bind to.
-`StartThread` / `SubmitMessage` keep that composer current (seeding it / folding the
-submitted message's selection back into it). When the submission watcher dispatches a round
-it reads the sticky selection straight off `Thread.Composer` — `PlanNextRound` →
-`RoundDispatch` → `RoundParams.Harness`/`.AgentName`/`.ModelName` — and `ThreadExecution`
-stamps the **assistant cell** with what actually ran (`ThreadMessage.Harness` etc., a display
-record, never the source). There is **no thread-level selection mirror** (`Pending*`,
+But **the round's selection is read message-first, composer-second.** Each user message
+captures the composer's selection at the moment it was sent, so `PlanNextRound` takes the
+selection from the **last drained message** and falls back to `Thread.Composer` only
+**per field**, for fields the message left null (a programmatic submit that stamped
+nothing). That ordering is what keeps delegation correct — a sub-thread message carries
+its OWN agent, not the parent composer's — and stops a later `/agent` pick from rewriting
+the selection of an already-queued message. The chain is `PlanNextRound` → `RoundDispatch`
+→ `RoundParams.Harness`/`.AgentName`/`.ModelName`, and `ThreadExecution` stamps the
+**assistant cell** with what actually ran (`ThreadMessage.Harness` etc., a display record,
+never the source). There is **no thread-level selection mirror** (`Pending*`,
 `SelectedAgentName`/`SelectedModelName`/`SelectedHarness`, `DraftText` were removed — they
 duplicated the composer and drifted).
 
@@ -270,37 +309,59 @@ Claude Code resolving `sonnet` to a concrete id), and the token usage
 `Harness · HH:mm:ss · duration · N in / M out` (model dropped from the line; still
 stored on the cell).
 
-## The chat template (`{userHome}/_ThreadTemplate`)
+## The composer node (`{user}/_Thread/ThreadComposer`)
 
 The composer's in-progress **draft text + harness/agent/model selection persist
-server-side** on a single stable per-user node at `{userHome}/_ThreadTemplate`
-(`userHome == AccessContext.ObjectId`). There is **no browser localStorage** — the
-template node is the source of truth, so the draft and selection survive a reload /
-reboot and are shared across every space the user composes in.
+server-side** on mesh nodes — there is **no browser localStorage**, so the draft and
+selection survive a reload / reboot and are shared across every space the user composes in.
 
-The composer state is a single record — `ThreadComposer` — with two homes (the
-out-of-thread template node, and `Thread.Composer` embedded on a real thread). It carries
-the draft `MessageContent`, the sticky `Harness`/`AgentName`/`ModelName` selection, and the
-per-message `Attachments`/`ContextPath`. There is **no separate `DraftText`/`Selected*`
-mirror on the thread** — the composer is the only selection/draft state.
+The composer state is a single record — `ThreadComposer` — with **three homes**, all
+resolved through `ThreadComposerNodeType`:
 
-- **Load**: the composer one-shot-reads the template on init and applies the saved
-  selection (always — the picker default) and, in the new-thread composer only, the
-  draft text into the Monaco editor.
-- **Save**: selection changes write through the composer immediately; the draft text is
-  debounced (`Throttle(600ms)`). In an *existing* thread the same `ThreadComposer` lives
-  embedded as `Thread.Composer`, so a `/agent` / `/model` / `/harness` pick updates it in
-  place — and is only *accepted* into a round when the thread is idle (the submission
-  watcher's `PlanNextRound` runs only on `Idle`/`Cancelled`, so a mid-round change stays
-  queued until the next round).
-- **Submit**: `StartThread` copies the template's composer (selection) onto the new thread
-  as `Thread.Composer` (the typed text becomes the first message; the draft + attachments
-  empty, the selection stays), so the next new thread inherits the selection.
+| When | Where the composer lives | Helper |
+|---|---|---|
+| No thread yet (the "new chat" box) | a per-user singleton node at **`{user}/_Thread/ThreadComposer`** — the composer IS the node's whole `Content` | `ThreadComposerNodeType.PathFor(user)` |
+| New chat started from a specific node | `{node}/_Thread/{user}/ThreadComposer` — owned per (node, user) | `ThreadComposerNodeType.PathForNode(node, user)` |
+| A thread exists | **inline** as `Thread.Composer` on the thread node itself — never a separate node | `ThreadComposerNodeType.ComposerOf` / `WithComposer` |
 
-The template is **inert**: it carries a composer draft but never any `PendingUserMessages`,
-so the submission watcher never fires on it. Its namespace is `{userHome}` (not
-`{userHome}/_Thread`), so the namespace-scoped resume-thread query
-(`namespace:{ns}/_Thread`) never lists it.
+It carries the draft `MessageContent`, the sticky `Harness`/`AgentName`/`ModelName`
+selection (stored as picked **node paths**), the reasoning `Effort` some harnesses expose,
+the per-message `Attachments`/`ContextPath`/`ContextReference`, and the `OpenThreadPath`
+navigation signal. There is **no separate `DraftText`/`Selected*` mirror on the thread** —
+the composer is the only selection/draft state.
+
+- **The composer is 100% data-bound, not hand-saved.** `ThreadComposerView` binds the form
+  controls DIRECTLY to whichever inline location applies via a node-bound `DataContext`.
+  There is no `/data` replica, **no debounced save subscription**, and no re-seed loop —
+  each field edit writes straight back to the composer on the node, and the owning hub's
+  serialised action block keeps concurrent fields (`ContextPath` / `OpenThreadPath`, written
+  by the side panel) from being clobbered.
+- **The per-user singleton is seeded at onboarding** (`ThreadComposerSeedHandler`, an
+  `INodePostCreationHandler`) so the composer's read always resolves. 🚨 Read a composer
+  path through a **query**, never a direct `GetMeshNodeStream` on a maybe-absent exact path
+  — that NotFound-storms the partition hub. Code that must write one it may have to create
+  first does `CreateNode` (benign when it already exists) and only then `Update`.
+- **A `/agent` · `/model` · `/harness` pick inside a thread** updates the thread's inline
+  composer in place, AND is mirrored onto the user's default composer node so the *next*
+  new chat restores the last-used selection. It is only *accepted* into a round when the
+  thread is not mid-execution (`PlanNextRound` plans on `Idle` / `Cancelled` /
+  `StartingExecution` and rejects `Executing`), so a mid-round change waits for the next
+  round.
+- **Submit**: `hub.SubmitComposer(threadPath)` drains the thread's inline composer into
+  `PendingUserMessages` and empties the draft in ONE atomic `stream.Update`. For a new
+  thread, `StartThread` copies the supplied composer onto the created thread as
+  `Thread.Composer` with the draft + attachments emptied and `OpenThreadPath` cleared, so
+  the selection carries over while the typed text becomes the first message.
+
+The composer node never carries `PendingUserMessages` (the record has no such field), so
+the submission watcher never fires on it. It lives under `_Thread` deliberately — the
+composer is thread-family state, and `ThreadComposer` is registered in
+`SatelliteTableMapping` as a `_Thread`/`threads` nodeType so its path segment and its
+nodeType route to the SAME partition table. Without that agreement the write landed in
+`threads` while the single-node read looked in `mesh_nodes`, which produced a routing
+`NotFound` and made the input box vanish (the 2026-06-10 "ThreadComposer disappears on
+model-select" bug). It does not pollute the resume-thread list because that query filters
+on `nodeType:Thread`, and the type node is hidden from search and the create menu.
 
 ## Read-only threads (owner-only edit)
 
