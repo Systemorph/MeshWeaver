@@ -61,7 +61,7 @@ export interface MeshOps {
   submitMessage(threadPath: string, userText: string, opts?: ThreadSubmitOptions): Promise<string | null>;
   /** Field-level partial node update (RFC 7396) — control-plane flips like requestedStatus. */
   patch(path: string, fields: Record<string, unknown>): void;
-  /** Optional mesh query — when present it feeds the agent/model selectors (nodeType:Agent / nodeType:Model). */
+  /** Optional mesh query — when present it feeds the agent/model selectors (nodeType:Agent / nodeType:LanguageModel). */
   search?(query: string, basePath?: string, limit?: number): Promise<Record<string, unknown>[]>;
   /**
    * Optional streaming-final autocomplete snapshot (the one-shot AutocompleteRequest twin) — feeds

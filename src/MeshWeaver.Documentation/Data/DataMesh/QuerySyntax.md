@@ -456,22 +456,27 @@ Add `scope:descendants` to go recursive.
 
 ---
 
-## The `SelectAsync` API
+## Reading a single node's fields
 
-The `SelectAsync` API retrieves a single property from a node at a known path without deserializing the full content blob. Use it when you only need one field and overhead matters.
+There is no `SelectAsync` API. To read fields off a node at a **known path**, take the node
+from its stream — that is the authoritative, live read; a query would go through the lagged
+read-side index and return stale content right after a write:
 
 ```csharp
-// Get the display name of a node
-var name = await meshQuery.SelectAsync<string>("Systemorph/Marketing", "Name");
-
-// Get the node type
-var nodeType = await meshQuery.SelectAsync<string>("ACME/Project", "NodeType");
-
-// Get the icon
-var icon = await meshQuery.SelectAsync<string>("ACME", "Icon");
+workspace.GetMeshNodeStream("Systemorph/Marketing")
+    .Where(node => node is not null)
+    .Take(1)
+    .Timeout(TimeSpan.FromSeconds(10))
+    .Subscribe(node =>
+    {
+        var name = node.Name;
+        var nodeType = node.NodeType;
+        var icon = node.Icon;
+    });
 ```
 
-Returns `default` if the node is not found or the property is null. Any property on `MeshNode` is valid: `Name`, `NodeType`, `Path`, `Icon`, `Description`, and so on.
+If you want a narrower payload out of a **set** query, use `select:` (below) — but note it
+drops `content`. See [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess).
 
 ---
 
@@ -515,5 +520,5 @@ MeshWeaver.Layout.Controls.Markdown($"""
 2. **`namespace:X` means "folder X"** — returns immediate children by default; add `scope:descendants` to go deep.
 3. **Wildcards** — `*` matches anything; prefix, suffix, and contains patterns all work.
 4. **Select only what you need** — use `select:` to keep payloads small in large result sets.
-5. **`SelectAsync` for single properties** — when you know the path and need just one field, `SelectAsync` avoids full-node deserialization.
+5. **Known path ⇒ node stream, not a query** — `workspace.GetMeshNodeStream(path)` is authoritative and live; `QueryAsync(path:X)` is a stale-read bug.
 6. **Vector search** — free-floating text tokens (`laptop nodeType:Story`) trigger HNSW cosine-index search on Postgres backends when an `IEmbeddingProvider` is registered; structured-only queries stay on the regular SQL path.

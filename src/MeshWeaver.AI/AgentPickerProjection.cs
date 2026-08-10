@@ -20,7 +20,7 @@ namespace MeshWeaver.AI;
 /// combo boxes.
 ///
 /// <para>🚨 The chat view (<c>ThreadChatView.SubscribeToAgentNodes</c> +
-/// <c>OnSyncedAgentSnapshot</c>) calls these helpers directly. Tests in
+/// <c>OnAgentList</c>) calls these helpers directly. Tests in
 /// <c>AgentPickerProjectionTest</c> drive the same
 /// <see cref="MeshWeaver.Graph.SyncedQueryDataSourceExtensions.GetQuery(MeshWeaver.Data.IWorkspace, object, string[])"/>
 /// pipe with the strings <see cref="BuildAgentQueries"/> returns and run the
@@ -618,7 +618,7 @@ public static class AgentPickerProjection
 
     /// <summary>
     /// Projects the synced-query snapshot into the agent picker's bound list.
-    /// Same shape as <c>ThreadChatView.OnSyncedAgentSnapshot</c>:
+    /// Same shape as <c>ThreadChatView.OnAgentList</c>:
     /// Agent-typed nodes only; tolerates <see cref="JsonElement"/> Content
     /// when the receiving hub's typed registry doesn't have
     /// <see cref="AgentConfiguration"/> wired up; sorts by Order then Name.
@@ -671,7 +671,7 @@ public static class AgentPickerProjection
 
     /// <summary>
     /// Projects the synced-query snapshot into the model picker's bound list.
-    /// Mirrors <c>ThreadChatView.OnSyncedAgentSnapshot</c>'s LanguageModel
+    /// Mirrors <c>ThreadChatView.OnAgentList</c>'s LanguageModel
     /// branch (without the factory-baseline merge — that lives in the
     /// view's <c>RebuildAvailableModels</c>).
     /// </summary>

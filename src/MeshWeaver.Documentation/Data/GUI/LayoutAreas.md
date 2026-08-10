@@ -226,16 +226,19 @@ Controls.Stack
 An editor that commits changes and redirects back to the Overview:
 
 ```csharp
-Controls.Button("Save").WithClickAction(async ctx =>
+Controls.Button("Save").WithClickAction(ctx =>
 {
-    // ... save logic ...
+    // ... save logic — compose it as an observable and Subscribe; never await here ...
     var viewHref = new LayoutAreaReference("Overview").ToHref(hubAddress);
     ctx.Host.UpdateArea(ctx.Area, new RedirectControl(viewHref));
+    return Task.CompletedTask;
 });
 
 var cancelHref = new LayoutAreaReference("Overview").ToHref(hubAddress);
 Controls.Button("Cancel").WithNavigateToHref(cancelHref);
 ```
+
+> 🚨 The handler is **synchronous** — `ctx => { …; return Task.CompletedTask; }`, never `async ctx =>`. An async click handler runs its continuation on the wrong scheduler and deadlocks the layout pump under load. Work that needs I/O is composed as an `IObservable<T>` and `.Subscribe(...)`d from inside the handler; the handler itself returns immediately. See [Observables](/Doc/GUI/Observables) and [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls).
 
 ## Live Demo
 
