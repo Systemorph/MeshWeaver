@@ -113,7 +113,7 @@ public class ThreadTokenUsageTest : AITestBase
     /// A consumer that starts watching a thread's usage BEFORE any round has run — i.e. while
     /// <c>{threadPath}/_Usage</c> holds nothing at all — must still receive the usage when it lands.
     ///
-    /// <para>This is the ONLY ordering the platform actually guarantees. <c>TokenUsage.RecordUsage</c>
+    /// <para>This is the ONLY ordering the platform actually guarantees. <c>TokenUsageNodeType.RecordUsage</c>
     /// is subscribed as an INDEPENDENT side effect, deliberately NOT chained before the round's
     /// terminal status write, so "the thread reached a terminal state" does NOT imply "the satellite
     /// exists". Every other test in this class reads the satellite AFTER waiting for the terminal
@@ -394,7 +394,7 @@ public class ThreadTokenUsageTest : AITestBase
     /// <para>🚨 Through the LIVE CHILDREN QUERY of <c>{threadPath}/_Usage</c> — byte for byte the
     /// primitive <c>ThreadTokenChip</c> binds to in the portal — and never a point
     /// <c>GetMeshNodeStream({threadPath}/_Usage/{modelKey})</c> read. The satellite is written by
-    /// <c>TokenUsage.RecordUsage</c>, which is subscribed as an INDEPENDENT side effect and
+    /// <c>TokenUsageNodeType.RecordUsage</c>, which is subscribed as an INDEPENDENT side effect and
     /// deliberately NOT chained before the round's terminal status write; a watcher can therefore be
     /// in place before the node exists. A point read of an absent node answers with an authoritative
     /// routing NotFound and TERMINATES the stream with an error — it cannot wait for a node to
