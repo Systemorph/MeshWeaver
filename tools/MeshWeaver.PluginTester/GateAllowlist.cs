@@ -116,6 +116,56 @@ public sealed record GateVerdict(
     /// the report carries that separately).</summary>
     public bool Success => NewFailures.Count == 0 && Stale.Count == 0;
 
+    /// <summary>
+    /// The one-line, phase-accurate account of WHY the run failed: which check (install /
+    /// idempotence / compile / render / tests) failed, on which scope(s) — plus a fatal error or
+    /// stale allow entries when those are what failed the run.
+    ///
+    /// <para>🚨 It names only what the report RECORDS. The message this replaced asserted a cause
+    /// ("does not compile — a public API changed") that the report frequently contradicted: the
+    /// 2026-08-10 <c>Store/Catalog</c> RED read <c>compile=Ok render=ok tests=FAILED</c> while CI
+    /// annotated it as a compile break, sending every investigator to diff public signatures that
+    /// were fine (issue #1077). A failure with no recorded failing check says exactly that rather
+    /// than guessing — an unexplained failure is cheaper than a confidently wrong explanation.</para>
+    /// </summary>
+    /// <param name="report">The run's report.</param>
+    /// <param name="verdict">The allowlist verdict, when one was applied — its NEW failures are
+    /// what failed the run; known debt did not.</param>
+    public static string Headline(GateReport report, GateVerdict? verdict = null)
+    {
+        var parts = new List<string>();
+        if (report.FatalError is not null)
+            parts.Add($"fatal: {FirstLine(report.FatalError)}");
+
+        var failures = verdict is not null
+            ? verdict.NewFailures
+            : Failures(report).ToList();
+        foreach (var check in CheckOrder)
+        {
+            var scopes = failures
+                .Where(f => string.Equals(f.Check, check, StringComparison.OrdinalIgnoreCase))
+                .Select(f => f.Scope)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            if (scopes.Count > 0)
+                parts.Add($"{check}: {string.Join(", ", scopes)}");
+        }
+
+        if (verdict is { Stale.Count: > 0 })
+            parts.Add($"stale allow entr(ies): {string.Join(", ", verdict.Stale)}");
+
+        return parts.Count > 0
+            ? string.Join("; ", parts)
+            : "no failing check was recorded";
+    }
+
+    /// <summary>The checks in pipeline order — the order <see cref="Headline"/> lists them in.</summary>
+    private static readonly string[] CheckOrder =
+        ["install", "idempotence", "compile", "render", "tests"];
+
+    private static string FirstLine(string text) =>
+        text.ReplaceLineEndings("\n").Split('\n')[0];
+
     private static IEnumerable<GateFailure> Failures(GateReport report)
     {
         foreach (var package in report.Packages)
