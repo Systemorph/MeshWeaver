@@ -57,7 +57,16 @@ namespace MeshWeaver.Graph.Configuration;
 /// type, and only once (<c>Take(1)</c>); after the recycle the new hub's baseline IS the new type,
 /// so the predicate cannot re-fire and there is no recycle loop. Content writes, satellite writes,
 /// and writes to other paths are all no-ops for it. Arming costs one filtered subscription on the
-/// process-wide feed subject — no per-hub upstream stream, no poll, no timer.</para>
+/// process-wide feed subject — no per-hub upstream stream, no poll, no timer.
+///
+/// <para><b>The fan-out cost, chosen deliberately.</b> One subscription per live hub means each
+/// published change walks every armed watcher: an enum compare and an ordinal path compare that
+/// fails on the first character for all but one of them. That is the same trade
+/// <c>PathResolutionService.OnMeshChange</c> already makes (a full-dictionary sweep per event,
+/// "deliberate: change events are rare relative to resolutions"), and it buys the simplicity of
+/// having NO shared registry — no mesh-scoped path→watcher map to keep in step with hub lifetimes,
+/// nothing to leak when a hub dies without unregistering. If the feed ever becomes hot enough for
+/// this to matter, the fix is a keyed feed, not a cache here.</para></para>
 /// </summary>
 internal static class NodeTypeRebindWatcher
 {
