@@ -506,6 +506,14 @@ public static class JsonSynchronizationStream
                                     "Stream {StreamId}: resubscribe failed.",
                                     reduced.StreamId);
                                 Interlocked.Exchange(ref resubscribing, 0);
+                                // A re-ask that itself raced the SAME recycle window gets the same
+                                // transient ShuttingDown verdict — push it back through the re-arm
+                                // carrier so the next bounded attempt fires (shared MaxRecycleReArms
+                                // budget; measured in StaleStampRootBindingTest, where the first
+                                // re-ask can land while the teardown is still draining).
+                                if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
+                                    rejectedByRecycle.OnNext(
+                                        "re-ask was itself rejected while the owner was still shutting down");
                             });
                 }
             }
