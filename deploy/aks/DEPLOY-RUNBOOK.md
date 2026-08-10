@@ -269,7 +269,7 @@ reverts them):
 |---|---|
 | `config.memex_portal.PreWarm__DynamicTypes: "true"` | every new pod sweeps + compiles ALL dynamic NodeTypes at start (resumes from the shared `/data` cache — warm restarts are cheap) |
 | `config.memex_portal.PreWarm__GateReadiness: "true"` | `/health` stays red until the sweep is green; with `maxSurge 1 / maxUnavailable 0` a regressed type STALLS the rollout with the old image serving. **✅ ON.** It was tried 2026-08-02 and reverted the same day on 7 FALSE regressions — all cross-silo `SubscribeRequest` timeouts, not compile errors (#694 residue). The gate no longer reads "no answer" as "it broke": a `TimedOut` outcome is filed as *unevaluated* and can never gate, and that leniency now survives the cascade (a dependent of an unevaluated upstream is `UpstreamUnevaluated`, also non-gating). Only a `CompileError` — or an `UpstreamFailed` cascading from one — on a **previously-healthy** type stalls a roll |
-| `probes.startup: {periodSeconds: 10, failureThreshold: 1080}` | ⚠️ REQUIRED with the gate: a cold bake is ~90 s/type, sequential — the default 5 min budget kills the pod mid-bake forever. `progressDeadlineSeconds` is DERIVED from these two in the chart, so raising them can't leave it behind |
+| `probes.startup: {periodSeconds: 10, failureThreshold: 180}` (= 30 min) | ⚠️ REQUIRED with the gate: a cold bake is **~2.4 s/type**, sequential *(measured 2026-08-10, prod Loki, three portals)* — ~10 min on memex-cloud, the largest mesh — and the default 5 min budget kills the pod mid-bake forever. 30 min is that worst case plus a plain cold boot, x2. `progressDeadlineSeconds` is DERIVED from these two in the chart, so raising them can't leave it behind. **Was `1080` (3 h)** until 2026-08-10, sized from a "~90 s/type" estimate that was 37x too high — a window that long detected nothing |
 
 **🚨 Before you trust the gate, verify the namespace actually reads it.** The gate protects a
 portal through exactly two deployment facts, and on 2026-08-10 two of the three portals had drifted
@@ -312,7 +312,7 @@ kubectl -n <env> patch configmap memex-portal-config --type merge \
   -p '{"data":{"PreWarm__DynamicTypes":"true","PreWarm__GateReadiness":"false"}}'
 kubectl -n <env> patch deployment memex-portal-deployment --type json -p \
   '[{"op":"replace","path":"/spec/template/spec/containers/0/startupProbe/periodSeconds","value":10},
-    {"op":"replace","path":"/spec/template/spec/containers/0/startupProbe/failureThreshold","value":1080}]'
+    {"op":"replace","path":"/spec/template/spec/containers/0/startupProbe/failureThreshold","value":180}]'
 # the probe patch rolls the deployment; the new pod bakes behind the gate while the old serves
 ```
 

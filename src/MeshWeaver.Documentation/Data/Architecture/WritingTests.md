@@ -364,6 +364,8 @@ The xUnit v3 adapter matches `FullyQualifiedName~`, **not** `ClassName~`. Never 
 
 ## References
 
+- [Negative Controls](/Doc/Architecture/NegativeControls) — a pin is only a pin if it fails against the defect; the procedure, and three tests that passed while proving nothing
+- [AsyncLocal Across Scheduler Hops](/Doc/Architecture/AsyncLocalAcrossHops) — why a diagnostic can be dead while `IsEnabled(Debug)` reads true, and why silo-side `ILogger` is unreliable in Orleans tests
 - [Reactive Test Assertions](/Doc/Architecture/ReactiveTestAssertions) — assertion API, §2a deadlock rule, legitimately-async catalogue
 - [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — why hub-reachable code is `IObservable<T>`, never `Task<T>`
 - [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) — why `ReadNode` is the right read after a write
