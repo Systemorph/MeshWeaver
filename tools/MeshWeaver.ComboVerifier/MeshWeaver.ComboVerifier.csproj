@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Step 3 of the Candidate Release Protocol's instance gate:
+         `mw-combo-verify <combo.json> <candidate-image>` assembles the instance's combo
+         (mw-combo-assemble's machinery), runs mw-plugin-test over it INSIDE the candidate image
+         (docker), and folds the evidence into the combo-verdict.json an operator lands on
+         Admin/UpdatePolicy. -->
+    <AssemblyName>mw-combo-verify</AssemblyName>
+    <RootNamespace>MeshWeaver.ComboVerifier</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- Same multi-arch pair as mw-plugin-test / mw-combo-assemble; Directory.Build.props'
+         ProduceReferenceAssembly gate handles the RID-leg race. -->
+    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
+  </ItemGroup>
+</Project>
