@@ -38,7 +38,7 @@ This is non-negotiable, for three reasons:
 | Side | Responsibility |
 |---|---|
 | **Backend layout area** | Build a `UiControl` tree. Pass *paths* (or `JsonPointerReference`s) into controls. Never call `meshQuery.QueryAsync(...)`, never `await` data, never `await PermissionHelper.GetEffectivePermissions(...)` (compose its `IObservable<Permission>` with `CombineLatest` instead). |
-| **GUI Blazor view (.razor.cs)** | Hold an `IMeshNodeStreamCache` field. In `BindData()`, subscribe via `_cache.GetStream(NodePath)` using `AddBinding(...)`. Write user edits back via `_cache.Update(NodePath, fn)`. |
+| **GUI Blazor view (.razor.cs)** | In `BindData()`, subscribe via `Hub.GetMeshNodeStream(NodePath)` using `AddBinding(...)`. Write user edits back via `Hub.GetMeshNodeStream(NodePath).Update(fn).Subscribe(...)`. |
 
 ---
 
@@ -59,14 +59,13 @@ The backend layout-area method **must not** be `async Task<UiControl>`. Return `
 
 ## GUI: subscribe via the cache, re-render on emission
 
-The canonical Blazor view template — all reads go through the process-wide `IMeshNodeStreamCache`. Multiple views on the same path share **one** upstream subscription; writes through `_cache.Update(path, fn)` are visible to every reader.
+The canonical Blazor view template. Reads and writes both go through `Hub.GetMeshNodeStream(path)`, which returns a `MeshNodeStreamHandle` backed by the process-wide `IMeshNodeStreamCache`. Multiple views on the same path share **one** upstream subscription; writes through the handle's `.Update(...)` are visible to every reader.
 
-> **Access-checked.** `cache.GetStream(path)` is gated by the current user's effective Read permission on the node. The cache asks the owning hub via `GetPermissionRequest`, caches the answer per `(path, userId)` for 30 s, and terminates the observable with `UnauthorizedAccessException` if Read is not granted. Subscribers should handle that error (toast, navigate to AccessDenied, render empty state) rather than letting it propagate. See [AccessContextPropagation.md](/Doc/Architecture/AccessContextPropagation).
+> **Access-checked.** The stream is gated by the current user's effective Read permission on the node. The cache asks the owning hub via `GetPermissionRequest`, caches the answer per `(path, userId)` for 30 s, and terminates the observable with `UnauthorizedAccessException` if Read is not granted. Subscribers should handle that error (toast, navigate to AccessDenied, render empty state) rather than letting it propagate. See [AccessContextPropagation.md](/Doc/Architecture/AccessContextPropagation).
 
 ```csharp
 public partial class MyView : BlazorView<MyControl, MyView>
 {
-    private IMeshNodeStreamCache? _cache;
     public string? Title { get; private set; }
     public string? ImageUrl { get; private set; }
 
@@ -79,11 +78,8 @@ public partial class MyView : BlazorView<MyControl, MyView>
 
         if (string.IsNullOrEmpty(NodePath)) return;
 
-        // 2. Resolve the cache — singleton on the mesh hub's service provider
-        _cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-
-        // 3. Subscribe — every emission re-renders this component
-        AddBinding(_cache.GetStream(NodePath)
+        // 2. Subscribe — every emission re-renders this component
+        AddBinding(Hub.GetMeshNodeStream(NodePath)
             .Where(node => node is not null)
             .DistinctUntilChanged()
             .Subscribe(node =>
@@ -98,7 +94,8 @@ public partial class MyView : BlazorView<MyControl, MyView>
 
 Key points to remember:
 
-- `_cache` is a **field**, not a local. Writers call `_cache.Update(NodePath, fn)` to push edits; the cache routes through the same shared handle so the read subscription receives the echo.
+- **Go through `Hub.GetMeshNodeStream(path)`, not the raw cache.** The handle supplies the hub's `JsonSerializerOptions` for you, so `node.Content` arrives as its registered domain type. The bare `IMeshNodeStreamCache.GetStream(path)` / `Update(path, fn)` overloads **were deleted**: without options the cache hands back Content as a raw `JsonElement`, so `node.Content as MyType` is `null` and the consumer silently no-ops — the wedged-thread / never-dispatching-watcher bug class. If you do resolve `IMeshNodeStreamCache` directly, you must pass `Hub.JsonSerializerOptions` to every call.
+- Writers call `Hub.GetMeshNodeStream(NodePath).Update(fn).Subscribe(...)` to push edits; the write routes through the same shared handle, so the read subscription receives the echo. `Update` returns a **cold** observable — without `Subscribe` the write never happens.
 - `AddBinding(...)` registers the subscription with the base class — it auto-disposes on component teardown. The cache's upstream handle stays alive for the process.
 - **No `.Take(1)`** — that snapshots once and the view freezes. Stay subscribed for the lifetime of the component.
 - **Never** open `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, ...)` directly in a Blazor view. That bypasses the cache; writes through the cache won't be observed by views that went around it.
@@ -108,13 +105,13 @@ Key points to remember:
 
 ## Writing user edits back
 
-The same `_cache` is the write path. Its `Update` takes a `MeshNode → MeshNode` lambda and returns `IObservable<MeshNode>` — subscribe to observe completion or errors:
+The same handle is the write path. Its `Update` takes a `MeshNode → MeshNode` lambda and returns a **cold** `IObservable<MeshNode>` — the write only happens on `Subscribe`:
 
 ```csharp
 private void OnTitleChanged(string newTitle)
 {
-    if (_cache == null || string.IsNullOrEmpty(NodePath)) return;
-    _cache.Update(NodePath, current => current with { Name = newTitle })
+    if (string.IsNullOrEmpty(NodePath)) return;
+    Hub.GetMeshNodeStream(NodePath).Update(current => current with { Name = newTitle })
         .Subscribe(_ => { }, ex => Logger.LogWarning(ex,
             "Title update failed for {Path}", NodePath));
 }
@@ -123,7 +120,7 @@ private void OnTitleChanged(string newTitle)
 Because the write routes through the **same shared upstream handle** every reader is subscribed to:
 
 1. The owning hub applies the patch and persists.
-2. This view's `_cache.GetStream(NodePath)` subscription receives the echo and re-renders.
+2. This view's `Hub.GetMeshNodeStream(NodePath)` subscription receives the echo and re-renders.
 3. Every other GUI watching the same path sees the patch through their own subscription.
 
 No separate `DataChangeRequest` is needed for own-node edits inside a bound view.
@@ -204,13 +201,13 @@ Mechanics (so you know what's load-bearing):
 
 | ❌ Wrong | Why | ✅ Right |
 |---|---|---|
-| `await meshQuery.QueryAsync<MeshNode>($"path:{x}").FirstOrDefaultAsync()` in a layout area | Lagged index, deadlock-prone, freezes view | Pass path; GUI subscribes via `IMeshNodeStreamCache.GetStream(path)` |
+| `await meshQuery.QueryAsync<MeshNode>($"path:{x}").FirstOrDefaultAsync()` in a layout area | Lagged index, deadlock-prone, freezes view | Pass path; GUI subscribes via `Hub.GetMeshNodeStream(path)` |
 | `SelectMany(async nodes => await ...)` for data resolution | async lambda inside an observable chain — same deadlock surface | Pass paths; bind in GUI via the cache |
 | `MeshNodeThumbnailControl.FromNode(loadedNode, ...)` after a backend fetch | Concrete values frozen at render time | `new MeshNodeThumbnailControl { NodePath = path }` |
 | `.Take(1)` on a display stream | View stops updating after first emission | Stay subscribed for the lifetime of the component |
 | `await PermissionHelper.GetEffectivePermissions(...).FirstAsync()` in a layout area | Hub deadlock candidate | Compose the `IObservable<Permission>` via `CombineLatest`; bind permissions on the GUI side |
 | `try { ... } catch { /* swallowed */ }` around backend reads | Errors disappear, debugging impossible | Propagate via `OnError`; framework handles it |
-| `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, ...)` directly in a Blazor view | Opens a per-view upstream handle; bypasses `IMeshNodeStreamCache`; multiplies subscriptions; writes through the cache aren't observed | `Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>().GetStream(path)` — shared, write-coherent |
+| `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, ...)` directly in a Blazor view | Opens a per-view upstream handle; bypasses `IMeshNodeStreamCache`; multiplies subscriptions; writes through the cache aren't observed | `Hub.GetMeshNodeStream(path)` — shared, write-coherent |
 | `host.UpdateData(id, node.Content)` + `GetDataStream(id).Debounce().Subscribe(...GetMeshNodeStream(path).Update...)` to edit node content (a.k.a. `SetupAutoSave`) | Replicate-then-save: two stores drift, the save loop races the echo and clobbers unedited fields | `MeshNodeContentEditorControl.ForType(path, typeof(T))` — the GUI view binds to `GetMeshNodeStream(path)` and writes per-field via `.Update(...)`; no replica, no save subscription |
 | A "Save" button that reads `/data/{id}` and writes the node | The edit should already be on the node via the bound stream | Node-bound editor; edits persist on change through `GetMeshNodeStream(path).Update(...)` |
 
@@ -218,9 +215,9 @@ Mechanics (so you know what's load-bearing):
 
 ## Where to look for working examples
 
-- **`src/MeshWeaver.Blazor/Components/MeshNodeThumbnailView.razor`** — the minimal read-only reference: one `IMeshNodeStreamCache.GetStream(NodePath)` subscription.
-- **`src/MeshWeaver.Blazor/Components/CollaborativeMarkdownView.razor.cs`** — read + write reference: cache subscription for the markdown body; `_cache.Update(BoundNodePath, fn)` to push edits.
-- **`src/MeshWeaver.Blazor/Components/MarkdownEditorView.razor`** — auto-save via `_cache.Update` from a debounced editor stream; canonical write-path pattern.
+- **`src/MeshWeaver.Blazor/Components/MeshNodeThumbnailView.razor`** — the minimal read-only reference: one `Hub.GetMeshNodeStream(NodePath)` subscription.
+- **`src/MeshWeaver.Blazor/Components/CollaborativeMarkdownView.razor.cs`** — read + write reference: a node-stream subscription for the markdown body, and `.Update(fn)` on the same handle to push edits.
+- **`src/MeshWeaver.Blazor/Components/MarkdownEditorView.razor`** — auto-save via `.Update(fn)` on the node-stream handle from a debounced editor stream; canonical write-path pattern.
 - **`src/MeshWeaver.Blazor/Components/ThreadMessageBubbleView.razor.cs`** — multiple sub-fields (Text, ToolCalls, UpdatedNodes, Role) extracted from `node.Content` as `JsonElement` inside the cache `Subscribe(...)`.
 - **`src/MeshWeaver.Blazor/BlazorView.razor.cs`** — the base class. Key API: `AddBinding`, `DataBind<T>`, `BindData()` lifecycle.
 
