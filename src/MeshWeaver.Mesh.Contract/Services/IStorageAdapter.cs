@@ -13,8 +13,10 @@ namespace MeshWeaver.Mesh.Services;
 /// rule (<c>Doc/Architecture/AsynchronousCalls.md</c>). No <c>Task&lt;T&gt;</c>,
 /// no <c>IAsyncEnumerable&lt;T&gt;</c>, no <c>await</c>. Composable with
 /// <c>SelectMany</c>/<c>Subscribe</c>; backends that wrap async leaves
-/// (HTTP, filesystem) do the <c>Observable.FromAsync</c> bridge inside the
-/// adapter — never above this line.
+/// (HTTP, filesystem) bridge them through a bounded <c>IIoPool</c> inside the
+/// adapter — never above this line, and never via <c>Observable.FromAsync</c>,
+/// which is forbidden outside <c>IoPool</c> and deadlocks under a blocking
+/// subscriber (see <c>Doc/Architecture/ControlledIoPooling.md</c>).
 /// </para>
 /// </summary>
 public interface IStorageAdapter

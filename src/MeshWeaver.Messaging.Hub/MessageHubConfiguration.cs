@@ -345,10 +345,13 @@ public record MessageHubConfiguration
     /// <summary>
     /// Reactive init overload — caller returns an <see cref="IObservable{Unit}"/> the hub
     /// will Subscribe to during init. The Initialize gate opens after the observable
-    /// emits its first value or completes. Wrap a Task-returning method via
-    /// <c>Observable.FromAsync(() =&gt; method())</c> for the typical "load initial data
-    /// before processing messages" shape. Hub-reachable code returns
-    /// <see cref="IObservable{T}"/>, never <see cref="Task{T}"/>.
+    /// emits its first value or completes. For the typical "load initial data before
+    /// processing messages" shape, bridge the Task-returning leaf through a bounded
+    /// <c>IIoPool</c> (<c>pool.Invoke(ct =&gt; method(ct))</c>) — <b>never</b>
+    /// <c>Observable.FromAsync</c>, which is forbidden outside <c>IoPool</c>: this
+    /// observable is subscribed on the hub's init turn, so a bare <c>FromAsync</c> would
+    /// run the method's synchronous prologue on the hub scheduler, unbounded. Hub-reachable
+    /// code returns <see cref="IObservable{T}"/>, never <see cref="Task{T}"/>.
     /// <para>Idempotent on the caller's delegate identity — the inner action is tracked
     /// in <see cref="RegisteredObservableInits"/> so repeat <c>WithInitialization(F)</c>
     /// calls (composed configurators) collapse to one Subscribe.</para>
