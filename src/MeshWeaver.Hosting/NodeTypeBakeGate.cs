@@ -40,6 +40,22 @@ public sealed class NodeTypeBakeGateState
     private int phase = (int)BakePhase.NotStarted;
     private volatile string detail = "pre-warm not started";
 
+    /// <summary>
+    /// Whether a readiness probe actually CONSUMES this state — i.e. the host registered its
+    /// health check. Declared by the host at registration
+    /// (<see cref="NodeTypeBakeGateExtensions.AddNodeTypeBakeGate"/>), never re-derived from
+    /// configuration here: the host owns the decision, and re-parsing the key would be a second
+    /// source of truth that can disagree with the wiring it claims to describe.
+    ///
+    /// <para>🚨 This exists because the gate silently did nothing for months while the log said
+    /// otherwise. The state is registered unconditionally, so a recorded regression used to print
+    /// "REFUSING READINESS — the rollout will stall with the previous image still serving" on a pod
+    /// that then went Ready and took traffic. An operator reading that line believed they were
+    /// protected; a production outage was diagnosed for hours against a log that was describing a
+    /// gate nobody had armed. A message that overstates enforcement is worse than no message.</para>
+    /// </summary>
+    public bool GatesReadiness { get; init; }
+
     /// <summary>The current phase.</summary>
     public BakePhase Phase => (BakePhase)Volatile.Read(ref phase);
 
@@ -146,9 +162,18 @@ public static class NodeTypeBakeGateExtensions
     /// sequential, so a mesh with dozens of types needs HOURS of startup budget. Left at the usual
     /// default (60 × 5 s = 5 minutes) Kubernetes kills and restarts the pod mid-bake, forever.</para>
     /// </summary>
-    public static IServiceCollection AddNodeTypeBakeGate(this IServiceCollection services)
+    /// <param name="gatesReadiness">
+    /// Pass <c>true</c> ONLY when the host also registers a readiness check that consumes this state.
+    /// It is what makes <see cref="NodeTypeBakeGateState.GatesReadiness"/> honest, and therefore what
+    /// decides whether a recorded regression is reported as an enforced stall or as an unenforced
+    /// warning. Defaulting to <c>false</c> keeps "registered" and "armed" separate: the diagnostics
+    /// are always collected, the enforcement is opt-in, and the log never claims the latter from the
+    /// former.
+    /// </param>
+    public static IServiceCollection AddNodeTypeBakeGate(
+        this IServiceCollection services, bool gatesReadiness = false)
     {
-        services.AddSingleton<NodeTypeBakeGateState>();
+        services.AddSingleton(new NodeTypeBakeGateState { GatesReadiness = gatesReadiness });
         return services;
     }
 }
