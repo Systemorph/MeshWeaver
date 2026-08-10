@@ -98,12 +98,12 @@ The ingress public IP is assigned by Azure. Retrieve it with `kubectl get svc -n
 
 ## 2. Images (Shared ACR)
 
-These images are pushed to the shared ACR. Grant the AKS kubelet `AcrPull` on the registry (cross-RG if needed) so nodes can pull. Separately, the in-pod **self-updater** lists ACR tags under a **portal Workload Identity** (a shared UAMI federated to `system:serviceaccount:<ns>:memex-portal-sa`, granted `AcrPull`) — provisioned by `infra/modules/portal-identity.bicep` and wired via `selfUpdate.azureClientId`. See [DeploymentAKS → Portal self-update](/Doc/Architecture/DeploymentAKS).
+These images are pushed to the shared ACR. Grant the AKS kubelet `AcrPull` on the registry (cross-RG if needed) so nodes can pull. Separately, the in-pod **self-updater** lists ACR tags under a **portal Workload Identity** (a shared UAMI federated to `system:serviceaccount:<ns>:memex-portal-sa`, granted `AcrPull`) — provisioned by `deploy/aks/infra/modules/portal-identity.bicep` and wired via `selfUpdate.azureClientId`. See [DeploymentAKS → Portal self-update](/Doc/Architecture/DeploymentAKS).
 
 | Image | Description |
 |---|---|
-| `<registry>/memex-portal-ai-base:latest` | `aspnet:10.0` + node20 + co-hosted CLIs (Claude Code + Copilot). The **one** hand-authored Dockerfile at `deploy/base-images/portal-ai`, built with `az acr build`. |
-| `<registry>/memex-portal-ai:<tag>` | The portal app — an SDK container build on the base image. **Must pass `-r linux-x64`** (the Copilot SDK keys its binary off the RID). |
+| `<registry>/memex-portal-ai-base:latest` | `aspnet:10.0` + node20 + co-hosted CLIs (Claude Code + Copilot). The **one** hand-authored Dockerfile at `deploy/base-images/portal-ai`, built **multi-arch** (`linux/amd64` + `linux/arm64`) via buildx / `az acr build`. Each arch bakes its own Copilot binary (`@github/copilot-linux-x64` / `-linux-arm64`). |
+| `<registry>/memex-portal-ai:<tag>` | The portal app — an SDK container build on the base image. **Multi-arch: do NOT pass `-r linux-x64`** (see below). |
 | `<registry>/memex-migration:<tag>` | One-shot DB migration container — the chart runs it as a **Job**, created per `helm upgrade`. |
 | `<registry>/memex-bake:<tag>` | NodeType pre-compilation (bake) Job. `bake.enabled` is **false** by default; it only makes sense where `/data` is a shared persistent volume. |
 
@@ -112,13 +112,22 @@ Build and push the portal (no Dockerfile — the SDK's `PublishContainer` pushes
 ```bash
 az acr login --name <registry>
 dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
-  -c Release -r linux-x64 --no-self-contained -t:PublishContainer \
+  -c Release --no-self-contained -t:PublishContainer -p:PublishProfile= \
+  -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"' \
   -p:ContainerRegistry=<registry>.azurecr.io -p:ContainerRepository=memex-portal-ai \
   -p:ContainerImageTag=<tag> -p:ContainerBaseImage=<registry>.azurecr.io/memex-portal-ai-base:latest
 kubectl -n memex set image deployment/memex-portal-deployment memex-portal=<registry>.azurecr.io/memex-portal-ai:<tag>
 ```
 
-> Use a **distinct tag** per build (not `:latest`) so the rollout is guaranteed to pull the new image.
+> **`-r linux-x64` was removed deliberately.** Pinning one RID builds a single-arch image; the other
+> architecture then gets an `ImagePullBackOff`. Dropping `-r` and setting `ContainerRuntimeIdentifiers`
+> makes the SDK publish per-RID and assemble an OCI image index. `-p:PublishProfile=` is required to
+> override the csproj's `DefaultContainer` profile, and the `'"a;b"'` quoting must use a **real** `;`
+> (a `%3B` is an escaped literal and yields one bogus RID). This mirrors what `main-cd.yml` does.
+> **Prerequisite:** `memex-portal-ai-base:latest` must itself be multi-arch, or the arm64 leg has no base layer.
+
+> Use a **distinct tag** per build (not `:latest`) so the rollout is guaranteed to pull the new image. On an
+> environment running the self-updater, that tag must also be dotted SemVer — see [DeploymentAKS](/Doc/Architecture/DeploymentAKS).
 
 ---
 

@@ -105,7 +105,7 @@ Both shapes are **`IObservable`-first**. Neither uses `IAsyncEnumerable` / `awai
 
 ## Progressive-snapshot providers (autocomplete, live search)
 
-`IAutocompleteProvider.GetItems` returns `IObservable<IReadOnlyCollection<AutocompleteItem>>` — each emission is the provider's **current best list**, sorted by `Priority` descending. A provider must emit at least an empty snapshot (`AutocompleteSnapshots.Empty`) and **never** `Observable.Empty`, which stalls the aggregator's `CombineLatest`.
+`IAutocompleteProvider.GetItems` returns `IObservable<IReadOnlyCollection<AutocompleteItem>>` — each emission is the provider's **current best list**, sorted by `Priority` descending. Emit at least an empty snapshot (`AutocompleteSnapshots.Empty`) rather than `Observable.Empty`: the aggregator seeds each slice with `.StartWith(Empty)` so a silent provider cannot actually stall the `CombineLatest`, but "contributes nothing" and "still loading" must not look identical to a reader of the code.
 
 A provider that does no I/O — pure registry enumeration — returns a single snapshot:
 
@@ -182,7 +182,7 @@ private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> DefaultN
 
 Three rules every snapshot-set provider must follow:
 
-1. **Always emit at least an empty collection — never `Observable.Empty`.** The aggregator `CombineLatest`s every provider in the context; a provider that never emits stalls the whole context. "Contributes nothing for this node" means emit `[]`, not silence.
+1. **Always emit at least an empty collection — never `Observable.Empty`.** The aggregator `CombineLatest`s every provider in the context, seeding each slice with `.StartWith([])`, so silence does not literally wedge the combine — but it makes "contributes nothing for this node" indistinguishable from "has not loaded yet", and it breaks the moment a caller composes the provider without that seed. Emit `[]`, not silence.
 2. **Each emission is the full set, not a delta.** The aggregator replaces the provider's slice on every emission and re-merges.
 3. **Compose live streams, never snapshot.** `GetEffectivePermissions` emits `seed.Concat(enriched)` — the static/claim seed first, then the synced-AccessAssignment-backed enrichment. Project off it with `.Select` so the menu self-corrects the instant a runtime grant propagates. Snapshotting the first emission is the exact access race this pattern exists to kill.
 
@@ -243,7 +243,8 @@ await foreach (var perms in host.Hub.GetEffectivePermissions(path).ToAsyncEnumer
     yield break;   // ← first-snapshot-wins
 }
 
-// ❌ Observable.Empty for "contributes nothing" — stalls the aggregator's CombineLatest forever.
+// ❌ Observable.Empty for "contributes nothing" — indistinguishable from "still loading",
+//    and it only survives because the aggregator happens to seed each slice with StartWith([]).
 return applicable ? Observable.Return(items) : Observable.Empty<IReadOnlyCollection<T>>();
 //                                              ^ must be Observable.Return((IReadOnlyCollection<T>)[])
 
@@ -295,7 +296,7 @@ Any new aggregator that gathers items from multiple providers should look like o
 **Progressive-snapshot contracts:**
 
 - [ ] Provider returns `IObservable<IReadOnlyCollection<T>>` (current best list per `OnNext`, priority-ordered); no `Task<…>`.
-- [ ] Provider emits at least `AutocompleteSnapshots.Empty` — never `Observable.Empty` (stalls `CombineLatest`).
+- [ ] Provider emits at least `AutocompleteSnapshots.Empty` — never `Observable.Empty` ("nothing" must be distinguishable from "not loaded").
 - [ ] No `await` anywhere; an async/blocking leaf goes through `IIoPool` (`Run` / `RunStream` / `InvokeBlocking`), never `Observable.FromAsync` / `Observable.Create(async …)`.
 - [ ] Aggregator uses `AutocompleteSnapshots.Combine` so providers run in parallel and the merged snapshot refines incrementally.
 - [ ] Per-provider `Catch(Observable.Return(AutocompleteSnapshots.Empty))` so one bad provider doesn't kill the merge.
@@ -303,7 +304,7 @@ Any new aggregator that gathers items from multiple providers should look like o
 **Reactive snapshot-set contracts:**
 
 - [ ] Provider returns `IObservable<IReadOnlyCollection<T>>`; each emission is the full set.
-- [ ] Provider **always emits** at least `[]` — never `Observable.Empty` (would stall `CombineLatest`).
+- [ ] Provider **always emits** at least `[]` — never `Observable.Empty` ("nothing" must be distinguishable from "not loaded").
 - [ ] Provider composes live input streams (`GetMeshNodeStream`, `GetEffectivePermissions`) with `Select` / `CombineLatest` — it does **not** `await foreach … yield break` or otherwise snapshot the first input.
 - [ ] Aggregator uses `CombineLatest` (each `StartWith([])`) into an `ImmutableSortedSet` with a comparer that defines both order and equality — no `OrderBy` / `Sort` after.
 - [ ] Renderer subscribes and pushes per emission via `host.UpdateArea`, with `RegisterForDisposal`.
