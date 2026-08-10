@@ -1213,10 +1213,13 @@ public static class PackageInstaller
             };
             // System-impersonated like every installer write (Using — see Upsert): this runs after
             // barrier scheduler hops, where no ambient context survives.
+            // Off-router issuing: the boot default-install runs with the DI root mesh hub — a
+            // target-less CreateOrUpdateNodeRequest posted there runs on the router (ROUTER_TRAFFIC).
             return Observable.Using(
                     () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
                           ?? System.Reactive.Disposables.Disposable.Empty,
-                    _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(record)))
+                    _ => hub.NodeOperationIssuingHub()
+                        .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(record)))
                 .FirstAsync().Select(d => d.Message)
                 .SelectMany(resp => resp.Success
                     ? Observable.Return(resp.Node!)
@@ -2196,11 +2199,15 @@ public static class PackageInstaller
     // post happens when hub.Observe's stream is SUBSCRIBED, so the impersonation must still be
     // alive then (Defer+using disposes it before the post — the exact trap the Edu redeemer
     // documented). The admin-gated install is the authorization (see Install).
+    // Off-router issuing (NodeOperationIssuingHub): the boot default-install seed calls this with
+    // the DI root mesh hub, and a target-less CreateOrUpdateNodeRequest posted there EXECUTES the
+    // whole bulk upsert on the router's action block (ROUTER_TRAFFIC). No-op for any other caller.
     private static IObservable<int> Upsert(IMessageHub hub, MeshNode node) =>
         Observable.Using(
                 () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
                       ?? System.Reactive.Disposables.Disposable.Empty,
-                _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)))
+                _ => hub.NodeOperationIssuingHub()
+                    .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)))
             .FirstAsync().Select(d => d.Message)
             .SelectMany(resp => resp.Success
                 ? Observable.Return(1)

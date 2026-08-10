@@ -9,6 +9,7 @@ using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Persistence.Test.TestHelpers;
 using Xunit;
 
 namespace MeshWeaver.Persistence.Test;
@@ -40,7 +41,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     /// per-method xUnit <c>methodTimeout</c> (60 s) is the upper bound either way.
     /// </summary>
     private static async Task WaitForChanges<T>(
-        List<T> changes,
+        IReadOnlyCollection<T> changes,
         int expectedMinCount,
         int timeoutMs = 30_000)
         => await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
@@ -53,7 +54,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     [Fact]
     public async Task ObserveQuery_Create_EmitsAddedNotification()
     {
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
@@ -82,7 +83,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     [Fact]
     public async Task ObserveQuery_CreateMultiple_EmitsBatchedNotification()
     {
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
@@ -120,7 +121,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         await NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
         await NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
 
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
@@ -148,7 +149,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
             NodeType = "Markdown"
         }).Should().Within(30.Seconds()).Emit();
 
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
@@ -183,7 +184,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         await NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
         await NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
 
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
@@ -211,7 +212,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     [Fact]
     public async Task ObserveQuery_FullCRUDCycle_EmitsCorrectNotifications()
     {
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
@@ -252,8 +253,8 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     [Fact]
     public async Task ObserveQuery_CRUDWithMultipleSubscribers_AllReceiveNotifications()
     {
-        var changes1 = new List<QueryResultChange<MeshNode>>();
-        var changes2 = new List<QueryResultChange<MeshNode>>();
+        var changes1 = new ChangeAccumulator<QueryResultChange<MeshNode>>();
+        var changes2 = new ChangeAccumulator<QueryResultChange<MeshNode>>();
 
         var subscription1 = MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
@@ -289,7 +290,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         var orgPath = NodePath("TestOrg");
         await NodeFactory.CreateNode(MeshNode.FromPath(orgPath) with { Name = "TestOrg", NodeType = "Group" }).Should().Within(30.Seconds()).Emit();
 
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{orgPath}"))
             .Subscribe(change => receivedChanges.Add(change));
@@ -324,7 +325,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         var proj1 = NodePath("Project1");
         await NodeFactory.CreateNode(MeshNode.FromPath(proj1) with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
 
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{_ns}"))
             .Subscribe(change => receivedChanges.Add(change));
@@ -356,7 +357,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     [Fact]
     public async Task ObserveQuery_WithFilter_IgnoresNonMatchingNodes()
     {
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
@@ -390,7 +391,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         var proj1 = NodePath("Project1");
         await NodeFactory.CreateNode(MeshNode.FromPath(proj1) with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
 
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
@@ -422,7 +423,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     [Fact]
     public async Task ObserveQuery_VersionIncrementsOnEachChange()
     {
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
@@ -451,7 +452,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     {
         await NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
 
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
