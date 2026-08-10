@@ -257,12 +257,33 @@ spec:
       app.kubernetes.io/instance: "{{ .Release.Name }}"
   replicas: 1
   revisionHistoryLimit: 3
+  # ⏱️ How long a rollout may be "not progressing" before k8s marks it ProgressDeadlineExceeded.
+  #
+  # 🚨 The k8s DEFAULT IS 600s, and against this deployment that default is simply WRONG: the
+  # startupProbe budget above is periodSeconds × failureThreshold, which managed envs set to
+  # 10 × 1080 = 3 HOURS to cover a cold NodeType bake. A legitimately-baking pod is therefore
+  # declared failed after 10 minutes — and `kubectl rollout status` reports a perfectly healthy
+  # long bake as a failed rollout, which is exactly the signal an operator would act on by
+  # rolling back the good image.
+  #
+  # DERIVED, never a second free-standing number: it is the full startup budget plus headroom for
+  # image pull + the wait-for-postgres initContainer. Tying it to the same two values means raising
+  # probes.startup can never silently leave the deadline behind it.
+  progressDeadlineSeconds: {{ add (mul .Values.probes.startup.periodSeconds .Values.probes.startup.failureThreshold) 600 }}
   strategy:
     rollingUpdate:
       maxSurge: 1
-      # 0 → the OLD pod is kept serving until the NEW pod passes its readiness probe (/health). With
-      # a single replica this is what turns a rollout from "brief outage" into zero-downtime: traffic
+      # 🚨 0 is load-bearing — do NOT raise it, and do not let a per-env patch raise it.
+      #
+      # 0 → SURGE-FIRST: the OLD pod keeps serving until the NEW pod passes its probes. With a
+      # single replica this is what turns a rollout from "brief outage" into zero-downtime: traffic
       # only moves once the replacement actually serves. (If the new pod can't come up — e.g. the PG
       # connection-exhaustion wedge — the rollout simply stalls with the old pod still serving, no 502.)
+      #
+      # It is also the ENTIRE mechanism behind the NodeType bake gate (PreWarm__GateReadiness): the
+      # gate protects a portal only by making the new pod refuse readiness, and "refuse readiness"
+      # is worth nothing if k8s already deleted the pod that was serving. At maxUnavailable:1 with
+      # replicas:1 the only serving pod can go away before the replacement is ready, so a gated
+      # rollout there buys FALSE CONFIDENCE — the gate reports, and the outage happens anyway.
       maxUnavailable: 0
     type: "RollingUpdate"
