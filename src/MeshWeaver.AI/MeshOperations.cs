@@ -2420,20 +2420,40 @@ public class MeshOperations
     /// appends the expected JSON schema to the error so the agent can recover.
     /// Emits null when content is valid (or when no schema is available).
     /// </summary>
+    /// <remarks>
+    /// Validation and the recovery schema are read off the SAME probe hub. They want the same
+    /// <see cref="ITypeDefinition"/>, so resolving twice meant building — and immediately tearing
+    /// down — two full hubs for one failed agent write.
+    /// </remarks>
     internal IObservable<string?> ValidateContentWithSchema(MeshNode meshNode)
     {
-        return ValidateContentAgainstSchema(meshNode)
-            .SelectMany(validationError =>
+        if (string.IsNullOrEmpty(meshNode.NodeType))
+            return Observable.Return<string?>(null);
+
+        return ReadFromContentType(
+            meshNode.NodeType!,
+            "_schema_validation",
+            (probeHub, typeDefinition) =>
             {
+                var validationError = ValidateAgainst(meshNode, typeDefinition.Type);
                 if (validationError == null)
-                    return Observable.Return<string?>(null);
-                if (string.IsNullOrEmpty(meshNode.NodeType))
-                    return Observable.Return<string?>(validationError);
-                return GetContentSchema(meshNode.NodeType!)
-                    .Select(schema => schema != null
-                        ? validationError + $" Expected content schema for NodeType '{meshNode.NodeType}': {schema}"
-                        : validationError);
-            });
+                    return null;
+                // A schema is a NICE-TO-HAVE on top of the error the agent must see: never let a
+                // schema-generation failure swallow the validation error itself.
+                try
+                {
+                    return validationError
+                        + $" Expected content schema for NodeType '{meshNode.NodeType}': "
+                        + GenerateSchema(probeHub, typeDefinition.Type);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex,
+                        "Schema retrieval skipped for NodeType {NodeType}", meshNode.NodeType);
+                    return validationError;
+                }
+            },
+            "Schema validation");
     }
 
     /// <summary>
@@ -2489,10 +2509,33 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Returns the JSON schema string for the content type registered against
-    /// <paramref name="nodeType"/>, or null if no schema can be derived.
+    /// Applies <paramref name="nodeType"/>'s hub configuration to a SHORT-LIVED PROBE HUB,
+    /// resolves the content type registered under <paramref name="nodeType"/>, and hands the
+    /// probe hub + type definition to <paramref name="read"/>. Emits null when the NodeType has
+    /// no configuration, no registered content type, or the read throws.
+    ///
+    /// <para>🚨 The probe hub is created <see cref="MeshDataSourceExtensions.AsTransientNodeProbe"/>,
+    /// so it gets the data context (which carries the type registrations this method reads) but
+    /// NOT the per-node control plane — no own-node subscription, no persistence sampler, no
+    /// compile / release-request / sources watcher, no compile-state mirror. Those exist to serve a
+    /// node for months; on a hub that lives microseconds they only opened <c>sync/</c> sub-hubs and
+    /// then faulted as the hub was disposed out from under them, which is where this path's entire
+    /// production log volume came from (~22 error lines per probe, none actionable).</para>
+    ///
+    /// <para>This is also the ONE place a probe hub is built, so a caller that needs both the
+    /// validation result and the schema (see <see cref="ValidateContentWithSchema"/>) pays for one
+    /// probe, not two.</para>
     /// </summary>
-    internal IObservable<string?> GetContentSchema(string nodeType)
+    /// <param name="nodeType">NodeType path whose content type is being resolved.</param>
+    /// <param name="addressPrefix">Address prefix for the probe hub — kept distinct per call site
+    /// so a log line still names which path created it.</param>
+    /// <param name="read">Reads the answer off the probe hub. Runs before the probe is disposed.</param>
+    /// <param name="skipLogContext">What is being skipped, for the debug log on failure.</param>
+    private IObservable<string?> ReadFromContentType(
+        string nodeType,
+        string addressPrefix,
+        Func<IMessageHub, ITypeDefinition, string?> read,
+        string skipLogContext)
     {
         return ResolveHubConfigForSchema(nodeType)
             .Select(hubConfig =>
@@ -2500,42 +2543,81 @@ public class MeshOperations
                 if (hubConfig == null) return null;
                 try
                 {
-                    var tempAddress = new Address($"_schema_lookup/{Guid.NewGuid():N}");
-                    var tempHub = hub.GetHostedHub(tempAddress, hubConfig);
-                    if (tempHub == null) return null;
+                    var probeAddress = new Address($"{addressPrefix}/{Guid.NewGuid():N}");
+                    var probeHub = hub.GetHostedHub(
+                        probeAddress, c => hubConfig(c).AsTransientNodeProbe());
+                    if (probeHub == null) return null;
                     try
                     {
-                        var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
+                        var typeRegistry = probeHub.ServiceProvider.GetService<ITypeRegistry>();
                         if (typeRegistry == null || !typeRegistry.TryGetType(nodeType, out var typeDefinition))
                             return null;
-                        // Generate the schema with tempHub's options, NOT the parent hub's.
-                        // The compiled content type (and its nested types) is registered in
-                        // tempHub's TypeRegistry under its clean short name. The parent hub's
-                        // PolymorphicTypeInfoResolver is bound to the parent's registry, which
-                        // does not own the type — so GetOrAddType would fall back to
-                        // TypeRegistry.FormatType and leak the fully-qualified, capitalized CLR
-                        // FullName into every $type reference. Use the type-owning hub's options
-                        // so the schema references resolve to the registered name.
-                        var schemaNode = tempHub.JsonSerializerOptions.GetJsonSchemaAsNode(typeDefinition!.Type);
-                        return (string?)schemaNode.ToJsonString();
+                        return read(probeHub, typeDefinition!);
                     }
                     finally
                     {
-                        tempHub.Dispose();
+                        probeHub.Dispose();
                     }
                 }
                 catch (Exception ex)
                 {
-                    logger.LogDebug(ex, "Schema retrieval skipped for NodeType {NodeType}", nodeType);
+                    logger.LogDebug(ex, "{Context} skipped for NodeType {NodeType}", skipLogContext, nodeType);
                     return null;
                 }
             });
     }
 
     /// <summary>
+    /// Generates the JSON schema for <paramref name="contentType"/> using
+    /// <paramref name="probeHub"/>'s options.
+    /// <para>
+    /// The schema MUST be generated with the probe hub's options, NOT the parent hub's. The
+    /// compiled content type (and its nested types) is registered in the probe's TypeRegistry
+    /// under its clean short name. The parent hub's PolymorphicTypeInfoResolver is bound to the
+    /// parent's registry, which does not own the type — so GetOrAddType would fall back to
+    /// TypeRegistry.FormatType and leak the fully-qualified, capitalized CLR FullName into every
+    /// $type reference. Use the type-owning hub's options so the schema references resolve to the
+    /// registered name.
+    /// </para>
+    /// </summary>
+    private static string GenerateSchema(IMessageHub probeHub, Type contentType)
+        => probeHub.JsonSerializerOptions.GetJsonSchemaAsNode(contentType).ToJsonString();
+
+    /// <summary>
+    /// Deserializes <paramref name="meshNode"/>'s content into <paramref name="contentType"/> and
+    /// reports the mismatch, or null when the content is valid.
+    /// </summary>
+    private string? ValidateAgainst(MeshNode meshNode, Type contentType)
+    {
+        var contentJson = JsonSerializer.Serialize(meshNode.Content, hub.JsonSerializerOptions);
+        try
+        {
+            var deserialized = JsonSerializer.Deserialize(contentJson, contentType, hub.JsonSerializerOptions);
+            return deserialized == null
+                ? $"Error: Content is null after deserialization for NodeType '{meshNode.NodeType}'."
+                : null;
+        }
+        catch (JsonException ex)
+        {
+            return $"Error: Content does not match the schema for NodeType '{meshNode.NodeType}'. {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Returns the JSON schema string for the content type registered against
+    /// <paramref name="nodeType"/>, or null if no schema can be derived.
+    /// </summary>
+    internal IObservable<string?> GetContentSchema(string nodeType)
+        => ReadFromContentType(
+            nodeType,
+            "_schema_lookup",
+            (probeHub, typeDefinition) => GenerateSchema(probeHub, typeDefinition.Type),
+            "Schema retrieval");
+
+    /// <summary>
     /// Validates node content against the content type for its NodeType.
-    /// Creates a temporary hub with the NodeType's configuration to find the
-    /// registered content type, then attempts to deserialize the content into that type.
+    /// Resolves the registered content type on a transient probe hub, then attempts to
+    /// deserialize the content into that type.
     /// Emits an error message if invalid, or null if valid/no schema available.
     /// </summary>
     internal IObservable<string?> ValidateContentAgainstSchema(MeshNode meshNode)
@@ -2543,46 +2625,11 @@ public class MeshOperations
         if (string.IsNullOrEmpty(meshNode.NodeType))
             return Observable.Return<string?>(null);
 
-        return ResolveHubConfigForSchema(meshNode.NodeType!)
-            .Select(hubConfig =>
-            {
-                if (hubConfig == null) return null;
-                try
-                {
-                    var tempAddress = new Address($"_schema_validation/{Guid.NewGuid():N}");
-                    var tempHub = hub.GetHostedHub(tempAddress, hubConfig);
-                    if (tempHub == null) return null;
-                    try
-                    {
-                        var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
-                        if (typeRegistry == null || !typeRegistry.TryGetType(meshNode.NodeType!, out var typeDefinition))
-                            return null;
-
-                        var contentType = typeDefinition!.Type;
-                        var contentJson = JsonSerializer.Serialize(meshNode.Content, hub.JsonSerializerOptions);
-                        try
-                        {
-                            var deserialized = JsonSerializer.Deserialize(contentJson, contentType, hub.JsonSerializerOptions);
-                            return (string?)(deserialized == null
-                                ? $"Error: Content is null after deserialization for NodeType '{meshNode.NodeType}'."
-                                : null);
-                        }
-                        catch (JsonException ex)
-                        {
-                            return (string?)$"Error: Content does not match the schema for NodeType '{meshNode.NodeType}'. {ex.Message}";
-                        }
-                    }
-                    finally
-                    {
-                        tempHub.Dispose();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    logger.LogDebug(ex, "Schema validation skipped for NodeType {NodeType}", meshNode.NodeType);
-                    return null;
-                }
-            });
+        return ReadFromContentType(
+            meshNode.NodeType!,
+            "_schema_validation",
+            (_, typeDefinition) => ValidateAgainst(meshNode, typeDefinition.Type),
+            "Schema validation");
     }
 
     /// <summary>

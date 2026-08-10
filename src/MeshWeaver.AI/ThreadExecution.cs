@@ -187,6 +187,15 @@ internal static class ThreadExecution
         // stream FAULTS it must not die silently — a dead watcher means a claimed
         // round never dispatches (Status stuck at StartingExecution, IsExecuting
         // forever): the live-path "observer dies" deadlock. On fault, re-establish.
+        //
+        // 🚨 This is a HAND-ROLLED loop, NOT
+        // ActivityControlPlaneExtensions.SubscribeWithReEstablish — it re-establishes on
+        // EVERY fault and therefore does NOT have that helper's terminal classification
+        // (own-node-gone / poisoned content). Converting it is a separate change: this
+        // watcher observes the PARENT thread hub's node, so the helper's address-scoped
+        // own-node-gone detection would need parentHub.Address passed through or it
+        // would silently never match. Only the SCHEDULING of the re-establish is shared,
+        // via ReEstablishSchedule.Arm.
         IDisposable? sub = null;
         // 🚨 #991 — hold the PENDING re-establish so teardown cancels it. An uncancelled
         // `Observable.Timer` sits on the process-wide TimerQueue (a strong GC root) and
@@ -194,6 +203,14 @@ internal static class ThreadExecution
         // faults as the hub tears down keeps the hub alive past disposal.
         var pendingReEstablish = new System.Reactive.Disposables.SerialDisposable();
         var disposed = false;
+        // 🚨 Resolve the workspace ONCE, at install time, while the hub's DI scope is
+        // alive. Re-resolving inside Establish() (GetWorkspace() is
+        // ServiceProvider.GetRequiredService<IWorkspace>()) put a live
+        // ObjectDisposedException source on the re-establish path: a timer tick that beat
+        // the disposal flag threw straight out of the Rx OnNext handler on a thread-pool
+        // thread — unhandled, process-fatal. IWorkspace is scoped per hub, so hoisting
+        // resolves the identical instance.
+        var workspace = parentHub.GetWorkspace();
         // 🚨 Observe the PARENT thread hub's AUTHORITATIVE own MeshNode stream —
         // NOT the cross-hub IMeshNodeStreamCache. The cache opens a remote
         // subscription to the owning grain and, on Orleans, replays/reorders:
@@ -211,7 +228,7 @@ internal static class ThreadExecution
         // single time and never sees a phantom re-claim. (Using the THREAD
         // hub's workspace here, never the _Exec child's, also matches
         // feedback_synced_query_thread_hub.md.)
-        void Establish() => sub = parentHub.GetWorkspace().GetMeshNodeStream()
+        void Establish() => sub = workspace.GetMeshNodeStream()
             // Pair each emission with its current Status so DistinctUntilChanged
             // dedupes on the Status field only — concurrent field updates that
             // happen while Status stays StartingExecution must NOT re-fire.
@@ -277,10 +294,11 @@ internal static class ThreadExecution
                 {
                     logger?.LogWarning(ex,
                         "[ExecRoundWatcher] stream errored for {ThreadPath} — re-establishing", threadPath);
-                    if (!disposed)
-                        pendingReEstablish.Disposable =
-                            System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1))
-                                .Subscribe(_ => Establish());
+                    // Re-checks `disposed` at FIRE time (not only here at arm time) and
+                    // routes a synchronous Establish() throw to the logger instead of onto
+                    // the timer's thread-pool thread. See ReEstablishSchedule.
+                    pendingReEstablish.Disposable = ReEstablishSchedule.Arm(
+                        () => disposed, Establish, logger, "ExecRoundWatcher", threadPath);
                 });
 
         Establish();
@@ -593,23 +611,30 @@ internal static class ThreadExecution
                     // terminal/valid state must restart the watcher.) Without this a
                     // faulted observation left the stale thread stuck forever.
                     //
-                    // 🚨 Two guards make this self-heal safe — mirroring the sanctioned
-                    // SubscribeWithReEstablish pattern (disposed-terminal + scheduled,
-                    // never-synchronous re-establish):
+                    // 🚨 This is a HAND-ROLLED loop. It is NOT
+                    // ActivityControlPlaneExtensions.SubscribeWithReEstablish and does NOT
+                    // inherit its terminal fault classification — it re-establishes on
+                    // EVERY fault, including an own-node-gone NotFound or poisoned content
+                    // that the sanctioned helper stops on. Converting it is a separate
+                    // change; only the SCHEDULING is shared, via ReEstablishSchedule.Arm:
                     //   • `disposed` stops re-establishing once the hub is torn down —
                     //     the fault is then permanent (scope gone), so retrying is futile.
+                    //     Read HERE and AGAIN when the timer fires (a second passes, and
+                    //     teardown is exactly when the stream faults).
                     //   • the 1 s Timer hops the re-establish OFF the synchronous error
                     //     stack. A Subscribe-time fault re-entering Establish inline would
                     //     recurse to a stack overflow; deferring also lets the disposal
                     //     hook set `disposed` past the teardown window.
+                    //   • a synchronous throw out of Establish (disposed DI scope) reaches
+                    //     the logger, never the timer's thread-pool thread as an unhandled
+                    //     exception.
                     if (disposed)
                         return;
                     logger?.LogWarning(ex,
                         "[ThreadExec] Init observation faulted for {ThreadPath} — re-establishing recovery",
                         threadPath);
-                    pendingReEstablish.Disposable =
-                        System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1))
-                            .Subscribe(_ => { if (!disposed) Establish(); });
+                    pendingReEstablish.Disposable = ReEstablishSchedule.Arm(
+                        () => disposed, Establish, logger, "ThreadExec Init", threadPath);
                 });
 
         Establish();
