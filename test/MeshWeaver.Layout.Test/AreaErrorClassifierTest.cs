@@ -302,4 +302,53 @@ public class AreaErrorClassifierTest
                 Failure("Permission check unavailable for user 'x' on 'AgenticEngineering/Intro' (Read)",
                     ErrorType.Unavailable))
             .Should().BeNull();
+
+    // ── IsAccessDenied: the server-side render pipeline swaps the raw exception text for the
+    //    standard localized access-denied presentation on a DEFINITE denial (issue #1182) ──
+
+    [Fact]
+    public void IsAccessDenied_TrueForTypedUnauthorizedAccessException()
+        // The exact prod shape: the access layer throws UnauthorizedAccessException
+        // ("User 'carson' lacks Read permission on 'Profiles/RolandLinkedIn'") mid-render.
+        => AreaErrorClassifier.IsAccessDenied(
+                new UnauthorizedAccessException("User 'carson' lacks Read permission on 'Profiles/RolandLinkedIn'"))
+            .Should().BeTrue();
+
+    [Fact]
+    public void IsAccessDenied_TrueWhenTheDenialIsWrapped()
+        => AreaErrorClassifier.IsAccessDenied(
+                new InvalidOperationException("render faulted",
+                    new UnauthorizedAccessException("User 'x' lacks Read permission on 'y'")))
+            .Should().BeTrue();
+
+    [Fact]
+    public void IsAccessDenied_TrueForTheAccessDeniedBanner()
+        // The delivery-failure banner carries no typed exception; the quoted-path banner is
+        // the same signal TryGetAccessDeniedPath keys the paywall redirect on.
+        => AreaErrorClassifier.IsAccessDenied(
+                Failure("Access denied: user 'x' lacks Read permission on 'AgenticEngineering'",
+                    ErrorType.Unauthorized))
+            .Should().BeTrue();
+
+    [Fact]
+    public void IsAccessDenied_FalseForAnEngineeringError()
+        // A crash must keep the generic error panel carrying the exception message —
+        // presenting it as "Access denied" would send the user to ask for rights they hold.
+        => AreaErrorClassifier.IsAccessDenied(new NullReferenceException("boom")).Should().BeFalse();
+
+    [Fact]
+    public void IsAccessDenied_FalseForAnAvailabilityFailure()
+        // NO VERDICT (issue #974): nothing was decided about the caller's rights, so it must
+        // never be presented as a denial — the typed check wins over any message wording.
+        => AreaErrorClassifier.IsAccessDenied(
+                Failure("Permission check unavailable for user 'x' on 'y' (Read) — no verdict was reached",
+                    ErrorType.Unavailable))
+            .Should().BeFalse();
+
+    [Fact]
+    public void IsAccessDenied_FalseForAValidationRejection()
+        // Validation is an expected USER-ACTION failure (Warning-level) but NOT a denial —
+        // its message is actionable and must stay visible verbatim.
+        => AreaErrorClassifier.IsAccessDenied(Failure("Validation failed for X", ErrorType.Failed))
+            .Should().BeFalse();
 }
