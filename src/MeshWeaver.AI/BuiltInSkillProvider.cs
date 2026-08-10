@@ -8,7 +8,8 @@ namespace MeshWeaver.AI;
 /// Provides the built-in skill nodes from embedded <c>Data/Skill/*.md</c> resources — the SAME
 /// .md-with-YAML authoring model as agents (<see cref="BuiltInAgentProvider"/>). Each skill is a
 /// <c>nodeType: Skill</c> markdown file: <b>behaviour</b> skills carry an <c>action:</c> block in the
-/// frontmatter (<c>Pick</c> / <c>OpenContent</c> / <c>Connect</c>), <b>instruction</b> skills carry
+/// frontmatter (any <see cref="SkillActionKind"/> — <c>Pick</c>, <c>OpenContent</c>, <c>Navigate</c>,
+/// <c>Connect</c>, <c>Disconnect</c>, <c>NewThread</c>), <b>instruction</b> skills carry
 /// their how-to in the markdown body. The slash word is the file name (<c>agent.md</c> → <c>/agent</c>).
 /// Discovered together with per-space / per-user skills via <see cref="SkillNodeType.SkillQueries"/>.
 /// </summary>
