@@ -194,6 +194,7 @@
   <Folder Name="/tools/">
     <File Path="tools/generate-memex-template.cs" />
     <Project Path="tools/MeshWeaver.ComboAssembler/MeshWeaver.ComboAssembler.csproj" />
+    <Project Path="tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj" />
     <Project Path="tools/MeshWeaver.MemexTemplate.Pack/MeshWeaver.MemexTemplate.Pack.csproj" />
     <Project Path="tools/MeshWeaver.LogWatcher/MeshWeaver.LogWatcher.csproj" />
     <Project Path="tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj" />
