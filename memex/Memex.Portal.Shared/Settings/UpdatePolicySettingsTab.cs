@@ -9,6 +9,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using MeshWeaver.PluginCatalog;
 using Memex.Portal.Shared.SelfUpdate;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -71,10 +72,16 @@ public static class UpdatePolicySettingsTab
                 UpdatePolicyNodeType.NodePath, typeof(UpdatePolicyContent)))
             .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingUpdatePolicy"))));
 
-        // Live status: the latest available tag + when last checked.
+        // Live status: the latest available tag, when last checked, and — when the combo gate has
+        // verified that tag against THIS instance's module set (mw-combo-verify) — its verdict. A
+        // red verdict replaces the eternal "update available" with "cannot update to X" naming
+        // every failing module (Doc/Architecture/CandidateReleaseProtocol → "Report the verdict
+        // where an admin looks").
         stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
             .Select(node => (UiControl?)Controls.Markdown(
-                StatusMarkdown(UpdatePolicyNodeType.Parse(node, h.Hub.JsonSerializerOptions))))
+                StatusMarkdown(
+                    UpdatePolicyNodeType.Parse(node, h.Hub.JsonSerializerOptions),
+                    (key, args) => h.Localize(key, args))))
             .StartWith((UiControl?)Controls.Markdown("")));
 
         // Manual apply (installs that can self-patch). Reads the latest tag, then patches via the Http pool.
@@ -116,9 +123,80 @@ public static class UpdatePolicySettingsTab
         return stack;
     }
 
-    private static string StatusMarkdown(UpdatePolicyContent content) =>
-        string.IsNullOrEmpty(content.LatestAvailableTag)
-            ? "_No newer version detected yet._"
-            : $"**Latest available:** `{content.LatestAvailableTag}`" +
-              (content.CheckedAt is { } at ? $" _(checked {at:yyyy-MM-dd HH:mm} UTC)_" : "");
+    /// <summary>How many caveat lines a NotVerifiable verdict renders before "… and N more".
+    /// Failing MODULES are never truncated — breadth-complete reporting is the gate's point.</summary>
+    private const int MaxRenderedCaveats = 6;
+
+    /// <summary>
+    /// The status line(s): latest available tag + check time, joined with the combo gate's verdict
+    /// for that tag when one is recorded. Pure and localizer-seamed so the three verdict renderings
+    /// are pinned by unit tests. Module ids, tags, digests, and the gate's failure/caveat
+    /// diagnostics render VERBATIM — they are machine text, the same rule as compiler output
+    /// (<c>InstanceComboReader.ProvenanceCaveat</c> documents the choice); every label around them
+    /// is localized.
+    /// </summary>
+    internal static string StatusMarkdown(
+        UpdatePolicyContent content, Func<string, object?[], string> localize)
+    {
+        if (string.IsNullOrEmpty(content.LatestAvailableTag))
+            return localize("ui.updateNoNewerVersion", []);
+
+        var tag = content.LatestAvailableTag!;
+        var available = localize("ui.updateLatestAvailable", [tag])
+            + (content.CheckedAt is { } at
+                ? " " + localize("ui.updateCheckedAt", [at.ToString("yyyy-MM-dd HH:mm")])
+                : "");
+
+        var verdict = content.VerificationFor(tag);
+        if (verdict is null)
+            return available;
+
+        var verifiedAt = localize("ui.updateVerifiedAtLine",
+            [verdict.VerifiedAt.ToString("yyyy-MM-dd HH:mm"), verdict.ImageDigest ?? "?"]);
+        return verdict.Verdict switch
+        {
+            ComboVerdictKind.Green =>
+                available + "\n\n"
+                + localize("ui.updateVerifiedGreen", [verdict.Modules.Count])
+                + " " + verifiedAt,
+            ComboVerdictKind.Red =>
+                localize("ui.updateBlocked", [tag]) + "\n\n"
+                + FailedModuleList(verdict, localize) + "\n\n" + verifiedAt,
+            _ =>
+                localize("ui.updateNotVerifiable", [tag]) + "\n\n"
+                + CaveatList(verdict, localize) + "\n\n" + verifiedAt,
+        };
+    }
+
+    /// <summary>Every failing module — never truncated — with its first failure line (and a count
+    /// of the rest).</summary>
+    private static string FailedModuleList(
+        ComboVerification verdict, Func<string, object?[], string> localize) =>
+        string.Join("\n", verdict.FailedModules.Select(module =>
+        {
+            var first = module.Failures.Count > 0 ? Sanitize(module.Failures[0]) : "";
+            var more = module.Failures.Count > 1
+                ? " " + localize("ui.updateMoreFailures", [module.Failures.Count - 1])
+                : "";
+            return $"- **{module.ModuleId}** — {first}{more}";
+        }));
+
+    private static string CaveatList(
+        ComboVerification verdict, Func<string, object?[], string> localize)
+    {
+        var lines = verdict.Caveats
+            .Take(MaxRenderedCaveats)
+            .Select(caveat => $"- {Sanitize(caveat)}")
+            .ToList();
+        if (verdict.Caveats.Count > MaxRenderedCaveats)
+            lines.Add("- " + localize("ui.updateMoreItems", [verdict.Caveats.Count - MaxRenderedCaveats]));
+        return string.Join("\n", lines);
+    }
+
+    /// <summary>One markdown-safe line out of a multi-line diagnostic, bounded.</summary>
+    private static string Sanitize(string diagnostic)
+    {
+        var flat = diagnostic.ReplaceLineEndings(" ").Trim();
+        return flat.Length <= 200 ? flat : flat[..200] + "…";
+    }
 }
