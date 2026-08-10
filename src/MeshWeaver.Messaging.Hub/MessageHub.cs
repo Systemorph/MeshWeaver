@@ -792,6 +792,7 @@ public sealed class MessageHub : IMessageHub
                 logger.LogWarning(
                     "Unhandled {MessageType} (ID: {MessageId}) in fallback hub {Address} - answering {ErrorType} NACK: {Reason}",
                     delivery.Message.GetType().Name, delivery.Id, Address, nackPolicy.ErrorType, nackPolicy.Reason);
+                var nackPosted = false;
                 try
                 {
                     Post(new DeliveryFailure(delivery)
@@ -800,13 +801,21 @@ public sealed class MessageHub : IMessageHub
                         NodeTypePath = nackPolicy.NodeTypePath,
                         Message = nackPolicy.Reason
                     }, o => o.ResponseFor(delivery));
+                    nackPosted = true;
                 }
                 catch (Exception ex)
                 {
                     logger.LogError(ex, "Failed to post fallback NACK for {MessageType} (ID: {MessageId}) in {Address}",
                         delivery.Message.GetType().Name, delivery.Id, Address);
                 }
-                return delivery.Failed(nackPolicy.Reason);
+                // 🚨 Mark ONLY when the typed NACK actually went out — see
+                // MessageService.FailureAlreadyReported. Marking after a THROWN post would suppress
+                // the follow-up and leave the caller with NO failure response, which is the silent
+                // park this NACK path exists to prevent.
+                var failed = delivery.Failed(nackPolicy.Reason);
+                return nackPosted
+                    ? failed.WithProperty(MessageService.FailureAlreadyReported, true)
+                    : failed;
             }
 
             // Check if this is a request that expects a response
