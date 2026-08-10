@@ -41,19 +41,28 @@ GitHub App credential already live.
 
 ## One fault, one ticket
 
-The fingerprint is `sha256(category, exception type, normalized message head, top application
-frame)`, truncated to 16 hex characters. Four details make it collapse the right things and only
-the right things:
+The fingerprint (`StructuralLogIncidentIdentity.Compute`) is
+`sha256(category, eventId, discriminator)` truncated to **16 hex characters** (the first 8 bytes),
+where the discriminator is `"{exceptionType}|{topFrame}"` — or whichever of the two is present, or
+the empty string when neither is. Four details make it collapse the right things and only the right
+things:
 
-- **The message is normalized** — guids, timestamps, paths (filesystem *and* mesh-node), quoted
-  literals, hex blobs and bare numbers are masked. `rbuergi/Foo/7a2f…` and `acme/Bar/91bc…` are one
-  fault, so a defect that every tenant hits opens one ticket rather than one per tenant.
+- **🚨 The message text is NOT hashed — deliberately, and this is the part that changed.** Earlier
+  revisions folded a *normalized* message (guids, timestamps, paths, quoted literals, hex blobs and
+  bare numbers masked) into the identity. That still fanned out: the varying subject sits in an
+  arbitrary position that no masking rule reliably anticipates, and one defect produced ~50
+  incidents. The message is now structurally excluded. It is still normalized and *carried* on the
+  report (`NormalizedMessage`), it just does not contribute to identity.
+- **Category + `EventId` identify the log SITE**, and are the whole identity for a bare diagnostic
+  with no exception and no frame — so every burst from one site is one incident.
 - **The exception type is part of the identity.** The same log line can precede different failures;
   folding them together would hide the second bug behind the first one's already-filed ticket.
-- **The top frame excludes framework code** and drops its `:line NNN` suffix, so an unrelated edit
-  above the faulting line does not fork the fingerprint into a second ticket.
+- **The top frame excludes framework code** (`System.` / `Microsoft.` prefixes are skipped) and
+  drops its `in /path/file.cs:line NNN` suffix, so an unrelated edit above the faulting line does
+  not fork the fingerprint into a second ticket.
 - **Namespace and pod are NOT in the fingerprint.** The same defect on two pods is one ticket; the
-  pods are recorded on the incident instead.
+  pods are recorded on the incident instead — and so a defect every tenant hits opens one ticket
+  rather than one per tenant.
 
 The fingerprint is also the incident's node id, so redelivery is idempotent by construction. That
 is what lets the watcher retry freely.

@@ -146,20 +146,21 @@ Examples: `PostgreSqlPathRoutingAdapter` (one schema-bound adapter per partition
 ```csharp
 public sealed class MyRoutingAdapter : IStorageAdapter
 {
-    private readonly IPartitionStateCache _cache;
-
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions opts)
-        => _cache.GetOrProbe(GetFirstSegment(node.Path)).Take(1).SelectMany(state =>
-            state switch
-            {
-                PartitionState.Exists e        => GetOrCreateSchemaAdapter(e.Def).Write(node, opts),
-                PartitionState.PendingCreate p => LazyCreateThenWrite(p, node, opts),
-                _                              => Observable.Return<MeshNode?>(null),
-            });
+    {
+        // Map the first path segment to a target SYNCHRONOUSLY — no existence probe,
+        // no cached partition state, no lazy CREATE SCHEMA on the write path.
+        var target = ResolveTarget(GetFirstSegment(node.Path));
+        return target is null
+            ? Observable.Return<MeshNode?>(null)       // not mine — chain falls through
+            : GetOrCreateAdapter(target).Write(node, opts);
+    }
 }
 ```
 
-The routing decision here is driven by the partition cache, not a path-match predicate.
+🚨 **A routing adapter must NOT create the partition it is routing to.** `PostgreSqlPathRoutingAdapter`'s lazy `EnsureSchemaForPartitionSync` was **deleted** from both write paths (`RouteWrite` and `CreateAdapterForTable`): any unrecognised first segment — NodeType names, reserved words, request URLs — used to spawn a ghost schema in production. A write to an unprovisioned partition now faults `42P01` ("no partition, no write"). Provisioning is explicit, via `IPartitionStorageProvider.EnsurePartitionProvisioned(namespace)`; see [Partition Storage Routing](/Doc/Architecture/PartitionStorageRouting).
+
+Reads are the mirror image: they **tolerate** an absent schema (`42P01` → empty result), never an error and never a slow tree walk.
 
 ---
 
@@ -183,21 +184,29 @@ Read-only providers (`EmbeddedResource`, `StaticNode`) set `IsReadOnly = true`. 
 
 ## The "No Async Ever" Rule
 
-Every method on `IStorageAdapter` returns `IObservable<T>`. Use `Observable.FromAsync(ct => ...)` to bridge async-leaf calls (Npgsql, Azure SDK, HTTP client) inside the adapter. There is no `Task<T>` on the public surface and no `await` between adapters and the routing layer.
+Every method on `IStorageAdapter` returns `IObservable<T>`. There is no `Task<T>` on the public surface and no `await` between adapters and the routing layer.
+
+🚨 **Bridge async leaves through `IIoPool` — NEVER `Observable.FromAsync`.** `Observable.FromAsync` is forbidden everywhere in `src/` outside `IoPool` itself: it runs the function's synchronous prologue on the **subscribing thread** (the hub/grain scheduler, when the subscribe happens mid-handler) and applies no concurrency bound — exactly the deadlock-and-exhaustion class the pool exists to kill.
+
+```csharp
+// ❌ FORBIDDEN
+=> Observable.FromAsync(ct => ReadRowAsync(path, ct));
+
+// ✅ Resolve an IIoPool from IoPoolRegistry (mesh-scoped singleton, never static)
+=> _ioPool.Invoke(ct => ReadRowAsync(path, ct));            // Task<T> leaf: DB, blob, HTTP
+=> _ioPool.InvokeBlocking(ct => File.ReadAllBytes(p));      // sync-blocking / CPU leaf
+=> _ioPool.InvokeStream(ct => EnumerateRowsAsync(ct));      // IAsyncEnumerable<T> leaf
+```
+
+PostgreSQL pools are named `pg:{adapter}` and capped at **1**, so the gate *is* the single Npgsql connection. Idempotent one-shots (schema provisioning) use the promise-cache — `pool.Run(...)` stashed in an *instance* `ConcurrentDictionary`. Full reference: [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling).
 
 ---
 
-## Postgres-Specific: `PgPartitionCache`
+## Postgres-Specific: there is no partition-state cache
 
-The PostgreSQL provider does not enumerate schemas at startup. Instead, per first-segment, it maintains a `ReplaySubject<PartitionState>` seeded by an `information_schema.schemata` probe on first access. There are three states:
+**`PgPartitionCache` and `PgPartitionNotifyListener` do not exist** — the whole probe/TTL/invalidate machinery was removed (issue #15). The router does not cache or probe schema existence at all: it maps the first path segment to a schema name **synchronously**, and reads tolerate an absent schema (`42P01` → empty). A partition created on another silo is therefore routable **immediately**, with no invalidation round-trip and nothing to go stale.
 
-| State | Meaning | TTL |
-|---|---|---|
-| **Exists(def)** | Schema present — reads and writes route to its adapter. | 15 min |
-| **PendingCreate(seg)** | Schema missing — lazy-create triggered on next write. | 1 min |
-| **Absent** | Probe failed — reads/writes return `null` so try-then-claim falls through. | — |
-
-**Cross-silo invalidation** is handled via PostgreSQL's `NOTIFY/LISTEN` mechanism. Migration V23 adds a Postgres trigger that fires `NOTIFY partition_changes` on every write to `admin.mesh_nodes` whose `namespace = 'Admin/Partition'`. `PgPartitionNotifyListener` (an `IHostedService` running on every silo) listens on that channel and calls `cache.Invalidate(ns)` on each event — the next access on any silo re-probes and picks up the new state automatically.
+The only boot-time work is `PostgreSqlPartitionSubscriptionHostedService`, which does `CREATE SCHEMA` + table init for every framework partition explicitly advertised by an `IStaticNodeProvider`. It **does not enumerate** existing schemas.
 
 ---
 
@@ -210,10 +219,16 @@ The PostgreSQL provider does not enumerate schemas at startup. Instead, per firs
 > Adapters self-check. `PersistenceService` only sequences and aggregates — it never inspects path shapes itself.
 
 > **Loading all partitions at startup.**
-> The routing layer never enumerates. `PgPartitionCache` probes lazily per first-segment on first access.
+> The routing layer never enumerates. Only explicitly-advertised framework partitions are seeded at boot; everything else routes by first path segment, with reads tolerating an absent schema.
+
+> **Creating the partition on the write path.**
+> A routing adapter maps a path to a target; it never runs `CREATE SCHEMA`. Provisioning is an explicit, pooled, promise-cached `EnsurePartitionProvisioned(...)` subscription.
 
 > **Calling a `Matches()` method.**
 > There is no `Matches`. That predicate was removed; routing is now driven entirely by `Read`/`Write` return values.
+
+> **Reaching for `Observable.FromAsync`.**
+> Forbidden outside `IoPool`. Bridge every async / blocking leaf through `IIoPool`.
 
 ---
 
@@ -223,9 +238,9 @@ The PostgreSQL provider does not enumerate schemas at startup. Instead, per firs
 |---|---|
 | `IObservable<bool> Matches(string)` | Removed — adapters self-decide via `Read`/`Write` return value. |
 | `IObservable<PartitionDefinition?> ResolveDefinition(string)` | Removed — internal to each provider's cache. |
-| `int Priority` on the provider | Removed — registration order determines try-then-claim sequence. |
-| `PostgreSqlPartitionStorageProvider._partitionSubjects` per first-segment | Replaced by `PgPartitionCache` (single class, TTL-aware, pg_notify-invalidated). |
-| `PostgreSqlPartitionSubscriptionHostedService` eagerly enumerated schemas | Now only seeds framework partitions from `IStaticNodeProvider`; lazy otherwise. |
+| `int Priority` on the provider | **Still present and load-bearing.** `PersistenceService` walks specific (fixed-namespace) providers before wildcards, and within a band higher `Priority` claims first (ties keep registration order). Durable backends return `100` so they always beat the in-memory wildcard catch-all `AddOrleansMeshServices` registers — without it, a host that wired its durable backend *after* the Orleans defaults silently persisted every node into RAM (2026-06-11 prod create-loss). |
+| `PostgreSqlPartitionStorageProvider._partitionSubjects` per first-segment | Removed with the rest of the partition-state caching (#15) — no probe, no TTL, no invalidation. |
+| `PostgreSqlPartitionSubscriptionHostedService` eagerly enumerated schemas | Now only seeds framework partitions from `IStaticNodeProvider`. |
 
 ---
 
@@ -234,6 +249,6 @@ The PostgreSQL provider does not enumerate schemas at startup. Instead, per firs
 - `src/MeshWeaver.Mesh.Contract/Services/IStorageAdapter.cs` — the adapter contract.
 - `src/MeshWeaver.Mesh.Contract/Services/IPartitionStorageProvider.cs` — the provider contract.
 - `src/MeshWeaver.Hosting/Persistence/PersistenceService.cs` — try-then-claim write, fan-out read/delete.
-- `src/MeshWeaver.Hosting.PostgreSql/PgPartitionCache.cs` — the per-namespace `ReplaySubject` cache.
-- `src/MeshWeaver.Hosting.PostgreSql/PgPartitionNotifyListener.cs` — cross-silo pg_notify listener.
-- `memex/aspire/Memex.Database.Migration/Migrations/V23_PartitionChangesNotify.cs` — the trigger migration.
+- `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPathRoutingAdapter.cs` — synchronous first-segment → schema/table routing.
+- `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionStorageProvider.cs` — `EnsurePartitionProvisioned` (pooled promise-cache).
+- `src/MeshWeaver.Mesh.Contract/Threading/` + [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling) — `IIoPool`, the only sanctioned async bridge.

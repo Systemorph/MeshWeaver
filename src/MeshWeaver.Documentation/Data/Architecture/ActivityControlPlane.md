@@ -117,7 +117,9 @@ Notice that **the user never posts a "cancel" message** — they just patch the 
 
 When you build a custom NodeType with state-machine semantics — a long-running job, a transitional resource, anything with start / pause / resume / retry / cancel — follow this shape:
 
-1. **Define your content record with two paired fields**: `Status` (current actual state) and `RequestedStatus` (or `RequestedAction`, `RequestedTransition` — your control surface).
+1. **Define your content record with two paired fields**: `Status` (current actual state) and `RequestedStatus` (the control surface).
+
+   > 🚨 **If you want `hub.WatchControlPlane(...)`, the field MUST be named `RequestedStatus` on a content type that materialises as an `ActivityLog`.** `WatchControlPlane` is hard-wired to `node.ContentAs<ActivityLog>()?.RequestedStatus` — it does not take a selector. A differently-named control field (`RequestedAction`, `RequestedTransition`, …) compiles fine and is written fine, and the watcher simply never fires: the write lands on the node and nothing reacts. If your control surface genuinely is not an `ActivityLog.RequestedStatus`, use `WatchSubmission` (below) with your own fingerprint/predicate instead — do not rename the field and expect `WatchControlPlane` to find it.
 2. **In `WithInitialization`**, subscribe to the hub's own `MeshNodeReference` stream and react to changes in the requested field. Use `.DistinctUntilChanged()` so you only fire on real transitions.
 3. **Your hub is the sole writer for `Status`**. Users never patch it directly — they patch `RequestedStatus`. The hub reads the request, does the work, and writes the resulting `Status`.
 4. **No new request/response message types.** Don't add `Cancel<X>Request`, `Pause<X>Request`, etc. The control plane *is* the content.
@@ -169,6 +171,7 @@ Faults log to the optional `ILogger` argument (or the `MeshWeaver.ActivityContro
 `WatchControlPlane` is right when the trigger is a single status field (`RequestedStatus`). Many orchestration cases need a broader predicate — for example, a thread hub that dispatches a new agent round whenever it has unprocessed user messages and isn't already executing:
 
 ```csharp
+// Illustrative shape — the step builders are yours to write.
 hub.WatchSubmission(
     fingerprint:   n => (t.IsExecuting, t.Messages.Count, t.IngestedMessageIds.Count, t.PendingUserMessages.Count),
     needsDispatch: n => !t.IsExecuting && t.PendingUserMessages.Count > 0,
@@ -214,7 +217,7 @@ The chain runs in the hub's natural scheduler so `AsyncLocal` flows. Multi-step 
 >
 > **Correctness comes from node state, never from an in-memory gate.** Each hub owns its OWN state, on its OWN node. The claim is a re-check *inside* the `stream.Update` lambda (or a paired `Requested<X>` field cleared in the same atomic update that transitions `Status`). An in-memory flag may coalesce redundant work, but it must never be the thing that makes double-dispatch impossible.
 
-Watchers that fire a one-shot trigger from an observable stream must single-flight. An in-memory `Interlocked.CompareExchange(ref dispatching, 1, 0)` gate is **not sufficient on its own**: it races on CI when the workspace stream's `ReplaySubject(1)` emits a stale snapshot after the gate has been released — a flicker `Idle → Executing → Idle` in the same hub tick can dispatch twice. The production failure mode this caused was `Submit_DuringExecution_QueuedUntilRoundCompletes`: u2 ingested twice into `IngestedMessageIds`, two response cells, six messages in `thread.Messages` instead of four.
+Watchers that fire a one-shot trigger from an observable stream must single-flight. An in-memory `Interlocked.CompareExchange(ref dispatching, 1, 0)` gate is **not sufficient on its own**: it races on CI when the workspace stream's `ReplaySubject(1)` emits a stale snapshot after the gate has been released — a flicker `Idle → Executing → Idle` in the same hub tick can dispatch twice. The production failure mode this caused was `Submit_DuringExecution_QueuedUntilRoundCompletes_ThenNextRoundDispatches` (`test/MeshWeaver.AI.Test/ThreadSubmissionIntegrationTest.cs`): u2 ingested twice into `IngestedMessageIds`, two response cells, six messages in `thread.Messages` instead of four.
 
 (`WatchSubmission` does carry such a flag internally, as a *coalescer* on top of the node-state claim — see the box above. That is the framework's job; it is not a substitute for the in-lambda re-check in your dispatch.)
 
@@ -224,12 +227,14 @@ For **cross-process triggers** (a non-owner hub wanting to drive a mutation on t
 
 ### Existing intent/state pairs in the codebase
 
-| Owning node            | Intent field                     | Current-state field           | Cleared by                       |
-|------------------------|----------------------------------|-------------------------------|----------------------------------|
-| `MeshThread`           | (none — Status transition gates) | `Status` (Starting/Executing) | `InstallServerWatcher` claim     |
-| `MeshThread`           | `RequestedStatus` (= `Cancelled`)| `Status` (→ `Cancelled`)      | Streaming-loop terminal write    |
-| `NodeTypeDefinition`   | `RequestedReleasePath`           | `LatestReleasePath`           | `NodeTypeCompileActivityHandler` |
-| `ActivityLog`          | `RequestedStatus`                | `Status`                      | Activity hub on transition       |
+| Owning node            | Intent field                      | Current-state field           | Consumed / retired by             |
+|------------------------|-----------------------------------|-------------------------------|-----------------------------------|
+| `MeshThread`           | (none — Status transition gates)  | `Status` (Starting/Executing) | `InstallServerWatcher` claim      |
+| `MeshThread`           | `RequestedStatus` (= `Cancelled`) | `Status` (→ `Cancelled`)      | Streaming-loop terminal write     |
+| `NodeTypeDefinition`   | `RequestedReleaseAt` (timestamp)  | `LatestReleasePath`           | the release watcher stamping `LastReleaseRequestHandledAt` (it dispatches only while `RequestedReleaseAt > LastReleaseRequestHandledAt` — an idempotent CAS, not a field clear) |
+| `ActivityLog`          | `RequestedStatus`                 | `Status`                      | Activity hub on transition        |
+
+> ⚠️ **`NodeTypeDefinition.RequestedReleasePath` is NOT an intent field — do not treat it as one.** It is a **durable pin**: while it is set, every per-instance hub activates against that release's `AssemblyPath` instead of `LatestReleasePath`, and creating a fresh release deliberately does **not** touch it. Nothing consumes or clears it; instances stay pinned until a human clears or repoints it. The consumable trigger is `RequestedReleaseAt` (+ `RequestedReleaseForce` / `RequestedReleaseBy`). See [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation) → "Pinning an instance to a fixed release".
 
 `MeshThread.RequestedStatus` is a `ThreadExecutionStatus?` — the request half of the same Status/RequestedStatus pair (today only `Cancelled` is ever requested). The GUI Stop button and a parent cancelling a sub-thread set it; the cancel watcher cancels the CTS, and the streaming loop's terminal write flips `Status → Cancelled` and clears `RequestedStatus`. `Cancelled` is a distinct, visible terminal status that re-dispatches like `Idle` when `PendingUserMessages` still holds input. (There is **no** transient `Completing` status — terminal writes are atomic.)
 
@@ -276,11 +281,15 @@ Never use a late `GetMeshNode` round-trip — its response can land *after* late
 
 | Persisted state | Recovery action |
 |---|---|
-| `RequestedStatus == Cancelled` | Honor it: stamp the response cell `Cancelled`, write terminal `Status = Cancelled`, clear the request |
-| `Executing` (with a response cell) | Resume the same cell by re-entering `StartingExecution`; `DispatchAfterClaim` reuses `ActiveMessageId` (resume mode) |
-| `StartingExecution` | No write — the `_Exec` round watcher fires on its own first emission |
+| `RequestedStatus == Cancelled` (and `Status != Cancelled`) | Honor it first, before looking at `Status`: stamp the response cell `Cancelled`, write terminal `Status = Cancelled`, clear the request |
+| `Executing` **with** an `ActiveMessageId` | **Stay `Executing`** and re-launch the streaming loop directly into the EXISTING response cell (`ThreadSubmissionServer.ResumeInterruptedRound`). Idempotent per `ActiveMessageId`, so a self-heal re-read cannot double-launch |
+| `Executing` **without** an `ActiveMessageId` | No cell to resume → reset to `Idle` (clearing `ExecutionStatus` / `ExecutionStartedAt` / streaming buffers) so the submission watcher can claim the pending input |
+| `StartingExecution` **without** an `ActiveMessageId` | **Orphaned claim** (#539) — the claim landed but the `_Exec` commit never did. CAS-guarded roll back to `Idle` so the submission watcher re-claims as a fresh, live transition the newly-subscribed `_Exec` watcher reliably sees |
+| `StartingExecution` **with** an `ActiveMessageId` | No write — the commit already ran; the round is effectively executing |
 | `Idle` / `Cancelled` (+ pending) | No write — the submission watcher claims |
 | `Done` | Terminal, untouched |
+
+> 🚨 **Never write `Executing → StartingExecution` on recovery.** That is the exact inverse of the `_Exec` commit edge (`StartingExecution → Executing`), and because BOTH the recovery observer and the exec round watcher are self-healing, the two volley under load — the re-dispatch ping-pong behind the resubmit / cold-load flake. Resume re-runs the round into its existing cell **while `Status` stays `Executing`**. The orphaned-claim rollback above is CAS-guarded precisely so it can never perform that inverse write.
 
 ### Activities — recover from the owner's own state
 
@@ -307,7 +316,7 @@ hub.GetWorkspace().GetMeshNodeStream().Update(node =>
 
 **Why "each hub owns its own state":** the intent field lives on the same node as the state field. The owning hub is the only writer; cross-hub coordination is impossible because no other hub knows about the field. Read-only views (UI, MCP) can show "request pending" by checking `Requested<X> is not null && Status == Idle`.
 
-Ship the round-orchestration steps as small `IObservable<Unit>` builders (`CreateUserCells`, `CommitRound`, `DispatchToExec`). Each step is one `Hub.Observe(..., target)` or `workspace.GetMeshNodeStream(path).Update(...)` followed by `.Select(_ => Unit.Default)`.
+Ship the round-orchestration steps as small `IObservable<Unit>` builders — one step per `Hub.Observe(..., target)` or `workspace.GetMeshNodeStream(path).Update(...)`, each followed by `.Select(_ => Unit.Default)`, composed with `Concat` / `SelectMany`. (The builder names used in the snippets above are illustrative; the thread hub's real implementation is `ThreadSubmissionServer.DispatchAfterClaim` → `CommitRoundAndExecute` in `src/MeshWeaver.AI/ThreadSubmission.cs`.)
 
 ---
 
@@ -349,7 +358,8 @@ log = log.Finish(v, ActivityStatus.Succeeded);         // Status → Failed
 
 ```csharp
 // ❌ WRONG — log stays Running forever. Repro:
-// CompileActivityLogTest.SuccessfulCompile_ReportsActivityLogWithSourceQueries…
+// CompileActivityLogTest.SuccessfulCompile_ReportsActivityLogWithSourceQueriesAndMatchedPaths
+// (test/MeshWeaver.Hosting.Monolith.Test/CompileActivityLogTest.cs)
 var log = new ActivityLog(ActivityCategory.Compilation) { HubPath = path };
 return Observable.Return(new CompileResult(asm, configs, log));
 
@@ -595,7 +605,7 @@ return host.Hub.GetWorkspace()
     .Select(log => Render(log!));
 ```
 
-`Render` switches on `log.Status` — for `Running`, show the streaming message list; for `Succeeded`, render the output (a download link to the bytes / a `NodeReference` to the saved file); for `Failed` / `Cancelled`, show the terminal `Messages` and the reason. **One subscription, one switch, all states handled.**
+`Render` switches on `log.Status` — for `Running`, show the streaming message list; for `Succeeded`, render the output (a download link to the bytes, or a link to the saved node's path); for `Failed` / `Cancelled`, show the terminal `Messages` and the reason. **One subscription, one switch, all states handled.**
 
 ### Cancel, retry, status — all free
 

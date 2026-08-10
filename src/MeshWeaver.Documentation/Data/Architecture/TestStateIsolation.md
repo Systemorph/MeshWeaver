@@ -88,12 +88,13 @@ Skip either half and the failures move around but never go away.
 - `MeshConfiguration.Nodes` is a `Dictionary` keyed by path, loaded once at fixture startup. If a test mutates a node at that path (via `CreateNodeRequest` → persistence, then `stream.Update`), the next test sees the **mutated** version on grain activation — not the original seed.
 - The fallback is synchronous. A grain that activated against `MeshConfiguration.Nodes` keeps that node in memory until deactivation, even if persistence later disagrees.
 
-`IStaticNodeProvider`, by contrast, is queried on **every** grain activation (`MessageHubGrain.OnActivateAsync` lines 43–45) and serves immutable, read-only definitions. Tests cannot pollute it because writes never flow there — `CreateNodeRequest` goes to persistence, which is per-cluster and cleaned up between tests.
+`IStaticNodeProvider`, by contrast, is consulted on **every** grain activation — `MessageHubGrain` resolves the node through `TryResolveStaticNode` → `IServiceProvider.FindStaticNode(path)` on the activation path, and `NodeTypeEnrichmentHelpers.EnrichWithNodeType` takes a static-provider fast path before it will open a remote stream — and it serves immutable, read-only definitions. Tests cannot pollute it because writes never flow there — `CreateNodeRequest` goes to persistence, which is per-cluster and cleaned up between tests.
 
 ```csharp
 public sealed class MyTestSeedProvider : IStaticNodeProvider
 {
-    public IReadOnlyList<MeshNode> GetStaticNodes() => [
+    // 🚨 The interface declares IEnumerable<MeshNode> — not IReadOnlyList.
+    public IEnumerable<MeshNode> GetStaticNodes() => [
         new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User",
             Content = new UserProfile { ... } },
         // NodeType definitions for the test (see "NodeType definitions" below)
@@ -112,7 +113,7 @@ hostBuilder
         services.AddSingleton<IStaticNodeProvider, MyTestSeedProvider>());
 ```
 
-> **Rule:** Static providers must satisfy the `HandleCreateNodeRequest` bare-node rule — every entry must have either `NodeType` or `Content` set (see `MeshExtensions.cs HandleCreateNodeRequest`). For NodeType definitions, also set `AssemblyLocation` so `NodeTypeService.EnrichWithNodeTypeAsync` short-circuits the dynamic-compilation lookup that would otherwise log `"NodeType definition not found at path 'X'"`.
+> **Rule:** Static providers must satisfy the `HandleCreateNodeRequest` bare-node rule — every entry must have either `NodeType` or `Content` set (see `MeshExtensions.cs`, `HandleCreateNodeRequest`). For NodeType definitions, also set `AssemblyLocation` so `NodeTypeEnrichmentHelpers.EnrichWithNodeType` short-circuits the dynamic-compilation lookup. When it cannot resolve the type at all it logs `EnrichWithNodeType: NodeType '<X>' has no static registration and no persisted node at that path — applying error overlay to '<instance>'` and paints a compilation-error overlay on the instance.
 
 ---
 
@@ -126,9 +127,9 @@ Even with a clean static seed, tests still create runtime nodes (the `CreateThre
 - Grain activation succeeds but reads wrong content — a cached `InstanceCollection` from a prior test's writes.
 - `"No route found"` warnings in the second test for nodes that were never supposed to exist (the first test's per-node hub is still registered with the routing service).
 
-Disposing at test end tears down the per-node hub cleanly: the `ActionBlock` completes, the subscription unwires, and in Orleans `Hub.RegisterForDisposal(_ => DeactivateOnIdle())` triggers grain deactivation (`MessageHubGrain.cs:105`). The next test sees a fresh routing table at the same path.
+Disposing at test end tears down the per-node hub cleanly: the `ActionBlock` completes, the subscription unwires, and in Orleans `hub.RegisterForDisposal(_ => TryDeactivateOnIdle())` triggers grain deactivation (`MessageHubGrain.cs` — note it is the *guarded* `TryDeactivateOnIdle`, which treats an already-dead activation as a no-op instead of escalating an `UnobservedTaskException` that would poison the next test class). The next test sees a fresh routing table at the same path.
 
-> **🚨 Disposal is not finished when `Dispose()` returns — drain BOTH halves first.** `IMessageHub.Dispose()` only *kicks off* reactive teardown. Before the test base tears down the service scope it must await **(1)** `IMessageHub.DisposalCompleted` (action blocks + message round-trips) **and (2)** `IoPoolRegistry.WhenDrained` (offloaded `IIoPool` I/O on the ThreadPool, which `DisposalCompleted` does **not** cover). Dispose the scope while a straggler `IIoPool` op is still running and its continuation resolves a dead Autofac scope → `ObjectDisposedException: …LifetimeScope… already disposed`, which xUnit reports as a run-aborting **"catastrophic failure."** The canonical helper is `mesh.TeardownAsync(timeout)`; the full order + failure mode is in [Mesh Lifecycle](/Doc/Architecture/MeshLifecycle).
+> **🚨 Disposal is not finished when `Dispose()` returns — drain BOTH halves first.** `IMessageHub.Dispose()` only *kicks off* reactive teardown. Before the test base tears down the service scope it must await **(1)** `IMessageHub.DisposalCompleted` (action blocks + message round-trips) **and (2)** `IoPoolRegistry.DrainAll()` (offloaded `IIoPool` I/O on the ThreadPool, which `DisposalCompleted` does **not** cover). Phase 2 must **cancel and join**, not wait — the wait-only `WhenDrained(timeout)` still exists but is the wrong primitive here: a live change-feed leaf never completes on its own, so a polled wait times out and lets the scope dispose while the leaf runs on → native use-after-unload SIGSEGV. Dispose the scope while a straggler `IIoPool` op is still running and its continuation resolves a dead Autofac scope → `ObjectDisposedException: …LifetimeScope… already disposed`, which xUnit reports as a run-aborting **"catastrophic failure."** The canonical helper is `mesh.TeardownAsync(timeout)`; the full order + failure mode is in [Mesh Lifecycle](/Doc/Architecture/MeshLifecycle).
 
 ```csharp
 public class MyOrleansTest(SharedOrleansFixture fixture, ITestOutputHelper output)
@@ -139,9 +140,9 @@ public class MyOrleansTest(SharedOrleansFixture fixture, ITestOutputHelper outpu
     private async Task<string> CreateThreadAsync(string contextPath, string text)
     {
         var node = ThreadNodeType.BuildThreadNode(contextPath, text, "Roland");
-        var path = await CreateNodeAsync(client, node, contextPath, ct);
-        _createdPaths.Add(path);   // ← track for teardown
-        return path;
+        var created = await MeshService.CreateNode(node).Should().Emit();
+        _createdPaths.Add(created.Path);   // ← track for teardown
+        return created.Path;
     }
 
     public async ValueTask DisposeAsync()
@@ -187,7 +188,7 @@ Path uniquification is a useful complement to the static-seed + dispose pattern,
 
 ## NodeType Definitions in Tests
 
-Tests that register a custom NodeType hit the same trap as runtime nodes. Placing a bare entry in `MeshConfiguration.Nodes` — `builder.AddMeshNodes(new MeshNode("readable") { Name = "Readable" })` — provides no `HubConfiguration` and no `AssemblyLocation`. When the per-node hub for a node of that type activates, `NodeTypeService.EnrichWithNodeTypeAsync` falls through the cached-config path, attempts a dynamic compile, fails (no `Source/` subtree exists), logs `NodeType definition not found at path 'readable'`, and the hub spins up with a default config that lacks `AddMeshDataSource` — so `GetDataRequest` returns `"No handler found"`.
+Tests that register a custom NodeType hit the same trap as runtime nodes. Placing a bare entry in `MeshConfiguration.Nodes` — `builder.AddMeshNodes(new MeshNode("readable") { Name = "Readable" })` — provides no `HubConfiguration` and no `AssemblyLocation`. When the per-node hub for a node of that type activates, `NodeTypeEnrichmentHelpers.EnrichWithNodeType` falls through the static-provider fast path, finds no persisted type node, warns, and the hub spins up with a default config that lacks `AddMeshDataSource` — so `GetDataRequest` returns `"No handler found"`.
 
 The fix is the same: register the NodeType definition through `IStaticNodeProvider`, and on the static node set both `HubConfiguration` (so the per-node hub gets the right wiring) and `AssemblyLocation` (so the type lookup short-circuits without compilation).
 
@@ -205,8 +206,8 @@ new MeshNode("readable") {
 
 After applying both halves, confirm isolation is solid:
 
-- **Run the full test class twice in a row.** The second run should show the same green count as the first.
-- **Check for `[Warning] NodeType definition not found at path '...'`** — should be empty.
+- **Run the full test class twice in a row.** The second run should show the same green count as the first. (Two runs of an *unchanged* class is the sanctioned exception to "never re-run a test to see if it was a flake" — here the second run is the assertion, not a retry.)
+- **Check for `[Warning] EnrichWithNodeType: NodeType '...' has no static registration`** — should be empty.
 - **Check for `No route found for ... → <path>` warnings** on paths a previous test created — should be empty.
 
 If any of these appear, you either missed a runtime-created path in the dispose loop or a static seed entry in the provider.

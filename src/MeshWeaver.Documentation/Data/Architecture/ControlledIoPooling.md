@@ -333,7 +333,12 @@ So the mesh teardown awaits **all three**, in order, before the scope is dispose
 1. `IMessageHub.DisposalCompleted` — action blocks + message round-trips. (Resources enqueue their
    async cleanup onto the `AsyncDisposeQueue` during this synchronous-`Dispose()` phase — `Dispose()`
    must never block, so async cleanup is *queued*, not run inline.)
-2. `IoPoolRegistry.WhenDrained(timeout)` — offloaded ThreadPool I/O (`TotalInFlight == 0`).
+2. `IoPoolRegistry.DrainAll()` — offloaded ThreadPool I/O. **CANCEL + JOIN, not wait.** 🚨 Do *not*
+   use the wait-only `WhenDrained(timeout)` here: a live change-feed leaf never completes on its own,
+   so a polled wait times out and lets the scope dispose *while the leaf is still running* — its
+   ThreadPool thread then dereferences a collectible node ALC's freed metadata after unload, a
+   native use-after-unload **SIGSEGV**. `DrainAll()` cancels every leaf so it stops, then joins, and
+   returns the count it had to leak.
 3. `AsyncDisposeQueue.DrainAsync(timeout)` — the queued async cleanup. A TPL `ActionBlock` drains it;
    `DrainAsync` `Complete()`s the block and awaits the remainder (bounded), so it converges even under
    continuous influx — a *version-target* wait would not (the queue is a message stream / endless
@@ -355,8 +360,7 @@ mesh.Dispose();
 await mesh.DisposalCompleted
     .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
     .FirstOrDefaultAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(15));   // phase 1
-if (ioPools is not null)
-    await ioPools.WhenDrained(TimeSpan.FromSeconds(15)).FirstAsync().ToTask();   // phase 2
+var leakedIoLeaves = ioPools?.DrainAll() ?? 0;   // phase 2 — cancel + join, NOT a polled wait
 if (disposeQueue is not null)
     await disposeQueue.DrainAsync(TimeSpan.FromSeconds(15));               // phase 3
 // ONLY NOW dispose the service scope.

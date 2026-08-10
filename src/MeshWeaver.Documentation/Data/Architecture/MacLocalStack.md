@@ -68,7 +68,7 @@ Language: the Voice page defaults to **English**; other languages are optional f
 
 ## 2. Local AI layer: Qwen via native Ollama
 
-The portal's AI runs through `IChatClientFactory` providers (see [the model provider design](/Doc/Architecture/CqrsAndContentAccess)).
+The portal's AI runs through `IChatClientFactory` providers (see [the model provider design](/Doc/Architecture/ModelProviders)).
 The framework already ships an **OpenAI-wire-compatible** provider (`AddOpenAICompatible`), and **Ollama
 exposes the OpenAI API** at `http://localhost:11434/v1` — so the local AI layer is **config, not new code**.
 
