@@ -268,8 +268,21 @@ reverts them):
 | Knob | What it does |
 |---|---|
 | `config.memex_portal.PreWarm__DynamicTypes: "true"` | every new pod sweeps + compiles ALL dynamic NodeTypes at start (resumes from the shared `/data` cache — warm restarts are cheap) |
-| `config.memex_portal.PreWarm__GateReadiness` | `/health` stays red until the sweep is green; with `maxSurge 1 / maxUnavailable 0` a regressed type STALLS the rollout with the old image serving. **⛔ OFF** — tried 2026-08-02 and reverted the same day: the first gated roll stalled on 7 FALSE regressions that were cross-silo `SubscribeRequest` timeouts, not compile errors (#694 residue, see SELF-UPDATE.md). Do NOT re-enable by widening the probe budget — the sweep is erroring, not slow |
-| `probes.startup: {periodSeconds: 10, failureThreshold: 1080}` | ⚠️ REQUIRED with the gate: a cold bake is ~90 s/type, sequential — the default 5 min budget kills the pod mid-bake forever |
+| `config.memex_portal.PreWarm__GateReadiness: "true"` | `/health` stays red until the sweep is green; with `maxSurge 1 / maxUnavailable 0` a regressed type STALLS the rollout with the old image serving. **✅ ON.** It was tried 2026-08-02 and reverted the same day on 7 FALSE regressions — all cross-silo `SubscribeRequest` timeouts, not compile errors (#694 residue). The gate no longer reads "no answer" as "it broke": a `TimedOut` outcome is filed as *unevaluated* and can never gate, and that leniency now survives the cascade (a dependent of an unevaluated upstream is `UpstreamUnevaluated`, also non-gating). Only a `CompileError` — or an `UpstreamFailed` cascading from one — on a **previously-healthy** type stalls a roll |
+| `probes.startup: {periodSeconds: 10, failureThreshold: 1080}` | ⚠️ REQUIRED with the gate: a cold bake is ~90 s/type, sequential — the default 5 min budget kills the pod mid-bake forever. `progressDeadlineSeconds` is DERIVED from these two in the chart, so raising them can't leave it behind |
+
+**🚨 Before you trust the gate, verify the namespace actually reads it.** The gate protects a
+portal through exactly two deployment facts, and on 2026-08-10 two of the three portals had drifted
+away from both. A gated config in a namespace missing either is *false confidence* — it reports and
+the outage happens anyway.
+
+| Must be true | Why | Check |
+|---|---|---|
+| a `startupProbe` exists **on `/health`** | that probe is the ONLY reader of the gate; no startupProbe (or one on `/alive` / `/healthz`) ignores it entirely | `kubectl -n <ns> get deploy memex-portal-deployment -o jsonpath='{.spec.template.spec.containers[0].startupProbe}'` |
+| `strategy.maxUnavailable: 0` | surge-first keeps the old pod serving until the new one passes; at `maxUnavailable:1` with `replicas:1` the only serving pod can be deleted BEFORE the replacement is ready | `kubectl -n <ns> get deploy memex-portal-deployment -o jsonpath='{.spec.strategy.rollingUpdate}'` |
+
+Both are rendered correctly by the chart — a `helm upgrade` restores them. A per-env `portal-patch.json`
+or a hand `kubectl patch` can still override them, which is how the drift happened.
 
 ⛔ **The bake Job (`bake.enabled`) stays OFF on AKS until core asserts fingerprint-match.** On its
 first AKS run (memex-cloud, 2026-07-30) `memex-bake:3.0.0-ci.1565` computed a **different framework
