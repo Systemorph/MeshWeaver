@@ -124,8 +124,8 @@ the right thing downstream:
 
 ```csharp
 probe.Select(x => (Result?)x)
-     .DefaultIfEmpty(null)          // "no result" is now a VALUE the chain can act on
-     .SelectMany(HandleOrReject)
+     .DefaultIfEmpty()              // "no result" is now a VALUE (null) the chain can act on
+     .SelectMany(HandleOrReject)    // …and HandleOrReject must have a branch for it
 ```
 
 **3. An explicit empty arm that fails closed.** `Subscribe` takes three arms; the third one is not
