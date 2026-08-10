@@ -195,13 +195,41 @@ public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
         // $Menu area do NOT count — only the actual error content does. While the wedge is live the
         // Overview never renders the overlay → the bounded Timeout makes the hang a loud
         // TimeoutException (RED). GREEN = the compile error is visible on the page.
-        var notification = await stream
-            .Materialize()
-            .Where(n => n.Kind == NotificationKind.OnError
-                || (n.Kind == NotificationKind.OnNext && RendersCompilationError(n.Value.Value)))
-            .FirstAsync()
-            .Timeout(45.Seconds())
-            .ToTask(ct);
+        // 🚨 The 45 s bound is the DETECTOR — never widen it. What it lacked was a WITNESS: on
+        // timeout the failure read as a bare "The operation has timed out." and four sessions
+        // theorised from that alone (issue #1081), the last of them concluding "the request never
+        // reaches the grain" — which a routing trace then refuted: the grain activates in ~50 ms
+        // and 160 DataChangedEvents reach the client inside the first second. The area RENDERS; it
+        // just never carries the overlay. So keep the last store that DID arrive and print it when
+        // the bound fires, so the next red says which page was served instead.
+        JsonElement? lastStore = null;
+        var received = 0;
+        Notification<MeshWeaver.Data.ChangeItem<JsonElement>> notification;
+        try
+        {
+            notification = await stream
+                .Materialize()
+                .Do(n =>
+                {
+                    if (n.Kind != NotificationKind.OnNext) return;
+                    received++;
+                    lastStore = n.Value.Value;
+                })
+                .Where(n => n.Kind == NotificationKind.OnError
+                    || (n.Kind == NotificationKind.OnNext && RendersCompilationError(n.Value.Value)))
+                .FirstAsync()
+                .Timeout(45.Seconds())
+                .ToTask(ct);
+        }
+        catch (TimeoutException)
+        {
+            var raw = lastStore is { ValueKind: JsonValueKind.Object } s ? s.GetRawText() : "(nothing)";
+            Output.WriteLine(
+                $"WEDGE WITNESS: {received} store emission(s) arrived and none rendered the "
+                + $"compilation-error overlay. Last store ({raw.Length} chars): "
+                + (raw.Length > 4000 ? raw[..4000] + "…" : raw));
+            throw;
+        }
 
         Output.WriteLine($"Notification: {notification.Kind} " +
             (notification.Kind == NotificationKind.OnError

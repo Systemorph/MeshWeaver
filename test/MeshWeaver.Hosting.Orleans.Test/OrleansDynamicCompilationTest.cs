@@ -14,6 +14,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
@@ -389,7 +390,11 @@ public class DynamicCompilationSiloConfigurator : ISiloConfigurator, IHostConfig
     public void Configure(ISiloBuilder siloBuilder)
     {
         siloBuilder.ConfigureMeshWeaverServer()
-            .AddMemoryGrainStorageAsDefault();
+            .AddMemoryGrainStorageAsDefault()
+            // Same rationale as TestSiloConfigurator: without this the silo's
+            // framework logs are dropped entirely, so every failure of a test
+            // built on this configurator reads as "two WriteLines and a timeout".
+            .ConfigureLogging(logging => logging.AddXUnitLogger());
         siloBuilder.ConfigureServices(services =>
             services.AddFileSystemAssemblyStore(TestSiloConfigurator.AssemblyStoreRoot));
     }
