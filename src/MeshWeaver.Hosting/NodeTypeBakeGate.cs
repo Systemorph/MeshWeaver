@@ -165,9 +165,12 @@ public static class NodeTypeBakeGateExtensions
     /// service writes to it whether or not anything gates on it, so the diagnostics are always there.
     ///
     /// <para>⚠️ A host that gates readiness on this MUST raise its <c>startupProbe.failureThreshold</c>
-    /// to cover a full cold bake. A cold compile is ~90 s per NodeType and the sweep is strictly
-    /// sequential, so a mesh with dozens of types needs HOURS of startup budget. Left at the usual
-    /// default (60 × 5 s = 5 minutes) Kubernetes kills and restarts the pod mid-bake, forever.</para>
+    /// to cover a full cold bake. A cold compile is ~2.4 s per NodeType and the sweep is strictly
+    /// sequential (measured 2026-08-10 across three production portals), so the largest mesh we run
+    /// (~240 types) needs ~10 minutes of bake on top of a plain cold boot. Left at the usual default
+    /// (60 × 5 s = 5 minutes) Kubernetes kills and restarts the pod mid-bake, forever. The chart's
+    /// paired setting is 10 s × 180 = 30 minutes; see <c>deploy/helm/values.yaml</c>
+    /// (<c>probes.startup</c>) for the derivation.</para>
     /// </summary>
     /// <param name="gatesReadiness">
     /// Pass <c>true</c> ONLY when the host also registers a readiness check that consumes this state.

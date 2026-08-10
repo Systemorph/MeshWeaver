@@ -154,7 +154,7 @@ private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> MoreActi
     ]);
 ```
 
-The built-in `DefaultMenuProvider` groups Create, Copy, Move, Import, Export, and Delete under the "Actions" parent using exactly this pattern.
+The built-in `DefaultNodeMenuProvider` (in `NodeMenuItemsExtensions`, registered alongside `DefaultMeshMenuProvider`) groups Create, Copy, Move, Import, Export, and Delete under the "Actions" parent using exactly this pattern.
 
 ---
 

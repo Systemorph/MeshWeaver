@@ -7,6 +7,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.GitSync;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -322,5 +323,123 @@ public class DeclaredAccessInstallTest(ITestOutputHelper output) : MonolithMeshT
             node.LastModified.Should().Be(before[path].LastModified,
                 $"the second pass must not touch {path}");
         }
+    }
+
+    /// <summary>
+    /// THE PRE-#902 GATE HEALS (atioz, 2026-08-10). An instance provisioned before the declared-access
+    /// step carries the SCOPED shape applied with an empty declaration — a policy that withholds
+    /// public read plus Public/Anonymous Viewer denies on every child, i.e. every child gated and
+    /// nothing public. Create-only meant the boot repair pass read the policy, skipped it, and
+    /// re-skipped it forever: the whole plugin baseline stayed invisible, Store included, so there
+    /// was not even a catalog page left to fix it from.
+    ///
+    /// <para>This reproduces that exact state on a free package and asserts the repair pass — the
+    /// same <c>EnsureDeclaredAccess</c> the boot runs — makes the content readable again.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task LegacyScopedGate_OnAFullyPublicPackage_IsHealed()
+    {
+        await Install("FreePlug");
+        var manifest = await Manifest("FreePlug");
+
+        // Rewind to the pre-#902 shape: policy without PublicRead, every child denied to
+        // Public+Anonymous. This is what the old Store gate seeded for every partition.
+        await Write(PackageInstaller.PartitionPolicyId, "FreePlug", new PartitionAccessPolicy
+        {
+            RedirectOnDenied = "FreePlug/Subscribe",
+        });
+        foreach (var subject in new[] { WellKnownUsers.Public, Anonymous })
+            await WriteDeny("FreePlug/Live", subject);
+
+        // Sanity: the rewind really does hide the content, so a green assertion below cannot be
+        // vacuous.
+        await Mesh.GetEffectivePermissions("FreePlug/Live", PlainUser)
+            .Should().Within(TimeSpan.FromSeconds(30))
+            .Match(p => !p.HasFlag(Permission.Read),
+                "the rewound legacy gate must actually withhold the content");
+
+        await PackageInstaller.EnsureDeclaredAccess(Mesh, manifest, "FreePlug", logger: null)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask();
+
+        // The policy is healed…
+        var policy = await Read($"FreePlug/{PackageInstaller.PartitionPolicyId}");
+        policy!.ContentAs<PartitionAccessPolicy>(Mesh.JsonSerializerOptions)!.PublicRead
+            .Should().BeTrue("a fully-public declaration must heal a policy that withholds it");
+
+        // …the contradicting denies are gone…
+        foreach (var subject in new[] { WellKnownUsers.Public, Anonymous })
+            (await Read($"FreePlug/Live/_Access/{subject}_Access"))
+                .Should().BeNull($"the legacy {subject} deny must be retired");
+
+        // …and the content reads again, which is the whole point.
+        foreach (var identity in new[] { PlainUser, Anonymous })
+            await Mesh.GetEffectivePermissions("FreePlug/Live", identity)
+                .Should().Within(TimeSpan.FromSeconds(30))
+                .Match(p => p.HasFlag(Permission.Read),
+                    $"'{identity}' must read the healed partition's content");
+    }
+
+    /// <summary>
+    /// The other half of the rule: a package-shipped gated policy carries NO Public/Anonymous
+    /// denies, so it is not the legacy fingerprint and survives the repair pass untouched — the
+    /// create-only contract <see cref="PackageShippedPolicy_Survives_CreateOnly"/> pins at install
+    /// time, held across the boot repair that now heals its legacy twin.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ShippedGatedPolicy_SurvivesTheRepairPass()
+    {
+        await Install("ShippedPolicy");
+        var manifest = await Manifest("ShippedPolicy");
+        var before = await Read($"ShippedPolicy/{PackageInstaller.PartitionPolicyId}");
+
+        await PackageInstaller.EnsureDeclaredAccess(Mesh, manifest, "ShippedPolicy", logger: null)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask();
+
+        var after = await Read($"ShippedPolicy/{PackageInstaller.PartitionPolicyId}");
+        after!.Version.Should().Be(before!.Version,
+            "a shipped gated policy has no legacy denies beside it and must not be rewritten");
+        after.ContentAs<PartitionAccessPolicy>(Mesh.JsonSerializerOptions)!.PublicRead
+            .Should().BeFalse("the package's own choice stands");
+    }
+
+    /// <summary>The manifest as the real source parsed it.</summary>
+    private async Task<PackageManifest> Manifest(string id) =>
+        (await Source().ListPackages("HEAD")
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask())
+        .Single(m => m.Id == id);
+
+    /// <summary>Writes a policy node straight to storage, as the pre-#902 installer would have.</summary>
+    private Task Write(string id, string partition, PartitionAccessPolicy content) =>
+        Save(new MeshNode(id, partition)
+        {
+            NodeType = PartitionAccessPolicyNodeType.NodeType,
+            Name = "Access Policy",
+            State = MeshNodeState.Active,
+            Content = content,
+        });
+
+    /// <summary>The legacy per-child Public/Anonymous Viewer DENY.</summary>
+    private Task WriteDeny(string scope, string subject) =>
+        Save(new MeshNode($"{subject}_Access", $"{scope}/_Access")
+        {
+            NodeType = AccessAssignmentNodeType.NodeType,
+            Name = $"{subject} — Viewer DENIED (gated)",
+            State = MeshNodeState.Active,
+            MainNode = scope,
+            Content = new AccessAssignment
+            {
+                AccessObject = subject,
+                DisplayName = subject,
+                Roles = [new RoleAssignment { Role = "Viewer", Denied = true }],
+            },
+        });
+
+    private async Task Save(MeshNode node)
+    {
+        using var _ = Mesh.ServiceProvider
+            .GetRequiredService<MeshWeaver.Messaging.AccessService>().ImpersonateAsSystem();
+        await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateOrUpdateNode(node)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
     }
 }
