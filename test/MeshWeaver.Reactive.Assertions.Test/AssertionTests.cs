@@ -209,6 +209,50 @@ public class AssertionTests
     }
 
     /// <summary>
+    /// A SOURCE that faults with <see cref="InvalidOperationException"/> must be reported as
+    /// "errored:" with the exception's own message — never as "completed without one".
+    /// The old implementation detected empty completion by catching the
+    /// InvalidOperationException("Sequence contains no elements") that Take(1).ToTask() throws,
+    /// which also swallowed every source-thrown InvalidOperationException. The canonical victim:
+    /// a poll predicate enumerating a plain List&lt;T&gt; that another thread Add's throws
+    /// "Collection was modified" — and CI reported the impossible "an Observable.Interval
+    /// completed without emitting" (FileSystemObservableQueryTests, run 31407254207), pointing
+    /// the whole triage at batching timing instead of the accumulator race.
+    /// </summary>
+    [Fact]
+    public async Task SourceInvalidOperation_ReportsErrored_NotCompletedWithoutOne()
+    {
+        var ex = await Assert.ThrowsAnyAsync<ObservableAssertionException>(
+            async () => await Observable.Range(0, 10)
+                .Select(x =>
+                {
+                    if (x > 0)
+                        throw new InvalidOperationException(
+                            "Collection was modified; enumeration operation may not execute.");
+                    return x;
+                })
+                .Should().Within(5.Seconds()).Match(v => v == 99));
+
+        Assert.Contains("errored: Collection was modified", ex.Message);
+        Assert.DoesNotContain("completed without one", ex.Message);
+    }
+
+    /// <summary>
+    /// The genuine empty completion keeps its message: a source that completes without a
+    /// matching value still reads "completed without one" (not a timeout, not an error).
+    /// </summary>
+    [Fact]
+    public async Task EmptyCompletion_StillReportsCompletedWithoutOne()
+    {
+        var ex = await Assert.ThrowsAnyAsync<ObservableAssertionException>(
+            async () => await Observable.Range(1, 3)
+                .Should().Within(5.Seconds()).Match(x => x == 99));
+
+        Assert.Contains("completed without one", ex.Message);
+        Assert.Contains("Last of 3 emission(s) was: 3", ex.Message);
+    }
+
+    /// <summary>
     /// `src.Where(p).Should().Emit()` hands the assertion an ALREADY-filtered stream, so a source
     /// emitting a steady stream of non-matching values looks identical to a wedged one. The message
     /// must say so — assuming a wedge sends the reader hunting a race that isn't there.
