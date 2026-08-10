@@ -110,15 +110,20 @@ The header and button are never touched by the update cycle. Only the middle are
 
 # Loading Data First
 
-When you need to fetch data before producing a control, an `async` delegate runs once at render time and returns the result. The delegate is not a subscription — it fires exactly once:
+When you need to fetch data before producing a control, return an observable that emits once the data arrives. Do **not** `await` inside the view delegate — the same rule that governs click actions governs view builders, and for the same reason: a view delegate runs on the layout hub's render path, so awaiting a mesh-backed call there parks the turn that would deliver the answer.
 
 ```csharp
+// ✅ Compose — the area renders as soon as the stream emits
 Controls.Stack
-    .WithView(async (host, ctx, ct) => {
-        var user = await LoadUserAsync(ct);
-        return Controls.Label($"Hello, {user.Name}");
-    })
+    .WithView((host, ctx) =>
+        host.Workspace.GetMeshNodeStream(userPath)
+            .Where(node => node is not null)
+            .Select(node => Controls.Label($"Hello, {node.Name}")))
 ```
+
+A genuinely-async leaf (HTTP, blob, a `Task`-returning SDK) goes through an [`IIoPool`](/Doc/Architecture/ControlledIoPooling) — `pool.Invoke(ct => FetchAsync(ct))` — and composes into the same chain with `SelectMany`. Never `Observable.FromAsync`: it runs the call's synchronous prologue on the subscribing thread and bounds nothing.
+
+> A `Func<…, CancellationToken, Task<T>>` overload of `WithView` does exist, and older areas use it. It is the shape this rule exists to retire — prefer the observable overloads above for anything you write.
 
 ---
 
