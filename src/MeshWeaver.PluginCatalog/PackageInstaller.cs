@@ -1867,13 +1867,18 @@ public static class PackageInstaller
                     // synthesized resolutions are never cached, and a fill that lands after its
                     // own invalidation is discarded (PathResolutionCachePoisonTest).
                     //
-                    // 🚨 …and it recurred AGAIN on a build carrying that fix (#1104), because
-                    // fixing RESOLUTION cannot help a hub a bad resolution has ALREADY activated:
-                    // GetHostedHub pins by address and the hub never re-reads its NodeType. That
-                    // is why this Post is no longer where the guarantee lives. It is fire-and-
-                    // forget, conditional on the placeholder dance having run, and available to
-                    // nobody but this installer — while ANY writer can retype a node. The
-                    // framework now un-pins on its own: every activation arms
+                    // 🚨 …and it recurred AGAIN on a build carrying that fix (#1104) — plugin-gate
+                    // run 31361446933, whose available-areas list was EXACTLY
+                    // ConfigureDefaultNodeHub's set (AddDefaultLayoutAreas + Invite) and not one
+                    // area of the node's real type. That list IS the fingerprint: it says the hub
+                    // bound the mesh DEFAULT configuration, not a stale type and not the Space
+                    // placeholder, which is what distinguishes this defect from a compile failure.
+                    // It recurred because fixing RESOLUTION cannot help a hub a bad resolution has
+                    // ALREADY activated: GetHostedHub pins by address and the hub never re-reads
+                    // its NodeType. That is why this Post is no longer where the guarantee lives.
+                    // It is fire-and-forget, conditional on the placeholder dance having run, and
+                    // available to nobody but this installer — while ANY writer can retype a node.
+                    // The framework now un-pins on its own: every activation arms
                     // NodeTypeRebindWatcher, which recycles the hub the first time the mesh change
                     // feed reports a different NodeType for its path. This Post stays as the fast
                     // path (it recycles immediately rather than on the feed hop) and as the marker
