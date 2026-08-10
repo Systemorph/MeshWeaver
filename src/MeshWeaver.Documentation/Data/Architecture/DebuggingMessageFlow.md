@@ -251,6 +251,44 @@ The general rule: **if a handler owes its reply from a detached observable, the 
 `onCompleted` is a terminal arm like any other.** Leaving it unhandled is not "nothing to do" — it is
 the one path that hangs the caller forever.
 
+### Terminated vs still-running: a `Timeout` catches only ONE of them
+
+This is the distinction that left several #981 captures unexplained, and it is worth internalising
+because it applies to every bounded reactive chain in the mesh:
+
+> **`.Timeout(...)` faults on SILENCE, not on a clean finish.** A source that *completes without
+> emitting* sails straight through `Timeout`, through any `Catch` behind it, and through every
+> `SelectMany` downstream — producing nothing, reporting nothing, bounded by nothing.
+
+So a chain guarded only by `Timeout` still has an unhandled terminal case. The two failure shapes
+need different evidence and have different fixes:
+
+| Shape | What the trail shows | What bounds it | Fix |
+|---|---|---|---|
+| **Still running** (slow upstream) | last stage is the *await*, nothing after | the `Timeout` | nothing — or a budget that reflects the real wait |
+| **Terminated empty** | a `*_COMPLETED_EMPTY` stage | **nothing** | `DefaultIfEmpty` / an explicit empty arm |
+
+`EnsurePartitionBootstrap`'s authorization probe carries both stages for exactly this reason —
+`BOOTSTRAP_PERM_AWAIT` before the fold, then one of `BOOTSTRAP_PERM_VERDICT` /
+`BOOTSTRAP_PERM_FAULTED` / `BOOTSTRAP_PERM_COMPLETED_EMPTY`. A capture that ends at
+`BOOTSTRAP_PERM_AWAIT` is a create waiting on a **slow-but-healthy** permission fold, not a
+terminated one.
+
+**That distinction matters for reading a quiescing-timeout report.** The permission fold is bounded
+at **15 s** (a cold-start synced query on a fresh partition legitimately takes seconds), while the
+teardown quiescing budget that *detects* the pending callback is **2 s**. A create caught mid-probe
+is therefore reported as a leaked callback long before its own bound would have fired — the report is
+the detector, not the defect, and raising either number fixes nothing.
+
+**Can that fold complete empty in practice?** Through the shipped evaluator, **no** — and the reason
+is the same reason it can stall. `PermissionEvaluator`'s fold rides `SyncedQueryMeshNodes`, whose
+`allChanges` is `upstream.Merge(externalChanges).Merge(feedRemovals)`; `externalChanges` is a
+`Subject` that is **never** completed, and `Merge` completes only when *every* source does. So that
+substrate can never complete at all — only stall, which the `Timeout` does catch. The empty case
+remains reachable only through the `EffectivePermissionsDelegate` DI extension point (an evaluator
+returning `Observable.Empty<Permission>()` is a legal implementation), which is why the empty arm is
+a guard rather than a hot path.
+
 The same block is printed by `[STALE-CALLBACK]` (every 5 s, for callbacks older than
 `MESHWEAVER_STALE_CALLBACK_MS`, default 30 s) — that is the one that fires while the mesh is still
 live, so a repro run that dials the env var down gets the handler side before teardown is involved.
