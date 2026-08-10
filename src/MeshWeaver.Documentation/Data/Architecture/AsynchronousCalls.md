@@ -505,7 +505,13 @@ If you find yourself using `.Take(N)` outside a `SelectMany` that immediately pr
 
 2. **No `*Async` extension shims on `IMeshService`.** Use `meshService.CreateNode(node)` / `UpdateNode(node)` / `DeleteNode(path)` — these return `IObservable<MeshNode>`. Never use `.CreateNodeAsync(...)` / `.UpdateNodeAsync(...)` / `.DeleteNodeAsync(...)` — those extensions bridge to Task via `.ToTask()` and deadlock every time they are reached from a hub handler.
 
-3. **Use `hub.Observe(...)` instead of `RegisterCallback` / `AwaitResponse`.** The Task-returning overloads are `[Obsolete]`. Production code MUST use `hub.Observe(delivery)` (already-posted) or `hub.Observe(request, options?)` (also posts) — both return `IObservable<IMessageDelivery[<TResponse>]>`. `DeliveryFailure` flows via `OnError`; no Task-await deadlock surface, no silently-skipped callback.
+3. **Use `hub.Observe(...)` instead of `RegisterCallback` / `AwaitResponse`.** The Task-returning overloads are `[Obsolete]`. Production code MUST use `hub.Observe(request, options?)` — it returns `IObservable<IMessageDelivery[<TResponse>]>`, `DeliveryFailure` flows via `OnError`, and there is no Task-await deadlock surface and no silently-skipped callback.
+
+   **🚨 3a. ALWAYS the pre-registering `hub.Observe(request, options)` — NEVER `hub.Post(...)` then `hub.Observe(delivery)`.** The two are not interchangeable. `Observe(request, options)` registers the response `AsyncSubject` **before** posting; `Observe(delivery)` registers it **after**, and `HandleCallbacks` **DROPS** any response whose correlation id has no registered subject yet ("No subject found for response … treating as processed"). A reply that lands in that window is consumed and gone — the caller's callback then sits pending forever (surfacing as a hang to its timeout, or as a leaked callback at teardown).
+
+   The window is real, not theoretical: `PostImplGeneric` runs `ScheduleNotify` **synchronously**, so by the time `Post` returns the delivery is already enqueued and its turn scheduled onto `turnScheduler` on another thread. Preempt the posting thread — routine under CI thread-pool contention — and the handler answers first. A warm owner answers in sub-millisecond time.
+
+   `Observe(delivery)` is safe ONLY when the response provably cannot have arrived yet, and "the delivery is already posted" is *not* that proof. If you already hold a posted delivery, that is the smell — restructure so the request is handed to `Observe(request, options)` instead. Prior occurrences: `MeshOperations` (four verbs), `MeshNodeStreamExtensions.GetMeshNode`, `HubStreamProviderFactory`, and `CreateOrUpdateNodeRequest`'s inner create (#981). Pinned by `WorkspaceCacheEvictionTest.GetMeshNode_WarmOwner_DropsResponse_WhenSubjectRegisteredAfterPost` and `UpsertInnerCreateObservationTest`.
 
 4. **Never `.QueryAsync<MeshNode>($"path:X").FirstOrDefaultAsync()` to read a known node.** Queries go through a lagged read-side index. For a known path: live = `workspace.GetMeshNodeStream(path).Subscribe(...)`; one-shot = the same stream with `.Where(n => n is not null).Take(1).Timeout(...)` (or the `hub.GetMeshNode(path, timeout?)` convenience, which wraps it null-on-absent).
 
@@ -894,12 +900,25 @@ return delivery.Processed();
 
 **Why `hub.Observe(...)` and not `RegisterCallback`:** the legacy `RegisterCallback` returns `Task<IMessageDelivery>` and the framework short-circuits the user callback for `DeliveryFailure` — the Task gets the exception, the callback never fires. Callers that drop the Task get silent infinite hangs. `hub.Observe(...)` exposes the same TCS-backed Task via `task.ToObservable()`, so `OnError` fires naturally.
 
-### When you already have a delivery
+### 🚨 Never post first and observe afterwards
 
 ```csharp
+// ❌ WRONG — the response subject is registered AFTER the post. HandleCallbacks DROPS a
+//    response whose id has no subject yet, so a reply that lands in this window is gone
+//    and the callback hangs forever. Post returns only after ScheduleNotify has already
+//    enqueued the delivery and scheduled its turn on another thread — the handler can and
+//    does win this race under load.
 var delivery = hub.Post(request, o => ...);
 hub.Observe(delivery).Subscribe(onNext, onError);
+
+// ✅ RIGHT — one call; the AsyncSubject is registered BEFORE the post, so however early the
+//    reply lands it is buffered and replayed to the subscriber.
+hub.Observe(request, o => ...).Subscribe(onNext, onError);
 ```
+
+See rule 3a. If some intermediate code needs the delivery id up front, pass an explicit
+`o.WithMessageId(id)` through the same `Observe(request, options)` call — do not split it
+into a post and a later observe.
 
 ### Inside an `IObservable<T>` chain
 
@@ -994,7 +1013,7 @@ The view binds to `_suggestions` directly — no callback that returns `Task<T[]
 |---|---|
 | `var x = await mesh.QueryAsync(...).ToListAsync()` | `mesh.Query<T>(req).Subscribe(c => ApplyChange(c))` |
 | `await Hub.AwaitResponse<R>(req, ...)` | `Hub.Observe(req).Subscribe(r => UpdateState(r.Message), ex => …)` |
-| `Hub.RegisterCallback(delivery, r => { … })` | `Hub.Observe(delivery).Subscribe(r => …, ex => …)` |
+| `var d = Hub.Post(req, o); Hub.RegisterCallback(d, r => { … })` | `Hub.Observe(req, o).Subscribe(r => …, ex => …)` — pass the REQUEST, never a delivery you already posted (rule 3a) |
 | `var n = await mesh.GetMeshNodeStream(p).Take(1).ToTask()` | live = `mesh.GetMeshNodeStream(p).Subscribe(n => UpdateState(n))`; one-shot = `Hub.GetMeshNode(p).Subscribe(n => …)` |
 | `return Task.FromResult(_suggestions.ToArray())` | bind directly to `_suggestions`; let `Subscribe` push updates |
 | `_ = LoadAsync(); await ...` | sync method that fires `Subscribe` |
@@ -1400,7 +1419,7 @@ exist yet).
 |---|---|---|
 | `hub.Post(...)` | Yes | Fire-and-forget, safe from any thread |
 | `hub.Observe(request).Subscribe(onNext, onError)` | Yes | Reactive request/response; DeliveryFailure → onError |
-| `hub.Observe(delivery).Subscribe(...)` | Yes | Same, when the delivery was already posted |
+| `hub.Post(...)` then `hub.Observe(delivery).Subscribe(...)` | **NO** | Registers the response subject AFTER the post; a reply landing in that window is DROPPED and the callback hangs forever. Use `hub.Observe(request, options)` — see rule 3a |
 | `meshService.CreateNode(...).Subscribe()` | Yes | Fire-and-forget, no callback logic |
 | `workspace.GetMeshNodeStream(path).Update(...).Subscribe(...)` in handler body | Yes | Runs on grain scheduler |
 | `hub.RegisterCallback(...)` | **OBSOLETE** | Use `hub.Observe(...)` — RegisterCallback's Task short-circuits DeliveryFailure → callback silently never fires → caller hangs |
