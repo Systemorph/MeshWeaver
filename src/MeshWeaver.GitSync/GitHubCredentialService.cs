@@ -70,7 +70,10 @@ public sealed class GitHubCredentialService(IMeshService meshService, IMessageHu
         logger?.LogInformation("Saving GitHub credential for {User} (login={Login}, keyFp={Fp})",
             userId, gitHubLogin, Fingerprint(token.AccessToken));
 
-        return hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
+        // Off-router issuing: this service holds the DI root mesh hub — a target-less
+        // CreateOrUpdateNodeRequest posted there runs on the router (ROUTER_TRAFFIC).
+        return hub.NodeOperationIssuingHub()
+            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
             .FirstAsync()
             .Select(d => d.Message)
             .SelectMany(resp => resp.Success

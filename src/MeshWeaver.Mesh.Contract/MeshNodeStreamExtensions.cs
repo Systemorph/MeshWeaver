@@ -1432,7 +1432,9 @@ public static class MeshNodeStreamExtensions
     /// subscribed (no <c>.Take(1)</c>). See <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </para>
     /// </summary>
-    /// <param name="hub">The hub that posts the read.</param>
+    /// <param name="hub">The hub the caller holds. When it is the ROOT MESH HUB (the router), the
+    /// read is issued on <see cref="MeshExtensions.NodeOperationIssuingHub"/> instead — the router
+    /// must be neither end of a delivery (ROUTER_TRAFFIC).</param>
     /// <param name="path">The mesh path to read.</param>
     /// <param name="timeout">Wall-clock budget for the read; defaults to 10 seconds.</param>
     /// <param name="onTimeout">
@@ -1447,6 +1449,16 @@ public static class MeshNodeStreamExtensions
         ReadTimeoutBehavior onTimeout = ReadTimeoutBehavior.Throw)
         => Observable.Create<MeshNode?>(observer =>
         {
+            // 🚨 Never issue the read on the ROOT MESH HUB — the router. Mesh-singleton services
+            // (plugin-catalog boot, log-incident ingest, credential resolvers) hold the DI-injected
+            // root hub, and a GetDataRequest posted there makes the router an END of the delivery in
+            // both directions: the request reaches the per-node hub stamped Sender = mesh/{id}, and
+            // the GetDataResponse (or, for a missing node, the DeliveryFailure) is addressed straight
+            // back at mesh/{id} — both exactly what the ROUTER_TRAFFIC detector reports (production
+            // 2026-08: "GetDataResponse has the mesh hub as target (sender: Hosting/_Access/…)" /
+            // "DeliveryFailure … (sender: Plugins/_DefaultInstallLedger)"). Same seam MeshService
+            // uses for CRUD; a non-router caller gets itself back, unchanged.
+            var issuingHub = hub.NodeOperationIssuingHub();
             var budget = timeout ?? TimeSpan.FromSeconds(10);
             var started = Stopwatch.StartNew();
             var cts = new CancellationTokenSource(budget);
@@ -1489,7 +1501,9 @@ public static class MeshNodeStreamExtensions
                 if (Volatile.Read(ref emitted) != 0) return;
                 var elapsed = started.Elapsed;
                 string diagnostics;
-                try { diagnostics = hub.GetPendingRequestDiagnostics(); }
+                // The pending-request snapshot must come from the ISSUING hub — that is where our
+                // GetDataRequest's callback is registered and where a lost reply shows as pending.
+                try { diagnostics = issuingHub.GetPendingRequestDiagnostics(); }
                 catch (Exception diagEx) { diagnostics = $"<diagnostics unavailable: {diagEx.GetType().Name}>"; }
                 // …and the OWNER's state, which is what actually decides the verdict. The reader's
                 // snapshot alone proves only that the reader is innocent (idle queues + our request
@@ -1550,7 +1564,7 @@ public static class MeshNodeStreamExtensions
                 // reply was dropped and this read hung to its timeout. That was the intermittent bulk flake
                 // in WorkspaceCacheEvictionTest (ReadNode -> GetMeshNode), proven deterministically by
                 // GetMeshNode_WarmOwner_DropsResponse_WhenSubjectRegisteredAfterPost.
-                innerSubscription = hub
+                innerSubscription = issuingHub
                     .Observe<GetDataResponse>(
                         new GetDataRequest(new MeshNodeReference()),
                         o => o.WithTarget(new Address(path)))
