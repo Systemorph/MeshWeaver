@@ -20,9 +20,11 @@ A **code update** is three steps: build the images, point the Deployments at the
 ```bash
 az acr login -n meshweaver
 
-# Portal — needs the prebuilt custom base image:
+# Portal — needs the prebuilt custom base image. MULTI-ARCH: never pass `-r linux-x64`.
 dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
-  -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
+  --no-self-contained -t:PublishContainer -p:PublishProfile= \
+  -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"' \
+  -p:ContainerRegistry=meshweaver.azurecr.io \
   -p:ContainerRepository=memex-portal-ai -p:ContainerImageTag=<tag> \
   -p:ContainerBaseImage=meshweaver.azurecr.io/memex-portal-ai-base:latest
 
@@ -32,6 +34,18 @@ dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.cs
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
   -p:ContainerRepository=memex-migration -p:ContainerImageTag=<tag>
 ```
+
+**🚨 The image must be MULTI-ARCH.** `memex-portal-ai-base:latest` is built for `linux/amd64` **and**
+`linux/arm64` (x86 cloud nodes and Apple-silicon local k3s both pull it), so the app image layered on it must
+be too. Do **not** pass `-r linux-x64` — a single RID produces a single-arch image, and a node of the other
+architecture gets an `ImagePullBackOff` that reads as "the deploy hung". Three details make the flags above
+non-obvious, all of them silent when wrong:
+- `-p:PublishProfile=` (empty) is required to override the csproj's `<PublishProfile>DefaultContainer</PublishProfile>`.
+- `RuntimeIdentifiers` is declared **project-local** in `Memex.Portal.Distributed.csproj`, never as a global
+  `-p:` — a global one propagates to every `ProjectReference` and fails them with `NETSDK1083`.
+- The `'"a;b"'` quoting (single-quoted double-quotes around a **real** `;`) is load-bearing. Writing `%3B`
+  instead gives MSBuild an *escaped* semicolon, so the value stays the single bogus RID `linux-x64;linux-arm64`
+  and the build fails with `MSB4115` / `NETSDK1083`.
 
 **🚨 `<tag>` must be dotted SemVer (`3.0.0`, `3.0.0-ci.749`) — a descriptive tag gets reverted.** The
 in-pod self-updater only recognises tags matching `^\d+\.\d+\.\d+([-+].*)?$` (`VersionSelect.PlatformVersionTag`);

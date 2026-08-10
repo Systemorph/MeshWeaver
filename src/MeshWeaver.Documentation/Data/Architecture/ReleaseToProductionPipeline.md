@@ -195,7 +195,9 @@ PluginCatalog:Sources:0:AutoSync        true      # provision the missing ones, 
 ```
 
 Both default to **false**, and only a literal `true` opts in — a typo can never be what enables
-unattended Space creation. They belong in the deployment's Helm values, beside the source itself.
+unattended Space creation. `AutoSync` is honoured **only when `AutoDiscover` is also on** (there is
+nothing to sync that was never discovered), so setting it alone silently does nothing. They belong in
+the deployment's Helm values, beside the source itself.
 
 `ModuleDiscoveryService` scans once at boot (after the default install settles) and again on every
 green build of the repo — it subscribes to the same `Admin/_Build/{owner}.{repo}` node the update

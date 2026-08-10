@@ -62,16 +62,15 @@ The preferred way to authenticate is a **named remote profile** in the host conf
 
 Then the tool call is just `mirror direction=push remote="prod" sourcePath="rbuergi/Story"` — the ApiToken never travels through the model context, transcripts, or logs. Passing a base URL as `remote` also resolves the token from a profile with a matching `BaseUrl`. Supplying `remoteToken` inline remains available as an ad-hoc fallback, but is discouraged: tool arguments are visible to the model and may be persisted in conversation transcripts.
 
-Under the hood:
+Under the hood (intended — the handler in step 2 is the missing piece):
 
-1. Reads every node under `sourcePath` from the source side.
-2. Calls `mcp.create` (or `mcp.update` for upserts) on the destination for each node, authenticating with the **destination's** ApiToken.
-3. Delegates the recursive copy to the mirror handler on the mesh hub, which fans out `CreateNodeRequest` per node (see the status note above).
-4. Returns a JSON summary with the fields `status`, `direction`, `sourcePath`, `targetPath`, `nodesImported`, `nodesSkipped`, `nodesRemoved`, `partitionsImported`, and `elapsedMs`.
+1. The MCP tool resolves the remote profile and posts one `MirrorRequest` at the `mesh` hub (`hub.Observe<MirrorResult>`).
+2. **The mesh-hub handler** reads every node under `sourcePath` and, per node, calls the destination's MCP surface (`create` / `update`) through `McpRemoteMeshClient`, authenticating with the **destination's** ApiToken.
+3. It returns a `MirrorResult` with the fields `status`, `direction`, `sourcePath`, `targetPath`, `nodesImported`, `nodesSkipped`, `nodesRemoved`, `partitionsImported`, and `elapsedMs`, which the tool serialises back.
 
 ## Network direction matrix
 
-Both tools initiate outbound HTTPS from the side they run on. The rule of thumb: **run the tool on whichever side has network reach to the other**.
+The tool initiates outbound HTTPS from the side it runs on, in both directions. The rule of thumb: **run the tool on whichever side has network reach to the other**.
 
 | You want to … | Run the tool on | Initiates outbound to | Works without a tunnel? |
 |---|---|---|---|
@@ -188,7 +187,7 @@ The destination's `ApiTokenAuthenticationHandler` validates the token and stamps
 - `Permission.Read` on the source paths (on the source portal — usually trivially satisfied when operating on your own partition).
 - `Permission.Create` / `Update` on the destination paths.
 
-> **Note:** If the destination user lacks Create on a path, the import silently skips the offending nodes (logged via `_logger?.LogWarning`). Run with the destination's Admin role during development to avoid surprises.
+> **Note (intended):** a destination user lacking Create on a path should surface as `nodesSkipped`, not a hard failure. Until the handler lands this is a contract statement, not observed behaviour. Run with the destination's Admin role during development to avoid surprises.
 
 ## What does NOT cross instances (v1)
 

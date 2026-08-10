@@ -7,9 +7,27 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # NodeType Release Redesign
 
-This document is the design proposal for first-class Release MeshNodes. It
-supersedes the implicit edit-then-invalidate-cache compile flow with an
+This document is the **original design proposal** for first-class Release MeshNodes,
+which superseded the implicit edit-then-invalidate-cache compile flow with an
 explicit, observable, version-pinned release pipeline.
+
+> 🚨 **This design SHIPPED, under different names and a different trigger.** Read the
+> sections below as the historical rationale, not as an API reference — and never
+> copy their code. What actually exists today:
+>
+> | In this proposal | What shipped |
+> |---|---|
+> | `Release : ActivityLog` | **`NodeTypeRelease`** (`MeshWeaver.Graph.Configuration`) — a plain record, not an `ActivityLog`. It mirrors the compile's terminal `Status` and links the run via `CompilationActivityPath`. |
+> | `CreateReleaseRequest` / `CreateReleaseResponse` | The trigger is a **`stream.Update` control-plane field**: set `NodeTypeDefinition.RequestedReleaseAt` (+ `RequestedReleaseForce`) via `workspace.GetMeshNodeStream(nodeTypePath).Update(...)`, or call `hub.RequestNodeTypeRelease(...)`. A `CreateNodeTypeReleaseRequest`/`Response` pair still exists as legacy plumbing — **never post one from new code** (see [Request via stream.Update](/Doc/Architecture/RequestViaStreamUpdate)). |
+> | `NodeTypeService.GetCachedConfiguration` / `GetActiveReleaseStream` | **`NodeTypeService` no longer exists.** The active release is the **`NodeTypeDefinition.LatestReleasePath`** field on the NodeType node — read it directly, do **not** resolve the active release with a `Query` (that round-trip is exactly what the field replaced). `RequestedReleasePath` pins a specific historical release. |
+> | `InvalidateCache` on `NodeTypeService` | `ICompilationCacheService.InvalidateCache(nodeName)` — still present, on the cache service. |
+> | `AssemblyPath` as the durable artefact | `AssemblyPath` is a **process-local hint**; the cross-silo durable reference is `AssemblyCollection` + `AssemblyContentPath` (content-collection blob) plus `AssemblyStoreVersion`. |
+>
+> **The C# blocks below violate current platform rules** (`Observable.FromAsync`, a
+> blocking `.Wait()`, an unsubscribed `UpdateMeshNode`). They are annotated in place
+> and kept only to show what was proposed. See
+> [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) and
+> [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling).
 
 ---
 
@@ -28,8 +46,9 @@ That sounds simple, but there are four failure modes that compound one another.
 **The ALC key mismatch.** Release-based ALCs are keyed in `_loadContexts` by
 `release.Path`. `InvalidateCache` looks up by `nodeName`, finds nothing, skips
 the GC sweep, and `File.Delete` on the cached `.dll` throws
-`UnauthorizedAccessException`. This is why
-`CodeEditRecompileTest` (`test/MeshWeaver.Hosting.Monolith.Test`) is still `[Skip]`-ed.
+`UnauthorizedAccessException`. This is what kept
+`CodeEditRecompileTest` (`test/MeshWeaver.Hosting.Monolith.Test`) skipped at the time.
+*(It runs today — the test is no longer skipped.)*
 
 **No observable feedback.** Users have no signal while a compile is running,
 when it finishes, or whether it succeeded. Diagnostics are read on demand via
@@ -158,11 +177,18 @@ Each Release MeshNode's hub watches its own `MeshNodeReference` stream via
 `hub.WatchControlPlane(...)`. When `RequestedStatus = Compiling` (set on
 create), it fires the Roslyn compile in the background:
 
+> 🚨 **Do not copy this block.** `Observable.FromAsync` is forbidden outside `IoPool`
+> (it runs the prologue on the subscribing thread — i.e. the hub's action block — with no
+> concurrency bound); the Roslyn compile is a blocking leaf and belongs on
+> `pool.InvokeBlocking(...)`. And `UpdateMeshNode` here is **never subscribed**, so the
+> write would silently not happen — the shipped code composes
+> `GetMeshNodeStream(path).Update(...).Subscribe(_ => { }, ex => …)`.
+
 ```csharp
 hub.RegisterForDisposal(hub.WatchControlPlane(requested =>
 {
     if (requested != ActivityStatus.Compiling) return;
-    Observable.FromAsync(ct => CompileReleaseAsync(hub, ct))
+    Observable.FromAsync(ct => CompileReleaseAsync(hub, ct))   // ❌ FORBIDDEN — use IIoPool
         .Subscribe(
             assemblyPath =>
                 hub.GetWorkspace().UpdateMeshNode(curr =>
