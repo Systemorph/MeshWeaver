@@ -320,6 +320,39 @@ public static class MeshExtensions
         => hub.NodeOperationExecutionHub()?.Address ?? hub.GetMeshHub().Address;
 
     /// <summary>
+    /// The hub a node-operation request/response exchange should be ISSUED ON. The caller's own hub
+    /// — except when that hub is the ROOT MESH HUB, the mesh's ROUTER: a request posted there makes
+    /// the router an END of the delivery in both directions (the request goes out stamped
+    /// <c>Sender = mesh/{id}</c> and its response is addressed straight back at <c>mesh/{id}</c>),
+    /// which is exactly what the <c>ROUTER_TRAFFIC</c> detector reports — and, for a target-less
+    /// request, EXECUTES the work on the router's single-threaded action block, starving the
+    /// routing it exists to do.
+    ///
+    /// <para>This is the one shared seam for every mesh-singleton service that takes the DI-injected
+    /// <see cref="IMessageHub"/> (which in the mesh's root container IS the router) and issues
+    /// request/response work on it: the plugin-catalog boot services, the log-incident ingest, the
+    /// content importers, one-shot <c>GetMeshNode</c> reads. They all hop onto
+    /// <see cref="NodeOperationExecutionHub"/> — the mesh's dedicated off-router execution hub,
+    /// routing-registered so responses land on it cross-silo, sharing the mesh's type registry and
+    /// permission evaluator. For any hub that is NOT the router this returns the hub unchanged, so
+    /// portal/session/import-hub callers keep their identity byte-for-byte.</para>
+    ///
+    /// <para>Identity is unaffected: the ambient <c>AccessService</c> is the mesh-wide singleton
+    /// every hosted hub's provider chains to, so an <c>ImpersonateAsSystem</c> (or any ambient
+    /// context) active at Subscribe time is read identically by this hub's post pipeline.</para>
+    ///
+    /// <para>Falls back to the hub itself only while the mesh is tearing down
+    /// (<see cref="NodeOperationExecutionHub"/> returns <c>null</c>) — the historical behaviour, at
+    /// a point where the operation is being dropped anyway.</para>
+    /// </summary>
+    /// <param name="hub">The hub the caller holds — returned unchanged unless it is the root mesh hub.</param>
+    /// <returns>The off-router issuing hub.</returns>
+    public static IMessageHub NodeOperationIssuingHub(this IMessageHub hub) =>
+        string.Equals(hub.Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal)
+            ? hub.NodeOperationExecutionHub() ?? hub
+            : hub;
+
+    /// <summary>
     /// Registers handlers for mesh node operations. Idempotent — calling twice on the
     /// same configuration is a no-op on the second call. Without this guard, every
     /// extra call would add a duplicate set of handlers; each delivery would invoke
