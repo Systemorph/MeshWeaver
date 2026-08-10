@@ -929,6 +929,42 @@ public static class MeshDataSourceExtensions
             .Subscribe(_ => compilationCache.UnloadNodeContexts(sanitizedNodeName));
     }
 
+    /// <summary>
+    /// Releases a hub's NodeType-assembly lease under the SAME phase rule as
+    /// <see cref="UnloadNodeAssemblyContexts"/>, and for the same reason: releasing the last lease
+    /// is what runs the deferred <c>Unload</c>, so doing it inline from
+    /// <c>MessageHub.DisposeImpl</c> would free the LoaderAllocator before
+    /// <see cref="IoPoolRegistry.DrainAll"/> has joined the pooled leaves still running that
+    /// assembly's code (issue #613 — AccessViolation → SIGABRT). Mesh alive ⇒ release now, so a
+    /// long-lived process reclaims the ALC as soon as its last user is gone. Mesh tearing down ⇒
+    /// hand it to <see cref="MeshTeardownSignal"/>, which fires after every drain phase.
+    /// </summary>
+    private static void ReleaseNodeTypeLease(
+        IDisposable lease, IMessageHub meshHub, MeshTeardownSignal? teardownSignal)
+    {
+        if (teardownSignal is null || !meshHub.IsDisposing)
+        {
+            lease.Dispose();
+            return;
+        }
+
+        // ReplaySubject(1)-backed and COMPLETING, so this subscription releases itself as soon as
+        // the report arrives (and a subscriber attaching after teardown finished still gets it) —
+        // the same self-releasing shape UnloadNodeAssemblyContexts relies on, so nothing is rooted.
+        // The error arm is not decoration: a faulted signal would otherwise leave the lease held
+        // for the process lifetime, which is the ALC leak this whole mechanism exists to bound —
+        // so release on error too, and say so.
+        teardownSignal.Completed.Subscribe(
+            _ => lease.Dispose(),
+            ex =>
+            {
+                meshHub.ServiceProvider.GetService<ILogger<MeshDataSource>>()?.LogWarning(ex,
+                    "Teardown signal faulted before the NodeType assembly lease was released — "
+                    + "releasing it now so the collectible context is not held for the process lifetime");
+                lease.Dispose();
+            });
+    }
+
     private static void SubscribeToOwnDeletion(IMessageHub hub)
     {
         var cache = hub.ServiceProvider.GetService<OwnNodeCache>();
@@ -988,11 +1024,25 @@ public static class MeshDataSourceExtensions
                 // their life — the /Store outage, pinned by NodeTypeAlcSharedWithInstancesTest.
                 // Reclaim is unaffected: Unload is cooperative, so the context could not have been
                 // collected while those hubs held references to its types anyway.
+                //
+                // 🚨 RELEASING the lease is itself phase-sensitive, because releasing the LAST one
+                // is what performs the deferred Unload — so a bare RegisterForDisposal(lease) would
+                // free the LoaderAllocator from inside MessageHub.DisposeImpl, i.e. BEFORE
+                // DisposalCompleted and therefore before IoPoolRegistry.DrainAll() joins the pooled
+                // leaves still executing this ALC's compiled types. That is issue #613's phase
+                // inversion exactly (AccessViolation → SIGABRT), re-entered through the lease. It
+                // has to obey the same rule as the unload above, so it goes through the same gate.
                 var nodeTypeLease = new SerialDisposable();
-                hub.RegisterForDisposal(nodeTypeLease);
+                hub.RegisterForDisposal(_ =>
+                    ReleaseNodeTypeLease(nodeTypeLease, meshHub, teardownSignal));
                 hub.RegisterForDisposal(ownStream
                     .Select(node => node?.NodeType)
                     .Where(nodeType => !string.IsNullOrWhiteSpace(nodeType))
+                    // 🚨 Take(1) is correct here and is NOT the freeze-the-binding kind: this feeds
+                    // a one-shot lease acquisition, not a live view. The lease cannot go stale
+                    // either — a node whose NodeType CHANGES is recycled by NodeTypeRebindWatcher,
+                    // so this hub (and with it this lease) dies rather than holding a lease on the
+                    // type it no longer is.
                     .Take(1)
                     // SerialDisposable, not SingleAssignmentDisposable: a hub torn down before its
                     // own node arrives has already disposed this, and assigning then releases the
