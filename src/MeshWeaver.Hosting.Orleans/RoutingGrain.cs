@@ -57,6 +57,16 @@ internal class RoutingGrain(
         ?? IoPool.Unbounded;
 
     /// <summary>
+    /// Per-destination FIFO for the stream-routed branch. Instance field — its lifetime is this
+    /// activation's, and it holds an entry only while a destination has work in flight.
+    /// See <see cref="OrderedRouteDispatcher"/> for why the order is a correctness requirement.
+    /// </summary>
+    private readonly OrderedRouteDispatcher orderedDispatcher = new(
+        meshHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Routing)
+        ?? IoPool.Unbounded,
+        logger);
+
+    /// <summary>
     /// Routes dispatched but not yet terminated. This is the back-pressure signal that used to be
     /// INVISIBLE: before #1028 the only evidence a route had stopped making progress was Orleans'
     /// own <c>NonReentrancyQueueSize</c> growing into the hundreds inside a "Response did not
@@ -130,10 +140,25 @@ internal class RoutingGrain(
         var streamProvider = this.GetStreamProvider(StreamProviders.Memory);
         var grainFactory = GrainFactory;
 
-        // 🚨 THE TURN'S WORK ENDS HERE. BuildRoute only COMPOSES a cold observable; every
-        // side effect runs when the routing pool subscribes it, on a ThreadPool thread.
-        Dispatch(BuildRoute(delivery, address, addressPath, streamProvider, grainFactory),
-            addressPath, delivery.Id);
+        // 🚨 THE TURN'S WORK ENDS HERE. The Build*Route helpers only COMPOSE a cold observable;
+        // every side effect runs when the routing pool subscribes it, on a ThreadPool thread.
+        //
+        // 🚨 …but for a STREAM-ROUTED destination the order in which those legs are subscribed
+        // is part of the contract, so that branch is drained through a per-destination FIFO
+        // (see OrderedRouteDispatcher for why a delta protocol cannot tolerate reordering).
+        // The branch decision is a pure set lookup — O(1), safe on the turn — and is made HERE
+        // precisely because the turn is the last point at which the send order is authoritative.
+        if (meshConfig.StreamRoutedAddressTypes.Contains(address.Type))
+        {
+            ReportSaturation(Interlocked.Increment(ref inFlightRoutes), addressPath);
+            orderedDispatcher.Enqueue(
+                addressPath,
+                BuildStreamRoute(delivery, address, addressPath, streamProvider),
+                () => ReportDrained(Interlocked.Decrement(ref inFlightRoutes)));
+        }
+        else
+            Dispatch(BuildGrainRoute(delivery, address, addressPath, streamProvider, grainFactory),
+                addressPath, delivery.Id);
 
         return Task.FromResult(delivery.Forwarded(address));
     }
@@ -173,10 +198,50 @@ internal class RoutingGrain(
     }
 
     /// <summary>
-    /// Composes (does NOT run) the route for one delivery. Everything below executes on the
-    /// routing pool, never on the grain turn — see <see cref="RouteMessage"/>.
+    /// Composes (does NOT run) the MEMORY-STREAM leg of a route: the "I'm a registered hosted hub,
+    /// find me via my RegisterStream subscription" path — portal hubs (<c>portal/{userId}</c>),
+    /// test client hubs (<c>client/{id}</c>), the cache hub (<c>cache/mesh-node-cache</c>), the
+    /// root mesh hub. The set is populated by each module via
+    /// <c>IMeshBuilder.AddStreamRoutedAddressType("…")</c>.
+    ///
+    /// <para>This is the channel every data-sync frame travels on, so its legs are drained through
+    /// <see cref="OrderedRouteDispatcher"/> — one at a time per destination, in arrival order.</para>
     /// </summary>
-    private IObservable<Unit> BuildRoute(
+    private IObservable<Unit> BuildStreamRoute(
+        IMessageDelivery delivery,
+        Address address,
+        string addressPath,
+        IStreamProvider streamProvider)
+    {
+        void PostFailureToSender(string failureMessage, ErrorType errorType) =>
+            PostFailure(delivery, address, streamProvider, failureMessage, errorType);
+
+        return Observable.Defer(() =>
+        {
+            logger.LogDebug("[ROUTE] {Address} type={Type} declared stream-routed → memory stream", addressPath, address.Type);
+            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM addr={addressPath} id={delivery.Id} streamName={addressPath}");
+            var s = streamProvider.GetStream<IMessageDelivery>(addressPath);
+            return PostToStream(() => s.OnNextAsync(delivery), addressPath, delivery.Id,
+                delivery.Sender, PostFailureToSender, logger, StreamPostTimeout);
+        })
+            // Composition-time faults must ALSO reach the sender — see BuildGrainRoute's trailing
+            // Catch for the full rationale (the classic one: GetStream NRE'ing out of
+            // PersistentStreamProvider.IsRewindable while the stream provider is still starting).
+            .Catch<Unit, Exception>(ex =>
+            {
+                RoutingGrainTrace.Write($"RoutingGrain.RouteMessage ROUTE_FAULT id={delivery.Id} addr={addressPath} ex={ex.Message}");
+                logger.LogError(ex, "[ROUTE] Routing {Address} failed before the delivery could be attempted", addressPath);
+                PostFailureToSender($"Routing to '{addressPath}' failed: {ex.Message}", ErrorType.Failed);
+                return Observable.Return(Unit.Default);
+            });
+    }
+
+    /// <summary>
+    /// Composes (does NOT run) the PER-NODE-GRAIN route for one delivery: path resolution, then the
+    /// grain hand-off. Everything below executes on the routing pool, never on the grain turn —
+    /// see <see cref="RouteMessage"/>.
+    /// </summary>
+    private IObservable<Unit> BuildGrainRoute(
         IMessageDelivery delivery,
         Address address,
         string addressPath,
@@ -188,23 +253,6 @@ internal class RoutingGrain(
 
         return Observable.Defer(() =>
         {
-            // Config-driven memory-stream dispatch: any address-type prefix
-            // declared as a static stream route goes via the cluster-wide
-            // Orleans memory stream instead of grain activation. This is the
-            // "I'm a registered hosted hub, find me via my RegisterStream
-            // subscription" path — portal hubs (`portal/{userId}`), test
-            // client hubs (`client/{id}`), cache hub (`cache/mesh-node-cache`),
-            // etc. The list is populated by each module via
-            // `IMeshBuilder.AddStreamRoutedAddressType("…")`.
-            if (meshConfig.StreamRoutedAddressTypes.Contains(address.Type))
-            {
-                logger.LogDebug("[ROUTE] {Address} type={Type} declared stream-routed → memory stream", addressPath, address.Type);
-                RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM addr={addressPath} id={delivery.Id} streamName={addressPath}");
-                var s = streamProvider.GetStream<IMessageDelivery>(addressPath);
-                return PostToStream(() => s.OnNextAsync(delivery), addressPath, delivery.Id,
-                    delivery.Sender, PostFailureToSender, logger, StreamPostTimeout);
-            }
-
             RoutingGrainTrace.Write($"RoutingGrain.RouteMessage RESOLVE_BEGIN id={delivery.Id} addr={addressPath}");
             return pathResolver.ResolvePath(addressPath)
                 .Take(1)
