@@ -56,6 +56,11 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     private readonly IServiceProvider serviceProvider;
     private readonly ILogger<OrleansRoutingService> logger;
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
+    // Per locally-registered address: completes when that address's INBOUND Orleans
+    // stream subscription is attached (or has terminally given up). Outbound grain
+    // dispatches from that address gate on it — see DeliverMessage. Instance field:
+    // lifetime is the mesh's, entries removed with their RegisterStream disposal.
+    private readonly ConcurrentDictionary<Address, IObservable<Unit>> subscriptionReady = new();
     private readonly CompositeDisposable inFlight = new();
     // Mesh-scoped IO pool for the genuinely-async stream UnsubscribeAsync. The hub's
     // RegisterForDisposal(IDisposable) is synchronous; the async unsubscribe is bridged
@@ -122,9 +127,26 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             if (!disposed)
             {
                 OrleansRouteTrace.Write($"OrleansRoutingService.Deliver DISPATCH_TO_GRAIN addr={address} id={delivery.Id}");
+                // 🚨 Issue #1081: gate the dispatch on the SENDER's inbound stream subscription
+                // being attached. RegisterStream makes the local route live synchronously but
+                // attaches the Orleans memory-stream subscription on a DETACHED retry task —
+                // so a freshly created hub can post a request (e.g. a SubscribeRequest) and
+                // receive its answer (the first DataChangedEvent, or a NotFound NACK published
+                // by RoutingGrain.PostFailure directly onto the sender's memory stream) BEFORE
+                // its own subscription exists. Memory streams do not replay to late subscribers:
+                // the answer is silently lost and nothing ever re-sends it — the caller parks
+                // until its test/GUI timeout (measured: NACK published at T+0.706s, subscription
+                // attached at T+0.709s, client dark for the full 20s bound). Holding the OUTBOUND
+                // message until the sender can hear the answer closes the window at its root; a
+                // sender that is not locally stream-registered (grain hubs, relays) is unaffected.
+                var senderReady = delivery.Sender is { } sender
+                    && subscriptionReady.TryGetValue(GetHostAddress(sender), out var ready)
+                        ? ready
+                        : Observable.Return(Unit.Default);
                 var sub = new SingleAssignmentDisposable();
                 inFlight.Add(sub);
-                sub.Disposable = DispatchObservable(delivery, address)
+                sub.Disposable = senderReady
+                    .SelectMany(_ => DispatchObservable(delivery, address))
                     .Catch<IMessageDelivery, Exception>(ex =>
                     {
                         logger.LogError(ex, "Failed to deliver to {Address}", address);
@@ -308,6 +330,15 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // and a hard failure past the deadline is loud (Critical) instead of a silent wedge.
         var cts = new CancellationTokenSource();
         var subscriptionTask = SubscribeWithRetryAsync(address, callback, cts.Token);
+        // Gate for OUTBOUND grain dispatches from this address (issue #1081 — see DeliverMessage):
+        // completes when the inbound subscription is attached, and ALWAYS completes — a given-up
+        // (null) or cancelled subscribe must degrade to today's behavior, never hold outbound
+        // traffic hostage. ContinueWith swallows the terminal state into a plain Unit; a completed
+        // task makes the gate an immediate pass-through (zero cost on the healthy path).
+        subscriptionReady[address] = Observable.Defer(() =>
+            subscriptionTask
+                .ContinueWith(_ => Unit.Default, TaskScheduler.Default)
+                .ToObservable());
         // Observe the task's terminal state so a fault is NEVER an unobserved-task exception (the retry
         // RETURNS NULL — not a throw — when it gives up, so a fault here is genuinely unexpected). Accessing
         // t.Exception marks it observed; this is trace-only, teardown still awaits the handle below.
@@ -327,6 +358,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         return Disposable.Create(() =>
         {
             streams.TryRemove(address, out _);
+            subscriptionReady.TryRemove(address, out _);
             cts.Cancel();
             ioPool.Invoke(async _ =>
                 {
@@ -378,6 +410,21 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                             OrleansRouteTrace.Write(
                                 $"OrleansRoutingService.STREAM_CALLBACK FAULTED addr={address} msg={v.Message?.GetType().Name} id={v.Id} ex={ex.Message}");
                         });
+                    return Task.CompletedTask;
+                },
+                ex =>
+                {
+                    // 🚨 The transport TELLING us it lost/failed delivery must never be silent
+                    // (issue #1081 — a dropped frame on this stream leaves a mirror tracking its
+                    // owner at a permanent deficit; the protocol-level BasedOnVersion chain heals
+                    // it, but the loss itself must be attributable). Orleans reports pulling-agent
+                    // faults and cache-pressure data loss (DataNotAvailableException) through this
+                    // callback; without it the default handler swallows the signal.
+                    logger.LogError(ex,
+                        "Orleans '{Provider}' stream for {Address} reported a delivery error — frames may have been lost; mirrors recover via the BasedOnVersion resync chain",
+                        StreamProviders.Memory, address);
+                    OrleansRouteTrace.Write(
+                        $"OrleansRoutingService.STREAM_ONERROR addr={address} ex={ex.Message}");
                     return Task.CompletedTask;
                 }).ConfigureAwait(false);
 
