@@ -71,8 +71,8 @@ sequenceDiagram
     participant SA as StorageAdapter
     participant Store as Storage
 
-    Hub->>PS: SaveNodeAsync(node, hub.JsonSerializerOptions)
-    PS->>SA: WriteAsync(node, options)
+    Hub->>PS: save(node, hub.JsonSerializerOptions)
+    PS->>SA: Write(node, options)
     SA->>Store: Serialize with $type
     Store-->>SA: Stored
     SA-->>PS: Success
@@ -82,43 +82,66 @@ sequenceDiagram
 ## Key Interfaces
 
 All persistence contracts accept `JsonSerializerOptions` explicitly — there is no global fallback.
-
-### `IMeshStorage`
-
-```csharp
-Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct);
-Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct);
-IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options);
-```
-
-### `IMeshService`
-
-Query and autocomplete operations require options for type resolution during result projection.
-
-```csharp
-IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, JsonSerializerOptions options, CancellationToken ct);
-IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(string basePath, string prefix, JsonSerializerOptions options, int limit, CancellationToken ct);
-```
+They are also **reactive**: every one of these returns `IObservable<T>`, never `Task<T>` (see
+[Asynchronous Calls](/Doc/Architecture/AsynchronousCalls)).
 
 ### `IStorageAdapter`
 
-Each backend adapter serializes and deserializes using exactly the options it is given.
+Each backend adapter serializes and deserializes using exactly the options it is given
+(`src/MeshWeaver.Mesh.Contract/Services/IStorageAdapter.cs`):
 
 ```csharp
-Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct);
-Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct);
+IObservable<MeshNode?> Read(string path, JsonSerializerOptions options);
+IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options);
+IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options);
+IObservable<IReadOnlyList<MeshNode>> WriteMany(/* … */);
+IObservable<string> Delete(string path);
+IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options);
+```
+
+> There is **no `IMeshStorage` interface** and no `GetNodeAsync` / `SaveNodeAsync` /
+> `ReadAsync` / `WriteAsync` on the adapter contract. `GetNodeAsync` / `SaveNodeAsync` exist
+> only as legacy **test-only** aliases in `MeshWeaver.Fixture/IStorageAdapterTestExtensions.cs`,
+> which forward to `Read` / `Write`. Application code never touches an adapter directly —
+> see [Data Access Patterns](/Doc/Architecture/DataAccessPatterns).
+
+### `IMeshService`
+
+Query and autocomplete take the caller's options for type resolution during result projection.
+Both are reactive; the `QueryAsync` interface method is **gone** — `IMeshService.Query<T>`'s
+`Initial` emission is the old "QueryAsync" snapshot (see
+`MeshWeaver.Mesh.Contract/Services/MeshQueryExtensions.cs`):
+
+```csharp
+IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(/* … */ AutocompleteMode mode = AutocompleteMode.RelevanceFirst /* … */);
 ```
 
 ## Default Configuration
 
-MeshWeaver initializes `JsonSerializerOptions` with these defaults out of the box:
+Every hub's options are built by `SerializationExtensions.CreateSerializationConfiguration`
+with these settings:
 
 | Setting | Value | Purpose |
 |---|---|---|
-| `WriteIndented` | `true` | Human-readable stored JSON |
 | `PropertyNamingPolicy` | `CamelCase` | JavaScript compatibility |
-| `PropertyNameCaseInsensitive` | `true` | Tolerant parsing |
-| `DefaultIgnoreCondition` | `WhenWritingNull` | Compact output |
+| `DefaultIgnoreCondition` | **`WhenWritingDefault`** | Compact output |
+| `UnmappedMemberHandling` | `Skip` | Tolerate unknown properties on read |
+| `ReferenceHandler` | `null` | Reference handling fully disabled |
+| `ReadCommentHandling` / `AllowTrailingCommas` | `Skip` / `true` | Tolerant parsing |
+| `IncludeFields` | `true` | `ValueTuple` support |
+| `AllowOutOfOrderMetadataProperties` | `true` | Accept a `$type` that isn't the first property (legacy persisted rows) |
+
+> 🚨 **`DefaultIgnoreCondition` is `WhenWritingDefault`, not `WhenWritingNull`** — and the
+> difference bites. Under `WhenWritingDefault` a `bool` property whose value is `false` is
+> **omitted from the JSON entirely**, so a property declared `public bool Flag { get; init; } = true`
+> silently fails to round-trip a `true → false` change: the `false` is not written, and the
+> reader re-applies the `true` default. When a default-valued member must survive the wire,
+> annotate it `[JsonIgnore(Condition = JsonIgnoreCondition.Never)]`.
+>
+> `WriteIndented` and `PropertyNameCaseInsensitive` are **not** set on the hub's options —
+> they keep the `System.Text.Json` defaults (`false`). Indented output is opt-in per adapter:
+> `FileSystemStorageAdapterFactory` supplies a `writeOptionsModifier` that copies the options
+> with `WriteIndented = true` for on-disk JSON.
 
 ## Best Practices
 
@@ -127,11 +150,12 @@ MeshWeaver initializes `JsonSerializerOptions` with these defaults out of the bo
 Never create a fresh `JsonSerializerOptions` for persistence calls — a bare instance has no type registry and silently discards `$type` discriminators.
 
 ```csharp
-// Correct — type registry flows through
-await persistence.SaveNodeAsync(node, hub.JsonSerializerOptions);
+// Correct — type registry flows through, and the write is subscribed (cold observable)
+adapter.Write(node, hub.JsonSerializerOptions)
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "Write failed for {Path}", node.Path));
 
 // Incorrect — loses type information
-await persistence.SaveNodeAsync(node, new JsonSerializerOptions());
+adapter.Write(node, new JsonSerializerOptions());
 ```
 
 ### Register every content type
@@ -157,14 +181,14 @@ The `$type` discriminator defaults to the **short** type name (`StackControl`, `
 
 ### Use typed query helpers
 
-The extension methods filter by `$type` and project directly to `T`, avoiding manual casting:
+`IMeshService.Query<T>` filters by `$type` and projects directly to `T`, avoiding manual
+casting — reactively, so subscribe rather than `await foreach`:
 
 ```csharp
 // Type-safe query with automatic $type filtering
-await foreach (var story in meshQuery.QueryAsync<Story>(query, hub.JsonSerializerOptions))
-{
-    // story is already typed as Story
-}
+meshService.Query<Story>(query)
+    .Subscribe(change => { /* change.Items are already typed as Story */ },
+               ex => logger.LogWarning(ex, "Query failed"));
 ```
 
 ## Storage Backends
@@ -174,9 +198,11 @@ All adapters implement the same interface and accept the same options — swappi
 | Adapter | Description |
 |---|---|
 | `FileSystemStorageAdapter` | Local `.json` files |
+| `PostgreSqlStorageAdapter` | PostgreSQL (the production backend) |
 | `CosmosStorageAdapter` | Azure Cosmos DB documents |
 | `AzureBlobStorageAdapter` | Azure Blob Storage |
-| `InMemoryPersistenceService` | In-memory store for testing |
+| `SqliteStorageAdapter` | SQLite |
+| `InMemoryStorageAdapter` | In-memory store for testing |
 
 ## Related Topics
 

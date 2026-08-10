@@ -6,6 +6,8 @@ Icon: /static/DocContent/Architecture/DataVersioning/icon.svg
 ---
 
 MeshWeaver takes a pragmatic stance on data versioning: rather than imposing a single strategy across all backends, it delegates to each store's native capabilities wherever they exist. The result is richer history, lower application complexity, and better performance than any cross-cutting shim could deliver.
+
+> **Scope — read this first.** This page is about **historical versions of the *data* a NodeType holds** (a pricing table, a claim, a contract) in whatever store backs it, and it is largely a **guide to the backends' own mechanisms** — the code samples below are the shape you would implement in a storage adapter, not a framework API you can call. There is no `VersionedEntityReference` and no `@V{n}` path resolution in the framework today. For the *live* `MeshNode` graph's revision counter — which is fully implemented — see [MeshNode Versioning](/Doc/Architecture/MeshNodeVersioning); for a node's edit history and restore, see the version tooling on the node itself (`get_versions` / `restore_version`).
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
   <defs>
     <marker id="dv-arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
@@ -126,25 +128,14 @@ CLONE pricing
 AT(TIMESTAMP => '2024-12-31 23:59:59');
 ```
 
-### MeshWeaver Integration
+### Reaching it from MeshWeaver
 
-Access historical Snowflake data through versioned entity references:
-
-```csharp
-// Query a claim as it existed on a specific date
-hub.Observe<GetDataResponse>(
-        new GetDataRequest(
-            new VersionedEntityReference(
-                Collection: "Claim",
-                Id: 12345,
-                AsOf: new DateTime(2024, 6, 1)
-            )
-        ),
-        o => o.WithTarget(new Address("Insurance/2024/Property")))
-    .Subscribe(
-        response => { /* historical claim in response.Message.Data */ },
-        ex => logger.LogWarning(ex, "historical read failed"));
-```
+There is **no built-in time-travel workspace reference** — `VersionedEntityReference` does not
+exist. A NodeType that wants "as of" reads over a Time-Travel-capable store adds it the ordinary
+way: an `AT(TIMESTAMP => …)` clause in the query its own data source issues, exposed to callers as
+a normal reactive read (an `asOf` parameter on the type's own request/observable). Keep the
+`AT(...)` inside the storage leaf — the leaf is where the async I/O lives, and it goes through
+`IIoPool` like every other I/O edge ([Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling)).
 
 ---
 
@@ -197,7 +188,7 @@ FOR SYSTEM_TIME ALL;
 
 ## Manual Versioning: Path Pattern
 
-When the underlying store has no built-in history mechanism (Cosmos DB, Azure Blob Storage), MeshWeaver uses an explicit **path-based versioning** convention.
+When the underlying store has no built-in history mechanism (Cosmos DB, Azure Blob Storage), the recommended convention is explicit **path-based versioning**. This is a **convention for an adapter you write** — nothing in the framework parses or resolves `@V{n}` today.
 
 ```mermaid
 flowchart LR
@@ -227,26 +218,35 @@ The undecorated path always points to the **current** version; decorated paths a
 
 ### Implementation Pattern
 
+🚨 The snippet below is the **storage-leaf** shape — the innermost `Task`-returning methods that
+actually talk to Cosmos/blob. It must not surface as a `Task` API: the adapter's public surface
+returns `IObservable<T>` and bridges these leaves through `IIoPool`
+(`pool.Invoke(ct => SaveVersionAsync(path, data, ct))`), never `Observable.FromAsync`, and no
+hub-reachable or Blazor code ever `await`s them. See
+[Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) and
+[Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling).
+
 ```csharp
-// Save a new version
-public async Task SaveVersionAsync(string path, object data)
+// Storage leaf — save a new version
+private async Task SaveVersionAsync(string path, object data, CancellationToken ct)
 {
     // Determine the next version number
-    var current = await GetCurrentVersionAsync(path);
+    var current = await GetCurrentVersionAsync(path, ct);
     var newVersion = current + 1;
 
     // Write the immutable versioned snapshot
-    await SaveAsync($"{path}@V{newVersion}", data);
+    await SaveAsync($"{path}@V{newVersion}", data, ct);
 
     // Advance the current pointer
-    await SaveAsync(path, data);
+    await SaveAsync(path, data, ct);
 }
 
-// Read a specific historical version
-public async Task<T> GetVersionAsync<T>(string path, int version)
-{
-    return await GetAsync<T>($"{path}@V{version}");
-}
+// Public surface — reactive, pooled
+public IObservable<Unit> SaveVersion(string path, object data) =>
+    ioPool.Invoke(ct => SaveVersionAsync(path, data, ct));
+
+public IObservable<T> GetVersion<T>(string path, int version) =>
+    ioPool.Invoke(ct => GetAsync<T>($"{path}@V{version}", ct));
 ```
 
 ### Cosmos DB

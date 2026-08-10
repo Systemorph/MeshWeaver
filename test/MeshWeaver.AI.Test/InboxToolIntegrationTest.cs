@@ -33,6 +33,13 @@ namespace MeshWeaver.AI.Test;
 /// cancel-then-restart behavior that ensures pending messages still
 /// dispatch a fresh round when the user hits ESC during a turn.
 /// </summary>
+/// <remarks>
+/// Serialised via <see cref="ConcurrencyStressCollection"/> for
+/// <c>Hammer_ConcurrentSubmits_AllIngested_NoneLost</c>: twelve submits are fired back-to-back at a
+/// thread that is already mid-round, and the verdict is a 150 s settle bound on "nothing was lost".
+/// That is a message-loss detector riding on the machine keeping up with the burst.
+/// </remarks>
+[Collection(ConcurrencyStressCollection.Name)]
 public class InboxToolIntegrationTest : AITestBase
 {
     public InboxToolIntegrationTest(ITestOutputHelper output) : base(output) { }

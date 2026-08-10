@@ -123,7 +123,7 @@ When a `MeshNode` references `nodeType = "X"` and no provider returns a node at 
 > NodeType 'X' is not registered (referenced by instance '&lt;path&gt;').  
 > Either register the type via `AddXxxType()` in your mesh builder, or fix the instance's `NodeType` field. Activation cannot proceed.
 
-Before this probe existed, the slow path waited the full `SlowPathTimeout = 30s` (stacked to 60s on double-enrichment) for a typeStream emission that would never come. The stuck per-node hub then jammed the routing action block, cascading 10-second timeouts to every other activation posted through the same client.
+Before this probe existed, the slow path waited the full `SlowPathTimeout` (`NodeTypeEnrichmentHelpers` — **60 s** today) for a typeStream emission that would never come, and activation enriches the same node twice, so a second wait used to stack on top of the first. The stuck per-node hub then jammed the routing action block, cascading 10-second timeouts to every other activation posted through the same client. (The stacking is gone — a re-enrichment short-circuit returns once `HubConfiguration` is set; the regression guard is `NodeTypeEnrichmentDoubleCallTest`.)
 
 See `test/MeshWeaver.Persistence.Test/UnregisteredNodeTypeTest.cs` for the regression guard.
 
@@ -131,7 +131,7 @@ See `test/MeshWeaver.Persistence.Test/UnregisteredNodeTypeTest.cs` for the regre
 
 | Symbol | Location |
 |---|---|
-| `IStaticNodeProvider` | `MeshWeaver.Mesh.Services` |
-| `StaticNodeProviderExtensions` | `MeshWeaver.Mesh.Services` — `FindStaticNode` / `EnumerateStaticNodes` helpers |
-| `StaticMeshNodeListProvider` | `MeshWeaver.Mesh.Services` — internal wrapper bridging `AddMeshNodes` to the provider model |
+| `IStaticNodeProvider` | namespace `MeshWeaver.Mesh.Services` (assembly **`MeshWeaver.Mesh.Contract`**) |
+| `StaticNodeProviderExtensions` | same namespace/assembly — `FindStaticNode` / `EnumerateStaticNodes` helpers |
+| `StaticMeshNodeListProvider` | same namespace/assembly — wrapper bridging `AddMeshNodes` to the provider model, registered in `MeshBuilder.Build` |
 | `NodeTypeEnrichmentHelpers` | `MeshWeaver.Graph.Configuration` — existence probe and slow path |

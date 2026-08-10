@@ -107,19 +107,14 @@ public static VirtualDataSource WithMeshQuery(
     this VirtualDataSource ds,
     string query,
     string? collectionName = null);
-
-public static VirtualDataSource WithMeshQuery<T>(
-    this VirtualDataSource ds,
-    string query,
-    string? collectionName = null) where T : class;
 ```
 
 | Parameter | Description |
 |---|---|
 | `query` | Mesh query string in the standard syntax (see [Query Syntax](/Doc/DataMesh/QuerySyntax)). Common shapes: `namespace:X scope:subtree nodeType:Y`, `path:X`, `path:X scope:descendants`, `namespace:X scope:nextLevel` (the next populated level — graph navigation). |
-| `collectionName` | Workspace collection name. Defaults to `typeof(T).Name` (or `nameof(MeshNode)` on the non-generic overload). Required when the same `T` appears in multiple synced collections — for example, `Sources` and `Tests` both hold `MeshNode`. |
+| `collectionName` | Workspace collection name. Defaults to `nameof(MeshNode)`. Required when several synced collections would otherwise collide — for example, `Sources` and `Tests` both hold `MeshNode`. |
 
-The non-generic overload is the everyday case (a collection of `MeshNode`). The generic overload accepts a content type and projects via `OfType<T>` — useful when the query selects a single content shape.
+There is one overload, and it yields a collection of `MeshNode`. To work with a single content shape, filter on the node's `Content` when you read the collection.
 
 ---
 
@@ -257,7 +252,7 @@ Reads and writes go through the framework's data-layer messages.
 
 - `NodeFactory.CreateNode(node)` — create a source node.
 - `NodeFactory.UpdateNode(node)` — write at the source side.
-- `ReadNodeAsync(path)` — read a `MeshNode` via `GetDataRequest + MeshNodeReference` on a dedicated reader hub.
+- `ReadNode(path)` — read a `MeshNode` on a dedicated reader hub; returns `IObservable<MeshNode?>` (the old `ReadNodeAsync` was deleted).
 
 Verification follows an observe-until-condition rhythm (mirrors `ObservableQueryTests`). The synced collection stays subscribed the whole time — no `Take(1)`, no draining.
 
@@ -273,10 +268,12 @@ public async Task DataChangeRequestOnSubscriber_PropagatesToOwningHub()
     // Source-side state.
     await NodeFactory.CreateNode(MakeSubject("alpha", "Original"))
         .FirstAsync().ToTask(ct);
-    await Task.Delay(500, ct);                 // synced collection picks it up.
 
-    // Read the current value (standard data-layer read).
-    var current = await ReadNodeAsync(path);
+    // Wait for the CONDITION, never a fixed sleep: a Task.Delay races CI load —
+    // too short and it flakes, too long and it wastes the suite's budget.
+    var current = await ReadNode(path)
+        .Where(n => n is not null)
+        .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
 
     // Write at the SUBSCRIBER via DataChangeRequest. The subscriber's
     // synced data source routes the update through its cached per-node
@@ -285,11 +282,12 @@ public async Task DataChangeRequestOnSubscriber_PropagatesToOwningHub()
             new DataChangeRequest { Updates = [current! with { Name = "Updated" }] },
             o => o.WithTarget(new Address(SubscriberPath)))
         .FirstAsync().ToTask(ct);
-    await Task.Delay(500, ct);
 
-    // Source side reflects the write.
-    var reread = await ReadNodeAsync(path);
-    reread!.Name.Should().Be("Updated");
+    // Source side reflects the write — again, observe until the condition holds.
+    await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        .SelectMany(_ => ReadNode(path))
+        .Where(n => n?.Name == "Updated")
+        .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
 }
 ```
 

@@ -52,50 +52,62 @@ for any *future* defect: a per-hub **aggregate** backpressure breaker.
   the watermark, **shed `[CanBeIgnored]`/failure-class messages** (never user-facing or
   lifecycle messages) to keep it draining. The breaker is keyed on the **hub**, aggregated
   across message keys.
-- This is the only *new* mechanism; 1–2 are generalizations of fixes already in the tree.
+
+✅ **This has landed.** `MessageStormBreaker` now carries `DefaultAggregateWatermark = 10_000`
+(overridable per hub with `MessageHubConfiguration.WithAggregateWatermark(...)`), exposes
+`AggregateSheds` / `AggregateShedCount`, and the shed shows up on a delivery's fate trail as
+`SHED_AGGREGATE` (see [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow)).
 
 ## Tests (the acceptance criteria — "done" = these are green)
 
 All deterministic. Run the saturation tests under `DOTNET_PROCESSOR_COUNT=2` (the CI 2-core
 sim that reproduces the real wedge — a fixed sleep/`Task.Delay` is forbidden; assert on the
-condition). Wait on the actual signal via `stream.Where(...).FirstAsync().Timeout(...)`.
+condition). Wait on the actual signal via `await stream.Should().Within(t).Match(...)`.
 
-1. **`Rejection_DoesNotAmplify`** — post a message to a hub with no `AccessContext` and no
-   exemption. Assert: exactly one rejection is logged/observed and **zero** `DeliveryFailure`
-   re-posts follow (count the `DeliveryFailure` traffic — it must be 0, not "fewer"). Pins
-   Invariant 1.
+**Only one of the five exists under the name below.** The other four are still *proposed* names
+for guards that have not been written; some of what they describe is covered incidentally by
+tests with different names (`AccessContextNeverNullTest`, `DeletedAddressNackClassificationTest`,
+`DeferredDeliveryNackedOnDisposeTest` in `test/MeshWeaver.Messaging.Hub.Test`). Treat 1, 2, 3 and 5
+as a backlog, not as a checklist you can grep for and find green.
 
-2. **`FailureExemptAtEveryEmitSite`** — reflection/architecture test: enumerate every site that
-   constructs a `DeliveryFailure`; assert each is guarded by the `[CanBeIgnored]`/`[SystemMessage]`
-   check. Fails the build when a new emit site forgets the guard. (Mirrors the
-   `NoStaticCollectionsTest` architecture-guard pattern.) Pins Invariant 1 permanently.
+1. **`Rejection_DoesNotAmplify`** *(proposed — does not exist)* — post a message to a hub with no
+   `AccessContext` and no exemption. Assert: exactly one rejection is logged/observed and **zero**
+   `DeliveryFailure` re-posts follow (count the `DeliveryFailure` traffic — it must be 0, not
+   "fewer"). Would pin Invariant 1.
 
-3. **`SubscribeToMissingTarget_Terminates`** — subscribe to a node path that does not exist
-   under a live prefix (the rsalzmann shape: `{partition}/_Thread/does-not-exist`). Assert the
-   subscription emits terminal `OnError` after ≤ N attempts within a bounded time and **stops**
-   (no further `SubscribeRequest`/NotFound after termination). Pins Invariant 2.
+2. **`FailureExemptAtEveryEmitSite`** *(proposed — does not exist)* — reflection/architecture test:
+   enumerate every site that constructs a `DeliveryFailure`; assert each is guarded by the
+   `[CanBeIgnored]`/`[SystemMessage]` check. Fails the build when a new emit site forgets the
+   guard. (Would mirror `NoStaticCollectionsTest` in `test/MeshWeaver.PathResolution.Test`, which
+   is the working example of this architecture-guard pattern.) Would pin Invariant 1 permanently.
 
-4. **`ManyDistinctMissingSubscribes_DoNotWedge`** — the wedge repro. Fire M (e.g. 200) subscribes
-   to M *distinct* non-existent paths (defeating any per-key breaker), then post a normal probe
-   message to the same hub. Assert the probe is processed within a short timeout — i.e. **the
-   action block stayed drainable**. RED until Invariant 3 lands; the canonical wedge guard. Pins
-   Invariant 3.
+3. **`SubscribeToMissingTarget_Terminates`** *(proposed — does not exist)* — subscribe to a node
+   path that does not exist under a live prefix (the rsalzmann shape:
+   `{partition}/_Thread/does-not-exist`). Assert the subscription emits terminal `OnError` after
+   ≤ N attempts within a bounded time and **stops** (no further `SubscribeRequest`/NotFound after
+   termination). Would pin Invariant 2.
 
-5. **`AggregateBreaker_ShedsOnlySheddable`** — drive a hub past the watermark with
-   `[CanBeIgnored]` traffic; assert shed messages are dropped but a concurrently-posted
-   **user-facing** message is still delivered (the breaker never sheds user/lifecycle work).
-   Pins Invariant 3's safety boundary.
+4. ✅ **`ManyDistinctMissingSubscribes_DoNotWedge`** — **exists and is green**
+   (`test/MeshWeaver.Messaging.Hub.Test/MessageHubTest.cs`). It holds the single turn thread, floods
+   the hub with `[CanBeIgnored]` traffic past a low injected watermark, and asserts a user-facing
+   probe still round-trips. It also proves the per-key breaker is *not* what saves it — the flood
+   is `[CanBeIgnored]`, so `ShouldDrop`'s `TripCount` stays 0. Pins Invariant 3.
+
+5. **`AggregateBreaker_ShedsOnlySheddable`** *(proposed — does not exist as a separate test)* —
+   drive a hub past the watermark with `[CanBeIgnored]` traffic; assert shed messages are dropped
+   but a concurrently-posted **user-facing** message is still delivered. Test 4 already asserts the
+   "user-facing message survives" half; the "shed count > 0" half is what a dedicated test would add.
 
 ## Status / ownership
 
-Invariants 1–2 exist as point-fixes in the tree (the `DeliveryFailure`-storm fix; the
-`AreaStreamRetry` / `JsonSynchronizationStream` bounded retries) — the work is **promoting them
-to enforced invariants** via tests 1–3, and adding the **aggregate breaker** (Invariant 3,
-tests 4–5). This all lives in the messaging action-block + sync layer (`MessageService`,
-`RoutingServiceBase`, `MessageStormBreaker`, `SynchronizationStream`). It must be implemented
-by a **single owner** of that layer so the aggregate breaker is designed coherently against the
-rejection/bounded-subscribe invariants — two parallel editors of the action block is itself a
-source of regression.
+**Invariant 3 has landed** — `MessageStormBreaker` carries the per-hub aggregate watermark and test
+4 above is the guard. Invariants 1–2 remain **point-fixes rather than enforced invariants** (the
+`DeliveryFailure`-storm exemptions in `MessageService.ReportFailure` and the routing sites; the
+`AreaStreamRetry` / `JsonSynchronizationStream` bounded retries) — the outstanding work is promoting
+them via tests 1–3. This all lives in the messaging action-block + sync layer (`MessageService`,
+`RoutingServiceBase`, `MessageStormBreaker`, `SynchronizationStream`) and should stay with a
+**single owner** of that layer — two parallel editors of the action block is itself a source of
+regression.
 
 The separate root causes that *fed* these wedges (System identity dropped on activity/import
 writes; user credential dropped on the composer `stream.Update`; the `Agent`/`Model` public-read

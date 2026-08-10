@@ -1097,7 +1097,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // double-submit of the same text within its debounce window.
 
         // No await in the click path — dispatch to Blazor render context and return void.
-        // All Hub operations use Post + RegisterCallback; all IMeshService operations
+        // All Hub operations use Post + hub.Observe(...); all IMeshService operations
         // use IObservable + Subscribe. No awaits on hub-backed calls anywhere in this chain.
         _ = InvokeAsync(SubmitMessageCore);
     }
@@ -2668,7 +2668,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // Add as attachment chip if not already present (text stays in editor)
         if (!attachments.Any(a => a.Path.Equals(path, StringComparison.OrdinalIgnoreCase)))
         {
-            // Add the chip immediately with path-only label; resolve display name via Post/RegisterCallback.
+            // Add the chip immediately with path-only label; resolve display name via Post/Observe.
             attachments.Add(new AttachmentInfo(path, null, IsContext: false));
             RequestDisplayName(path, displayName => InvokeAsync(() =>
             {

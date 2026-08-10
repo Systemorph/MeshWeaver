@@ -103,15 +103,17 @@ The benefits fall out naturally:
 
 ## The Deadlock Trap
 
-### Why `AwaitResponse` to Self Deadlocks
+### Why awaiting a response from your own hub deadlocks
 
-`AwaitResponse` (now **obsolete** — see below) posts a request and synchronously blocks the calling thread until the reply arrives:
+The framework used to expose `AwaitResponse`, which posted a request and then blocked/awaited the
+calling thread until the reply arrived. **That API has been deleted from `src/`** — but the shape it
+enabled is still writable by hand, and it is the one to recognise:
 
 ```csharp
-// ⚠️ Obsolete API — do not use in new code
-var response = await hub.AwaitResponse(
-    new CreateNodeRequest(node),
-    o => o.WithTarget(hub.Address));
+// ❌ The deleted shape — post, then block the calling thread until the reply lands.
+//    Hand-rolling the equivalent (.Result / .Wait() / .FirstAsync().ToTask() + await)
+//    reproduces the same deadlock.
+var response = await SomeRoundTripToOwnHub();
 ```
 
 When the caller *is* the hub's own handler, every step of that sequence fights itself:
@@ -141,7 +143,7 @@ This is not a timing edge case — it is a structural certainty whenever a handl
 
 ## The Fix: Reactive Streams (the Modern API)
 
-> **The `AwaitResponse` and `RegisterCallback` APIs are `[Obsolete]`.** All hub-reachable code must use `IObservable<T>` end-to-end — no `await`, no `Task<T>`, no `TaskCompletionSource`. Tests may use `.FirstAsync().ToTask()` at the boundary; production code never does.
+> **The `AwaitResponse` and `RegisterCallback` APIs are gone** — they no longer exist anywhere in `src/`; `hub.Observe(...)` is the only request/response surface. All hub-reachable code must use `IObservable<T>` end-to-end — no `await`, no `Task<T>`, no `TaskCompletionSource`. Tests may use `.FirstAsync().ToTask()` at the boundary; production code never does.
 
 The correct pattern for any write that produces a side effect is `stream.Update(...)`, which returns a cold `IObservable<T>`. Subscribe in the handler; the framework serialises the write through the owning hub's action block without blocking anything.
 
@@ -194,7 +196,9 @@ hub.Observe<CreateNodeResponse>(
     ex => logger.LogError(ex, "Cross-hub call failed"));
 ```
 
-The response arrives as an observable emission; the subscriber runs inside the *receiving* hub's action block, not the caller's — so neither side blocks.
+`Observe` **registers the response subject BEFORE it posts** (`MessageHub.Observe(object, Func<PostOptions, PostOptions>)` generates the message id, calls `GetOrAddResponseSubject(messageId, …)`, and only then `Post`s). That ordering is not stylistic: `HandleCallbacks` **drops** a reply whose correlation id has no registered subject (it logs "No subject found for response message" and returns `delivery.Processed()`), so a post-then-register shape silently loses the reply.
+
+The response arrives as an observable emission, and the subscriber runs on the **calling** hub's action block — the reply is routed back to the caller, whose `HandleCallbacks` rule pushes it onto the `AsyncSubject` the caller registered. Neither side blocks: the callee answered with a `Post` and moved on; the caller never held its thread waiting.
 
 ---
 
@@ -224,9 +228,10 @@ Search for patterns that block the hub thread:
 
 ```csharp
 // Red flags — search for these in hub-reachable code
-await hub.AwaitResponse(...)           // Obsolete + deadlock risk
-hub.AwaitResponse(...).Result          // Even worse — sync-over-async
+await SomeRoundTrip()                  // Awaiting a reply from your own hub — deadlock
+someObservable.FirstAsync().Result     // Sync-over-async
 Task.Result / Task.Wait()              // Blocks the action block
+hub.Post(req, …); hub.Observe(req)     // Post-then-register — HandleCallbacks DROPS the reply
 ```
 
 Check [DebuggingMessageFlow.md](/Doc/Architecture/DebuggingMessageFlow) for trace tags that reveal where a message stopped flowing.

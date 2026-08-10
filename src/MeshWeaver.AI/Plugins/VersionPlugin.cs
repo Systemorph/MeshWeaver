@@ -16,8 +16,10 @@ namespace MeshWeaver.AI.Plugins;
 /// Plugin providing version history operations for AI agents. Wraps
 /// <see cref="IVersionQuery"/> to list versions, retrieve snapshots, and restore nodes.
 ///
-/// Every method is await-free: the async <see cref="IVersionQuery"/> reads are run
-/// on <see cref="TaskPoolScheduler"/> via <c>Observable.FromAsync</c> so they never
+/// Every method is await-free: <see cref="IVersionQuery"/> already returns
+/// <c>IObservable</c>, and those reads are moved onto <see cref="TaskPoolScheduler"/>
+/// with <c>.SubscribeOn(TaskPoolScheduler.Default)</c> (NEVER
+/// <c>Observable.FromAsync</c>, which is forbidden outside <c>IoPool</c>) so they never
 /// occupy the hub scheduler, and restores go through <c>IMeshService.UpdateNode</c>
 /// which is already reactive (<c>IObservable&lt;MeshNode&gt;</c>). A
 /// <see cref="TaskCompletionSource{T}"/> bridges the off-hub completions back to the

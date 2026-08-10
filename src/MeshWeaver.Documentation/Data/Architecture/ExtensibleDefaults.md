@@ -24,7 +24,7 @@ Apply Extensible Defaults whenever a feature has:
 |--------|----------|----------------|-----------------|-------------------|
 | Agent | `Agent` | `Agent` | `BuiltInAgentProvider` | `AgentPickerProjection.BuildAgentQueries` |
 | Model / Provider | `ModelProvider` + `LanguageModel` | `Provider` (models nested under their provider) | `BuiltInLanguageModelProvider` | `AgentPickerProjection.BuildModelQueries` |
-| Role | `Role` | `Role` | `RoleNodeType.BuiltInRolesProvider` | *(to follow Agent/Model)* |
+| Role | `Role` | `Role` | `RoleNodeType.BuiltInRolesProvider` | *(none — `PermissionEvaluator` consumes the roles directly through `IMeshNodeStreamCache.GetQuery`)* |
 
 ---
 
@@ -212,28 +212,39 @@ Using the same query id everywhere means a single shared upstream subscription v
 | Mistake | Symptom | What this pattern enforces |
 |---------|---------|----------------------------|
 | Per-user `MemoryCache` with a `Timeout()` fallback. | First permission check after process start waits the full timeout (e.g. 2 s) while the upstream synced query warms; the fallback emits empty roles and the UI looks "logged out". | The `Replay(1)` is fed by the static provider's nodes *synchronously* on first subscribe — there is no warm-up window to time out against. |
-| Reading the entity via `IMeshQueryCore.QueryAsync` (CQRS read side). | Index-lag staleness after writes; missed Initial emissions. | Reads come from the local workspace's synced collection, which folds `Added`/`Updated`/`Removed` deltas verbatim. See [CQRS and Content Access](/Doc/Architecture/CqrsAndContentAccess). |
-| Calling `ConfigResolver.ResolveConfigurationAsync` on every per-node activation. | Every grain activation does a Postgres round-trip plus an async resolution before the hub can answer any messages. | The static repo carries enough state for activation; user extensions arrive lazily via the same synced collection. |
-| Application-level caching (e.g. `PermissionEvaluator._userScopeRolesCache`). | Cache invalidation is its own deadlock surface; runtime updates need a separate invalidation hook. | No application cache. The synced collection *is* the cache, kept consistent by `IDataChangeNotifier`. |
+| Reading the entity via a one-shot CQRS query instead of the synced collection. | Index-lag staleness after writes; missed Initial emissions. | Reads come from the local workspace's synced collection, which folds `Added`/`Updated`/`Removed` deltas verbatim. See [CQRS and Content Access](/Doc/Architecture/CqrsAndContentAccess). |
+| Resolving configuration per per-node activation. | Every grain activation does a Postgres round-trip plus an async resolution before the hub can answer any messages. | The static repo carries enough state for activation; user extensions arrive lazily via the same synced collection. |
+| Application-level caching in the permission evaluator. | Cache invalidation is its own deadlock surface; runtime updates need a separate invalidation hook. | No application cache. The synced collection *is* the cache, kept consistent by `IDataChangeNotifier`. |
 
 ---
 
-## Applying this to Roles & AccessAssignments
+## Roles & AccessAssignments — already migrated
 
-Today `PermissionEvaluator` hand-rolls a per-user `MemoryCache` over a synced AccessAssignment query and falls through a 2 s `Timeout()` on first use. That fallback fires hundreds of times during a single thread render and is the dominant cost of opening a chat. Migrating to this pattern means:
+`PermissionEvaluator` (`src/MeshWeaver.Mesh.Contract/Security/PermissionEvaluator.cs`) **no longer
+hand-rolls a per-user `MemoryCache` with a 2 s `Timeout()` fallback.** Its own summary now reads
+*"no per-hub service instance, no `IMemoryCache` layer"*: per-scope state lives entirely in the
+shared `IMeshNodeStreamCache` via narrow per-scope queries —
+`cache.GetQuery($"$security-access:{scope}", …)` and `cache.GetQuery($"$security-policy:{scope}", …)` —
+which is this pattern applied. `RoleNodeType.BuiltInRolesProvider` ships the canonical roles plus the
+read-only `_Policy`.
 
-1. **Keep `BuiltInRolesProvider`** — it already ships the four canonical roles plus the read-only `_Policy`.
-2. **Add `BuiltInAccessAssignmentProvider`** for baseline assignments (e.g. `Public → Viewer` on shipped namespaces), so the synced collection has a non-empty Initial on a blank mesh.
-3. **Replace `PermissionEvaluator.GetUserScopeRolesStream`** with a workspace-local consumer of the same `workspace.GetQuery(id, BuildRoleAssignmentQueries(...))` projection that Agent and Model use. No `Timeout`, no `Catch`-to-empty fallback — the `Replay(1)` snapshot is already populated when the first permission check arrives.
+> The one piece never built is a `BuiltInAccessAssignmentProvider` for baseline assignments
+> (e.g. `Public → Viewer` on shipped namespaces) — it does not exist in `src/`. If you want a
+> non-empty Initial for assignments on a blank mesh, that is still to be written.
 
-See [Access Control](/Doc/Architecture/AccessControl) for the role / assignment data model and the per-hub `PermissionEvaluator` that consumes the projection.
+See [Access Control](/Doc/Architecture/AccessControl) for the role / assignment data model and the
+per-hub `PermissionEvaluator` that consumes the projection.
 
 ---
 
 ## References
 
-- `AgentPickerProjection` — canonical caller (Agent & Model).
-- `BuiltInAgentProvider`, `RoleNodeType.BuiltInRolesProvider` — static repo examples.
+- `AgentPickerProjection` — canonical caller (Agent & Model). Note it exposes **both**
+  `BuildAgentQuery` (the single-string canonical form) and `BuildAgentQueries` (the array form for
+  `hub.GetQuery(id, params string[])`); the per-partition registry shape uses the former.
+- `BuiltInAgentProvider`, `RoleNodeType.BuiltInRolesProvider` — static repo examples. Note
+  `IStaticNodeProvider` is described in-code as **legacy** in places that have moved to
+  `IStaticRepoSource` / `AddMeshNodes`; check which surface a new entity should use before copying.
 - `StaticNodeQueryProvider` — how static nodes fold into `IMeshQueryCore`.
 - [Synced Query Data Source](/Doc/DataMesh/SyncedQueryDataSource) — delta protocol, gating, Replay semantics.
 - [Access Control](/Doc/Architecture/AccessControl) — the role/permission evaluator that will consume this pattern.

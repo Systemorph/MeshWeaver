@@ -348,7 +348,7 @@ The symptoms are easy to recognise and hard to pin down without knowing the caus
 
 - The page hangs forever on a "Loading…" spinner.
 - The user navigates away and then cannot navigate again.
-- Production load tests pass; the first concurrent user breaks everything.
+- Single-user local testing passes; the first *concurrent* user breaks everything.
 - The trace shows the awaited Task is still pending while response messages pile up in the hub's ActionBlock.
 
 The cure is structural: **eliminate the await**. Tactical workarounds all fail:
