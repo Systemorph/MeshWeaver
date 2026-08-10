@@ -41,6 +41,14 @@ public static class JsonSynchronizationStream
     private const string SystemUserId = "system-security";
 
     /// <summary>
+    /// Upper bound on NACK-triggered re-probes of a recycling owner (see the re-probe block in
+    /// <c>CreateExternalClient</c>). Six attempts at doubling backoff (500 ms … 8 s) cover ~24 s —
+    /// far beyond any recycle window — while keeping a permanently-rejecting owner from being
+    /// probed forever.
+    /// </summary>
+    private const int MaxRecycleReprobes = 6;
+
+    /// <summary>
     /// When the FIRST heartbeat fires on a fresh subscription. The rest keep the configured
     /// <see cref="SyncStreamOptions.HeartbeatInterval"/> cadence.
     ///
@@ -334,6 +342,21 @@ public static class JsonSynchronizationStream
         // by RouteStreamMessage); a DeliveryFailure / NotFound — the owner ADDRESS DOES NOT EXIST —
         // surfaces as OnError, so we fault subscribers and dispose the keep-alive so nothing
         // heartbeats/resubscribes a non-existent owner. Reactive end-to-end: no await.
+        // 🚨 Bounded re-probe for a TRANSIENT recycle reject — assigned below, where Resubscribe
+        // is defined (safe: a NACK response can only arrive through the hub's turn loop, strictly
+        // after this method finished wiring the stream). The ShuttingDown NACK's contract is
+        // explicit — "the address may reactivate (recycle / restart); retry to get the
+        // authoritative answer" — and the re-sent SubscribeRequest is ITSELF what reactivates a
+        // recycled owner (routing creates per-node hubs on demand), so no OTHER event is
+        // guaranteed to exist: a recycle whose reactivation lands no further node write produces
+        // no change-feed pulse, and the heartbeat is deliberately fire-and-forget. Measured in
+        // StaleStampRootBindingTest: with the NACK delivered but no re-probe, the ride-out sat
+        // out the caller's whole 120 s with a live keep-alive and nothing to fire the latch.
+        // This is NOT the 2026-06-08 watchdog shape: nothing runs on a schedule — each attempt
+        // is triggered by an explicit transient NACK, the count is bounded, and the change-feed
+        // latch stays the primary detector. Same protocol reaction as OrleansRoutingService's
+        // transient dispatch retry.
+        Action? reprobeOnRecycleNack = null;
         var observeSubscription = Observable
             .Using(
                 // Apply an explicit identity SCOPE for the post — do NOT rely on the ambient AsyncLocal
@@ -376,8 +399,12 @@ public static class JsonSynchronizationStream
                     {
                         logger.LogDebug(
                             "SubscribeRequest for stream {StreamId} rejected — owner {Owner} is shutting down "
-                            + "(recycle/restart in flight); keeping the stream alive for the resubscribe latch",
+                            + "(recycle/restart in flight); keeping the stream alive and re-probing",
                             reduced.StreamId, owner);
+                        // The change-feed latch only fires on a post-recycle WRITE; a recycle
+                        // whose reactivation writes nothing leaves it silent forever. The NACK
+                        // is the one guaranteed event, so it triggers the bounded re-probe.
+                        reprobeOnRecycleNack?.Invoke();
                         return;
                     }
 
@@ -476,9 +503,37 @@ public static class JsonSynchronizationStream
                                     "Stream {StreamId}: resubscribe failed.",
                                     reduced.StreamId);
                                 Interlocked.Exchange(ref resubscribing, 0);
+                                // A re-probe that itself raced the same recycle window gets the
+                                // same transient verdict — take the next bounded attempt.
+                                if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
+                                    reprobeOnRecycleNack?.Invoke();
                             });
                 }
             }
+
+            // The bounded transient-NACK re-probe (see the declaration above the initial
+            // SubscribeRequest for the full rationale). Backoff doubles from 500 ms and caps at
+            // 8 s; MaxRecycleReprobes attempts cover ~24 s — far beyond any recycle window —
+            // after which recovery is left to the change-feed latch, exactly as before.
+            var recycleReprobes = 0;
+            reprobeOnRecycleNack = () =>
+            {
+                var attempt = Interlocked.Increment(ref recycleReprobes);
+                if (attempt > MaxRecycleReprobes)
+                {
+                    logger.LogWarning(
+                        "Stream {StreamId}: owner {Owner} still rejecting as shutting down after "
+                        + "{Attempts} re-probes — leaving recovery to the change-feed latch.",
+                        reduced.StreamId, owner, MaxRecycleReprobes);
+                    return;
+                }
+                var delay = TimeSpan.FromMilliseconds(Math.Min(500 * Math.Pow(2, attempt - 1), 8000));
+                // On keepAlive: a terminal NotFound (or stream teardown) disposes keepAlive,
+                // which cancels a pending re-probe — never probe an owner that is gone for good.
+                keepAlive.Add(Observable.Timer(delay).Subscribe(_ => Resubscribe(
+                    $"rejected the subscribe as shutting down (recycle in flight) — "
+                    + $"re-probe {attempt}/{MaxRecycleReprobes}")));
+            };
 
             // 🚨 THE LOST INITIAL — and why the first heartbeat comes EARLY.
             //
