@@ -558,7 +558,7 @@ public static class MeshExtensions
                 //     SelectMany so root + grant are in place by the time RLS / the write-guard run.
                 //     See EnsurePartitionBootstrap.
                 // 2. Validators → 3. NodeType existence → 4-7. Enrich + save + change feed + version
-                return EnsurePartitionBootstrap(hub, node, capturedRequest, logger)
+                return EnsurePartitionBootstrap(hub, node, capturedRequest, logger, request.Id)
                     // 1d. A SYSTEM-OWNED space grants nobody write access. Sequenced AFTER the
                     //     bootstrap (which may have just created the partition) and ahead of the
                     //     validators, and folded into the same rejection tuple so the failure is
@@ -1371,8 +1371,13 @@ public static class MeshExtensions
     /// grant-less altogether, or any combination) is repaired on the next child create —
     /// nothing is permanently cached as "bootstrapped".</para>
     /// </summary>
+    /// <param name="requestId">
+    /// The awaited create delivery's id, or <c>null</c> for callers with no correlation to report
+    /// against (the batch create). Used ONLY to record <c>BOOTSTRAP_PERM_*</c> stages on the
+    /// <c>RequestFateLedger</c>; <c>NoteRequestStage</c> is a no-op when nothing awaits the id.
+    /// </param>
     private static IObservable<System.Reactive.Unit> EnsurePartitionBootstrap(
-        IMessageHub hub, MeshNode node, CreateNodeRequest request, ILogger logger)
+        IMessageHub hub, MeshNode node, CreateNodeRequest request, ILogger logger, string? requestId = null)
     {
         // Central mesh hub only — see remarks.
         if (!ReferenceEquals(hub, hub.GetMeshHub()))
@@ -1475,15 +1480,67 @@ public static class MeshExtensions
                 // permission fold's CombineLatest gate makes every shared gate the
                 // (synchronous, by contract) fan-out touches half of a lock-order inversion.
                 // See HubPermissionExtensions.TakeDecisionOutsideGate.
+                // 🔍 #981 — the stage that splits "the fold is STILL RUNNING" from "the fold
+                // TERMINATED". Every capture so far shows the create's chain subscribed and no
+                // terminal stage after it, which is ambiguous precisely here: this permission fold
+                // is the one place in the create path that can legitimately take SECONDS (a
+                // cold-start synced query on a fresh partition), and it is bounded at 15 s — well
+                // above the 2 s quiescing budget that DETECTS the pending callback. So a capture
+                // that ends at BOOTSTRAP_PERM_AWAIT is a create waiting on a slow-but-healthy
+                // authorization probe, and one that reaches a verdict/timeout/empty stage is not.
+                // Without this pair the two are indistinguishable in the trail.
+                hub.NoteRequestStage(requestId,
+                    $"BOOTSTRAP_PERM_AWAIT partition={partition} user={effectiveUser}");
                 return hub.CheckPermission(partition, effectiveUser, Permission.Create)
                     .TakeDecisionOutsideGate()
                     .Timeout(TimeSpan.FromSeconds(15))
                     .Catch<bool, Exception>(ex =>
                     {
+                        hub.NoteRequestStage(requestId,
+                            $"BOOTSTRAP_PERM_FAULTED {ex.GetType().Name}");
                         logger.LogDebug(ex,
                             "[PartitionBootstrap] authorization probe for {User} on '{Partition}' faulted; skipping heal",
                             effectiveUser, partition);
                         return Observable.Return(false);
+                    })
+                    // 🚨 An authorization probe that COMPLETES WITHOUT A VERDICT must not vanish.
+                    //
+                    // `TakeDecisionOutsideGate()` is `Take(1).SelectMany(...)`, and the `.Timeout`
+                    // above CANNOT catch this case: Timeout faults on SILENCE, not on a clean
+                    // finish. So a fold that completes without emitting would sail past every bound
+                    // in this chain, EnsurePartitionBootstrap would emit nothing, and the create's
+                    // whole chain would terminate unanswered — the same shape as the
+                    // `.Where(n => n is not null)` that used to swallow a declined write.
+                    //
+                    // Today this is UNREACHABLE through the shipped evaluator, and the reason is
+                    // worth writing down because it is also why a STALL is the realistic failure:
+                    // the fold rides `SyncedQueryMeshNodes`, whose `allChanges` merges a
+                    // `Subject` that is never completed — so that substrate can never complete at
+                    // all, only stall (which the Timeout above does catch). But
+                    // `EffectivePermissionsDelegate` is a DI extension point: an evaluator that
+                    // answers `Observable.Empty<Permission>()` is a legal implementation, and the
+                    // framework must not hang because one did. Fail CLOSED with the same verdict
+                    // the faulted-fold arm already produces, and say so loudly — a guard that is
+                    // inert today costs nothing and removes an entire silent-hang class.
+                    .Select(verdict => (bool?)verdict)
+                    .DefaultIfEmpty(null)
+                    .Select(verdict =>
+                    {
+                        if (verdict is null)
+                        {
+                            hub.NoteRequestStage(requestId,
+                                $"BOOTSTRAP_PERM_COMPLETED_EMPTY partition={partition} user={effectiveUser}");
+                            logger.LogError(
+                                "[PartitionBootstrap] the authorization probe for {User} on '{Partition}' COMPLETED "
+                                + "WITHOUT A VERDICT — treating it as denied (heal skipped) so the create still "
+                                + "answers. An EffectivePermissionsDelegate must emit a decision; find the evaluator "
+                                + "that completed empty.",
+                                effectiveUser, partition);
+                            return false;
+                        }
+                        hub.NoteRequestStage(requestId,
+                            $"BOOTSTRAP_PERM_VERDICT authorized={verdict.Value}");
+                        return verdict.Value;
                     })
                     .SelectMany(authorized =>
                     {
