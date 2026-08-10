@@ -284,7 +284,7 @@ public static class PluginGateRunner
                 };
                 if (!type.DeclaresTestsArea)
                     return Observable.Return(afterRender with { Tests = CheckOutcome.Skipped });
-                return ResolveTestsHost(harness, type.Path)
+                return CreateTestsProbe(harness, type.Path)
                     .SelectMany(hostPath => AreaProbe.ExecuteTestsArea(
                         harness.Client, hostPath, options.RenderTimeout))
                     .Catch((Exception ex) => Observable.Return(new AreaVerdict(
@@ -304,34 +304,41 @@ public static class PluginGateRunner
     /// a throwaway probe instance under the type path (system-impersonated — the same footing
     /// as the install).
     /// </summary>
-    private static IObservable<string> ResolveTestsHost(GateMesh harness, string typePath)
+    /// <summary>
+    /// The Tests probe ALWAYS runs on a freshly created instance, never on a shipped one.
+    ///
+    /// <para>🚨 This is a correctness requirement, not tidiness. A shipped instance (e.g. the
+    /// Store root) is installed early in the run, so its hub activates mid-import — BEFORE this
+    /// type's compile produced its release — and a hub never rebinds on its own: it keeps serving
+    /// only the framework areas, and the type's Tests view is absent for the rest of the run.
+    /// That surfaced as <c>No renderer is registered for area `Tests`</c> (latched as an instant
+    /// red before AreaProbe treated not-found as transient, and as
+    /// <c>Tests area never became available within 120s</c> after). Recycling the shipped host
+    /// instead (DisposeRequest, then probe) trades this for a subscribe-vs-teardown race the raw
+    /// probe stream has no recovery for — the platform's stream cache absorbs exactly that race,
+    /// but the tester's <c>GetRemoteStream</c> path deliberately bypasses the cache.</para>
+    ///
+    /// <para>A fresh node's hub activates on FIRST ACCESS — the probe's own subscription — which
+    /// is after the compile gate passed, so it binds the release just verified, deterministically.
+    /// The Tests-area convention (self-contained static suites that throw on failure) is what
+    /// makes the host instance interchangeable.</para>
+    /// </summary>
+    private static IObservable<string> CreateTestsProbe(GateMesh harness, string typePath)
     {
         var meshService = harness.ServiceProvider.GetRequiredService<IMeshService>();
-        return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{typePath}"))
-            .Take(1)
-            .SelectMany(change =>
-            {
-                var shipped = change.Items
-                    .Where(n => n.Path != typePath && n.State == MeshNodeState.Active)
-                    .OrderBy(n => n.Path, StringComparer.Ordinal)
-                    .FirstOrDefault();
-                if (shipped is not null)
-                    return Observable.Return(shipped.Path);
-
-                var probePath = $"{typePath}/GateProbe";
-                var probe = new MeshNode("GateProbe", typePath)
-                {
-                    Name = "Gate Probe",
-                    NodeType = typePath,
-                    MainNode = probePath,
-                    State = MeshNodeState.Active,
-                };
-                var access = harness.ServiceProvider.GetRequiredService<AccessService>();
-                return Observable.Using(
-                        () => access.ImpersonateAsSystem(),
-                        _ => meshService.CreateNode(probe))
-                    .Select(created => created.Path);
-            });
+        var probePath = $"{typePath}/GateProbe";
+        var probe = new MeshNode("GateProbe", typePath)
+        {
+            Name = "Gate Probe",
+            NodeType = typePath,
+            MainNode = probePath,
+            State = MeshNodeState.Active,
+        };
+        var access = harness.ServiceProvider.GetRequiredService<AccessService>();
+        return Observable.Using(
+                () => access.ImpersonateAsSystem(),
+                _ => meshService.CreateNode(probe))
+            .Select(created => created.Path);
     }
 
     /// <summary>
@@ -373,8 +380,16 @@ public static class PluginGateRunner
             services.AddLogging(logging =>
             {
                 logging.SetMinimumLevel(minLevel);
-                if (minLevel < LogLevel.Warning)
-                    logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss.fff "; });
+                // 🚨 ALWAYS attach the provider, including at the default Warning level. It used to
+                // be attached only when the level was turned DOWN (`minLevel < Warning`), so a gate
+                // run at its default verbosity emitted the report and NOTHING else — every
+                // framework Warning was written to a logger with no sinks. When the gate went RED
+                // on CI ("No renderer is registered for area `Tests` on hub `Store`", 2026-08-10)
+                // the run therefore carried zero evidence of WHY the instance was bound to the
+                // fallback config, and the failure could not be diagnosed from the job log at all.
+                // Warning volume is a handful of lines per run — the trace levels are still opt-in
+                // through MW_LOG_LEVEL.
+                logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss.fff "; });
                 foreach (var category in (Environment.GetEnvironmentVariable("MW_LOG_CATEGORIES") ?? "")
                          .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     logging.AddFilter(category, minLevel);

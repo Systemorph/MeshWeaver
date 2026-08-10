@@ -162,7 +162,10 @@ public enum QuerySource
     Default,
 
     /// <summary>
-    /// ActivityLog nodes — implies nodeType:Activity filter.
+    /// A change feed: MAIN content nodes INNER-JOINed with their <c>_Activity</c> satellites,
+    /// ranked by the joined activity's recency. A node with no recorded activity does not appear.
+    /// It does <b>not</b> imply a <c>nodeType:Activity</c> filter — the rows returned are the
+    /// main nodes, and every other filter still applies.
     /// </summary>
     Activity,
 

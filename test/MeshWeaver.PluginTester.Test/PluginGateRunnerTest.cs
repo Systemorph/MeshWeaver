@@ -107,6 +107,103 @@ public class PluginGateRunnerTest(ITestOutputHelper output)
     private const string PricedThingNodeTypeJson =
         """{"$type":"MeshNode","id":"Thing","namespace":"Priced","path":"Priced/Thing","mainNode":"Priced/Thing","name":"Thing","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"A thing.","configuration":"config => config.WithContentType<Thing>().AddDefaultLayoutAreas()","includeGlobalTypes":true}}""";
 
+    // ── the STORE shape: a SELF-TYPED root (root `Shop` is nodeType `Shop/Front`, defined by a
+    //    child of the same package) whose NodeType node ships a BAKED, STALE compile stamp —
+    //    `compilationStatus: Ok` plus assembly coordinates and a `compiledFrameworkVersion` from
+    //    a long-gone framework build. That is EXACTLY what MeshWeaver.Plugins commits (see
+    //    Store/Catalog/index.json), and it is the only shape whose Tests host is a node the
+    //    INSTALLER activates: PackageInstaller lands the root as a Space placeholder, retypes it,
+    //    recycles its hub and then WARMS it — i.e. the root's one-and-only NodeType enrichment
+    //    runs while the type is still framework-stale and its assembly is absent from this run's
+    //    store. Every other Tests host is created after the compiles and cannot see that window.
+    //    If enrichment binds the root to the defaults-only fallback there, the root serves the
+    //    generic areas and NOT the type's — "No renderer is registered for area `Tests` on hub
+    //    `Store`", the plugin gate's Store/Catalog RED (2026-07-29, recurred 2026-08-10). ──
+
+    private const string ShopIndexJson =
+        """{"$type":"MeshNode","id":"Shop","namespace":"","path":"Shop","mainNode":"Shop","name":"Shop","nodeType":"Shop/Front","state":"Active","content":{"$type":"FrontContent","intro":"hello"}}""";
+
+    private const string ShopFrontNodeTypeJson =
+        """{"$type":"MeshNode","id":"Front","namespace":"Shop","path":"Shop/Front","mainNode":"Shop/Front","name":"Front","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"The shop front.","configuration":"config => config.WithContentType<FrontContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Tests\", FrontTestsArea.Tests))","includeGlobalTypes":true,"compilationStatus":"Ok","lastCompiledVersion":201,"latestAssemblyCollection":"local","latestAssemblyPath":"Shop_Front/v201-0123456789abcdef0123456789abcdef-aaaabbbbcccc.dll","compiledFrameworkVersion":"0123456789abcdef0123456789abcdef","latestReleasePath":"Shop/Front/Release/20260719130110-fHGetxbU"}}""";
+
+    private const string FrontContentSource =
+        """
+        public record FrontContent
+        {
+            public string? Intro { get; init; }
+
+            public int Answer() => 42;
+        }
+        """;
+
+    private const string FrontTestsArea =
+        """
+        using System;
+        using System.Reactive.Linq;
+        using MeshWeaver.Layout;
+        using MeshWeaver.Layout.Composition;
+
+        public static class FrontTestsArea
+        {
+            public static IObservable<UiControl?> Tests(LayoutAreaHost host, RenderingContext _)
+            {
+                var sb = new System.Text.StringBuilder("### Front tests\n\n| Test | Result |\n|---|---|\n");
+                var passed = 0;
+                try
+                {
+                    if (new FrontContent().Answer() != 42)
+                        throw new Exception("expected the answer to be 42");
+                    sb.Append("| Answer is 42 | ✅ pass |\n");
+                    passed++;
+                }
+                catch (Exception ex) { sb.Append($"| Answer is 42 | ❌ {ex.Message} |\n"); }
+                sb.Append($"\n**{passed}/1 passed.**");
+                return Observable.Return<UiControl?>(Controls.Markdown(sb.ToString()));
+            }
+        }
+        """;
+
+    /// <summary>
+    /// The regression this pins: a package whose ROOT is typed by an in-package NodeType that
+    /// ships a stale compile stamp must still serve that type's areas once installed. The gate
+    /// runs the root's <c>Tests</c> area, which only exists in the type's compiled configuration
+    /// — so a root bound to the defaults-only fallback fails here with "Area not found", exactly
+    /// as Store/Catalog does when the race is lost on a loaded CI runner.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task SelfTypedRootWithStaleCompileStamp_ServesItsTypesAreas()
+    {
+        var repo = CreateRepo(root =>
+        {
+            WriteFile(root, "Shop/index.json", ShopIndexJson);
+            WriteFile(root, "Shop/Front.json", ShopFrontNodeTypeJson);
+            WriteFile(root, "Shop/Front/Source/FrontContent.cs", FrontContentSource);
+            WriteFile(root, "Shop/Front/Test/FrontTestsArea.cs", FrontTestsArea);
+        });
+        try
+        {
+            var (report, log) = await RunGate(repo);
+
+            report.FatalError.Should().BeNull();
+            var shop = report.Packages.Single(p => p.Id == "Shop");
+            shop.InstallError.Should().BeNull($"the self-typed root must install; log:\n{log}");
+
+            var front = shop.NodeTypes.Single(t => t.Path == "Shop/Front");
+            front.Compile.Should().Be(CheckOutcome.Passed,
+                $"the shipped stale stamp must be rebuilt, not trusted; detail: {front.CompileDetail}");
+            front.TestsDetail.Should().NotContain("Area not found",
+                "the root hub must be bound to the type's compiled configuration, never to the "
+                + $"defaults-only fallback; log:\n{log}");
+            front.Tests.Should().Be(CheckOutcome.Passed,
+                $"the ROOT's Tests area must execute green; detail: {front.TestsDetail}");
+            report.ExitCode.Should().Be(0, $"all green must exit 0; log:\n{log}");
+        }
+        finally
+        {
+            TryDelete(repo);
+        }
+    }
+
     [Fact(Timeout = 300_000)]
     public async Task GoodPackage_CompilesRendersAndExecutesTestsGreen_ExitsZero()
     {

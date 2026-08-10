@@ -110,7 +110,18 @@ The header and button are never touched by the update cycle. Only the middle are
 
 # Loading Data First
 
-`ViewDefinition` is declared as `Task<UiControl?>`, so `WithView` does accept an `async` delegate that runs once at render time. The delegate is not a subscription — it fires exactly once:
+When you need data before producing a control, return an **observable** that emits once the data arrives. A view delegate runs on the layout hub's render path, so this is the shape to reach for first:
+
+```csharp
+// ✅ Compose — the area renders as soon as the stream emits
+Controls.Stack
+    .WithView((host, ctx) =>
+        host.Workspace.GetMeshNodeStream(userPath)
+            .Where(node => node is not null)
+            .Select(node => Controls.Label($"Hello, {node.Name}")))
+```
+
+`ViewDefinition` is declared as `Task<UiControl?>`, so `WithView` *also* accepts an `async` delegate that runs once at render time — it is not a subscription, it fires exactly once:
 
 ```csharp
 Controls.Stack
@@ -120,9 +131,9 @@ Controls.Stack
     })
 ```
 
-> 🚨 **The signature allows `await`; the hub does not forgive it.** Never await *hub-reachable* work here — a mesh read, a `QueryAsync`, a permission lookup, another layout area. That is a render running on the hub scheduler waiting for the hub, which is how layout areas deadlock or freeze at "awaiting first data". External I/O must go through an [`IIoPool`](/Doc/Architecture/ControlledIoPooling), never a bare `await` and never `Observable.FromAsync`.
+> 🚨 **The signature allows `await`; the hub does not forgive it.** Never await *hub-reachable* work here — a mesh read, a `QueryAsync`, a permission lookup, another layout area. That is a render running on the hub scheduler waiting for the hub, which is how layout areas deadlock or freeze at "awaiting first data". External I/O must go through an [`IIoPool`](/Doc/Architecture/ControlledIoPooling), never a bare `await` and never `Observable.FromAsync` (which runs the call's synchronous prologue on the subscribing thread and bounds nothing).
 >
-> For anything that comes from the mesh — which is almost everything — **do not fetch at all**: pass the path and let the view bind, or use the observable overload in the next section. See [Data Binding](/Doc/GUI/DataBinding).
+> For anything that comes from the mesh — which is almost everything — **do not fetch at all**: pass the path and let the view bind, or use the observable overload above. See [Data Binding](/Doc/GUI/DataBinding).
 
 ---
 

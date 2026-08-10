@@ -275,6 +275,21 @@ public static class NodeTypeCompileStateMirror
                 _ => { },
                 ex =>
                 {
+                    // Teardown is not a fault. From the first instant of Dispose the hub refuses
+                    // hosted-hub creation, so the own MeshNode stream cannot build its `sync/`
+                    // sub-hub and the mirror's subscribe throws HubDisposingException for THIS
+                    // address. The mirror is registered for the hub's disposal — dying with the
+                    // hub is the contract, and the fresh activation installs a new one — so the
+                    // warning reported routine shutdown as a defect (one line per per-NodeType
+                    // hub teardown in memex-cloud, alongside the compile watchers' ERRORs).
+                    if (ActivityControlPlaneExtensions.IsOwnHubDisposing(ex, hub.Address))
+                    {
+                        logger?.LogDebug(ex,
+                            "[CompileStateMirror] {NodeTypePath}: hub is disposing — the mirror stops with it "
+                            + "(the next activation installs a new one).",
+                            nodeTypePath);
+                        return;
+                    }
                     logger?.LogWarning(ex,
                         "[CompileStateMirror] {NodeTypePath}: mirror stream faulted — satellite no longer updates until the hub recycles.",
                         nodeTypePath);
