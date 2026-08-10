@@ -478,6 +478,7 @@
   "ui.updateVerifiedAtLine": "_(verified {0} UTC, image `{1}`)_",
   "ui.updateMoreFailures": "(+{0} more)",
   "ui.updateMoreItems": "… and {0} more",
+  "ui.updateCaveats": "**With caveats:**",
   "ui.agentDetails": "Agent Details",
   "ui.platformInstances": "Platform Instances",
   "ui.syncParties": "Syncing parties",
