@@ -341,6 +341,50 @@ The [/code skill](/Skill/code) sets the bar for NodeTypes and data models: **a t
 
 ---
 
+## Intra-Project Parallelism — How a Project Opts In
+
+The suite runs single-threaded by default: `test/xunit.runner.json` sets `parallelizeTestCollections: false`, `maxParallelThreads: 1`. Parallel safety is a property of the tests, not of the runner, so a project opts in **individually** by shipping its own `xunit.runner.json` next to its `.csproj`:
+
+```json
+{
+  "parallelizeAssembly": false,
+  "parallelizeTestCollections": true,
+  "maxParallelThreads": 4,
+  "methodTimeout": 30000
+}
+```
+
+`test/Directory.Build.props` picks the project-local file over the shared default on an `Exists()` condition, and `VerifyXunitRunnerConfigCopied` **fails the build** if neither branch lands a config in `$(TargetDir)` — because with no config at all xUnit falls back to *its* defaults, which is unbounded parallelism nobody asked for. Live opt-ins today: `MeshWeaver.Content.Test`, `MeshWeaver.Hosting.Orleans.Test`, `MeshWeaver.AI.Test`.
+
+### Classes that need the machine go in a serial collection
+
+Some tests deliberately saturate the box and then judge the result on a wall clock. Four of those timesharing one 4-vCPU runner blow bounds that hold with room to spare when each has the box. Put them in one `DisableParallelization` collection — `MeshWeaver.AI.Test/ConcurrencyStressCollection.cs` is the worked example:
+
+```csharp
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class ConcurrencyStressCollection
+{
+    public const string Name = "AI concurrency stress";
+}
+
+// …and on each such class:
+[Collection(ConcurrencyStressCollection.Name)]
+public class CrossHubPatchAtomicityTest(ITestOutputHelper output) : AITestBase(output)
+```
+
+**Membership is structural, not "whatever failed last time."** A class belongs there only when BOTH hold:
+
+1. it **creates concurrency of its own** — N operations deliberately in flight at once, or a dedicated pump thread; **and**
+2. its verdict is a **wall-clock bound on that burst** — a deadlock or lost-write detector, not a functional comparison.
+
+(1) alone is just a slow test, which is what parallelism is for. (2) alone is a generous budget on sequential work, which survives sharing a box.
+
+🚨 **Never widen those bounds to make a starved run pass.** They are deadlock detectors; a detector with a padded budget detects nothing. Scheduling is the right lever precisely because the tests are correct and the contention is the artefact.
+
+🚨 **A green local run does not prove a project is parallel-safe.** `DOTNET_PROCESSOR_COUNT=4` sizes the thread pool and GC as though the machine had four cores but **does not take the other cores away**, so a test that spawns its own concurrency still gets real parallelism on a dev box. An 18-core box produced five consecutive green runs of an opt-in that CI then failed on three concurrency-stress tests. Measure the opt-in on CI.
+
+---
+
 ## Running Tests
 
 Always run tests in the background — they take minutes.
