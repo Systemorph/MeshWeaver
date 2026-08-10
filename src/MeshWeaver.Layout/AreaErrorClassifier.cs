@@ -209,6 +209,27 @@ public static class AreaErrorClassifier
            && (failure.Message ?? string.Empty).StartsWith("No node found", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
+    /// True when the failure IS a definite access DENIAL — a typed
+    /// <see cref="UnauthorizedAccessException"/> anywhere in the chain, or one of the
+    /// access-denied banners <see cref="TryGetAccessDeniedPath"/> recognises. Narrower than
+    /// <see cref="IsExpectedUserActionFailure"/> (which also covers validation rejections and
+    /// NotFound): this predicate drives the server-side render pipeline's decision to swap the
+    /// raw exception text for the standard localized access-denied presentation (issue #1182 —
+    /// a viewer without Read on a node saw "⚠️ This area failed to render." plus the internal
+    /// permission banner). An availability failure (NO VERDICT, issue #974) must never be
+    /// presented as a denial, so it short-circuits first — same as
+    /// <see cref="IsExpectedUserActionFailure"/>.
+    /// </summary>
+    public static bool IsAccessDenied(Exception? ex)
+    {
+        if (IsAvailabilityFailure(ex)) return false;
+        for (var e = ex; e != null; e = e.InnerException)
+            if (e is UnauthorizedAccessException)
+                return true;
+        return TryGetAccessDeniedPath(ex) is not null;
+    }
+
+    /// <summary>
     /// The node PATH an access-denied failure names — extracted so the GUI can degrade gracefully
     /// (e.g. redirect a not-yet-enrolled visitor to a course's public paywall) instead of showing a
     /// raw "Access denied" card. Both access-denied banners put the path in the segment right after
