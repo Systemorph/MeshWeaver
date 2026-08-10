@@ -373,8 +373,10 @@ A complete data source setup showing multiple types, a virtual path, a validator
     .AddSource(src => src
         .WithType<TodoItem>(type => type
             .WithKey(todo => todo.Id)
-            .WithInitialData(async (ref, ct) =>
-                await LoadTodosFromDatabaseAsync(ct))
+            // Every WithInitialData overload takes an IObservable factory (or a fixed
+            // collection) — there is no Task/async overload. Bridge a real I/O leaf
+            // through an IIoPool, never Observable.FromAsync.
+            .WithInitialData(() => dbPool.Invoke(ct => LoadTodosFromDatabaseAsync(ct)))
         )
         .WithType<Project>(type => type
             .WithKey(proj => proj.Id)
