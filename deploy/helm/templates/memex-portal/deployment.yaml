@@ -136,10 +136,12 @@ spec:
             # failing, readiness/liveness are suspended, so a slow boot is never flagged unhealthy.
             #
             # ⚠️ This budget is what bounds a NodeType BAKE (PreWarm__GateReadiness). A cold compile
-            # is ~90 s per NodeType and the sweep is strictly sequential, so a mesh with dozens of
-            # types needs HOURS here, not minutes. periodSeconds × failureThreshold is the ceiling:
-            # the default 5 × 60 = 5 minutes is right for a plain boot and far too small for a cold
-            # bake — turning the gate on without raising this kills the pod mid-bake, every time.
+            # is ~2.4 s per NodeType and the sweep is strictly sequential (measured 2026-08-10), so
+            # the largest mesh we run (~240 types) needs ~10 min of bake on top of a plain cold boot.
+            # periodSeconds × failureThreshold is the ceiling: the default 5 × 60 = 5 minutes is
+            # right for a plain boot and too small for a cold bake — turning the gate on without
+            # raising this kills the pod mid-bake, every time. Paired setting and full derivation:
+            # values.yaml (probes.startup) — 10 × 180 = 30 min.
             httpGet: { path: /health, port: 8080 }
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
@@ -261,7 +263,7 @@ spec:
   #
   # 🚨 The k8s DEFAULT IS 600s, and against this deployment that default is simply WRONG: the
   # startupProbe budget above is periodSeconds × failureThreshold, which managed envs set to
-  # 10 × 1080 = 3 HOURS to cover a cold NodeType bake. A legitimately-baking pod is therefore
+  # 10 × 180 = 30 MINUTES to cover a cold NodeType bake. A legitimately-baking pod is therefore
   # declared failed after 10 minutes — and `kubectl rollout status` reports a perfectly healthy
   # long bake as a failed rollout, which is exactly the signal an operator would act on by
   # rolling back the good image.
