@@ -35,27 +35,48 @@ public static class AreaProbe
     /// Renders the node's DEFAULT area and classifies the first materialised frame: green when
     /// the resolved area's control landed without a framework error control, red on an error
     /// control or when nothing materialises within <paramref name="timeout"/>.
+    ///
+    /// <para>🚨 An <c>Area not found</c> frame is TRANSIENT, never terminal — see
+    /// <see cref="ExecuteTestsArea"/> for the mechanism (layout re-registration after a fresh
+    /// compile). The stream keeps waiting for a frame in which the area exists; the timeout is
+    /// the backstop, and it reports the last transient state so a genuinely missing area still
+    /// fails with the precise reason.</para>
     /// </summary>
     public static IObservable<AreaVerdict> RenderDefaultArea(
         IMessageHub client, string nodePath, TimeSpan timeout) =>
-        Frames(client, nodePath, area: null)
-            .Where(frame => IsAreaMaterialized(frame, requestedArea: null))
-            .Take(1)
-            .Select(frame =>
-            {
-                var strings = CollectStrings(frame);
-                var error = strings.FirstOrDefault(s =>
-                    s.Contains(RenderFailedMarker, StringComparison.Ordinal)
-                    || s.Contains(RenderEmergencyMarker, StringComparison.Ordinal)
-                    || s.Contains(AreaNotFoundMarker, StringComparison.Ordinal));
-                return error is null
-                    ? new AreaVerdict(CheckOutcome.Passed, null)
-                    : new AreaVerdict(CheckOutcome.Failed, FirstLines(error));
-            })
-            .Timeout(timeout)
-            .Catch((TimeoutException _) => Observable.Return(new AreaVerdict(
-                CheckOutcome.Failed,
-                $"default area did not materialise within {timeout.TotalSeconds:F0}s")));
+        Observable.Defer(() =>
+        {
+            string? lastTransient = null;
+            return Frames(client, nodePath, area: null)
+                .Where(frame => IsAreaMaterialized(frame, requestedArea: null))
+                .Select(frame =>
+                {
+                    var strings = CollectStrings(frame);
+                    var notFound = strings.FirstOrDefault(s =>
+                        s.Contains(AreaNotFoundMarker, StringComparison.Ordinal));
+                    if (notFound is not null)
+                    {
+                        lastTransient = FirstLines(notFound);
+                        return null;   // keep waiting — registration may still be catching up
+                    }
+                    var error = strings.FirstOrDefault(s =>
+                        s.Contains(RenderFailedMarker, StringComparison.Ordinal)
+                        || s.Contains(RenderEmergencyMarker, StringComparison.Ordinal));
+                    return error is null
+                        ? new AreaVerdict(CheckOutcome.Passed, null)
+                        : new AreaVerdict(CheckOutcome.Failed, FirstLines(error));
+                })
+                .Where(verdict => verdict is not null)
+                .Select(verdict => verdict!)
+                .Take(1)
+                .Timeout(timeout)
+                .Catch((TimeoutException _) => Observable.Return(new AreaVerdict(
+                    CheckOutcome.Failed,
+                    lastTransient is null
+                        ? $"default area did not materialise within {timeout.TotalSeconds:F0}s"
+                        : $"default area never became available within {timeout.TotalSeconds:F0}s — "
+                          + $"last state: {lastTransient}")));
+        });
 
     /// <summary>
     /// Renders (= EXECUTES) the <c>Tests</c> layout area on <paramref name="nodePath"/> and
@@ -66,16 +87,42 @@ public static class AreaProbe
     /// </summary>
     public static IObservable<AreaVerdict> ExecuteTestsArea(
         IMessageHub client, string nodePath, TimeSpan timeout) =>
-        Frames(client, nodePath, area: "Tests")
-            .Select(ClassifyTestsFrame)
-            .Where(verdict => verdict is not null)
-            .Select(verdict => verdict!)
-            .Take(1)
-            .Timeout(timeout)
-            .Catch((TimeoutException _) => Observable.Return(new AreaVerdict(
-                CheckOutcome.Failed,
-                $"Tests area reported no verdict within {timeout.TotalSeconds:F0}s " +
-                "(expected a ✅/❌ table with an 'N/M passed' summary)")));
+        ClassifyTestsFrames(Frames(client, nodePath, area: "Tests"), timeout);
+
+    /// <summary>
+    /// The Tests-area verdict pipeline over an arbitrary frame stream — the seam the tests drive
+    /// with synthetic frames, and <see cref="ExecuteTestsArea"/> with the live sync stream.
+    /// </summary>
+    public static IObservable<AreaVerdict> ClassifyTestsFrames(
+        IObservable<JsonElement> frames, TimeSpan timeout) =>
+        Observable.Defer(() =>
+        {
+            // 🚨 "Area not found" is a TRANSIENT frame here, never a terminal verdict. Right after
+            // a (re)compile the instance hub re-registers its layout, so the sync stream can
+            // legitimately serve a frame in which the type's custom areas do not exist YET — only
+            // the defaults. Latching that first frame with Take(1) turned the re-registration
+            // window into a gate failure ("No renderer is registered for area `Tests` on hub
+            // `Store`") that fired only on loaded CI runners — 16 straight local runs, macOS and
+            // Linux alike, could not reproduce it, and it redded three unrelated core PRs in one
+            // day. The platform's own rule is to wait on the actual condition via the stream: keep
+            // waiting for a frame that carries the area; the timeout stays the backstop, and it
+            // reports the last transient state so a genuinely absent Tests area still fails with
+            // the precise reason instead of a generic "no verdict".
+            string? lastTransient = null;
+            return frames
+                .Select(frame => ClassifyTestsFrame(frame, transient => lastTransient = transient))
+                .Where(verdict => verdict is not null)
+                .Select(verdict => verdict!)
+                .Take(1)
+                .Timeout(timeout)
+                .Catch((TimeoutException _) => Observable.Return(new AreaVerdict(
+                    CheckOutcome.Failed,
+                    lastTransient is null
+                        ? $"Tests area reported no verdict within {timeout.TotalSeconds:F0}s " +
+                          "(expected a ✅/❌ table with an 'N/M passed' summary)"
+                        : $"Tests area never became available within {timeout.TotalSeconds:F0}s — "
+                          + $"last state: {lastTransient}")));
+        });
 
     // One cold frame stream per probe; the sync stream is disposed on unsubscribe/terminal.
     private static IObservable<JsonElement> Frames(IMessageHub client, string nodePath, string? area) =>
@@ -87,14 +134,19 @@ public static class AreaProbe
             return stream.Select(ci => ci.Value).Finally(stream.Dispose);
         });
 
-    // Terminal classification of a Tests frame; null = keep waiting (still rendering).
-    private static AreaVerdict? ClassifyTestsFrame(JsonElement frame)
+    // Terminal classification of a Tests frame; null = keep waiting (still rendering, or the
+    // area not registered yet — the transient detail is reported through onTransient so the
+    // timeout verdict can carry it).
+    private static AreaVerdict? ClassifyTestsFrame(JsonElement frame, Action<string> onTransient)
     {
         var strings = CollectStrings(frame);
 
         var notFound = strings.FirstOrDefault(s => s.Contains(AreaNotFoundMarker, StringComparison.Ordinal));
         if (notFound is not null)
-            return new AreaVerdict(CheckOutcome.Failed, FirstLines(notFound));
+        {
+            onTransient(FirstLines(notFound));
+            return null;
+        }
 
         var renderError = strings.FirstOrDefault(s =>
             s.Contains(RenderFailedMarker, StringComparison.Ordinal)
