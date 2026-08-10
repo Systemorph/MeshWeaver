@@ -273,6 +273,24 @@ jobs:
                 # build) simply contributes nothing to its shard's tarball.
                 [ -d "$d" ] && echo "$d"
               done | sort -u > ".build-paths-$i.txt"
+          # 🚨 Shard 0 additionally carries the PLUGIN TESTER — the ONE non-test bin that
+          # travels. tools/MeshWeaver.PluginTester (mw-plugin-test.dll) is a TOOL, so the
+          # test-project sweep above never picks it up; but the plugin-gate job reuses THIS
+          # artifact instead of rebuilding, and that reuse is exactly what keeps the gate
+          # inside its 12-minute budget. While the gate sat unarmed the omission was
+          # invisible — the FIRST armed run died on "mw-plugin-test.dll not in the build
+          # output — the gate cannot run", having tested nothing, which is the very shape
+          # that job exists to prevent. The run loop iterates shard-assign.sh's project
+          # list (not the extracted tree), so this extra bin is inert for the tests.
+          # Missing here is a BUILD fault, not a tolerable absence: the solution builds
+          # this project, so fail loudly rather than ship an artifact the gate cannot use.
+          if [ "$i" -eq 0 ]; then
+            if [ ! -d tools/MeshWeaver.PluginTester/bin ]; then
+              echo "::error::tools/MeshWeaver.PluginTester/bin is missing — the plugin gate would have nothing to run."
+              exit 1
+            fi
+            echo tools/MeshWeaver.PluginTester/bin >> ".build-paths-$i.txt"
+          fi
           # zstd -T0 = all cores. --long=27 (128 MiB match window) dedupes ACROSS
           # files: the self-contained test bins each carry near-identical copies
           # of the same framework + MeshWeaver DLLs, which the default 8 MiB
