@@ -348,6 +348,28 @@ The shape in the log is a `CS1061` / `CS0103` against framework surface:
 CS1061: 'MessageHubConfiguration' does not contain a definition for 'AddTracking'
 ```
 
+**A timeout is not a verdict, and it does not cascade like one.** The chain above starts with a
+`CompileError` — Roslyn's answer that the type is broken. When the sweep instead gets *no* answer
+(`TimedOut`: the per-type budget elapsed, typically a cross-silo `SubscribeRequest` during a roll),
+that is not evidence of breakage and must never stall a rollout. So the two cascade differently:
+
+| Upstream outcome | Dependent reported as | Refuses readiness? |
+|---|---|---|
+| `CompileError` / `Faulted` | `UpstreamFailed` | **yes** |
+| `TimedOut` | `UpstreamUnevaluated` | no |
+| `UpstreamUnevaluated` | `UpstreamUnevaluated` | no |
+
+Both no-answer statuses are filed by `NodeTypeBakeGateState` under *unevaluated* — they can never
+set `Regressed`, but they are **named in the `/health` payload**, because non-blocking must not mean
+invisible. Only a failure on a type that was **healthy before this image** gates at all: a type
+already sitting at `Error` before the deploy is pre-existing damage, and gating on it would let one
+abandoned NodeType freeze every future rollout.
+
+That distinction is what makes the readiness gate safe to arm. Counting timeouts as regressions
+stalled memex-cloud on 2026-08-02 with "7 NodeType(s) regressed" and not one `CS####` diagnostic;
+counting only *direct* timeouts leniently still let one timed-out shared source gate through its
+dependents, which reproduced the same stall one hop downstream.
+
 ### The obligation on framework changes
 
 Removing or renaming any public framework surface — extension methods on
