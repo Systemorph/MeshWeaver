@@ -272,7 +272,7 @@ public class AgentChatClient : IAgentChat
     /// In-memory set of sub-thread paths currently in flight on this chat
     /// session. Maintained by <see cref="EmitDelegationEvent"/>: Dispatched
     /// adds, Terminal removes. Read by the cancel watcher in
-    /// <c>ThreadExecution.SetupCancellationWatcher</c> to propagate cancel
+    /// <c>ThreadExecution.InstallCancellationWatcher</c> to propagate cancel
     /// to sub-threads whose paths haven't yet been persisted onto
     /// <c>Thread.StreamingToolCalls[].DelegationPath</c>, and by the
     /// streaming-loop's stamp pass that walks unmatched
@@ -502,7 +502,7 @@ public class AgentChatClient : IAgentChat
     /// <see cref="GetStreamingResponseAsync(IReadOnlyCollection{ChatMessage}, CancellationToken)"/>
     /// path, so the streaming chat ships the same context/attachments the user set (contextPath +
     /// attachments) instead of dropping them and forcing the agent to Search for what was attached.
-    /// 🚨 It deliberately does NOT enumerate context children (no IMeshService.QueryAsync fan-out) —
+    /// 🚨 It deliberately does NOT enumerate context children (no IMeshService.Query fan-out) —
     /// that fan-out bridges back through hub messaging and can park the streaming task indefinitely
     /// ("Generating response…" forever). The agent's Search tool pulls children when it needs them.
     /// </summary>
@@ -528,7 +528,7 @@ public class AgentChatClient : IAgentChat
                 messageText.AppendLine("The current node already exists. To modify it, use Get then Update — do NOT Create it again.");
             messageText.AppendLine();
 
-            // 🚨 No await foreach over IMeshService.QueryAsync here.
+            // 🚨 No await foreach over IMeshService.Query here.
             // That used to enumerate children of the context path to inject
             // into the system prompt. The fan-out through IMeshQueryProvider
             // bridges back through hub messaging in a way that can park the
@@ -778,7 +778,7 @@ public class AgentChatClient : IAgentChat
         // Pure in-memory lookup against the synced agent cache.
         // 🚨 Callers MUST await `WhenInitialized` before calling here on a
         // cold path — this method does not gate, because the gate must run
-        // on a non-hub thread (Task.Run in ThreadExecution.ExecuteMessageAsync).
+        // on a non-hub thread (the Ai I/O pool invoke in ThreadExecution.ExecuteMessageAsync).
         // Awaiting WhenInitialized here would block the hub's ActionBlock if
         // GetResponseAsync runs on it.
         var agent = SelectAgent(messages.LastOrDefault());
@@ -1566,7 +1566,7 @@ public class AgentChatClient : IAgentChat
         // produced "No suitable agent" even though the dropdown showed 9 of
         // them. The synced query runs on the workspace of THIS hub (the thread
         // hub passed in via the ctor's service provider), not the _Exec child
-        // — _Exec is blocked by the streaming Task.Run.
+        // — _Exec is occupied by the streaming round.
         var workspace = hub.GetWorkspace();
         // The chatting user's home namespace — where a user drops their OWN agents, surfaced via the
         // namespace:{userHome} alternation in AgentPickerProjection.BuildAgentQuery. Skips system/hub

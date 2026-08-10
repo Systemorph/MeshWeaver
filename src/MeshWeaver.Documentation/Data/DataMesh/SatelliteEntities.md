@@ -149,7 +149,7 @@ Replies to comments are nested as children of the comment node (e.g., `_Comment/
 
 In PostgreSQL, satellite entities are stored in **dedicated tables** within the same schema as their parent partition. This separation enables efficient index-based lookups — for example, "get all comments for this document" via the `main_node` column index.
 
-Configuration lives in `PartitionDefinition.StandardTableMappings`:
+Configuration lives in `SatelliteTableMapping.Defaults` (surfaced per partition by `PartitionDefinition.DefaultSegmentTableMappings()`):
 
 | Sub-Namespace | Table | Description |
 |---|---|---|
@@ -157,9 +157,14 @@ Configuration lives in `PartitionDefinition.StandardTableMappings`:
 | `_UserActivity` | `user_activities` | User access records |
 | `_Thread` | `threads` | Threads and thread messages |
 | `_Tracking` | `annotations` | Legacy track-change records (no longer written) |
-| `_Approval` | `approvals` | Approval records |
+| `_Approval` | `annotations` | Approval records |
 | `_Access` | `access` | Access assignments |
-| `_Comment` | `comments` | Comments and replies |
+| `_Comment` | `annotations` | Comments and replies |
+| `_ThreadMessage` | `threads` | Thread messages |
+| `_Notification` | `notifications` | Notifications |
+| `Source`, `Test` | `code` | Source and test code nodes (primary content, not satellites) |
+
+`_Comment`, `_Approval` and `_Tracking` deliberately **share** the `annotations` table — there is no `comments` or `approvals` table in any schema.
 
 Primary entities (where `MainNode == Path`, or where no satellite prefix matches) go to the `mesh_nodes` table.
 
@@ -171,11 +176,11 @@ var def = new PartitionDefinition
 {
     Namespace = "ACME",
     Schema = "acme",
-    TableMappings = PartitionDefinition.StandardTableMappings
+    TableMappings = PartitionDefinition.DefaultSegmentTableMappings()
 };
 
 def.ResolveTable("ACME/Projects/Alpha")                     // → "mesh_nodes"
-def.ResolveTable("ACME/Projects/Alpha/_Comment/c1")         // → "comments"
+def.ResolveTable("ACME/Projects/Alpha/_Comment/c1")         // → "annotations"
 def.ResolveTable("ACME/Projects/Alpha/_Access/Alice_Access") // → "access"
 def.ResolveTable("ACME/Projects/Alpha/_Activity/act1")       // → "activities"
 ```
@@ -193,7 +198,9 @@ var comment = new MeshNode("c1", "ACME/Docs/readme/_Comment")
     MainNode = "ACME/Docs/readme",
     Content = new { Author = "alice", Text = "This is really helpful!" }
 };
-await persistence.SaveNodeAsync(comment, options, ct);
+meshService.CreateNode(comment).Subscribe(
+    _ => { },
+    ex => logger.LogWarning(ex, "Failed to create comment"));
 ```
 
 The `MainNode` property drives three key behaviours:
