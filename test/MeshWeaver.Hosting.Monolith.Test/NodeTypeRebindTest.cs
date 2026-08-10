@@ -4,9 +4,11 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -45,61 +47,104 @@ public class NodeTypeRebindTest(ITestOutputHelper output) : MonolithMeshTestBase
     private const string MarkerArea = "RebindMarkerArea";
     private const string Marker = "REBOUND_ON_THE_REAL_NODETYPE";
 
+    private const string OtherTypePath = "type/RebindOther";
+    private const string OtherArea = "RebindOtherArea";
+
+    // The happy path is fast (the recycle is one change-feed hop), but a REGRESSION here is a
+    // wait that runs out — so the per-test watchdogs must outlast the render budget below, or the
+    // failure reads as a harness abort instead of the assertion it is.
+    protected override TimeSpan TestSoftDeadline => TimeSpan.FromSeconds(90);
+    protected override TimeSpan TestHardDeadline => TimeSpan.FromSeconds(180);
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .AddGraph()
-            // A STATIC NodeType (no Roslyn, no compile lifecycle) whose configuration declares
-            // one distinctive area. Its presence on the instance hub is the unambiguous proof
-            // that the hub bound THIS type rather than the mesh default.
+            // STATIC NodeTypes (no Roslyn, no compile lifecycle) whose configurations each declare
+            // one distinctive area. The marker area's presence on the instance hub is the
+            // unambiguous proof that the hub bound THAT type rather than the mesh default (or the
+            // type it activated with).
             .AddMeshNodes(MeshNode.FromPath(MarkerTypePath) with
             {
                 Name = "RebindMarker",
                 State = MeshNodeState.Active,
                 HubConfiguration = config => config.AddLayout(layout =>
-                    layout.WithView(ctx => ctx.Area == MarkerArea,
-                        (_, _) => Controls.Html(Marker)))
+                    layout.WithView(MarkerArea, RenderMarker))
+            })
+            .AddMeshNodes(MeshNode.FromPath(OtherTypePath) with
+            {
+                Name = "RebindOther",
+                State = MeshNodeState.Active,
+                HubConfiguration = config => config.AddLayout(layout =>
+                    layout.WithView(OtherArea, RenderOther))
             });
+
+    // NAMED areas (not predicate views) on purpose: a named area shows up in the "Available named
+    // areas" list the layout host prints when an area is missing, so a red run reproduces the
+    // issue's decisive evidence verbatim — the list is item for item ConfigureDefaultNodeHub's set,
+    // with not one area of the type the node actually carries.
+    private static IObservable<UiControl?> RenderMarker(LayoutAreaHost host, RenderingContext ctx)
+        => Observable.Return<UiControl?>(Controls.Html(Marker));
+
+    private static IObservable<UiControl?> RenderOther(LayoutAreaHost host, RenderingContext ctx)
+        => Observable.Return<UiControl?>(Controls.Html("the type this hub activated with"));
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient(d => d);
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
+    /// <summary>
+    /// #1104's exact shape: the hub activates against a node with NO NodeType — what a
+    /// freshly-provisioned partition root looks like inside the install window, and what
+    /// <c>PathResolutionService.SynthesizePartitionRoot</c>'s fabricated placeholder always is —
+    /// so it binds the mesh DEFAULT configuration. The type then arrives.
+    /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task NodeTypeArrivesAfterActivation_HubRebindsToIt()
+    public Task NodeTypeArrivesAfterActivation_HubRebindsToIt()
+        => AssertRebinds(activationNodeType: null);
+
+    /// <summary>
+    /// The installer's placeholder dance, generalised: the hub activates on one type and the node
+    /// is retyped to another. Same pin, same consequence — the hub serves the FIRST type's areas
+    /// forever. (In the Store's case type #1 is the <c>Space</c> placeholder written before the
+    /// package's own type has compiled.)
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public Task NodeTypeChangedAfterActivation_HubRebindsToIt()
+        => AssertRebinds(activationNodeType: OtherTypePath);
+
+    private async Task AssertRebinds(string? activationNodeType)
     {
         var instancePath = $"type/Rebind{Guid.NewGuid():N}";
 
-        // 1. A node with NO NodeType — the shape a freshly-provisioned partition root has
-        //    inside the install window, and the shape PathResolutionService's synthesized
-        //    placeholder always has.
+        // 1. The node as it looks at activation time. Content is required (a node with neither
+        //    NodeType nor Content is rejected), the NodeType is the variable under test.
         await MeshService.CreateNode(MeshNode.FromPath(instancePath) with
         {
             Name = "Rebind",
+            NodeType = activationNodeType,
             State = MeshNodeState.Active,
+            Content = JsonSerializer.SerializeToElement(new { title = "instance" }),
         }).Should().Emit();
 
-        // 2. ACTIVATE its hub while it is still type-less. Ping is answered by every hub, so
-        //    the response is proof the hub exists — and from here on it is PINNED by address:
-        //    routing short-circuits on GetHostedHub and never resolves the path again.
+        // 2. ACTIVATE its hub in that state. Ping is answered by every hub, so the response is
+        //    proof the hub exists — and from here on it is PINNED by address: routing
+        //    short-circuits on GetHostedHub and never resolves the path again.
         await Mesh.Observe(new PingRequest(), o => o.WithTarget(new Address(instancePath)))
             .Should().Within(60.Seconds()).Emit();
-        Output.WriteLine($"Activated {instancePath} while it had no NodeType.");
+        Output.WriteLine(
+            $"Activated {instancePath} as NodeType '{activationNodeType ?? "(none)"}'.");
 
-        // 3. The node acquires its real type — the installer's retype, a user changing a
-        //    node's type, a repo import landing the typed row.
+        // 3. The node acquires its real type — the installer's retype, a user changing a node's
+        //    type, a repo import landing the typed row.
         await Mesh.GetWorkspace().GetMeshNodeStream(instancePath)
             .Update(node => node with { NodeType = MarkerTypePath })
             .Should().Emit();
-        await Mesh.GetWorkspace().GetMeshNodeStream(instancePath)
-            .Should().Within(30.Seconds())
-            .Match(n => n.NodeType == MarkerTypePath);
         Output.WriteLine($"Retyped {instancePath} to {MarkerTypePath}.");
 
-        // 4. The hub MUST now serve the type's area. Before the fix it still serves the mesh
-        //    default configuration it was born with, the area is not registered on it, and this
-        //    render never yields the marker — "No renderer is registered for area
-        //    '{MarkerArea}' on hub '{instancePath}'".
+        // 4. The hub MUST now serve the type's area. Before the fix it still serves whatever it
+        //    was born with, the area is not registered on it, and this render never yields the
+        //    marker — "No renderer is registered for area '{MarkerArea}' on hub '{instancePath}'".
         var client = GetClient();
         var reference = new LayoutAreaReference(MarkerArea);
         var stream = client.GetWorkspace()
@@ -107,12 +152,18 @@ public class NodeTypeRebindTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Should().Within(90.Seconds())
+            .Should().Within(60.Seconds())
             .Match(c => c is HtmlControl h && h.Data?.ToString()?.Contains(Marker) == true);
 
         control.Should().BeOfType<HtmlControl>(
             "the hub must rebind to the node's real NodeType once it arrives, instead of "
-            + "staying pinned on the mesh default configuration it activated with")
+            + "staying pinned on the configuration it activated with")
             .Which.Data!.ToString().Should().Contain(Marker);
+
+        // Asserted LAST, so a red run is never ambiguous about which half broke: by now the retype
+        // has demonstrably reached the hub, and this confirms it is what the mesh reads back too.
+        await Mesh.GetWorkspace().GetMeshNodeStream(instancePath)
+            .Should().Within(30.Seconds())
+            .Match(n => n.NodeType == MarkerTypePath);
     }
 }
