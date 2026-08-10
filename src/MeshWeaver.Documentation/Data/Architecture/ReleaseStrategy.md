@@ -197,6 +197,7 @@ the version-scheme angle.
 
 ## 9. See also
 
+- [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract) — what `main-cd.yml` guarantees about the set: all-or-nothing publication, the promote ordering, the reconciler, and verifying the image rather than the tick.
 - [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) — the version-number mechanics.
 - [Deployment](/Doc/Architecture/Deployment) — the two deploy routes (AKS vs Container Apps).
 - [DeploymentAKS](/Doc/Architecture/DeploymentAKS) · [LocalColimaMac](/Doc/Architecture/LocalColimaMac).
