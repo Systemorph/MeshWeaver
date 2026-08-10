@@ -707,25 +707,36 @@ jobs:
         set -euo pipefail
         tar -I 'zstd --long=27' -xf build-output-0.tar.zst
         rm -f build-output-0.tar.zst
-    - name: Is the plugins token configured?
+    - name: Is the plugins credential configured?
       id: token
       env:
-        PLUGINS_REPO_TOKEN: ${{ secrets.PLUGINS_REPO_TOKEN }}
+        PLUGINS_REPO_SSH_KEY: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
       run: |
-        if [ -n "$PLUGINS_REPO_TOKEN" ]; then echo "present=true" >> "$GITHUB_OUTPUT"
+        if [ -n "$PLUGINS_REPO_SSH_KEY" ]; then echo "present=true" >> "$GITHUB_OUTPUT"
         else echo "present=false" >> "$GITHUB_OUTPUT"; fi
     - name: Check out MeshWeaver.Plugins
       id: plugins
-      # A PAT/App token with read access to the private plugins repo. Absent (e.g. on a fork, or
-      # before the secret is provisioned) the gate reports SKIPPED rather than failing — an
-      # unavailable input is not evidence of a break.
+      # 🚨 A READ-ONLY DEPLOY KEY, deliberately — not a PAT and not the org's GitHub App.
+      # This gate needs exactly one capability: read Systemorph/MeshWeaver.Plugins. A deploy key
+      # grants precisely that and nothing else, so a secret readable by every workflow run in this
+      # repo cannot be turned into anything wider. The alternatives were both worse:
+      #   • a fine-grained PAT is minimal too, but it is minted against a PERSON, inherits their
+      #     account's lifecycle, and EXPIRES — a gate that silently disarms when someone's token
+      #     lapses is the failure shape this whole job exists to prevent;
+      #   • the org's `meshweaver-cloud` App is installed on ALL repos with write scopes (it drives
+      #     self-update and the issues/PR/webhook integrations), so putting its private key here
+      #     would let any workflow — including one added by a PR — mint org-wide write tokens.
+      # Rotate/revoke by deleting the key on the plugins repo (Settings → Deploy keys) and
+      # replacing PLUGINS_REPO_SSH_KEY here; nothing else depends on it.
+      # Absent (e.g. on a fork) the gate reports SKIPPED rather than failing — an unavailable
+      # input is not evidence of a break.
       continue-on-error: true
       uses: actions/checkout@v6
       with:
         repository: Systemorph/MeshWeaver.Plugins
         ref: main
         path: plugins-repo
-        token: ${{ secrets.PLUGINS_REPO_TOKEN }}
+        ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
         fetch-depth: 1
     - name: "Compile + run the VITAL plugins against this PR"
       if: steps.plugins.outcome == 'success'
@@ -771,27 +782,35 @@ jobs:
     # reasons the checkout can fail are treated differently:
     #   • a FORK PR genuinely cannot reach a private repo → skip, with a warning. Nothing the
     #     contributor can do, and their change cannot be proven either way here.
-    #   • the SAME repo failing means PLUGINS_REPO_TOKEN is missing or expired → that is a
+    #   • the SAME repo failing means PLUGINS_REPO_SSH_KEY is missing or revoked → that is a
     #     CONFIGURATION fault, and configuration faults must be loud. Failing is what gets the
     #     secret provisioned; a warning would let the gate sit permanently inert and green.
-    # Not-yet-configured is the BOOTSTRAP state (this very PR introduces the gate, so the secret
-    # cannot exist before it merges). Warn loudly; do not block. Remove nothing here — the arm
-    # below is what keeps it honest once the secret exists.
+    # Not-yet-configured is the BOOTSTRAP state. Warn loudly; do not block. Remove nothing here —
+    # the arm below is what keeps it honest once the secret exists.
+    #
+    # 🚨 This warn-only branch is NOT free, and the cost has now been paid once. The gate shipped
+    # unarmed and sat green-but-inert for weeks, so #683's deletion of
+    # AiSettingsNodeType.AddSkillSource merged unverified — the plugins repo's
+    # Store/Plugin/Source/Localizer.cs still called it. The break surfaced only when the mesh
+    # recompiled Store/Plugin in production: CS0117, every nodeType:Store/Plugin partition
+    # (Edu, Agent, Skill, Essentials, Publish, …) stuck on the compilation-error overlay.
+    # This job, armed, would have failed that PR — Store is in VITAL_MODULES for exactly this.
     - name: Warn — gate not yet armed
       if: steps.token.outputs.present != 'true' && github.event.pull_request.head.repo.fork != true
       run: |
-        echo "::warning title=Plugin gate NOT armed::PLUGINS_REPO_TOKEN is not configured, so the cross-repo API gate did not run and this PR is UNVERIFIED against the plugins. Provision a read-access token for Systemorph/MeshWeaver.Plugins to arm it."
+        echo "::warning title=Plugin gate NOT armed::PLUGINS_REPO_SSH_KEY is not configured, so the cross-repo API gate did not run and this PR is UNVERIFIED against the plugins. Add a read-only deploy key for Systemorph/MeshWeaver.Plugins to arm it."
     - name: Report a skipped gate (fork PR)
       if: steps.plugins.outcome != 'success' && github.event.pull_request.head.repo.fork == true
       run: |
         echo "::warning::Fork PR — MeshWeaver.Plugins is unreachable, so the cross-repo API gate did not run."
-    # 🚨 Token CONFIGURED but the checkout still failed ⇒ expired, revoked, or wrong scope. That is
-    # a configuration FAULT, and configuration faults must be loud: a gate reporting green while
-    # testing nothing is exactly how mw-plugin-test:latest went stale unnoticed.
+    # 🚨 Credential CONFIGURED but the checkout still failed ⇒ the deploy key was revoked or
+    # replaced. That is a configuration FAULT, and configuration faults must be loud: a gate
+    # reporting green while testing nothing is exactly how mw-plugin-test:latest went stale
+    # unnoticed.
     - name: Fail — gate armed but could not run
       if: steps.token.outputs.present == 'true' && steps.plugins.outcome != 'success' && github.event.pull_request.head.repo.fork != true
       run: |
-        echo "::error::PLUGINS_REPO_TOKEN is configured but checking out Systemorph/MeshWeaver.Plugins FAILED (expired, revoked, or insufficient scope). The cross-repo API gate did not run, so this PR is unverified against the plugins."
+        echo "::error::PLUGINS_REPO_SSH_KEY is configured but checking out Systemorph/MeshWeaver.Plugins FAILED (deploy key revoked, replaced, or removed from the plugins repo). The cross-repo API gate did not run, so this PR is unverified against the plugins."
         exit 1
 
   collect-results:
