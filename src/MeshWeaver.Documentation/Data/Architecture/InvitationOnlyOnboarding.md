@@ -53,16 +53,25 @@ at `Admin/Invitation/{slug}` (the slug is the lowercased email with non-alphanum
 `Email`, `InvitedBy`, `InvitedAt`, `Status` (`Pending`/`Accepted`/`Revoked`), `AcceptedAt`, `Note`.
 
 The onboarding gate must find an invitation **by email, globally, before the user has any identity**.
-That works because `InvitationNodeType`
-registers a query-routing rule sending the path-less lookup to the Admin partition — the exact
-proven pattern `User → Auth` and `Role → Admin` use:
 
-```csharp
-builder.AddQueryRoutingRule(query =>
-    query.ExtractNodeType() == NodeType && string.IsNullOrEmpty(query.Path)
-        ? new QueryRoutingHints { Partition = "Admin" }
-        : null);
-```
+> 🚨 **Invitation queries MUST be path-scoped — `path:Admin/Invitation`.** `InvitationNodeType`
+> registers a `QueryRoutingHints { Partition = "Admin" }` rule for path-less `nodeType:Invitation`
+> queries, but **that rule is currently inert**: `PostgreSqlPartitionedMeshQuery` routes purely by
+> the path's first segment and does not consume `QueryRoutingHints` yet. A path-less
+> `nodeType:Invitation` query therefore goes through the cross-schema fan-out, which **excludes the
+> `admin` schema** — so it silently returns **zero rows** and every invited user is refused. The
+> rule is kept only so the hint is in place once the router honours it.
+>
+> `InvitationService`, `InvitationEmailSender` and `InvitationsSettingsTab` all path-scope for this
+> reason. Do the same in any new caller:
+>
+> ```csharp
+> // ✅ path-scoped — resolves the admin schema via the first path segment
+> "path:Admin/Invitation scope:children nodeType:Invitation"
+>
+> // ❌ path-less — inert routing hint, cross-schema fan-out skips `admin`, 0 rows
+> "nodeType:Invitation"
+> ```
 
 > **Why not the auth-mirror trigger?** The V27 auth-mirror trigger only mirrors
 > `User/Group/Role/VUser/ApiToken` into the `auth` schema; it would **silently drop** `Invitation`
@@ -90,14 +99,19 @@ real gate is at `CreateUser`).
 
 ## The admin Invitations tab
 
-`InvitationsSettingsTab`
-adds an **Invitations** tab under the **Administration** settings group. It is gated exactly like the
-existing **Global Administration** tab: the provider yields it only when the viewer is the node owner
-**and** holds root-level `Permission.All`. Registered via `ConfigureDefaultNodeHub`, that gate means
-it surfaces only on a platform admin's own User Settings page — **not** on every node.
+`InvitationsSettingsTab` adds an **Invitations** tab under the **Administration** settings group,
+registered through `AddGlobalSettingsMenuItems` (wired in `MemexConfiguration`). The gate is
+`AdminMenuGate.IsPlatformAdmin(host)` — reactive, so the tab appears as soon as the platform-admin
+grant surfaces.
 
-The tab lets an admin enter an email + optional note and **Invite** (creates the node and sends the
-email), lists all invitations with their status, and **Revoke**s a Pending one.
+🚨 **"Platform admin" means `Permission.All` at scope `Admin`, not root-level.** A root-level grant
+is the data-superuser shape and is deliberately not how platform admins are provisioned — see
+[Access Control → The Admin partition](/Doc/Architecture/AccessControl). (The XML doc comment on
+`InvitationsSettingsTab` still says "root-level `Permission.All`"; the code does not.)
+
+The tab lets an admin enter an email + optional note and **Invite** (which creates the node — the
+hosted `InvitationEmailSender` sends the mail), lists all invitations with their status, and
+**Revoke**s a Pending one.
 
 ---
 
@@ -117,10 +131,12 @@ send and reports success, so local dev and tests never send mail.
 | `Email:ClientSecret` | string | `""` | App-registration client secret (keep in Key Vault). |
 | `Email:UseManagedIdentity` | bool | `false` | When `true`, authenticate via `DefaultAzureCredential` (managed identity) instead of a client secret. |
 
-`GraphEmailSender` calls Graph
-`/users/{mailbox}/sendMail`. It bridges the async Graph call to the codebase's reactive convention
-via `Observable.FromAsync` — the sender is not hub-reachable, so this is the sanctioned boundary
-(same shape as other HttpClient outbound integrations).
+`GraphEmailSender` calls Graph `/users/{mailbox}/sendMail` and returns `IObservable<bool>`. 🚨 It
+bridges the async Graph call through a **bounded HTTP `IIoPool`** (`_http.Run(...)`), **not**
+`Observable.FromAsync` — a bare `FromAsync` runs the prologue on the subscribing thread and
+deadlocks under a blocking subscriber. `Observable.FromAsync` is forbidden everywhere in `src/`
+outside `IoPool` itself; there is no "not hub-reachable, so it's fine" exemption. See
+[Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling).
 
 ### Azure setup (one-time)
 
