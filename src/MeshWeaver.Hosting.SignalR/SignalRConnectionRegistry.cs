@@ -36,7 +36,13 @@ public sealed class SignalRConnectionRegistry : IDisposable
     /// <summary>
     /// Initializes a new instance of the <c>SignalRConnectionRegistry</c> class.
     /// </summary>
-    /// <param name="hub">The portal message hub used for serialization options and token validation.</param>
+    /// <param name="hub">
+    /// The hub this transport is hosted from — from DI this is the root <c>mesh/{id}</c> hub. Used
+    /// ONLY as a hosting parent (<c>GetHostedHub</c>), a service-provider handle, a source of
+    /// serializer options, and as the mesh's inbound routing entry point for injected participant
+    /// messages. Transport-level REQUESTS are issued on <see cref="TransportHub"/> instead; see the
+    /// 🚨 note there.
+    /// </param>
     /// <param name="routingService">The routing service used to register per-connection push routes.</param>
     /// <param name="hubContext">The SignalR hub context used to push messages down to connected clients.</param>
     /// <param name="ioPools">Optional I/O pool registry; the HTTP pool is used to bridge async client sends, falling back to the unbounded pool when not supplied.</param>
@@ -53,6 +59,45 @@ public sealed class SignalRConnectionRegistry : IDisposable
         ioPool = ioPools?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
         logger = hub.ServiceProvider.GetRequiredService<ILogger<SignalRConnectionRegistry>>();
     }
+
+    /// <summary>
+    /// Per-registry disambiguator for this transport's portal-hub address. Instance state, never
+    /// static (Doc/Architecture/NoStaticState) — and it keeps each replica's routing anchor unique,
+    /// so two replicas never materialise a hub at the same <c>portal/…</c> address.
+    /// </summary>
+    private readonly string instanceId = Guid.NewGuid().ToString("N")[..8];
+
+    /// <summary>
+    /// The stable <c>portal/signalr-{instance}</c> hub every transport-level request is issued on.
+    ///
+    /// <para>🚨 NEVER issue a request on <see cref="hub"/>. From DI that is the root
+    /// <c>mesh/{id}</c> hub — the mesh's ROUTER, not a call target. A request originating there
+    /// makes the router an END of the delivery in both directions: the outbound
+    /// <c>ValidateTokenRequest</c> reaches the <c>ApiToken/{hashPrefix}</c> hub stamped
+    /// <c>Sender = mesh/{id}</c>, and the <c>ValidateTokenResponse</c> is addressed straight back at
+    /// <c>mesh/{id}</c> — which is precisely what the <c>ROUTER_TRAFFIC</c> detector reports
+    /// (production: <c>"ValidateTokenResponse has the mesh hub as target (sender:
+    /// ApiToken/…, target: mesh/…)"</c>). Work on the router's action block starves the routing it
+    /// exists to do.</para>
+    ///
+    /// <para>Resolution is a hosted-hubs dictionary lookup that creates on first use and returns
+    /// the same instance afterwards, so this needs no gate of its own — and creating it lazily
+    /// (rather than in the constructor) keeps hub construction out of DI construction.</para>
+    ///
+    /// <para>🚨 <c>RegisterStream</c> is REQUIRED, not decoration: <c>portal</c> is a stream-routed
+    /// address type (<c>MeshConfiguration.DefaultStreamRoutedAddressTypes</c>), so on Orleans the
+    /// RoutingGrain dispatches to this address over the cluster-wide memory stream. Without the
+    /// registration the RESPONSE has nowhere to land cross-silo and the request times out. Same
+    /// wiring as <c>GrpcConnectionRegistry.TransportHub</c> and <c>SessionHubResolver</c>.</para>
+    /// </summary>
+    private IMessageHub TransportHub =>
+        hub.GetHostedHub(
+            AddressExtensions.CreatePortalAddress($"signalr-{instanceId}"),
+            c => c.WithInitialization(h =>
+                h.RegisterForDisposal(routingService.RegisterStream(h))),
+            HostedHubCreation.Always)
+        ?? throw new InvalidOperationException(
+            "Failed to materialise the SignalR transport portal hub.");
 
     // Immutable write-once constant (NoStaticState permits static readonly constants).
     private static readonly AccessContext Anonymous = new()
@@ -79,7 +124,8 @@ public sealed class SignalRConnectionRegistry : IDisposable
                 // Token validation is the auth bootstrap — it runs BEFORE any identity exists, so it
                 // must run as System (Permission.All) or the never-null guard fail-closes the post.
                 () => accessService.ImpersonateAsSystem(),
-                _ => hub.Observe(new ValidateTokenRequest(rawToken), o => o.WithTarget(tokenAddress))
+                // 🚨 Issued on the transport's PORTAL hub, never on the root mesh hub — see TransportHub.
+                _ => TransportHub.Observe(new ValidateTokenRequest(rawToken), o => o.WithTarget(tokenAddress))
                         .Select(d => d.Message as ValidateTokenResponse))
             .Take(1)
             // Completed-empty = the request produced NO verdict at all (unroutable ApiToken hub) —
