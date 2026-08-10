@@ -335,7 +335,13 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         var typeByName = (System.Collections.IDictionary?)GetField("typeByName");
         var aliasByName = (System.Collections.IDictionary?)GetField("aliasByName");
         var nameByType = (System.Collections.IDictionary?)GetField("nameByType");
+        // All three, not just the first: this helper reaches into private fields by name, so a
+        // rename is the expected way it breaks. Asserting each one says WHICH field moved; the
+        // null-forgiving dereference below would instead throw a NullReferenceException that
+        // names nothing and reads like a defect in the registry rather than in this test.
         typeByName.Should().NotBeNull("the test must track the registry's storage-field shape");
+        aliasByName.Should().NotBeNull("the test must track the registry's storage-field shape");
+        nameByType.Should().NotBeNull("the test must track the registry's storage-field shape");
         if (typeByName!.Values.Cast<object>().Any(d => ReferenceEquals(GetDefinitionType(d), type)))
             holding.Add("typeByName");
         if (aliasByName!.Values.Cast<object>().Any(d => ReferenceEquals(GetDefinitionType(d), type)))
