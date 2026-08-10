@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.PluginCatalog;
 
 namespace MeshWeaver.PluginTester;
 
@@ -84,6 +86,47 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
 
     /// <summary>Process exit code: 0 = all green.</summary>
     public int ExitCode => Success ? 0 : 1;
+
+    /// <summary>
+    /// Maps this report onto the structured wire contract <c>--report</c> writes
+    /// (<see cref="GateRunReport"/>, owned by <c>MeshWeaver.PluginCatalog</c> next to the verdict
+    /// types that consume it) — how the combo verifier, running OUTSIDE the candidate image, reads
+    /// the verdict of the tester running inside it. Loss-free for everything the verdict folding
+    /// needs; <c>GateRunReportContractTest</c> pins the round-trip.
+    /// </summary>
+    public GateRunReport ToRunReport() => new()
+    {
+        FatalError = FatalError,
+        Packages = Packages
+            .Select(package => new GateRunPackage
+            {
+                Id = package.Id,
+                NodeCount = package.NodeCount,
+                InstallError = package.InstallError,
+                IdempotenceError = package.IdempotenceError,
+                NodeTypes = package.NodeTypes
+                    .Select(type => new GateRunNodeType
+                    {
+                        Path = type.Path,
+                        CompilationStatus = type.CompilationStatus?.ToString(),
+                        Compile = Map(type.Compile),
+                        CompileDetail = type.CompileDetail,
+                        Render = Map(type.Render),
+                        RenderDetail = type.RenderDetail,
+                        Tests = Map(type.Tests),
+                        TestsDetail = type.TestsDetail,
+                    })
+                    .ToImmutableList(),
+            })
+            .ToImmutableList(),
+    };
+
+    private static GateRunOutcome Map(CheckOutcome outcome) => outcome switch
+    {
+        CheckOutcome.Passed => GateRunOutcome.Passed,
+        CheckOutcome.Failed => GateRunOutcome.Failed,
+        _ => GateRunOutcome.Skipped,
+    };
 
     /// <summary>
     /// Writes the human-readable per-package summary table. With a <paramref name="verdict"/>
