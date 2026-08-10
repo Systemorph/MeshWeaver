@@ -91,13 +91,48 @@ The lifecycle runs on the `Status` / `RequestedStatus` control-plane pair
 
 | `RequestedStatus` | Set by | The control plane does |
 |---|---|---|
-| `Triage` | ingest (first sighting, or a repeat of a `New`/`Failed` incident) | marks `Triaging`, starts a LogTriage thread with the incident as `MainNode` |
-| `File` | the triage agent | resolves the repository, opens the issue as the GitHub App, records `IssueUrl` |
-| `Comment` | ingest (repeat of a `Filed` incident, at most once per `CommentInterval`) | comments the recurrence; reopens the issue first if it had been closed |
+| `Triage` | ingest (first sighting, or a repeat of an un-ticketed `New`/`Failed` incident) | marks `Triaging`, starts a LogTriage thread with the incident as `MainNode` |
+| `File` | the triage agent | marks `Filing`, resolves the repository, opens the issue as the GitHub App, records `IssueNumber`/`IssueUrl` |
+| `Comment` | ingest (repeat of a ticketed incident, at most once per `CommentInterval`) | comments the recurrence; reopens the issue first if it had been closed |
 | `Suppress` | the triage agent, or an admin | marks `Suppressed` — occurrences keep counting, tickets stop |
 
 Because the state lives in the mesh, a portal restart mid-triage strands nothing: the node still
 says what it is waiting for and the next query emission picks it up.
+
+### One fault, one ticket — for the fault's whole life
+
+Deduplicating at the *fingerprint* is only half the promise. The other half is that the incident is
+**filed at most once**, and the control plane enforces it in two places.
+
+**The claim.** Every transition consumes `RequestedStatus` in a write against the incident's LIVE
+content, and that write lands *before* the GitHub call it guards (the
+claim-the-guard-before-the-mutation rule). A second work item for the same incident finds the
+request already cleared and stands down. Without it the only guards are in-process: the incident
+query is eventually consistent, so it re-emits the pre-write snapshot after the in-flight set has
+been released — which is how two issues were opened for one fault inside the same second on the
+watcher's first live run.
+
+**The issue link outranks the status.** `NextRequest` checks `IssueNumber` *before* the
+`New`/`Failed` retry rule, and a `File` request that arrives on an already-ticketed incident is
+granted as a `Comment` instead. Both close the same chain: a recurrence parks a ticketed incident at
+`Failed` (a comment that errored, or the stranded-triage reconcile marking it retryable), ingest
+re-triages it, the agent drafts again and asks to `File` — and a second issue appears. That chain
+filed `ROUTER_TRAFFIC` eight times in seven minutes.
+
+A recurrence is therefore always folded onto the ticket that exists:
+
+- One comment per `CommentInterval` (default 6 h), whatever asked for it — a `File` request landing
+  on a ticketed incident obeys the same bound a `Comment` request does, so a continuously-firing
+  fault cannot turn its own issue into a feed.
+- A **closed** issue is reopened first (`ReopenOnRecurrence`). A defect that returns after someone
+  closed its ticket is exactly what should notify.
+- A comment that lands writes the incident back to `Filed`, clearing a stale `Failed` — leaving it
+  is what let ingest re-triage a ticketed incident in the first place.
+
+The claim keys on `RequestedStatus`, never on the status, so the in-flight statuses (`Triaging`,
+`Filing`) are not dead ends: a crash between the claim and the write-back parks the incident there,
+and asking again — an admin in the incident view, or the stranded-triage reconcile below — is
+honoured.
 
 ### The one state nothing requests: `Triaging`
 
