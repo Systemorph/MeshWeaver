@@ -143,7 +143,7 @@ public static class PackageInstaller
                         nodes.Select(n => n.Path))
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, nodes.Length, authorizingUserId: authorizingUserId))
-                    .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
+                    .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
                     // …then the package's committed binaries, into the warmed root's content
                     // collection — the half of "publish" that merging used to leave undone (#848).
                     .SelectMany(_ => SyncPackageContent(hub, partition, sourceFolder, files, logger))
@@ -673,13 +673,51 @@ public static class PackageInstaller
             },
         };
 
+    /// <summary>
+    /// Budget for the single READ that decides whether a self-typed root may be warmed yet. This
+    /// is a snapshot of the type's current state, never a wait for a compile — the installer must
+    /// not hold on Roslyn (the compile activity it just kicked runs on the same mesh), so an
+    /// unanswered read simply means "don't warm this one".
+    /// </summary>
+    private static readonly TimeSpan RootTypeProbeTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Activates the roots this install just wrote, so a freshly installed package is not dark
+    /// until someone navigates to it.
+    ///
+    /// <para>🚨 Warming a root is not a read — it ACTIVATES its hub, and a hub's NodeType
+    /// enrichment binds ONCE for the hub's lifetime. So a root may only be warmed once its type
+    /// can actually produce a configuration. For a SELF-TYPED root (the Store shape: root
+    /// <c>Store</c> is nodeType <c>Store/Catalog</c>, defined by a child of the same package) the
+    /// type is, at this moment, still carrying the compile stamp the node repo COMMITTED —
+    /// <c>compilationStatus: Ok</c> with a months-old <c>compiledFrameworkVersion</c> and an
+    /// assembly this mesh has never seen. Warming into that state made the outcome a race between
+    /// the per-NodeType hub's framework-stale kickoff (which flips Pending, so enrichment WAITS for
+    /// the rebuild) and this activation (which, if it wins, snaps the stale <c>Ok</c>, spends the
+    /// single self-heal retry and can end on the silent defaults-only fallback). Measured margin on
+    /// a developer machine: 13 ms. A loaded CI runner loses it, and the root then serves only the
+    /// generic areas — "No renderer is registered for area <c>Tests</c> on hub <c>Store</c>", the
+    /// plugin gate's Store/Catalog RED (2026-07-29, recurred 2026-08-10 on three different PRs).
+    /// The recycle a few lines above exists precisely so the root re-activates against its FINAL
+    /// type; warming before that type is loadable defeated it.</para>
+    ///
+    /// <para>So: when a root is typed by a NodeType this very package installs, SKIP the warm
+    /// unless that type currently has a build an instance could load
+    /// (<see cref="MeshDataSourceExtensions.AwaitLoadableBuild"/>, read once, bounded by
+    /// <see cref="RootTypeProbeTimeout"/>). Skipping is the safe answer, and it is cheap: warming
+    /// is only an optimisation against "the root stays dark until something touches it", whereas a
+    /// warm into an unloadable type PINS the wrong configuration. The next real access — the gate's
+    /// render, a visitor, the next install — activates the root against the rebuilt type and binds
+    /// correctly. Deliberately NOT a wait: the installer runs on the mesh that is compiling, so
+    /// holding here would trade a mis-binding for a stalled install.</para>
+    /// </summary>
     private static IObservable<Unit> WarmInstalledRoots(
-        IMessageHub hub, IEnumerable<string> paths, ILogger? logger)
+        IMessageHub hub, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
     {
         var workspace = hub.GetWorkspace();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var roots = paths
-            .Select(path => path.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault())
+        var roots = nodes
+            .Select(n => n.Path.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault())
             .Where(root => !string.IsNullOrWhiteSpace(root))
             .Select(root => root!)
             .Distinct(StringComparer.Ordinal)
@@ -687,14 +725,58 @@ public static class PackageInstaller
         if (roots.Length == 0)
             return Observable.Return(Unit.Default);
 
+        // The NodeTypes this package defines — only these can still be carrying the repo's
+        // committed stale stamp at this point in the install.
+        var inPackageTypes = nodes
+            .Where(n => n.Content is NodeTypeDefinition)
+            .Select(n => n.Path)
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // The root's DECLARED type, read off the nodes we just wrote — never off the mesh, since
+        // reading the root is the very activation this gate exists to defer.
+        string? DeclaredTypeOf(string root) => nodes
+            .FirstOrDefault(n => string.Equals(n.Path, root, StringComparison.Ordinal))?.NodeType;
+
+        // True when warming this root now cannot pin the wrong configuration: either its type is
+        // not one this package defines (nothing about to be rebuilt), or that type already has a
+        // build an instance could load. One bounded READ — never a wait for a compile.
+        IObservable<bool> MayWarm(string root)
+        {
+            var declaredType = DeclaredTypeOf(root);
+            if (string.IsNullOrEmpty(declaredType) || !inPackageTypes.Contains(declaredType))
+                return Observable.Return(true);
+            return workspace.GetMeshNodeStream(declaredType)
+                .Where(node => node is not null)
+                .Take(1)
+                .Timeout(RootTypeProbeTimeout)
+                .Select(node => node.HasLoadableBuild())
+                .Catch<bool, Exception>(_ => Observable.Return(false))
+                .Do(loadable =>
+                {
+                    if (!loadable)
+                        logger?.LogInformation(
+                            "[PackageInstaller] not warming root {Root}: its NodeType {Type} has no "
+                            + "build this framework can load yet (the repo's committed compile stamp "
+                            + "is being rebuilt). Warming now would bind the root to the fallback "
+                            + "configuration for its hub's lifetime; the first real access after the "
+                            + "rebuild binds it correctly.",
+                            root, declaredType);
+                });
+        }
+
         return roots
             .Select(root => Observable
                 .Using(
                     () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-                    _ => workspace.GetMeshNodeStream(root)
-                        .Where(node => node is not null)
-                        .Take(1)
-                        .Timeout(WarmTimeout))
+                    _ => MayWarm(root)
+                        .SelectMany(mayWarm => mayWarm
+                            ? workspace.GetMeshNodeStream(root)
+                                .Where(node => node is not null)
+                                .Take(1)
+                                .Timeout(WarmTimeout)
+                                .Select(_ => true)
+                            : Observable.Return(false)))
+                .Where(warmed => warmed)
                 .Select(_ => root)
                 .Catch<string, Exception>(exception =>
                 {
@@ -942,7 +1024,7 @@ public static class PackageInstaller
                 }
                 return WriteInstalledRecord(
                         hub, manifest, installedFromRef, all.Length, authorizingUserId: authorizingUserId)
-                    .SelectMany(_ => WarmInstalledRoots(hub, all.Select(n => n.Path), logger))
+                    .SelectMany(_ => WarmInstalledRoots(hub, all, logger))
                     .Select(_ => result);
             });
     }
@@ -1551,7 +1633,7 @@ public static class PackageInstaller
                         logger, nodes.Select(n => n.Path))
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, nodes.Length, moduleManifest, authorizingUserId))
-                    .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
+                    .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
                     // …then the package's committed binaries (course videos/posters) into the
                     // warmed root's content collection — the half of "publish" that merging used
                     // to leave undone (#848).
@@ -1741,7 +1823,7 @@ public static class PackageInstaller
                         logger, nodes.Select(n => n.Path))
                     .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
                         newManifest.Files.Count, newManifest, authorizingUserId))
-                    .SelectMany(_ => WarmInstalledRoots(hub, nodes.Select(n => n.Path), logger))
+                    .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
                     // A changed BINARY is a changed file like any other: manifest.lock hashes the
                     // `content/**` assets too, so a re-cut video is in `changedFiles` and an
                     // unchanged one never travels. This is what keeps the incremental path cheap
