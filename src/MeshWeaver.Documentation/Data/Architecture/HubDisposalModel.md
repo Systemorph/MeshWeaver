@@ -22,9 +22,11 @@ Tags:
 > the probe is `IsDisposing` (a `bool`) and completion is `DisposalCompleted` (an
 > `IObservable<Unit>`). The **only** async that survives shutdown is the **draining
 > of a genuine async pipeline** — the mesh-level **IO-pool drain** (`IIoPool`) and a
-> reactive dispose action that flushes in-flight writes — and even those are
-> expressed as `IObservable`, awaited *reactively* by the state machine. Everything
-> else is an observable.
+> reactive dispose action that flushes in-flight writes. Those are expressed as
+> `IObservable` too, but note *who* waits for them: the hub **starts** them and does
+> not block, and it is the **mesh-level** teardown
+> ([Mesh Lifecycle](/Doc/Architecture/MeshLifecycle)) that joins them before the
+> service scope closes. Everything else is an observable.
 >
 > For *debugging* a disposal that hangs or leaks, see
 > [Debugging Disposal, Storms and Leaks](/Doc/Architecture/DebuggingDisposalAndLeaks).
@@ -198,22 +200,37 @@ registered sync dispose actions), `messageService.Dispose()` (**sync** —
 `RunLevel = Dead`. The disposal-phase subscriptions are disposed in the `finally`
 (each has already self-completed).
 
-### The watchdog — `Observable.Timer`, not `Task.Delay`
+### The watchdog — `Observable.Timer`, and it tears down for real
 
-A safety net force-completes disposal if the state machine ever wedges. It is a
-reactive timer that **cancels itself the instant disposal completes**:
+A safety net runs the teardown if the state machine ever wedges. It is a reactive
+timer that **cancels itself the instant disposal completes**:
 
 ```csharp
 watchdogSubscription = Observable
-    .Timer(DisposalWatchdogTimeout)            // 25 s, default scheduler (off action block)
+    .Timer(DisposalWatchdogTimeout)            // 8 s, default scheduler (off action block)
     .TakeUntil(disposalCompleted)              // cancel the moment disposal finishes
-    .Subscribe(_ => { if (!DisposalSignalled) SignalDisposalCompleted(); }, _ => { });
+    .Subscribe(
+        _ => { if (!DisposalSignalled) ForceTeardownAfterWatchdog(); },
+        _ => { });                             // a faulted disposalCompleted needs no watchdog
 ```
 
-`TakeUntil(disposalCompleted)` is what fixed the **TimerQueue leak**: the old
-uncancelled `Task.Delay(25s)` rooted the entire hub graph (cache, data sources,
-action block, subscriptions) for 25 s after *every* dispose, even a fast one. The
-reactive timer releases its scheduler entry as soon as the subject fires.
+Two things matter here, and both were once wrong:
+
+- **It force-*tears down*, it does not merely signal.** `ForceTeardownAfterWatchdog`
+  flips `RunLevel` to `ShutDown` first (so heartbeats and hosted-hub creation stop
+  feeding the storm), then runs the SAME teardown the phases would have —
+  `hostedHubs.Dispose()`, `CancelCallbacks()`, `DisposeImpl()`,
+  `messageService.Dispose()` — each in its own `try/catch`, then sets `Dead` and
+  signals. The predecessor only **signalled** completion here: the caller unblocked
+  and every child leaked, which is how one dead Blazor circuit's portal hub kept
+  ~7k sync-stream hubs alive heartbeating at ~1.2 cores forever (the 2026-07-01
+  zombie portal-hub storm).
+- **`TakeUntil(disposalCompleted)` is what fixed the TimerQueue leak.** The old
+  uncancelled `Task.Delay(25 s)` rooted the entire hub graph (cache, data sources,
+  action block, subscriptions) for 25 s after *every* dispose, even a fast one. The
+  reactive timer releases its scheduler entry as soon as the subject fires. (The
+  current budget is `DisposalWatchdogTimeout` = **8 s**; the 25 s figure is the
+  deleted `Task.Delay`, not today's bound.)
 
 ---
 
@@ -226,12 +243,20 @@ pipeline* — and even it is expressed as `IObservable`, awaited reactively:
    file / HTTP work. These drain at the mesh boundary, not per hub. The sanctioned
    async edge (see [Controlled IO Pooling](/Doc/Architecture/ControlledIoPooling)).
 2. **A reactive dispose action that flushes** — e.g. `MeshNodeTypeSource` registers
-   `RegisterForDisposal(hub => FlushPendingWrites().Timeout(10s)…)`. This **must**
-   finish before teardown (a per-node hub disposing mid-write would otherwise lose
-   data and the next test could read stale persistence). It is awaited by the
-   dispose-action drain above — reactively, never on the action block, never as a
-   `Task`. `FlushPendingWrites()` is *already* an `IObservable`; the leaf I/O inside
-   it pools through the persistence layer.
+   `RegisterForDisposal(_ => FlushPendingWrites().Timeout(10s)…)` so a per-node hub
+   disposing mid-write doesn't lose data. `FlushPendingWrites()` is *already* an
+   `IObservable`; the leaf I/O inside it pools through the persistence layer, which is
+   **mesh-scoped and outlives this hub**.
+
+   > 🚨 **The hub does NOT wait for it.** `DisposeImpl` composes the registered
+   > reactive actions with `Observable.Merge(legs).Subscribe(…)` and moves straight on
+   > to `disposables.Dispose()` — fire-and-forget, deliberately not held in
+   > `disposables` so the synchronous teardown can't cancel an in-flight pool leaf.
+   > What actually guarantees the flush has landed before the service scope dies is the
+   > **mesh-level teardown**, not the hub: `IoPoolRegistry.DrainAll()` +
+   > `AsyncDisposeQueue.DrainAsync(...)` in
+   > [Mesh Lifecycle](/Doc/Architecture/MeshLifecycle). Do not rely on
+   > `DisposalCompleted` alone to mean "my flush finished".
 
 There is no `Func<…, Task>` dispose action and no `IAsyncDisposable` registration any
 more — the `RegisterForDisposal` surface takes `Func<IMessageHub, IObservable<Unit>>`.
@@ -329,10 +354,12 @@ change-feed resubscribe latch **stay armed** and the subscriber rehydrates after
 - **Need to run sync cleanup on dispose?** `hub.RegisterForDisposal(IDisposable)`
   (the common case) or `RegisterForDisposal(Action<IMessageHub>)`. These run in the
   ShutDown phase on the action block.
-- **Need cleanup that must finish before teardown (an async flush)?**
+- **Need cleanup that performs I/O (an async flush)?**
   `hub.RegisterForDisposal(Func<IMessageHub, IObservable<Unit>>)` — return an
-  observable that completes when done; the dispose-action drain awaits it reactively.
-  There is no `Func<…, Task>` overload and no `IAsyncDisposable` overload.
+  observable that completes when done. There is no `Func<…, Task>` overload and no
+  `IAsyncDisposable` overload. The hub **starts** it in ShutDown and does not wait;
+  its leaf must run on a mesh-scoped resource (the persistence layer / `IIoPool`) so
+  the mesh-level teardown drain can join it.
 - **Need to wait for the hub to finish disposing?** Subscribe to
   `hub.DisposalCompleted`. Only at the test / grain edge may you bridge it once with
   `.FirstOrDefaultAsync().ToTask()`. To ask "is it shutting down?", read `IsDisposing`.
@@ -349,6 +376,7 @@ change-feed resubscribe latch **stay armed** and the subscriber rehydrates after
   field is not the same as owning it. See
   [Subscription Ownership](/Doc/Architecture/SubscriptionOwnership).
 
-Canonical implementation: `MessageHub.HandleShutdownCore` /
-`MessageHub.Dispose` / `HostedHubsCollection.DisposeHubsReactive` in
-`src/MeshWeaver.Messaging.Hub`.
+Canonical implementation: `MessageHub.Dispose` / `MessageHub.HandleShutdownCore` /
+`MessageHub.OnQuiesceComplete` / `MessageHub.DisposeImpl` /
+`MessageHub.ForceTeardownAfterWatchdog` / `HostedHubsCollection.DisposeHubsReactive`
+in `src/MeshWeaver.Messaging.Hub`.

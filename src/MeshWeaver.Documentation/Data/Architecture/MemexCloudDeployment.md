@@ -98,13 +98,14 @@ The ingress public IP is assigned by Azure. Retrieve it with `kubectl get svc -n
 
 ## 2. Images (Shared ACR)
 
-Three images are pushed to the shared ACR. Grant the AKS kubelet `AcrPull` on the registry (cross-RG if needed) so nodes can pull. Separately, the in-pod **self-updater** lists ACR tags under a **portal Workload Identity** (a shared UAMI federated to `system:serviceaccount:<ns>:memex-portal-sa`, granted `AcrPull`) — provisioned by `infra/modules/portal-identity.bicep` and wired via `selfUpdate.azureClientId`. See [DeploymentAKS → Portal self-update](/Doc/Architecture/DeploymentAKS).
+These images are pushed to the shared ACR. Grant the AKS kubelet `AcrPull` on the registry (cross-RG if needed) so nodes can pull. Separately, the in-pod **self-updater** lists ACR tags under a **portal Workload Identity** (a shared UAMI federated to `system:serviceaccount:<ns>:memex-portal-sa`, granted `AcrPull`) — provisioned by `infra/modules/portal-identity.bicep` and wired via `selfUpdate.azureClientId`. See [DeploymentAKS → Portal self-update](/Doc/Architecture/DeploymentAKS).
 
 | Image | Description |
 |---|---|
 | `<registry>/memex-portal-ai-base:latest` | `aspnet:10.0` + node20 + co-hosted CLIs (Claude Code + Copilot). The **one** hand-authored Dockerfile at `deploy/base-images/portal-ai`, built with `az acr build`. |
 | `<registry>/memex-portal-ai:<tag>` | The portal app — an SDK container build on the base image. **Must pass `-r linux-x64`** (the Copilot SDK keys its binary off the RID). |
-| `<registry>/memex-migration:<tag>` | One-shot DB migration container. |
+| `<registry>/memex-migration:<tag>` | One-shot DB migration container — the chart runs it as a **Job**, created per `helm upgrade`. |
+| `<registry>/memex-bake:<tag>` | NodeType pre-compilation (bake) Job. `bake.enabled` is **false** by default; it only makes sense where `/data` is a shared persistent volume. |
 
 Build and push the portal (no Dockerfile — the SDK's `PublishContainer` pushes straight to the registry):
 
@@ -147,7 +148,14 @@ The Postgres connection uses the **private IP + password + SSL** (`SslMode=Requi
 
 > **Known chart-generation gaps** (fix at the AddMemex generator):
 > - The chart's `secrets.yaml` hardcodes the in-cluster Postgres connection string → `deploy.sh` patches it post-install.
-> - The migration is rendered as a **Deployment**, not a Job, so Kubernetes reruns it after each clean exit → it can show `CrashLoopBackOff` even though every run **succeeds**. This is harmless, but should be a `Job` (see §11).
+> - Step 4's `kubectl set image deployment/memex-migration-deployment` is a **legacy leftover** and is why `deploy.sh` guards it with `|| true`. The chart renders the migration as a run-once **Job** (`memex-migration-<Release.Revision>`), so that line targets a Deployment the chart no longer creates. The migration actually runs from the `helm upgrade` in step 2.
+
+> 🚨 **A migration `CrashLoopBackOff` is NOT harmless.** Earlier revisions of this chart rendered the
+> migration as a Deployment, which restarted the process after each clean `exit 0`. Every run rebuilds
+> `public.top_level_index` across every partition schema, so this produced **310 restarts in a day pegging
+> a full core** — a CPU storm that previous versions of these docs described as benign. That is exactly why
+> it is a Job now. If you see a migration Deployment crash-looping, the namespace is on the legacy shape;
+> treat it as a live problem.
 
 ---
 
@@ -322,8 +330,11 @@ The master key, PG connection string, Microsoft client secret, and `Bootstrap:Se
 **Multi-replica HA**
 Needs Orleans `AzureTables`/`AdoNet` clustering wired on the Filesystem backend.
 
-**Migration as a Job**
-The migration container is currently rendered as a Deployment (see §4). It should be a `Job`.
+**Migration as a Job (done)**
+The chart now renders the migration as a run-once `Job` (`deploy/helm/templates/memex-migration/job.yaml`,
+`restartPolicy: Never`, named per Helm revision with `ttlSecondsAfterFinished`). Remaining: the in-pod
+self-updater and its RBAC still target a `memex-migration-deployment`, so a self-update does not run the
+migration — see [DeploymentAKS → Migration under self-update](/Doc/Architecture/DeploymentAKS).
 
 **Release image**
 Replace any temporary debug image tag with a clean `latest`/release tag before treating the deployment as final.

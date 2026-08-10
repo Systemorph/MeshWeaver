@@ -159,7 +159,7 @@ Tests bridge to `Task` exactly once at the assertion edge — see [WritingTests]
 
 ## What the watcher does
 
-When `Content.PendingUserMessages` becomes non-empty AND `Status` is `Idle` or `Cancelled` (a stopped round re-dispatches like `Idle`), the submission watcher — installed via `ThreadSubmission.InstallServerWatcher` during thread hub initialization — takes over:
+When `Content.PendingUserMessages` becomes non-empty AND `Status` is `Idle` or `Cancelled` (a stopped round re-dispatches like `Idle`) — or `StartingExecution`, the state the watcher itself sets when it claims the round — the submission watcher — installed via `ThreadSubmission.InstallServerWatcher` during thread hub initialization — takes over:
 
 1. Drains **every** entry in `PendingUserMessages` into `Messages` — the whole queue becomes ONE round (`ThreadSubmission.ComputeDrainIds`); the agent sees the drained list as a multi-message turn.
 2. Allocates **one** response cell node for the round. Its id is derived deterministically from the drained ids + each drained message's `Timestamp`/`Text` (`DeriveDeterministicResponseId`) — never a fresh `Guid` — so a re-dispatch of the same logical round reuses the same cell instead of minting duplicates.
@@ -185,7 +185,7 @@ Key properties:
 - `Cancelled` is a distinct, visible terminal status that re-dispatches like `Idle` when new input is queued.
 - Cancellation is requested by setting `RequestedStatus = Cancelled` (GUI Stop button, or a parent cancelling a sub-thread). The cancel watcher cancels the CTS; the streaming loop's terminal write flips `Status → Cancelled` and clears `RequestedStatus`.
 
-**Wake-up recovery** (`InitializeThreadLifecycle`): on hub activation the thread reads its own node's first stream emission and drives any non-terminal state to valid once — a pending `RequestedStatus = Cancelled` is honoured, an interrupted `Executing` round **resumes its existing response cell** (re-entering `StartingExecution`; `DispatchAfterClaim` reuses `ActiveMessageId`), and `Idle` / `Cancelled` with pending input is left for the submission watcher. See [ActivityControlPlane](/Doc/Architecture/ActivityControlPlane) → "Wake-up recovery".
+**Wake-up recovery** (`InitializeThreadLifecycle`): on hub activation the thread reads its own node's first stream emission and drives any non-terminal state to valid once — a pending `RequestedStatus = Cancelled` is honoured, an interrupted `Executing` round **stays `Executing`** and re-launches the streaming loop into its existing response cell (`ThreadSubmissionServer.ResumeInterruptedRound`, idempotent per `ActiveMessageId`), and `Idle` / `Cancelled` with pending input is left for the submission watcher. See [ActivityControlPlane](/Doc/Architecture/ActivityControlPlane) → "Wake-up recovery" for the full state table.
 
 ### Mid-execution inbox drain (A7)
 
@@ -226,8 +226,11 @@ thread forever:
   acting — it does NOT `Take(1).Timeout(15s)` and silently abandon the thread when
   that emission is dropped/late under load. The one-shot give-up *was* the
   sub-thread cold-load "deadlock" (really a missed observation).
-- **`Executing` + `ActiveMessageId`** → resume the same response cell (re-enter
-  `StartingExecution`; the `_Exec` round watcher re-dispatches). Resume → the round
+- **`Executing` + `ActiveMessageId`** → re-launch the streaming loop into the same
+  response cell while **`Status` stays `Executing`**. 🚨 Do NOT write
+  `Executing → StartingExecution`: that inverts the `_Exec` commit edge, and since both
+  the recovery observer and the exec watcher self-heal, the two volley under load — the
+  re-dispatch ping-pong behind the resubmit / cold-load flake. Resume → the round
   naturally finishes.
 - **`Executing` mid-delegation** → re-observe the existing child sub-thread (do not
   re-run the agent loop — that re-delegates). When the child reaches terminal,

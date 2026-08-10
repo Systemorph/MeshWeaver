@@ -197,7 +197,7 @@ The baton model exists to enforce a small set of strong security promises. Each 
 | **No write is attributed to a hub address by accident.** Hub addresses are never `CreatedBy` on stored data. | `AccessService.SetContext` logs an `Error` with stack trace when a hub-shaped principal lands on `AsyncLocal`. PostPipeline reads AsyncLocal — the wrong principal can't be stamped on outgoing deliveries. | The error log itself — CI parses for `[Error] [MeshWeaver.AccessContext] SetContext: hub-shaped principal` and fails the run if any appear outside the sanctioned-init phase. |
 | **Sanctioned non-user identities have minimum-necessary permissions.** A read-only hydrator can't write; an onboarding creator can't read another user's data. | Each sanctioned identity has per-NodeType access rules granting ONLY its specific operations. No wildcard ("all `sync/*` get protocol perms") — every grant is exact. | One test per sanctioned identity verifies that misuse fails with `UnauthorizedAccessException` and a meaningful message. |
 | **Cross-user reads are gated at every cache hit.** The `MeshNodeStreamCache` hydrates under a sanctioned read-only identity, but every `GetStream(path)` call re-validates the requesting user's Read permission. | `MeshNodeStreamCache.GetStream` always wraps the upstream in an access gate keyed on `(path, userId)`. The cache is the hydrator; the user is the reader. | `UserAccessTests.SecurePersistence_NodeInPrivateNamespace_HiddenWithoutGrant` — caches loaded under a sanctioned identity must still return `UnauthorizedAccessException` to unauthorized callers. |
-| **Fail-closed under uncertainty.** No silent fallback. | `UserServicePostPipeline` leaves `delivery.AccessContext` null when no context can be resolved; downstream AccessControl denies. The "stamp hub-self as principal" fallback was removed on 2026-05-21. | Watch for `PostPipeline: hub={Hub}, message={MessageType} posted with no AccessContext`. Every occurrence is either a missing wrap (fix it) or a framework-lifecycle message (exempt via `[SystemMessage]`). |
+| **Fail-closed under uncertainty.** No silent fallback. | On a `User`-mode hub with no resolvable context and a non-exempt message, `UserServicePostPipeline` **fails the delivery** — `return d.Failed(reason)` — rather than delivering a null-context message that would fail closed deep in AccessControl. The "stamp hub-self as principal" fallback was removed on 2026-05-21. | Watch the `MeshWeaver.AccessContext` channel for `[Error] PostPipeline: AccessContext must never be null for an application post — no identity, no delivery.` Every occurrence is either a missing wrap (fix it) or a framework-lifecycle message that should be exempt (`[SystemMessage]`). |
 
 The whole model rests on failure modes being **loud and tested**, not silent. The error log, the violation tests, and the fail-closed default together make a privilege-escalation regression visible the moment it's introduced.
 
@@ -225,9 +225,13 @@ Any call to `hub.Post(...)`, `hub.Observe(...)`, or `meshService.CreateNode/Upda
 
 1. If `delivery.AccessContext` is **already set** (e.g. via `PostOptions.WithAccessContext(...)`, `ImpersonateAsHub`, or `ImpersonateAsSystem` at the post site) → use it; do not overwrite.
 2. Else read `accessService.Context ?? accessService.CircuitContext`; if non-null → stamp on the delivery.
-3. Else → **fail closed** (leave `delivery.AccessContext` null; downstream AccessControl denies). Framework-lifecycle messages marked `[SystemMessage]` (heartbeats, hub lifecycle) are exempt from the "no AccessContext" warning because they carry no security-relevant payload.
+3. Else, if the hub is `PostingIdentity.System` **and** the message is not exempt → stamp the well-known `system-security` identity (the routing/persistence fallback).
+4. Else, if the message is not exempt → **log an Error on the `MeshWeaver.AccessContext` channel and FAIL the delivery** (`d.Failed(reason)`), short-circuiting the rest of the pipeline. `NotifyAsync` sees `State == Failed` and `ReportFailure` posts a `DeliveryFailure` back, so an awaiting `hub.Observe(...)` gets a clean `OnError`. It does **not** throw (Post is fire-and-forget from countless call sites) and does **not** deliver a null-context message.
+5. Exempt messages (`[SystemMessage]`, `[CanBeIgnored]`, `DeliveryFailure`) keep their null context and are delivered normally — they carry no security-relevant payload.
 
 The baton is now on the delivery, ready for hand-off.
+
+> The `PostingIdentity` used here is read from **`syncPipeline.Hub.Configuration`**, the final `with`-copied configuration — not from the configuration instance the pipeline delegate was captured against, which predates any `WithPostingIdentity(...)` call.
 
 ### Phase 3 — Crossing the boundary: delivery carries the baton
 
@@ -244,8 +248,8 @@ The baton is now on the delivery, ready for hand-off.
 
 Before the handler body runs, two cooperating pieces of code set `AsyncLocal` from `delivery.AccessContext`:
 
-- `MessageService.NotifyAsync` → `UserServiceDeliveryPipeline` (`MessageHubConfiguration.cs:409–434`) sets AsyncLocal for the **delivery pipeline** body.
-- `MessageHub.HandleMessageAsync` (`MessageHub.cs:434–476`) sets AsyncLocal for the **rule-chain / handler dispatch** body.
+- `MessageService.NotifyAsync` → `MessageHubConfiguration.UserServiceDeliveryPipeline` sets AsyncLocal for the **delivery pipeline** body.
+- `MessageHub.HandleMessageAsync` sets AsyncLocal for the **rule-chain / handler dispatch** body, and `MessageHub.RestoreUserContextOnEmission` re-stamps `delivery.AccessContext` on every emission of the response observable.
 
 Both wrap their inner work in `try/finally` so the previous value is restored when the piece finishes — the action-block thread that dispatched message N is correctly re-entrant for message N+1.
 
@@ -265,14 +269,35 @@ The handler typically posts further messages or starts reactive chains. Two case
 
 ```csharp
 // AccessContextCaptureExtensions.CarryAccessContext (cross-cutting wrap)
-public static IObservable<T> CarryAccessContext<T>(this IObservable<T> source, IServiceProvider sp)
+public static IObservable<T> CarryAccessContext<T>(
+    this IObservable<T> source, AccessService? access, bool restoreNullCapture = false)
 {
-    var accessSvc = sp.GetService<AccessService>();
-    var captured = accessSvc?.Context ?? accessSvc?.CircuitContext;
-    if (captured is null) return source;
-    return source.Do(_ => accessSvc!.SetContext(captured));
+    if (access is null) return source;
+    // Capture Context ONLY — never `?? CircuitContext`. PostPipeline already reads
+    // `Context ?? CircuitContext` at post time, and synthesising CircuitContext here
+    // would leak the Blazor circuit identity into background Subscribe paths.
+    var captured = access.Context;
+    if (captured is null && !restoreNullCapture) return source;
+    // Each OnNext/OnError/OnCompleted runs inside a SwitchAccessContext SCOPE that is
+    // disposed as the callback returns — AsyncLocal is touched only for the callback.
+    return new CarryAccessContextObservable<T>(source, access, captured);
 }
 ```
+
+> 🚨 **Never re-implement this as `source.Do(_ => access.SetContext(captured))`.** That was the
+> earlier shape and it was reverted (2026-05-22 / re-fixed 2026-05-28): `SetContext` without a
+> matching restore mutates AsyncLocal on whatever thread Subscribe ran on — often the caller's —
+> and leaves the captured identity live for every subsequent operation on that logical execution
+> context. That is the McpUpdate user1/user2 cross-contamination bug. The scope-per-callback shape
+> above is the fix; a bare `Do(...)` re-introduces the leak.
+
+`restoreNullCapture` is the second half of the contract. The **write**-result observables
+(`MeshNodeStreamHandle.Update`/`Overwrite`) pass `true`: a null capture is restored **as null**, so
+the framework identity ambient on the emission thread (the stream cache's read path runs
+`ImpersonateAsSystem`) cannot leak into the caller's callback and turn a nested write into a
+post-as-System escalation. Read/query pipelines default to `false` — a null capture passes through
+unwrapped, preserving whatever identity is ambient at emission. Flipping that default to clamp is
+blocked on migrating the ops/MCP call sites that currently depend on the leaked ambient identity.
 
 This is applied by every mesh write primitive — `MeshService.CreateNode/Update/Delete/CopyNode`, `MeshNodeStreamHandle.Update`, `IMeshNodeStreamCache.Update` — so callers keep writing the natural shape:
 
@@ -341,7 +366,7 @@ For each sanctioned identity, you need all three:
 **1. Define** an `internal const string` for the identity's name inside the component's assembly:
 
 ```csharp
-// MeshWeaver.Hosting/MeshNodeStreamCache.cs
+// src/MeshWeaver.Hosting/MeshNodeCacheIdentity.cs
 internal static class MeshNodeCacheIdentity
 {
     internal const string Address = "cache/mesh-node-cache";
@@ -446,13 +471,17 @@ When this fires:
 
 Beyond ensuring writes preserve user identity, reads through the process-wide `IMeshNodeStreamCache` are also gated by the caller's effective Read permission on the path.
 
-The cache asks the owning node hub via `GetPermissionRequest` (`src/MeshWeaver.Mesh.Contract/Security/GetPermissionRequest.cs`); the response is a `Permission` flags bag. Only when `Permissions.HasFlag(Permission.Read)` does the gated observable forward upstream emissions; otherwise it terminates with `UnauthorizedAccessException`.
+🚨 **The gate is evaluated LOCALLY — it does NOT post a `GetPermissionRequest` to the path's hub.** `MeshNodeStreamCache.ProbeEffectivePermissions` calls `meshHub.GetEffectivePermissions(path, userId)` (→ the static `PermissionEvaluator`) directly. Only when the result has `Permission.Read` does the gated observable forward upstream emissions; otherwise it terminates with `UnauthorizedAccessException`.
+
+Why local, and why the hub round-trip was removed: `GetEffectivePermissions` walks the path's whole scope hierarchy — root, partition, every ancestor, the node itself — so access defined on the **main node** already covers every satellite under it ("who can read the main node can read all its satellites"). Asking for the PATH is therefore sufficient. The old probe targeted `new Address(path)`, and a satellite / cell sub-path with no hub of its own — a `{thread}/{messageId}` the GUI subscribed to that was never persisted, or a brand-new thread — routes to NotFound, so nothing answered and the probe blocked for the full 15 s timeout: the side-panel "thread won't open" spinner. **Do not reintroduce a leaf-hub permission probe on the read path.**
+
+The caller's captured `AccessContext` is restored around the *synchronous* evaluator capture (`accessService.SwitchAccessContext(captured)`) so claim-based (Bearer-token) roles on `AccessContext.Roles` resolve — `PermissionEvaluator` snapshots `accessService.Context` on the calling thread before any Rx scheduler hop.
 
 Per-`(path, userId)` validations are cached in-process for 30 s (the `AccessTtl` constant in `MeshNodeStreamCache.cs`). Revocation surfaces within at most that window; the cache is not invalidated reactively. The shared upstream is unchanged — only the returned subscriber-side observable is gated.
 
-Why authoritative validation lives on the node hub: the hub already runs the validator chain when it answers `GetPermissionRequest` (see `AccessControlPipeline.HandleGetPermission`). Routing the check through that handler keeps the gate aligned with every other access decision in the system.
-
 ## `GetPermissionRequest` contract
+
+`GetPermissionRequest` still exists as a message — it is how a *caller* asks a specific per-node hub what it grants (the test helper `PermissionTestExtensions`, and the request-time pipeline). It is simply no longer what the stream cache uses.
 
 ```csharp
 public record GetPermissionRequest : IRequest<GetPermissionResponse>;
