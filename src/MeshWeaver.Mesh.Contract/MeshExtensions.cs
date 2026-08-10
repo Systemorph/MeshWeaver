@@ -269,19 +269,35 @@ public static class MeshExtensions
             return null;
 
         var routingService = mesh.ServiceProvider.GetService<IRoutingService>();
+        // 🚨 INHERIT THE ROUTER'S PERMISSION EVALUATOR. A hub's configuration starts EMPTY —
+        // MessageHubExtensions.CreateMessageHub builds a fresh MessageHubConfiguration and nothing
+        // is inherited from the parent — and HubPermissionExtensions.ResolveEvaluator does NOT walk
+        // the parent chain: `hub.Configuration.Get<EffectivePermissionsDelegate>() ??
+        // DefaultEvaluator`, whose default returns Permission.All (no gating). So moving node CRUD
+        // onto a hub that did not copy the evaluator would make RlsNodeValidator grant EVERY write.
+        // Copying the mesh hub's own delegate keeps the gate byte-for-byte what it was on the
+        // router — and keeps a mesh deliberately built WITHOUT RLS ungated, exactly as before.
+        // (Pinned by OwnerlessPartitionRepairTest: without this the stranger's create succeeds.)
+        var permissionEvaluator = mesh.Configuration.Get<EffectivePermissionsDelegate>();
         return mesh.GetHostedHub(
             NodeOperationHubAddress(mesh),
-            config => config
+            config =>
+            {
                 // Same wiring as SessionHubResolver's MCP session hub: its own IWorkspace (the
                 // node-operation handlers reach mesh-node streams through it) plus the routing
                 // registration that makes responses land here cross-silo.
-                .AddData()
-                .WithNodeOperationExecution()
-                .WithInitialization(h =>
-                {
-                    if (routingService is not null)
-                        h.RegisterForDisposal(routingService.RegisterStream(h));
-                }),
+                config = config
+                    .AddData()
+                    .WithNodeOperationExecution()
+                    .WithInitialization(h =>
+                    {
+                        if (routingService is not null)
+                            h.RegisterForDisposal(routingService.RegisterStream(h));
+                    });
+                return permissionEvaluator is null
+                    ? config
+                    : config.WithPermissionEvaluator(permissionEvaluator);
+            },
             HostedHubCreation.Always);
     }
 
