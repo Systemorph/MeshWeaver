@@ -146,7 +146,7 @@ public static class PackageInstaller
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
                     // …then the package's committed binaries, into the warmed root's content
                     // collection — the half of "publish" that merging used to leave undone (#848).
-                    .SelectMany(_ => SyncPackageContent(hub, partition, sourceFolder, files, logger))
+                    .SelectMany(_ => SyncPackageContent(hub, partition, sourceFolder, files, nodes, logger))
                     .SelectMany(_ => RunInstallHooks(hub, partition!, logger))
                     .Select(_ => result);
             });
@@ -682,6 +682,101 @@ public static class PackageInstaller
     private static readonly TimeSpan RootTypeProbeTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
+    /// Backstop for <see cref="MayPublishIntoRoot"/> — the wait before the CONTENT publish touches
+    /// a self-typed root. Unlike the warm's probe this genuinely waits for the in-package type's
+    /// rebuild, because the publish is the point of the step, not an optimisation. The wait ends
+    /// as soon as the type has a loadable build OR its rebuild has run and settled without one, so
+    /// this cap is only ever reached when the type never even starts compiling.
+    /// </summary>
+    private static readonly TimeSpan RootTypeSettleTimeout = TimeSpan.FromSeconds(90);
+
+    /// <summary>
+    /// The path of the NodeType <paramref name="root"/> declares, but ONLY when that type is one
+    /// this very package installs — those are the only types that can still be carrying the
+    /// compile stamp the node repo COMMITTED at this point in the install. Read off the nodes we
+    /// just wrote, never off the mesh: reading the root is the very activation these gates exist
+    /// to defer. Null means "nothing about to be rebuilt — touching this root is safe".
+    /// </summary>
+    private static string? InPackageTypeOf(string root, IReadOnlyCollection<MeshNode> nodes)
+    {
+        var declaredType = nodes
+            .FirstOrDefault(n => string.Equals(n.Path, root, StringComparison.Ordinal))?.NodeType;
+        if (string.IsNullOrEmpty(declaredType))
+            return null;
+        return nodes.Any(n => n.Content is NodeTypeDefinition
+                && string.Equals(n.Path, declaredType, StringComparison.OrdinalIgnoreCase))
+            ? declaredType
+            : null;
+    }
+
+    /// <summary>
+    /// Whether the CONTENT publish may touch <paramref name="rootPath"/> yet — the gate in front
+    /// of <see cref="SyncPackageContent"/>, and the second half of the warm's guard above.
+    ///
+    /// <para>🚨 The publish posts its <c>SyncContentFilesRequest</c> to the ROOT's address, and
+    /// routing a message to a node that has no hub yet ACTIVATES one
+    /// (<c>RoutingServiceBase.RouteImpl</c> → <c>CreateHub</c> →
+    /// <c>IMeshNodeHubFactory.ResolveHubConfiguration</c>). So the publish is a root-activating
+    /// touch exactly like the warm, running a few lines after it: the guard the warm gained is
+    /// bypassed the moment a package carries a single byte of <c>content/**</c>. Same door, same
+    /// mis-binding.</para>
+    ///
+    /// <para>Unlike the warm the publish is the POINT of the step, so this WAITS for the type's
+    /// rebuild rather than giving up on the first read — a healthy self-typed package publishes
+    /// normally, a fraction of a second later, into a root that then binds its own configuration.
+    /// The wait ends the moment the type has a loadable build, or the moment a rebuild has RUN and
+    /// settled without producing one (a committed stale stamp whose source no longer compiles).
+    /// </para>
+    ///
+    /// <para>In that second case the answer is <c>false</c> and the publish is SKIPPED — because
+    /// sending it is strictly worse than not sending it. Activating a root whose type is
+    /// ABI-stale-with-a-failed-rebuild parks the enrichment on its framework-stale heal for the
+    /// full slow-path budget, which is the same 60 s as the hub's request timeout: measured, the
+    /// install burned 60.9 s and the sync was abandoned at the sender, its files landing (or not)
+    /// on whichever side of that dead heat the machine happened to fall. A skip is deterministic,
+    /// immediate, and recoverable — the assets are published by the next install once the type
+    /// compiles, which for a package under auto-update is the very next poll. The log names the
+    /// type so the cause is the package's compile error, not a mystery 404.</para>
+    /// </summary>
+    private static IObservable<bool> MayPublishIntoRoot(
+        IMessageHub hub, string rootPath, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
+    {
+        var declaredType = InPackageTypeOf(rootPath, nodes);
+        if (declaredType is null)
+            return Observable.Return(true);
+
+        // Fold the type's stream into "has a compile been in flight since we started?" so a
+        // rebuild that ends WITHOUT a loadable build is recognised as a final answer instead of
+        // waited out to the cap.
+        return hub.GetWorkspace().GetMeshNodeStream(declaredType)
+            .Where(node => node is not null)
+            .Scan((Compiled: false, Loadable: false, Settled: false), (state, node) =>
+            {
+                var inFlight = node.Content is NodeTypeDefinition def
+                    && def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling;
+                var compiled = state.Compiled || inFlight;
+                var loadable = node.HasLoadableBuild();
+                return (compiled, loadable, loadable || (compiled && !inFlight));
+            })
+            .Where(state => state.Settled)
+            .Take(1)
+            .Timeout(RootTypeSettleTimeout)
+            .Select(state => state.Loadable)
+            .Catch<bool, Exception>(_ => Observable.Return(false))
+            .Do(loadable =>
+            {
+                if (!loadable)
+                    logger?.LogWarning(
+                        "[PackageInstaller] not publishing content assets into root {Root}: its NodeType "
+                        + "{Type} has no build this framework can load, so the publish would activate the "
+                        + "root against a type that cannot configure it — a request that parks for the "
+                        + "whole slow-path budget and is then abandoned. Fix the type's compile error; the "
+                        + "next install publishes the assets.",
+                        rootPath, declaredType);
+            });
+    }
+
+    /// <summary>
     /// Activates the roots this install just wrote, so a freshly installed package is not dark
     /// until someone navigates to it.
     ///
@@ -725,25 +820,13 @@ public static class PackageInstaller
         if (roots.Length == 0)
             return Observable.Return(Unit.Default);
 
-        // The NodeTypes this package defines — only these can still be carrying the repo's
-        // committed stale stamp at this point in the install.
-        var inPackageTypes = nodes
-            .Where(n => n.Content is NodeTypeDefinition)
-            .Select(n => n.Path)
-            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-
-        // The root's DECLARED type, read off the nodes we just wrote — never off the mesh, since
-        // reading the root is the very activation this gate exists to defer.
-        string? DeclaredTypeOf(string root) => nodes
-            .FirstOrDefault(n => string.Equals(n.Path, root, StringComparison.Ordinal))?.NodeType;
-
         // True when warming this root now cannot pin the wrong configuration: either its type is
         // not one this package defines (nothing about to be rebuilt), or that type already has a
         // build an instance could load. One bounded READ — never a wait for a compile.
         IObservable<bool> MayWarm(string root)
         {
-            var declaredType = DeclaredTypeOf(root);
-            if (string.IsNullOrEmpty(declaredType) || !inPackageTypes.Contains(declaredType))
+            var declaredType = InPackageTypeOf(root, nodes);
+            if (declaredType is null)
                 return Observable.Return(true);
             return workspace.GetMeshNodeStream(declaredType)
                 .Where(node => node is not null)
@@ -830,10 +913,15 @@ public static class PackageInstaller
     /// collection mounted (tests, a minimal host) answers "collection not found", and by this point the
     /// nodes have already landed — throwing would leave the package half-written. The written count is
     /// logged so an incomplete publish is visible rather than silent.</para>
+    ///
+    /// <para>🚨 The post ACTIVATES the root's hub (see <see cref="MayPublishIntoRoot"/>), so it is
+    /// gated on the root's in-package NodeType having a build an instance can load — the same
+    /// condition the warm consults. Gating INSIDE this method rather than at its three call sites
+    /// is deliberate: a call site that forgot would silently reopen the door.</para>
     /// </summary>
     private static IObservable<int> SyncPackageContent(
         IMessageHub hub, string? rootPath, string? sourceFolder,
-        IReadOnlyList<PackageFile> files, ILogger? logger)
+        IReadOnlyList<PackageFile> files, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
     {
         if (string.IsNullOrWhiteSpace(rootPath))
             return Observable.Return(0);
@@ -850,7 +938,12 @@ public static class PackageInstaller
             return Observable.Return(0);
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        return ContentAssetMapper.ToContentSyncs(rootPath!, assets)
+        return MayPublishIntoRoot(hub, rootPath!, nodes, logger)
+            .SelectMany(mayPublish => mayPublish
+                ? Publish()
+                : Observable.Return(0));
+
+        IObservable<int> Publish() => ContentAssetMapper.ToContentSyncs(rootPath!, assets)
             // Impersonated per post, like every other installer write: the pipeline hops schedulers
             // and an ambient impersonation does not survive those hops (see Upsert).
             .Select(sync => Observable.Using(
@@ -1651,7 +1744,7 @@ public static class PackageInstaller
                     // to leave undone (#848).
                     .SelectMany(_ => SyncPackageContent(
                         hub, manifest.TargetPartition ?? manifest.Id,
-                        manifest.SourceFolder ?? manifest.Id, files, logger))
+                        manifest.SourceFolder ?? manifest.Id, files, nodes, logger))
                     .Select(_ => result);
             }));
             });
@@ -1842,7 +1935,7 @@ public static class PackageInstaller
                     // even for a course carrying tens of MB of video (#848).
                     .SelectMany(_ => SyncPackageContent(
                         hub, manifest.TargetPartition ?? manifest.Id,
-                        manifest.SourceFolder ?? manifest.Id, changedFiles, logger))
+                        manifest.SourceFolder ?? manifest.Id, changedFiles, nodes, logger))
                     .Select(_ => result);
             });
     }
