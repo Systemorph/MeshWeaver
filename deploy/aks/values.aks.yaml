@@ -179,10 +179,20 @@ config:
     # The poller's built-in default is 6h, which is why a freshly published image
     # could sit unpicked for hours and look like "self-update is broken" (memex,
     # 2026-08-03: running ci.1672 while ci.1674 had been in ACR since 07:34).
-    # Managed envs track main closely, so poll every 20 minutes. Binding only
-    # works from the image that added SelfUpdateOptions.SectionName — before that
-    # this key is inert, because AddSelfUpdate() constructed its options directly.
-    SelfUpdate__PollInterval: "00:20:00"
+    #
+    # DAILY, deliberately (2026-08-10, measured): every roll invalidates the whole
+    # NodeType compile cache — the framework MVID changes on every CI image — so a
+    # roll costs a full sequential rebuild (~2.4 s/type; ~10 min on the largest
+    # mesh) plus a degraded warm-up window while the 3 s enrichment probe is
+    # starved. CI publishes ~44 images/day; polling faster than the rebuild is
+    # worth just multiplies that cost. One roll per day keeps fixes flowing daily
+    # at a quarter of the compile cost and a quarter of the degraded windows.
+    # For an URGENT fix, don't shorten this — `kubectl rollout restart` the
+    # portal: the poll fires on startup (StartWith(-1L)) and picks the newest
+    # image immediately. Binding only works from the image that added
+    # SelfUpdateOptions.SectionName — before that this key is inert, because
+    # AddSelfUpdate() constructed its options directly.
+    SelfUpdate__PollInterval: "1.00:00:00"
     Mcp__BaseUrl: "http://memex-portal-service:8080"
     # ---- AI model providers (templated by the chart) ------------------------
     # These seed the system model catalog on deploy (BuiltInLanguageModelProvider
