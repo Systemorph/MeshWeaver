@@ -1,6 +1,14 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 
+// 🚨 Namespace deliberately NOT MeshWeaver.Messaging.Serialization (where the file now lives).
+// The type used to sit in MeshWeaver.Mesh.Contract, but MeshWeaver.Mesh.Contract REFERENCES
+// MeshWeaver.Messaging.Hub — so the wire-level degrade seam (ObjectPolymorphicConverter) could not
+// see it, which is exactly the hole this registry exists to plug. Moving the FILE down (it has zero
+// mesh dependencies — Type, JsonElement, JsonSerializerOptions) while KEEPING the namespace means
+// every existing `using MeshWeaver.Mesh.Services;` still resolves. That matters more than tidiness
+// here: NodeType source stored in the mesh is compiled at RUNTIME and is invisible to `dotnet build`,
+// so renaming a public namespace is a breaking change no build or test in this repo can catch.
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
@@ -21,10 +29,23 @@ namespace MeshWeaver.Mesh.Services;
 ///
 /// <para>This registry is the ONE mesh-wide source of truth for that mapping, independent of any
 /// hub's frozen options: populated once (at <c>WithContentType</c>) and retained for the process
-/// lifetime, it lets the degrade seams (<c>MeshNodeStreamCache</c>, <c>EnsureTypedContent</c>)
-/// recover the concrete type on the ALREADY-degraded path — no hot-path cost, no dependency on
-/// per-hub option ordering. Registered in DI exactly like <c>IAssemblyStore</c> so it is reachable
-/// from every hub's <see cref="System.IServiceProvider"/>, including the cache hub.</para>
+/// lifetime, it lets the degrade seams recover the concrete type on the ALREADY-degraded path — no
+/// hot-path cost, no dependency on per-hub option ordering. Registered in DI exactly like
+/// <c>IAssemblyStore</c> so it is reachable from every hub's <see cref="System.IServiceProvider"/>,
+/// including the cache hub.</para>
+///
+/// <para><b>The three seams that consult it</b>, outermost first:
+/// <list type="number">
+/// <item><c>ObjectPolymorphicConverter.ReadObject</c> — the WIRE, and the broadest: EVERY hub that
+/// receives such a node passes through it. It was the last one wired, which is why prod kept logging
+/// <c>"Received '$type':'PluginContent' which is NOT registered in this (receiving) hub"</c> for every
+/// plugin content type at once while the two seams below were already healing.</item>
+/// <item><c>MeshNodeStreamCache</c> (GetStream + GetQuery) — the cache hub's read boundary.</item>
+/// <item><c>MeshNodeStreamHandle.EnsureTypedContent</c> — the per-handle read boundary.</item>
+/// </list>
+/// None of them ADOPT the type into a hub's <c>ITypeRegistry</c>: they deserialise to the concrete
+/// type explicitly, so a per-compile collectible identity never becomes a hub's long-lived answer for
+/// that discriminator (see <c>PolymorphicTypeInfoResolver.WarnCollectibleSerialization</c>).</para>
 /// </summary>
 public interface IMeshContentTypeRegistry
 {

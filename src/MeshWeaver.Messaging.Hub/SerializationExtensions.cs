@@ -119,9 +119,15 @@ public static class SerializationExtensions
         // native stack is exhausted (StackOverflow → SIGABRT — uncatchable, kills the process).
         var depthGuard = new SerializationDepthGuard();
         yield return new AddressConverter();
+        // The mesh-wide $type→CLR-Type map (IMeshContentTypeRegistry) lets the converter re-type content
+        // whose type this hub cannot register statically — a dynamically-compiled NodeType's content.
+        // GetService, not GetRequiredService: hosts without the mesh persistence stack (bare
+        // Messaging.Hub tests) register none, and a null registry leaves the converter's behaviour
+        // exactly as it was.
         yield return new ObjectPolymorphicConverter(hub.TypeRegistry,
             hub.ServiceProvider.GetService<ILogger<ObjectPolymorphicConverter>>(),
-            depthGuard);
+            depthGuard,
+            hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshContentTypeRegistry>());
         yield return new MessageDeliveryConverter(hub.TypeRegistry);
         yield return new ReadOnlyCollectionConverterFactory();
         yield return new JsonNodeConverter();
