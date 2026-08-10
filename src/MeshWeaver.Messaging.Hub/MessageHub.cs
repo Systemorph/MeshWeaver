@@ -476,6 +476,26 @@ public sealed class MessageHub : IMessageHub
             })
             .Catch((Exception ex) =>
             {
+                // Recognized shutdown, NOT a failure: this hub is being torn down (its own Dispose
+                // began, or an ancestor's disposal froze the subtree) and the teardown is what ended
+                // the BuildupAction — canonically an ObjectDisposedException from a disposing hub
+                // erroring its pending response subjects into a child's in-flight init request (the
+                // $model-probe → sync/{id} race, issues #1122–#1125: a transient probe hub is
+                // DESIGNED to be disposed mid-life, so its children's dispose-during-init is a
+                // normal path). Reporting it as "initialization failed → FAILED state" logged a
+                // fail-level error and left FAILED residue on a hub that was already dying — the
+                // same defect class as the CompileWatcher shutdown-as-fault reports. Terminate the
+                // init cleanly instead: no error log, no FAILED marker; still open the gate so any
+                // remaining lifecycle traffic (the disposal state machine) flows.
+                if (IsShuttingDown)
+                {
+                    logger.LogDebug(ex,
+                        "Hub {Address} initialization ended by shutdown ({ExceptionType}) — recognized "
+                        + "shutdown outcome, no failure state recorded.", Address, ex.GetType().Name);
+                    OpenGate(MessageHubConfiguration.InitializeGateName);
+                    return Observable.Return(request.Processed());
+                }
+
                 // Init failed — a BuildupAction faulted (threw) or HUNG (TimeoutException from the bound
                 // above). Do NOT leave the gate closed (→ the 30s-per-message deferral wedge): enter a
                 // FAILED state that surfaces a clear DeliveryFailure for every later request, then
@@ -1368,6 +1388,17 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     public bool IsDisposing => disposalStarted;
     private volatile bool disposalStarted;
+
+    /// <summary>
+    /// True when this hub is part of a shutdown: its own <see cref="Dispose"/> has begun, OR an
+    /// ANCESTOR's disposal has frozen hosted-hub creation across the subtree
+    /// (<see cref="HostedHubsCollection.CloseCreation"/> cascades at the first instant of the
+    /// ancestor's <c>Dispose()</c>, strictly BEFORE this hub's own <see cref="IsDisposing"/>
+    /// flips — the <c>DisposeRequest</c> only reaches it in the ancestor's DisposeHostedHubs
+    /// phase). A frozen subtree means disposal of this hub is already in progress or imminent,
+    /// so anything that terminates because of it is a recognized shutdown outcome, not a fault.
+    /// </summary>
+    public bool IsShuttingDown => disposalStarted || hostedHubs.IsCreationFrozen;
 
     /// <inheritdoc />
     // Native reactive view of the completion subject — NOT bridged from a Task. Fires Unit +
