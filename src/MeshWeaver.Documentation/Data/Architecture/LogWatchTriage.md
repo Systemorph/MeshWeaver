@@ -12,7 +12,7 @@ agent-written description of what is probably broken, filed in the repository th
                                 ▼
                        mw-log-watcher            (ns monitoring, its own PVC)
                           │ group lines into bursts
-                          │ fingerprint  =  hash(top app frame, exception)  — or hash(log site) with no frame
+                          │ fingerprint  =  hash(top app frame, exception)  — or hash(category, event id, exception) with no frame
                           │ queue to disk
                           ▼  POST /api/log-incidents   (Bearer, in-cluster)
                        Portal

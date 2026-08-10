@@ -93,8 +93,10 @@ public record LogIncident
     /// <summary>
     /// The node id, and the identity of "the same error happening again": a stable hash over the
     /// FAULT — its top application frame and exception type — falling back to the log site
-    /// (category + event id) for a burst that names no frame. The message never participates, and
-    /// neither does the category of whoever caught and printed the fault. See
+    /// (category + event id) <b>plus the exception type</b> for a burst that names no frame. The
+    /// message never participates. The category participates ONLY in that no-frame fallback: when
+    /// a frame exists it locates the fault precisely, so who caught and printed it is irrelevant —
+    /// that is what stopped one fault from opening two tickets. See
     /// <see cref="StructuralLogIncidentIdentity"/>.
     /// </summary>
     [Browsable(false)]
