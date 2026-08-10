@@ -113,12 +113,34 @@ internal static class OrleansClusterDisposal
     }
 
     /// <summary>
-    /// Runs one <see cref="Task"/>-returning leaf on <see cref="IoPool.Unbounded"/> and projects it to
+    /// The gate every cluster teardown passes through — BOUNDED, not <see cref="IoPool.Unbounded"/>.
+    ///
+    /// <para>🚨 Unbounded was the cross-test starvation. Each disposal is made hot immediately so the
+    /// next class's cluster can start, which is correct — but with no bound, every cluster this
+    /// assembly ever built could be shutting down AT ONCE underneath the class currently running.
+    /// Silo shutdown is not cheap, and on a 4-vCPU runner those overlapping teardowns starve the
+    /// live test's render: it waits on a stream that never gets scheduled and dies on its own
+    /// 30s Timeout. That is the shard-0 Orleans flake — a DIFFERENT test each run, because the
+    /// victim is simply whoever is running when enough teardowns pile up.</para>
+    ///
+    /// <para>Reproduced with <c>DOTNET_PROCESSOR_COUNT=4</c> (the runner's shape): the whole project
+    /// fails there and passes unconstrained, and the victim class passes ALONE under the same
+    /// constraint — so it is the overlap, not the test.</para>
+    ///
+    /// <para>Bounding is the framework's own prescription for this ("concurrency bounding channels
+    /// through <c>IIoPool</c>"), not a tuning knob: it keeps teardown off the xUnit thread — which is
+    /// what avoids the original deadlock — while stopping it from competing with the suite. Legs of
+    /// different clusters never wait on each other, so a bound cannot deadlock the drain.</para>
+    /// </summary>
+    private static readonly IIoPool DisposalPool = new IoPool(2);
+
+    /// <summary>
+    /// Runs one <see cref="Task"/>-returning leaf on <see cref="DisposalPool"/> and projects it to
     /// <see cref="Unit"/>, swallowing a benign shutdown-race so a failed leg completes rather than
     /// faulting the sequence. The pool IS the async boundary — nothing is <c>await</c>ed here.
     /// </summary>
     private static IObservable<Unit> RunVoid(Func<Task> leaf) =>
-        IoPool.Unbounded
+        DisposalPool
             .Run(_ => leaf().ContinueWith(static _ => Unit.Default, TaskScheduler.Default))
             .Catch(Observable.Return(Unit.Default));
 
