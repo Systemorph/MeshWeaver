@@ -5,6 +5,7 @@ using Microsoft.Azure.Cosmos;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Cosmos;
 
@@ -24,9 +25,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     // in subscription order, so ONE subscriber throwing (a synced query caught mid-teardown, with
     // a disposed changeBuffer still attached) aborts delivery to every subscriber after it — and
     // the publish sites' `catch { }` made that silent. Issues #889 (Postgres) and #1053 (in-memory).
-    // No logger is wired on this adapter, so an isolated fault is not reported here; the fan-out
-    // guarantee still holds. Pass one the moment Cosmos plumbs an ILogger through.
-    private readonly IsolatedChangeFeed _changes = new(null, "cosmos");
+    private readonly IsolatedChangeFeed _changes;
 
     /// <inheritdoc />
     public IObservable<DataChangeNotification> Changes => _changes;
@@ -53,14 +52,24 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     /// <param name="nodesContainer">The Cosmos container that stores <see cref="MeshNode"/> documents.</param>
     /// <param name="partitionsContainer">The Cosmos container that stores partition objects.</param>
     /// <param name="ioPool">Optional I/O pool used to run Cosmos round-trips off the calling scheduler; defaults to the unbounded pool.</param>
+    /// <param name="logger">
+    /// Logger the change feed reports isolated subscriber faults through. Supply it: a null one
+    /// leaves a dropped or faulting observer reported NOWHERE, which is exactly the silence
+    /// <see cref="IsolatedChangeFeed"/> exists to end. The DI path
+    /// (<c>CosmosStorageAdapterFactory.Create</c>) resolves it; only the eager
+    /// <c>IServiceCollection</c> helpers that build an adapter from a caller-supplied
+    /// <see cref="CosmosClient"/> — outside any container — leave it null.
+    /// </param>
     public CosmosStorageAdapter(
         Container nodesContainer,
         Container partitionsContainer,
-        IIoPool? ioPool = null)
+        IIoPool? ioPool = null,
+        ILogger<CosmosStorageAdapter>? logger = null)
     {
         _nodesContainer = nodesContainer;
         _partitionsContainer = partitionsContainer;
         _ioPool = ioPool ?? IoPool.Unbounded;
+        _changes = new IsolatedChangeFeed(logger, "cosmos");
     }
 
     /// <summary>
