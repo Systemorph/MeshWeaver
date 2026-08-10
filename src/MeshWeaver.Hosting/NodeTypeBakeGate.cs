@@ -86,10 +86,17 @@ public sealed class NodeTypeBakeGateState
         // outage), but self-update silently stopped advancing, which for an auto-updating fleet is
         // the worse failure.
         //
-        // Deliberately narrow: only TimedOut is reclassified. A CompileError is Roslyn's verdict
-        // that the type is broken on this image, and an UpstreamFailed still gates — see
+        // UpstreamUnevaluated is the SAME condition one hop downstream: the sweep never got an
+        // answer about this type's upstream, so it has no answer about this type either. Without
+        // it the leniency stopped at depth 1 — one timed-out shared source turned every
+        // previously-healthy dependent into a gating UpstreamFailed and the 2026-08-02 stall came
+        // straight back. "I don't know" has to propagate as "I don't know".
+        //
+        // Deliberately narrow: only the two no-answer statuses are reclassified. A CompileError is
+        // Roslyn's verdict that the type is broken on this image, and an UpstreamFailed — a
+        // dependent of a type that genuinely failed to compile — still gates; see
         // UpstreamFailedOnAPreviouslyHealthyType_AlsoGates for why that one is intentional.
-        if (outcome.Status is PreWarmStatus.TimedOut)
+        if (outcome.Status is PreWarmStatus.TimedOut or PreWarmStatus.UpstreamUnevaluated)
         {
             unevaluated[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
             return;
