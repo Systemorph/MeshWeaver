@@ -1512,9 +1512,22 @@ public static class PackageInstaller
                     // the same fabrication. Partition provisioning runs BEFORE the root write, so
                     // any routed touch inside that window fabricated it. Fixed at the source —
                     // synthesized resolutions are never cached, and a fill that lands after its
-                    // own invalidation is discarded (PathResolutionCachePoisonTest). If this
-                    // symptom ever reappears, check BOTH: is the hub recycled, and is the
-                    // resolution for the bare root path serving a real node?
+                    // own invalidation is discarded (PathResolutionCachePoisonTest).
+                    //
+                    // 🚨 …and it recurred AGAIN on 2026-08-10 (gate run 31361446933) on a commit
+                    // that already carried that fix, with the same available-areas list: exactly
+                    // ConfigureDefaultNodeHub's set (AddDefaultLayoutAreas + Invite), so the hub
+                    // was serving the mesh DEFAULT configuration — not Store/Catalog's, not even
+                    // the Space placeholder's. The residual is that a hub, once activated, is
+                    // pinned by address in Mesh.GetHostedHub and never re-reads its node's
+                    // NodeType: fixing the RESOLUTION does not un-pin the HUB the bad resolution
+                    // already activated. This Dispose is the only thing that does, and it is
+                    // fire-and-forget AND conditional on the placeholder dance having run. So when
+                    // the symptom reappears, check THREE things: is the resolution for the bare
+                    // root path serving a real node, did this recycle run, and is the live hub the
+                    // one activated inside the provisioning window? Issue #1077 carries the
+                    // analysis; the plugin gate now names the node that hosted the failing area,
+                    // which is what makes the third question answerable from CI alone.
                     .Select(rest =>
                     {
                         if (placeholderRoot is not null && root is not null)

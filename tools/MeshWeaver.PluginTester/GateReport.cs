@@ -135,7 +135,7 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
         }
         if (verdict is null)
         {
-            output.WriteLine(Success ? "ALL GREEN." : $"{FailedPrefix} {GateVerdict.Headline(this)}.");
+            output.WriteLine(Success ? "ALL GREEN." : $"{FailedPrefix} — {GateVerdict.Headline(this)}");
             return;
         }
         foreach (var entry in verdict.Stale)
@@ -147,17 +147,19 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
             ? verdict.KnownDebt.Count == 0
                 ? "ALL GREEN."
                 : $"GREEN — {verdict.KnownDebt.Count} known-debt failure(s) allowed (shrinking list)."
-            : $"{FailedPrefix} {GateVerdict.Headline(this, verdict)} — " +
+            : $"{FailedPrefix} — {GateVerdict.Headline(this, verdict)} — " +
               $"{verdict.NewFailures.Count} new failure(s), {verdict.Stale.Count} stale allow entr(ies).");
     }
 
     /// <summary>
     /// The stable prefix of the ONE line CI lifts verbatim into its failure annotation. The whole
     /// line is the message — no parsing, so the annotation cannot drift out of step with the
-    /// verdict. Changing this literal changes the workflow's grep: keep the two in step
-    /// (<c>.github/workflows/dotnet-test.yml</c>, the plugin-gate step).
+    /// verdict. Deliberately ASCII: <c>.github/workflows/dotnet-test.yml</c> greps
+    /// <c>^GATE FAILED</c>, so re-punctuating the line cannot silently unhook the annotation and
+    /// leave CI back on a guessed cause. Changing this literal changes that grep — keep them in
+    /// step.
     /// </summary>
-    public const string FailedPrefix = "GATE FAILED —";
+    public const string FailedPrefix = "GATE FAILED";
 
     private static string Label(PackageResult package, GateVerdict? verdict)
     {
