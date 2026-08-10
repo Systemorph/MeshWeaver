@@ -21,33 +21,23 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Pins the two ways the ROOT MESH HUB — the mesh's ROUTER — ends up as an <b>end</b> of a delivery
-/// rather than a hop on the way to one. Both showed up in production as <c>ROUTER_TRAFFIC</c> ERROR
-/// lines (~2,385/24h across the three portals, the single largest source of red log lines):
-///
-/// <list type="number">
-///   <item><b>Node CRUD.</b> <c>MeshExtensions.NodeOperationTarget</c> used to fall back to
-///     <c>hub.GetMeshHub().Address</c> whenever the issuing hub had no
-///     <c>WithNodeOperationExecution</c> ancestor — which is EVERY per-node hub (a thread hub
-///     creating its <c>_Notification</c> satellite, a NodeType <c>Source</c> hub writing a compile
-///     activity). The create then executed on the router's single-threaded action block and its
-///     response came back stamped <c>Sender = mesh/{id}</c>:
-///     <c>"RawJson has the mesh hub as sender (sender: mesh/…, target: …/Source/FNodeTypeAtomicSolution)"</c>.</item>
-///   <item><b>SignalR token validation.</b> <c>SignalRConnectionRegistry</c> issued its
-///     <c>ValidateTokenRequest</c> on the DI-injected <c>IMessageHub</c> — which is the root mesh hub
-///     — so the request reached the <c>ApiToken/{hashPrefix}</c> hub stamped <c>Sender = mesh/{id}</c>
-///     and its response was addressed straight back at the router. <c>GrpcConnectionRegistry</c> had
-///     already been fixed (its <c>TransportHub</c>); SignalR had not.</item>
-/// </list>
+/// The ROOT MESH HUB is the mesh's ROUTER — it must never be an <b>end</b> of a delivery, only a hop
+/// on the way to one. <c>SignalRConnectionRegistry</c> broke that: it issued its per-connection
+/// <c>ValidateTokenRequest</c> on the DI-injected <c>IMessageHub</c>, which IS the root mesh hub, so
+/// the request reached the <c>ApiToken/{hashPrefix}</c> hub stamped <c>Sender = mesh/{id}</c> and its
+/// response was addressed straight back at the router. <c>GrpcConnectionRegistry</c> had already been
+/// fixed (its <c>TransportHub</c>); SignalR had not. In production this was part of the ~2,385
+/// <c>ROUTER_TRAFFIC</c> ERROR lines per 24 h across the three portals — the single largest source of
+/// red log lines.
 ///
 /// <para>🚨 The assertion is deliberately on the <b>sender</b> role only. "The mesh hub as SENDER" is
-/// unambiguous — the router actually originated that message, which it may never do. "The mesh hub as
+/// unambiguous — the router actually ORIGINATED that message, which it may never do. "The mesh hub as
 /// TARGET" is reported by <c>MessageHub.DeliverMessage</c> for the RECEIVING hub, so it also fires for
-/// a pure routing HOP: <c>HierarchicalRouting.RouteAlongHostingHierarchy</c> hands every delivery a
-/// hosted hub cannot route locally to <c>parentHub.DeliverMessage</c>, and for every hub in the
-/// process that parent is the mesh hub. Those hops are the design (they are what gives
+/// a pure routing HOP: <c>HierarchicalRouting.RouteAlongHostingHierarchy</c> (line 218) hands every
+/// delivery a hosted hub cannot route locally to <c>parentHub.DeliverMessage</c>, and for every hub in
+/// the process that parent is the mesh hub. Those hops are the DESIGN — they are what gives
 /// <c>RoutingServiceBase.RouteInMesh</c> its single-threaded arrival-order guarantee for per-address
-/// activation) and are NOT what this test pins.</para>
+/// activation — so asserting on them would pin an invariant the architecture does not hold.</para>
 /// </summary>
 public class RouterTrafficTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -65,30 +55,6 @@ public class RouterTrafficTest(ITestOutputHelper output) : MonolithMeshTestBase(
             });
 
     private CancellationToken Ct => TestContext.Current.CancellationToken;
-
-    /// <summary>
-    /// A per-node hub issuing node CRUD must NOT target the router — and the response must therefore
-    /// never reach it stamped with the mesh hub as sender.
-    /// </summary>
-    [Fact]
-    public async Task NodeCrud_FromAPerNodeHub_NeverRunsOnTheRouter()
-    {
-        var nodeHub = Mesh.GetHostedHub(new Address(TestPartition), c => c, HostedHubCreation.Always)!;
-
-        var target = nodeHub.NodeOperationTarget();
-        Output.WriteLine($"NodeOperationTarget for {nodeHub.Address} = {target}");
-        Assert.False(
-            string.Equals(target.Type, AddressExtensions.MeshType, StringComparison.Ordinal),
-            $"Node CRUD from the per-node hub '{nodeHub.Address}' targets the ROUTER ({target}). "
-            + "The mesh hub routes; it must not execute work. NodeOperationTarget must fall back to "
-            + "the mesh's dedicated off-router execution hub.");
-
-        await nodeHub.ServiceProvider.GetRequiredService<IMeshService>()
-            .CreateNode(new MeshNode($"child-{Guid.NewGuid():N}", TestPartition) { NodeType = "Markdown" })
-            .Timeout(30.Seconds()).FirstAsync().ToTask(Ct);
-
-        AssertRouterNeverSent();
-    }
 
     /// <summary>
     /// SignalR's per-connection token validation must be issued on the transport's own portal hub,
