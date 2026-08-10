@@ -888,7 +888,7 @@ jobs:
         # re-words a cause, which is exactly how this job came to annotate a `tests` failure as
         # "does not compile — a public API changed" and send investigators to diff public
         # signatures that were fine (#1077).
-        verdict="$(grep -m1 -- '^GATE FAILED —' "$log" || true)"
+        verdict="$(grep -m1 -- '^GATE FAILED' "$log" || true)"
         # Multi-line-safe even though the verdict is one line: a bare KEY=VALUE with an unexpected
         # newline would corrupt every later output in the file.
         {

@@ -461,6 +461,20 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// BEFORE writing its root, so any routed touch inside that window fabricated the
     /// placeholder, and the fabrication outlived every later write.
     /// Repro: <c>PathResolutionCachePoisonTest.SynthesizedPartitionRoot_IsNotCached</c>.</para>
+    ///
+    /// <para>🚨 NOT cached is not the same as NOT pinned, and the difference is still open.
+    /// The identical symptom recurred on 2026-08-10 (gate run 31361446933) on a commit that
+    /// already carried the no-cache fix, listing exactly this default set again. Whoever routes
+    /// on a synthesized resolution ACTIVATES a hub, and that hub is pinned by address in
+    /// <c>Mesh.GetHostedHub</c> — an instance hub never re-reads its node's NodeType, so it keeps
+    /// serving the default configuration for the life of the process even though every later
+    /// RESOLUTION is now correct. The fabrication is no longer the thing that outlives the write;
+    /// the HUB it activated is. So when this symptom reappears, check THREE things: is the
+    /// resolution for the bare root path serving a real node, was the hub recycled after the root
+    /// was retyped (<c>PackageInstaller</c> posts a <c>DisposeRequest</c> — fire-and-forget, and
+    /// only when the placeholder dance ran), and is the live hub the one that was activated inside
+    /// the provisioning window? Issue #1077 carries the analysis; the plugin gate now prints WHICH
+    /// node hosted the failing area, which is what makes that third question answerable.</para>
     /// </summary>
     private IObservable<AddressResolution?> SynthesizePartitionRoot(string[] segments)
     {
