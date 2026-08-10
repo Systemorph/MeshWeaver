@@ -463,15 +463,17 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// Repro: <c>PathResolutionCachePoisonTest.SynthesizedPartitionRoot_IsNotCached</c>.</para>
     ///
     /// <para>🚨 <b>Not caching it is necessary, not sufficient — and that is now covered.</b> The
-    /// same symptom recurred on a build that already carried the no-cache fix (#1104), because a
-    /// hub the fabrication had ALREADY activated stays pinned: <c>Mesh.GetHostedHub</c> is keyed
-    /// by address, routing short-circuits on it for a hosted address, and the hub never re-reads
-    /// its NodeType. <i>Not cached is not not-pinned.</i> Repairing resolution can only help the
-    /// NEXT activation. The un-pin is the framework's job and lives in
-    /// <c>NodeTypeRebindWatcher</c>: every activation watches the mesh change feed for its own
-    /// path and recycles the hub the first time the node reports a different NodeType. So the two
-    /// halves are: this method must not PIN a fabrication (here), and a hub bound to one must be
-    /// able to LET GO of it (there).</para>
+    /// same symptom recurred on a build that already carried the no-cache fix (#1104) — plugin-gate
+    /// run 31361446933, again listing EXACTLY this default set and not one area of the node's real
+    /// type, which is the fingerprint to recognise it by — because a hub the fabrication had
+    /// ALREADY activated stays pinned: <c>Mesh.GetHostedHub</c> is keyed by address, routing
+    /// short-circuits on it for a hosted address, and the hub never re-reads its NodeType.
+    /// <i>Not cached is not not-pinned.</i> Repairing resolution can only help the NEXT activation.
+    /// The un-pin is the framework's job and lives in <c>NodeTypeRebindWatcher</c>: every
+    /// activation watches the mesh change feed for its own path and recycles the hub the first time
+    /// the node reports a different NodeType. So the two halves are: this method must not PIN a
+    /// fabrication (here), and a hub bound to one must be able to LET GO of it (there).
+    /// Issue #1077 carries the gate-side analysis that isolated the second half.</para>
     /// </summary>
     private IObservable<AddressResolution?> SynthesizePartitionRoot(string[] segments)
     {
