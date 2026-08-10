@@ -58,28 +58,36 @@ The portal's node context menu — the cube icon on every node — is fully data
 
 ## Default Menu Items
 
-`AddDefaultMeshMenu()` — called automatically by `AddDefaultLayoutAreas()` — registers a standard set of items for every node type.
+`AddDefaultMeshMenu()` — called automatically by `AddDefaultLayoutAreas()` — registers two default providers, one per menu context.
 
-**Top-level items:**
+**Node menu** (`DefaultNodeMenuProvider`) — per-node operations, emitted as one flat list. The provider **re-stamps** each item's `Order` so the sections come out in a fixed shape regardless of what each layout area declares:
 
-| Item | Area | Permission | Order | Notes |
-|------|------|------------|------:|-------|
-| Edit | `Edit` | `Update` | -10 | |
-| Files | `Files` | `Read` | 25 | |
-| Threads | `Threads` | — | 50 | |
-| Versions | `Versions` | `Read` | 55 | |
-| Settings | `Settings` | `Read` | 90 | |
+| Item | Area | Permission | Order | Icon | Notes |
+|------|------|------------|------:|:---:|-------|
+| Edit | `Edit` | `Update` | 10 | ✏️ | |
+| Pin | `Pin` | — | 12 | 🔖 | Viewer-scoped, not permission-gated; hidden on the viewer's own home |
+| Move | `Move` | `Delete` | 14 | ➡️ | Requires Delete on the source |
+| Copy | `Copy` | `Create` | 16 | 📋 | Duplicates the subtree |
+| Delete | `Delete` | `Delete` | 18 | 🗑️ | |
+| Files | `Files` | `Read` | 30 | 📁 | |
+| Data | `Data` | `Read` | 31 | 🧾 | The raw record, reachable even when Overview is a designed page |
+| Versions | `Versions` | `Read` | 32 | 🕘 | |
+| Stop sync | `StopSync` | `Update` or `Sync` | 34 | 🔌 | Only on a synced node |
+| Recycle | `Recycle` | `Update` | 50 | ♻️ | |
 
-**Actions sub-menu** (Order: 95 — contains grouped items):
+`_separator` entries are inserted at Order 20 and 40 — but **only where both adjacent sections actually carry items**, so a viewer who sees no editable actions never gets a leading divider.
 
-| Item | Area | Permission | Notes |
-|------|------|------------|-------|
-| Create | `Create` | `Create` | |
-| Copy | `Copy` | `Create` | Duplicates the node subtree to a new location |
-| Move | `Move` | `Delete` | Relocates the subtree (requires Delete on source) |
-| Import | `ImportMeshNodes` | `Create` | File/folder upload or copy from mesh |
-| Export | `Export` | `Export` | Exports subtree as ZIP with native file formats |
-| Delete | `Delete` | `Delete` | |
+Edit, Move, Copy and Delete are **suppressed on a protected partition root** (a user's home). Deleting that node would wipe the whole partition; `PartitionRootDeletionGuard` blocks it server-side, and the menu keeps it out of reach in the first place. Pin stays.
+
+Threads are **not** in this menu — they live in the dedicated top-bar AI menu (`AiMenuContext`).
+
+**Mesh menu** (`DefaultMeshMenuProvider`) — mesh-level operations, which keep the `Order` their layout area declares:
+
+| Item | Area | Permission | Order |
+|------|------|------------|------:|
+| Create | `Create` | `Create` | 0 |
+| Import | `ImportMeshNodes` | `Create` | 1 |
+| Export | `Export` | `Export` | 26 |
 
 Items with a required permission are checked inside the provider. Only items the viewer is permitted to see ever reach the portal.
 
@@ -154,7 +162,15 @@ private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> MoreActi
     ]);
 ```
 
-The built-in `DefaultMenuProvider` groups Create, Copy, Move, Import, Export, and Delete under the "Actions" parent using exactly this pattern.
+The built-in node menu does **not** use this pattern. `DefaultNodeMenuProvider` emits Edit, Pin, Move, Copy, Delete, Create, Import, Export and the rest as one **flat** list, grouped by `Order` band and rendered with `_separator` dividers rather than by nesting:
+
+| Order band | Section | Icons |
+|---|---|---|
+| 10–18 | edit / organize | ✏️ 🔖 ➡️ 📋 🗑️ |
+| 30–38 | content / history / sync | 📁 🕘 🔌 🔄 |
+| 50 | lifecycle | ♻️ |
+
+Because the aggregator re-sorts every provider's items by `Order`, a plugin's item slots into the right section just by picking a number in that band — which is why the built-in set stays flat. Use `Children` when you genuinely want a hover sub-menu of your own.
 
 ---
 
@@ -252,26 +268,30 @@ hub.GetMenu((Address)nodePath, new LayoutAreaReference("Overview"), "Node")
 
 ## Live Example
 
-The cell below renders the `NodeMenuItemDefinition` model as a table, illustrating the data that backs a typical menu:
+The cell below renders the default **node** menu's item set, illustrating the data that backs a typical menu. Note it uses `DataGridControl` — structured data always goes through a control, never a hand-built markdown or HTML string.
 
 ```csharp --render NodeMenuDemo --show-code
+record MenuRow(string Label, string Area, string Permission, int Order);
+
 var items = new[]
 {
-    new { Label = "Edit",     Area = "Edit",    Permission = "Update", Order = -10 },
-    new { Label = "Files",    Area = "Files",   Permission = "Read",   Order = 25  },
-    new { Label = "Threads",  Area = "Threads", Permission = "(none)", Order = 50  },
-    new { Label = "Versions", Area = "Versions",Permission = "Read",   Order = 55  },
-    new { Label = "Settings", Area = "Settings",Permission = "Read",   Order = 90  },
-    new { Label = "Actions",  Area = "(group)", Permission = "(group)",Order = 95  },
+    new MenuRow("Edit",      "Edit",     "Update",           10),
+    new MenuRow("Pin",       "Pin",      "(none)",           12),
+    new MenuRow("Move",      "Move",     "Delete",           14),
+    new MenuRow("Copy",      "Copy",     "Create",           16),
+    new MenuRow("Delete",    "Delete",   "Delete",           18),
+    new MenuRow("Files",     "Files",    "Read",             30),
+    new MenuRow("Data",      "Data",     "Read",             31),
+    new MenuRow("Versions",  "Versions", "Read",             32),
+    new MenuRow("Stop sync", "StopSync", "Update or Sync",   34),
+    new MenuRow("Recycle",   "Recycle",  "Update",           50),
 };
 
-var rows = string.Join("\n", items.Select(i =>
-    $"| {i.Label,-10} | `{i.Area,-16}` | `{i.Permission,-8}` | {i.Order,4} |"));
-
-MeshWeaver.Layout.Controls.Markdown(
-    $"| Label | Area | Permission | Order |\n" +
-    $"|-------|------|------------|------:|\n" +
-    rows)
+new DataGridControl(items)
+    .WithColumn(new PropertyColumnControl<string> { Property = "label"      }.WithTitle("Label"))
+    .WithColumn(new PropertyColumnControl<string> { Property = "area"       }.WithTitle("Area"))
+    .WithColumn(new PropertyColumnControl<string> { Property = "permission" }.WithTitle("Permission"))
+    .WithColumn(new PropertyColumnControl<int>    { Property = "order"      }.WithTitle("Order"))
 ```
 
 ---
