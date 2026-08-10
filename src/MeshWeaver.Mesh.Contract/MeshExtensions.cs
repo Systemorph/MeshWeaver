@@ -3219,12 +3219,42 @@ public static class MeshExtensions
         void DispatchInnerCreate()
         {
             var inner = new CreateNodeRequest(node) { CreatedBy = requestedBy };
-            var forwarded = hub.Post(inner, o =>
-            {
-                var withTarget = o.WithTarget(hub.Address);
-                return inboundCtx is not null ? withTarget.WithAccessContext(inboundCtx) : withTarget;
-            })!;
-            hub.Observe(forwarded)
+            // 🚨 PRE-REGISTERING Observe(request, options) — never Post-then-Observe(delivery) (#981).
+            //
+            // This runs OFF the hub action block: `existingObs` is `persistence.Read(...)`, which for
+            // any adapter that is not a synchronous in-memory hit (partition-routed / embedded-resource
+            // / pooled backends) emits on an I/O thread. So `hub.Post` here is NOT reentrant into the
+            // turn loop — `KickDrain` finds `draining == false` and schedules the turn onto
+            // `turnScheduler` STRAIGHT AWAY, on another thread, while this thread walks on to the next
+            // statement. `PostImplGeneric` also runs `ScheduleNotify` synchronously, so POSTED /
+            // RECEIVED / ENQUEUED are already behind us by the time `Post` returns.
+            //
+            // With the old `Post(...)` + `Observe(forwarded)` pair, everything between those two
+            // statements was unprotected: preempt this thread (a saturated CI runner does exactly
+            // that) and the turn can run the whole create and post its `CreateNodeResponse` first.
+            // `HandleCallbacks` finds no subject for the correlation, treats the response as consumed
+            // and DROPS it — then this line registers a subject that nothing will ever answer. The
+            // upsert never replies, and the caller's callback sits pending until the teardown
+            // quiescing budget reports it as a leaked `CreateNodeRequest@mesh/<self>`.
+            //
+            // It also destroyed the evidence: `RequestFateLedger` starts a trail at REGISTRATION, so
+            // the post-hoc overload lost POSTED/RECEIVED/ENQUEUED/ROUTED and left a trail reading
+            // "AWAITING → REGISTERED_AFTER_POST" and nothing else — which is precisely the capture
+            // that could not name this mechanism.
+            //
+            // `Observe(request, options)` registers the AsyncSubject BEFORE posting, so the response
+            // is buffered no matter how early it lands, and the trail records every stage.
+            //
+            // Identity is unaffected by the swap. The overload re-seeds emissions from the AMBIENT
+            // context, which is exactly what is unreliable on this thread (MeshService.CreateNode's
+            // note) — but nothing here leans on it: `inner.CreatedBy` pins the identity as a request
+            // FIELD, the post stamps `inboundCtx` explicitly, `ApplyUpdateViaStream` opens its own
+            // `SwitchAccessContext(inboundCtx)`, and PostOk/PostFail are `ResponseFor` posts.
+            hub.Observe(inner, o =>
+                {
+                    var withTarget = o.WithTarget(hub.Address);
+                    return inboundCtx is not null ? withTarget.WithAccessContext(inboundCtx) : withTarget;
+                })
                 .Subscribe(
                     d =>
                     {
