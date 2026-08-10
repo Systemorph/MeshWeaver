@@ -126,8 +126,10 @@ public interface IPartitionStorageProvider
     ///
     /// <para><b>Reactive surface — no <c>await</c>.</b> Any actual I/O (the Postgres
     /// <c>CREATE SCHEMA</c> round-trip) stays at the IO boundary inside the
-    /// implementation (<c>Observable.FromAsync(work, Scheduler.Default)</c>, bounded
-    /// by Npgsql's pool); consumers compose this into the create-validation chain with
+    /// implementation, on the per-adapter <c>pg:{adapter}</c> <c>IIoPool</c>
+    /// (<c>_ioPool.Run(...)</c>, promise-cached so each schema provisions at most once)
+    /// — never <c>Observable.FromAsync</c>, which is forbidden outside <c>IoPool</c>;
+    /// consumers compose this into the create-validation chain with
     /// <c>.Concat()</c>/<c>.Subscribe(...)</c>. This is the ONLY trigger for partition
     /// creation — see <c>OwnsPartitionProvisioningValidator</c>.</para>
     ///
