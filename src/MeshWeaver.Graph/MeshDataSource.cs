@@ -1561,6 +1561,48 @@ public static class MeshDataSourceExtensions
             || (def.CompilationStatus != CompilationStatus.Compiling
                 && def.CompilationStatus != CompilationStatus.Pending));
 
+    /// <summary>
+    /// Holds a NodeType MeshNode stream until the type is settled AND is not advertising a build
+    /// the framework cannot load — i.e. until an INSTANCE activating against it can be given the
+    /// type's real configuration.
+    ///
+    /// <para>Stricter than <see cref="AwaitCompilationSettled"/> in exactly one way: a settled
+    /// <c>Ok</c> whose assembly coordinates are present but whose
+    /// <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/> does not match the live framework
+    /// (or whose bytes this process cannot resolve) is NOT accepted. That state is what a node repo
+    /// COMMITS — MeshWeaver.Plugins ships <c>Store/Catalog</c> with <c>compilationStatus: Ok</c> and
+    /// a July framework hash — and it is transient by construction: the per-NodeType hub's
+    /// framework-stale kickoff flips it to Pending and rebuilds. An instance enriched inside that
+    /// window binds ONCE to the fallback configuration and then serves only the generic areas
+    /// ("No renderer is registered for area <c>Tests</c> on hub <c>Store</c>").</para>
+    ///
+    /// <para>A type that never compiled at all (no assembly coordinates) and a type whose compile
+    /// genuinely FAILED both pass straight through — the assembly fields are only ever written by a
+    /// successful compile, so "nothing built" is a settled answer, not a stale build. Callers must
+    /// still bound the wait (a type that can never produce a loadable build would otherwise hold
+    /// forever) and degrade rather than fail.</para>
+    ///
+    /// <para>Non-NodeType nodes answer <c>true</c>, so this is safe to ask about any MeshNode.</para>
+    /// </summary>
+    /// <param name="node">The NodeType MeshNode to judge.</param>
+    /// <returns>False only while the node is mid-compile or is advertising an unloadable build.</returns>
+    public static bool HasLoadableBuild(this MeshNode? node)
+        => node?.Content is not NodeTypeDefinition def
+            || (def.CompilationStatus != CompilationStatus.Compiling
+                && def.CompilationStatus != CompilationStatus.Pending
+                && (string.IsNullOrEmpty(def.LatestAssemblyPath)
+                    || NodeTypeCompilationHelpers.HasUsableBuild(node, def)));
+
+    /// <summary>
+    /// Stream form of <see cref="HasLoadableBuild"/> — holds a NodeType MeshNode stream until the
+    /// type is settled and not advertising a build the framework cannot load. Callers must bound
+    /// the wait: a type that can never produce a loadable build would otherwise hold forever.
+    /// </summary>
+    /// <param name="source">The NodeType's MeshNode stream.</param>
+    /// <returns>The same stream, filtered to loadable-build emissions.</returns>
+    public static IObservable<MeshNode> AwaitLoadableBuild(this IObservable<MeshNode> source)
+        => source.Where(node => node.HasLoadableBuild());
+
     // StartCompile relocated to NodeTypeCompilationHelpers.RunCompile so the
     // per-NodeType-hub auto-watcher and the CreateReleaseRequest handler share
     // one body. The watcher fires on CompilationStatus = Pending; the handler
