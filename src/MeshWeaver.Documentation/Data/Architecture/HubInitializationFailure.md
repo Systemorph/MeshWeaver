@@ -41,18 +41,25 @@ A hub whose initialization throws must:
 
 ## Where it lives
 
-`MessageHub.HandleInitialize` wraps the BuildupAction composition in a single high-level `.Catch`:
+`MessageHub.HandleInitialize` wraps the BuildupAction composition in a **liveness bound plus** a
+single high-level `.Catch`:
 
 ```csharp
 return Observable
     .Concat(actions.Select(a => a(this).DefaultIfEmpty(Unit.Default).Take(1)))
     .ToList()
-    .Select(_ => { OpenGate(InitializeGateName); return request.Processed(); })
+    // 🚫 A BuildupAction that HANGS raises no exception, so convert "never completed within
+    //    the budget" into a TimeoutException the SAME .Catch handles.
+    .Timeout(Configuration.StartupTimeout ?? DefaultInitializationTimeout)
+    .Select(_ => { OpenGate(MessageHubConfiguration.InitializeGateName); return request.Processed(); })
     .Catch((Exception ex) =>
     {
-        EnterInitializationFailedState(ex);     // status = failed + register the refusal rule
-        OpenGate(InitializeGateName);           // ALWAYS open — a closed gate is the wedge
-        return Observable.Return(request.Failed($"Hub '{Address}' initialization failed: {ex.Message}"));
+        var reason = ex is TimeoutException
+            ? "a BuildupAction did not complete within …s (a hung dependency or stuck compile)"
+            : $"a BuildupAction faulted ({ex.GetType().Name}: {ex.Message})";
+        EnterInitializationFailedState(new InvalidOperationException(reason, ex));
+        OpenGate(MessageHubConfiguration.InitializeGateName);   // ALWAYS open — a closed gate is the wedge
+        return Observable.Return(request.Failed($"Hub '{Address}' initialization failed — {reason}"));
     });
 ```
 
@@ -71,12 +78,23 @@ wedge, a layout-area subscription receives a `DeliveryFailureException` carrying
 renders that message instead of spinning to the generic "did not become addressable" timeout. The user
 sees **what** broke.
 
-## What this does NOT cover
+## Hangs ARE covered — by the startup bound, not by the per-message deferral
 
-A BuildupAction that **hangs** (never completes, never throws) still relies on the per-message 30s
-deferral timeout to surface a `DeliveryFailure` — there is no throw to catch. Hangs are a separate
-concern (e.g. a cross-hub read of a *different* FAILED hub that defers); fix the hung dependency, don't
-paper over it with a timer.
+A BuildupAction that **hangs** (never emits, never completes, never throws) used to leave the
+`Concat` incomplete, so the gate never opened and every message wedged on the 30 s per-message
+deferral timeout. That gap is closed: `.Timeout(Configuration.StartupTimeout ??
+DefaultInitializationTimeout)` converts "did not complete within the budget" into a
+`TimeoutException` that the same `.Catch` turns into the FAILED state, and the resulting
+`DeliveryFailure` names the hang explicitly (*"a BuildupAction did not complete within Ns (a hung
+dependency or stuck compile)"*) rather than reporting a generic deferral.
+
+A hub may tighten the budget via `Configuration.StartupTimeout`. **This bound is a liveness
+guarantee, not a fix** — it makes the failure observable and fast. When it fires, go and fix the
+hung dependency; do not raise the number.
+
+What this still does NOT cover: a hub that initialised *successfully* and then hangs inside a
+handler. That is an ordinary wedge — see
+[ErrorPropagationAndWedges](../ErrorPropagationAndWedges).
 
 ## Test
 

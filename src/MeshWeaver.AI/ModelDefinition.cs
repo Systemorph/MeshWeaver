@@ -1,13 +1,14 @@
 namespace MeshWeaver.AI;
 
 /// <summary>
-/// Content shape for <c>nodeType:Model</c> mesh nodes — the
-/// bring-your-own-model surface. Mirrors the role
+/// Content shape for <c>nodeType:LanguageModel</c> mesh nodes
+/// (<see cref="LanguageModelNodeType.NodeType"/>) — the bring-your-own-model
+/// surface. Mirrors the role
 /// <see cref="AgentConfiguration"/> plays for <c>nodeType:Agent</c>: a
 /// mesh node carries everything <see cref="IChatClientFactory"/> needs to
 /// instantiate a chat client (endpoint, model id, auth reference). Discovery
 /// happens via the same workspace synced query that loads agents
-/// (<c>nodeType:Agent|Model</c>).
+/// (<c>nodeType:Agent|LanguageModel</c>).
 ///
 /// <para>Auth is handled by an <see cref="ApiKeySecretRef"/> — a path or
 /// key into a secret store rather than the literal credential — so a Model

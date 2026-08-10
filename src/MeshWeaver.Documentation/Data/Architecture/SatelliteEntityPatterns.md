@@ -318,21 +318,24 @@ public class MyClientConfigurator : IHostConfigurator
 }
 ```
 
-### Verification via `GetRemoteStream`
+### Verification via the node stream
 
-Subscribe to the node's workspace stream **before** triggering the operation, then reactively wait for the expected state to appear. This applies to operations that mutate the document text — e.g. a **tracked change**, which embeds `<!--insert:…-->`/`<!--delete:…-->` markers:
+Subscribe to the node's stream **before** triggering the operation, then reactively wait for the expected state to appear. This applies to operations that mutate the document text — e.g. a **tracked change**, which embeds `<!--insert:…-->`/`<!--delete:…-->` markers:
 
 ```csharp
-// 0) Subscribe BEFORE sending the request — never after
-var markersAppeared = workspace.GetRemoteStream<MeshNode>(docAddress)
-    .Select(nodes => nodes?.FirstOrDefault(n => n.Path == docPath))
+// 0) Subscribe BEFORE sending the request — never after.
+//    GetMeshNodeStream(path) is the shared per-path handle; do NOT hand-roll
+//    GetRemoteStream<MeshNode>(address) + FirstOrDefault(n => n.Path == …),
+//    which pulls the whole collection and re-opens its own subscription.
+var markersAppeared = workspace.GetMeshNodeStream(docPath)
     .Select(node => (node?.Content as MarkdownContent)?.Content ?? "")
     .Where(content => content.Contains($"<!--insert:{markerId}"))
     .FirstAsync()
     .ToTask(ct);
 
-// 1) Send request
-var response = await client.AwaitResponse(request, o => o.WithTarget(address), ct);
+// 1) Send the request. In TESTS the sanctioned bridge is the test base's helper;
+//    production code subscribes to hub.Observe(...) instead of awaiting.
+var response = await AwaitResponseAsync(request, o => o.WithTarget(address), ct: ct);
 
 // 2) Wait for the stream to reflect the change
 var updatedContent = await markersAppeared;
@@ -349,9 +352,13 @@ private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, Ca
     where T : class
 {
     var nodeId = path[(path.LastIndexOf('/') + 1)..];
-    var response = await client.AwaitResponse(
+    // Test-only bridge. `client.AwaitResponse(...)` no longer exists — the framework
+    // has no Task-returning request/response API; `hub.Observe(...)` is the surface,
+    // and MonolithMeshTestBase.AwaitResponseAsync is the sanctioned await at the
+    // assertion edge.
+    var response = await AwaitResponseAsync(
         new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-        o => o.WithTarget(new Address(path)), ct);
+        o => o.WithTarget(new Address(path)), hub: client, ct: ct);
 
     var node = response.Message.Data as MeshNode;
     if (node == null && response.Message.Data is JsonElement je)

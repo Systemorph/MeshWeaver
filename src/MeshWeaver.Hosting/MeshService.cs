@@ -10,16 +10,16 @@ namespace MeshWeaver.Hosting;
 
 /// <summary>
 /// Scoped IMeshService implementation.
-/// Writes go through hub messaging (Post + RegisterCallback) — no direct persistence dependency.
+/// Writes go through hub messaging (<c>hub.Observe(request, …)</c>) — no direct persistence dependency.
 /// Reads go through MeshQuery (aggregated query providers).
 /// Identity is captured from AccessService and stamped on each delivery.
 ///
-/// The CRUD observables use <c>Observable.Create(observer =&gt; ...)</c> and signal all outcomes —
-/// success, handler rejection, and routing <see cref="DeliveryFailure"/> — via
-/// <c>observer.OnNext</c> / <c>observer.OnError</c>. <b>Never <see cref="Observable.FromAsync(System.Func{System.Threading.Tasks.Task})"/></b>
-/// (FromAsync wraps a Task and blocks a thread-pool thread), <b>never Task return types</b> on the
-/// public surface, <b>never <see cref="Task"/>.<see cref="Task.FromResult{TResult}(TResult)"/></b>
-/// inside callbacks (use the <see cref="SyncDelivery"/> overload of RegisterCallback instead).
+/// The CRUD observables use <c>Observable.Defer(...)</c> over <c>hub.Observe(request, …)</c>,
+/// composing outcomes with <c>.SelectMany</c> and surfacing handler rejection / routing
+/// <see cref="DeliveryFailure"/> as <c>Observable.Throw</c>.
+/// <b>Never <see cref="Observable.FromAsync(System.Func{System.Threading.Tasks.Task})"/></b>
+/// (forbidden outside <c>IoPool</c>: it runs the prologue on the subscribing thread and bounds
+/// nothing), and <b>never Task return types</b> on the public surface.
 /// See <c>Doc/Architecture/AsynchronousCalls</c>.
 ///
 /// Each call is bounded by <see cref="MeshOperationOptions.Timeout"/> so a lost/slow response

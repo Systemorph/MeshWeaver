@@ -40,11 +40,24 @@ Any **newly provisioned** server (a fresh environment, or a rebuild) is geo-redu
 
 ### 🚨 Enabling geo-redundancy on the EXISTING live server is NOT an in-place flip
 
-`geoRedundantBackup` is **immutable after server creation** on Flexible Server. Re-running the bicep
-against the running `<pg-server>` will **not** turn it on — ARM rejects the change. To make the
-*live* server geo-redundant you must create a **new** geo-redundant server from a restore and cut
-over. This is a disruptive prod operation — schedule a short maintenance window; it is **not** run
-as part of a normal code deploy.
+This runbook was written on the basis that `geoRedundantBackup` is **immutable after server creation**
+on Flexible Server, so re-running the bicep against the running `<pg-server>` would not turn it on and
+the only route was to create a **new** geo-redundant server from a restore and cut over.
+
+> ⚠️ **Re-check before you commit to the rebuild.** That immutability is an Azure platform behaviour, not
+> something this repo controls, and Azure has changed Flexible Server backup capabilities over time. The
+> rebuild-and-cut-over below is a disruptive prod operation; attempt the cheap in-place path first and
+> only fall back to it if Azure actually rejects the change:
+>
+> ```bash
+> az postgres flexible-server update -g <aks-resource-group> -n <pg-server> --geo-redundant-backup Enabled
+> ```
+>
+> If that succeeds, verify with the `az postgres flexible-server show` query below and skip the runbook
+> entirely.
+
+If the in-place update is rejected, use the restore-and-cut-over runbook. Schedule a short maintenance
+window; it is **not** run as part of a normal code deploy.
 
 Runbook (paired-region DR enablement for the live server):
 

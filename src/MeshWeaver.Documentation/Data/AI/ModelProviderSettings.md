@@ -111,7 +111,7 @@ The backend lives in `src/MeshWeaver.AI/Connect/`:
 **`IConnectStrategy`** — one implementation per CLI.
 - `ClaudeConnectStrategy`: spawns `claude` under the user's `CLAUDE_CONFIG_DIR`, probes the CLI (or its `.credentials.json`) for login status, and if absent runs `claude setup-token` (or `/login`), scrapes the auth URL, surfaces it, and captures the pasted code/token.
 - `CopilotConnectStrategy`: runs the Copilot SDK device-flow — surfaces the device URL + code, polls `GetAuthStatusAsync`.
-- Both reuse the subprocess shape from `MeshPlugin`/`KernelExecutor` (`RedirectStandardInput`); `Observable.FromAsync` is used only at the process boundary.
+- Both reuse the subprocess shape from `MeshPlugin`/`KernelExecutor` (`RedirectStandardInput`). The process boundary runs on the `Process` [`IIoPool`](/Doc/Architecture/ControlledIoPooling) — `InvokeBlocking` for the spawn, `Invoke` for the stdin write — carrying **only** the async leaves, with the auth-URL/token scrape composed as an ordinary observable. Never `Observable.FromAsync`, which is forbidden outside `IoPool`.
 
 **`ConnectSessionManager`** — a mesh-scoped singleton that holds the live `Process` between "show URL" and "paste code", keyed per user (instance `ConcurrentDictionary`, **never static**), with a 5-minute timeout that calls `Kill(entireProcessTree:true)`.
 

@@ -8,7 +8,7 @@ order: 30
 
 Move a subtree of MeshNodes from one running MeshWeaver instance to another — no ZIP exports, no file uploads, no per-node back-and-forth. The most common use is **pushing from local dev to prod** so content you authored in `memex-local` appears at `https://memex.meshweaver.cloud` in a single command.
 
-> ⚠️ **Status: the mesh hub currently has no handler for `MirrorRequest`** — the contract (`MirrorRequest`/`MirrorResult` in `src/MeshWeaver.Mesh.Contract/Services/IMirrorOperations.cs`), the MCP tools, the REST endpoint, and the HTTP transport are all in place, but a posted `MirrorRequest` receives no response until the handler (fanning out `CreateNodeRequest` per node) lands. This page documents the contract and intended behavior.
+> ⚠️ **Status: NOT WIRED END-TO-END. The mesh hub has no handler for `MirrorRequest`** — verified: nothing in `src/` or `memex/` registers one, and the `AddMirrorHandler` that several code comments point at does not exist. The contract (`MirrorRequest`/`MirrorResult` in `src/MeshWeaver.Mesh.Contract/Services/IMirrorOperations.cs`), the `mirror` MCP tool, the `POST /api/mesh/mirror` endpoint, the import-dialog caller, and the HTTP transport are all in place, but a posted `MirrorRequest` gets no response — the tool falls into its error branch and the REST endpoint answers *"No response from mirror handler"*. **Everything below the "What it does" heading is the intended contract, not observed behaviour.**
 
 ## What it does
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
@@ -62,16 +62,15 @@ The preferred way to authenticate is a **named remote profile** in the host conf
 
 Then the tool call is just `mirror direction=push remote="prod" sourcePath="rbuergi/Story"` — the ApiToken never travels through the model context, transcripts, or logs. Passing a base URL as `remote` also resolves the token from a profile with a matching `BaseUrl`. Supplying `remoteToken` inline remains available as an ad-hoc fallback, but is discouraged: tool arguments are visible to the model and may be persisted in conversation transcripts.
 
-Under the hood:
+Under the hood (intended — the handler in step 2 is the missing piece):
 
-1. Reads every node under `sourcePath` from the source side.
-2. Calls `mcp.create` (or `mcp.update` for upserts) on the destination for each node, authenticating with the **destination's** ApiToken.
-3. Delegates the recursive copy to the mirror handler on the mesh hub, which fans out `CreateNodeRequest` per node (see the status note above).
-4. Returns a JSON summary with the fields `status`, `direction`, `sourcePath`, `targetPath`, `nodesImported`, `nodesSkipped`, `nodesRemoved`, `partitionsImported`, and `elapsedMs`.
+1. The MCP tool resolves the remote profile and posts one `MirrorRequest` at the `mesh` hub (`hub.Observe<MirrorResult>`).
+2. **The mesh-hub handler** reads every node under `sourcePath` and, per node, calls the destination's MCP surface (`create` / `update`) through `McpRemoteMeshClient`, authenticating with the **destination's** ApiToken.
+3. It returns a `MirrorResult` with the fields `status`, `direction`, `sourcePath`, `targetPath`, `nodesImported`, `nodesSkipped`, `nodesRemoved`, `partitionsImported`, and `elapsedMs`, which the tool serialises back.
 
 ## Network direction matrix
 
-Both tools initiate outbound HTTPS from the side they run on. The rule of thumb: **run the tool on whichever side has network reach to the other**.
+The tool initiates outbound HTTPS from the side it runs on, in both directions. The rule of thumb: **run the tool on whichever side has network reach to the other**.
 
 | You want to … | Run the tool on | Initiates outbound to | Works without a tunnel? |
 |---|---|---|---|
@@ -97,9 +96,9 @@ Open the destination portal (e.g. `https://memex.meshweaver.cloud`), log in as t
 Always preview before writing. Pass `dryRun=true` to enumerate the subtree without touching the destination:
 
 ```text
-mcp__memex-local__mirror_to_remote
-    remoteBaseUrl="https://memex.meshweaver.cloud"
-    remoteToken="mw_…"
+mcp__memex-local__mirror
+    direction="push"
+    remote="prod"                       # a configured Mirror:Remotes profile — keeps the token server-side
     sourcePath="rbuergi/Story"
     targetPath="rbuergi/Story"
     dryRun=true
@@ -130,9 +129,9 @@ Read the list. Confirm the count and paths match your expectations before procee
 Same call, `dryRun=false` (the default):
 
 ```text
-mcp__memex-local__mirror_to_remote
-    remoteBaseUrl="https://memex.meshweaver.cloud"
-    remoteToken="mw_…"
+mcp__memex-local__mirror
+    direction="push"
+    remote="prod"
     sourcePath="rbuergi/Story"
 ```
 
@@ -162,12 +161,12 @@ This should return the four nodes. You can also open `https://memex.meshweaver.c
 
 ## Pulling from a remote into local
 
-`PullFromRemote` uses the same shape as `MirrorToRemote` — just a different tool name. Here local makes outbound calls to prod, fetches the subtree, and writes it under the target path:
+Pull is the **same tool** with `direction="pull"` — there is no separate tool. Here local makes outbound calls to prod, fetches the subtree, and writes it under the target path:
 
 ```text
-mcp__memex-local__pull_from_remote
-    remoteBaseUrl="https://memex.meshweaver.cloud"
-    remoteToken="mw_…"
+mcp__memex-local__mirror
+    direction="pull"
+    remote="prod"
     sourcePath="Doc/Architecture/GrantingAccess"
     targetPath="rbuergi/MyDocs/GrantingAccess"
     dryRun=true
@@ -188,7 +187,7 @@ The destination's `ApiTokenAuthenticationHandler` validates the token and stamps
 - `Permission.Read` on the source paths (on the source portal — usually trivially satisfied when operating on your own partition).
 - `Permission.Create` / `Update` on the destination paths.
 
-> **Note:** If the destination user lacks Create on a path, the import silently skips the offending nodes (logged via `_logger?.LogWarning`). Run with the destination's Admin role during development to avoid surprises.
+> **Note (intended):** a destination user lacking Create on a path should surface as `nodesSkipped`, not a hard failure. Until the handler lands this is a contract statement, not observed behaviour. Run with the destination's Admin role during development to avoid surprises.
 
 ## What does NOT cross instances (v1)
 
@@ -200,9 +199,9 @@ Not everything survives a mirror. Content that lives outside `node.Content` is o
 
 ## Token economy
 
-Each `mirror_to_remote` / `pull_from_remote` invocation from Claude Code is **one** MCP tool call: approximately 1 k input tokens (args) plus a short text summary back. The actual recursive copy runs server-side via `HttpClient` — Claude isn't reasoning node by node.
+Each `mirror` invocation from Claude Code is **one** MCP tool call: approximately 1 k input tokens (args) plus a short text summary back. The actual recursive copy runs server-side — Claude isn't reasoning node by node.
 
-If you want strictly zero LLM tokens, the same `MirrorOperations` logic is also exposed via the import dialog UI (Blazor). Future work includes a CLI that drives it without an LLM in the loop.
+If you want strictly zero LLM tokens, the same `MirrorRequest` is also posted by the import dialog UI (`ImportLayoutArea`, Blazor) and by the REST endpoint. Future work includes a CLI that drives it without an LLM in the loop.
 
 ## Source links
 
@@ -212,10 +211,10 @@ If you want strictly zero LLM tokens, the same `MirrorOperations` logic is also 
 | HTTP storage adapter | `src/MeshWeaver.Hosting/Persistence/Http/HttpMeshStorageAdapter.cs` |
 | MCP transport | `src/MeshWeaver.Hosting/Persistence/Http/McpRemoteMeshClient.cs` |
 | Path remapping (source → target prefix) | `src/MeshWeaver.Hosting/Persistence/Http/PathRemappingStorageAdapter.cs` |
-| MCP tools (`MirrorToRemote`, `PullFromRemote`) | `src/MeshWeaver.Mcp/McpMeshPlugin.cs` |
+| MCP tool (`Mirror`, one tool with `direction=push\|pull`) | `src/MeshWeaver.Mcp/McpMeshPlugin.cs` |
 | REST endpoint (`POST /api/mesh/mirror`) | `memex/Memex.Portal.Shared/Api/MeshApiEndpoints.cs` |
 | Mesh-hub handler | *not yet registered — see status note* |
-| Tests | `test/MeshWeaver.Hosting.Test/HttpMeshStorageAdapterTests.cs` · `MirrorOperationsTests.cs` |
+| Tests | `test/MeshWeaver.Hosting.Test/HttpMeshStorageAdapterTests.cs` · `MirrorOperationsTests.cs` (class `MirrorRequestValidationTests` — request/result contract only; no end-to-end flow, since there is no handler) |
 | Auth handler | `memex/Memex.Portal.Shared/Authentication/ApiTokenAuthenticationHandler.cs` |
 
 ## Troubleshooting
