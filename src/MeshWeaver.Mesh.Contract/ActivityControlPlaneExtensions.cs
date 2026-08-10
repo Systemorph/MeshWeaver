@@ -186,8 +186,18 @@ public static class ActivityControlPlaneExtensions
     /// keeps running while its control plane is dead — the #891 wedges-to-zero violation);
     /// never subscribe such a watcher with a bare log-and-die <c>OnError</c> handler.
     ///
-    /// <para>Three fault classes, in classification order:</para>
+    /// <para>Four fault classes, in classification order:</para>
     /// <list type="number">
+    ///   <item><description><b>Own hub tearing down</b> — a
+    ///     <see cref="HubDisposingException"/> naming THIS watcher's own
+    ///     <paramref name="address"/>: the hub the watcher belongs to has begun disposing, so
+    ///     the mesh-node stream can no longer create its <c>sync/</c> sub-hub and every
+    ///     subscribe throws. TERMINAL and NOT a fault — the watcher is meant to die with its
+    ///     hub (a fresh activation installs fresh watchers). Re-establishing here logged an
+    ///     ERROR for routine teardown and armed a 1 s <see cref="Observable.Timer(TimeSpan)"/>
+    ///     rooted at the hub that is being collected — the #991 leak shape, on the exact code
+    ///     path #991 identified as "teardown is when the fault happens". Logged at Debug and
+    ///     stopped.</description></item>
     ///   <item><description><b>Poisoned own content</b> — a
     ///     <see cref="MeshNodeStreamException"/> with
     ///     <see cref="MeshNodeErrorCode.Deserialization"/>: the watched node's own content
@@ -265,6 +275,25 @@ public static class ActivityControlPlaneExtensions
                 onNext,
                 ex =>
                 {
+                    if (IsOwnHubDisposing(ex, address))
+                    {
+                        // Terminal, and NOT an error: our own hub is tearing down. From the first
+                        // instant of Dispose the hub refuses hosted-hub creation, so the own
+                        // MeshNode stream cannot build its `sync/` sub-hub and every subscribe
+                        // throws HubDisposingException for THIS address. The watcher exists to
+                        // observe that hub; when the hub goes, so does the watcher (the next
+                        // activation installs a fresh one). Re-establishing was doubly wrong: it
+                        // reported routine teardown as a prod ERROR (the memex-cloud drip: three
+                        // `… faulted on <path> — re-establishing` lines per per-NodeType hub
+                        // teardown, plus one per short-lived schema-probe hub), and it armed a
+                        // 1 s TimerQueue entry holding `Establish` → `source` → the hub that is
+                        // being collected — the #991 root shape.
+                        logger?.LogDebug(ex,
+                            "{Context}: own hub {Address} is disposing — the watcher stops with the hub "
+                            + "(a fresh activation installs a new one), no re-establish",
+                            faultLogContext, address);
+                        return;
+                    }
                     if (IsPoisonedContent(ex))
                     {
                         // Terminal: the watched node's own content cannot be deserialized, and
@@ -305,6 +334,47 @@ public static class ActivityControlPlaneExtensions
             pendingReEstablish.Dispose();
             serial.Dispose();
         });
+    }
+
+    /// <summary>
+    /// True when <paramref name="ex"/> (or an inner exception, at any depth) is a
+    /// <see cref="HubDisposingException"/> raised for <paramref name="address"/> itself —
+    /// i.e. the watcher's OWN hub has begun disposing.
+    ///
+    /// <para>A <see cref="HubDisposingException"/> is transient for a consumer watching
+    /// SOMEONE ELSE's hub (that address may reactivate, so retrying is the honest answer —
+    /// see the type's own remarks). For a watcher observing its own hub it is TERMINAL: the
+    /// hub is gone, its watchers are registered for its disposal, and the fresh activation
+    /// installs new ones. That asymmetry is why this predicate is address-scoped rather than
+    /// a bare <see cref="HubDisposingException.IsHubDisposal"/> — a source node owned by
+    /// another hub going down must still re-establish.</para>
+    ///
+    /// <para>Matching is on <see cref="Address.Path"/>: a hosted address renders its hosting
+    /// parent as a <c>~host</c> suffix, and "the hub at this node path is disposing" is the
+    /// question being asked — the hosting chain does not change the answer.</para>
+    /// </summary>
+    /// <param name="ex">The fault to classify.</param>
+    /// <param name="address">The watcher's own hub/node address.</param>
+    public static bool IsOwnHubDisposing(Exception? ex, Address address) =>
+        IsOwnHubDisposing(ex, address, depth: 0);
+
+    // depth caps the walk: AggregateException fan-out makes the traversal a tree, not a chain.
+    // 16 mirrors HubDisposingException.IsHubDisposal and is far beyond any real wrapping depth
+    // (the deepest observed in prod is TargetInvocationException → HubDisposingException).
+    private static bool IsOwnHubDisposing(Exception? ex, Address address, int depth)
+    {
+        if (depth > 16 || address is null)
+            return false;
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is HubDisposingException disposing
+                && string.Equals(disposing.HubAddress.Path, address.Path, StringComparison.Ordinal))
+                return true;
+            if (e is AggregateException agg
+                && agg.InnerExceptions.Any(inner => IsOwnHubDisposing(inner, address, depth + 1)))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>

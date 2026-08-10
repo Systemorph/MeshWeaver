@@ -22,8 +22,10 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// SecurityService to dodge the validator cycle). One boss for fan-out —
 /// per-adapter providers stay leaves.
 /// <para>
-/// source:activity implies nodeType:Activity filter; source:accessed JOINs with UserActivity
-/// nodes to order by last-access time. Providers that don't support these sources return normal results.
+/// source:activity and source:accessed are JOIN-backed ORDERING sources, not filters —
+/// neither implies a nodeType. source:activity orders by activity recency; source:accessed
+/// JOINs UserActivity to order by last-access time. Providers that don't support these
+/// sources return normal results.
 /// Identity is resolved from AccessService.Context. Use accessService.ImpersonateAsHub(hub)
 /// to temporarily switch identity for hub-level operations.
 /// </para>

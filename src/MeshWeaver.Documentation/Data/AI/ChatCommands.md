@@ -37,7 +37,7 @@ public record SkillDefinition
 
 public record SkillAction
 {
-    public required SkillActionKind Kind { get; init; }   // Pick | OpenContent | Navigate | Connect | Disconnect | NewThread
+    public SkillActionKind Kind { get; init; } = SkillActionKind.Pick;  // Pick | OpenContent | Navigate | Connect | Disconnect | NewThread
     public string? Query { get; init; }        // Pick: the combobox query (+ `sort:order`)
     public string? Field { get; init; }        // Pick: camelCase ThreadComposer field (harness|agentName|modelName)
     public string? Title { get; init; }        // Pick: combobox title

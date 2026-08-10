@@ -44,7 +44,7 @@ Each NodeType declares its storage shape **once, on its NodeType definition** (i
 | `AccessAssignment` | owns a table | satellite table (`access`) |
 | *(default)* | — | the partition's primary `mesh_nodes` table |
 
-This replaces both the hard-coded `PartitionDefinition.StandardTableMappings` / `NodeTypeToSuffix` dictionaries **and** the `_Thread`/`_Access`/… path-suffix string-matching: a node's storage table comes from **its NodeType's configuration**, not from the shape of its path. Adding a new satellite type is a one-line configuration on that NodeType — no central map to edit, no router branch to add. *This is what makes the config easy.*
+The hard-coded static `PartitionDefinition.StandardTableMappings` / `NodeTypeToSuffix` dictionaries are **already gone** — the defaults now come from the configurable `SatelliteTableMapping.Defaults`, surfaced as `PartitionDefinition.DefaultSegmentTableMappings()` (segment → table) and `DefaultNodeTypeTableMappings()` (nodeType → table). What remains is the `_Thread`/`_Access`/… **path-suffix** matching being the primary router input: the goal is for a node's storage table to come from **its NodeType's configuration** rather than the shape of its path, so adding a new satellite type is a one-line configuration on that NodeType — no central map to edit, no router branch to add.
 
 ## The only framework partitions: `public`, `admin`, `auth`
 
@@ -77,6 +77,6 @@ Beyond per-User/Space partitions, the clean model keeps exactly three system sch
 **Still design / migration debt (the broader query redesign, tracked separately):**
 - Fix the per-schema delegate's satellite Query Initial, then route scoped-satellite through it too (full pedestrian retirement).
 - Longest-prefix-match cross-adapter routing (§2) — `FindBestPrefixMatch` exists; the PG router still resolves by first-segment.
-- Retiring `NodeTypeToSuffix` / `StandardTableMappings` path-suffix matching in favour of reading `StorageTable` everywhere (the `StorageTable` field is declared and provisioned, not yet the sole routing source).
+- Retiring **path-suffix matching** in favour of reading `StorageTable` everywhere. (The static `NodeTypeToSuffix` / `StandardTableMappings` dictionaries are already deleted — `SatelliteTableMapping.Defaults` replaced them — but `PartitionDefinition.ResolveTable(path)` still matches the path suffix first, and only falls back to `ResolveTableByNodeType`.)
 - SQL-side hybrid scoring: cross-schema text scoring is in (`9bdc64ef6`); vector term + single-schema `GenerateSelectQuery` score column remain.
 - Query fan-to-all replacing `NeedsFanOut` / `ResolvePinnedPartition` / `EnumerateFanOutAsync`.

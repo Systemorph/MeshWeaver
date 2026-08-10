@@ -153,6 +153,106 @@ public class CompileWaitDoesNotTimeoutTest
     }
 
     /// <summary>
+    /// 🚨 The wedge the disarm left behind: a compile that RUNS and lands a terminal state the
+    /// caller's <c>settled</c> predicate REJECTS must re-arm the budget, never wait forever.
+    ///
+    /// <para>The framework-stale self-heal is exactly that caller: <c>IsRecompileSettled</c> with
+    /// <c>requireUsableBuild</c> accepts ONLY a genuinely usable build, so a rebuild that ends at
+    /// <c>Error</c> — a node repo's committed stale stamp whose source no longer compiles, the
+    /// Store/Catalog shape — is not an answer. The disarm was a one-shot edge
+    /// (<c>TakeUntil(compileInFlight.Take(1))</c>): once ONE Pending/Compiling emission was seen
+    /// the wall clock was cancelled for good, so after that rejected terminal NOTHING was left to
+    /// bound the wait. The per-instance hub's enrichment then never completed and never faulted —
+    /// every message routed to that node parked until the SENDER's own timeout, and the node's hub
+    /// was never created at all. Measured: a package install whose root is typed by such a NodeType
+    /// stalled 60.3 s on its content publish (the mesh hub's RequestTimeout) and then dropped the
+    /// package's binaries. A hang that only ends at someone else's timeout is the "wedges to zero"
+    /// violation — the wait must sink gracefully so the caller can overlay the diagnostic.</para>
+    ///
+    /// <para>Contrast <see cref="InFlightCompile_ThatFailsLate_SurfacesError_NotHang"/>: there the
+    /// predicate ACCEPTS Error, so the same sequence resolves as a value. The distinguishing input
+    /// is the predicate, which is why the disarm's one-shot shape hid this for so long.</para>
+    /// </summary>
+    [Fact]
+    public void InFlightCompile_LandingATerminalTheWaitRejects_ReArmsTheBudget()
+    {
+        var scheduler = new TestScheduler();
+        var typeStream = new Subject<MeshNode>();
+
+        // The framework-stale heal's rule: ONLY a usable build settles. Error does not.
+        var settledUsableOnly = typeStream
+            .Where(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LatestAssemblyPath))
+            .Take(1);
+
+        MeshNode? emitted = null;
+        Exception? error = null;
+        NodeTypeEnrichmentHelpers
+            .WaitForCompileSettled(typeStream, settledUsableOnly, Budget,
+                () => new TimeoutException("no compile in flight"), scheduler)
+            .Subscribe(n => emitted = n, ex => error = ex);
+
+        typeStream.OnNext(Node(CompilationStatus.Compiling));   // disarms the wall clock
+        scheduler.AdvanceBy(Budget.Ticks * 3);
+        Assert.Null(error);
+        Assert.Null(emitted);
+
+        // The compile FINISHES — at a terminal state this caller does not accept. No further
+        // compile is in flight, so nothing else is coming: the budget must run again.
+        typeStream.OnNext(Node(CompilationStatus.Error));
+        Assert.Null(error);                                     // budget re-armed, not yet elapsed
+
+        scheduler.AdvanceBy(Budget.Ticks + 1);
+
+        Assert.Null(emitted);
+        Assert.IsType<TimeoutException>(error);
+    }
+
+    /// <summary>
+    /// The re-arm must not shorten a LEGITIMATE second compile: a rejected terminal followed by a
+    /// fresh Pending disarms the clock again, and the eventual usable build still resolves the
+    /// wait however long it takes. Otherwise the fix above would trade a hang for the fresh-pod
+    /// mid-compile fault it exists to prevent.
+    /// </summary>
+    [Fact]
+    public void RejectedTerminal_ThenASecondCompile_DisarmsAgain_AndResolvesOnTheUsableBuild()
+    {
+        var scheduler = new TestScheduler();
+        var typeStream = new Subject<MeshNode>();
+
+        var settledUsableOnly = typeStream
+            .Where(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LatestAssemblyPath))
+            .Take(1);
+
+        MeshNode? emitted = null;
+        Exception? error = null;
+        NodeTypeEnrichmentHelpers
+            .WaitForCompileSettled(typeStream, settledUsableOnly, Budget,
+                () => new TimeoutException("no compile in flight"), scheduler)
+            .Subscribe(n => emitted = n, ex => error = ex);
+
+        typeStream.OnNext(Node(CompilationStatus.Compiling));
+        scheduler.AdvanceBy(Budget.Ticks * 2);
+        typeStream.OnNext(Node(CompilationStatus.Error));       // rejected → budget re-arms
+
+        // A second compile starts well inside the re-armed budget — disarm again.
+        scheduler.AdvanceBy(Budget.Ticks / 2);
+        typeStream.OnNext(Node(CompilationStatus.Pending));
+        scheduler.AdvanceBy(Budget.Ticks * 5);
+        Assert.Null(error);
+        Assert.Null(emitted);
+
+        var ok = Node(CompilationStatus.Ok, withAssembly: true);
+        typeStream.OnNext(ok);
+
+        Assert.Null(error);
+        Assert.Same(ok, emitted);
+    }
+
+    /// <summary>
     /// A NodeType that is already settled Ok at first observation resolves immediately
     /// — the wall-clock never even starts to matter.
     /// </summary>

@@ -14,9 +14,11 @@ namespace MeshWeaver.AI.Plugins;
 /// Agent plugin providing tools for adding comments and suggesting edits on
 /// Markdown documents via the collaborative editing infrastructure.
 ///
-/// Every method is await-free — reads are wrapped in <c>Observable.FromAsync</c> on
-/// the <see cref="TaskPoolScheduler"/> so blocking enumeration never touches the hub
-/// scheduler, and writes go through <c>hub.Post + hub.RegisterCallback</c> with a
+/// Every method is await-free — reads are moved onto the <see cref="TaskPoolScheduler"/>
+/// with <c>.SubscribeOn(TaskPoolScheduler.Default)</c> (NEVER
+/// <c>Observable.FromAsync</c>, which is forbidden outside <c>IoPool</c>) so blocking
+/// enumeration never touches the hub scheduler, and writes go through
+/// <c>hub.Observe(...).Subscribe(...)</c> with a
 /// <see cref="TaskCompletionSource{T}"/> bridging the off-hub callback thread back
 /// to the caller. See <c>Doc/Architecture/AsynchronousCalls</c> for the rationale:
 /// any <c>await</c> on a hub-backed operation from inside a plugin method will
@@ -65,9 +67,9 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         var resolvedPath = MeshOperations.ResolvePath(resolvedInput);
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // Read the document off the hub scheduler, then fan into Post + RegisterCallback.
+        // Read the document off the hub scheduler, then fan into hub.Observe(...).
         // No `await` anywhere — the subscription runs the read on TaskPoolScheduler and
-        // the write's callback fires on the response thread. Both resolve the TCS.
+        // the write's response arrives on the observe subscription. Both resolve the TCS.
         ops.Get(resolvedInput)
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
@@ -241,8 +243,8 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
     }
 
     /// <summary>
-    /// Posts a request via Post + RegisterCallback and resolves <paramref name="tcs"/>
-    /// from the callback. No <c>await</c>: the callback fires on a non-hub thread
+    /// Posts a request via <c>hub.Observe(...)</c> and resolves <paramref name="tcs"/>
+    /// from the subscription. No <c>await</c>: the response arrives on a non-hub thread
     /// when the response arrives. Routing failures surface as a user-actionable
     /// error pointing the agent back at the "use `path`, not `name`" rule.
     /// </summary>

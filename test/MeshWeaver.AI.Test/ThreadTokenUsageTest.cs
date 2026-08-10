@@ -2,12 +2,14 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -103,6 +105,45 @@ public class ThreadTokenUsageTest : AITestBase
         cell.InputTokens.Should().Be(InTokens);
         cell.OutputTokens.Should().Be(OutTokens);
         cell.TotalTokens.Should().Be(TotalTokens);
+    }
+
+    // ─── Observing usage from BEFORE the satellite exists (pins the read primitive) ───
+
+    /// <summary>
+    /// A consumer that starts watching a thread's usage BEFORE any round has run — i.e. while
+    /// <c>{threadPath}/_Usage</c> holds nothing at all — must still receive the usage when it lands.
+    ///
+    /// <para>This is the ONLY ordering the platform actually guarantees. <c>TokenUsageNodeType.RecordUsage</c>
+    /// is subscribed as an INDEPENDENT side effect, deliberately NOT chained before the round's
+    /// terminal status write, so "the thread reached a terminal state" does NOT imply "the satellite
+    /// exists". Every other test in this class reads the satellite AFTER waiting for the terminal
+    /// state and therefore only samples the lucky ordering; this one pins the unlucky one.</para>
+    ///
+    /// <para>It is also the shape production uses: <c>ThreadTokenChip</c> opens its live
+    /// <c>path:{thread}/_Usage scope:children</c> query the moment the chip is parameterised — long
+    /// before the first round writes anything. A point <c>GetMeshNodeStream({thread}/_Usage/{model})</c>
+    /// read cannot serve that: an absent node answers with an authoritative routing NotFound, which
+    /// terminates the stream with an error rather than waiting for the node to appear. Under load
+    /// (CI, or four test classes in flight) the round loses that race and the read errors within a
+    /// second — three of this class's tests failed exactly that way at
+    /// <c>DOTNET_PROCESSOR_COUNT=4 -parallel collections</c> (#1040).</para>
+    /// </summary>
+    [Fact]
+    public async Task UsageWatchedFromBeforeTheRound_ArrivesWhenTheSatelliteIsCreated()
+    {
+        var threadPath = await SeedThread();
+        var client = GetClient();
+
+        // Open the observation FIRST — at this point the thread has no _Usage namespace at all, so
+        // this is the "watcher was already there" ordering, deterministically.
+        var watching = WaitForUsage(threadPath, "usage_model",
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 20_000);
+
+        client.SubmitMessage(threadPath, "hello", modelName: "usage-model", createdBy: TestUser);
+
+        var usage = await watching;
+        usage.Model.Should().Be("usage-model");
+        usage.ThreadId.Should().Be(threadPath);
     }
 
     // ─── Cumulative across rounds (pins the round-dispatch reset hole) ───
@@ -346,13 +387,41 @@ public class ThreadTokenUsageTest : AITestBase
             .Should().Within(TimeSpan.FromMilliseconds(timeoutMs))
             .Match(m => predicate(m!)))!;
 
-    // The per-model TokenUsage satellite at {threadPath}/_Usage/{modelKey}.
+    /// <summary>
+    /// Watches the per-model <see cref="TokenUsage"/> satellite at
+    /// <c>{threadPath}/_Usage/{modelKey}</c> until it matches <paramref name="predicate"/>.
+    ///
+    /// <para>🚨 Through the LIVE CHILDREN QUERY of <c>{threadPath}/_Usage</c> — byte for byte the
+    /// primitive <c>ThreadTokenChip</c> binds to in the portal — and never a point
+    /// <c>GetMeshNodeStream({threadPath}/_Usage/{modelKey})</c> read. The satellite is written by
+    /// <c>TokenUsageNodeType.RecordUsage</c>, which is subscribed as an INDEPENDENT side effect and
+    /// deliberately NOT chained before the round's terminal status write; a watcher can therefore be
+    /// in place before the node exists. A point read of an absent node answers with an authoritative
+    /// routing NotFound and TERMINATES the stream with an error — it cannot wait for a node to
+    /// appear. The children query starts from the (possibly empty) collection and re-emits when the
+    /// node lands, which is the only shape that serves this ordering.</para>
+    ///
+    /// <para>That mismatch was #1040's largest blocker: at
+    /// <c>DOTNET_PROCESSOR_COUNT=4 -parallel collections</c> three of this class's tests failed
+    /// inside a second with <c>No node found at …/_Usage/…</c> — not a timeout, an error. Serial
+    /// scheduling merely let the create win the race.
+    /// <see cref="UsageWatchedFromBeforeTheRound_ArrivesWhenTheSatelliteIsCreated"/> pins the losing
+    /// ordering deterministically.</para>
+    /// </summary>
     private async Task<TokenUsage> WaitForUsage(string threadPath, string modelKey, Func<TokenUsage, bool> predicate, int timeoutMs)
-        => (await Mesh.GetWorkspace().GetMeshNodeStream($"{threadPath}/{TokenUsageNodeType.SatelliteSegment}/{modelKey}")
-            .Select(n => n?.Content as TokenUsage)
+    {
+        var usagePath = $"{threadPath}/{TokenUsageNodeType.SatelliteSegment}/{modelKey}";
+        return (await Mesh.GetQuery(
+                $"usage:{threadPath}",
+                $"path:{threadPath}/{TokenUsageNodeType.SatelliteSegment} scope:children "
+                + $"nodeType:{TokenUsageNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
+            .Select(nodes => nodes
+                .FirstOrDefault(n => string.Equals(n.Path, usagePath, StringComparison.OrdinalIgnoreCase))
+                .ContentAs<TokenUsage>(Mesh.JsonSerializerOptions))
             .Where(u => u is not null)
             .Should().Within(TimeSpan.FromMilliseconds(timeoutMs))
             .Match(u => predicate(u!)))!;
+    }
 
     // ─── Fake usage-reporting chat client ───
 

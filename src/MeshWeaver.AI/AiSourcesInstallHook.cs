@@ -80,16 +80,13 @@ public sealed class AiSourcesInstallHook(IMessageHub hub) : IPartitionInstallHoo
             .Select(nodes => (IReadOnlyList<string>)nodes
                 .Select(n => n.Id)
                 .Where(id => !string.IsNullOrEmpty(id))
-                // 🚨 Drop the node-type DEFINITION. UserNodeType.CreateMeshNode registers itself
-                // self-referentially — id "User" AND nodeType "User" — so `nodeType:User` returns
-                // the definition alongside the real users, and its Id reads as a user called
-                // "User". Everything downstream then targets that name: AiSettingsNodeType.PathFor
-                // yields "User/_Memex/AiSettings", whose partition segment is the literal "User",
-                // so the write lands on schema "user" — never provisioned, because no such user
-                // was ever onboarded. Postgres answers 42P01 and the hook fails for EVERY
-                // partition it registers ("Registering Collaboration sources for user User
-                // failed"). A real user is always keyed by their principal id (rbuergi), never by
-                // the type's own name.
+                // 🚨 Drop the NodeType DECLARATION node. `User` is self-typed — the node that
+                // DEFINES the type carries `nodeType: User` too — so a pathless `nodeType:User`
+                // query returns it alongside the real accounts. Treated as a user it resolves to a
+                // partition literally named "User", which no instance provisions, and every install
+                // logged `42P01: relation "user.mesh_nodes" does not exist` once per package. The
+                // per-user Catch swallowed it, so the only visible trace was the noise — and a
+                // stray `vuser` partition on any instance where the same query shape ran for VUser.
                 .Where(id => !string.Equals(id, UserNodeType, StringComparison.OrdinalIgnoreCase))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList());

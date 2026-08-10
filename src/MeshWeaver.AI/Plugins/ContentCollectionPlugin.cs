@@ -110,7 +110,7 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
         var resolvedPath = MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, nodePath));
         var address = new Address(resolvedPath);
 
-        // Post + RegisterCallback + TCS — never `await hub.RegisterCallback(..., ct)` from
+        // hub.Observe(...) + TCS — never `await` a hub response from
         // a plugin method: that blocks the hub scheduler. The callback fires on a non-hub
         // thread when the response arrives and resolves the TCS to unblock the caller.
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);

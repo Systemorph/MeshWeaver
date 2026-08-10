@@ -24,8 +24,8 @@ namespace MeshWeaver.AI;
 ///   batched ingestion keeps one output cell per round.
 /// - Pure helpers <see cref="FindUnprocessedUserMessages"/> and <see cref="PlanNextRound"/>
 ///   are the unit-testable core.
-/// - Hard rule: no await, no IMeshService.QueryAsync, no Query, no client
-///   SubmitMessageRequest. Only Hub.Post + RegisterCallback + workspace stream writes.
+/// - Hard rule: no await, no IMeshService.Query, no client
+///   SubmitMessageRequest. Only Hub.Post + hub.Observe(...) + workspace stream writes.
 /// </summary>
 internal static class ThreadSubmission
 {
@@ -277,8 +277,13 @@ internal static class ThreadSubmissionServer
         // silently — a dead watcher means the resubmit is never claimed and the
         // thread parks forever (the live-path "observer dies" deadlock behind
         // Resubmit_AfterExecution_DoesNotDeadlock). On fault, re-establish after a
-        // short delay. Mirrors ThreadExecution.InitializeThreadLifecycle and
-        // ActivityControlPlaneExtensions.WatchControlPlane.
+        // short delay.
+        //
+        // 🚨 This is a HAND-ROLLED loop, NOT
+        // ActivityControlPlaneExtensions.SubscribeWithReEstablish / WatchControlPlane —
+        // it does NOT inherit their terminal fault classification and re-establishes on
+        // EVERY fault, including an own-node-gone NotFound. Converting it is a separate
+        // change; only the SCHEDULING is shared, via ReEstablishSchedule.Arm.
         var serial = new System.Reactive.Disposables.SerialDisposable();
         // 🚨 #991 — hold the PENDING re-establish so teardown cancels it. An uncancelled
         // `Observable.Timer` sits on the process-wide TimerQueue (a strong GC root) and
@@ -286,6 +291,14 @@ internal static class ThreadSubmissionServer
         // stream that faults as the hub tears down keeps the hub alive past disposal.
         var pendingReEstablish = new System.Reactive.Disposables.SerialDisposable();
         var disposed = false;
+        // 🚨 Resolve the workspace ONCE, at install time, while the hub's DI scope is
+        // alive. Re-resolving inside Establish() (GetWorkspace() is
+        // ServiceProvider.GetRequiredService<IWorkspace>()) put a live
+        // ObjectDisposedException source on the re-establish path: a timer tick that beat
+        // the disposal flag threw straight out of the Rx OnNext handler on a thread-pool
+        // thread — unhandled, process-fatal. IWorkspace is scoped per hub, so hoisting
+        // resolves the identical instance.
+        var workspace = threadHub.GetWorkspace();
         // 🚨 Stage 1 of the in-memory inbox channel. Resolve-or-create the per-thread
         // ThreadInboxChannel here (thread-hub init — single threaded, before any round),
         // so check_inbox (Stage 2) and the round-end reconcile resolve the same instance.
@@ -293,7 +306,7 @@ internal static class ThreadSubmissionServer
         // messages that arrive mid-round WITHOUT writing the thread node — the node write
         // that used to happen here (and in check_inbox) is what raced the round and wedged.
         var inboxChannel = ThreadInboxChannel.For(threadHub);
-        void Establish() => serial.Disposable = threadHub.GetWorkspace().GetMeshNodeStream()
+        void Establish() => serial.Disposable = workspace.GetMeshNodeStream()
             // 🚨 React ONLY to control-plane changes — Status, and the pending / ingested /
             // user-message id sets. A running round emits hundreds of StreamingText / Messages
             // updates; without this filter the watcher re-ran ReconcileUserMessageIds (an
@@ -339,7 +352,6 @@ internal static class ThreadSubmissionServer
                 triggerNode =>
                 {
                     logger?.LogDebug("[SubmissionWatcher] DISPATCH_TRIGGERED for {ThreadPath}", threadPath);
-                    var workspace = threadHub.GetWorkspace();
                     // 🚨 Re-stamp the thread OWNER's identity for the claim own-write (see the
                     // identity note at the top of this method). The .Update().Subscribe() below
                     // posts the UpdateStreamRequest SYNCHRONOUSLY on this thread, so capturing the
@@ -385,10 +397,11 @@ internal static class ThreadSubmissionServer
                     logger?.LogWarning(ex,
                         "[SubmissionWatcher] stream errored for {ThreadPath} — re-establishing",
                         threadPath);
-                    if (!disposed)
-                        pendingReEstablish.Disposable =
-                            System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1))
-                                .Subscribe(_ => Establish());
+                    // Re-checks `disposed` at FIRE time (not only here at arm time) and
+                    // routes a synchronous Establish() throw to the logger instead of onto
+                    // the timer's thread-pool thread. See ReEstablishSchedule.
+                    pendingReEstablish.Disposable = ReEstablishSchedule.Arm(
+                        () => disposed, Establish, logger, "SubmissionWatcher", threadPath);
                 });
 
         Establish();
@@ -447,7 +460,7 @@ internal static class ThreadSubmissionServer
     /// <para><b>NOT a stopgap for the lost-message defect.</b> That defect — the non-atomic
     /// owner-side <c>PatchDataRequest</c> apply that read a handler-time snapshot and committed a
     /// deferred FULL-NODE replace, clobbering a concurrent writer's just-added field — is FIXED at
-    /// the root in <c>DataExtensions.ApplyMeshNodePatchAtomic</c> (the merge now applies onto the
+    /// the root in <c>DataExtensions.ApplyMeshNodePatchInTurn</c> (the merge now applies onto the
     /// LIVE node in one primary-stream turn). See
     /// <c>CrossHubPatchAtomicityTest.ConcurrentCrossHubPatches_DoNotDropAQueuedMessage</c>.</para>
     ///
@@ -497,7 +510,7 @@ internal static class ThreadSubmissionServer
                 "[SubmissionWatcher] lost-message invariant restored for {ThreadPath}: {Ids} were in "
                 + "Messages+UserMessageIds but neither ingested nor pending — re-marking ingested "
                 + "(concurrent cross-mirror RFC 7396 array-replace on IngestedMessageIds; the "
-                + "owner-side full-replace clobber is fixed in DataExtensions.ApplyMeshNodePatchAtomic)",
+                + "owner-side full-replace clobber is fixed in DataExtensions.ApplyMeshNodePatchInTurn)",
                 threadHub.Address.Path, string.Join(",", ingestedMissing));
 
         threadHub.GetWorkspace().GetMeshNodeStream().Update(n =>
@@ -701,7 +714,7 @@ internal static class ThreadSubmissionServer
     /// <summary>
     /// Creates the output cell, writes the committed round to the thread node, and
     /// fires off agent execution on the _Exec hosted hub. Non-blocking — all
-    /// Hub.Post + RegisterCallback; the workspace write is a synchronous fire-and-forget.
+    /// Hub.Post + hub.Observe(...); the workspace write is a synchronous fire-and-forget.
     ///
     /// Step 0 (new): for each unprocessed user id present in <see cref="MeshThread.PendingUserMessages"/>,
     /// create the satellite ThreadMessage cell. The client only writes the thread node;
@@ -1179,7 +1192,7 @@ internal static class ThreadSubmissionServer
                 return;
             }
 
-            // Step 1: create the assistant output cell (CreateNodeRequest → RegisterCallback).
+            // Step 1: create the assistant output cell (CreateNodeRequest → hub.Observe(...)).
             // Status=Streaming until the streaming loop transitions it to Completed/Cancelled/Error.
             var responseCell = new MeshNode(responseMsgId, threadPath)
             {

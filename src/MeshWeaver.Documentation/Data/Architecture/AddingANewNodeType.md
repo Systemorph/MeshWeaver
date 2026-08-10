@@ -142,7 +142,11 @@ public static TBuilder AddLanguageModelType<TBuilder>(this TBuilder builder)
 }
 ```
 
-> **`AddMeshNodes(CreateMeshNode())` is mandatory.** It registers the partition meta-node so `path:Model` returns `{ Path: "Model", NodeType: "LanguageModel" }`. Without it the partition exists conceptually but is undiscoverable — the chat dropdown's `namespace:Model` query returns nothing.
+> **`AddMeshNodes(CreateMeshNode())` is mandatory.** It registers the type definition so the type resolves by name (`FindStaticNode`) and its `HubConfiguration` delegate is available. Without it the type exists conceptually but is undiscoverable, and the catalog query that feeds the picker returns nothing.
+
+> 🚨 **If the type's catalog is served from the DB, the definition must be registered `IsDefinitionOnly = true`.** The sample above is the minimal shape; the real `AddLanguageModelType` takes a `serveFromPartition` set and, when the catalog partition is DB-synced, (a) skips the in-memory static provider (Postgres serves the instances) and (b) registers the type-def as definition-only. Skip (b) and the per-node-hub persistence sampler auto-persists the type-def to a phantom schema named after the lowercased discriminator (`languagemodel`) that was never provisioned → `42P01`. Full rules: [NodeType Catalogs](/Doc/Architecture/NodeTypeCatalogs).
+
+> ⚠️ **Namespace note for this example.** `LanguageModelNodeType.RootNamespace` is still `"Model"`, but that is the **legacy** partition name, honoured for backwards-compatible configs. The live model catalog lives under the **`Provider`** partition — providers at `Provider/{provider}`, models nested at `Provider/{provider}/{model}` — and the composer's model picker queries `namespace:Provider nodeType:LanguageModel scope:descendants sort:order`, not `namespace:Model`. Read the recipe for its *shape*, not for that constant.
 
 ---
 

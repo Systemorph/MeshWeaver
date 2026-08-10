@@ -10,16 +10,16 @@ namespace MeshWeaver.Hosting;
 
 /// <summary>
 /// Scoped IMeshService implementation.
-/// Writes go through hub messaging (Post + RegisterCallback) — no direct persistence dependency.
+/// Writes go through hub messaging (<c>hub.Observe(request, …)</c>) — no direct persistence dependency.
 /// Reads go through MeshQuery (aggregated query providers).
 /// Identity is captured from AccessService and stamped on each delivery.
 ///
-/// The CRUD observables use <c>Observable.Create(observer =&gt; ...)</c> and signal all outcomes —
-/// success, handler rejection, and routing <see cref="DeliveryFailure"/> — via
-/// <c>observer.OnNext</c> / <c>observer.OnError</c>. <b>Never <see cref="Observable.FromAsync(System.Func{System.Threading.Tasks.Task})"/></b>
-/// (FromAsync wraps a Task and blocks a thread-pool thread), <b>never Task return types</b> on the
-/// public surface, <b>never <see cref="Task"/>.<see cref="Task.FromResult{TResult}(TResult)"/></b>
-/// inside callbacks (use the <see cref="SyncDelivery"/> overload of RegisterCallback instead).
+/// The CRUD observables use <c>Observable.Defer(...)</c> over <c>hub.Observe(request, …)</c>,
+/// composing outcomes with <c>.SelectMany</c> and surfacing handler rejection / routing
+/// <see cref="DeliveryFailure"/> as <c>Observable.Throw</c>.
+/// <b>Never <see cref="Observable.FromAsync(System.Func{System.Threading.Tasks.Task})"/></b>
+/// (forbidden outside <c>IoPool</c>: it runs the prologue on the subscribing thread and bounds
+/// nothing), and <b>never Task return types</b> on the public surface.
 /// See <c>Doc/Architecture/AsynchronousCalls</c>.
 ///
 /// Each call is bounded by <see cref="MeshOperationOptions.Timeout"/> so a lost/slow response
@@ -48,6 +48,29 @@ internal sealed class MeshService(
     /// </summary>
     private Address? _nodeOperationTarget;
     private Address NodeOperationTarget => _nodeOperationTarget ??= hub.NodeOperationTarget();
+
+    /// <summary>
+    /// The hub the node-operation request is POSTED FROM (and whose action block observes the
+    /// response). Normally the caller's own hub — but when that hub is the ROOT MESH HUB it is the
+    /// mesh's ROUTER, and the router must be neither end of a delivery: a request posted there
+    /// reaches its handler stamped <c>Sender = mesh/{id}</c>, which is exactly what the
+    /// <c>ROUTER_TRAFFIC</c> detector reports. Issuing on the dedicated node-operation execution
+    /// hub instead keeps request AND response entirely off the router (both ends are that hub, so
+    /// the post is local and never routed at all).
+    ///
+    /// <para>Identity is unaffected: <see cref="ConfigurePost"/> stamps the caller's captured
+    /// <c>AccessContext</c> on the delivery explicitly, and the <c>CreatedBy</c>/<c>DeletedBy</c>/
+    /// <c>RequestedBy</c> fields carry it in the request itself — neither depends on which hub the
+    /// post originates from.</para>
+    ///
+    /// <para>Cached alongside <see cref="_nodeOperationTarget"/>: the parent chain is stable for
+    /// this scoped service's lifetime.</para>
+    /// </summary>
+    private IMessageHub? _issuingHub;
+    private IMessageHub IssuingHub => _issuingHub ??=
+        string.Equals(hub.Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal)
+            ? hub.NodeOperationExecutionHub() ?? hub
+            : hub;
 
     /// <summary>
     /// Per-call timeout ceiling. Every CRUD observable is bounded by this so a lost response
@@ -109,7 +132,7 @@ internal sealed class MeshService(
             if (string.IsNullOrEmpty(request.CreatedBy)
                 && captured?.ObjectId is { Length: > 0 } callerId)
                 request = request with { CreatedBy = callerId };
-            return hub.Observe(request, o => ConfigurePost(o, captured))
+            return IssuingHub.Observe(request, o => ConfigurePost(o, captured))
                 .SelectMany(d =>
                 {
                     var r = d.Message;
@@ -138,7 +161,7 @@ internal sealed class MeshService(
             if (string.IsNullOrEmpty(request.CreatedBy)
                 && captured?.ObjectId is { Length: > 0 } callerId)
                 request = request with { CreatedBy = callerId };
-            return hub.Observe(request, o => ConfigurePost(o, captured))
+            return IssuingHub.Observe(request, o => ConfigurePost(o, captured))
                 .SelectMany(d =>
                 {
                     var r = d.Message;
@@ -181,7 +204,7 @@ internal sealed class MeshService(
             if (string.IsNullOrEmpty(request.RequestedBy)
                 && captured?.ObjectId is { Length: > 0 } callerId)
                 request = request with { RequestedBy = callerId };
-            return hub.Observe(request, o => ConfigurePost(o, captured))
+            return IssuingHub.Observe(request, o => ConfigurePost(o, captured))
                 .SelectMany(d =>
                 {
                     var r = d.Message;
@@ -209,7 +232,7 @@ internal sealed class MeshService(
             if (string.IsNullOrEmpty(request.DeletedBy)
                 && captured?.ObjectId is { Length: > 0 } callerId)
                 request = request with { DeletedBy = callerId };
-            return hub.Observe(request, o => ConfigurePost(o, captured))
+            return IssuingHub.Observe(request, o => ConfigurePost(o, captured))
                 .SelectMany(d =>
                 {
                     var r = d.Message;
@@ -239,7 +262,7 @@ internal sealed class MeshService(
                 IncludeDescendants = includeDescendants,
                 IncludeSatellites = includeSatellites
             };
-            return hub.Observe(req, o => ConfigurePost(o, captured))
+            return IssuingHub.Observe(req, o => ConfigurePost(o, captured))
                 .SelectMany(d =>
                 {
                     var r = d.Message;

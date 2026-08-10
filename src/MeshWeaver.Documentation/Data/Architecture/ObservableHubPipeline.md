@@ -5,48 +5,65 @@ Description: "Target architecture and staged plan for converting the message-hub
 
 # Observable Hub Pipeline — Migration Design
 
-> **Status: DESIGN / NOT YET IMPLEMENTED.** This is the target for converting the
-> message-hub core away from `Task`-based handlers + TPL Dataflow to `IObservable`
-> end-to-end with a synchronous single-threaded turn loop. Until it ships, the live
-> pipeline is still `AsyncDelivery` (`Task<IMessageDelivery>`) driven by a Dataflow
-> `ActionBlock` (`MessageService`). Do not describe the system as observable-core
-> until each stage below is merged and green.
+> **Status: LANDED (stages 1–3).** This page was written as a migration design; the
+> migration has since shipped, so read it as **the record of a completed change plus the
+> invariants it must preserve**, not as future work. Verify against the code before
+> quoting any snippet below — several were written as *targets* and the shipped shape
+> differs in detail (notably: `AsyncDelivery` kept its NAME and its `CancellationToken`
+> parameter, and the turn loop trampolines through `TaskScheduler` rather than draining
+> in a bare `while`).
+>
+> What is true of the live pipeline today:
+>
+> - `AsyncDelivery` (`Messaging.Contract/IMessageHandler.cs`) is
+>   `delegate IObservable<IMessageDelivery> (IMessageDelivery, CancellationToken)` — **not**
+>   `Task<IMessageDelivery>`. `SyncDelivery` still returns `IMessageDelivery` and lifts via
+>   `Observable.Return`.
+> - `MessageService` has **no TPL Dataflow blocks**. The inbox is
+>   `Queue<Func<IObservable<IMessageDelivery>>> mainQueue` (plus a `deferredQueue` for
+>   gate-deferred turns) guarded by a `Lock turnGate` + a `draining` re-entrancy flag.
+> - `MessageHub.HandleMessageAsync` folds the rule chain with `SelectMany` over an
+>   `Observable.Return(delivery)` seed and returns `IObservable<IMessageDelivery>`.
+> - `RouteConfiguration.Handlers` is `ImmutableList<AsyncDelivery>` (now observable-typed);
+>   the old `.FirstAsync().ToTask(ct)` bridge is **deleted** — `RouteConfiguration`'s own
+>   doc comment says callers "must NOT bridge manually with `.FirstAsync().ToTask()`".
+>
+> Still `Task`-shaped by design (stage 4's remainder): `HierarchicalRouting.RouteMessageAsync`
+> is **synchronous** (`IMessageDelivery` in, `IMessageDelivery` out — it never became
+> `IObservable`), and the Orleans grain boundary stays `Task` because that is the silo
+> contract.
 
 ## Why
 
-The hub already exposes `IObservable<T>` on its public surface (`IRoutingService.DeliverMessage`,
-`RoutingServiceBase`, `hub.Observe(...)`), but the **internal** delivery pipeline is still
-`Task`-based:
-
-- `AsyncDelivery` (`Messaging.Contract/IMessageHandler.cs`) = `delegate Task<IMessageDelivery> (IMessageDelivery, CancellationToken)`.
-- `MessageHubConfiguration.AsyncPipelineConfig` composes handlers as `async (d, ct, next) => await next(...)`.
-- `MessageService` drives delivery through a TPL **`ActionBlock`** and `await`s routing
-  (`hierarchicalRouting.RouteMessageAsync`) and the pipeline (`deliveryPipeline.Invoke`).
-- `RouteConfiguration.Handlers` is `ImmutableList<AsyncDelivery>`; the observable-handler
-  form bridges back to `Task` with `.FirstAsync().ToTask(ct)` (`RouteConfiguration.cs:27`).
-
-The `ActionBlock` exists for exactly one reason: to **serialize asynchronous handler
-continuations** onto a single logical thread. Once every handler is a *synchronous*
-`IObservable` that completes inline on `Subscribe` (the case after this migration — see
-[AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls) rule #1 and #9), there are no
-async continuations to serialize, and a plain lock-guarded queue (one turn at a time) is
-sufficient and simpler. Genuine async (Postgres, blob, file, compile) is already isolated
-behind [`IIoPool`](/Doc/Architecture/AsynchronousCalls) — those leaves stay async and bridge
+The hub already exposed `IObservable<T>` on its public surface (`IRoutingService.DeliverMessage`,
+`RoutingServiceBase`, `hub.Observe(...)`) while the **internal** delivery pipeline was still
+`Task`-based. The `ActionBlock` existed for exactly one reason: to **serialize asynchronous
+handler continuations** onto a single logical thread. Once every handler is a *synchronous*
+`IObservable` that completes inline on `Subscribe` (see
+[AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls)), there are no async
+continuations to serialize, and a plain lock-guarded queue (one turn at a time) is
+sufficient and simpler. Genuine async (Postgres, blob, file, compile) is isolated
+behind [`IIoPool`](/Doc/Architecture/ControlledIoPooling) — those leaves stay async and bridge
 to `IObservable` at the pool, never on the turn loop.
 
-## Target architecture
+## Target architecture (as designed — see the status note for what shipped)
 
 ### 1. Handler delegate — `IObservable`, not `Task`
 
+The design proposed renaming the delegate to `DeliveryHandler` and dropping the
+`CancellationToken`. **What shipped keeps both the name and the token:**
+
 ```csharp
-// Messaging.Contract/IMessageHandler.cs
-public delegate IObservable<IMessageDelivery> DeliveryHandler(IMessageDelivery request);
-public delegate IObservable<IMessageDelivery> DeliveryHandler<in TMessage>(IMessageDelivery<TMessage> request);
+// Messaging.Contract/IMessageHandler.cs — the ACTUAL shipped shape
+public delegate IObservable<IMessageDelivery> AsyncDelivery(IMessageDelivery request, CancellationToken cancellationToken);
+public delegate IObservable<IMessageDelivery> AsyncDelivery<in TMessage>(IMessageDelivery<TMessage> request, CancellationToken cancellationToken);
 public delegate IMessageDelivery SyncDelivery(IMessageDelivery request);   // unchanged — lifts via Observable.Return
+public delegate IObservable<IMessageDelivery> AsyncRouteDelivery(Address routeAddress, IMessageDelivery request, CancellationToken cancellationToken);
 ```
 
-`AsyncDelivery` / `AsyncRouteDelivery` are deleted. The `CancellationToken` parameter goes
-away from the handler surface (cancellation is a subscription concern — `Timeout`, dispose).
+So `AsyncDelivery` / `AsyncRouteDelivery` were **retyped, not deleted** — the return type
+changed from `Task<IMessageDelivery>` to `IObservable<IMessageDelivery>`. Do not go looking
+for a `DeliveryHandler` type; it does not exist.
 
 ### 2. Pipeline composition — `SelectMany`, not `await next`
 
@@ -62,10 +79,12 @@ Genuine-async handlers: the body returns `ioPool.Invoke(...)`/`hub.Observe(...)`
 
 ### 3. Routing — reactive fold
 
-`HierarchicalRouting.RouteMessage` returns `IObservable<IMessageDelivery>`; the handler loop
-becomes a reactive fold (`Handlers.Aggregate(Observable.Return(delivery), (acc, h) => acc.SelectMany(h))`)
-then `.Select(RouteAlongHostingHierarchy)`. The observable-handler `WithHandler` stores the
-handler directly — the `.FirstAsync().ToTask()` bridge is deleted.
+The observable-handler `WithHandler` now stores the handler directly and the
+`.FirstAsync().ToTask()` bridge **is** deleted. The reactive fold landed in
+`MessageHub.HandleMessageAsync` (a `foreach` accumulating `result.SelectMany(...)` over a
+snapshot of the rule chain), **not** in routing:
+`HierarchicalRouting.RouteMessageAsync` remained a synchronous
+`IMessageDelivery RouteMessageAsync(IMessageDelivery, CancellationToken)`.
 
 ### 4. Turn loop — a single-threaded queue of `IObservable`, not a TPL `ActionBlock`
 
@@ -75,11 +94,20 @@ handler directly — the `.FirstAsync().ToTask()` bridge is deleted.
 > and moves on. The queue itself is the single-thread guarantee — exactly one turn drains at a
 > time — so the `ActionBlock` (whose only job was to serialize async continuations) is gone.
 
-`MessageService` replaces the `ActionBlock`/`deferredBuffer`/`executionBuffer` Dataflow blocks
-with a single lock-guarded FIFO queue and a re-entrancy-guarded drain loop:
+`MessageService` replaced the `ActionBlock`/`deferredBuffer`/`executionBuffer` Dataflow blocks
+with `mainQueue` + `deferredQueue` (both `Queue<Func<IObservable<IMessageDelivery>>>`), a
+`Lock turnGate`, and a `draining` re-entrancy flag. The shipped drain
+(`EnqueueTurn` / `KickDrain` / `ScheduleDrainOne` / `DrainOne`) differs from the sketch below
+in one important way: **each drain run is started on `turnScheduler`**
+(`Task.Factory.StartNew(DrainOne, …, TaskCreationOptions.DenyChildAttach, turnScheduler)`), so
+a handler still observes `TaskScheduler.Current == ` the hub's configured scheduler — the
+invariant `WithTaskScheduler` and the Orleans grain hub depend on. `DrainOne` then
+**trampolines**: a synchronous turn completes inline during `Subscribe` and the loop picks up
+the next turn on the same pool task; only a genuinely-async turn returns before completing, and
+its terminal callback re-schedules the drain.
 
 ```csharp
-// q : Queue<Func<IObservable<IMessageDelivery>>>   — each item is the lazy turn for one delivery
+// Sketch of the design (the shipped code adds the turnScheduler hop + trampoline described above)
 void Post(IMessageDelivery d)
 {
     lock (gate) { q.Enqueue(() => RouteAndDeliver(d)); }   // RouteAndDeliver returns IObservable
@@ -89,21 +117,17 @@ void Post(IMessageDelivery d)
 void Drain()
 {
     lock (gate) { if (draining) return; draining = true; }  // one turn at a time, ever
-    try
-    {
-        while (TryDequeue(out var turn))
-            turn().Subscribe(                               // START the turn's observable
-                _ => { },                                   // terminal: state was mutated INLINE
-                ex => ReportFailure(ex));                   // error handling per turn
-    }
-    finally { lock (gate) { draining = false; } }
+    while (TryDequeue(out var turn))
+        turn().Subscribe(                                   // START the turn's observable
+            _ => { },                                       // terminal: state was mutated INLINE
+            ex => ReportFailure(ex));                       // error handling per turn
 }
 ```
 
 For a **synchronous** handler the turn's `IObservable` emits and completes *inline on
-`Subscribe`*, so all of its hub-state mutation happens on this single thread before `Drain`
+`Subscribe`*, so all of its hub-state mutation happens on this single thread before the drain
 advances — strict FIFO, no overlap. A handler that `hub.Post`s to its own hub enqueues behind
-the current turn (the `while` picks it up; `draining` blocks nested re-entry). The
+the current turn (`draining` blocks nested re-entry). The
 deferral/gate machinery (`gates`, `ScheduleDeferralTimeout`, `ProcessDeferredMessage`) maps 1:1:
 a deferred message is **re-enqueued** when its gate opens instead of `deferredBuffer.Post(...)`.
 
@@ -149,7 +173,7 @@ loop. This is the same actor-model boundary as today (state on one thread, I/O o
 results re-enter as messages) — just expressed in `IObservable` + a plain queue instead of
 `Task` + a Dataflow `ActionBlock`.
 
-## Staged plan (green CI gate per stage — do NOT merge a red stage)
+## Staged plan (historical — stages 1–3 are merged; stage 4 is partly done)
 
 1. **Routing chain** — `RouteConfiguration.Handlers` + `HierarchicalRouting` → `IObservable`;
    keep a thin `Task` bridge at the `MessageService` edge so this stage is self-contained.
@@ -172,9 +196,9 @@ results re-enter as messages) — just expressed in `IObservable` + a plain queu
 - **A dedicated branch** off a green point, NOT the currently-deployed branch. Stabilize +
   verify the branch end-to-end before merge/deploy.
 
-## Docs to update prominently when each stage lands
+## Docs that describe the shipped pipeline
 
-- [AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls) — the routing/pipeline section,
-  and the line ~187 table (routing moves from "leave as-is" to "observable by composition").
+- [AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls) — the routing/pipeline section.
 - [MessageBasedCommunication.md](/Doc/Architecture/MessageBasedCommunication) — handler return type.
-- `CLAUDE.md` reactive-pattern rules — `DeliveryHandler` replaces `AsyncDelivery`.
+- [OrleansTaskScheduler.md](/Doc/Architecture/OrleansTaskScheduler) — how `turnScheduler` is
+  resolved and why the grain hub needs the scheduler hop the trampoline preserves.

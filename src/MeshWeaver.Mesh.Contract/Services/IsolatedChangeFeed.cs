@@ -28,7 +28,7 @@ namespace MeshWeaver.Mesh.Services;
 /// query silently stopped re-emitting after a create that completed successfully. The subscriber
 /// that throws is not hypothetical on any backend: every live synced query owns a
 /// <c>persistence.Changes → changeBuffer</c> pipeline, and one-shot queries
-/// (<c>IMeshService.QueryAsync</c>, autocomplete, path resolution) open and tear one down
+/// (<c>IMeshService.Query</c>, autocomplete, path resolution) open and tear one down
 /// constantly, so the disposal window is hit whenever a write lands during a teardown.</para>
 ///
 /// <para>So: deliver to a SNAPSHOT of the observers, isolate each one, and never let a throw from

@@ -59,6 +59,14 @@ namespace MeshWeaver.AI.Test;
 /// deficit forever. The fix reads the snapshot in-turn and carries its own version
 /// (<c>BuildReassertFrame</c>, pinned by <c>ResubscribeReassertFrameTest</c>).</para>
 /// </summary>
+/// <remarks>
+/// Serialised via <see cref="ConcurrencyStressCollection"/>: 6 mirrors × 48 writes × 4 rounds are
+/// merged into ONE burst so they hit the owner together, and the verdict is a 30 s settle bound on
+/// that burst. Sharing a 4-vCPU runner turns the bound into a measure of the scheduler — the backed-out
+/// opt-in failed here with zero write errors, all 288 entries at the owner and a mirror still advancing
+/// monotonically when the bound expired.
+/// </remarks>
+[Collection(ConcurrencyStressCollection.Name)]
 public class CrossHubPatchAtomicityTest(ITestOutputHelper output) : AITestBase(output)
 {
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
