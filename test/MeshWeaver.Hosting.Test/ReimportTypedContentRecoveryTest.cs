@@ -5,6 +5,8 @@ using System.Text.Json;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
@@ -149,6 +151,67 @@ public class ReimportTypedContentRecoveryTest(ITestOutputHelper output) : HubTes
             "the seam must consult the mesh-wide registry on the degraded path, not just warn");
         contentType.GetProperty("Heading")!.GetValue(typed.Content).Should().Be("Seam One",
             "the seam must round-trip the payload, not merely the type tag");
+    }
+
+    /// <summary>
+    /// 🚨 The WIRE seam — the FIRST place a dynamic NodeType's content degrades, and until now the only
+    /// one that never consulted the mesh-wide registry.
+    ///
+    /// <para>Prod (memex.meshweaver.cloud, 2026-08-09) logged this continuously, for EVERY plugin's
+    /// content type at once — <c>PluginContent</c> (the type of every Store/Plugin ROOT node, so
+    /// <c>/Underwriting</c> itself), <c>GuidelineReference</c>, <c>RegionalLimitContent</c>,
+    /// <c>CapacityCapContent</c>, <c>AppetiteMetricContent</c>, <c>Workbench</c>, <c>ChessGame</c>, …:
+    /// <c>"Received '$type':'PluginContent' which is NOT registered in this (receiving) hub"</c>. The
+    /// advice in that warning — register it on the receiving hub — is IMPOSSIBLE for a type that only
+    /// exists after a runtime Roslyn compile, and <c>PolymorphicTypeInfoResolver</c> deliberately
+    /// refuses to auto-adopt collectible types into a per-hub registry. So the node crossed the wire
+    /// untyped, every <c>Content is X</c> soft-cast failed, and the page rendered empty.</para>
+    ///
+    /// <para>Two hubs, ONE payload, the only difference being whether the process-wide
+    /// <see cref="IMeshContentTypeRegistry"/> is reachable from the receiving hub's DI: without it the
+    /// bug reproduces, with it the converter re-types. Delete the registry lookup from
+    /// <c>ObjectPolymorphicConverter.ReadObject</c> and this turns red.</para>
+    /// </summary>
+    [Fact]
+    public void WireSeam_ForeignHubReadsDynamicContentTyped_OnlyThroughRegistry()
+    {
+        var contentType = EmitCollectibleType("WirePluginContent", "Body");
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(contentType);
+
+        // A hub that does NOT own the type and has NO mesh-wide registry — the shape every
+        // pre-fix receiving hub had (cache hub, routing hub, a sibling per-node hub).
+        var unaidedHub = GetClient();
+        var instance = Activator.CreateInstance(contentType)!;
+        contentType.GetProperty("Body")!.SetValue(instance, "hero markup");
+        var stored = JsonSerializer.Serialize(instance, contentType, unaidedHub.JsonSerializerOptions);
+        stored.Should().Contain(contentType.Name, "the owning hub stamps the short-name $type discriminator");
+
+        // BUG REPRODUCED at the wire seam: the receiving hub's polymorphic converter cannot resolve the
+        // discriminator, so Content arrives as a bare JsonElement.
+        JsonSerializer.Deserialize<object>(stored, unaidedHub.JsonSerializerOptions)
+            .Should().BeOfType<JsonElement>(
+                "a receiving hub with no registration and no mesh-wide registry degrades dynamic content to JsonElement");
+
+        // FIX: the SAME payload, read by a hub whose DI exposes the mesh-wide registry — the converter
+        // recovers the concrete CLR type. No per-hub WithType, no recycle, no adoption into the hub's
+        // own TypeRegistry (so the collectible assembly is not pinned by this hub).
+        var aidedHub = GetClient(c => c
+            .WithServices(s => s.AddSingleton<IMeshContentTypeRegistry>(registry))
+            .WithPostingIdentity(PostingIdentity.System));
+
+        var recovered = JsonSerializer.Deserialize<object>(stored, aidedHub.JsonSerializerOptions);
+
+        recovered!.GetType().Should().Be(contentType,
+            "the wire seam must consult the mesh-wide registry before degrading to JsonElement");
+        contentType.GetProperty("Body")!.GetValue(recovered).Should().Be("hero markup",
+            "recovery must round-trip the payload, not merely the type tag");
+
+        // The receiving hub must NOT have adopted the collectible type: adopting a per-compile CLR
+        // identity into a long-lived registry is what PolymorphicTypeInfoResolver refuses to do, and
+        // the fix must not smuggle it in through the back door.
+        aidedHub.TypeRegistry.TryGetType(contentType.Name, out _).Should().BeFalse(
+            "recovery deserialises to the concrete type; it must not register the collectible type on the hub");
     }
 
     /// <summary>
