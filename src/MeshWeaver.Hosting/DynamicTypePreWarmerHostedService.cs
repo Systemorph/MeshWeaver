@@ -125,12 +125,29 @@ public sealed class DynamicTypePreWarmerHostedService(
                     gate?.MarkComplete(
                         $"baked in {elapsed:hh\\:mm\\:ss} — compiled={Volatile.Read(ref compiled)} "
                         + $"alreadyBaked={Volatile.Read(ref alreadyBaked)}");
+                    // 🚨 Say ONLY what is actually enforced. The gate STATE is registered
+                    // unconditionally, so this branch runs whether or not a readiness probe consumes
+                    // it. Claiming a stall that nothing enforces is worse than saying nothing: it was
+                    // read as proof the portal was protected while the pod went Ready and served
+                    // traffic, and a production outage was diagnosed against it for hours.
                     if (gate is { Phase: BakePhase.Regressed })
-                        logger.LogCritical(
-                            "DynamicTypePreWarmer: REFUSING READINESS — {Detail}. The rollout will stall "
-                            + "with the previous image still serving. Regressions: {Regressions}",
-                            gate.Detail,
-                            string.Join(" | ", gate.Regressions.Select(r => $"{r.Key} → {r.Value}")));
+                    {
+                        var regressions = string.Join(" | ", gate.Regressions.Select(r => $"{r.Key} → {r.Value}"));
+                        if (gate.GatesReadiness)
+                            logger.LogCritical(
+                                "DynamicTypePreWarmer: REFUSING READINESS — {Detail}. The rollout will stall "
+                                + "with the previous image still serving. Regressions: {Regressions}",
+                                gate.Detail, regressions);
+                        else
+                            logger.LogCritical(
+                                "DynamicTypePreWarmer: GATE NOT ARMED — {Count} NodeType(s) regressed on this "
+                                + "image and NOTHING CONSUMES THIS STATE, so nothing is blocked. Startup "
+                                + "continues and instances of these types will fail. To make it enforce, run a "
+                                + "host that registers the bake readiness check with '{Key}'=true, and give the "
+                                + "startupProbe a full cold-bake budget. {Detail}. Regressions: {Regressions}",
+                                gate.Regressions.Count, NodeTypeBakeGateExtensions.EnabledConfigKey,
+                                gate.Detail, regressions);
+                    }
                 });
     }
 

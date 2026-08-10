@@ -1,4 +1,5 @@
 using MeshWeaver.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -24,6 +25,50 @@ public class NodeTypeBakeGateStateTest
     [Fact]
     public void FreshState_IsNotStarted() =>
         new NodeTypeBakeGateState().Phase.Should().Be(BakePhase.NotStarted);
+
+    /// <summary>
+    /// 🚨 Registered is NOT armed, and the state must say which it is.
+    ///
+    /// <para>The state is registered unconditionally so diagnostics are always collected, while the
+    /// readiness check that ENFORCES it is opt-in. For months those were independent, so a recorded
+    /// regression logged "REFUSING READINESS — the rollout will stall with the previous image still
+    /// serving" on a pod that nothing gated, which then went Ready and took traffic. The claim was
+    /// read as proof of protection during a production outage. Defaulting to <c>false</c> is what
+    /// makes the honest branch the fallback: a host must opt IN to claiming enforcement.</para>
+    /// </summary>
+    [Fact]
+    public void GatesReadiness_DefaultsToFalse_SoTheLogCannotClaimAnUnarmedStall() =>
+        new NodeTypeBakeGateState().GatesReadiness.Should().BeFalse();
+
+    [Fact]
+    public void AddNodeTypeBakeGate_DefaultRegistration_IsNotArmed() =>
+        new ServiceCollection().AddNodeTypeBakeGate()
+            .BuildServiceProvider().GetRequiredService<NodeTypeBakeGateState>()
+            .GatesReadiness.Should().BeFalse();
+
+    /// <summary>
+    /// A host that registers the readiness check declares it here, and that single declaration is
+    /// what the pre-warmer reports from — never a second re-parse of the config key, which could
+    /// disagree with the wiring it claims to describe.
+    /// </summary>
+    [Fact]
+    public void AddNodeTypeBakeGate_WhenHostGates_IsArmed() =>
+        new ServiceCollection().AddNodeTypeBakeGate(gatesReadiness: true)
+            .BuildServiceProvider().GetRequiredService<NodeTypeBakeGateState>()
+            .GatesReadiness.Should().BeTrue();
+
+    /// <summary>Arming changes only what may be CLAIMED — never which outcomes gate.</summary>
+    [Fact]
+    public void Arming_DoesNotChangeWhichOutcomesGate()
+    {
+        var armed = new NodeTypeBakeGateState { GatesReadiness = true };
+        var unarmed = new NodeTypeBakeGateState();
+        armed.MarkOutcome(Failed("A", wasHealthy: true));
+        unarmed.MarkOutcome(Failed("A", wasHealthy: true));
+
+        armed.Phase.Should().Be(BakePhase.Regressed);
+        unarmed.Phase.Should().Be(BakePhase.Regressed);
+    }
 
     [Fact]
     public void MarkRunning_MovesToRunning()

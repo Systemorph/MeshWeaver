@@ -290,8 +290,6 @@ builder.Services.AddHealthChecks()
 // assembly cache — types already baked for this framework are skipped, so a second replica
 // (or a restart) inherits the first pod's work instead of repeating it.
 builder.Services.AddDynamicTypePreWarming();
-// Shared bake state the sweep writes and the readiness gate below reads.
-builder.Services.AddNodeTypeBakeGate();
 
 // 🚦 "Fail before prod, not in prod." Opt-in (PreWarm:GateReadiness) gate that holds /health
 // RED until this pod's NodeTypes are built against ITS image. Combined with the deployment's
@@ -303,8 +301,20 @@ builder.Services.AddNodeTypeBakeGate();
 // intentional deployment choice, not something a self-host inherits by accident. It also
 // REQUIRES a startupProbe budget large enough for a full cold bake (see values.aks.yaml) —
 // without that, Kubernetes kills the pod mid-bake and it never converges.
-if (bool.TryParse(builder.Configuration[NodeTypeBakeGateExtensions.EnabledConfigKey], out var gateBake)
-    && gateBake)
+//
+// 🚨 ONE flag decides BOTH the health-check registration and what the pre-warmer is allowed to
+// claim. They were previously independent: the state registered unconditionally while the check
+// registered on the flag, so a regression logged "REFUSING READINESS — the rollout will stall"
+// on a pod with nothing gating it, which then went Ready and served traffic. Deriving both from
+// this single parse is what keeps the log honest — see NodeTypeBakeGateState.GatesReadiness.
+var gateBake = bool.TryParse(builder.Configuration[NodeTypeBakeGateExtensions.EnabledConfigKey],
+    out var parsedGateBake) && parsedGateBake;
+
+// Shared bake state the sweep writes and the readiness gate below reads. Always registered — the
+// diagnostics are collected either way; only ENFORCEMENT is opt-in.
+builder.Services.AddNodeTypeBakeGate(gateBake);
+
+if (gateBake)
     builder.Services.AddHealthChecks()
         .AddCheck<Memex.Portal.Distributed.NodeTypeBakeHealthCheck>("nodetype_bake");
 
