@@ -50,6 +50,18 @@ public class UpsertInnerCreateObservationTest(ITestOutputHelper output) : Monoli
     /// </summary>
     private async Task FenceCreateCompleted(string path)
     {
+        // GetMeshNode is one-shot request/response — it answers null and COMPLETES for a node that
+        // is not there yet, so it has to be re-queried rather than awaited (WritingTests.md,
+        // "Polling loops around QueryAsync"). Never a fixed sleep: the wait is on the condition.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => Mesh.GetMeshNode(path))
+            .Where(n => n is not null)
+            .FirstAsync()
+            .Timeout(20.Seconds());
+
+        // Two further COMPLETE round-trips through the same mesh hub. Once these have answered, any
+        // reply the create posted is long since pumped — the interleaving that loses a post-hoc
+        // registration.
         await Mesh.GetMeshNode(path).Should().Within(15.Seconds()).Match(n => n is not null);
         await Mesh.GetMeshNode(path).Should().Within(15.Seconds()).Match(n => n is not null);
     }
