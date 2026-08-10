@@ -115,15 +115,31 @@ internal static class NodeTypeRebindWatcher
             .Subscribe(
                 change =>
                 {
-                    // A hub already tearing down needs no recycle, and posting to it would only
-                    // add a delivery the disposal has to drain.
-                    if (instanceHub.IsDisposing)
-                        return;
-                    logger?.LogInformation(
-                        "NodeType rebind: node '{Path}' is now typed '{NewNodeType}' but its hub activated on "
-                        + "'{BoundNodeType}' — recycling so the next access binds the real type",
-                        path, change.NodeType ?? "(none)", boundNodeType ?? "(none)");
-                    instanceHub.Post(new DisposeRequest(), o => o.WithTarget(instanceHub.Address));
+                    // 🚨 The handler runs SYNCHRONOUSLY on the PUBLISHER's thread — inside the
+                    // storage write's post-commit Do (StorageAdapterChangeFeedExtensions). A throw
+                    // here would propagate INTO that write and fail an unrelated caller's save, so
+                    // this recycle can never be allowed to escape. It is cheap and non-blocking:
+                    // Post enqueues onto the target's action block, and DisposeRequest is
+                    // [SystemMessage]/[CanBeIgnored], so it needs no AccessContext on a thread that
+                    // carries none.
+                    try
+                    {
+                        // A hub already tearing down needs no recycle, and posting to it would only
+                        // add a delivery the disposal has to drain.
+                        if (instanceHub.IsDisposing)
+                            return;
+                        logger?.LogInformation(
+                            "NodeType rebind: node '{Path}' is now typed '{NewNodeType}' but its hub activated on "
+                            + "'{BoundNodeType}' — recycling so the next access binds the real type",
+                            path, change.NodeType ?? "(none)", boundNodeType ?? "(none)");
+                        instanceHub.Post(new DisposeRequest(), o => o.WithTarget(instanceHub.Address));
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.LogWarning(ex,
+                            "NodeType rebind: recycling '{Path}' after its retype failed — the hub keeps its "
+                            + "activation-time configuration until it is recycled", path);
+                    }
                 },
                 ex => logger?.LogWarning(ex,
                     "NodeType rebind watcher for '{Path}' faulted — the hub keeps its activation-time "
