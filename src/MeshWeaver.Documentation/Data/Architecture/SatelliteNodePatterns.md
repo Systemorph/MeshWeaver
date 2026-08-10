@@ -68,37 +68,47 @@ Every node in MeshWeaver has its own hub, created on demand when a message is ro
 
 ## Never Await in Hub Handlers
 
-Hub message handlers run on the hub's serial execution block. Any `await` that waits for the same execution block to process another message will deadlock — the block is already occupied.
+Hub message handlers run on the hub's serial execution block. Any `await` that waits for the same execution block to process another message will deadlock — the block is already occupied. Everything is `IObservable<T>` end-to-end: compose and `Subscribe`, never `await`.
 
 ```csharp
-// WRONG — deadlocks: CreateNodeAsync uses AwaitResponse internally,
-// which needs the execution block that is currently busy running this handler.
+// WRONG — deadlocks: the await parks the action block that must process
+// the very response this call is waiting for.
 private static async Task<IMessageDelivery> HandleRequest(IMessageHub hub, ...)
 {
     await meshService.CreateNodeAsync(node);
 }
 
-// CORRECT — return immediately, continue work off the execution block
+// CORRECT — return immediately; the observable chain does the work off the
+// execution block and posts the response from its terminal events.
 private static IMessageDelivery HandleRequest(IMessageHub hub, ...)
 {
-    meshService.CreateNodeAsync(node).ContinueWith(t =>
-    {
-        if (t.IsFaulted) logger.LogError(t.Exception, "...");
-        else hub.Post(new SomeResponse { ... }, o => o.ResponseFor(delivery));
-    });
+    meshService.CreateNode(node)
+        .Subscribe(
+            _  => hub.Post(new SomeResponse { ... }, o => o.ResponseFor(delivery)),
+            ex => logger.LogError(ex, "create failed"));
     return delivery.Processed();
 }
 ```
+
+> 🚨 `meshService.CreateNodeAsync(...)` still exists as a **back-compat `Task` shim** over the observable
+> (`MeshServiceExtensions`). It is not the pattern — a `Task` on the hub path is the deadlock. Use
+> `meshService.CreateNode(node)` and `Subscribe`.
 
 ### Allowed Patterns
 
 | Pattern | When to use |
 |---|---|
 | `hub.Post(message)` | Fire-and-forget to same or another hub |
-| `hub.RegisterCallback(delivery, callback)` | Wait for a response without blocking |
-| `.ContinueWith(t => ...)` | Continue after an async operation completes |
-| `hub.InvokeAsync(async ct => { await foreach ... })` | Streaming loops — the **only** place `await` is acceptable |
+| `hub.Observe<TResponse>(request, options?).Subscribe(onNext, onError)` | Request/response — the **only** request/response primitive |
+| `.SelectMany(...)` / `.Select(...)` | Chain dependent work into one observable |
+| `hub.InvokeAsync(action, exceptionCallback)` | Marshal an external callback back onto the hub's action block (both arguments are required) |
 | `stream.Subscribe(callback)` | React to workspace stream changes |
+
+> 🚨 **`RegisterCallback` and `AwaitResponse` do not exist.** They were **deleted** from `IMessageHub`,
+> not deprecated — the interface states it plainly: *"No Task-returning request/response API on the
+> interface anymore … There's no callback registration, no `TaskCompletionSource`, and no `Task`."*
+> Code written against either name does not compile. `hub.Observe(request, options?)` (`AsyncSubject`-backed)
+> is the whole surface; tests use `MonolithMeshTestBase.AwaitResponseAsync(...)`.
 
 ### Forbidden Patterns
 
@@ -107,26 +117,25 @@ private static IMessageDelivery HandleRequest(IMessageHub hub, ...)
 | `await` in hub handlers | Deadlocks the execution block |
 | `Task.Run(async () => ...)` | Breaks workspace stream propagation |
 | `.GetAwaiter().GetResult()` | Blocks the execution thread |
-| `JsonSerializer.SerializeToElement(...)` | Puts `$type` at the wrong position |
+| `.ContinueWith(t => ...)` | A `Task` continuation on the hub path — compose with `SelectMany` instead |
+| `Observable.FromAsync(...)` | Runs the prologue on the subscribing (hub) thread and is unbounded — go through `IIoPool` |
 
 ---
 
 ## Updating Node Content
 
-To update a node's content — for example, appending a message ID to a Thread's list — subscribe to the workspace stream and post a `DataChangeRequest`:
+To update a node's content — for example, appending a message ID to a Thread's list — use the one mutation API, `GetMeshNodeStream(path).Update(...)`. It works for the hub's own node and for any other node in the mesh; the owning hub's single-threaded action block serialises every writer, and only an RFC 7396 merge patch of the fields you actually changed crosses the wire.
 
 ```csharp
-// Fires synchronously if the data is already loaded
-workspace.GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
-{
-    var node = nodes.FirstOrDefault(n => n.Path == path);
-    var updatedNode = node with { Content = newContent };
-    // Post DataChangeRequest — the framework handles serialization
-    hub.Post(new DataChangeRequest { Updates = [updatedNode] });
-});
+// Cold — the write runs on Subscribe. Always subscribe, always with an error handler.
+workspace.GetMeshNodeStream(path)
+    .Update(node => node with { Content = newContent })
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "update failed for {Path}", path));
 ```
 
-> **Never serialize manually.** The framework's `ObjectPolymorphicConverter` places `$type` discriminators at the correct position in the JSON. Manual `SerializeToElement` puts `$type` at the end, which STJ rejects on deserialization.
+> **Do not reach for `DataChangeRequest` from application code**, and never read a node's current content with `GetStream<MeshNode>().Take(1)` before writing — `Take(1)` on a live stream freezes the binding, and the read-modify-write races every other writer. `stream.Update` is the read-modify-write, done on the owner. `DataChangeRequest`/`PatchDataRequest` are the plumbing `Update` itself uses.
+
+> **Never serialize manually.** Let the framework's polymorphic converter emit the `$type` discriminators; hand-rolled `JsonSerializer.SerializeToElement(...)` of a node's content produces a payload the deserializer can reject.
 
 ---
 
@@ -142,27 +151,35 @@ User/Roland/_Thread/hello-world-4651/msg2     (ThreadMessage node)
 
 ### Data Flow
 
-1. **`Thread.ThreadMessages`** stores an ordered `IReadOnlyList<string>` of child message IDs.
-2. **`HandleSubmitMessage`** (sync handler):
-   - Subscribes to the workspace stream, appends new IDs, posts `DataChangeRequest`.
-   - Fire-and-forgets `CreateNodeAsync` for the user and response message nodes.
-   - Uses `ContinueWith` to start streaming in the `_Exec` sub-hub once the nodes exist.
-   - Returns `delivery.Processed()` immediately — the execution block is never held.
-3. **`_Exec` sub-hub** owns the streaming loop:
-   - `EnsureInitializedAsync` runs via `ContinueWith` (off the execution block).
-   - The streaming loop runs via `hub.InvokeAsync` — the only place an `await foreach` is permitted.
-   - Response text updates are posted as `DataChangeRequest` to the ThreadMessage hub address.
-4. **Blazor view** data-binds a `ThreadViewModel` that wraps the messages list.
+1. **`Thread.Messages`** stores an ordered `ImmutableList<string>` of child message IDs
+   (`src/MeshWeaver.AI/Thread.cs`). Queued-but-not-yet-started input sits separately in
+   `Thread.PendingUserMessages`.
+2. **Submission is a node write, not a wire message.** Callers use the canonical extensions in
+   `src/MeshWeaver.AI/HubThreadExtensions.cs` — `hub.StartThread(...)` / `hub.SubmitMessage(...)` —
+   which write the thread node via `GetMeshNodeStream(threadPath).Update(...)`. There is no
+   `SubmitMessageRequest`-shaped handler to write.
+3. **The per-thread submission watcher reacts to that state change**: it drains
+   `PendingUserMessages` into `Messages`, allocates the user + response cells, and invokes
+   `ThreadExecution.ExecuteMessageAsync(execHub, RoundParams, AccessContext?)` **directly as a
+   method** — no message dispatch. It returns `IObservable<Unit>`; the watcher subscribes and treats
+   completion (gated on the terminal `Status` write) as round-done.
+4. **The `_Exec` hosted hub** owns the round: its round watcher sees `Status = StartingExecution` and
+   dispatches, so the streaming loop never runs on the thread node's own action block.
+5. **Blazor view** data-binds a `ThreadViewModel` that wraps the messages list.
+
+Full reference: [Thread Operations](/Doc/Architecture/ThreadOperations).
 
 ### ThreadViewModel and Data Binding
 
-Raw arrays (`IReadOnlyList<string>`) cannot be deserialized by `GetStream<object>`. Wrap them in a view model with value-equality:
+Raw arrays cannot be deserialized by `GetStream<object>`. `ThreadViewModel`
+(`src/MeshWeaver.AI/ThreadViewModel.cs`) wraps the list and overrides `Equals` so a re-emission with
+identical contents does not churn the UI:
 
 ```csharp
 public record ThreadViewModel
 {
-    public IReadOnlyList<string> Messages { get; init; } = [];
-    // Custom Equals uses SequenceEqual to suppress redundant UI updates
+    // ... bubble list + status state ...
+    // Custom Equals compares element-wise to suppress redundant UI updates
 }
 ```
 
@@ -183,19 +200,23 @@ Doc/MyDoc/_Comment/abc123/reply1       (Reply node)
 
 | Aspect | Thread/Message | Comment/Reply |
 |---|---|---|
-| Mutation entry point | Hub message handlers | Click actions in layout areas |
-| Child list | Indexed `ThreadMessages` on the parent | Discovered via `Query` |
-| Text edits | `DataChangeRequest` via `_Exec` sub-hub | Direct `stream.Update` |
-| Node creation | `CreateNodeAsync` → confirm in handler | `CreateNode` (Active) → edit via `stream.Update` |
+| Mutation entry point | The `hub.StartThread` / `hub.SubmitMessage` extensions (`HubThreadExtensions`) | Click actions in layout areas |
+| Child list | Indexed `Thread.Messages` on the parent | Discovered by querying the comment's direct-child `Comment` nodes |
+| Text edits | `stream.Update` on the response cell, driven from the `_Exec` hub | Direct `stream.Update` |
+| Node creation | `meshService.CreateNode(...)` composed into the round's observable chain | `CreateNode` (Active) → edit via `stream.Update` |
+
+> `Comment.Replies` still exists on the record, but the current renderer does **not** read it — it
+> discovers replies with a live child query so a reply written by any writer shows up without the
+> parent's list being maintained in lockstep (`CommentLayoutAreas`).
 
 ---
 
 ## PostgreSQL Table Routing
 
-Both Thread/ThreadMessage and Comment/Reply nodes are stored in satellite tables. The mapping is configured in `PartitionDefinition.TableMappings`:
+Both Thread/ThreadMessage and Comment/Reply nodes are stored in satellite tables. The default layout is `SatelliteTableMapping.Defaults`; a partition may override it through `PartitionDefinition.TableMappings`:
 
 ```json
-{ "_Thread": "threads", "_Comment": "comments" }
+{ "_Thread": "threads", "_ThreadMessage": "threads", "_Comment": "annotations" }
 ```
 
 The routing is path-based, so children automatically inherit the parent's table:
@@ -204,8 +225,15 @@ The routing is path-based, so children automatically inherit the parent's table:
 |---|---|
 | `User/alice/_Thread/chat-1` | `threads` |
 | `User/alice/_Thread/chat-1/msg1` | `threads` (path contains `_Thread`) |
-| `Doc/MyDoc/_Comment/abc123` | `comments` |
-| `Doc/MyDoc/_Comment/abc123/reply1` | `comments` (path contains `_Comment`) |
+| `Doc/MyDoc/_Comment/abc123` | `annotations` |
+| `Doc/MyDoc/_Comment/abc123/reply1` | `annotations` (path contains `_Comment`) |
+
+> 🚨 **There is no `comments` table.** `_Comment` shares the **`annotations`** table with `_Approval`
+> and the legacy `_Tracking` — see `SatelliteTableMapping.Defaults`
+> (`src/MeshWeaver.Mesh.Contract/SatelliteTableMapping.cs`), which is the single source of truth for
+> segment → table. Other segments in the same set: `_Activity` → `activities`, `_UserActivity` →
+> `user_activities`, `_Access` → `access`, `_Notification` → `notifications`, and `Source`/`Test` →
+> `code`.
 
 ---
 
@@ -220,7 +248,7 @@ var hubConfig = defaultConfig != null
     : nodeConfig;
 ```
 
-Skipping this composition means handlers such as `AddThreadSupport()` (which registers `CreateThreadRequest`) will be absent from the node hub, causing silent failures when thread creation is attempted.
+Skipping this composition means the shared registrations — type-registry entries such as `config.TypeRegistry.AddAITypes()`, default layout areas, and the framework's own watchers — are absent from the node hub, so cross-hub messages arrive as raw `JsonElement` and areas silently fail to resolve.
 
 ---
 

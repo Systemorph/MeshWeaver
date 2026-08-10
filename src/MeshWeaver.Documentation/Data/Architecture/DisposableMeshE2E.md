@@ -70,12 +70,14 @@ The portal's `PluginCatalog__RegistryUrl` points at the stub, so the admin tab l
 installs the checkouts exactly like a production instance installs from
 `memex.meshweaver.cloud`.
 
-> ⚠️ **Fresh-mesh gotcha — the `Plugins` records partition.** `PackageInstaller` writes its
-> install record to `Plugins/{id}` *without provisioning that partition*, so on a fresh mesh the
-> content imports fine but the record write dies with `42P01: relation "plugins.mesh_nodes" does
-> not exist` — and the card never flips to "✓ Installed". Until core ensures the partition, the
-> stub serves a synthetic **`Plugins (bootstrap)`** package (a lone `Plugins` Space root);
-> installing it first provisions the schema via the Space-root create.
+> ✅ **Fixed in core — the `Plugins` records partition no longer needs a bootstrap package.**
+> `PackageInstaller` used to write its install record to `Plugins/{id}` *without provisioning that
+> partition*, so on a fresh mesh the content imported fine but the record write died with
+> `42P01: relation "plugins.mesh_nodes" does not exist` and the card never flipped to
+> "✓ Installed". `PackageInstaller.EnsurePartitionsProvisioned` now calls
+> `IPartitionStorageProvider.EnsurePartitionProvisioned` for the install-record partition before
+> writing (idempotent, promise-cached). A harness that still ships a synthetic
+> **`Plugins (bootstrap)`** package is carrying a workaround it no longer needs.
 
 Bootstrap installs are verified by **outcome** — the imported pages render — never by the
 catalog card's "✓ Installed" flip, whose read-back can lag on a fresh mesh.
@@ -115,6 +117,7 @@ stay green:
 | smoke | `vars.E2E_SMOKE_BASE_URL` | the read-only smoke against a live instance |
 | mesh | `vars.MW_E2E_ENABLED` + registry secrets (+ a token for sibling private checkouts) | registry login → `mesh/up.sh` → the full suite |
 
-See the education repo's `.github/workflows/ci.yml` for the worked example, and its
+See the **education repo's** `.github/workflows/ci.yml` for the worked example, and its
 `.claude/skills/course-e2e/SKILL.md` for the step-by-step authoring skill (mirrored on the mesh
-as `Skill/course-e2e`).
+as `Skill/course-e2e`). Both paths are in `Systemorph/education`, not in this repo — MeshWeaver's
+own workflows are `dotnet-test.yml` (CI) and `main-cd.yml` (CD); there is no `ci.yml` here.

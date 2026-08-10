@@ -47,7 +47,7 @@ When a hub handler looks like a deadlock — a test times out, a response never 
   <line x1="638" y1="248" x2="122" y2="248" stroke="#43a047" stroke-width="2" marker-end="url(#arr-green)"/>
   <text x="380" y="241" text-anchor="middle" fill="#a5d6a7" font-size="11">Response (ResponseFor)</text>
   <rect x="50" y="256" width="200" height="22" rx="5" fill="#1b3a2a"/>
-  <text x="150" y="271" text-anchor="middle" fill="#a5d6a7" font-size="11">RegisterCallback fires → completes</text>
+  <text x="150" y="271" text-anchor="middle" fill="#a5d6a7" font-size="11">hub.Observe(…) emits → completes</text>
   <text x="380" y="298" text-anchor="middle" fill="currentColor" fill-opacity="0.38" font-size="11">Hang diagnosis: find the last MESSAGE_FLOW: tag that fired and check what follows</text>
 </svg>
 
@@ -110,21 +110,24 @@ If the test hangs inside the runner, per-test log files are captured here:
 
 ## Structured Trace Tag Reference
 
-Every tag below is emitted as a single structured log line. The source column shows the exact file and approximate line so you can jump straight to the code.
+Every tag below is emitted as a single structured log line. The source column names the file and the
+emitting method — **grep for the tag itself rather than a line number**, which goes stale on the next
+edit to the file.
 
 | Tag | Source | What it tells you |
 |---|---|---|
-| `MESSAGE_FLOW: Unpacking message …` | `MessageService.cs:238` | A message was decoded at this hub |
-| `MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL …` | `MessageService.cs:247` | Hub is delegating routing to its parent / hierarchy |
-| `MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT …` | `MessageService.cs:251` | Routing returned — check `State` to see if the message was forwarded, processed, or failed |
-| `MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION …` | `MessageService.cs:303` | Hub recognised itself as the target and is invoking handlers |
-| `Buffering message …` | `MessageService.cs:184` | Hub isn't initialised yet — message went into the deferred buffer |
-| `Deferring on-target message …` | `MessageService.cs:294` | Hub received the message but a `WithInitializationGate` is still closed |
-| `Allowing message … through gate …` | `MessageService.cs:282` | A specific gate predicate let the message through pre-init |
-| `Cancelling execution pipeline …` | `MessageService.cs:373` | Hub is shutting down — in-flight work gets cancelled |
+| `MESSAGE_FLOW: Unpacking message …` | `MessageService.cs` | A message was decoded at this hub |
+| `MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL …` | `MessageService.cs` | Hub is delegating routing to its parent / hierarchy |
+| `MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT …` | `MessageService.cs` | Routing returned — check `Result` to see if the message was forwarded, processed, or failed |
+| `MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION …` | `MessageService.cs` | Hub recognised itself as the target and is invoking handlers |
+| `MESSAGE_FLOW: EXECUTION_START / EXECUTION_COMPLETED / EXECUTION_FAILED / EXECUTION_TIMEOUT_DURING_DISPOSAL` | `MessageService.cs` | The handler-invocation window itself, with a `Duration` on the terminal lines |
+| `Buffering message …` | `MessageService.cs` | Hub isn't initialised yet — message went into the deferred buffer |
+| `Deferring on-target message …` | `MessageService.cs` | Hub received the message but a `WithInitializationGate` is still closed |
+| `Allowing message … through gate …` | `MessageService.cs` | A specific gate predicate let the message through pre-init |
+| `Cancelling execution pipeline …` | `MessageService.cs` | Hub is shutting down — in-flight work gets cancelled |
 | `An exception occurred during the processing of MessageDelivery …` | `MessageHub.cs` | A handler threw — full delivery payload + stack are dumped here. **This is your prime suspect when a request seems to vanish.** |
-| `No handler found for request <T> in <Address>` | `MessageHub.cs:369` | Hub received the message but no handler matched — a `DeliveryFailure` is sent back to the caller |
-| `DeserializeDelivery: Could not deserialize message in hub <addr> — type '<T>' is not registered in this hub's TypeRegistry.` | `MessageService.cs:DeserializeDelivery` | Receiving hub fell back to `JsonElement` because the inbound `$type` discriminator isn't registered. Fix: `WithType(typeof(T), nameof(T))` on the receiving hub's config. |
+| `No handler found for request <T> (ID: …) in <Address> - sending DeliveryFailure response` | `MessageHub.cs` | Hub received the message but no handler matched — a `DeliveryFailure` is sent back to the caller |
+| `Could not deserialize message in hub <addr> — type '<T>' is not registered in this hub's TypeRegistry.` | `MessageService.DeserializeDelivery` | Receiving hub fell back to `JsonElement` because the inbound `$type` discriminator isn't registered. Fix: `WithType(typeof(T), nameof(T))` on the receiving hub's config. |
 | `SYNC_STREAM …` | `JsonSynchronizationStream.cs` | Cross-hub workspace-stream traffic. Look here when a `GetRemoteStream<>` subscription never emits. |
 
 ---
@@ -140,8 +143,12 @@ For a request-response hang, the healthy timeline looks like this:
 [T1]  MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION Hub=B
 [T2]  <handler logs at Information level>
 [T3]  MESSAGE_FLOW: Unpacking …                           (response arrives back at Hub A)
-[T3]  hub.RegisterCallback fires → IObservable completes  (caller's await returns)
+[T3]  hub.Observe(request) emits, then completes          (the caller's subscription fires)
 ```
+
+> `hub.Observe(...)` is the **only** request/response primitive — there is no `RegisterCallback`
+> registry and no `AwaitResponse` on `IMessageHub` to grep for. `Observe` is `AsyncSubject`-backed
+> and pre-registers before posting, so a synchronously-handled response cannot slip past it.
 
 Find the **last** `MESSAGE_FLOW:` line that fired and look at what should have happened next:
 
@@ -340,7 +347,12 @@ The wire `$type` discriminator must match the receiver's registered `typeName`. 
 
 A receiver that registered `WithType(typeof(T), nameof(T))` only matches short names, so an FQN on the wire fails the lookup and produces a `DeliveryFailure` even though both sides technically "have" the type.
 
-**Triage with the file trace** (`MESHWEAVER_MSG_TRACE=1`, `%TEMP%/meshweaver-msg-trace.log`): the `NotifyAsync ENTER` line stamps `msg=...` with the JSON `$type` discriminator from `RawJson.Content`. If it reads `msg=MeshWeaver.Mesh.CreateNodeRequest` (FQN) instead of `msg=CreateNodeRequest` (short), a hub somewhere along the hop didn't register `T` in its TypeRegistry — register on every hub the message transits, not just the originator and the final target.
+**Triage with the file trace** (`MESHWEAVER_MSG_TRACE=1`). The file is
+`Path.GetTempPath()` + `meshweaver-msg-trace.log` — `%TEMP%\…` on Windows, but on macOS that is
+`$TMPDIR` (a per-user `/var/folders/…` directory, **not** `/tmp`) and on Linux `/tmp`. Find it with
+`ls "${TMPDIR:-/tmp}"/meshweaver-*.log`; a POSIX shell expands `$TEMP` to the empty string, so a
+copied-from-Windows `"$TEMP/meshweaver-msg-trace.log"` silently reads `/meshweaver-msg-trace.log`
+and finds nothing. The `NotifyAsync ENTER` line stamps `msg=...` with the JSON `$type` discriminator from `RawJson.Content`. If it reads `msg=MeshWeaver.Mesh.CreateNodeRequest` (FQN) instead of `msg=CreateNodeRequest` (short), a hub somewhere along the hop didn't register `T` in its TypeRegistry — register on every hub the message transits, not just the originator and the final target.
 
 For test setup specifically: `MessageHubConfiguration.TypeRegistry` is mutable per call (`WithType` returns the same instance), so `configuration.TypeRegistry.AddAITypes();` (discarded return) is sufficient — but the call must reach **the configuration of every hub that serializes the message**, including hosted sub-hubs like `{path}/_Exec` and any cross-cutting `ConfigureDefaultNodeHub` chain.
 
@@ -369,7 +381,7 @@ When you find the broken edge, leave the relevant `LogTrace` / `LogDebug` lines 
 ## "Deadlock" that is really a missed observation — resurrection on init
 
 A whole class of "hangs" are **not** locks. The signature in the
-`MESHWEAVER_MSG_TRACE` file (`%TEMP%/meshweaver-msg-trace.log`) is decisive:
+`MESHWEAVER_MSG_TRACE` file (`meshweaver-msg-trace.log` under the temp dir — see above) is decisive:
 
 - **Real lock-deadlock** — one *large gap* where nothing runs, then the test
   times out. The action block is wedged on a blocking continuation.
@@ -453,11 +465,15 @@ Before assuming a lock, **dump the managed stacks mid-freeze** — it settles
 deadlock-vs-missed-observation in one shot:
 
 ```bash
-# launch the test, then mid-freeze (the compile/source-read window):
-pid=$(tasklist | grep -i testhost | awk '{print $2}')
-dotnet-stack report -p $pid > /tmp/stacks.txt
+# launch the test, then mid-freeze (the compile/source-read window).
+# macOS/Linux — `tasklist` is Windows-only; use pgrep:
+pid=$(pgrep -f testhost | head -1)
+dotnet-stack report -p "$pid" > /tmp/stacks.txt
 grep -vE "System\.|Microsoft\.|xunit|testhost" /tmp/stacks.txt | sort -u   # any APP frame?
 ```
+
+`dotnet-stack` is a separate global tool (`dotnet tool install -g dotnet-stack`); it is not part of
+the SDK.
 
 If **every** thread is parked on `LowLevelLifoSemaphore.Wait` / `Task.Wait` /
 `WaitOne` and there is **no MeshWeaver frame on any thread**, nothing is running —

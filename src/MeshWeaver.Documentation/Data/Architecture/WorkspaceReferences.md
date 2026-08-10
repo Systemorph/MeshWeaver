@@ -97,7 +97,7 @@ var stream = workspace.GetRemoteStream<UiControl, LayoutAreaReference>(
     new Address(path), new LayoutAreaReference("Overview"));
 ```
 
-> 🚨 **For a MeshNode by path, do NOT use `GetRemoteStream<MeshNode, …>`** — use `workspace.GetMeshNodeStream(path)` (the shared `IMeshNodeStreamCache` handle, read + `.Update(...)` write-back on one stream). The `GetRemoteStream<MeshNode>` forms are discouraged and reserved for framework plumbing; see [CQRS](/Doc/Architecture/CqrsAndContentAccess) and [Data Access Patterns](/Doc/Architecture/DataAccessPatterns).
+> 🚨 **For a MeshNode by path, `GetRemoteStream<MeshNode, …>` THROWS** — use `workspace.GetMeshNodeStream(path)` (the shared `IMeshNodeStreamCache` handle, read + `.Update(...)` write-back on one stream). `Workspace.ThrowIfMeshNode` refuses the public overloads for `MeshNode` because the single-node remote reduce does not converge; the raw reduce is reserved for framework plumbing via the internal `GetRemoteStreamUnchecked`. See [CQRS](/Doc/Architecture/CqrsAndContentAccess) and [Data Access Patterns](/Doc/Architecture/DataAccessPatterns).
 
 ---
 

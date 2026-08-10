@@ -29,7 +29,7 @@ A partition hub is a **queue with a TTL**, not a long-lived component tied to a 
   <text x="655" y="42" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">IPartitionStorage</text>
   <text x="655" y="59" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bbdefb">Provider (1…N)</text>
   <line x1="468" y1="38" x2="578" y2="38" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
-  <text x="523" y="33" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55">Matches / Resolve</text>
+  <text x="523" y="33" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55">Resolve → CreateAdapterForTable</text>
   <text x="30" y="116" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity="0.55">acme schema</text>
   <rect x="30" y="128" width="155" height="52" rx="10" fill="#1e88e5"/>
   <text x="107" y="150" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Hub: acme/mesh_nodes</text>
@@ -163,7 +163,7 @@ Each backend gets its own `IPartitionStorageProvider`. The contract is identical
 | Backend | Table dimension | `CreateAdapterForTable` |
 |---|---|---|
 | **Postgres** | Real — one table per satellite (`mesh_nodes`, `threads`, `activities`, …) | Builds a fresh `NpgsqlDataSource(MaxPoolSize=1, SearchPath=schema)` per `(schema, table)`. One hub per `(schema, table)`. |
-| **Cosmos DB** | Real — one container per logical table | Builds a fresh `CosmosContainer` client per `(database, container)`. One hub per `(database, container)`. |
+| **Cosmos DB** | Real — one container per logical table | Builds a fresh `Microsoft.Azure.Cosmos.Container` client per `(database, container)`. One hub per `(database, container)`. |
 | **Azure Blob** | Degenerate — blob paths are the only namespace | Returns one shared `AzureBlobStorageAdapter` per container regardless of `table`. One hub per container. |
 | **FileSystem** | Degenerate — directory paths only | Returns one shared `FileSystemStorageAdapter` per directory regardless of `table`. One hub per directory. |
 | **Embedded resource** | Degenerate | Returns the same shared adapter; one hub per namespace. |
@@ -179,7 +179,7 @@ The `(schema, table)` dimension only carries weight where the backend has real p
 
 A storage call resolves in three steps:
 
-1. **Adapter type** — pick the first `IPartitionStorageProvider` whose `Matches(fullPath)` returns true. The check takes the **full path**, not just the first segment, so a provider can route `Admin/Partition/*` to Postgres while another routes `Admin/Settings/*` to embedded resources. First match wins; registration order is the routing table.
+1. **Adapter type** — `PartitionStorageRouter` iterates the registered `IPartitionStorageProvider`s **in registration order**, skips every `IsReadOnly` one, and takes the first writable provider. 🚨 **There is no `Matches(path)` predicate** — that method was removed from the contract; an adapter self-declares by returning `null` from `Read`/`Write` (see [Storage Adapter Implementation](/Doc/Architecture/StorageAdapterImplementation)). This first-writable-wins selection is explicitly a **Stage 1 stub** in `PartitionStorageRouter.Resolve`: it synthesizes a `PartitionDefinition` keyed on the path's first segment when the provider does not supply one, and it does not yet do per-path provider selection. Do not rely on "provider A serves `Admin/Partition/*` while provider B serves `Admin/Settings/*`" — that routing does not exist here today.
 
 2. **Schema** — within the matched provider, the `PartitionDefinition` identifies the schema (Postgres), container (Cosmos), or directory (FileSystem).
 
