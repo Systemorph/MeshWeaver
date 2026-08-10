@@ -85,7 +85,16 @@ flowchart LR
 | **Layout Handlers** | Produce UI components for the Blazor front-end |
 | **Workflow Handlers** | Orchestrate multi-step business processes |
 
-Handler bodies are **synchronous**: do the work (or start an `IObservable<T>` chain and `Subscribe`) and return the processed delivery immediately — never `async Task` with an `await` on a mesh operation (it deadlocks the single-threaded action block; see [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls)). Callers consume responses reactively via `hub.Observe<TResponse>(request).Subscribe(...)`.
+A handler is registered as one of two delegate shapes, and **neither returns a `Task`**:
+
+| Delegate | Signature | Use |
+|---|---|---|
+| `SyncDelivery<TMessage>` | `IMessageDelivery (IMessageDelivery<TMessage>)` | Do the work inline and return the processed delivery. |
+| `AsyncDelivery<TMessage>` | `IObservable<IMessageDelivery> (IMessageDelivery<TMessage>, CancellationToken)` | Return a composed observable; the turn loop **subscribes** it. |
+
+Handler bodies stay **synchronous**: do the work (or start an `IObservable<T>` chain and `Subscribe`) and return immediately — never `async Task` with an `await` on a mesh operation (it deadlocks the single-threaded turn loop; see [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls)).
+
+Callers consume responses reactively via `hub.Observe<TResponse>(request, options?).Subscribe(...)`. **Always `Observe`, never post-then-register** — `Observe` allocates the message id and registers the response subject *before* posting, because a reply whose correlation id has no registered subject is silently dropped.
 
 ### 3. Request / Response Pattern
 

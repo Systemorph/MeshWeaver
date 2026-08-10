@@ -5,14 +5,14 @@ Description: Bootstrapping a new MeshWeaver portal with dotnet new, template str
 Icon: /static/NodeTypeIcons/code.svg
 ---
 
-MeshWeaver ships a **.NET project template** (`meshweaver-memex`) that scaffolds a complete, runnable portal in one command. `dotnet new meshweaver-memex -o MyProject` produces a working solution with sample data, authentication, AI integration, and both monolith and distributed deployment options — ready to run in under a minute.
+MeshWeaver ships a **.NET project template** — package id `MeshWeaver.MemexTemplate`, short name `meshweaver-memex` — that scaffolds a complete, runnable portal in one command. `dotnet new meshweaver-memex -o MyProject` produces a working solution with sample data, authentication, AI integration, and both monolith and distributed deployment options — ready to run in under a minute.
 
 ## Why Use the Template?
 
 Building a MeshWeaver portal from scratch means wiring up message hubs, layout areas, authentication, graph nodes, access control, and Aspire orchestration. The template handles all of that up front, giving you:
 
 - A **running portal** with sample data (an ACME insurance company demo) from day one
-- **Dev login** with pre-configured users (Admin, Alice, Bob) for frictionless local development
+- **Dev login** with pre-configured sample users (Alice, Bob, Carol, David, Emma, TestUser) for frictionless local development
 - **Two deployment modes** — a lightweight monolith with no external dependencies, and a full distributed stack with Aspire, Orleans, and PostgreSQL
 - **Proper namespace renaming** — `dotnet new` replaces every `Memex` reference with your project name throughout the generated solution
 
@@ -23,13 +23,16 @@ Building a MeshWeaver portal from scratch means wiring up message hubs, layout a
 From NuGet:
 
 ```bash
-dotnet new install MeshWeaver.ProjectTemplates
+dotnet new install MeshWeaver.MemexTemplate
 ```
 
-Or from a local template directory (useful during development of the template itself):
+Or build it from this repository (useful when working on the template itself) — packing runs
+`tools/generate-memex-template.cs`, which regenerates the template content from the live `memex/`
+source tree into `dist/templates/`, then packs that directory:
 
 ```bash
-dotnet new install path/to/dist/templates/
+dotnet pack tools/MeshWeaver.MemexTemplate.Pack
+dotnet new install path/to/dist/templates/          # or install the produced .nupkg
 ```
 
 ### 2. Scaffold a New Project
@@ -46,7 +49,9 @@ This creates a `MyProject/` directory with all projects renamed from `Memex` to 
 dotnet run --project MyProject/MyProject.Portal.Monolith
 ```
 
-Open the URL shown in the console (default: `https://localhost:7222`). The dev login page lists available users — click any name to sign in immediately.
+Open the URL shown in the console (the generated README says `https://localhost:7122`). The dev login page lists available users — click any name to sign in immediately.
+
+> The template does **not** ship a `Properties/launchSettings.json` (it is gitignored in the source tree the generator copies from), so `dotnet run` uses the ASP.NET defaults unless you add one. Set `ASPNETCORE_ENVIRONMENT=Development` yourself — either by adding a `launchSettings.json` or with `--environment Development` — otherwise the portal starts without the dev configuration it needs.
 
 ### 4. Run with Aspire (Distributed)
 
@@ -63,7 +68,6 @@ MyProject/
 ├── MyProject.slnx                          # Solution file
 ├── MyProject.Portal.Monolith/              # Standalone portal (no external deps)
 │   ├── Program.cs                          # Entry point
-│   ├── Properties/launchSettings.json      # Dev environment & ports
 │   └── appsettings.Development.json        # Graph storage paths, AI config
 ├── MyProject.Portal.Shared/                # Shared Razor UI, auth, configuration
 │   ├── Pages/                              # DevLogin, Onboarding, portal pages
@@ -76,16 +80,14 @@ MyProject/
 │   └── MyProject.Portal.ServiceDefaults/   # Health, telemetry defaults
 ├── samples/Graph/Data/                     # Sample data loaded by AddGraph()
 │   ├── ACME/                               # Insurance company demo
-│   │   ├── Project/                        # 2 projects with Todos
+│   │   ├── Project/                        # Projects
+│   │   ├── Article/ ProductLaunch/         # Sample content nodes
+│   │   ├── Documentation/                  # ACME-specific documentation
 │   │   ├── User/                           # 3 org-scoped users (Oliver, Paul, Quinn)
-│   │   ├── Agent/                          # TodoAgent definition
-│   │   ├── Doc/                            # ACME-specific documentation
 │   │   └── _Access/                        # Partition-level access assignments
 │   └── User/                               # Top-level login users
-│       ├── Admin.json                      # Admin user
-│       ├── Alice.json                      # Sample user
-│       ├── Bob.json                        # Sample user
-│       └── _Access/                        # Global access assignments (Admin role)
+│       ├── Alice.json  Bob.json  …         # Sample users (Roland/Samuel are excluded by the generator)
+│       └── _Access/                        # Global access assignments
 ├── Directory.Build.props                   # MSBuild properties
 ├── Directory.Packages.props                # Centralized NuGet versions
 └── nuget.config                            # Package sources
@@ -102,7 +104,7 @@ The template ships users at two levels, mirroring MeshWeaver's built-in user con
 | **Global** | `User/Admin`, `User/Alice`, `User/Bob` | Portal-wide login users with `namespace: "User"` |
 | **Partition** | `ACME/User/Oliver`, `ACME/User/Paul`, `ACME/User/Quinn` | Organization-scoped users with `namespace: "ACME/User"` |
 
-The **DevLogin page** queries `nodeType:User namespace:User` — so only global users appear at the login screen. Partition-scoped users (such as ACME's Oliver) are visible within their organization context but do not surface on the login page.
+The **DevLogin page** lists users through `AccessSubjectQueries.Users` — the one canonical users query, `nodeType:User namespace:""`. 🚨 Do **not** hand-roll `nodeType:User namespace:User`: that legacy shape targets the pre-V27 `user` schema, which no longer exists, and it silently returns **zero** users (issue #213). Always reference `AccessSubjectQueries.Users` rather than re-typing a query.
 
 ### Access Control
 
@@ -122,7 +124,7 @@ Every login user needs an **AccessAssignment** node that grants a role. These li
 }
 ```
 
-> Without an access assignment, a user can log in but receives "Access denied" on every page. The template ships Admin, Alice, and Bob pre-configured with the `Admin` role.
+> Without an access assignment, a user can log in but receives "Access denied" on every page. In the sample data, `User/_Access/` carries the global assignments (e.g. `TestUser_Access` with the `Admin` role) and `ACME/_Access/` the partition-scoped ones.
 
 ### Graph Storage Configuration
 
@@ -134,14 +136,19 @@ The monolith portal loads sample data from the filesystem. Paths are declared in
     "Storage": {
       "Type": "FileSystem",
       "BasePath": "../samples/Graph/Data"
-    },
-    "Content": {
-      "Type": "FileSystem",
-      "BasePath": "../samples/Graph"
     }
+  },
+  "Storage": {
+    "Name": "storage",
+    "SourceType": "FileSystem",
+    "BasePath": "../samples/Graph"
   }
 }
 ```
+
+Note the two sections are **siblings**: `Graph:Storage` is the node store, and the top-level
+`Storage` section is the content/blob store — there is no `Graph:Content`. The generator rewrites the
+`BasePath` values from `../../` (their depth inside `memex/`) to `../` when it emits the template.
 
 The distributed portal uses PostgreSQL instead — no file paths required.
 
@@ -211,7 +218,9 @@ Delete the `ACME/` directory and add your own data. The portal loads whatever is
 
 ### Moving to Production Auth
 
-The DevLogin page is active only when `ASPNETCORE_ENVIRONMENT=Development`. In production, configure Microsoft or Google OAuth in the Aspire AppHost. See [Deployment](/Doc/Architecture/Deployment) for secrets management and redirect URI setup.
+🚨 **DevLogin is not gated on the environment.** It is enabled by the resolved *authentication provider*: `Auth:EnableDevLogin` when set, otherwise `true` whenever the provider resolves to `Dev` — which is the **fallback** when no external providers and no Entra ID configuration are present. So a portal deployed with `ASPNETCORE_ENVIRONMENT=Production` but no auth configured still serves the dev login page.
+
+Before going to production, configure a real provider (Entra ID / an external OAuth provider) — and set `Auth:EnableDevLogin=false` explicitly if you want belt-and-braces. See [Deployment](/Doc/Architecture/Deployment) for secrets management and redirect URI setup.
 
 ## Monolith vs. Distributed
 
@@ -270,11 +279,11 @@ Start with the monolith during development — it has no external dependencies a
 
 ### "Address already in use" on startup
 
-The default ports (7222/5222) are occupied by another process. Either stop that process or change the ports in `Properties/launchSettings.json`.
+The port the portal binds is occupied by another process. Either stop that process, or set the URLs explicitly (`--urls "https://localhost:7123;http://localhost:5023"`, or in a `Properties/launchSettings.json` you add).
 
 ### Dev login shows no users
 
-The DevLogin page queries `nodeType:User namespace:User`. Make sure your user JSON files live in `samples/Graph/Data/User/` — files inside an organization subdirectory like `ACME/User/` will not appear.
+The DevLogin page lists users via `AccessSubjectQueries.Users`. Make sure your user JSON files live in `samples/Graph/Data/User/` and carry `"nodeType": "User"`. If you have copied the query into your own code, check it is not the legacy `namespace:User` shape — that one returns zero rows.
 
 ### "Access denied" after login
 
@@ -282,7 +291,7 @@ The user node exists but has no access assignment. Create an `AccessAssignment` 
 
 ### Portal crashes on startup (missing `Graph:Storage`)
 
-`ASPNETCORE_ENVIRONMENT` is not set to `Development`. Verify that `Properties/launchSettings.json` exists and sets the environment variable, or pass `--environment Development` on the command line.
+`ASPNETCORE_ENVIRONMENT` is not set to `Development`, so `appsettings.Development.json` — which is where the storage paths live — is never layered in. The template ships no `launchSettings.json`, so pass `--environment Development` on the command line or add one that sets the variable.
 
 ### ACME data not loading
 

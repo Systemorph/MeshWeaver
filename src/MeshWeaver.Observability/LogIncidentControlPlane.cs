@@ -15,6 +15,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
+// MeshWeaver.AI.Thread, not System.Threading.Thread (which the implicit usings bring in).
+using AiThread = MeshWeaver.AI.Thread;
+
 namespace MeshWeaver.Observability;
 
 /// <summary>
@@ -46,6 +49,17 @@ public sealed class LogIncidentControlPlane : BackgroundService
     private readonly ConcurrentDictionary<string, byte> inFlight = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Fingerprints with a stranded-triage RECONCILE in flight — a separate set from
+    /// <see cref="inFlight"/> on purpose. Sharing one would let a repair pass swallow the very
+    /// emission that carries the agent's <c>File</c> request: the agent's patch IS the node change
+    /// that produces that emission, so if nothing changes afterwards there is no second chance and
+    /// the ticket is never opened. Two sets means a reconcile can never mask a real request; they
+    /// still cannot collide on a write, because the queue runs items one at a time and the
+    /// reconcile re-reads the status inside its update lambda.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, byte> reconciling = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// Work queue. Items run ONE AT A TIME via <c>Select(Run).Concat()</c> — the sanctioned way to
     /// serialise without a lock or a semaphore (AGENTS.md → "No hand-woven async/concurrency
     /// primitives"). Serialising also keeps a burst of new fingerprints from opening a dozen
@@ -66,8 +80,15 @@ public sealed class LogIncidentControlPlane : BackgroundService
         this.logger = logger;
     }
 
-    /// <summary>One queued transition.</summary>
-    private record LogIncidentWork(string Path, LogIncident Incident, LogIncidentRequest Request);
+    /// <summary>
+    /// One queued transition. <paramref name="Reconcile"/> marks the internal repair pass rather
+    /// than a requested transition: nobody asks for it on the wire, the watcher notices a
+    /// <see cref="LogIncidentStatus.Triaging"/> incident and checks it against the thread it is
+    /// waiting for. It is deliberately NOT a <see cref="LogIncidentRequest"/> value — the request
+    /// enum is the control-plane contract an agent or an admin writes, and this is neither.
+    /// </summary>
+    private record LogIncidentWork(
+        string Path, LogIncident Incident, LogIncidentRequest Request, bool Reconcile = false);
 
     /// <inheritdoc />
     // The hosted-service boundary — the single sanctioned Task bridge. Everything inside is one
@@ -133,13 +154,43 @@ public sealed class LogIncidentControlPlane : BackgroundService
         {
             if (node.ContentAs<LogIncident>(hub.JsonSerializerOptions, logger) is not { } incident)
                 continue;
+
             if (incident.RequestedStatus == LogIncidentRequest.None)
+            {
+                // 🚨 Triaging is the one state nothing else can leave. The agent is supposed to
+                // write the draft and ask to File; if its round ends without doing that — the
+                // configured agent is not in this deployment's catalog, the model is down, the
+                // portal restarted mid-round — the incident sits in Triaging forever. NextRequest
+                // re-triages New and Failed, never Triaging (it cannot tell "in flight" from
+                // "stranded"), so it is invisible AND unrecoverable: it stays parked even after
+                // the missing dependency lands. That is how nineteen incidents accumulated on
+                // memex.systemorph.com while LogTriage was absent from the served agent catalog.
+                //
+                // The thread is the authority on whether the round is still running, so ask it.
+                // This is a reconcile against observable state, NOT a timer or a retry watchdog:
+                // it fires only on an emission that already carries a stranded-looking incident,
+                // and does nothing at all while the round is genuinely in flight.
+                if (NeedsTriageReconcile(incident) && reconciling.TryAdd(incident.Fingerprint, 0))
+                    queue.OnNext(new LogIncidentWork(
+                        node.Path, incident, LogIncidentRequest.Triage, Reconcile: true));
                 continue;
+            }
+
             if (!inFlight.TryAdd(incident.Fingerprint, 0))
                 continue;
             queue.OnNext(new LogIncidentWork(node.Path, incident, incident.RequestedStatus));
         }
     }
+
+    /// <summary>
+    /// Whether an incident looks stranded in <see cref="LogIncidentStatus.Triaging"/> and should be
+    /// checked against the thread it is waiting for. A thread path is required: without one there
+    /// is no evidence to reconcile against, and guessing would be a watchdog.
+    /// </summary>
+    internal static bool NeedsTriageReconcile(LogIncident incident) =>
+        incident.RequestedStatus == LogIncidentRequest.None
+        && incident.Status == LogIncidentStatus.Triaging
+        && incident.TriageThreadPath is { Length: > 0 };
 
     /// <summary>
     /// Performs one transition. Always completes — a failure is written onto the incident as
@@ -151,7 +202,7 @@ public sealed class LogIncidentControlPlane : BackgroundService
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         return Observable.Using(
                 () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-                _ => work.Request switch
+                _ => work.Reconcile ? ReconcileTriaging(work) : work.Request switch
                 {
                     LogIncidentRequest.Triage => Triage(work),
                     LogIncidentRequest.File => Apply(work, filer.File(work.Incident)),
@@ -179,7 +230,8 @@ public sealed class LogIncidentControlPlane : BackgroundService
                     return Observable.Return(Unit.Default);
                 });
             })
-            .Finally(() => inFlight.TryRemove(work.Incident.Fingerprint, out _));
+            .Finally(() => (work.Reconcile ? reconciling : inFlight)
+                .TryRemove(work.Incident.Fingerprint, out _));
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -240,6 +292,97 @@ public sealed class LogIncidentControlPlane : BackgroundService
             return Unit.Default;
         });
     }
+
+    /// <summary>
+    /// Repairs an incident stranded in <see cref="LogIncidentStatus.Triaging"/>: if the round it is
+    /// waiting for has finished without producing anything actionable, record that as
+    /// <see cref="LogIncidentStatus.Failed"/> — a state the ingest path re-triages on the next
+    /// recurrence (<c>NextRequest</c>), so the incident recovers by itself once whatever was
+    /// missing is back.
+    ///
+    /// <para>Does nothing while the round is genuinely in flight, and nothing if the incident has
+    /// moved on in the meantime — the status is re-read INSIDE the update lambda, so a draft that
+    /// landed between the thread read and the write is never clobbered.</para>
+    ///
+    /// <para>A thread node that cannot be read at all is not swallowed: the error propagates to
+    /// <see cref="Run"/>, which records it on the incident as <c>Failed</c> with the reason. Failed
+    /// is retryable; stranded is not.</para>
+    /// </summary>
+    private IObservable<Unit> ReconcileTriaging(LogIncidentWork work)
+    {
+        var threadPath = work.Incident.TriageThreadPath!;
+        return hub.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Where(node => node is not null)
+            .Take(1)
+            .Timeout(ThreadReadTimeout)
+            .Select(node => node.ContentAs<AiThread>(hub.JsonSerializerOptions, logger))
+            .SelectMany(thread =>
+            {
+                if (thread is null || !RoundFinished(thread))
+                    return Observable.Return(Unit.Default);
+
+                logger?.LogWarning(
+                    "Incident {Fingerprint}: triage thread {Thread} finished without a draft — "
+                    + "marking the incident Failed so it is retried (triage agent '{Agent}')",
+                    work.Incident.Fingerprint, threadPath, options.TriageAgent);
+
+                return Write(work.Path, current =>
+                    StrandedTriageOutcome(current, threadPath, options.TriageAgent) ?? current);
+            });
+    }
+
+    /// <summary>
+    /// The rule the reconcile applies once the triage round is known to be over: an incident still
+    /// sitting in <see cref="LogIncidentStatus.Triaging"/> with nothing requested got nothing out of
+    /// its agent, so it FAILED — and <c>Failed</c> is a state the ingest path re-triages.
+    ///
+    /// <para>Returns null when there is nothing to do. That is the important half: the incident is
+    /// re-read at write time, so a draft that landed between the thread read and the write (status
+    /// moved on, or <c>RequestedStatus</c> now asks to File) leaves the incident untouched. The
+    /// reconcile must never be able to overwrite a successful triage it merely raced.</para>
+    /// </summary>
+    internal static LogIncident? StrandedTriageOutcome(
+        LogIncident current, string threadPath, string agentName) =>
+        current.Status == LogIncidentStatus.Triaging
+        && current.RequestedStatus == LogIncidentRequest.None
+            ? current with
+            {
+                Status = LogIncidentStatus.Failed,
+                RequestedStatus = LogIncidentRequest.None,
+                Error = StrandedTriageError(threadPath, agentName),
+            }
+            : null;
+
+    /// <summary>
+    /// How long the reconcile waits for the triage thread node to emit. This bounds a ONE-SHOT read
+    /// of a specific node (AGENTS.md → "Reads: GetMeshNodeStream(path) … Take(1).Timeout(…)"), it
+    /// does not bound the agent round — a running round simply reads as "not finished".
+    /// </summary>
+    private static readonly TimeSpan ThreadReadTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Whether the thread's execution round is over. <c>Idle</c> alone is not enough — a
+    /// just-created thread is Idle too, with its first message still queued — so the queue must be
+    /// drained AND at least one message must have been materialised into the conversation.
+    /// </summary>
+    internal static bool RoundFinished(AiThread thread) =>
+        thread.Status is ThreadExecutionStatus.Idle
+            or ThreadExecutionStatus.Cancelled
+            or ThreadExecutionStatus.Done
+        && thread.PendingUserMessages.IsEmpty
+        && thread.Messages.Count > 0;
+
+    /// <summary>
+    /// Why the incident failed, in terms an operator can act on. Names the most common cause first:
+    /// a triage agent that is configured but absent from the deployment's agent catalog produces
+    /// exactly this shape — a round that runs, says so in the thread, and writes nothing back.
+    /// Technical diagnostic text like <c>Error</c>'s other writers (an exception message), not UI
+    /// copy — the incident view labels are what carry translations.
+    /// </summary>
+    internal static string StrandedTriageError(string threadPath, string agentName) =>
+        $"Triage finished without a draft. Thread '{threadPath}' completed but nothing was written "
+        + $"back to the incident — most often the configured triage agent '{agentName}' is not "
+        + "present in this deployment's agent catalog. Retried on the next recurrence.";
 
     /// <summary>
     /// The one instruction the agent gets here. Deliberately short: the incident node IS the

@@ -1,7 +1,7 @@
 ---
 Name: Mesh Lifecycle — Build Up & Tear Down
 Category: Architecture
-Description: The exact, symmetric order for standing a mesh up and taking it down — including the TWO-phase drain (DisposalCompleted + I/O-queue) that every teardown MUST await before the service scope dies. Applies to tests, the Orleans silo, and host shutdown.
+Description: The exact, symmetric order for standing a mesh up and taking it down — including the activity quiesce and the three-phase drain (DisposalCompleted + IoPool cancel-and-join + async dispose queue) that every teardown MUST complete before the service scope dies. Applies to tests, the Orleans silo, and host shutdown.
 Icon: ArrowSync
 ---
 
@@ -49,7 +49,7 @@ Two invariants make tear-down tractable, so honor them at build time:
 
 ---
 
-## Tear Down — drain ALL THREE phases, THEN dispose the scope
+## Tear Down — quiesce activities, drain ALL THREE phases, THEN dispose the scope
 
 `IMessageHub.Dispose()` is **reactive and returns immediately** — it only *kicks off*
 the disposal state machine. Completion is signalled later through
@@ -60,7 +60,7 @@ scope is disposed:
 | # | In-flight work | Drained by | Why it's separate |
 |---|---|---|---|
 | 1 | Hub **action blocks** + in-flight **message round-trips** (`hub.Observe`, `GetMeshNode`, …) | `IMessageHub.DisposalCompleted` | Runs on the hub's single-threaded action block; the disposal state machine waits for the response subjects to drain. |
-| 2 | **Offloaded I/O** — anything sent through `IIoPool` (DB, blob, HTTP, compile) | `IoPoolRegistry.WhenDrained(timeout)` | Runs on the **ThreadPool**, independent of the action block. `DisposalCompleted` does **not** know about it. |
+| 2 | **Offloaded I/O** — anything sent through `IIoPool` (DB, blob, HTTP, compile) | `IoPoolRegistry.DrainAll()` — **cancel + join**, synchronous, returns the count of leaves that did not stop | Runs on the **ThreadPool**, independent of the action block. `DisposalCompleted` does **not** know about it. |
 | 3 | **Async cleanup** a resource cannot finish inside its synchronous `Dispose()` (flush a write queue, await a stream) | `AsyncDisposeQueue.DrainAsync(quiesce)` | `Dispose()` may not block; resources `Enqueue` their async cleanup onto the queue and a TPL `ActionBlock` drains it. |
 
 The async dispose queue is the key to phase 3: **`Dispose()` is synchronous and must
@@ -76,23 +76,46 @@ drains it in the background; tear-down gives it a bounded quiesce budget to fini
 > producers are still posting. The `DrainedVersion` counter (one per item) is the test
 > hook: enqueue N, drain, assert it advanced by N.
 
-The canonical helper does all three:
+There is also a **phase 0** that is easy to miss: an in-flight *activity* falls through all
+three phases above — its trigger returned as soon as the activity existed, its command runs
+off-turn so it holds no grain turn, and the subscribe-window pool permit is long released, so
+`DrainAll()` joins nothing. So teardown **waits for `ActivityTracker.WhenIdle` first**, before
+anything is disposed: those runs still write their terminal `ActivityLog` status through hubs
+that must still be alive. (Measured before this existed: a 5 s activity, and teardown returned
+after 2028 ms with the command still running.)
+
+The canonical helper does all of it:
 
 ```csharp
 // MeshWeaver.Mesh.MeshTeardownExtensions
-await mesh.TeardownAsync(timeout);   // Dispose() → DisposalCompleted → IoPool drain → AsyncDisposeQueue drain
+var report = await mesh.TeardownAsync(timeout);   // activities → Dispose() → DisposalCompleted → DrainAll → AsyncDisposeQueue
 // ONLY NOW is it safe to dispose the Autofac scope:
 await ((IAsyncDisposable)mesh.ServiceProvider).DisposeAsync();
 ```
 
 `TeardownAsync`:
 
-1. captures the `IoPoolRegistry` + `AsyncDisposeQueue` **while the scope is still alive**
-   (never resolve DI once disposal has begun — see the note in `MessageHub.DisposeImpl`),
-2. calls `mesh.Dispose()` (resources enqueue their async cleanup during this reactive disposal),
-3. awaits `DisposalCompleted` (phase 1),
-4. awaits `IoPoolRegistry.WhenDrained` (phase 2), then
-5. after all the sync stuff is disposed, awaits `AsyncDisposeQueue.DrainAsync` (phase 3).
+1. captures the `IoPoolRegistry`, `AsyncDisposeQueue`, `ActivityTracker` and
+   `MeshTeardownSignal` **while the scope is still alive** (never resolve DI once disposal has
+   begun — see the note in `MessageHub`'s ShutDown `finally`),
+2. waits (bounded) on `ActivityTracker.WhenIdle` — phase 0,
+3. calls `mesh.Dispose()` (resources enqueue their async cleanup during this reactive disposal),
+4. awaits `DisposalCompleted` (phase 1),
+5. calls `IoPoolRegistry.DrainAll()` (phase 2), then
+6. awaits `AsyncDisposeQueue.DrainAsync(timeout)` (phase 3), and finally
+7. fires `MeshTeardownSignal` with the `TeardownReport`.
+
+> 🚨 **Phase 2 CANCELS, it does not merely wait.** The predecessor was the wait-only, polled
+> `WhenDrained(timeout)`, which **still exists on `IoPoolRegistry`** — it is simply the wrong
+> primitive here, so do not reach for it in a teardown path. A live change-feed leaf never completes on its
+> own, so a wait-without-cancel timed out and let the scope dispose *while the leaf still ran*;
+> its ThreadPool thread then dereferenced a collectible node ALC's freed metadata after unload
+> → a native use-after-unload SIGSEGV. `DrainAll()` cancels every leaf so it stops, then joins,
+> and returns how many did not.
+
+`TeardownAsync` returns a **`TeardownReport`** (leaked I/O leaves + whether the async dispose
+queue drained clean). **Surface a dirty report** — fail the test class, error-log the shutdown.
+Proceeding silently over live work is the use-after-unload crash above.
 
 If a caller drives `Dispose()` itself and keeps its own progress/diagnostic loop
 around `DisposalCompleted` (the monolith test base does), it uses the wait half
@@ -103,25 +126,25 @@ var ioPools = mesh.ServiceProvider.GetService<IoPoolRegistry>();        // captu
 var disposeQueue = mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
 mesh.Dispose();
 await WaitWithProgressAsync(...);                                       // phase 1 (DisposalCompleted)
-if (ioPools is not null)
-    await ioPools.WhenDrained(timeout).FirstAsync().ToTask();           // phase 2 (I/O queue)
+var leakedIoLeaves = ioPools?.DrainAll() ?? 0;                          // phase 2 (cancel + join)
 if (disposeQueue is not null)
     await disposeQueue.DrainAsync(timeout);                             // phase 3 (async cleanup)
 // THEN dispose the scope
 ```
 
-Each wait is **bounded** by a timeout. A wait that times out means a real bug — a
+Phases 0, 1 and 3 are **bounded** by a timeout. A wait that times out means a real bug — a
 wedged action block (surfaced separately by `AnyHubQuiescingTimedOut`), a leaked
-I/O slot (a non-zero `IoPoolRegistry.TotalInFlight` after the wait), or a wedged async
+I/O slot (a non-zero `leakedIoLeaves` / `IoPoolRegistry.TotalInFlight`), or a wedged async
 cleanup. The timeout keeps tear-down from hanging; it does **not** paper over the leak
 — log it and fix the leak, never just widen the timeout (see [the no-band-aids rule](/Doc/Architecture/ControlledIoPooling)).
 
 ### The order is the whole point
 
 ```
-Dispose()  →  DisposalCompleted  →  IoPool drain  →  AsyncDisposeQueue drain  →  dispose scope
- (enqueue async    (action blocks)    (ThreadPool I/O)   (async cleanup)
-  cleanup here)  └──────────────── nothing may resolve DI after this ────────────────┘
+WhenIdle  →  Dispose()  →  DisposalCompleted  →  DrainAll()  →  AsyncDisposeQueue drain  →  dispose scope
+(activities)  (enqueue async   (action blocks)    (cancel+join      (async cleanup)
+              cleanup here)                        ThreadPool I/O)
+                            └────────────── nothing may resolve DI after this ──────────────┘
 ```
 
 Dispose the scope one step early — before phase 2 or 3 — and any straggler `IIoPool`
@@ -134,7 +157,7 @@ THE catastrophic `ObjectDisposedException`.
 
 | Context | Tear-down site |
 |---|---|
-| Monolith tests | `MonolithMeshTestBase.DisposeAsync` — `WaitWithProgressAsync` (phase 1) + `IoPoolRegistry.WhenDrained` (phase 2) + `AsyncDisposeQueue.DrainAsync` (phase 3) before `base.DisposeAsync` releases the per-`[Fact]` provider. |
+| Monolith tests | `MonolithMeshTestBase.DisposeAsync` — `WaitWithProgressAsync` (phase 1) + `IoPoolRegistry.DrainAll()` (phase 2) + `AsyncDisposeQueue.DrainAsync` (phase 3) before `base.DisposeAsync` releases the per-`[Fact]` provider. |
 | Host shutdown (prod) | Same shape — `TeardownAsync` (or the three phases by hand) before the host disposes the root scope. |
 | Orleans test cluster | **Exception — do NOT hand-roll this.** The whole `TestCluster.DisposeAsync` is handed to a background pool (`OrleansClusterDisposal.DisposeInBackground`) because awaiting *any* part of silo shutdown on the xUnit teardown thread deadlocks — silo shutdown drives continuations that the blocked thread owns. So you must **not** manually `Dispose()`/`TeardownAsync` a live silo's root mesh hub at fixture teardown (double-dispose + the same deadlock). The "offloaded work draining against a disposed scope" race on the silo side is absorbed by `OrleansShutdownRaceSuppressor`, not by an inline drain. |
 

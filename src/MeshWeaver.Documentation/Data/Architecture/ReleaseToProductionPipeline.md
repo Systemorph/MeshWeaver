@@ -67,30 +67,44 @@ The delta-install path scopes recompiles to the package; the GitSync path now co
 affected closure on import. The closure is the same computation CI uses to decide which modules'
 tests to run, so the runtime and the pipeline agree by construction rather than by convention.
 
-## (C) The platform image — the hop nothing automates
+## (C) The platform image — built by CD, rolled by the install itself
 
-Continuous delivery **builds and pushes** the portal, migration and plugin-tester images. It does
-**not** roll them out: the deployments pin an explicit image tag rather than following a moving one,
-so a published image reaches an instance only when something sets that tag.
+Continuous delivery **builds and pushes** the portal, migration, bake and plugin-tester images to
+ACR, tagged by version. It does **not** `kubectl set image` anything: the deployments pin an explicit
+tag rather than following a moving one, so a published image reaches an instance only when something
+sets that tag.
 
-That is a deliberate safety property (no unattended platform upgrades), but it is easy to forget:
-a core fix can be merged, green, and published, and still be absent from every instance. When a
-symptom points at core behaviour, **check the running image first** — comparing the deployment's tag
-against the newest tag in the registry costs one command and forecloses a long, wrong hunt.
+That "something" is the install itself. `SelfUpdateHostedService` polls ACR (every 6 h, and once on
+startup) and patches its **own** portal + migration Deployments per the `Admin/UpdatePolicy` node —
+`Continuous` (the platform default, newest build-numbered tag), `Stable` (newest clean release), or
+`None` (manual only). See [Release & Self-Update Strategy](/Doc/Architecture/ReleaseStrategy).
+
+So the hop is automated *by policy*, and it still fails silently in two ways worth remembering: a
+`None`-policy install never moves, and a commit whose CD run never completed has no selectable
+version tag to move **to** (only the moving `main` pointer and the per-run staging tag, both
+invisible to `VersionSelect`). When a symptom points at core behaviour, **check the running image
+first** — comparing the deployment's tag against the newest tag in the registry costs one command and
+forecloses a long, wrong hunt.
 
 ## Update policy
 
-The **default is automatic**: a plugin repo's green build reaches these portals without anyone
-clicking. Per-record overrides exist for the cases where that is wrong:
+The policy is a **single boolean on each install record** — `Package.AutoUpdate` — not a three-state
+enum:
 
-| Policy | Behaviour |
+| `AutoUpdate` | Behaviour |
 |---|---|
-| **Auto** (default) | apply the update, including the recompiles of (B) |
-| **On demand** | surface that an update is available; apply on the click |
-| **Ignore** | never apply; stay visible as a suppressed update |
+| `true` | apply the update unattended, including the recompiles of (B) |
+| `false` | surface that an update is available (a `Notification` satellite on the install record + an **Update** button on the card); apply on the click |
 
-The policy governs *applying*, never *noticing* — an ignored update is still recorded, so an
-instance can always answer "what am I behind on?".
+**The platform default is `false` — review-first, explicit opt-in.** A fresh record is seeded from
+the deployment's `PluginCatalog:AutoUpdateByDefault` (default `false`); **our Helm deployments set it
+`true`**, so on those portals a plugin repo's green build does land without anyone clicking. That is
+a deployment choice, not the platform default. The seed applies at install time only: the record's
+own flag is the runtime authority thereafter, and an update re-stamp carries it forward.
+
+The flag governs *applying*, never *noticing* — a not-applied update is still recorded, so an
+instance can always answer "what am I behind on?". See
+[Plugin Update on Green Build](/Doc/Architecture/PluginUpdateOnGreenBuild).
 
 ## Local changes and conflicts
 
@@ -119,13 +133,16 @@ which lists the queries it ran and the nodes each matched.
 
 This is the part that surprises people, so it is worth stating plainly:
 
-> **On our instances, modules arrive through per-Space GitSync, not through the plugin catalog.**
+> **A module is on a mesh only because something put it there — a per-Space GitSync config or an
+> install record. Neither is implied by a green repo.**
 
-On `memex.meshweaver.cloud` there are **37 `{Space}/_GitSync` configs** — one per deployed Space,
-each naming a repo and a subdirectory — and the install-records partition holds **no install
-records at all**. Every reinsurance and education Space is there because it has a sync entry. A
-module with **no sync entry is simply not on the mesh**, no matter how green its repo is. That is
-the whole explanation for "the module is merged but I cannot find it".
+This was measured on `memex.meshweaver.cloud` in mid-2026: **37 `{Space}/_GitSync` configs** — one
+per deployed Space, each naming a repo and a subdirectory — and **no install records at all**; every
+reinsurance and education Space was there because it had a sync entry. That snapshot is no longer the
+whole picture (`PluginCatalog:InstallPreInstalledPackages` and `InstallByDefault` now write install
+records on a fresh boot), but the invariant it illustrates still holds: a module with **neither** a
+sync entry nor an install record is simply not on the mesh, no matter how green its repo is. That is
+the whole explanation for "the module is merged but I cannot find it" — so check both, per Space.
 
 ### Adding a NEW module to an instance
 
@@ -178,7 +195,9 @@ PluginCatalog:Sources:0:AutoSync        true      # provision the missing ones, 
 ```
 
 Both default to **false**, and only a literal `true` opts in — a typo can never be what enables
-unattended Space creation. They belong in the deployment's Helm values, beside the source itself.
+unattended Space creation. `AutoSync` is honoured **only when `AutoDiscover` is also on** (there is
+nothing to sync that was never discovered), so setting it alone silently does nothing. They belong in
+the deployment's Helm values, beside the source itself.
 
 `ModuleDiscoveryService` scans once at boot (after the default install settles) and again on every
 green build of the repo — it subscribes to the same `Admin/_Build/{owner}.{repo}` node the update

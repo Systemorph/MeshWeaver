@@ -9,8 +9,9 @@ Category: Architecture
 
 A "new environment" is an additional Memex portal — its own domain, database, and
 sign-in — running on the **shared AKS cluster** (`<aks-cluster>` / `<aks-resource-group>`,
-swedencentral). `memex.meshweaver.cloud` is the worked example; it lives under
-`deploy/aks/envs/<env>/`.
+swedencentral). Each environment lives under `deploy/aks/envs/<env>/`; the only one tracked in this
+repo is the reference template `deploy/aks/envs/example/` — per-tenant env folders are git-ignored
+because their directory names are tenant identities.
 The shared platform (cluster, ingress, Postgres server, Key Vault, ACR) is brought up
 once — see the AKS deploy runbook (`deploy/aks/DEPLOY-RUNBOOK.md` in the repository); this guide
 adds an environment on top of it.
@@ -239,11 +240,14 @@ See [Memex Cloud Deployment](/Doc/Architecture/MemexCloudDeployment) for the pro
     -o jsonpath='{range .spec.template.spec.containers[0].volumeMounts[*]}{.name} -> {.mountPath}{"\n"}{end}' \
     | grep dumps || echo "NO DUMP MOUNT — crashes will produce nothing"
   ```
-- **The per-env patch replaces volumes BY INDEX.** `deploy/aks/envs/<env>/portal-patch.json` targets
-  `/spec/template/spec/volumes/0`, `/1`, … so **adding or reordering a volume in the chart silently
-  misaligns every environment**, and a cluster can keep running an older volume set while the chart
-  in git looks correct. After any deploy, diff the live mounts against the chart — do not assume the
-  chart is what is running.
+- **The per-env patch is index-SENSITIVE, and fails loudly when the chart moves.** The data/users/content
+  PVC volumes now render from the **chart** (`persistence:` in `values.aks.yaml`); `portal-patch.json` only
+  appends the env-specific extras, using `"path": ".../volumes/-"` (append) rather than a numeric index. It
+  does, however, open with a JSON-Patch **`test` guard** —
+  `{"op":"test","path":"/spec/template/spec/volumes/0/name","value":"memex-data"}` — so if the chart ever
+  reorders volumes, the **whole atomic patch is rejected** rather than silently misapplied. That is the
+  intended behaviour: a failed patch is the signal. Read the rejection as "the chart's volume order
+  changed", not as a transient error, and still verify the live mounts after a deploy.
 - **KEDA overrides `kubectl scale`.** A `ScaledObject` with `minReplicaCount: 2` silently restores
   replicas, so "scale to zero" (the documented heal for a wedged mesh) **does not take** and you
   conclude the heal failed when it never ran. Check first — and note `PAUSED`:
@@ -268,7 +272,8 @@ That is cold-compile, not a bad image.
 az acr manifest show -r <registry> -n memex-portal-ai:<tag> \
   | jq -r '.manifests[]?.platform | "\(.os)/\(.architecture)"'
 
-# 2. Roll and wait.
+# 2. Roll and wait. The cluster is PRIVATE — these kubectl lines only work from inside it, so in
+#    practice wrap them: az aks command invoke -g <rg> -n <cluster> --command "…"
 kubectl set image deploy/memex-portal-deployment memex-portal=<registry>/memex-portal-ai:<tag> -n <env>
 kubectl rollout status deploy/memex-portal-deployment -n <env> --timeout=600s
 
@@ -280,9 +285,15 @@ for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " https://<host>/
   cold and makes the window longer, not shorter.
 - **A steady ratio is a signal, not warm-up.** Warm-up converges toward 100%; a stable ~50% across
   many minutes means *one replica is failing consistently* — investigate that, do not wait it out.
-- **Probe budgets** (`startupProbe` 300s, `liveness` 90s, `readiness` 30s): liveness and readiness
-  do not run until the startup probe succeeds, so a **slow boot is safe**. What is not safe is a
-  hang or crash *after* startup — 90s of failed `/alive` and kubelet restarts the container.
+- **Probe budgets.** Liveness (`/alive`, 15s × 6 = **90s**) and readiness (`/alive`, 10s × 3 = **30s**) do
+  not run until the startup probe succeeds, so a **slow boot is safe**. What is not safe is a hang or crash
+  *after* startup — 90s of failed `/alive` and kubelet restarts the container.
+  - 🚨 **The startup budget is environment-specific — don't quote the chart default.** It is
+    `probes.startup.periodSeconds × failureThreshold`; the base chart defaults to 5 × 60 = **5 minutes**,
+    but the AKS overlay (`deploy/aks/values.aks.yaml`) sets 10 × 1080 = **3 hours**. The large budget is
+    deliberate: it is what bounds a cold NodeType bake (`PreWarm__GateReadiness`), which is sequential and
+    ~90 s per type. So on AKS a pod can sit un-ready far longer than "the deploy hung" instincts suggest —
+    check `probes:` in the env's values before concluding anything from elapsed time.
 
 ## Related
 
