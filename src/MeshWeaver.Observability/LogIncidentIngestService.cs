@@ -170,22 +170,37 @@ public sealed class LogIncidentIngestService(
 
     /// <summary>
     /// What a recurrence should ask for. Suppressed incidents ask for nothing (that is the point of
-    /// suppressing); a filed incident asks for a comment at most once per
-    /// <see cref="LogWatchOptions.CommentInterval"/>; an incident whose triage never completed is
-    /// re-requested so a portal restart mid-triage cannot strand it forever.
+    /// suppressing); an incident that already has an issue folds the recurrence into it, at most
+    /// once per <see cref="LogWatchOptions.CommentInterval"/>; an incident whose triage never
+    /// completed is re-requested so a portal restart mid-triage cannot strand it forever.
+    ///
+    /// <para>🚨 <b>The issue link outranks the status.</b> The check on
+    /// <see cref="LogIncident.IssueNumber"/> comes before the <c>New</c>/<c>Failed</c> retry rule
+    /// deliberately: a ticketed incident that later goes <c>Failed</c> — a recurrence comment that
+    /// errored, or the stranded-triage reconcile marking it retryable — used to re-enter triage,
+    /// and the agent's fresh draft then asked to <c>File</c> again. That chain is how
+    /// <c>ROUTER_TRAFFIC</c> was filed EIGHT times in seven minutes on the watcher's first live run.
+    /// Once an issue exists, a recurrence belongs on it, never in a new one.</para>
     /// </summary>
     private static LogIncidentRequest NextRequest(
-        LogIncident incident, LogWatchOptions options, DateTimeOffset now) => incident.Status switch
+        LogIncident incident, LogWatchOptions options, DateTimeOffset now) => incident switch
     {
-        LogIncidentStatus.Suppressed => LogIncidentRequest.None,
-        LogIncidentStatus.Filed when CommentDue(incident, options, now) => LogIncidentRequest.Comment,
-        LogIncidentStatus.Filed => LogIncidentRequest.None,
+        { Status: LogIncidentStatus.Suppressed } => LogIncidentRequest.None,
+        { IssueNumber: not null } => CommentDue(incident, options, now)
+            ? LogIncidentRequest.Comment
+            : LogIncidentRequest.None,
+        { Status: LogIncidentStatus.Filed } => LogIncidentRequest.None,
         // New/Failed → (re)try triage. Triaging/Filing → leave the in-flight request alone.
-        LogIncidentStatus.New or LogIncidentStatus.Failed => LogIncidentRequest.Triage,
+        { Status: LogIncidentStatus.New or LogIncidentStatus.Failed } => LogIncidentRequest.Triage,
         _ => incident.RequestedStatus,
     };
 
-    private static bool CommentDue(LogIncident incident, LogWatchOptions options, DateTimeOffset now) =>
+    /// <summary>
+    /// Whether this incident may speak on its issue again. The ONE rate limit on recurrence noise —
+    /// the control plane's claim reads it too, so a <c>File</c> request that arrives on an
+    /// already-ticketed incident is bounded by exactly the same window as a <c>Comment</c> request.
+    /// </summary>
+    internal static bool CommentDue(LogIncident incident, LogWatchOptions options, DateTimeOffset now) =>
         incident.LastCommentedAt is not { } last || now - last >= options.CommentInterval;
 
     // ══════════════════════════════════════════════════════════════════════════
