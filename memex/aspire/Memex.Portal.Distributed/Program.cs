@@ -303,12 +303,32 @@ builder.Services.AddNodeTypeBakeGate();
 // intentional deployment choice, not something a self-host inherits by accident. It also
 // REQUIRES a startupProbe budget large enough for a full cold bake (see values.aks.yaml) —
 // without that, Kubernetes kills the pod mid-bake and it never converges.
-if (bool.TryParse(builder.Configuration[NodeTypeBakeGateExtensions.EnabledConfigKey], out var gateBake)
-    && gateBake)
+var gateBake = bool.TryParse(builder.Configuration[NodeTypeBakeGateExtensions.EnabledConfigKey], out var g) && g;
+var bakeSweepEnabled =
+    bool.TryParse(builder.Configuration[DynamicTypePreWarmerHostedService.EnabledConfigKey], out var s) && s;
+
+if (gateBake)
     builder.Services.AddHealthChecks()
         .AddCheck<Memex.Portal.Distributed.NodeTypeBakeHealthCheck>("nodetype_bake");
 
 var app = builder.Build();
+
+// 🚨 The two PreWarm keys are ONE setting. The gate reads bake state that only the SWEEP writes,
+// and the health check reports Healthy while the bake is NotStarted — deliberately, so a config
+// mistake can never black-hole a pod forever. The consequence is that GateReadiness=true with
+// DynamicTypes=false yields a gate that is registered, permanently green, and protects nothing.
+// That is precisely the failure this gate exists to prevent, so it must not be the quiet outcome:
+// say it at Critical, where a deployment that believes it is protected will actually see it.
+if (gateBake && !bakeSweepEnabled)
+    app.Services.GetRequiredService<ILoggerFactory>()
+        .CreateLogger("MeshWeaver.Hosting.NodeTypeBakeGate")
+        .LogCritical(
+            "NodeType bake gate is ENABLED ({GateKey}=true) but the pre-warm sweep is OFF "
+            + "({SweepKey}!=true). The gate has nothing to measure, so it will report healthy on "
+            + "every rollout and protect NOTHING. Enable the sweep, or turn the gate off so the "
+            + "configuration stops claiming a protection that is not there.",
+            NodeTypeBakeGateExtensions.EnabledConfigKey,
+            DynamicTypePreWarmerHostedService.EnabledConfigKey);
 
 app.MapDefaultEndpoints();
 app.StartMemexApplication<Memex.Portal.Shared.App>();

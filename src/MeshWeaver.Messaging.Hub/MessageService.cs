@@ -1413,6 +1413,7 @@ public class MessageService : IMessageService
                 var reason = $"{nackPolicy.Reason} (inbound type '{jsonType}' is not registered in this hub's TypeRegistry)";
                 logger.LogWarning("Unhandled {JsonType} in fallback hub {Address} - answering {ErrorType} NACK: {Reason}",
                     jsonType, Address, nackPolicy.ErrorType, reason);
+                var nackPosted = false;
                 try
                 {
                     Post(new DeliveryFailure(delivery)
@@ -1421,16 +1422,20 @@ public class MessageService : IMessageService
                         NodeTypePath = nackPolicy.NodeTypePath,
                         Message = reason
                     }, new PostOptions(Address).ResponseFor(delivery));
+                    nackPosted = true;
                 }
                 catch (Exception ex)
                 {
                     logger.LogError(ex, "Failed to post fallback NACK for '{JsonType}' (ID: {MessageId}) in {Address}",
                         jsonType, delivery.Id, Address);
                 }
-                // The typed NACK above IS this request's failure response. Mark it so the
-                // Failed-state check on the way out does not post an unclassified second one and
-                // race it to the caller's subject.
-                return delivery.Failed(reason).WithProperty(FailureAlreadyReported, true);
+                // 🚨 Mark ONLY when the typed NACK actually went out. The marker suppresses the
+                // unclassified follow-up, so setting it after a THROWN post would leave the caller
+                // with no failure response at all — turning a swallowed exception into the silent
+                // park this whole NACK path exists to prevent. Suppress the duplicate, never the
+                // only answer.
+                var failed = delivery.Failed(reason);
+                return nackPosted ? failed.WithProperty(FailureAlreadyReported, true) : failed;
             }
 
             return ReportFailure(delivery.Failed(failureMessage));
