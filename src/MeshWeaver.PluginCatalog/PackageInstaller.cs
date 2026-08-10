@@ -1668,46 +1668,47 @@ public static class PackageInstaller
                     .SelectMany(rest => RootRetypeReconciled()
                         .SelectMany(_ => RootRetypePersisted())
                         .Select(_ => rest))
-                    // 🚨 RECYCLE the retyped root's hub. It was ACTIVATED as the Space placeholder
-                    // (RootRetypeReconciled reads the stream, and readers race the install anyway),
-                    // so the live hub instance still carries the placeholder's configuration — the
-                    // default areas, none of the package type's. Nothing re-activates it: the node's
-                    // stored type changed but the hub does not watch its own NodeType. The symptom
-                    // is a freshly installed package whose ROOT renders without its type's areas
-                    // ("No renderer is registered for area Tests on hub Store" — the plugin gate's
-                    // Store/Catalog RED, 2026-07-29; same family as the freshly-provisioned-Store-
-                    // is-invisible incident) until someone manually recycles it. Dispose is the
-                    // recycle idiom (RecycleLayoutArea): fire-and-forget, next access re-activates
-                    // with the final type. Only when the placeholder dance actually ran.
+                    // 🚨 NO RECYCLE IS POSTED HERE — deliberately, and this is load-bearing.
                     //
-                    // 🚨 This recycle is NECESSARY but was not SUFFICIENT: the identical symptom
-                    // recurred 2026-08-09 because PathResolutionService PINNED a fabricated
-                    // partition-root placeholder (no NodeType → the root's hub binds the mesh
-                    // DEFAULT configuration), so every re-activation after this Dispose re-read
-                    // the same fabrication. Partition provisioning runs BEFORE the root write, so
-                    // any routed touch inside that window fabricated it. Fixed at the source —
-                    // synthesized resolutions are never cached, and a fill that lands after its
-                    // own invalidation is discarded (PathResolutionCachePoisonTest).
+                    // The retyped root's hub DOES have to be un-pinned: it was ACTIVATED as the
+                    // Space placeholder, so the live instance still carries the placeholder's
+                    // configuration — the default areas, none of the package type's ("No renderer is
+                    // registered for area Tests on hub Store", the plugin gate's Store/Catalog RED,
+                    // 2026-07-29). The installer used to do that itself with a fire-and-forget
+                    // `hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(root.Path)))`.
                     //
-                    // 🚨 …and it recurred AGAIN on a build carrying that fix (#1104), because
-                    // fixing RESOLUTION cannot help a hub a bad resolution has ALREADY activated:
-                    // GetHostedHub pins by address and the hub never re-reads its NodeType. That
-                    // is why this Post is no longer where the guarantee lives. It is fire-and-
-                    // forget, conditional on the placeholder dance having run, and available to
-                    // nobody but this installer — while ANY writer can retype a node. The
-                    // framework now un-pins on its own: every activation arms
-                    // NodeTypeRebindWatcher, which recycles the hub the first time the mesh change
-                    // feed reports a different NodeType for its path. This Post stays as the fast
-                    // path (it recycles immediately rather than on the feed hop) and as the marker
-                    // of intent; it is not load-bearing. If the symptom ever reappears, check all
-                    // three: is the hub recycled, is the resolution for the bare root path serving
-                    // a real node, and did the rebind watcher see the retype?
-                    .Select(rest =>
-                    {
-                        if (placeholderRoot is not null && root is not null)
-                            hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(root.Path)));
-                        return rest;
-                    })
+                    // Since #1104 the FRAMEWORK owns that guarantee and owns it better:
+                    // NodeTypeRebindWatcher is armed on every activation and recycles the hub the
+                    // first time the mesh change feed reports a NodeType different from the one the
+                    // instance bound. Two properties matter here — it fires on the POST-COMMIT feed
+                    // event (so it cannot race the debounced persist), and it posts to its OWN
+                    // instance (`instanceHub.Post(…, WithTarget(instanceHub.Address))`), so the
+                    // signal can only ever kill the mis-bound instance that armed it.
+                    //
+                    // 🚨 The installer's copy had NEITHER property, and that is what made it a
+                    // defect rather than a redundant fast path (issue #1151). It is ADDRESSED, not
+                    // instance-scoped: routing resolves the address at DELIVERY time, so it disposes
+                    // whichever instance happens to be live when it lands — and it lands late,
+                    // because it queues behind the recycle the watcher already started. The install
+                    // then keeps touching that same address (WarmInstalledRoots, and
+                    // SyncPackageContent's SyncContentFilesRequest, both of which ACTIVATE the root),
+                    // so the stray Dispose tears down the FRESH, correctly-bound instance in the
+                    // middle of the handler serving the install's own content publish.
+                    //
+                    // Measured on StaleStampRootBindingTest's ShopB fixture: two ShopB disposals
+                    // 426 ms apart — the watcher's at +2 ms after the retype, this one at +428 ms,
+                    // landing on the instance activated by the content sync 105 ms earlier. The
+                    // handler faulted with HubDisposingException ("cannot create '/content/'"),
+                    // answered ImportContentResponse.Fail — and that reply never left the disposing
+                    // hub, so the installer burned its whole 60 s RequestTimeout and published
+                    // 0/1 assets. Deleting the stray Dispose removes the only recycle signal in the
+                    // install that can reach an instance other than the one it means.
+                    //
+                    // If the mis-binding symptom ever reappears, check all three: is the hub
+                    // recycled (the watcher logs "NodeType rebind: node '…' is now typed …"), is the
+                    // resolution for the bare root path serving a real node, and did the rebind
+                    // watcher see the retype?
+                    //
                     // A placeholder's write is bookkeeping, not content — its FINAL retype in
                     // stage 2 is the root's one counted write (keeps Written ≤ node count).
                     .Select(rest => (IList<(string Path, bool Wrote)>)(placeholderRoot is null ? rootWrites : [])
