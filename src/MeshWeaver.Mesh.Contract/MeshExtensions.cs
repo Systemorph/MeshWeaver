@@ -2175,7 +2175,7 @@ public static class MeshExtensions
                             return Observable.Empty<System.Reactive.Unit>();
                         }
 
-                        return RunDeletionValidatorsWithWarningsObs(hub, rootNode, capturedRequest)
+                        return RunDeletionValidatorsWithWarningsObs(hub, rootNode, capturedRequest, request.AccessContext)
                             .SelectMany(vresult =>
                             {
                                 if (vresult.Error is { Length: > 0 } err)
@@ -2247,12 +2247,30 @@ public static class MeshExtensions
                                         //     all-or-nothing failure.
                                         var preValidate = capturedRequest.Recursive
                                             ? PreValidateDescendantsObs(meshHub, path, collected.ToDelete, request.AccessContext, opts.Timeout, logger)
-                                            : Observable.Return<(string Path, string Error)?>(null);
+                                            : Observable.Return<(string Path, string Error, NodeDeletionRejectionReason Reason)?>(null);
 
                                         return preValidate.SelectMany(failure =>
                                         {
                                             if (failure is { } f)
                                             {
+                                                if (f.Reason == NodeDeletionRejectionReason.Unauthorized)
+                                                {
+                                                    // A permission denial on a descendant is an EXPECTED
+                                                    // outcome, refused atomically BEFORE any deletion —
+                                                    // name the real condition at Warning, and answer with
+                                                    // Unauthorized, not a generic validation failure
+                                                    // mislabelled "unexpected" (issue #1128).
+                                                    logger.LogWarning(
+                                                        "[DeleteNode] permission-denied path={Root} deniedAt={Path} — refused before any deletion: {Err}",
+                                                        path, f.Path, f.Error);
+                                                    PostFailed(
+                                                        f.Error,
+                                                        NodeDeletionRejectionReason.Unauthorized,
+                                                        [new LogMessage(f.Error, LogLevel.Error)],
+                                                        collected.ToDelete.ToImmutableList());
+                                                    return Observable.Empty<System.Reactive.Unit>();
+                                                }
+
                                                 logger.LogWarning(
                                                     "[DeleteNode] pre-validation failed path={Root} blockedBy={Path} err={Err}",
                                                     path, f.Path, f.Error);
@@ -2280,9 +2298,31 @@ public static class MeshExtensions
                                             "[DeleteNode] committing path={Path} count={Count}",
                                             path, collected.ToDelete.Count);
 
+                                        // 🚨 Execute the COMMIT under the SYSTEM identity, not the
+                                        // caller's. The authorization decision for the whole cascade
+                                        // was taken atomically ABOVE, before any mutation: the caller's
+                                        // Delete permission on the root (phase 2) plus the per-leaf
+                                        // [RequiresPermission(Delete)] delivery gate that every
+                                        // descendant's ValidateDeleteRequest just passed (pre-flight).
+                                        // Re-evaluating the CALLER's permission per-leaf DURING the
+                                        // commit was issue #1128: the plan contains the subtree's own
+                                        // `_Access` grant satellites, the bottom-up fan-out deletes
+                                        // them early, the caller's authorization evaporates MID-COMMIT,
+                                        // and the cascade aborted half-done ("partial-deleted=31" with
+                                        // no rollback) even though the caller was fully authorized when
+                                        // the operation was admitted. Decide once, up front, under the
+                                        // caller; execute the already-decided cascade under system.
+                                        // DeletedBy still carries the caller for the audit trail, and
+                                        // per-leaf validators still run at each leaf's own hub.
+                                        var executionContext = new AccessContext
+                                        {
+                                            ObjectId = WellKnownUsers.System,
+                                            Name = WellKnownUsers.System
+                                        };
+
                                         return DeleteSubtreeUntilDrained(
                                                 meshHub, storage, path, collected.ToDelete,
-                                                capturedRequest, request.AccessContext,
+                                                capturedRequest, executionContext,
                                                 recentlyDeleted, logger, collectedMessages)
                                             .Timeout(opts.Timeout)
                                             // 5. Post-deletion side effects for the ROOT node — e.g.
@@ -2410,8 +2450,25 @@ public static class MeshExtensions
                             _ => null,
                         }
                         : null;
-                    logger.LogError(ex, "[DeleteNode] {Kind} path={Path} partial-deleted={Partial}",
-                        isTimeout ? "timeout" : (isNotFound ? "not-found" : "unexpected"), path, partial.Count);
+                    // 🚨 Name the real condition (issue #1128): a permission denial is an
+                    // EXPECTED outcome, never an "unexpected" fail-level event. When it
+                    // arrives here with NOTHING deleted it is a plain Warning; when nodes
+                    // were already deleted before the denial, the subtree is left torn —
+                    // that partial mutation stays a LOUD error until the day it can no
+                    // longer happen (the commit now runs under the system identity after
+                    // up-front authorization, so this leg is a canary, not a code path).
+                    var isUnauthorized = dfxReason == NodeDeletionRejectionReason.Unauthorized;
+                    if (isUnauthorized && partial.Count > 0)
+                        logger.LogError(ex,
+                            "[DeleteNode] permission-denied MID-COMMIT path={Path} — {Partial} node(s) were "
+                            + "already deleted before the denial; the subtree is left partially deleted",
+                            path, partial.Count);
+                    else if (isUnauthorized)
+                        logger.LogWarning(
+                            "[DeleteNode] permission-denied path={Path}: {Reason}", path, ex.Message);
+                    else
+                        logger.LogError(ex, "[DeleteNode] {Kind} path={Path} partial-deleted={Partial}",
+                            isTimeout ? "timeout" : (isNotFound ? "not-found" : "unexpected"), path, partial.Count);
                     var failMsgs = collectedMessages.ToImmutable()
                         .Add(new LogMessage(
                             isNotFound ? $"Node not found at path '{path}'" : ex.Message,
@@ -2421,7 +2478,11 @@ public static class MeshExtensions
                             ? $"Delete of '{path}' exceeded {opts.Timeout.TotalSeconds:0}s timeout"
                             : (isNotFound
                                 ? $"Node not found at path '{path}'"
-                                : $"Unexpected error: {ex.Message}"),
+                                : (isUnauthorized
+                                    // Already legible ("Access denied: user 'x' lacks Delete
+                                    // permission on 'y'") — no "Unexpected error:" prefix.
+                                    ? ex.Message
+                                    : $"Unexpected error: {ex.Message}")),
                         isTimeout
                             ? NodeDeletionRejectionReason.Unknown
                             : (dfxReason
@@ -2758,12 +2819,23 @@ public static class MeshExtensions
     /// <summary>
     /// Bulk-atomic pre-flight: post <see cref="ValidateDeleteRequest"/> at every
     /// descendant address (root excluded — already validated by the caller) and
-    /// return the FIRST validator failure as <c>(Path, Error)</c>, or <c>null</c>
+    /// return the FIRST failure as <c>(Path, Error, Reason)</c>, or <c>null</c>
     /// if all descendants pass. Subscribed before any storage side effects fire,
     /// so a single failing descendant aborts the whole subtree delete with no
     /// partial state — sibling deletes that pass validation never run.
+    ///
+    /// <para>🚨 This pre-flight is ALSO the per-descendant PERMISSION check
+    /// (issue #1128): <see cref="ValidateDeleteRequest"/> carries the same
+    /// <c>[RequiresPermission(Delete)]</c> delivery gate as the leaf
+    /// <see cref="DeleteNodeRequest"/> fan-out, evaluated at each leaf's own hub
+    /// under the caller's <see cref="AccessContext"/>. An Unauthorized refusal
+    /// here is the atomic up-front denial — reported as
+    /// <see cref="NodeDeletionRejectionReason.Unauthorized"/> so callers see a
+    /// legible permission denial, never a partially deleted subtree. The commit
+    /// that follows a fully-granted pre-flight then runs under the system
+    /// identity, immune to the cascade deleting its own <c>_Access</c> grants.</para>
     /// </summary>
-    private static IObservable<(string Path, string Error)?> PreValidateDescendantsObs(
+    private static IObservable<(string Path, string Error, NodeDeletionRejectionReason Reason)?> PreValidateDescendantsObs(
         IMessageHub meshHub,
         string rootPath,
         ImmutableHashSet<string> allPaths,
@@ -2775,7 +2847,7 @@ public static class MeshExtensions
             .Where(p => !string.Equals(p, rootPath, StringComparison.OrdinalIgnoreCase))
             .ToArray();
         if (descendants.Length == 0)
-            return Observable.Return<(string, string)?>(null);
+            return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(null);
 
         var perPath = descendants.Select(p => meshHub
             // 🚨 Stamp the caller's AccessContext on every ValidateDeleteRequest.
@@ -2794,14 +2866,28 @@ public static class MeshExtensions
             {
                 var resp = d.Message as ValidateDeleteResponse;
                 if (resp is null || resp.IsValid)
-                    return ((string, string)?)null;
-                return (p, resp.Errors[0]);
+                    return ((string, string, NodeDeletionRejectionReason)?)null;
+                return (p, resp.Errors[0], NodeDeletionRejectionReason.ValidationFailed);
             })
-            .Catch<(string, string)?, Exception>(ex =>
+            .Catch<(string, string, NodeDeletionRejectionReason)?, Exception>(ex =>
             {
+                // The [RequiresPermission(Delete)] gate on ValidateDeleteRequest refused
+                // this leaf for the CALLER — the atomic up-front permission denial. It is
+                // an expected outcome, decided before any deletion; classify it so the
+                // caller gets Unauthorized with the gate's legible message ("Access
+                // denied: user 'x' lacks Delete permission on 'y'"), not a fail-level
+                // "unexpected" report (issue #1128).
+                if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.Unauthorized })
+                {
+                    logger.LogDebug(
+                        "[DeleteNode] pre-flight permission denied {Path}: {Message}", p, ex.Message);
+                    return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(
+                        (p, ex.Message, NodeDeletionRejectionReason.Unauthorized));
+                }
                 logger.LogWarning(ex,
                     "[DeleteNode] pre-validate descendant failed {Path}", p);
-                return Observable.Return<(string, string)?>((p, ex.Message));
+                return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(
+                    (p, ex.Message, NodeDeletionRejectionReason.ValidationFailed));
             }));
 
         // Collect every descendant's outcome; emit the first non-null failure
@@ -3206,7 +3292,8 @@ public static class MeshExtensions
         RunDeletionValidatorsWithWarningsObs(
             IMessageHub hub,
             MeshNode node,
-            DeleteNodeRequest request)
+            DeleteNodeRequest request,
+            AccessContext? deliveryAccessContext = null)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
@@ -3214,7 +3301,14 @@ public static class MeshExtensions
             Operation = NodeOperation.Delete,
             Node = node,
             Request = request,
-            AccessContext = accessService?.Context ?? accessService?.CircuitContext,
+            // 🚨 The DELIVERY's AccessContext first — the ambient AsyncLocal does not
+            // survive the scheduler hops between handler entry and this call (the same
+            // reason the handler captures senderUserId at entry), and for a cascade-leg
+            // delete the delivery carries the explicit SYSTEM execution stamp that
+            // RlsNodeValidator's cascade bypass keys on (issue #1128). Falling back to
+            // the ambient context preserves the pre-existing behavior for callers that
+            // did not thread the delivery through.
+            AccessContext = deliveryAccessContext ?? accessService?.Context ?? accessService?.CircuitContext,
             // This runner validates the ROOT node of the delete. For a standalone delete the
             // cascade root is the request path itself; a leaf delete issued by the subtree
             // fan-out carries the ORIGINAL root so validators exempt space-teardown invariants
