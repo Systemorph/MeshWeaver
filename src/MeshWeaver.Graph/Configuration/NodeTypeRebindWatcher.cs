@@ -79,12 +79,23 @@ internal static class NodeTypeRebindWatcher
         MeshNode enriched, IMessageHub meshHub, ILogger? logger)
     {
         var baseConfig = enriched.HubConfiguration;
+        // 🚨 A NULL HubConfiguration MUST SURVIVE. Both activation sites branch on it to activate
+        // the fail-fast NACK-FALLBACK hub — a hub whose UnhandledMessageNack answers every message
+        // with a typed DeliveryFailure naming the node type, and which DeactivateOnIdle's so the
+        // next access retries. Wrapping here would make it non-null unconditionally, killing that
+        // branch and swapping fail-fast for a bare hub that Ignores typed requests: the PARK class
+        // (senders wait out their whole budget instead of getting a diagnostic). That is the exact
+        // rule NodeTypeEnrichmentHelpers.ApplyStreamResult already states for its own wrap — "only
+        // wrap when a hub configuration will actually be composed". Nothing is lost: a hub with no
+        // configuration at all already retries on the next access, so it is never pinned.
+        if (baseConfig is null)
+            return enriched;
         var path = enriched.Path;
         var boundNodeType = enriched.NodeType;
         return enriched with
         {
             HubConfiguration = config =>
-                (baseConfig is null ? config : baseConfig(config))
+                baseConfig(config)
                     .WithInitialization(instanceHub =>
                     {
                         // Fire-and-forget by design: a watcher that cannot be armed must never
