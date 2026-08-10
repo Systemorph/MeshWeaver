@@ -35,6 +35,23 @@ public static class ServiceDefaults
             http.AddServiceDiscovery();
         });
 
+        // Attributable resilience for the plugin-registry client (#1133/#1137). Every client
+        // otherwise shares the ONE unnamed defaults pipeline above, whose Polly events log
+        // Source: '-standard//…' with an empty operation key — the boot-time registry timeouts
+        // could not be attributed to any call path. Re-registering the named client the
+        // PluginCatalog consumer resolves (InstanceRegistrationClient.HttpClientName — the
+        // literal is duplicated here because ServiceDefaults deliberately does not reference
+        // MeshWeaver.PluginCatalog) swaps the shared default pipeline for its own standard one,
+        // so the same event now reads 'plugin-registry-standard//…'. Same policies, named.
+        // RemoveAllResilienceHandlers is [Experimental] (EXTEXP0001) — the pragma is the API's
+        // designed opt-in, and it is the ONLY way to override the defaults pipeline per client
+        // without stacking a second retry-inside-retry pipeline on top of it.
+#pragma warning disable EXTEXP0001
+        builder.Services.AddHttpClient("plugin-registry")
+            .RemoveAllResilienceHandlers()
+            .AddStandardResilienceHandler();
+#pragma warning restore EXTEXP0001
+
         builder.Services.AddRequestTimeouts();
         builder.Services.AddOutputCache();
 

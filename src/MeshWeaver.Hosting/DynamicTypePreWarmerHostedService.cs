@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -50,6 +51,11 @@ public sealed class DynamicTypePreWarmerHostedService(
 
     private void KickWarmup()
     {
+        // The bake barrier consumers sequence on (#1114) — settled at EVERY terminal of this
+        // method, including the early no-bake returns, so a waiter never waits on a bake that is
+        // not coming. Resolved (not required) for resilience; AddDynamicTypePreWarming registers it.
+        var bake = services.GetService<PreWarmCompletion>();
+
         // Config-gated, DEFAULT OFF — see the class doc. Read as a raw string (no Binder
         // dependency); anything but an explicit true stays lazy.
         var enabled = services.GetService<IConfiguration>()?[EnabledConfigKey];
@@ -58,6 +64,7 @@ public sealed class DynamicTypePreWarmerHostedService(
             logger.LogInformation(
                 "DynamicTypePreWarmer: disabled ({Key} != true) — dynamic NodeTypes compile lazily on first access",
                 EnabledConfigKey);
+            bake?.MarkSettled();
             return;
         }
 
@@ -65,6 +72,7 @@ public sealed class DynamicTypePreWarmerHostedService(
         if (mesh is null)
         {
             logger.LogDebug("DynamicTypePreWarmer: no mesh hub resolved — skipping startup warm-up");
+            bake?.MarkSettled();
             return;
         }
 
@@ -114,6 +122,9 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // an un-provable bake must not become an outage. A genuine broken type is caught
                     // by MarkOutcome above, which is what the gate is actually for.
                     gate?.MarkComplete("warm-up stream faulted — gate released, lazy compile applies");
+                    // A fault is a terminal too: the sweep is over, the compile queue is no longer
+                    // saturated, and whoever sequenced on the bake may proceed (#1114).
+                    bake?.MarkSettled();
                 },
                 () =>
                 {
@@ -152,6 +163,13 @@ public sealed class DynamicTypePreWarmerHostedService(
                                 gate.Regressions.Count, NodeTypeBakeGateExtensions.EnabledConfigKey,
                                 gate.Detail, regressions);
                     }
+
+                    // The sweep ran to its end — regressed or not, the compile queue has drained
+                    // and per-node hub activations no longer park behind it. Release the boot
+                    // flows sequenced on the bake (#1114). On a Regressed+armed pod readiness
+                    // stays refused regardless; the default install proceeding is deliberate —
+                    // installs repair content, and the broken type is already terminal.
+                    bake?.MarkSettled();
                 });
     }
 
@@ -185,6 +203,12 @@ public static class PreWarmServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddDynamicTypePreWarming(this IServiceCollection services)
     {
+        // The bake barrier (#1114): boot flows that write through per-node hubs — the plugin
+        // default install foremost — resolve this and sequence themselves after the sweep, so
+        // they never race a post-roll recompile storm. Registered HERE, with the pre-warmer,
+        // because its absence is itself the signal: a host without the pre-warm has no bake to
+        // wait for, and consumers proceed immediately.
+        services.TryAddSingleton<PreWarmCompletion>();
         services.AddHostedService<DynamicTypePreWarmerHostedService>();
         return services;
     }
