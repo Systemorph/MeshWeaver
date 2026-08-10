@@ -285,14 +285,62 @@ public record LayoutAreaHost : IDisposable
             // render would run on the init-observer thread as the argument is built, OUTSIDE the pool
             // leaf — untracked, exactly the straggler. Defer moves the whole BuildRenderObservable
             // construction to SUBSCRIBE time, so it runs inside the gated, drain-joined pool leaf.
+            // 🚨 DIAGNOSTIC ONLY — count the render results this area actually delivered.
+            //
+            // A generator that neither emits NOR faults leaves the area on the
+            // "Rendering {area}... awaiting first data" placeholder that
+            // WriteFrameworkMilestones just wrote, forever: nothing here is bounded (deliberately —
+            // a legitimately slow area must never be cut short), FailRendering never runs (no
+            // fault), and PushRenderResult never runs (no emission), so the page shows a spinner
+            // and the SERVER SAYS NOTHING. That silence is what made issue #1081 undiagnosable
+            // across four sessions: the client's store carried the placeholder and the menu areas
+            // while `Overview` was simply absent from `areas`, and every log was mute.
+            //
+            // These two counters do NOT bound, cancel, retry or convert anything — the render
+            // still lands whenever it lands. They only make the "delivered nothing" state
+            // ATTRIBUTABLE, and they fire on real lifecycle events (terminal notification /
+            // disposal), never on a timer — a watchdog here would be the forbidden band-aid.
+            var rendered = 0;
             var renderSubscription = ScheduleRenderSubscribe(
                     Observable.Defer(() => BuildRenderObservable(context, baseStore)))
-                .Subscribe(PushRenderResult, FailRendering);
+                .Subscribe(
+                    result =>
+                    {
+                        Interlocked.Increment(ref rendered);
+                        PushRenderResult(result);
+                    },
+                    FailRendering,
+                    () =>
+                    {
+                        if (Volatile.Read(ref rendered) != 0)
+                            return;
+                        // The pipeline reached a TERMINAL state having produced no content and no
+                        // error. Nothing further is coming on this subscription, so the area is
+                        // provably stuck on its placeholder — a wedges-to-zero violation, and the
+                        // one shape that is knowable without any clock.
+                        logger.LogError(
+                            "Layout area '{Area}' on {Hub} COMPLETED WITHOUT RENDERING: its view "
+                            + "generator neither emitted a control nor faulted, so the area stays on "
+                            + "its \"awaiting first data\" placeholder with nothing to time it out. "
+                            + "The subscriber sees a spinner forever. Look at the renderer registered "
+                            + "for this area on this hub's LayoutDefinition.",
+                            context.Area, Hub.Address);
+                    });
 
             // Tear down: dispose the render + milestone subscriptions and clear the
             // restored context so it never leaks into unrelated work on this thread.
             return System.Reactive.Disposables.Disposable.Create(() =>
             {
+                // Same diagnostic at the OTHER real lifecycle event: the host went away having
+                // never delivered a frame. Warning, not Error — a client that navigates away
+                // before the first render is legitimate and must not page anyone — but it names
+                // the area, which is exactly what the 45 s timeouts in the Orleans suite could
+                // not.
+                if (Volatile.Read(ref rendered) == 0)
+                    logger.LogWarning(
+                        "Layout area '{Area}' on {Hub} was torn down having never rendered — the "
+                        + "subscriber only ever saw the \"awaiting first data\" placeholder.",
+                        context.Area, Hub.Address);
                 renderSubscription.Dispose();
                 milestoneSubscription.Dispose();
                 if (capturedAccessContext != null)
