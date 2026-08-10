@@ -128,6 +128,46 @@ public static class HubPermissionExtensions
     }
 
     /// <summary>
+    /// CLASSIFIED permission check for the CURRENT user (resolved from
+    /// <see cref="AccessService.Context"/> / <see cref="AccessService.CircuitContext"/>) — the
+    /// tri-state twin of <see cref="CheckPermission(IMessageHub,string,Permission)"/>, for callers
+    /// that already run under the user's identity (a Blazor circuit, a layout-area render) and so
+    /// have no explicit user id to pass.
+    ///
+    /// <para>🚨 Use this — never <c>CheckPermission(...).Catch(_ =&gt; Observable.Return(false))</c>
+    /// — whenever the answer decides what a user is SHOWN or TOLD. That local catch is the shape
+    /// issue #974 removed from <c>AccessControlPipeline</c>: it is fail-closed and a lie, and it
+    /// turns a transient fold fault into a permanent-looking denial. See
+    /// <see cref="CheckPermissionOutcome(IMessageHub,string,string,Permission)"/> for the full
+    /// reasoning; identity is the only difference.</para>
+    ///
+    /// <para>The identity is resolved INSIDE the deferred chain, so it is read at subscribe time
+    /// (under the caller's ambient context) rather than when the observable was composed — and
+    /// UNDER the classifier, because <c>ResolveUserId</c> touches <c>hub.ServiceProvider</c>, which
+    /// throws on a hub whose DI scope is mid-disposal. Removing a <c>catch</c> MOVES a failure
+    /// rather than deleting it, so the classifier has to be wide enough to cover the composition
+    /// too — the same edge the explicit
+    /// <see cref="Observable.Defer{TResult}(Func{IObservable{TResult}})"/> in the four-argument
+    /// overload exists to close.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose configured evaluator answers the check.</param>
+    /// <param name="nodePath">Path the permission is evaluated on.</param>
+    /// <param name="permission">The permission being checked.</param>
+    public static IObservable<PermissionCheckOutcome> CheckPermissionOutcome(
+        this IMessageHub hub,
+        string nodePath,
+        Permission permission)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        return Observable
+            .Defer(() => hub.CheckPermissionOutcome(nodePath, ResolveUserId(hub), permission))
+            .Catch<PermissionCheckOutcome, Exception>(ex => Observable.Return(
+                PermissionCheckOutcome.Undetermined(
+                    $"permission check on '{nodePath}' could not resolve the current user: "
+                    + $"{ex.GetType().Name}: {ex.Message}")));
+    }
+
+    /// <summary>
     /// True when the current user (resolved from <see cref="AccessService.Context"/> /
     /// <see cref="AccessService.CircuitContext"/>) is a <b>global admin</b> — i.e. an
     /// admin on the <b>Admin partition</b> (<see cref="Permission.All"/> at scope
