@@ -8,6 +8,9 @@
     <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
     <!-- MapDefaultEndpoints / MapVersionEndpoint live here, beside /health and /alive. -->
     <ProjectReference Include="..\..\memex\aspire\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
+    <!-- DbVersionHealthCheckTest drives the portal's own db_version health check: whether a
+         cancellation raised by the CALLER is reported as a database verdict (#1183). -->
+    <ProjectReference Include="..\..\memex\aspire\Memex.Portal.Distributed\Memex.Portal.Distributed.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <!-- OAuthCodeStoreTest runs against a full monolith mesh (the store persists
          authorization codes as mesh nodes — the multi-replica safety contract). -->
