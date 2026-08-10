@@ -116,6 +116,16 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     // persisted bytes). See GraftRoutingEnrichment.
     private MeshNode? _latestRoutingNode;
 
+    // Mesh-wide $type → CLR-Type map (see IMeshContentTypeRegistry). The per-hub
+    // ITypeRegistry consulted first in ResolveJsonElementContent only knows what THIS hub's
+    // HubConfiguration registered at construction — and for a dynamic NodeType that is a
+    // side effect of MeshDataSource.WithContentType, which never runs when enrichment bound
+    // the instance to a fallback config. This registry is the options-independent, process-
+    // wide answer the other three degrade seams (ObjectPolymorphicConverter.ReadObject,
+    // MeshNodeStreamCache, MeshNodeStreamHandle.EnsureTypedContent) already consult; the
+    // OWNING hub's own load was the one seam still missing from that list.
+    private readonly Mesh.Services.IMeshContentTypeRegistry? _contentTypeRegistry;
+
     internal MeshNodeTypeSource(
         IWorkspace workspace,
         object dataSource,
@@ -155,6 +165,8 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             .GetService<MeshDataSourceExtensions.OwnNodeCache>();
         _recentlyDeletedRegistry = workspace.Hub.ServiceProvider
             .GetService<RecentlyDeletedRegistry>();
+        _contentTypeRegistry = workspace.Hub.ServiceProvider
+            .GetService<Mesh.Services.IMeshContentTypeRegistry>();
         _logger?.LogDebug("MeshNodeTypeSource: Created for hubPath={HubPath} (routingSuppliedStream={Supplied})",
             hubPath, ownNodeStream != null);
 
@@ -990,6 +1002,31 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             if (shortName is null
                 || !registry.TryGetType(shortName, out typeDef) || typeDef?.Type == null)
             {
+                // 🚨 Before degrading, ask the MESH-WIDE map. This hub's ITypeRegistry only
+                // knows what its own HubConfiguration registered at construction, and for a
+                // dynamically compiled NodeType that registration (MeshDataSource
+                // .WithContentType) is a SIDE EFFECT of enrichment having resolved the real
+                // config. When enrichment degraded — an unanswered registration probe during
+                // a post-roll recompile storm, a fallback overlay, a re-import into a running
+                // process — the side effect never happened here, yet another hub in this
+                // process (or a later activation) may already have registered the very same
+                // CLR type. IMeshContentTypeRegistry is exactly that options-independent
+                // answer, and the other three degrade seams already consult it; the owning
+                // hub's own load was the last one that did not, so its workspace copy stayed
+                // untyped even after the type was known process-wide. Deserialises to the
+                // CONCRETE type explicitly, so nothing is adopted into this hub's frozen
+                // options (no collectible-ALC identity becomes a long-lived answer).
+                var recovered = _contentTypeRegistry?.TryRecover(je, _workspace.Hub.JsonSerializerOptions);
+                if (recovered is not null)
+                {
+                    _logger?.LogDebug(
+                        "MeshNodeTypeSource[{HubPath}]: content discriminator '$type': '{TypeName}' is not on "
+                        + "this hub's registry, but the mesh-wide content-type registry resolved it to {Type} "
+                        + "for {Path} — content typed from the mesh map.",
+                        _hubPath, typeName, recovered.GetType().Name, node.Path);
+                    return node with { Content = recovered };
+                }
+
                 // 🚨 Bad-data tolerance contract: degrade to JsonElement but LOUDLY.
                 // This is the OWNING hub failing to type its OWN node's content — the
                 // discriminator is unresolvable on the one registry that is canonical
