@@ -284,7 +284,12 @@ public sealed class ContentImportBuilder
         // Typed request-response: pre-registers the response callback by message-id BEFORE posting
         // (canonical hub.Observe<TResponse> idiom) — no manual Post returning a nullable delivery.
         // Wrapped in Defer so the post still happens on Subscribe (cold), as before.
-        return Observable.Defer(() => _hub
+        // 🚨 Issued off the router: mesh-singleton callers (the plugin default-install seed) hold
+        // the DI root mesh hub, and an ImportContentRequest posted there addresses its response
+        // straight back at mesh/{id} — the production ROUTER_TRAFFIC line "ImportContentResponse
+        // has the mesh hub as target (sender: Agent…)". NodeOperationIssuingHub is a no-op for
+        // every non-router hub, so node/import/portal-hub callers are unchanged.
+        return Observable.Defer(() => _hub.NodeOperationIssuingHub()
             .Observe(request, o => o.WithTarget(address))
             .Select(d => d.Message)
             .Take(1));
@@ -368,7 +373,9 @@ public sealed class SyncContentFilesBuilder
             SourceOwnedPaths = _sourceOwnedPaths,
         };
         var address = new Address(_nodePath);
-        return Observable.Defer(() => _hub
+        // Off-router issuing, same reason as ContentImportBuilder.Post: the router must be neither
+        // end of the request/response pair (ROUTER_TRAFFIC); a non-router hub gets itself back.
+        return Observable.Defer(() => _hub.NodeOperationIssuingHub()
             .Observe(request, o => o.WithTarget(address))
             .Select(d => d.Message)
             .Take(1));
