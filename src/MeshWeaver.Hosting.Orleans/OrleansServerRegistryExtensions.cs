@@ -115,6 +115,9 @@ public static class OrleansServerRegistryExtensions
         // Partition routing is the default (see OrleansConnectionExtensions for rationale).
         services.AddPartitionedInMemoryPersistence();
         services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
+        // Deterministic streaming-readiness signal (silo lifecycle → Active) that the routing
+        // service orders its Orleans stream subscriptions on — see OrleansStreamingReadiness.
+        services.AddOrleansStreamingReadiness();
         // The root mesh hub's cross-silo REPLY stream (core#694 layer 2) — see
         // RootMeshHubReplyStreamService for the full story.
         services.AddRootMeshHubReplyStream();

@@ -823,6 +823,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// so the read never hits a missing node. <see cref="MeshWeaver.AI.ThreadComposerNodeType.ComposerOf"/>
     /// discriminates by NodeType: a ThreadComposer node's own content, or the thread's embedded
     /// <c>Thread.Composer</c>.
+    /// <para>An idle-collected composer grain whose reactivation outruns the request budget answers
+    /// the subscribe with a TRANSIENT owner failure ("No response received in hub … target hub was
+    /// not found"). The stream-cache contract forwards that to the subscriber for the CALLER to
+    /// retry (<c>MeshNodeStreamCache.IsTransientOwnerFailure</c>) — the bounded backoff here is that
+    /// retry, the same <see cref="AreaStreamRetry"/> every layout area uses. Only a NON-transient
+    /// failure is surfaced; a transient one that survives the whole budget is logged and stays
+    /// silent (the raw framework banner is hostile and unactionable), and the next chat rebind
+    /// restarts the projection naturally.</para>
     /// </summary>
     private void OpenComposerProjection(string path)
     {
@@ -832,6 +840,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         composerSubscription = Hub.GetMeshNodeStream(path)
             .Select(n => MeshWeaver.AI.ThreadComposerNodeType.ComposerOf(n, Hub.JsonSerializerOptions, Logger))
             .Where(c => c is not null)
+            .RetryAreaWithBackoff(AreaErrorClassifier.ShouldRetryArea)
             .Subscribe(
                 c => InvokeAsync(() =>
                 {
@@ -842,7 +851,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     boundEffort = c.Effort;
                     StateHasChanged();
                 }),
-                ex => SurfaceError(ex, "Loading the composer"));
+                ex =>
+                {
+                    if (AreaErrorClassifier.IsTransientHubFailure(ex))
+                        Logger.LogWarning(ex,
+                            "[ThreadChat:{InstanceId}] composer projection for {Path} still unavailable after bounded retries — staying silent; the next chat rebind resubscribes",
+                            _instanceId, path);
+                    else
+                        SurfaceError(ex, "Loading the composer");
+                });
         StateHasChanged();
     }
 
