@@ -27,6 +27,41 @@ namespace MeshWeaver.Graph;
 public static class MeshDataSourceExtensions
 {
     /// <summary>
+    /// Marker declaring that a hub exists ONLY to be interrogated for type information and
+    /// will be disposed immediately — see <see cref="AsTransientNodeProbe"/>.
+    /// </summary>
+    internal sealed record TransientNodeProbe;
+
+    /// <summary>
+    /// Declares this hub a <b>transient probe</b>: it applies a NodeType's configuration purely
+    /// so its <see cref="MeshWeaver.Domain.ITypeRegistry"/> / <see cref="MeshDataSource.ContentType"/>
+    /// can be read, and is disposed in the same breath. Such a hub gets the data context (which is
+    /// what carries the type information) but NOT the per-node control plane —
+    /// the own-node subscription, the persistence sampler, the compile / release-request / sources
+    /// watchers, and the compile-state mirror.
+    ///
+    /// <para><b>Why this exists.</b> Those watchers are long-lived, self-healing machinery for a
+    /// node that lives for months. Installing them on a hub that lives for microseconds is a pure
+    /// mismatch: each one immediately opens mesh-node streams (spinning up a <c>sync/</c> sub-hub
+    /// apiece) and then faults as the hub is torn down out from under it —
+    /// <c>HubDisposingException: Hub … is shutting down — cannot create '/MeshNode'</c> — which the
+    /// watchers report as a fault and retry. Measured on the AKS portals: ~22 error/warning log
+    /// lines per probe, every one of them attributable to this teardown race and none of them
+    /// actionable. Skipping the control plane removes the machinery that had nothing to do, so
+    /// there is no fault to report and no <c>sync/</c> sub-hub to create.</para>
+    ///
+    /// <para>The probe still gets everything it reads: <c>WithContentType</c> registers into the
+    /// hub's <c>TypeRegistry</c> from the data-source configuration (data-context build), the
+    /// <c>GetDataRequest</c>/<c>SchemaReference</c> handler is a plain message handler, and
+    /// <c>DataContext.DataSources</c> / <c>TypeSources</c> are built as usual.</para>
+    ///
+    /// <para>🚨 A probe hub must never be used to WRITE. With no own-node subscription and no
+    /// persistence sampler it has no node identity and would not persist anything.</para>
+    /// </summary>
+    public static MessageHubConfiguration AsTransientNodeProbe(this MessageHubConfiguration config)
+        => config.Set(new TransientNodeProbe());
+
+    /// <summary>
     /// Marker that records every <see cref="AddMeshDataSource(MessageHubConfiguration, Func{MeshDataSource, MeshDataSource})"/>
     /// call's configuration callback. Used to make AddMeshDataSource idempotent at the
     /// framework-registration level — handlers, init hooks, and the gate are registered
@@ -831,9 +866,16 @@ public static class MeshDataSourceExtensions
     /// <c>MessageHubConfiguration.Build</c>). A named static method, not a lambda: the observable
     /// <c>WithInitialization</c> overload de-duplicates on DELEGATE IDENTITY, and a fresh lambda
     /// per configurator call would stack N subscriptions instead of collapsing to one.
+    /// <para>
+    /// Skipped entirely on a <see cref="TransientNodeProbe"/> hub — see
+    /// <see cref="AsTransientNodeProbe"/> for why a probe must not run the node control plane.
+    /// </para>
     /// </summary>
     private static IObservable<Unit> SubscribeToOwnDeletionInit(IMessageHub hub)
     {
+        if (hub.Configuration.Get<TransientNodeProbe>() is not null)
+            return Observable.Return(Unit.Default);
+
         SubscribeToOwnDeletion(hub);
         return Observable.Return(Unit.Default);
     }
@@ -1349,8 +1391,12 @@ public static class MeshDataSourceExtensions
                                     return Observable.Empty<GetDataResponse>();
 
                                 var dummyAddress = new Address($"$schema-probe/{Guid.NewGuid():N}");
+                                // 🚨 AsTransientNodeProbe: built to answer one SchemaReference and
+                                // disposed in the Finally below. It must not install the per-node
+                                // control plane — those watchers would only open `sync/` sub-hubs
+                                // and then fault as this hub is torn down out from under them.
                                 var subHub = hub.GetHostedHub(dummyAddress, c =>
-                                    matching.HubConfiguration(c.AddData()));
+                                    matching.HubConfiguration(c.AddData()).AsTransientNodeProbe());
 
                                 var schemaDelivery = subHub.Post(new GetDataRequest(new SchemaReference()))!;
                                 return subHub.Observe(schemaDelivery)
