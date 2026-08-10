@@ -111,6 +111,88 @@ public class DeletedAddressNackClassificationTest(ITestOutputHelper output) : Hu
             + "would re-classify this verdict as retryable and restore the silent park");
     }
 
+    // ── The SECOND door into the same NACK: a handler that throws HubDisposingException ─────────
+    //
+    // The fork above lives in NackThroughParent, which covers deliveries the hub ABANDONS — the
+    // intake gate and the disposal drain. But a delivery can also be ACCEPTED and then fault: the
+    // handler runs while RunLevel still reads Started, reaches for machinery HostedHubsCollection
+    // has already frozen (SynchronizationStream's ctor → Host.GetHostedHub), and throws
+    // HubDisposingException. That lands in MessageService's execution Catch, NOT in
+    // NackThroughParent — a completely separate classification site, and #1038 only fixed the first.
+    //
+    // Measured: with #1038 in, MeshPluginTest.FullCrudWorkflow_CreateGetUpdateDelete STILL failed 2
+    // of 4 whole-assembly runs at DOTNET_PROCESSOR_COUNT=4 -parallel collections, with the identical
+    // #1029 signature — "Unavailable … reached no verdict within 10s", the authoritative NotFound
+    // arriving on the 5 s FirstHeartbeat and going nowhere. The trace names the door:
+    //
+    //     Message delivery failed for SubscribeRequest (ID: …) in ACME/CrudTest_…:
+    //       ---> MeshWeaver.Messaging.HubDisposingException: Hub ACME/CrudTest_… is shutting down
+    //            at MeshWeaver.Data.WorkspaceStreams.CreateReducedStream…
+    //
+    // These two tests force that door deterministically — the handler throws the exception outright,
+    // so there is no disposal race to lose and no scheduling luck involved.
+
+    private record ThrowingRequest : IRequest<GatedResponse>;
+
+    private static readonly Address LiveAddress = new("gated", "recycling-node");
+
+    /// <summary>
+    /// Registers a handler that throws <see cref="HubDisposingException"/> exactly as
+    /// <c>SynchronizationStream</c>'s constructor does when the hosted-hub collection is already
+    /// frozen — the real production shape, minus the race.
+    /// </summary>
+    private static IMessageHub ThrowingHub(IMessageHub host, Address address) =>
+        host.GetHostedHub(
+            address,
+            c => c.WithTypes(typeof(ThrowingRequest), typeof(GatedResponse))
+                .WithHandler<ThrowingRequest>((h, _) =>
+                    throw new HubDisposingException(h.Address, "/MeshNode")));
+
+    [Fact(Timeout = 30_000)]
+    public async Task HandlerThrowingHubDisposing_OnADeletedAddress_IsNackedAsAuthoritativeNotFound()
+    {
+        var host = GetHost();
+        ThrowingHub(host, DeletedAddress).Should().NotBeNull();
+
+        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(
+            () => host.Observe<GatedResponse>(new ThrowingRequest(), o => o.WithTarget(DeletedAddress))
+                .FirstAsync().ToTask(TestContext.Current.CancellationToken));
+        Output.WriteLine($"[nack] {failure.Failure!.ErrorType}: {failure.Failure.Message}");
+
+        failure.Failure!.ErrorType.Should().Be(ErrorType.NotFound,
+            "the tombstone says this address is gone for good, and that is true no matter WHICH "
+            + "site classifies the failure — an accepted-then-faulted delivery is not more "
+            + "recoverable than an abandoned one");
+
+        // Same wording contract as the abandoned-delivery fork, and for the same two classifiers.
+        // The transient half is the trap here: the raw exception text is "Hub … is shutting down",
+        // which IsTransientOwnerFailure matches — so simply reporting e.ToString() with a NotFound
+        // ErrorType would still read as retryable and leave #1029 exactly where it was.
+        failure.Failure.Message.Should().Contain("No node found",
+            "MeshNodeStreamCache.IsMissingNodeFailure matches this phrase — it is what turns the "
+            + "NACK into a definitive 'Not found' for MeshOperations.FetchNode");
+        failure.Failure.Message.Should().NotContain("shutting down",
+            "IsTransientOwnerFailure matches 'is shutting down' anywhere in the message; leaving "
+            + "the raw exception text in would re-classify the verdict as retryable");
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task HandlerThrowingHubDisposing_OnALiveAddress_StaysTransientShuttingDown()
+    {
+        var host = GetHost();
+        ThrowingHub(host, LiveAddress).Should().NotBeNull();
+
+        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(
+            () => host.Observe<GatedResponse>(new ThrowingRequest(), o => o.WithTarget(LiveAddress))
+                .FirstAsync().ToTask(TestContext.Current.CancellationToken));
+        Output.WriteLine($"[nack] {failure.Failure!.ErrorType}: {failure.Failure.Message}");
+
+        failure.Failure!.ErrorType.Should().Be(ErrorType.ShuttingDown,
+            "no tombstone means the address is recycling and WILL come back; answering NotFound "
+            + "here would tear down the sync stream's keep-alive and change-feed resubscribe latch "
+            + "— the regression the transient classification exists to prevent (#672)");
+    }
+
     /// <summary>
     /// Polls the public disposal diagnostics until the request is DEMONSTRABLY parked in the gated
     /// hub's deferred queue. Without it the test could dispose before the delivery was accepted —

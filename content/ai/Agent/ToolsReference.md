@@ -247,9 +247,12 @@ namespace:Doc                  # Immediate children of Doc
 
 **limit** — Limits the number of results: `limit:10`, `limit:50`
 
-**source** — Specifies the data source:
+**source** — Switches the data source backing the query:
 ```
-source:activity    # Results ordered by user's last access time
+source:activity    # Main nodes that HAVE Activity satellites — a change feed,
+                   # newest activity first. NOT "what I looked at".
+source:accessed    # Only nodes the CALLER has opened, newest access first
+                   # (joins the caller's own UserActivity log — works across partitions)
 ```
 
 **context** — Filters results by visibility context:
@@ -580,14 +583,17 @@ Nodes can have satellite data stored in dedicated sub-namespaces with underscore
 
 | Prefix | Table | Node Types | Purpose |
 |--------|-------|------------|---------|
-| `_Thread` | threads | Thread, ThreadMessage | Chat/discussion threads |
-| `_Comment` | comments | Comment | Document comments and replies |
-| `_Activity` | activities | ActivityLog | Activity tracking |
-| `_UserActivity` | user_activities | UserActivity | Per-user activity (recently viewed) |
-| `_Access` | access | AccessAssignment | Permission grants |
-| `_Approval` | approvals | Approval | Approval workflows |
-| `_Tracking` | tracking | TrackedChange | Track changes / collaborative editing |
-| `_Notification` | notifications | Notification | Bell notifications (e.g. thread completion) |
+| `_Thread` | `threads` | Thread, ThreadComposer | Chat/discussion threads |
+| `_ThreadMessage` | `threads` | ThreadMessage | Thread message cells |
+| `_Activity` | `activities` | Activity | Activity tracking |
+| `_UserActivity` | `user_activities` | UserActivity | Per-user activity (recently viewed) |
+| `_Access` | `access` | AccessAssignment | Permission grants |
+| `_Comment` | `annotations` | Comment | Document comments and replies |
+| `_Approval` | `annotations` | Approval | Approval workflows |
+| `_Tracking` | `annotations` | TrackedChange | Legacy track-changes (read-only; nothing writes these any more) |
+| `_Notification` | `notifications` | Notification | Bell notifications (e.g. thread completion) |
+
+`_Comment`, `_Approval` and `_Tracking` deliberately **share** the `annotations` table — there is no `comments`, `approvals` or `tracking` table in any schema. The set is defined by `SatelliteTableMapping.Defaults` and is configurable per host and per namespace.
 
 ### Path Patterns
 

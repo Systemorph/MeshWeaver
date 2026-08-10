@@ -38,7 +38,7 @@ Two consequences drive the whole design:
 - **Heavy tool results die at the round boundary — and that is a feature.** End the reading phase with a round boundary and the document simply stops being in context. You get the "document absent" state from §1 for free.
 - **Anything the next round needs must be written into the assistant's answer *text*.** State that lived only in a tool result — including facts the agent discovered and acted on — is gone after the boundary. If the next round depends on it, the assistant must emit it as part of its reply.
 
-Also worth knowing when you reason about cost: token usage is stamped when a round **terminates**. A round that dies mid-flight (an infrastructure error, a cancellation) may record **no usage at all**, so thread-level cost figures are a *floor*, not an exact total (see GitHub issue #369).
+Also worth knowing when you reason about cost: token usage is stamped when a round **terminates**. A round that dies mid-flight (an infrastructure error, a cancellation) may record **no usage at all**, so thread-level cost figures are a *floor*, not an exact total.
 
 ## 3. The two-phase extract-then-write protocol
 
@@ -88,8 +88,7 @@ See also the typed-content discipline in [MeshPlugin → Create](/Doc/AI/Tools/M
 
 ## 7. Operational notes
 
-- **Measuring true cost.** Sum every `_Usage` satellite across the whole thread tree — delegation sub-threads record separately (and may be priced as an unknown model, GitHub issue #369), and error-terminated rounds may be missing entirely (§2).
-- **Filename hygiene.** Until path canonicalisation ships (GitHub issue #364), prefer ASCII filenames for uploads: decomposed-Unicode names index fine but fail by-name reads.
+- **Measuring true cost.** Sum every `_Usage` satellite across the whole thread tree (`{threadPath}/_Usage/{modelKey}`, one per model, accumulating across the thread's rounds) — delegation sub-threads record separately, and error-terminated rounds may be missing entirely (§2).
 
 ## Measured effect
 
