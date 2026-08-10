@@ -60,6 +60,7 @@ public static class MigrationRegistry
         new V49_FixAccessAssignmentMainNode(),
         new V50_RescopePlatformAdminGrants(),
         new V51_DropInvalidPartitionSchemas(),
+        new V52_DeleteStaleNodeTypeOrphans(),
     ];
 
     /// <summary>
