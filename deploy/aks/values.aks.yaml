@@ -128,30 +128,53 @@ config:
     # /health red until they are built against THIS image — with the deployment's
     # maxSurge 1 / maxUnavailable 0, a regressed type stalls the ROLLOUT (old
     # image keeps serving) instead of surfacing as user-facing errors.
-    # ⚠️ Enabling the gate REQUIRES the raised probes.startup budget below —
-    # paired settings, never change one without the other.
-    # ⛔ Gate OFF — core #694 (cross-silo reply routing) is NOT fully fixed.
-    # Enabled 2026-08-02 on the reasoning that #718 + #719 (both 2026-07-29)
-    # closed #694; reverted the SAME DAY after the first gated roll on
-    # memex-cloud stalled with "7 NodeType(s) regressed on this image".
-    # Those were FALSE regressions: the pod log contains no CS#### compile
-    # error at all, only cross-silo subscribe timeouts from the sweep —
+    #
+    # ✅ Gate ON. It was enabled 2026-08-02 and reverted the same day: the first
+    # gated roll on memex-cloud stalled with "7 NodeType(s) regressed on this
+    # image", and every one was FALSE — no CS#### diagnostic anywhere in the pod
+    # log, only cross-silo subscribe timeouts from the sweep,
     #   No response received in hub cache/… within 00:01:00 for request
     #   SubscribeRequest → target Claims / Reinsurance / SocialMedia /
     #   ClaimsDeepfield / RiskTransfer
-    # i.e. during a roll the baking pod and the serving pod are two silos and
-    # the sweep cannot resolve shared sources across that boundary, exactly as
-    # this comment warned before. The types compile fine; the sweep cannot
-    # reach them. So the 2026-07-30 observation was NOT explained by #718/#719.
-    # The gate's failure mode is a STALLED rollout (old image keeps serving —
-    # no outage, but self-update silently stops advancing), which is why this
-    # must stay off until the sweep's cross-silo source resolution is fixed.
-    # ⚠️ Do NOT re-enable by widening the probe budget — the sweep is not slow,
-    # it is erroring. Fix the cross-silo SubscribeRequest first.
-    # The sweep itself stays ON: deploys still compile every type at pod start;
-    # failures fall back to lazy compile instead of holding readiness.
+    # During a roll the baking pod and the serving pod are two silos, and the
+    # sweep cannot always resolve shared sources across that boundary (core #694
+    # residue). The types compiled fine; the sweep could not reach them.
+    #
+    # What changed — the gate no longer treats "no answer" as "it broke":
+    #   • A TIMEOUT IS NOT A VERDICT. NodeTypeBakeGateState.MarkOutcome files a
+    #     TimedOut outcome under "unevaluated" and it can never set Regressed.
+    #     Every one of the 7 false regressions was this shape.
+    #   • That leniency now survives the CASCADE. A dependent of an unevaluated
+    #     upstream is reported UpstreamUnevaluated (also non-gating) instead of
+    #     UpstreamFailed — without that, one timed-out shared source still gated
+    #     through its dependents and the same stall returned one hop downstream.
+    #   • Only a real verdict on a previously-healthy type gates: a CompileError
+    #     (Roslyn rejected it on THIS image) or an UpstreamFailed cascading from
+    #     one. A type already broken before the deploy never gates, so one
+    #     abandoned NodeType cannot freeze every future rollout.
+    # Non-blocking is not invisible: unevaluated types are named in the /health
+    # payload, so a swallowed timeout still shows up rather than hiding a real
+    # regression. (Pinned by NodeTypeBakeGateStateTest + DynamicTypePreWarmerTest.)
+    #
+    # ⚠️ THREE prerequisites, all of which must be true in the LIVE namespace —
+    # verify, do not assume, because two of the three portals had drifted:
+    #   1. probes.startup raised to cover a full COLD bake (below: 10 × 1080 = 3h).
+    #      Without it Kubernetes kills the pod mid-bake, every time, forever.
+    #   2. The startupProbe must actually EXIST and point at /health — that probe
+    #      is the only thing that reads this gate. A namespace with no startupProbe
+    #      (or one probing /alive or /healthz) ignores the gate completely.
+    #   3. strategy.maxUnavailable MUST be 0. The gate protects a portal only by
+    #      making the new pod refuse readiness; at maxUnavailable:1 with replicas:1
+    #      the serving pod can be deleted first, so the gate reports and the outage
+    #      happens anyway — false confidence.
+    # The chart renders 1 and 3 correctly; a per-env patch or a hand `kubectl` can
+    # still override them, so CHECK before trusting the gate (DEPLOY-RUNBOOK §7).
+    #
+    # Failure mode if the gate DOES fire on a real regression: a stalled rollout
+    # with the old image still serving — no outage, but self-update stops
+    # advancing, so a stalled roll must be investigated, not waited out.
     PreWarm__DynamicTypes: "true"
-    PreWarm__GateReadiness: "false"
+    PreWarm__GateReadiness: "true"
     # ---- Platform self-update cadence --------------------------------------
     # The poller's built-in default is 6h, which is why a freshly published image
     # could sit unpicked for hours and look like "self-update is broken" (memex,
