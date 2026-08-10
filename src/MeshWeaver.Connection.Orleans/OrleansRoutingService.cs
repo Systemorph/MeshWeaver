@@ -9,8 +9,10 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reflection;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Orleans.Runtime;
 using Orleans.Streams;
@@ -68,6 +70,43 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     private readonly IIoPool ioPool;
     private volatile bool disposed;
 
+    /// <summary>
+    /// The host's own <see cref="IHostApplicationLifetime.ApplicationStopping"/> token — the
+    /// observable signal that this process has begun shutting down.
+    ///
+    /// <para>🚨 This is what makes the shutdown window ROUTABLE-OR-NOT decidable instead of
+    /// discovered by exception. The moment an Orleans silo begins graceful shutdown it leaves
+    /// <c>Active</c> in the membership oracle, and from that instant EVERY placement of
+    /// <see cref="IRoutingGrain"/> — a <c>[StatelessWorker(1)]</c> grain, placed through
+    /// <c>StatelessWorkerDirector</c> → <c>PlacementService.GetCompatibleSilos</c>, which
+    /// intersects with the ACTIVE silo set — throws
+    /// <c>OrleansException: No active nodes are compatible with grain routing</c>. The silo is
+    /// still running and still processing; it simply may no longer take new activations.</para>
+    ///
+    /// <para><b>Prod evidence (memex, 2026-08-10).</b> On all three pod shutdowns that day the
+    /// first such exception landed within HALF A SECOND of the host logging "Application is
+    /// shutting down..." — 11:44:31.341 → 11:44:31.750 on <c>…-wq7s8</c> — and then repeated
+    /// 52, 838 and 944 times respectively until the process exited. Every one of those was
+    /// (a) an Orleans-internal <c>Orleans.Messaging[100071]</c> error, because we asked for a
+    /// grain that could no longer be placed, and (b) a <see cref="ErrorType.Failed"/> — i.e.
+    /// TERMINAL — <see cref="DeliveryFailure"/> to the sender. The traffic was ordinary live
+    /// routing (activity <c>compile-state</c> heartbeats, node streams); nothing was wrong with
+    /// it except that the silo underneath was going away.</para>
+    ///
+    /// <para><see cref="IHostApplicationLifetime.ApplicationStopping"/> fires BEFORE the silo hosted service is stopped
+    /// (hosted services stop in reverse registration order, after the stopping handlers run), so
+    /// it is available strictly earlier than the condition it predicts. That ordering is what
+    /// makes this a readiness signal rather than a retry: we never attempt the placement we know
+    /// cannot succeed, so Orleans never logs 100071 and the sender is answered immediately with
+    /// the correct, RIDE-IT-OUT classification.</para>
+    /// </summary>
+    private readonly CancellationToken hostStopping;
+
+    /// <summary>
+    /// True once this process has begun shutting down — see <see cref="hostStopping"/>.
+    /// </summary>
+    private bool IsHostStopping => hostStopping.IsCancellationRequested;
+
     // Stream-teardown is bounded by Default (ProcessorCount); the op is a quick Orleans
     // UnsubscribeAsync, never a sustained fan-out.
     private const string StreamPoolName = "RoutingStream";
@@ -89,6 +128,11 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         this.logger = logger;
         ioPool = serviceProvider.GetService<IoPoolRegistry>()?.Get(StreamPoolName)
                  ?? IoPool.Unbounded;
+        // Optional by design: a non-host DI container (a bare mesh in a unit test) has no
+        // application lifetime, and then there is no shutdown window to detect — the token
+        // stays uncancelled and every routing decision below behaves exactly as before.
+        hostStopping = serviceProvider.GetService<IHostApplicationLifetime>()?.ApplicationStopping
+                       ?? CancellationToken.None;
     }
 
     /// <summary>
@@ -119,7 +163,48 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 return callback.Invoke(delivery, CancellationToken.None);
             }
 
-            // 2. Background mesh dispatch via the routing grain. Path resolution
+            // 2. Shutdown window. The host has begun stopping, so the silo is leaving (or has
+            //    left) the ACTIVE silo set and IRoutingGrain can no longer be PLACED — the
+            //    dispatch below is guaranteed to throw "No active nodes are compatible with
+            //    grain routing". Answer the sender HERE instead: the failure is real (this
+            //    message is not being routed) but it is TRANSIENT, so it must carry
+            //    ErrorType.ShuttingDown, never the terminal ErrorType.Failed.
+            //
+            //    🚨 The classification is the functional half of this fix. Long-lived consumers
+            //    with their own recovery machinery — chiefly SynchronizationStream's keep-alive
+            //    + change-feed resubscribe latch, and JsonSynchronizationStream — key on
+            //    ShuttingDown to RIDE THE REJECT OUT; a terminal Failed makes them tear down
+            //    (CI 30003419841). The Monolith router already classifies its shutdown reject
+            //    this way (MonolithRoutingService.PostNotFound); the Orleans router did not, so
+            //    every pod shutdown NACKed hundreds of live subscriptions as permanently failed.
+            //
+            //    Not dispatching is also what removes the Orleans-internal
+            //    `Orleans.Messaging[100071] Failed to address message` error per attempt — that
+            //    log is emitted by Orleans when WE ask for an unplaceable grain, so it can only
+            //    be silenced by not asking.
+            if (IsHostStopping)
+            {
+                var shutdownMessage = $"Host is shutting down, cannot route to {address}";
+                OrleansRouteTrace.Write($"OrleansRoutingService.Deliver SHUTTING_DOWN addr={address} id={delivery.Id}");
+                logger.LogDebug("Orleans: {MessageType} → {Address} rejected as {ErrorType} — host is shutting down",
+                    delivery.Message?.GetType().Name, address, nameof(ErrorType.ShuttingDown));
+
+                // Same NACK-once contract as RoutingServiceBase.PostNotFound (see MayAnswer), but
+                // DO classify the returned delivery either way so whoever finishes it can.
+                //
+                // 🚨 senderNacked is the POST's verdict, not the permission to post. FailedAndNacked
+                // means "the sender has been answered" and suppresses downstream reporting, so
+                // claiming it when SendDeliveryFailure could not post (no mesh hub) would leave an
+                // Observe(...) caller waiting out its full budget with the failure recorded nowhere.
+                var senderNacked = MayAnswer(delivery)
+                                   && SendDeliveryFailure(delivery, shutdownMessage, ErrorType.ShuttingDown);
+
+                return Observable.Return(senderNacked
+                    ? delivery.FailedAndNacked(shutdownMessage)
+                    : delivery.Failed(shutdownMessage, ErrorType.ShuttingDown));
+            }
+
+            // 3. Background mesh dispatch via the routing grain. Path resolution
             //    runs INSIDE the grain (silo-side) where the catalog is visible —
             //    on the client, MeshConfiguration.Nodes is empty. Fire-and-forget
             //    Subscribe — errors flow into SendDeliveryFailure inside the
@@ -149,9 +234,27 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                     .SelectMany(_ => DispatchObservable(delivery, address))
                     .Catch<IMessageDelivery, Exception>(ex =>
                     {
-                        logger.LogError(ex, "Failed to deliver to {Address}", address);
-                        OrleansRouteTrace.Write($"OrleansRoutingService.Deliver DISPATCH_FAILED addr={address} id={delivery.Id} ex={ex.Message}");
-                        SendDeliveryFailure(delivery, $"Failed to deliver to {address}: {ex.Message}");
+                        // The stopping token can flip AFTER we dispatched — the placement then
+                        // fails for exactly the reason handled above, so classify it the same
+                        // way (transient, ride-it-out) and keep it out of the error log. An
+                        // expected shutdown artifact reported at Error is what auto-filed a
+                        // production incident for a process that was merely exiting.
+                        var shuttingDown = IsHostStopping;
+                        if (shuttingDown)
+                            logger.LogDebug(ex, "Failed to deliver to {Address} — host is shutting down", address);
+                        else
+                            logger.LogError(ex, "Failed to deliver to {Address}", address);
+                        OrleansRouteTrace.Write($"OrleansRoutingService.Deliver DISPATCH_FAILED addr={address} id={delivery.Id} shuttingDown={shuttingDown} ex={ex.Message}");
+
+                        // 🚨 The same answer-once contract the shutdown branch above applies —
+                        // this path used to answer unconditionally. A DeliveryFailure answered
+                        // with a DeliveryFailure loops, and a [CanBeIgnored] control message has
+                        // no one waiting, so the NACK is pure added traffic. Both matter most
+                        // precisely here: dispatch fails in bulk while a silo is leaving, which is
+                        // when the mesh can least afford an answering storm.
+                        if (MayAnswer(delivery))
+                            SendDeliveryFailure(delivery, $"Failed to deliver to {address}: {ex.Message}",
+                                shuttingDown ? ErrorType.ShuttingDown : ErrorType.Failed);
                         return Observable.Empty<IMessageDelivery>();
                     })
                     .Finally(() =>
@@ -250,7 +353,38 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             });
     }
 
-    private void SendDeliveryFailure(IMessageDelivery delivery, string message)
+    /// <summary>
+    /// Whether a NACK may be sent for <paramref name="delivery"/> AT ALL — the routing layer's
+    /// answer-once contract, stated in one place so every path that gives up on a delivery
+    /// applies it identically (the same contract as <c>RoutingServiceBase.PostNotFound</c>).
+    ///
+    /// <para>Never answer a <see cref="DeliveryFailure"/>: the answer is itself a
+    /// <see cref="DeliveryFailure"/>, so answering one loops. Never answer a
+    /// <see cref="CanBeIgnoredAttribute"/> message: nobody is awaiting it, so the NACK is pure
+    /// added traffic — and it is added at exactly the worst moment, since the paths that give up
+    /// are shutdown and dispatch failure, when the volume of control messages is highest and the
+    /// process has least capacity. That is how a teardown turns into a failure storm.</para>
+    /// </summary>
+    private static bool MayAnswer(IMessageDelivery delivery) =>
+        delivery.Message is not DeliveryFailure
+        && delivery.Message?.GetType().HasAttribute<CanBeIgnoredAttribute>() != true;
+
+    /// <param name="delivery">The delivery that could not be routed.</param>
+    /// <param name="message">The failure message returned to the sender.</param>
+    /// <param name="errorType">How the sender should read the failure. <see cref="ErrorType.Failed"/>
+    /// is TERMINAL; pass <see cref="ErrorType.ShuttingDown"/> whenever the cause is this process
+    /// going away, so consumers with recovery machinery ride it out instead of tearing down.</param>
+    /// <returns>
+    /// 🚨 <c>true</c> only when the NACK was actually POSTED. The caller stamps the returned
+    /// delivery <c>FailedAndNacked</c> on the strength of this, and that state tells everyone
+    /// downstream "the sender has been answered, stop reporting" — so returning <c>true</c>
+    /// without having posted converts a routing failure into a silent one, and the
+    /// <c>hub.Observe(...)</c> caller waits out its whole request budget with nothing to show.
+    /// The mesh hub is genuinely absent in some hosts (a routing service built without one), which
+    /// is why this cannot be assumed.
+    /// </returns>
+    private bool SendDeliveryFailure(IMessageDelivery delivery, string message,
+        ErrorType errorType = ErrorType.Failed)
     {
         try
         {
@@ -266,30 +400,41 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // (feedback_access_context_always_set). We never invent a user here; we either
             // pass through the failed delivery's own AccessContext or use System.
             var meshHub = serviceProvider.GetService<IMessageHub>();
-            if (meshHub != null)
+            if (meshHub == null)
             {
-                var failureAccess = serviceProvider.GetService<AccessService>();
-                using (delivery.AccessContext is null ? failureAccess?.ImpersonateAsSystem() : null)
-                {
-                    meshHub.Post(
-                        new DeliveryFailure(delivery)
-                        {
-                            ErrorType = ErrorType.Failed,
-                            Message = message
-                        },
-                        o =>
-                        {
-                            o = o.WithTarget(delivery.Sender).WithRequestIdFrom(delivery);
-                            return delivery.AccessContext is not null
-                                ? o.WithAccessContext(delivery.AccessContext)
-                                : o;
-                        });
-                }
+                // No hub to post through: say so rather than letting the caller record a NACK
+                // that was never sent. Warning, not Debug — a sender is about to hang.
+                logger.LogWarning(
+                    "Cannot NACK {MessageType} → {Sender}: no IMessageHub is registered, so the "
+                    + "sender will not be told the delivery failed ({Message})",
+                    delivery.Message?.GetType().Name, delivery.Sender, message);
+                return false;
             }
+
+            var failureAccess = serviceProvider.GetService<AccessService>();
+            using (delivery.AccessContext is null ? failureAccess?.ImpersonateAsSystem() : null)
+            {
+                meshHub.Post(
+                    new DeliveryFailure(delivery)
+                    {
+                        ErrorType = errorType,
+                        Message = message
+                    },
+                    o =>
+                    {
+                        o = o.WithTarget(delivery.Sender).WithRequestIdFrom(delivery);
+                        return delivery.AccessContext is not null
+                            ? o.WithAccessContext(delivery.AccessContext)
+                            : o;
+                    });
+            }
+
+            return true;
         }
         catch (Exception ex)
         {
             logger.LogDebug(ex, "Failed to send delivery failure for {MessageId}", delivery.Id);
+            return false;
         }
     }
 
