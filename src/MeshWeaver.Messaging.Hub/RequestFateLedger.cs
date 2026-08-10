@@ -228,6 +228,15 @@ internal sealed class RequestFateLedger
         {
             bool Has(string token) => snapshot.Any(s => s.StartsWith(token, StringComparison.Ordinal));
 
+            // Ahead of RESPONSE_POSTED on purpose: a refused reply always carries BOTH stages (the
+            // post is recorded, then the teardown guard refuses it), and "the responder's own
+            // shutdown ate the reply" is a strictly sharper answer than "it was lost in transit".
+            if (Has("RESPONSE_REFUSED_SHUTTING_DOWN"))
+                return "the handler REPLIED but the responding hub was already past "
+                     + "DisposeHostedHubs, so its own teardown guard refused the post — nothing "
+                     + "reached the requester and nothing NACKed it, so the caller burns its whole "
+                     + "RequestTimeout. The responder is the one shutting down; look at what "
+                     + "recycled/deleted that address mid-handler, not at the requester.";
             if (Has("RESPONSE_POSTED"))
                 return "a reply WAS posted for this correlation and the callback is STILL pending — "
                      + "the reply was lost between the responder and the requester, so chase the "

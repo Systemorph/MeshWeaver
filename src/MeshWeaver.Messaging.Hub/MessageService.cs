@@ -1540,6 +1540,24 @@ public class MessageService : IMessageService
             && message is not ShutdownRequest and not DisposeRequest)
         {
             postFate?.Add($"POST_REFUSED_SHUTTING_DOWN runLevel={hub.RunLevel}", Address);
+            // 🚨 …and record it on the REQUEST's trail when the message being refused IS the answer
+            // to an awaited request. `postFate` keys on the RESPONSE delivery's own id, which nobody
+            // tracks, so without this the refusal is recorded nowhere and the request's trail ends
+            // at RESPONSE_POSTED — reading "the reply was lost between the responder and the
+            // requester", with no hint that the responder's own teardown is what ate it. That
+            // ambiguity cost a full investigation on #1151, where an install's SyncContentFilesRequest
+            // burned its whole 60 s RequestTimeout because the answering hub crossed
+            // DisposeHostedHubs between HANDLER_ENTER and the reply.
+            //
+            // Diagnostics only — the refusal itself is unchanged. Actually DELIVERING (or NACKing)
+            // a reply a disposing hub cannot post is the open defect, tracked separately: it has to
+            // go out through the live PARENT (our own Post re-enters this very gate), which is the
+            // NackThroughParent contract applied to a third path — one this guard, not the intake
+            // gate or the disposal drain, is responsible for.
+            if (correlatedRequestId is not null)
+                requestFates?.Find(correlatedRequestId.ToString())?.Add(
+                    $"RESPONSE_REFUSED_SHUTTING_DOWN type={message.GetType().Name} runLevel={hub.RunLevel}",
+                    Address);
             return ((IMessageDelivery)delivery).Failed("Hub is shutting down");
         }
 
