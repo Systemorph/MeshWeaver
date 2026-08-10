@@ -95,9 +95,9 @@ var subscription = new EventSubscription
 };
 ```
 
-This is the durable backbone of **delegation**: a parent agent delegates to a sub-thread and continues when the sub-thread finishes. The in-memory wait (a `TaskCompletionSource`) is the fast path for the same-process happy case; the `EventSubscription` is the **reboot backstop** — if the portal restarts mid-delegation, the runner reconciles the subscription, sees the sub-thread already resting, and continues the parent. Nothing is lost. (See [Thread Operations](/Doc/Architecture/ThreadOperations).)
+This is the durable backbone of **delegation**: a parent agent delegates to a sub-thread and continues when the sub-thread finishes. The in-memory wait is the fast path for the same-process happy case — `DelegationTool.WaitForDelegationResult`, an `IObservable<string>` folded off the sub-thread's node stream (`Scan` for "saw it running, now resting" → `Take(1).Timeout(...)`), bridged to the tool's `Task<string>` return **only** at the model-facing tool boundary. The `EventSubscription` is the **reboot backstop** — if the portal restarts mid-delegation, the runner reconciles the subscription, sees the sub-thread already resting, and continues the parent. Nothing is lost. (See [Thread Operations](/Doc/Architecture/ThreadOperations).)
 
-> **Asking a question vs. done.** A sub-thread that finished a task and one that asked the user a clarifying question both currently reach `Idle` — the thread status alone can't tell them apart. The `RequireActiveFirst` + summary-presence heuristic covers the common case; an explicit round disposition (`Completed` / `AwaitingInput` / `Failed`) is the clean fix and is the follow-up that makes the resting trigger fire only on genuine completion.
+> **Asking a question vs. done.** A sub-thread that finished a task and one that asked the user a clarifying question both currently reach `Idle` — the thread status alone can't tell them apart. The `RequireActiveFirst` + summary-presence heuristic covers the common case. An explicit round disposition (something like `Completed` / `AwaitingInput` / `Failed`) would make the resting trigger fire only on genuine completion; **it is a proposal, not a type that exists today**.
 
 ## Why one runner, reconciled on startup (not Orleans reminders)
 

@@ -101,7 +101,7 @@ public, information_schema, pg_catalog, pg_toast,
 *_versions
 ```
 
-The canonical discovery query — used by `DiscoverPartitionsAsync` and the migration script:
+The canonical discovery query — used by the migration script and every "which partitions exist?" sweep (there is no `DiscoverPartitionsAsync` API; the router does not enumerate schemas):
 
 ```sql
 SELECT schema_name FROM information_schema.schemata s
@@ -112,7 +112,7 @@ WHERE EXISTS (
   AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\';
 ```
 
-Implementation: `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionedStoreFactory.cs:269`.
+Implementation: `MeshNodeEmbeddingBackfill` / `SchemaInitialization` in `memex/aspire/Memex.Database.Migration/Migrations/` use exactly this shape.
 
 ---
 
@@ -139,34 +139,37 @@ Partitions with `Versioned = true` also get a sibling `{schema}_versions` schema
 |---|---|
 | `mesh_node_history` | Append-only history of every `mesh_nodes` write |
 
-The mesh DDL plus all triggers and stored procedures are emitted by `PostgreSqlSchemaInitializer.GetMeshSchemaScript` (`src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs:277`).
+The mesh DDL plus all triggers and stored procedures are emitted by `PostgreSqlSchemaInitializer` (`src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs`).
 
 ---
 
 ## NodeType → table routing
 
-Writes do **not** pick their destination table from the C# `NodeType` string alone — they pick based on **the path itself**, by longest-suffix match. This is defined in `PartitionDefinition.StandardTableMappings` (`src/MeshWeaver.Mesh.Contract/PartitionDefinition.cs:66`):
+Writes do **not** pick their destination table from the C# `NodeType` string alone — they pick based on **the path itself**, by longest-segment match. The defaults live in `SatelliteTableMapping.Defaults` (`src/MeshWeaver.Mesh.Contract/SatelliteTableMapping.cs`) — a `static readonly` immutable **list**, i.e. a constant lookup, not a mutable static dictionary. (The old static `PartitionDefinition.StandardTableMappings` / `NodeTypeToSuffix` dictionaries are deleted.)
 
-```
-"_Activity"      -> activities
-"_UserActivity"  -> user_activities
-"_Thread"        -> threads
-"_ThreadMessage" -> threads
-"_Access"        -> access
-"_Tracking"      -> annotations
-"_Approval"      -> annotations
-"_Comment"       -> annotations
-"Source"         -> code
-"Test"           -> code
-```
+| Segment | Table | NodeTypes that resolve to it |
+|---|---|---|
+| `_Activity` | `activities` | `Activity` |
+| `_UserActivity` | `user_activities` | `UserActivity` |
+| `_Thread` | `threads` | `Thread`, `ThreadComposer` |
+| `_ThreadMessage` | `threads` | `ThreadMessage` |
+| `_Access` | `access` | `AccessAssignment` |
+| `_Tracking` | `annotations` | `TrackedChange` *(legacy, read-only)* |
+| `_Approval` | `annotations` | `Approval` |
+| `_Comment` | `annotations` | `Comment` |
+| `_Notification` | `notifications` | `Notification` |
+| `Source` | `code` | *(none — path-matched only)* |
+| `Test` | `code` | *(none — path-matched only)* |
 
-`PartitionDefinition.ResolveTable(path)` scans the path for the longest matching suffix. The fallback chain is:
+The set is **configurable**, not hardcoded: per host via `PostgreSqlStorageOptions.SatelliteTables`, and per namespace via `PartitionDefinition.TableMappings` / `NodeTypeTableMappings` (populated from `PartitionDefinition.DefaultSegmentTableMappings()` / `DefaultNodeTypeTableMappings()`).
+
+`PartitionDefinition.ResolveTable(path)` scans the path for the longest matching segment. The fallback chain is:
 
 1. If a path-segment match is found → use the mapped table.
-2. If no match but a `nodeType` is provided → `ResolveTableByNodeType(nodeType)` (`PartitionDefinition.cs:105`).
+2. If no match but a `nodeType` is provided → `ResolveTableByNodeType(nodeType)`.
 3. Otherwise → `mesh_nodes`.
 
-Implementation: `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlStorageAdapter.cs:45`.
+Implementation: `PostgreSqlStorageAdapter.ResolveTable` (`src/MeshWeaver.Hosting.PostgreSql/PostgreSqlStorageAdapter.cs`).
 
 > ⚠ **Footgun — wrong segment, wrong table.**
 > If you write an `AccessAssignment` whose namespace does **not** end in `_Access` (e.g. you write `Admin/Groups/G1` instead of `Admin/Groups/_Access/G1`), the row lands in `mesh_nodes` instead of `access`. The `access_changed` trigger will never fire, and `rebuild_user_effective_permissions` will not see the assignment. This was the bug behind Repair v1 (`memex/aspire/Memex.Database.Migration/Program.cs:133`).
@@ -300,6 +303,11 @@ Partitions with `Versioned = true` (the default for content partitions) get a si
 | v7 | Deploy per-user permission-rebuild trigger function |
 | v8 | Fix `ThreadMessage.MainNode` to point at the thread's content node, not the thread path |
 | v9 | Rename `_Source/_Test` namespace segments to `Source/Test` |
+| v10 … | see below |
+
+The table above is the **early history only**. Migrations now live as one file per version in `memex/aspire/Memex.Database.Migration/Migrations/` (`V01_…` … `V51_…` at the time of writing) — **read that directory, not this table**, for the current head version and for what each step does. Notable later ones: `V10_PerUserPartitions`, `V27_RenameUserSchemaToAuthAndMirrorApiTokens`, `V28_RenameOrganizationToSpace`, `V38_DropLegacyProviderSchema`, `V45_AddNodeAuthorshipColumns`, `V50_RescopePlatformAdminGrants`, `V51_DropInvalidPartitionSchemas`.
+
+🚨 **Fresh databases fast-forward.** `MigrationRunner` skips the legacy `user`-schema repair chain (V05/V10/V14/V15/V17/V18/V20/V22/V25/V27/V31 — all reference the long-gone `user` schema) when `SchemaInitialization.DetectFreshDbAsync` reports no CONTENT partition schemas. Framework schemas (`admin`/`auth`/`system_*`) are excluded from that count so they can never make a fresh DB look non-fresh.
 
 ---
 
@@ -311,7 +319,7 @@ Partitions with `Versioned = true` (the default for content partitions) get a si
 
 > 🚨 **`rebuild_user_effective_permissions` is per partition.** It runs against `SET LOCAL search_path = {schema}, public` and updates only that schema's `user_effective_permissions` plus `public.partition_access`. There is no global rebuild — call it once per partition.
 
-> 🚨 **Both `partition_access` and `user_effective_permissions` are required.** A user with row-level permissions but no `partition_access` row sees nothing in the partition. A user with `partition_access` but no row-level permissions sees only `public_read = true` node types. Forgetting either produces silent denials.
+> 🚨 **Both `partition_access` and `user_effective_permissions` are required.** A user with row-level permissions but no `partition_access` row sees nothing in the partition. A user with `partition_access` but no row-level permissions sees **nothing** — the old `public_read` node-type escape hatch was deleted (issue #953); there is no node-type public read. Public read is declared with a `PartitionAccessPolicy` `_Policy` node (`PublicRead = true`) or a `NodeTypeGate`, both of which materialise rows that *participate in* the prefix fold. Forgetting either table produces silent denials.
 
 > 🚨 **`access_changed` falls back to a full rebuild when `accessObject` is null.** Always populate `accessObject` in `AccessAssignment` content. A missing value triggers `rebuild_user_effective_permissions` over the entire partition instead of the fast per-user variant, locking the shadow table.
 
@@ -325,8 +333,11 @@ Partitions with `Versioned = true` (the default for content partitions) get a si
 
 | File | Contents |
 |---|---|
-| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs` | DDL, stored procedures, triggers (~1 400 lines) |
-| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionedStoreFactory.cs` | Partition discovery and routing |
-| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlStorageAdapter.cs` | Write-side table resolution |
-| `src/MeshWeaver.Mesh.Contract/PartitionDefinition.cs` | `StandardTableMappings` and `ResolveTable` |
-| `memex/aspire/Memex.Database.Migration/Program.cs` | Versioned migrations + idempotent schema-init harness |
+| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs` | DDL, stored procedures, triggers (~2 500 lines) |
+| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPathRoutingAdapter.cs` | First-segment → schema/table routing (no probe, no cache) |
+| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionStorageProvider.cs` | `EnsurePartitionProvisioned` — the ONE schema-creation entry point |
+| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlStorageAdapter.cs` | Write-side table resolution (`ResolveTable`) |
+| `src/MeshWeaver.Mesh.Contract/SatelliteTableMapping.cs` | The configurable satellite defaults |
+| `src/MeshWeaver.Mesh.Contract/PartitionDefinition.cs` | `TableMappings` / `NodeTypeTableMappings` and `ResolveTable` |
+| `memex/aspire/Memex.Database.Migration/Migrations/` | One file per versioned migration (`V01_…` … `V51_…`) |
+| `memex/aspire/Memex.Database.Migration/Program.cs` | Migration harness + idempotent schema init + embedding backfills |

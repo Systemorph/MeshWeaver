@@ -52,8 +52,11 @@ ship sequence:
    -warnaserror` for the touched projects, and run the affected tests. Never discover red on CI.
 2. **Push** the branch and **open the PR** against `main` (title `type(scope): summary`; body =
    what changed · why · how tested).
-3. **Request the GitHub Copilot review** — via the REST API (`requested_reviewers` with the Copilot
-   bot; `gh pr edit --add-reviewer` cannot add it).
+3. **Let the Copilot review arrive** — 🚨 do **not** hand-request it. The `main pr protection`
+   branch ruleset carries a `copilot_code_review` rule, so every PR against `main` is reviewed
+   automatically; requesting it again just queues a second review and burns extra Copilot credits.
+   (A 402 quota error means the monthly allowance is spent and the PR is silently left unreviewed —
+   check for that rather than re-requesting.)
 4. **Wait for CI to conclude**, fix any red at the root, and **triage Copilot's comments** (fix the
    correct ones, reply with a reason for any kept).
 

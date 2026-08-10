@@ -56,5 +56,11 @@ A plugin that receives webhooks:
    events replay naturally on the next start, so every action taken from an event must be
    idempotent.
 
-The registry lists node-repo roots of type `Space`, `Store/Plugin`, and `Store/Catalog` — see
-[Plugin Registry](/Doc/Architecture/PluginRegistry) for how packages are served and installed.
+## Where the code lives
+
+- `memex/Memex.Portal.Shared/Api/WebhookInboxEndpoints.cs` — the anonymous `POST /api/hooks/{target}`
+  endpoint: allowlist check → 404, `ContentLength > MaxBodyBytes` → 413, target-node existence,
+  then the `WebhookEvent` write.
+- `src/MeshWeaver.Graph/Configuration/WebhookEventNodeType.cs` — the `WebhookEvent` node type and the
+  constants both ends share: `TargetsConfigSection = "WebhookInbox:Targets"` and
+  `MaxBodyBytes = 1024 * 1024`.

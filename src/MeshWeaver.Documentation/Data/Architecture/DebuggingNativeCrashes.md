@@ -19,7 +19,7 @@ assertion, no stack in the trx, often no trx at all. CI reds it via the exit-mar
 |---|---|
 | `exit=139` | SIGSEGV (128+11) — segmentation fault |
 | `exit=134` | SIGABRT (128+6) — runtime abort / failfast |
-| `exit=124` | **not** a crash — the wall-clock cap (`timeout`) killed a hang or a too-slow run |
+| `exit=124` | **not** a crash — CI's per-project wall-clock cap (`timeout --signal=TERM --kill-after=30s 8m` in `dotnet-test.yml`) killed a hang or a too-slow run. GNU `timeout` is a Linux/CI thing; macOS ships no `timeout` binary, so this marker never appears locally |
 
 **The crashing project name is meaningful; the crashing TEST name usually is not.** The signal lands
 wherever the process happened to be, which is frequently not where the defect is.
@@ -120,10 +120,17 @@ different build-id and therefore no symbols at all.
 
 ## You do need a container for the managed side
 
-`dotnet-dump` on macOS **cannot** read a Linux core dump, so `clrthreads` / `clrstack` / `verifyheap`
-— anything needing the DAC — still requires a **linux/amd64** container
+The **managed** commands — `clrthreads` / `clrstack` / `verifyheap`, i.e. anything that goes through
+the DAC — need the target's own `libmscordaccore.so`, a Linux ELF library. `dotnet-dump analyze` on
+macOS cannot load it, so those commands require a **linux/amd64** container
 (CI runners are x64; Apple-silicon Docker is arm64, so `--platform linux/amd64` and emulation are
 required — it is slow but it works).
+
+🚨 **This restriction is about the DAC, not about the file.** A `createdump` core is a plain ELF64
+that any tool can read; the native analysis in the previous section runs entirely on the Mac. Do not
+read "you need a container" as "a Linux core cannot be opened on macOS" — believing that has cost an
+investigation a slow multi-hundred-MB download and an emulated container for facts that were ten
+minutes of local Python away.
 
 **Stage the dump under `$HOME`, not `/private/tmp`** — Colima does not mount `/private/tmp`, so a
 dump left in the scratch directory is invisible inside the container.
@@ -206,7 +213,11 @@ Two traps make this look impossible when it is not:
   immediately *before* it, not the function the address lands in. Disassembling the few bytes ahead of
   the return address is what names the real callee.
 
-The recipe, end to end (each step is seconds):
+The recipe, end to end (each step is seconds). **This is the elfutils spelling of the same four
+facts the macOS-native section above extracts with plain Python** — `eu-readelf` and `eu-addr2line`
+are elfutils binaries that a stock macOS does **not** ship (and Homebrew does not carry a working
+`eu-readelf` either), so run the whole block inside the container, not on the Mac. If you only need
+the faulting frame, prefer the pure-Python route above and skip the container entirely.
 
 ```bash
 # 1. Which thread, and what did the kernel say? si_code 1 = SEGV_MAPERR; si_addr is the deref'd pointer.
@@ -226,7 +237,7 @@ curl -sfL -o coreclr.dbg \
 eu-addr2line -f -C -e coreclr.dbg 0x<RVA>
 ```
 
-Run steps 2–4 in a **linux/amd64** container whose runtime patch matches `_runtimes.txt` from the
+Run the block in a **linux/amd64** container whose runtime patch matches `_runtimes.txt` from the
 artifact (the shard already records it) — then `libcoreclr.so` is byte-identical and the build-id
 lookup succeeds. The `.debug` carries a symbol table but no DWARF lines, so you get function names,
 not line numbers; that is enough to name the phase.

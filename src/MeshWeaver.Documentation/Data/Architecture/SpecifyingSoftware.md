@@ -7,7 +7,6 @@ VideoUrl: "https://www.youtube.com/embed/CtpgzjClS5c?si=jqOftd0uSGqbjFvS"
 VideoDuration: "00:12:16"
 VideoTitle: "Mastering Software Specifications"
 VideoTagLine: "Create Interactive Specification"
-VideoTranscript: "transcripts/Specifying Software.txt"
 Thumbnail: "images/SpecifyingSoftware.jpeg"
 Authors:
   - "Roland Buergi"

@@ -145,13 +145,17 @@ The pattern mirrors the existing reactive completion provider — no new transpo
 
 `MeshNodeLanguageService` caches one `AdhocWorkspace` per NodeType, keyed by a source-versions snapshot (`{sourcePath → MeshNode.LastModified.Ticks}`). When any source file changes the snapshot diverges and the workspace is rebuilt.
 
-The in-process `MeshNodeCompilationService._references` field (TPA + a few well-known additions) is static and shared across all NodeTypes, so reference resolution cost is paid once per process.
+The in-process `MeshNodeCompilationService._references` field (TPA + a few well-known additions) is `private static readonly`, initialized once and never written at runtime, so reference resolution cost is paid once per process. That is the sanctioned *immutable constant lookup* case — it is **not** a licence for a static cache. Anything that takes a write at runtime must be an instance field on a mesh-scoped singleton (see [No Static State](/Doc/Architecture/NoStaticState)); the per-NodeType workspace cache above is exactly that.
 
 Speculative compiles do **not** cache — every `LspCheckNode` call rebuilds the substituted compilation. Cost is dominated by parse + bind + diagnose (~200–500 ms for typical NodeTypes). No emit, no DLL on disk.
 
 ## Reactive Contract
 
-🚨 **Every `IMeshLanguageService` method returns `IObservable<T>`.** The Roslyn `*Async` APIs are wrapped at the seam via `Observable.FromAsync(ct => svc.GetXxxAsync(...))` — the same pattern `MeshNodeCompilationService.CompileCore` uses. MCP and agent tool surfaces bridge to `Task<string>` via `.FirstAsync().ToTask()`, which is the sanctioned exception for external-protocol adapters (see [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls)). No `await` anywhere in hub-reachable code.
+🚨 **Every `IMeshLanguageService` method returns `IObservable<T>`.** The Roslyn `*Async` leaves are bridged through the **bounded Compile I/O pool** — `_ioPool.Run(ct => GetXxxAsync(cached, ct))`, where `_ioPool` is `IoPoolRegistry.Get(IoPoolNames.Compile)` (falling back to `IoPool.Unbounded` only when the service is constructed outside DI, e.g. in a test). Roslyn LSP work is CPU-bound, and the bounded pool caps its concurrency so it cannot starve other schedulers.
+
+> 🚨 **Never `Observable.FromAsync` here — or anywhere in `src/`.** A bare `FromAsync` runs the function's synchronous prologue on the *subscribing* thread and applies no concurrency bound; under a blocking subscriber it deadlocks, because `SubscribeOn` moves only the subscribe, not the `await` continuation. The pool runs the leaf with `ConfigureAwait(false)` behind a gate, which is what makes it safe. See [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling).
+
+MCP and agent tool surfaces bridge to `Task<string>` via `.FirstAsync().ToTask()`, which is the sanctioned exception for external-protocol adapters (see [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls)). No `await` anywhere in hub-reachable code.
 
 ## What's Deferred
 
