@@ -77,6 +77,36 @@ public class RouterTrafficTest(ITestOutputHelper output) : MonolithMeshTestBase(
     }
 
     /// <summary>
+    /// 🚨 The other half of the same defect, and the one that produced the VOLUME.
+    /// <c>MeshExtensions.NodeOperationTarget</c> fell back to <c>hub.GetMeshHub().Address</c>, so a
+    /// create from any hub that declared no execution target of its own — every per-node hub — both
+    /// landed on and EXECUTED on the router, and every message that work then sent went out stamped
+    /// <c>Sender = mesh/{id}</c>. Because the sender role is reported by the RECEIVING hub, the line
+    /// count scaled with the number of node hubs rather than the number of message types: production
+    /// 2026-08 logged <c>"RawJson has the mesh hub as sender (sender: mesh/…, target:
+    /// …/Source/FNodeTypeAtomicSolution)"</c> once per node hub. Node CRUD now runs on
+    /// <c>portal/nodeops-{meshId}</c>.
+    ///
+    /// <para><see cref="NodeOperationOriginTest"/> pins the same change deterministically (which hub
+    /// answered); this one measures it in the terms production reports it.</para>
+    /// </summary>
+    [Fact]
+    public async Task NodeCreate_IsNeverIssuedByTheRouter()
+    {
+        var path = $"{TestPartition}/RouterTraffic-{Guid.NewGuid():N}";
+
+        await NodeFactory.CreateNode(MeshNode.FromPath(path) with
+            {
+                Name = "Router traffic probe",
+                NodeType = "Markdown",
+                State = MeshNodeState.Active,
+            })
+            .Timeout(30.Seconds()).FirstAsync().ToTask(Ct);
+
+        AssertRouterNeverSent();
+    }
+
+    /// <summary>
     /// Creates an ApiToken node for the DevLogin admin and returns the raw <c>mw_…</c> token.
     /// </summary>
     private async Task<string> SeedApiToken()
