@@ -82,15 +82,31 @@ public sealed class PersistenceService : IStorageAdapter
                 ? Observable.Return<bool?>(null)
                 : Observable
                     .Merge(_allOrdered.Select(p =>
-                        p.PartitionExists(LegacyUserPartitionRepair.LegacyPartition)
+                        // 🚨 Defer + Take(1) + Timeout + Catch — the same shape as
+                        // PartitionWriteGuardValidator, and every part of it is load-bearing on a
+                        // READ path that a partition-root miss runs through:
+                        //   Defer   — a provider that throws SYNCHRONOUSLY when called would throw
+                        //             inside this Select, before any observable exists, so the
+                        //             Catch below could never see it and the whole probe would
+                        //             fault. Deferring turns that into an OnError in the stream.
+                        //   Take(1) — the fold is ToList(), which needs every source to COMPLETE.
+                        //             A provider that emits and stays open would hang the probe,
+                        //             and with it every partition-root read, forever.
+                        //   Timeout — a backend that never answers at all is the same wedge. The
+                        //             bound is not a tuning knob: the contract already has a word
+                        //             for "no answer", and it is `null` = indeterminate. This
+                        //             converts a hang into that defined answer instead of silence.
+                        Observable.Defer(() => p.PartitionExists(LegacyUserPartitionRepair.LegacyPartition))
+                            .Take(1)
+                            .Timeout(LegacyProbeTimeout)
                             .Catch((Exception ex) =>
                             {
                                 // A provider that cannot answer is INDETERMINATE, never "absent" —
                                 // answering false here would disable healing on a genuinely legacy
                                 // store because one backend was unreachable.
                                 _logger?.LogDebug(ex,
-                                    "[Persistence] Legacy-partition probe failed on a provider; "
-                                    + "treating its answer as indeterminate.");
+                                    "[Persistence] Legacy-partition probe failed on {Provider}; "
+                                    + "treating its answer as indeterminate.", p.GetType().Name);
                                 return Observable.Return<bool?>(null);
                             })))
                     .ToList()
@@ -131,6 +147,10 @@ public sealed class PersistenceService : IStorageAdapter
     /// hot read path. Instance field, so the cache dies with the mesh.</para>
     /// </summary>
     private IObservable<bool?> LegacyPartitionExists() => _legacyPartitionExists;
+
+    /// <summary>How long one provider's legacy-partition existence probe may take before it
+    /// counts as indeterminate. Same bound as <c>PartitionWriteGuardValidator</c>.</summary>
+    private static readonly TimeSpan LegacyProbeTimeout = TimeSpan.FromSeconds(5);
 
     private readonly IObservable<bool?> _legacyPartitionExists;
 
