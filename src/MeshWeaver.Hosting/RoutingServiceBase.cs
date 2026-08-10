@@ -77,8 +77,14 @@ namespace MeshWeaver.Hosting
             if (Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
                 return;
 
+            // ONE traversal is enough, and the serializer key MUST be this same value:
+            // GetHostAddress is idempotent (every return path yields an address with
+            // Host == null), so a second call can only ever return `address` again. The
+            // serializer lookup below and EnqueueForActivation therefore key on exactly
+            // what the hosted-hub short-circuit probes — if those two ever disagreed, a
+            // message could miss the live queue and leapfrog it, which is the very bug
+            // this method now prevents.
             var address = GetHostAddress(delivery.Target!);
-            var hostAddress = GetHostAddress(address);
 
             // 🚨 FIFO with a still-draining activation FIRST — before the hosted-hub
             // short-circuit below. A hub becomes visible to GetHostedHub the moment its
@@ -91,7 +97,7 @@ namespace MeshWeaver.Hosting
             // address is live, EVERY message must join its queue (Concat preserves total
             // arrival order); it self-retires the moment the backlog drains — TryEnqueue
             // then returns false and the steady-state direct path below is untouched.
-            if (activationSerializers.TryGetValue(hostAddress, out var draining)
+            if (activationSerializers.TryGetValue(address, out var draining)
                 && draining.TryEnqueue(delivery))
                 return;
 
@@ -103,7 +109,7 @@ namespace MeshWeaver.Hosting
                 return;
             }
 
-            // 🚨 Per-address activation FIFO. The hub for `hostAddress` is not yet
+            // 🚨 Per-address activation FIFO. The hub for `address` is not yet
             // activated. Two rapid messages to the SAME not-yet-activated address
             // must reach its hub in ARRIVAL order. Routed independently, each drives
             // the async ResolvePath → CreateHub chain (RouteMessage) and the hub
@@ -116,7 +122,7 @@ namespace MeshWeaver.Hosting
             // pump preserves it through activation. Once the hub is hosted the backlog
             // drains and the serializer self-retires — subsequent messages take the
             // direct short-circuit above (no per-message ResolvePath).
-            EnqueueForActivation(delivery, hostAddress);
+            EnqueueForActivation(delivery, address);
         }
 
         private void EnqueueForActivation(IMessageDelivery delivery, Address hostAddress)
