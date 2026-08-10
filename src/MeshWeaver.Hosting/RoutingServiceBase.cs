@@ -78,6 +78,22 @@ namespace MeshWeaver.Hosting
                 return;
 
             var address = GetHostAddress(delivery.Target!);
+            var hostAddress = GetHostAddress(address);
+
+            // 🚨 FIFO with a still-draining activation FIRST — before the hosted-hub
+            // short-circuit below. A hub becomes visible to GetHostedHub the moment its
+            // construction completes (HostedHubsCollection.GetHub publishes it to the
+            // registry BEFORE the activation serializer has drained the deliveries that
+            // queued behind the activating message), so a message arriving in that window
+            // that took the direct path OVERTOOK every delivery still in the backlog:
+            // the kernel's "use sharedValue" submission reached the REPL before the
+            // "define sharedValue" one — CS0103, issue #1145. While a serializer for this
+            // address is live, EVERY message must join its queue (Concat preserves total
+            // arrival order); it self-retires the moment the backlog drains — TryEnqueue
+            // then returns false and the steady-state direct path below is untouched.
+            if (activationSerializers.TryGetValue(hostAddress, out var draining)
+                && draining.TryEnqueue(delivery))
+                return;
 
             // if we have created the hub ==> route through us.
             var hostedHub = Mesh.GetHostedHub(address, HostedHubCreation.Never);
@@ -86,8 +102,6 @@ namespace MeshWeaver.Hosting
                 hostedHub.DeliverMessage(delivery);
                 return;
             }
-
-            var hostAddress = GetHostAddress(address);
 
             // 🚨 Per-address activation FIFO. The hub for `hostAddress` is not yet
             // activated. Two rapid messages to the SAME not-yet-activated address
