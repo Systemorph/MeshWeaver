@@ -857,5 +857,8 @@
   "versions.invalidParameter": "Wählen Sie die zu vergleichenden Versionen im Versionsverlauf aus.",
   "versions.restore": "v{0} wiederherstellen",
   "versions.viewSource": "Quelltext-Vergleich anzeigen",
-  "versions.viewRedline": "Nachverfolgte Änderungen anzeigen"
+  "versions.viewRedline": "Nachverfolgte Änderungen anzeigen",
+  "settings.published": "Im Web veröffentlicht",
+  "ui.mdPublishedIntro": "Jede Seite, die ein **abgemeldeter Besucher** öffnen kann — dieselbe Liste, die `/sitemap.xml` an Suchmaschinen liefert, aus derselben Quelle gelesen, damit beide nicht auseinanderlaufen.\n\nEine Seite ist öffentlich, weil sie eine **Leseberechtigung für Anonymous** trägt. Es gibt keinen separaten Schalter und keinen separaten Ort: Die öffentliche URL ist ihr gewöhnlicher Pfad. Änderbar im Reiter **Zugriff** des Knotens.",
+  "ui.mdPublishedNone": "**Nichts ist veröffentlicht.** Kein Knoten trägt eine Leseberechtigung für Anonymous, daher sieht ein abgemeldeter Besucher nichts und `/sitemap.xml` ist leer."
 }

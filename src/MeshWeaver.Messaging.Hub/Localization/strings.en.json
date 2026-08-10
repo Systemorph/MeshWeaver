@@ -857,5 +857,8 @@
   "versions.invalidParameter": "Pick the versions to compare on the version history page.",
   "versions.restore": "Restore v{0}",
   "versions.viewSource": "Show the source diff",
-  "versions.viewRedline": "Show the tracked changes"
+  "versions.viewRedline": "Show the tracked changes",
+  "settings.published": "Published to the web",
+  "ui.mdPublishedIntro": "Every page a **logged-out visitor** can open — the same list `/sitemap.xml` gives crawlers, read from the same enumeration so the two cannot drift.\n\nA page is public because it carries an **Anonymous Read grant**. There is no separate switch and no separate location: its public URL is its ordinary path. Change it on the node's **Access** tab.",
+  "ui.mdPublishedNone": "**Nothing is published.** No node carries an Anonymous Read grant, so a logged-out visitor sees nothing and `/sitemap.xml` is empty."
 }
