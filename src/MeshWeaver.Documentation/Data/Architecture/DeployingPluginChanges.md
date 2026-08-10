@@ -85,10 +85,21 @@ a `compile` of its NodeType — rather than deleted and started over.
 
 ## Core is the opposite case
 
-`Systemorph/MeshWeaver` **does** have an image, so merging to `main` *is* the deploy: CD publishes
-`memex-portal-ai:main` and portals self-update. Confirm the CD run before calling it deployed — the
-push-triggered run **skips**; the real one fires after *MeshWeaver Build and Test* completes on
-main, and its jobs must show the image build succeeded.
+`Systemorph/MeshWeaver` **does** have an image, so merging to `main` *is* the deploy: `main-cd.yml`
+publishes the image set to ACR and the portals self-update.
+
+Two things to know before calling it deployed:
+
+- **CD reacts to a `workflow_run`, not to the push.** It fires only after *MeshWeaver Build and Test*
+  completes successfully on a `push` to `main` — so a hand-kicked `workflow_dispatch` of that
+  workflow makes main look green while CD still skips. If no image appeared, re-drive CD directly:
+  `gh workflow run main-cd.yml --ref main` (it also runs itself 3-hourly as a reconciler).
+- **The tag the self-updater acts on is `memex-portal-ai:<version>`** (e.g. `3.0.0-rc1.ci.2470`) —
+  `VersionSelect` requires `^\d+\.\d+\.\d+`, so the moving `:main` pointer and the per-run
+  `staging-<sha>-<run_id>` tag are invisible to it by construction. Publication is all-or-nothing:
+  every leg pushes only the staging tag, and the `promote` job applies the real tags last. Verify the
+  IMAGE, never the green tick — `.github/scripts/check-image-set.sh <short-sha>` makes the same
+  assertion CD does.
 
 ## Never fix it live
 

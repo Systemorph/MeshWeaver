@@ -53,7 +53,7 @@ This page covers three things:
   <rect x="557" y="110" width="160" height="28" rx="6" fill="#1b0000" opacity="0.8"/>
   <text x="637" y="129" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#ffcc80">Roslyn kernel runs script</text>
   <rect x="557" y="146" width="160" height="28" rx="6" fill="#1b0000" opacity="0.8"/>
-  <text x="637" y="165" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#ffcc80">Log · Mesh · Ct globals</text>
+  <text x="637" y="165" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#ffcc80">Mesh · Log · Ct · Inputs</text>
   <line x1="540" y1="155" x2="448" y2="155" stroke="#f57c00" stroke-width="1.5" marker-end="url(#arr)"/>
   <text x="494" y="171" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#90a4ae">DataChangeRequest</text>
   <rect x="268" y="234" width="180" height="44" rx="8" fill="#26a69a"/>
@@ -64,7 +64,7 @@ This page covers three things:
   <text x="380" y="310" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.5" font-style="italic">All entry points converge on the Activity hub; the Executor child hub runs scripts off-thread and pushes incremental snapshots back.</text>
 </svg>
 *Script execution architecture: three entry points converge on the Activity hub, which delegates to a child Executor hub and streams progress snapshots back to subscribers.*
-> **Lifting an existing operation onto script execution?** Read *[Activity Control Plane → Operations as scripts](/Doc/Architecture/ActivityControlPlane#operations-as-scripts--the-canonical-shape-for-export-import-compile-)* first. That section is the canonical shape for export, import, compile, mirror, and similar operations: form-bound inputs via `JsonPointerReference` → patch `RequestedStatus = Running` → activity-driven progress → result panel subscribes to the same activity. This page documents the lower-level mechanics; that page documents the user-facing pattern.
+> **Lifting an existing operation onto script execution?** Read *[Activity Control Plane → Operations as scripts](/Doc/Architecture/ActivityControlPlane#operations-as-scripts--the-canonical-shape-for-export-import-compile-)* first. That section is the canonical shape for export, import, compile, mirror, and similar operations: inputs bound DIRECTLY to the activity node (a node-bound editor, never a `/data` replica + save loop) → patch `RequestedStatus = Running` → activity-driven progress → result panel subscribes to the same activity. This page documents the lower-level mechanics; that page documents the user-facing pattern.
 
 ---
 
@@ -230,13 +230,16 @@ The effect is identical to the equivalent GUI action — including any node-driv
 
 ## Writing progress in scripts
 
-Every script receives three globals:
+Every script receives four globals (`MeshScriptGlobals`, `MeshWeaver.Kernel.Hub`):
 
 | Global | Type | Purpose |
 |---|---|---|
 | `Mesh` | `IMessageHub` | Full mesh access — post messages, subscribe to streams, mutate nodes. |
 | `Log` | `ILogger` | Each call appends to `ActivityLog.Messages` and flushes a snapshot to all subscribers within milliseconds. |
 | `Ct` | `CancellationToken` | Rebound per submission. Pass it to every cancellable async API so user-initiated cancellation actually interrupts in-flight work. |
+| `Inputs` | `IReadOnlyDictionary<string, JsonElement>` | Caller-supplied payload, forwarded from `ExecuteScriptRequest.Inputs` via `SubmitCodeRequest.Inputs`. Empty for the plain REPL / launch-button case. Read with `Inputs["title"].GetString()` or `Inputs["options"].Deserialize<ExportOptions>()`. |
+
+`Inputs` is what makes "operation as a script" work without a side-channel node: the form or caller patches the inputs onto the request and the script reads them as typed JSON. Values are carried as `JsonElement` so any JSON shape survives serialization across hub boundaries without a type-registry entry per shape.
 
 > **Always pass `Ct` to async calls.** `Task.Delay(ms, Ct)`, `HttpClient.GetAsync(url, Ct)`, `FirstAsync(predicate).ToTask(Ct)` — every cancellable API should receive it. Without `Ct`, clicking Cancel in the Activity Control Plane sends the signal but the script can't act on it until the current await returns.
 
@@ -310,36 +313,39 @@ When an agent (Claude, Copilot, etc.) writes a script for an MCP user to run, th
 
 ## Observing progress
 
-Subscribers use the canonical CQRS read pattern: subscribe to the activity hub's `MeshNodeReference` stream and observe the `ActivityLog` content updating live.
+Subscribers use the canonical CQRS read pattern: subscribe to the activity node's **shared per-path handle** and observe the `ActivityLog` content updating live.
+
+> 🚨 **Read a node by path with `GetMeshNodeStream(path)`, never `GetRemoteStream<MeshNode, MeshNodeReference>(...)`.** `GetRemoteStream` is framework plumbing; using it for a node by path opens a **second** upstream handle instead of joining the process-wide `IMeshNodeStreamCache` entry — so writes made through the shared handle are invisible to your subscription. (Several XML doc comments in `MeshWeaver.Kernel` and on `ExecuteScriptResponse.ActivityLog` still recommend `GetRemoteStream`; they are stale — follow this page.)
 
 ```csharp
 var workspace = hub.GetWorkspace();
-var stream = workspace
-    .GetRemoteStream<MeshNode, MeshNodeReference>(
-        new Address(activityPath), new MeshNodeReference())
-    .Select(change => change.Value?.Content as ActivityLog)
-    .Where(log => log is not null);
+var log = workspace.GetMeshNodeStream(activityPath)
+    .Select(node => node?.Content as ActivityLog)
+    .Where(l => l is not null)
+    .Select(l => l!);
 
-// Wait for the run to finish and get the terminal snapshot.
-var final = await stream
-    .Where(log => log!.Status != ActivityStatus.Running)
-    .Take(1)
-    .Timeout(TimeSpan.FromMinutes(2))
-    .FirstAsync();
-
-foreach (var msg in final!.Messages)
-    Console.WriteLine($"[{msg.LogLevel}] {msg.Message}");
+// Wait for the run to finish and get the terminal snapshot — reactive, no await.
+log.Where(l => l.Status != ActivityStatus.Running)
+   .Take(1)
+   .Timeout(TimeSpan.FromMinutes(2))
+   .Subscribe(
+       final =>
+       {
+           foreach (var msg in final.Messages)
+               logger.LogInformation("[{Level}] {Message}", msg.LogLevel, msg.Message);
+       },
+       ex => logger.LogWarning(ex, "Activity stream failed for {Path}", activityPath));
 ```
 
-For **live display** — a streaming UI stripe or detail view — don't filter by terminal status. Just project `Messages.Count` and let the subscription tick on every snapshot:
+For **live display** — a streaming UI stripe or detail view — don't filter by terminal status, and **don't `.Take(1)`** (it would freeze the binding). Project the field you care about and let the subscription tick on every snapshot:
 
 ```csharp
-var liveMessageCount = stream
-    .Select(log => log!.Messages.Count)
+var liveMessageCount = log
+    .Select(l => l.Messages.Count)
     .DistinctUntilChanged();
 ```
 
-> **Never query for the activity log** with `IMeshService.QueryAsync("path:...")`. The query path is eventually consistent and will lag behind the workspace stream — you may miss intermediate snapshots or read a stale `Status`. `GetRemoteStream` bypasses the index and observes the owning hub's workspace directly. See [CqrsAndContentAccess.md](/Doc/Architecture/CqrsAndContentAccess).
+> **Never query for the activity log** with `IMeshService.QueryAsync("path:...")`. The query path is eventually consistent and will lag behind the workspace stream — you may miss intermediate snapshots or read a stale `Status`. `GetMeshNodeStream(path)` bypasses the index and observes the owning hub's workspace directly. See [CqrsAndContentAccess.md](/Doc/Architecture/CqrsAndContentAccess).
 
 ---
 
@@ -376,32 +382,27 @@ Because the executor's address is internal and never exposed to clients, every e
 
 ## Live demo — script globals available in cells
 
-The same `Log`, `Mesh`, and `Ct` globals available inside a mesh script are also available in interactive markdown cells. This cell renders the names and types of the three globals:
+The same `Mesh`, `Log`, `Ct`, and `Inputs` globals available inside a mesh script are also available in interactive markdown cells. This cell renders them through `Controls.DataGrid` — the standard way to render tabular data. **Never hand-build an HTML string** (`$"<table>…"`, `StringBuilder`, `Controls.Html(markup)`) for structured data; `Controls.Html` is only for genuinely pre-rendered rich text.
 
 ```csharp --render ScriptGlobalsDemo --show-code
-var rows = new[]
+record ScriptGlobal(string Name, string TypeName, string Purpose);
+
+var globals = new[]
 {
-    ("Log",  "ILogger",         "Appends to ActivityLog.Messages; each call flushes a snapshot to all subscribers."),
-    ("Mesh", "IMessageHub",     "Full mesh access — post messages, subscribe to streams, mutate nodes."),
-    ("Ct",   "CancellationToken", "Rebound per submission. Pass to every cancellable async API."),
+    new ScriptGlobal("Mesh", "IMessageHub",
+        "Full mesh access — post messages, subscribe to streams, mutate nodes."),
+    new ScriptGlobal("Log", "ILogger",
+        "Appends to ActivityLog.Messages; each call flushes a snapshot to all subscribers."),
+    new ScriptGlobal("Ct", "CancellationToken",
+        "Rebound per submission. Pass to every cancellable async API."),
+    new ScriptGlobal("Inputs", "IReadOnlyDictionary<string, JsonElement>",
+        "Caller-supplied payload from ExecuteScriptRequest.Inputs. Empty for a plain REPL run."),
 };
 
-var header = MeshWeaver.Layout.Controls.Html(
-    "<table style='border-collapse:collapse;width:100%'>" +
-    "<thead><tr>" +
-    "<th style='text-align:left;padding:6px 12px;border-bottom:2px solid #e2e8f0'>Global</th>" +
-    "<th style='text-align:left;padding:6px 12px;border-bottom:2px solid #e2e8f0'>Type</th>" +
-    "<th style='text-align:left;padding:6px 12px;border-bottom:2px solid #e2e8f0'>Purpose</th>" +
-    "</tr></thead><tbody>" +
-    string.Join("", rows.Select((r, i) =>
-        $"<tr style='background:{( i % 2 == 0 ? "#f8fafc" : "white" )}'>" +
-        $"<td style='padding:6px 12px;font-family:monospace;font-weight:600'>{r.Item1}</td>" +
-        $"<td style='padding:6px 12px;font-family:monospace;color:#6366f1'>{r.Item2}</td>" +
-        $"<td style='padding:6px 12px;color:#374151'>{r.Item3}</td>" +
-        "</tr>")) +
-    "</tbody></table>");
-
-header
+Controls.DataGrid(globals)
+    .WithColumn(new PropertyColumnControl<string> { Property = "name" }.WithTitle("Global"))
+    .WithColumn(new PropertyColumnControl<string> { Property = "typeName" }.WithTitle("Type"))
+    .WithColumn(new PropertyColumnControl<string> { Property = "purpose" }.WithTitle("Purpose"))
 ```
 
 ---
@@ -411,8 +412,9 @@ header
 | Pitfall | What goes wrong | Fix |
 |---|---|---|
 | `await` inside a click handler wrapping `ExecuteScriptRequest` | Click actions must be synchronous. | Use `hub.Post(...)` (fire-and-forget) or `hub.Observe(...).Subscribe(...)`. See [AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls). |
-| Subscribing only to `SubmitCodeResponse` | That's the completion ack — it carries no progress. | Subscribe to the activity log via `GetRemoteStream`. |
-| Polling `IMeshService.QueryAsync` for activity status | Eventually consistent, will lag. | Use `GetRemoteStream` — it observes the owning hub's workspace directly. |
+| Subscribing only to `SubmitCodeResponse` | That's the completion ack — it carries no progress. | Subscribe to the activity log via `GetMeshNodeStream(activityPath)`. |
+| Polling `IMeshService.QueryAsync` for activity status | Eventually consistent, will lag. | Use `GetMeshNodeStream(activityPath)` — it observes the owning hub's workspace directly. |
+| `GetRemoteStream<MeshNode, MeshNodeReference>(...)` to read an activity by path | Opens a second upstream handle instead of the shared cache entry — writes through the shared handle are invisible to it. | `GetMeshNodeStream(activityPath)`. |
 | `Console.WriteLine` from heavy parallel loops | Every line becomes an activity-log message; flooding the log overwhelms subscribers and may DoS the workspace. | Aggregate before logging — one line per step, not per iteration. |
 | Long synchronous CPU loops with no log calls | No `Log` call → no snapshot → subscribers see nothing. | Add a heartbeat log if a phase runs longer than ~1 s. |
 | Raw MCP `create` rejects a node's `$type` ("not a registered content type") | The type is registered only on a dedicated hub, or the target sits in a restricted partition. | Run the write via `execute_script` through the canonical service — see *Creating typed / restricted-partition nodes* above. |

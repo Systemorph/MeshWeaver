@@ -1264,11 +1264,21 @@ public sealed class MessageHub : IMessageHub
     /// stay working while it is migrated — and must stay VISIBLE, because the failure is silent until
     /// it is catastrophic. The leaked-callback CI failure that surfaced it read as a flaky test, not
     /// as the router doing someone else's job.</para>
+    ///
+    /// <para>🚨 The ends are the DELIVERY's own — <c>delivery.Target</c> and <c>delivery.Sender</c> —
+    /// never <see cref="Address"/>, the hub that happens to be handling it. Those differ on every
+    /// ROUTED message: <c>HierarchicalRouting</c> sends a hosted hub's non-local delivery UP via
+    /// <c>parentHub.DeliverMessage(delivery)</c>, and for essentially every hub in the process that
+    /// parent is the root mesh hub — so keying on <see cref="Address"/> made the router's ordinary
+    /// FORWARDING look like the router doing work, and reported every HOP as a violation ("validate a
+    /// token + read a node" alone emitted five). A detector that cries wolf on the mesh's actual job
+    /// is the one that gets muted, taking the real reports with it.</para>
     /// </summary>
     private void ReportRouterTraffic(IMessageDelivery delivery)
     {
         // The rule itself is a pure predicate — see RouterTrafficRule, where it is unit-tested.
-        var role = RouterTrafficRule.RoleOf(Address.Type, delivery.Sender?.Type, delivery.Message);
+        // Target = where the delivery is ADDRESSED, not where it is currently being handled.
+        var role = RouterTrafficRule.RoleOf(delivery.Target?.Type, delivery.Sender?.Type, delivery.Message);
         if (role is null)
             return;
 
@@ -1276,14 +1286,15 @@ public sealed class MessageHub : IMessageHub
         if (!routerTrafficReported.TryAdd($"{role}:{messageType}", 0))
             return;
 
-        // Log BOTH ends explicitly. {Address} is this hub — the delivery TARGET — so when the router
-        // is the SENDER it would name the innocent hub and send the reader hunting the wrong one.
+        // Log BOTH ends of the DELIVERY explicitly — never this hub's own address, which on a routed
+        // message is merely the hop the delivery is passing through and sends the reader hunting an
+        // innocent hub.
         logger.LogError(
             "ROUTER_TRAFFIC: {MessageType} has the mesh hub as {Role} (sender: {Sender}, target: {Target}). "
             + "The mesh hub is the ROUTER and must not execute work — it belongs on a hub of its own "
             + "(session portal hub for REST/Blazor/MCP, import hub for bulk imports). Reported once per "
             + "role+type for this hub.",
-            messageType, role, delivery.Sender?.ToString() ?? "(none)", Address);
+            messageType, role, delivery.Sender?.ToString() ?? "(none)", delivery.Target?.ToString() ?? "(none)");
     }
 
     /// <summary>
