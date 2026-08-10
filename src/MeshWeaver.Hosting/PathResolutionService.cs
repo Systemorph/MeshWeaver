@@ -88,11 +88,25 @@ namespace MeshWeaver.Hosting;
 ///
 /// <para><b>Invalidation</b>: the constructor subscribes the optional
 /// <see cref="IMeshChangeFeed"/> (the same post-commit broadcast
-/// <c>MeshNodeStreamCache</c> uses). Any <see cref="MeshChangeEvent"/> with path
-/// <c>P</c> — Created, Updated or Deleted — removes every entry whose key equals
-/// <c>P</c> or starts with <c>P + "/"</c>: Created(P) can deepen resolutions of
-/// P and its descendants; Deleted/Updated(P) invalidate anything resolving to or
-/// under P. Iterating the whole dictionary per event is fine — events are rare
+/// <c>MeshNodeStreamCache</c> uses). A <see cref="MeshChangeEvent"/> with path
+/// <c>P</c> sweeps every entry whose key equals <c>P</c> or starts with
+/// <c>P + "/"</c> — but what the sweep DOES depends on the kind, because the cache
+/// serves two freshness contracts (see <see cref="CachedResolution"/>):
+/// <list type="bullet">
+///   <item><b>Created/Deleted</b> REMOVE matching entries and drop matching in-flight
+///     fill claims — these are the only events that can change a path's resolution
+///     SHAPE (Created(P) can deepen resolutions of P and its descendants; Deleted(P)
+///     invalidates anything resolving to or under P).</item>
+///   <item><b>Updated</b> only STALE-MARKS matching entries (and in-flight claims):
+///     an in-place write cannot move a node, so the route shape stays valid and
+///     <see cref="ResolveRoute"/> keeps serving from cache, while the cached NODE
+///     snapshot is dropped and node-reading callers (<see cref="ResolvePath"/>)
+///     re-query. Removing on Updated was the issue #1172 routing/compile feedback
+///     loop: every activity-log write invalidated the entry the next routed message
+///     to that activity needed, so the silo router paid a storage query per message
+///     during the boot NodeType bake and saturated its in-flight window.</item>
+/// </list>
+/// Iterating the whole dictionary per event is fine — events are rare
 /// relative to resolutions. When no <see cref="IMeshChangeFeed"/> is registered
 /// (minimal test fixtures) the service does not cache at all and behaves exactly
 /// like the uncached implementation.</para>
@@ -107,29 +121,52 @@ internal class PathResolutionService : IPathResolver, IDisposable
     private readonly bool _hasWritablePartitionProvider;
 
     /// <summary>
+    /// One cached resolution. <see cref="NodeStale"/> tracks the TWO freshness contracts the
+    /// cache serves: the route SHAPE (<see cref="AddressResolution.Prefix"/>/<c>Remainder</c>)
+    /// is invariant under in-place <c>Updated</c> writes, so a stale-marked entry still answers
+    /// <see cref="ResolveRoute"/>; the NODE snapshot is not, so <see cref="ResolvePath"/>
+    /// treats the same entry as a miss and re-queries. A stale entry carries
+    /// <c>Resolution.Node == null</c> — keeping the superseded node (with its whole Content)
+    /// pinned for a route-only answer would grow process memory with every hot-written path.
+    /// </summary>
+    private sealed record CachedResolution(AddressResolution Resolution, bool NodeStale);
+
+    /// <summary>
     /// Positive-only value cache: joined segment path → the resolved
-    /// <see cref="AddressResolution"/> (never null). Non-null ONLY when an
+    /// <see cref="CachedResolution"/> (never null). Non-null ONLY when an
     /// <see cref="IMeshChangeFeed"/> is registered — without the invalidation
     /// signal, caching would serve stale routes forever, so the service then
     /// resolves uncached (exactly the pre-cache behaviour). Storing the VALUE (not
     /// the in-flight observable) means a hung / errored / null resolution caches
     /// nothing and so can never poison the path — see the class doc.
     /// </summary>
-    private readonly ConcurrentDictionary<string, AddressResolution>? _resolutionCache;
+    private readonly ConcurrentDictionary<string, CachedResolution>? _resolutionCache;
 
     /// <summary>
-    /// In-flight fill claims: joined segment path → the monotonic claim stamped when its
-    /// resolution query started. <see cref="OnMeshChange"/> drops matching claims, so an
-    /// answer computed from a PRE-change snapshot can no longer be committed to
-    /// <see cref="_resolutionCache"/> after the invalidation swept an entry that did not
-    /// exist yet. Bounded by the number of CONCURRENT resolutions (entries are removed in
-    /// the resolution's <c>Finally</c>), never by the number of paths. Non-null exactly
-    /// when <see cref="_resolutionCache"/> is.
+    /// One in-flight fill claim. Reference identity IS the claim (see
+    /// <see cref="ClaimStillHeld"/>); <see cref="NodeStale"/> is flipped by an <c>Updated</c>
+    /// event landing while the fill's query is open — the fill still commits (its route SHAPE
+    /// is valid), but marked stale so node-reading callers re-query. Without the flag,
+    /// dropping the claim on every Updated meant a hot-WRITTEN path could NEVER commit a
+    /// cache entry at all: writes interleaved every fill, and every routed message paid a
+    /// fresh storage query — the issue #1172 routing/compile feedback loop.
     /// </summary>
-    private readonly ConcurrentDictionary<string, long>? _pendingFills;
+    private sealed class PendingFill
+    {
+        /// <summary>Set by <see cref="OnMeshChange"/> when an Updated event affects this fill's key mid-query.</summary>
+        public volatile bool NodeStale;
+    }
 
-    /// <summary>Monotonic source for <see cref="_pendingFills"/> claims.</summary>
-    private long _fillSequence;
+    /// <summary>
+    /// In-flight fill claims: joined segment path → the claim stamped when its
+    /// resolution query started. <see cref="OnMeshChange"/> drops matching claims on
+    /// <c>Created</c>/<c>Deleted</c> (an answer computed from a PRE-change snapshot can no
+    /// longer be committed after the invalidation swept an entry that did not exist yet) and
+    /// stale-marks them on <c>Updated</c>. Bounded by the number of CONCURRENT resolutions
+    /// (entries are removed in the resolution's <c>Finally</c>), never by the number of
+    /// paths. Non-null exactly when <see cref="_resolutionCache"/> is.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, PendingFill>? _pendingFills;
 
     /// <summary>Change-feed invalidation subscription; disposed with the singleton.</summary>
     private readonly IDisposable? _changeFeedSubscription;
@@ -150,8 +187,8 @@ internal class PathResolutionService : IPathResolver, IDisposable
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
         if (changeFeed is not null)
         {
-            _resolutionCache = new ConcurrentDictionary<string, AddressResolution>(StringComparer.Ordinal);
-            _pendingFills = new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
+            _resolutionCache = new ConcurrentDictionary<string, CachedResolution>(StringComparer.Ordinal);
+            _pendingFills = new ConcurrentDictionary<string, PendingFill>(StringComparer.Ordinal);
             _changeFeedSubscription = changeFeed.Subscribe(OnMeshChange);
         }
         // Gates the partition-root MeshNode synthesis below — we only fall back
@@ -169,10 +206,19 @@ internal class PathResolutionService : IPathResolver, IDisposable
     }
 
     public IObservable<AddressResolution?> ResolvePath(string path)
-        => Resolve(path, forNavigation: false);
+        => Resolve(path, forNavigation: false, routeShapeOnly: false);
+
+    /// <summary>
+    /// Route-shape resolution (see <see cref="IPathResolver.ResolveRoute"/>): serves cached
+    /// entries even when their NODE snapshot is stale, because an in-place Updated write
+    /// cannot change any path's Prefix/Remainder. This is the silo router's per-message
+    /// lookup — it must stay a dictionary hit for hot-written paths (issue #1172).
+    /// </summary>
+    public IObservable<AddressResolution?> ResolveRoute(string path)
+        => Resolve(path, forNavigation: false, routeShapeOnly: true);
 
     public IObservable<AddressResolution?> ResolveNavigationPath(string path)
-        => Resolve(path, forNavigation: true);
+        => Resolve(path, forNavigation: true, routeShapeOnly: false);
 
     /// <summary>
     /// Shared resolution core. <paramref name="forNavigation"/> gates the legacy
@@ -185,7 +231,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// "no legacy User mirror" onboarding invariant
     /// (<c>UserOnboardingServiceTests.CreateUser_WritesPartitionRootOnly_NoUserMirror</c>).
     /// </summary>
-    private IObservable<AddressResolution?> Resolve(string path, bool forNavigation)
+    private IObservable<AddressResolution?> Resolve(string path, bool forNavigation, bool routeShapeOnly)
     {
         if (string.IsNullOrEmpty(path))
             return Observable.Return<AddressResolution?>(null);
@@ -194,7 +240,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
         if (string.IsNullOrEmpty(normalized))
             return Observable.Return<AddressResolution?>(null);
 
-        var resolved = ResolveSegments(normalized.Split('/'));
+        var resolved = ResolveSegments(normalized.Split('/'), routeShapeOnly);
         if (forNavigation)
             resolved = resolved.SelectMany(RewriteLegacyUserHome);
         return resolved.DistinctUntilChanged(AddressResolutionEquality.Instance);
@@ -227,7 +273,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
         => resolution is not null
             && string.Equals(resolution.Prefix, UserNodeType.NodeType, StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrEmpty(resolution.Remainder)
-            ? ResolveSegments(resolution.Remainder.Split('/'))
+            ? ResolveSegments(resolution.Remainder.Split('/'), routeShapeOnly: false)
             : Observable.Return(resolution);
 
     /// <summary>
@@ -244,7 +290,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// see that method for why pinning it is a permanent, silent mis-binding of the
     /// partition root's hub.</para>
     /// </summary>
-    private IObservable<AddressResolution?> ResolveSegments(string[] segments)
+    private IObservable<AddressResolution?> ResolveSegments(string[] segments, bool routeShapeOnly)
     {
         if (_resolutionCache is null || _pendingFills is null)
             return ResolveSegmentsCore(segments)
@@ -253,8 +299,14 @@ internal class PathResolutionService : IPathResolver, IDisposable
                     : SynthesizePartitionRoot(segments));
 
         var key = string.Join("/", segments);
-        if (_resolutionCache.TryGetValue(key, out var cached))
-            return Observable.Return<AddressResolution?>(cached);
+        // A stale-marked entry still has a VALID route shape (Updated cannot move a node),
+        // so a route-shape caller is served from cache — this is what keeps the silo router
+        // off the storage backend for hot-written paths (issue #1172). A node-reading caller
+        // treats the same entry as a miss and re-queries below; its fresh commit replaces
+        // the stale entry for everyone.
+        if (_resolutionCache.TryGetValue(key, out var cached)
+            && (routeShapeOnly || !cached.NodeStale))
+            return Observable.Return<AddressResolution?>(cached.Resolution);
 
         // 🚨 CLAIM the fill BEFORE the query runs. The query is a live round-trip that
         // can take milliseconds-to-seconds under load; a write landing WHILE it is in
@@ -265,7 +317,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
         // race is how a freshly-created node answers "No node found" (or resolves to its
         // ancestor with a remainder) for the rest of the process.
         // Repro: PathResolutionCachePoisonTest.InvalidationDuringInFlightQuery_DoesNotPinThePreChangeAnswer.
-        var claim = Interlocked.Increment(ref _fillSequence);
+        var claim = new PendingFill();
         _pendingFills[key] = claim;
         return ResolveSegmentsCore(segments)
             .Do(resolution =>
@@ -274,20 +326,34 @@ internal class PathResolutionService : IPathResolver, IDisposable
                 // (absent path) is never cached — a concurrent CreateNode may still
                 // be propagating — and a query that never emits or errors stores
                 // nothing at all, so it can only stall its own caller, never the
-                // whole path. The change feed invalidates positive entries on write.
+                // whole path. The change feed invalidates positive entries on
+                // Created/Deleted and stale-marks them on Updated.
                 if (resolution is null)
                     return;
                 if (!ClaimStillHeld(key, claim))
                     return;
-                _resolutionCache.TryAdd(key, resolution);
+                // An Updated that landed mid-query makes the NODE snapshot stale but not
+                // the route shape — commit stale-marked (Node dropped: a route-only answer
+                // must not pin the superseded node's Content in memory).
+                var stale = claim.NodeStale;
+                var entry = new CachedResolution(
+                    stale ? resolution with { Node = null } : resolution, stale);
+                // Indexer, not TryAdd: a node-reading caller refreshing a stale-marked
+                // entry must REPLACE it.
+                _resolutionCache[key] = entry;
                 // Re-check AFTER the add: an invalidation that ran between the check
                 // above and the add would have swept an empty slot. Undoing here makes
                 // the pair safe in BOTH interleavings — worst case the entry is dropped
                 // twice and the next resolution re-queries.
                 if (!ClaimStillHeld(key, claim))
                     _resolutionCache.TryRemove(key, out _);
+                else if (!stale && claim.NodeStale)
+                    // An Updated raced the commit itself: downgrade the just-written
+                    // fresh entry so node-reading callers re-query.
+                    _resolutionCache.TryUpdate(key,
+                        new CachedResolution(resolution with { Node = null }, true), entry);
             })
-            .Finally(() => _pendingFills.TryRemove(new KeyValuePair<string, long>(key, claim)))
+            .Finally(() => _pendingFills.TryRemove(new KeyValuePair<string, PendingFill>(key, claim)))
             .SelectMany(resolution => resolution is not null
                 ? Observable.Return<AddressResolution?>(resolution)
                 : SynthesizePartitionRoot(segments));
@@ -295,13 +361,13 @@ internal class PathResolutionService : IPathResolver, IDisposable
 
     /// <summary>
     /// True while this resolution's fill claim is still the live one for <paramref name="key"/>:
-    /// no invalidation for that key has run since the query started
-    /// (<see cref="OnMeshChange"/> drops matching claims).
+    /// no Created/Deleted invalidation for that key has run since the query started
+    /// (<see cref="OnMeshChange"/> drops matching claims; Updated only stale-marks them).
     /// </summary>
-    private bool ClaimStillHeld(string key, long claim) =>
+    private bool ClaimStillHeld(string key, PendingFill claim) =>
         _pendingFills is not null
         && _pendingFills.TryGetValue(key, out var current)
-        && current == claim;
+        && ReferenceEquals(current, claim);
 
     /// <summary>
     /// Change-feed invalidation: any Created/Updated/Deleted event with path
@@ -325,6 +391,32 @@ internal class PathResolutionService : IPathResolver, IDisposable
             return;
         var path = change.Path;
         var childPrefix = path + "/";
+
+        if (change.Kind == MeshChangeKind.Updated)
+        {
+            // 🚨 An in-place update cannot change ANY path's resolution SHAPE — the node
+            // existed at that path before the write and still does (moves publish
+            // Deleted(old)+Created(new), deletes publish Deleted). Only the cached NODE
+            // snapshot goes stale. Stale-MARK instead of remove, claims first so a fill
+            // committing between the two sweeps cannot land a fresh entry the entry-sweep
+            // already passed: route-shape callers (the silo router's per-message lookup)
+            // keep their warm entry, node-reading callers re-query. Removing here was the
+            // issue #1172 amplifier: every activity-log write invalidated the very entry
+            // the NEXT routed message to that activity needed, so during the boot NodeType
+            // bake every route to a compile activity paid a fresh storage query while
+            // holding a RoutingGrain in-flight slot — 64+ filled, the bake's own stream
+            // waits timed out behind the saturated router, and the bake inflated ~10×.
+            if (_pendingFills is not null)
+                foreach (var (key, fill) in _pendingFills)
+                    if (Affected(key))
+                        fill.NodeStale = true;
+            foreach (var (key, cached) in _resolutionCache)
+                if (!cached.NodeStale && Affected(key))
+                    _resolutionCache.TryUpdate(key,
+                        new CachedResolution(cached.Resolution with { Node = null }, true), cached);
+            return;
+        }
+
         foreach (var key in _resolutionCache.Keys)
         {
             if (Affected(key))
