@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
@@ -84,15 +85,28 @@ public class AiSourcesInstallHookTest(ITestOutputHelper output) : MonolithMeshTe
         // no node at User/_Memex/AiSettings. Pre-fix this write happened once per package per
         // boot — 42P01 noise on PostgreSQL, a phantom node here (#1127).
         var phantomPath = AiSettingsNodeType.PathFor(UserNodeType.NodeType);
-        var phantom = await Mesh.GetWorkspace()
-            .GetQuery($"{AiSettingsNodeType.NodeType}|declaration-phantom",
-                $"path:{phantomPath} nodeType:{AiSettingsNodeType.NodeType} select:path,id,name,nodeType")
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(15))
-            .ToTask();
 
-        phantom.Should().BeEmpty(
-            $"the `User` NodeType declaration node is not an account — a node at {phantomPath} "
-            + "means the enumeration treated the self-typed declaration as a user again (#1127)");
+        // 🚨 Read the NODE, not the index. This assertion pins an ABSENCE immediately after a write
+        // pass, which is the one case a query cannot settle: GetQuery is eventually consistent, so
+        // an empty first emission is equally consistent with "the phantom was never written" and
+        // "the phantom was written and the index has not caught up yet". The second reading is the
+        // regression this test exists to catch, so a query here can only ever pass — including on
+        // the pre-fix code. GetMeshNodeStream is authoritative, and an absent node surfaces as a
+        // routing NotFound (OnError/DeliveryFailureException), which is a DIFFERENT signal from a
+        // present one (OnNext) rather than the same empty result. Same shape as
+        // CompileActivityNoPhantomPathTest, which pins the identical "leaf never created under a
+        // real ancestor" phantom.
+        var probe = await Mesh.GetMeshNodeStream(phantomPath)
+            .Where(n => n?.Content is not null)
+            .Materialize()
+            .Should().Within(TimeSpan.FromSeconds(15)).Match(
+                n => n.Kind == NotificationKind.OnError,
+                $"the `User` NodeType declaration node is not an account — anything served at "
+                + $"{phantomPath} means the enumeration treated the self-typed declaration as a "
+                + "user again (#1127)");
+
+        probe.Exception.Should().BeOfType<DeliveryFailureException>(
+            "the absence must be the routing NotFound for a node that was never created — any other "
+            + "fault would mean this assertion passed for a reason unrelated to #1127");
     }
 }
