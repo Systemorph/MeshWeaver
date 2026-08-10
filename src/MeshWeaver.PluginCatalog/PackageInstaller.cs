@@ -1594,9 +1594,21 @@ public static class PackageInstaller
                     // the same fabrication. Partition provisioning runs BEFORE the root write, so
                     // any routed touch inside that window fabricated it. Fixed at the source —
                     // synthesized resolutions are never cached, and a fill that lands after its
-                    // own invalidation is discarded (PathResolutionCachePoisonTest). If this
-                    // symptom ever reappears, check BOTH: is the hub recycled, and is the
-                    // resolution for the bare root path serving a real node?
+                    // own invalidation is discarded (PathResolutionCachePoisonTest).
+                    //
+                    // 🚨 …and it recurred AGAIN on a build carrying that fix (#1104), because
+                    // fixing RESOLUTION cannot help a hub a bad resolution has ALREADY activated:
+                    // GetHostedHub pins by address and the hub never re-reads its NodeType. That
+                    // is why this Post is no longer where the guarantee lives. It is fire-and-
+                    // forget, conditional on the placeholder dance having run, and available to
+                    // nobody but this installer — while ANY writer can retype a node. The
+                    // framework now un-pins on its own: every activation arms
+                    // NodeTypeRebindWatcher, which recycles the hub the first time the mesh change
+                    // feed reports a different NodeType for its path. This Post stays as the fast
+                    // path (it recycles immediately rather than on the feed hop) and as the marker
+                    // of intent; it is not load-bearing. If the symptom ever reappears, check all
+                    // three: is the hub recycled, is the resolution for the bare root path serving
+                    // a real node, and did the rebind watcher see the retype?
                     .Select(rest =>
                     {
                         if (placeholderRoot is not null && root is not null)

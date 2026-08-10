@@ -461,6 +461,17 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// BEFORE writing its root, so any routed touch inside that window fabricated the
     /// placeholder, and the fabrication outlived every later write.
     /// Repro: <c>PathResolutionCachePoisonTest.SynthesizedPartitionRoot_IsNotCached</c>.</para>
+    ///
+    /// <para>🚨 <b>Not caching it is necessary, not sufficient — and that is now covered.</b> The
+    /// same symptom recurred on a build that already carried the no-cache fix (#1104), because a
+    /// hub the fabrication had ALREADY activated stays pinned: <c>Mesh.GetHostedHub</c> is keyed
+    /// by address, routing short-circuits on it for a hosted address, and the hub never re-reads
+    /// its NodeType. <i>Not cached is not not-pinned.</i> Repairing resolution can only help the
+    /// NEXT activation. The un-pin is the framework's job and lives in
+    /// <c>NodeTypeRebindWatcher</c>: every activation watches the mesh change feed for its own
+    /// path and recycles the hub the first time the node reports a different NodeType. So the two
+    /// halves are: this method must not PIN a fabrication (here), and a hub bound to one must be
+    /// able to LET GO of it (there).</para>
     /// </summary>
     private IObservable<AddressResolution?> SynthesizePartitionRoot(string[] segments)
     {
