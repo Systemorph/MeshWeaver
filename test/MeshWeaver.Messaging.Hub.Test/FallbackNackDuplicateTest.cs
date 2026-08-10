@@ -13,24 +13,24 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// its OWN typed <see cref="DeliveryFailure"/> — and must answer EXACTLY ONCE.
 ///
 /// <para><b>The defect this pins.</b> <c>MessageService.DeserializeDelivery</c> posted the typed
-/// NACK (<see cref="ErrorType.CompilationFailed"/> + NodeTypePath) and then returned
-/// <c>delivery.Failed(reason)</c> — the overload that DECLARES "the failing site did not answer the
-/// sender". The on-target caller therefore ran <c>ReportFailure(delivery)</c> with its default
-/// <see cref="ErrorType.Unknown"/> and posted a SECOND <see cref="DeliveryFailure"/> for the same
-/// request, carrying the same message text but a different classification. Both are
+/// NACK (<see cref="ErrorType.CompilationFailed"/> + NodeTypePath) and then returned a plain
+/// <c>delivery.Failed(reason)</c>, so the on-target caller ran <c>ReportFailure(delivery)</c> with
+/// its default <see cref="ErrorType.Unknown"/> and posted a SECOND <see cref="DeliveryFailure"/> for
+/// the same request — same message text, different classification, no NodeTypePath. Both are
 /// <c>ResponseFor</c> the one request, so a caller's <c>Observe(...).FirstAsync()</c> resolved on
-/// whichever won the race — <see cref="ErrorType.CompilationFailed"/> or
-/// <see cref="ErrorType.Unknown"/>, non-deterministically.</para>
+/// whichever won the race.</para>
 ///
 /// <para>That flip is what made <c>OrleansBrokenNodeTypeAccessTest</c> (and its Monolith mirror
 /// <c>BrokenNodeTypeAccessTest</c>) fail intermittently on CI shard 0 with
 /// "Expected value to be CompilationFailed, but found Unknown" — an ASSERTION, not a timeout, with
-/// byte-identical message text in the passing and failing runs. The contract is spelled out on
-/// <see cref="IMessageDelivery.FailedAndNacked"/>: "A site that posts its own NACK must use
-/// FailedAndNacked instead, or the sender gets two."</para>
+/// byte-identical message text in the passing and failing runs.</para>
 ///
-/// <para>Counting the NACKs pins the CAUSE (a duplicate answer) rather than the SYMPTOM (which of
-/// the two won), so it fails deterministically — no load, no CPU constraint, no Orleans cluster.</para>
+/// <para><b>Why it is written as a COUNT.</b> Asserting the winner's <see cref="ErrorType"/> only
+/// re-tests the symptom and passes whenever the race happens to fall the right way — which is how
+/// the Orleans test passed 10/10 locally while flapping on CI. Counting the answers pins the CAUSE,
+/// so it fails deterministically with no load, no CPU constraint and no Orleans cluster, and it
+/// keeps holding for the sites that still returned an unmarked <c>Failed</c> after the first fix
+/// (the generic registry-hint path and the DeliveryFailure ping-pong guard).</para>
 /// </summary>
 public class FallbackNackDuplicateTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -81,5 +81,50 @@ public class FallbackNackDuplicateTest(ITestOutputHelper output) : HubTestBase(o
         await nacks.Skip(1).Should().NotEmit(3.Seconds(),
             "the fallback hub already answered this request; a second DeliveryFailure makes the "
             + "caller's ErrorType depend on which answer wins the race");
+    }
+}
+
+/// <summary>
+/// The same "one request, one failure answer" contract on the hub that has NO
+/// <see cref="UnhandledMessageNack"/> policy — the ORDINARY case of a message whose type this hub's
+/// TypeRegistry does not know.
+///
+/// <para>That path answers from inside <c>UnpackIfNecessary</c>
+/// (<c>return ReportFailure(delivery.Failed(failureMessage))</c>) and then hands a still-Failed
+/// delivery back to the on-target caller, which reported it a SECOND time. Both answers carry the
+/// same <see cref="ErrorType.Unknown"/>, so the duplicate is invisible in any assertion about the
+/// winner — it shows up only as a count, and only on this policy-free hub, which is why the
+/// fallback-hub fix did not reach it. A duplicate NACK on the unregistered-type path is a traffic
+/// multiplier on a storm-prone route, not a spare log line.</para>
+/// </summary>
+public class UnregisteredTypeNackDuplicateTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    private const string UnregisteredType = "TotallyUnregisteredProbeRequest";
+
+    private readonly ReplaySubject<DeliveryFailure> nacks = new();
+
+    // NOTE: no UnhandledMessageNack policy here — that is the point of this fixture.
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => configuration.WithHandler<DeliveryFailure>((_, delivery) =>
+        {
+            nacks.OnNext(delivery.Message);
+            return delivery.Processed();
+        });
+
+    [Fact(Timeout = 60_000)]
+    public async Task UnregisteredType_WithNoFallbackPolicy_IsNackedExactlyOnce()
+    {
+        GetHost();
+        var client = GetClient();
+
+        client.Post(new RawJson($$"""{"$type":"{{UnregisteredType}}"}"""),
+            o => o.WithTarget(CreateHostAddress()));
+
+        await nacks.Should().Within(20.Seconds()).Emit(
+            "an unregistered inbound type must fail closed — the sender is owed a terminal answer");
+
+        await nacks.Skip(1).Should().NotEmit(3.Seconds(),
+            "the unpack step already answered this request; reporting the still-Failed delivery "
+            + "again sends the sender a second DeliveryFailure for the one request");
     }
 }
