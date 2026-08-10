@@ -502,7 +502,11 @@ public record LayoutAreaHost : IDisposable
             // Emit as a Full: a complete snapshot the client's control streams
             // re-evaluate wholesale, delivering nested sub-areas reliably.
             return new ChangeItem<EntityStore>(resultStore, Stream.StreamId, Stream.Hub.Version);
-        }, ex => logger.LogWarning(ex, "Cannot apply render for {Area}", Reference.Area));
+            // resolvedArea, not Reference.Area — the latter is null for a default-area
+            // subscription, so this line said "(null)" for exactly the renders #1182 was
+            // about. The render-FAILURE paths were fixed there; these two remaining
+            // diagnostics still carried the same null.
+        }, ex => logger.LogWarning(ex, "Cannot apply render for {Area}", resolvedArea));
     }
 
     /// <summary>
@@ -1279,7 +1283,8 @@ public record LayoutAreaHost : IDisposable
                     coll => coll.SetItem(ProgressDataId, new { message, progress = percent ?? 0 })),
                 Stream.StreamId,
                 Stream.Hub.Version),
-            ex => logger.LogWarning(ex, "Cannot update loading progress for {Area}", Reference.Area));
+            // resolvedArea — see "Cannot apply render for" above.
+            ex => logger.LogWarning(ex, "Cannot update loading progress for {Area}", resolvedArea));
 
     /// <summary>
     /// Writes the framework's own loading milestones through the
