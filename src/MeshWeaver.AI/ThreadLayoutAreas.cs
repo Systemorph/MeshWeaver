@@ -674,7 +674,7 @@ public static class ThreadLayoutAreas
 
     /// <summary>
     /// Walks <paramref name="messageIds"/>, requests each satellite ThreadMessage via
-    /// GetDataRequest (Post + RegisterCallback wrapped as an Observable), accumulates
+    /// GetDataRequest (posted and observed via <c>hub.Observe(...)</c>), accumulates
     /// their UpdatedNodes, and emits the aggregated list once all responses arrive.
     /// </summary>
     private static IObservable<ImmutableList<NodeChangeEntry>> CollectUpdatedNodes(

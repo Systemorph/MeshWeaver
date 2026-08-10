@@ -201,7 +201,7 @@ If your node type ships as a compiled assembly — a typed record in the portal 
 
 A node type that adds `#r "nuget:..."` at the top of its `Source/*.cs` compiles identically under `MonolithMeshTestBase`. The test's compilation path hits the same `MeshNodeCompilationService` and the same `INuGetAssemblyResolver` that the portal uses. The only prerequisite is network access to `api.nuget.org` during the test run — the resolver caches packages, so subsequent test methods in the same process are instant.
 
-See `test/MeshWeaver.Graph.Test/NodeTypeWithNuGetCompilationTest.cs` for a narrowly-scoped compilation test against `MathNet.Numerics`.
+See `test/MeshWeaver.Graph.Test/NuGetAssemblyResolverTest.cs` (`Resolve_MathNetNumerics_LoadsTransitiveDeps`) for a narrowly-scoped resolution test against `MathNet.Numerics`, and `NuGetDirectiveParserTest.cs` for the `#r "nuget:…"` directive parsing.
 
 ---
 

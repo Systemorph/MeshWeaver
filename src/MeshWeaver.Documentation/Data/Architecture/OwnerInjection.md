@@ -66,7 +66,7 @@ The litmus test: *can you name a user this work is for?* Yes → inject that own
 platform plumbing) → `ImpersonateAsSystem`, explicitly. Never leave it empty and never invent a
 hub-self identity.
 
-## The motivating bug — cold-start submit deadlock
+## The motivating bug — cold-start submit deadlock (FIXED; kept as the worked example)
 
 `OrleansChatHistoryTest.ColdStart_AgentSeesAllPreviousMessages` (2-core) is the canonical failure
 this rule fixes. A thread is seeded in persistence; on a **cold start** (grains inactive) a user
@@ -107,17 +107,18 @@ loses the cold-start race.
 |---|---|
 | Thread hub | `ThreadExecution.SetThreadHubIdentity` — reads the thread node's `CreatedBy` and stamps it as **both** `Context` and `CircuitContext` (carry-forward) on hub activation. |
 | Activity hub | The activity control-plane establishes the activity owner the same way (resolve from the activity node, inject as CircuitContext). |
-| Per-node data source / sync stream | The node's data-source `SynchronizationStream` must carry the **node owner** for its deferred `UpdateStreamRequest` writes. Because the owner is established on the hub **asynchronously**, the stream must resolve it **synchronously from the node already in its `Current`** (`CreatedBy`) when the live/standing context is null — not depend on the async hub-identity round-trip winning the cold-start race. Genuine infra streams (doc sync) carry System. |
+| Per-node data source / sync stream | `SynchronizationStream.Update` resolves the node OWNER **synchronously from the node already in its own `Current`** when neither a live AsyncLocal context nor a captured creation context survives — via `IStreamOwnerResolver`, resolved off `Host.ServiceProvider`. Genuine infra streams (doc sync) carry System. |
 | One-shot helpers | `AccessContextScope.FromNode(node, accessService)` — runs a block under the node's owner (`CreatedBy`/`LastModifiedBy`), falling back to System only for an unattributed node. |
 
-> 🚧 **Status:** the thread-hub and `FromNode` injection are in place. The remaining cross-cutting
-> piece is the per-node **data-source sync stream**: on a cold start the first submit write reaches
-> the stream *before* the async `SetThreadHubIdentity` establishes the owner on the (correct) `Host`
-> hub, so the write posts null and fails closed. The fix is a **synchronous owner resolver** — the
-> data-source stream resolves the owner from the node in its own `Current` (its `CreatedBy`) at write
-> time, wired by the MeshNode-aware data-source layer (a generic `SynchronizationStream<EntityStore>`
-> can't read `CreatedBy` itself). This removes the race entirely. It composes with the deferred-write
-> context capture in the `SynchronizationStream` access work.
+> ✅ **Status: shipped.** The synchronous owner resolver is
+> `IStreamOwnerResolver` (`src/MeshWeaver.Data/Serialization/IStreamOwnerResolver.cs`), implemented
+> by `MeshNodeStreamOwnerResolver` in `MeshWeaver.Graph` (the layer that knows `MeshNode` —
+> `MeshWeaver.Data` sits below `Mesh.Contract` and cannot read it), registered in
+> `GraphConfigurationExtensions` and consumed by `SynchronizationStream.Update`. Because the node is
+> ALREADY in the stream's `Current` at write time, its `CreatedBy` is available with **no async
+> round-trip and no race** — which closes the cold-start FIRST-write race described above. The
+> result is still filtered through the real-user invariant by the caller, so a hub/system principal
+> can never leak into `CreatedBy`.
 
 ## See also
 

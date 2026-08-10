@@ -34,12 +34,13 @@ portal configures.
 
 | Piece | Where | Status |
 |---|---|---|
-| **The container** — `whisper.cpp` server + the Swiss-German model | `deploy/whisper/` (Dockerfile + compose + README) | built; not runtime-verified in CI (no Docker in the sandbox) |
+| **The container** — `whisper.cpp` server + the Swiss-German model | `deploy/whisper/` (Dockerfile + compose + helm + README) | built; not runtime-verified in CI (no Docker in the sandbox) |
 | **`SpeechConfiguration`** — endpoint, language, enabled; the portal-settable config | `src/MeshWeaver.Speech/SpeechConfiguration.cs` | done |
-| **`ISpeechTranscriber` / `WhisperContainerTranscriber`** — the centralized client; `POST /inference` on the HTTP `IIoPool`, cold `IObservable` | `src/MeshWeaver.Speech/` | done + **4 unit tests** against the real `/inference` contract |
-| **Portal endpoint** — `POST /api/speech/transcribe` the clients call | portal host | next |
-| **Mic UI** — a record button in `ThreadChatView` (browser `MediaRecorder`) → transcript into the message box | `MeshWeaver.Blazor.Portal/Chat` | next |
-| **RN + MAUI** — record → same endpoint | `clients/react-native`, `memex/Memex.Client` | next |
+| **`ISpeechTranscriber` / `WhisperContainerTranscriber`** — the centralized client; `POST /inference` on the HTTP `IIoPool`, cold `IObservable` | `src/MeshWeaver.Speech/` | done + unit tests against the real `/inference` contract |
+| **Portal endpoint** — `POST /api/speech/transcribe` the clients call | `memex/Memex.Portal.Shared/Api/SpeechEndpoints.cs` (`MapSpeechApi`, wired in `MemexConfiguration`) | done |
+| **Mic UI** — a record button in `ThreadChatView` (browser `MediaRecorder`) → transcript into the composer | `MeshWeaver.Blazor.Portal/Chat` | done |
+| **React / React Native** — record → same endpoint | `clients/react` (`ops.transcribe`), `clients/react-native/src/speech/` | done |
+| **MAUI** | `memex/Memex.Client/Voice/` | still the **on-device** Whisper.net path — see [On-device voice](/Doc/Architecture/OnDeviceVoice) |
 
 ## Why a container (vs. on-device or a cloud STT)
 
@@ -63,13 +64,24 @@ portal configures.
 
 Audio is posted to the portal endpoint under the caller's session; the portal forwards it to the (typically
 cluster-internal) Whisper container. The container endpoint is **not** exposed to clients directly — they only
-ever see `/api/speech/transcribe`, so the model host stays behind the portal's auth.
+ever see `/api/speech/transcribe`, so the model host stays behind the portal's auth. Specifically, the endpoint:
+
+- requires the same **Bearer** policy as the rest of the REST surface (`/api/mesh/*`), with antiforgery
+  disabled because a Bearer multipart post carries no antiforgery token (identical to `/api/mesh/upload`);
+- caps a single upload at **25 MB** — generous for speech, and well under the 200 MB multipart ceiling
+  `AddMeshApi` raises, so it cannot be turned into a large-allocation DoS;
+- returns **503** with a plain message when transcription is unconfigured or disabled, rather than a 500.
+  The mic UI also checks `IsConfigured` and stays hidden, so this is belt-and-suspenders;
+- **normalizes** the container's reply to JSON `{"text": …, "language": …}` — a client-supplied whisper.cpp
+  `response_format` part is accepted for compatibility but ignored.
 
 ## Status
 
-**Done + tested here:** the container definition (`deploy/whisper`), `MeshWeaver.Speech` (config + transcriber),
-and 4 unit tests that drive `WhisperContainerTranscriber` against an in-process server mimicking whisper.cpp's
-`/inference` (transcribe, language forward + per-call override, unconfigured error, server-error propagation).
+**Shipped:** the container definition (`deploy/whisper`), `MeshWeaver.Speech` (config + transcriber) with unit
+tests driving `WhisperContainerTranscriber` against an in-process server mimicking whisper.cpp's `/inference`
+(transcribe, language forward + per-call override, unconfigured error, server-error propagation), the portal
+`POST /api/speech/transcribe` endpoint, the `ThreadChatView` mic button, and the React / React Native record
+paths.
 
-**Next:** the portal `POST /api/speech/transcribe` endpoint, the `ThreadChatView` mic button, and the RN/MAUI
-record paths — then an end-to-end run against a live container (the one thing that needs Docker + the model).
+**Not done:** MAUI still transcribes on-device rather than through this endpoint, and there has been no
+end-to-end run against a live container (the one thing that needs Docker + the model).

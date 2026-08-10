@@ -16,7 +16,7 @@ namespace MeshWeaver.Markdown.Export.Layout;
 /// Layout areas that render the export dialog for a markdown node.
 /// Two entry points: <c>ExportPdf</c> and <c>ExportDocx</c>. Both render the same
 /// <see cref="ExportDocumentControl"/>; the Blazor view decides the default format.
-/// Uses the reactive <c>GetDataRequest</c> + <c>RegisterCallback</c> pattern — never
+/// Uses the reactive <c>GetDataRequest</c> + <c>hub.Observe(...)</c> pattern — never
 /// <c>await</c> inside the hub — so it can't deadlock the message pump.
 /// </summary>
 [Browsable(false)]
@@ -52,7 +52,7 @@ public static class ExportDocumentLayoutArea
         var hubPath = host.Hub.Address.ToString();
 
         // Seed the observable with a partial control (SourcePath + DefaultFormat always known).
-        // The hub then fires a GetDataRequest via Post + RegisterCallback — NO await — and when
+        // The hub then fires a GetDataRequest via hub.Observe(...) — NO await — and when
         // the response arrives the observable emits an enriched control with NodeName set.
         var seed = (UiControl?)new ExportDocumentControl
         {

@@ -21,6 +21,7 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 | See every **running instance** — who it's for, its infra, database, and version — and how to create or delete one | [Instances.md](/Doc/Architecture/Instances) |
 | **Database backups** & disaster recovery — managed PITR, geo-redundancy, restore | [DatabaseBackups.md](/Doc/Architecture/DatabaseBackups) |
 | Understand the release model, merge gates, version channels, and **policy-driven self-update** | [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy) |
+| Know what CD **guarantees** about a published image set — all-or-nothing publication, the promote ordering, the self-healing reconciler — and why you verify the IMAGE and never the green tick | [ContinuousDeliveryContract.md](/Doc/Architecture/ContinuousDeliveryContract) |
 | Ship a code update to the `memex` portal on the shared AKS cluster | [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
 | Deploy an Aspire-orchestrated `test`/`prod` Container Apps environment | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
 | Understand the private-AKS-cluster architecture & operations behind the shared portal | [MemexCloudDeployment.md](/Doc/Architecture/MemexCloudDeployment) |
@@ -76,21 +77,28 @@ For single-tenant apps, configure the tenant ID explicitly — the default `/com
 
 Secrets are stored in `dotnet user-secrets` for local development and in GitHub secrets for CI/CD. (On AKS, secrets come from the Key Vault `SecretProviderClass` wired by `deploy/aks/envs/<env>/deploy.sh`.)
 
-Required secrets for distributed modes:
+Parameters for distributed modes (the authoritative list is the `builder.AddParameter(...)` calls in `memex/aspire/Memex.AppHost/Program.cs`):
 
-| Secret | Description |
-|---|---|
-| `Parameters:azure-foundry-key` | Azure AI Foundry API key (LLM access) |
-| `Parameters:embedding-endpoint` | Embedding model endpoint |
-| `Parameters:embedding-key` | Embedding model API key |
-| `Parameters:embedding-model` | Embedding model name |
-| `Parameters:microsoft-client-id` | Microsoft OAuth client ID |
-| `Parameters:microsoft-client-secret` | Microsoft OAuth client secret |
-| `Parameters:microsoft-tenant-id` | Microsoft Entra tenant ID (single-tenant apps) |
-| `Parameters:google-client-id` | Google OAuth client ID |
-| `Parameters:google-client-secret` | Google OAuth client secret |
-| `Parameters:custom-domain` | Custom domain for the deployed portal |
-| `Parameters:certificate-name` | TLS certificate name for the custom domain |
+| Parameter | Description | If unset |
+|---|---|---|
+| `Parameters:azure-foundry-key` | Azure AI Foundry API key (LLM access) | **Required** |
+| `Parameters:azure-foundry-endpoint` | Azure AI Foundry `/models` endpoint | Optional — defaulted in `appsettings.json` |
+| `Parameters:anthropic-endpoint` | Anthropic-compatible endpoint | **Required** — blank yields `Endpoint is missing for model 'X'` |
+| `Parameters:anthropic-model-0/1/2` | Model catalog offered in the composer's model picker | **Required** — blank yields an empty model dropdown |
+| `Parameters:embedding-endpoint` | Embedding model endpoint | Optional (defaults to empty) |
+| `Parameters:embedding-key` | Embedding model API key | Optional (defaults to empty) |
+| `Parameters:embedding-model` | Embedding model name | Optional (defaults to empty) |
+| `Parameters:key-protection-master-key` | Encrypts `ModelProvider` API keys at rest | Falls back to a **dev default that is not secret** — `test`/`prod` MUST override |
+| `Parameters:microsoft-client-id` | Microsoft OAuth client ID | **Required** |
+| `Parameters:microsoft-client-secret` | Microsoft OAuth client secret | **Required** |
+| `Parameters:microsoft-tenant-id` | Microsoft Entra tenant ID (single-tenant apps) | Optional — omitted when empty |
+| `Parameters:google-client-id` | Google OAuth client ID | Optional (defaults to empty) |
+| `Parameters:google-client-secret` | Google OAuth client secret | Optional — omitted when empty |
+| `Parameters:linkedin-client-secret` | LinkedIn publishing (client id is inlined in the AppHost) | Optional |
+| `Parameters:custom-domain` | Custom domain for the deployed portal | Optional — omitted when empty |
+| `Parameters:certificate-name` | TLS certificate name for the custom domain | Optional — omitted when empty |
+
+> 🚨 Several of these deliberately carry **no `value:` default** in the AppHost. That is not an oversight: passing `value: ""` makes Aspire resolve the parameter to the empty string and skip the user-secrets/config lookup entirely, so the setting silently stays blank even when user-secrets has it. Don't "tidy" a default onto them.
 
 Set a secret with:
 
@@ -106,8 +114,11 @@ dotnet user-secrets set "Parameters:azure-foundry-key" "<your-key>"
 ```
 memex/aspire/
 ├── Memex.AppHost/                  # Aspire orchestrator — defines all resources
+├── Memex.Aspire.Hosting/           # Shared Aspire hosting extensions
 ├── Memex.Portal.Distributed/       # Portal with co-hosted Orleans silo
-├── Memex.Portal.Orleans/           # Orleans grain interfaces
 ├── Memex.Portal.ServiceDefaults/   # Shared service defaults (health, telemetry)
-└── Memex.Database.Migration/       # Database migration project
+├── Memex.Database.Migration/       # Database migration project (runs MigrationRegistry.All)
+└── Memex.NodeType.Bake/            # NodeType pre-compilation (bake) job
 ```
+
+Outside `aspire/`, `memex/` also holds `Memex.Portal.Monolith` (the standalone dev portal), `Memex.Portal.Shared` (shared portal code, including the self-update poller), `Memex.Client`, and `Memex.LocalMesh`.

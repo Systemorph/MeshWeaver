@@ -62,8 +62,12 @@ public class MeshHubBuilder
     /// <summary>
     /// Sets a custom reactive initialization function. Caller returns an
     /// <see cref="IObservable{Unit}"/>; the mesh hub's Initialize gate opens
-    /// once the observable emits / completes. Wrap a Task-returning method via
-    /// <c>Observable.FromAsync(() =&gt; method())</c>.
+    /// once the observable emits / completes. A Task-returning method is bridged
+    /// through a bounded <c>IIoPool</c> (<c>pool.Invoke(ct =&gt; method(ct))</c>),
+    /// <b>never</b> <c>Observable.FromAsync</c>: this observable is subscribed on the
+    /// hub's init turn, and a bare <c>FromAsync</c> would run the method's synchronous
+    /// prologue on that very scheduler with no concurrency bound. See
+    /// <c>Doc/Architecture/ControlledIoPooling.md</c>.
     /// </summary>
     public MeshHubBuilder WithInitialization(Func<IMessageHub, IObservable<Unit>>? initializationFunc)
     {

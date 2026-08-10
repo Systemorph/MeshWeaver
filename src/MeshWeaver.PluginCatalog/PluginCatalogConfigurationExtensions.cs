@@ -82,7 +82,14 @@ public static class PluginCatalogConfigurationExtensions
                 // Same two-registration idiom: the IHostedService forward is what STARTS it.
                 .AddSingleton<ModuleDiscoveryService>()
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
-                    sp => sp.GetRequiredService<ModuleDiscoveryService>()))
+                    sp => sp.GetRequiredService<ModuleDiscoveryService>())
+                // Reads this instance's COMBO — every module it carries with its source and pinned
+                // ref, folding the {Space}/_GitSync and Plugins/{id} shapes into one list. The input
+                // the candidate-release deploy gate verifies an image against
+                // (Doc/Architecture/CandidateReleaseProtocol). A plain singleton, NOT a hosted
+                // service: it is a pull-on-demand READER — it starts nothing, subscribes to nothing,
+                // and writes nothing, so it costs an instance that never calls it exactly nothing.
+                .AddSingleton<InstanceComboReader>())
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();

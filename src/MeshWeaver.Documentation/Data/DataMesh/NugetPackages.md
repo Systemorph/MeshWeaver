@@ -4,7 +4,7 @@ Category: Documentation
 Description: Load any NuGet package directly from an interactive markdown code cell using the #r "nuget:..." directive — no SDK, no restart.
 ---
 
-Interactive markdown in MeshWeaver is backed by a [.NET Interactive](https://github.com/dotnet/interactive) `CSharpKernel`. That gives every code cell the same package-management directive used by Polyglot Notebooks: `#r "nuget:PackageId, Version"`. MeshWeaver resolves the package in-process using `NuGet.Protocol`, `NuGet.Packaging`, and `NuGet.Resolver` — no .NET SDK, no MSBuild — adds its assemblies to the kernel's compilation references, and the package is usable immediately without restarting the portal.
+Interactive markdown in MeshWeaver is backed by a Roslyn scripting kernel (`Microsoft.CodeAnalysis.CSharp.Scripting`). It supports the same package-management directive Polyglot Notebooks made familiar: `#r "nuget:PackageId, Version"` — but the implementation is MeshWeaver's own, not .NET Interactive's. MeshWeaver resolves the package in-process using `NuGet.Protocol`, `NuGet.Packaging`, and `NuGet.Resolver` — no .NET SDK, no MSBuild — adds its assemblies to the kernel's compilation references, and the package is usable immediately without restarting the portal.
 
 ## Basic usage
 
@@ -18,12 +18,16 @@ using Humanizer;
 
 When MeshWeaver renders a cell like this, it:
 
-1. Submits the entire cell to the kernel as a single `SubmitCode` command.
-2. .NET Interactive's package-management extension sees the `#r "nuget"` directive, calls `api.nuget.org`, and restores the package and its transitive dependencies into the local NuGet cache.
-3. Adds every resolved assembly to the kernel's metadata references via `CSharpKernel.AddAssemblyReferences(...)`.
+1. Submits the entire cell to the kernel as a single `SubmitCodeRequest`.
+2. `NuGetDirectiveParser.Extract` strips the `#r "nuget"` directives from the source, and
+   `INuGetAssemblyResolver.ResolveAsync` calls `api.nuget.org` and restores the package and its
+   transitive dependencies into the local NuGet cache.
+3. Adds every resolved assembly to the kernel's script options
+   (`scriptOptions.AddReferences(...)`) and installs a runtime probe for the package's
+   probing directories.
 4. Compiles and runs the remaining code against the augmented reference set.
 
-The return value flows back as a `ReturnValueProduced` event and is rendered into the `--render` area.
+The return value is rendered into the `--render` area.
 <svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
   <defs>
     <marker id="np-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
@@ -40,9 +44,9 @@ The return value flows back as a `ReturnValueProduced` event and is rendered int
   <rect x="195" y="60" width="130" height="80" rx="10" fill="#1b3a2a" stroke="#43a047" stroke-width="1.5"/>
   <rect x="195" y="60" width="130" height="34" rx="10" fill="#43a047"/>
   <rect x="195" y="80" width="130" height="14" fill="#43a047"/>
-  <text x="260" y="82" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">CSharpKernel</text>
-  <text x="260" y="108" text-anchor="middle" fill="#cfd8dc" font-size="11">SubmitCode</text>
-  <text x="260" y="124" text-anchor="middle" fill="#cfd8dc" font-size="11">command</text>
+  <text x="260" y="82" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Script Kernel</text>
+  <text x="260" y="108" text-anchor="middle" fill="#cfd8dc" font-size="11">SubmitCodeRequest</text>
+  <text x="260" y="124" text-anchor="middle" fill="#cfd8dc" font-size="11">Roslyn scripting</text>
   <rect x="375" y="60" width="150" height="80" rx="10" fill="#2a1e3a" stroke="#8e24aa" stroke-width="1.5"/>
   <rect x="375" y="60" width="150" height="34" rx="10" fill="#8e24aa"/>
   <rect x="375" y="80" width="150" height="14" fill="#8e24aa"/>
@@ -53,8 +57,8 @@ The return value flows back as a `ReturnValueProduced` event and is rendered int
   <rect x="565" y="60" width="175" height="34" rx="10" fill="#f57c00"/>
   <rect x="565" y="80" width="175" height="14" fill="#f57c00"/>
   <text x="652" y="82" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Result</text>
-  <text x="652" y="108" text-anchor="middle" fill="#cfd8dc" font-size="11">AddAssemblyReferences</text>
-  <text x="652" y="124" text-anchor="middle" fill="#cfd8dc" font-size="11">ReturnValueProduced</text>
+  <text x="652" y="108" text-anchor="middle" fill="#cfd8dc" font-size="11">AddReferences</text>
+  <text x="652" y="124" text-anchor="middle" fill="#cfd8dc" font-size="11">rendered inline</text>
   <line x1="150" y1="100" x2="193" y2="100" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#np-arrow)"/>
   <line x1="325" y1="100" x2="373" y2="100" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#np-arrow)"/>
   <line x1="525" y1="100" x2="563" y2="100" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#np-arrow)"/>
@@ -101,7 +105,7 @@ DateTime.UtcNow.AddMinutes(-5).Humanize()
 
 ## What happens on failure
 
-If the package ID is unknown, the version does not exist, or the kernel cannot reach `nuget.org`, the cell produces a `CommandFailed` event. The error is rendered inline — the author sees exactly what went wrong without tailing server logs:
+If the package ID is unknown, the version does not exist, or the kernel cannot reach `nuget.org`, the restore throws and the cell fails. The error is rendered inline — the author sees exactly what went wrong without tailing server logs:
 
 ```csharp
 #r "nuget:ThisPackageDoesNotExist, 1.0.0"
