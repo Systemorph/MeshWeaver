@@ -119,8 +119,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// </summary>
     /// <param name="observer">The observer to receive change items.</param>
     /// <returns>A disposable that ends the subscription. On a DISPOSED stream the store is
-    /// completed (never disposed — #1170/#1171), so a late subscriber still receives the
-    /// replayed last value and graceful completion instead of a silent no-op.</returns>
+    /// completed (never disposed — #1170/#1171), so a late subscriber receives any replayed
+    /// last value — there is none if the stream was disposed before it ever published — and
+    /// then graceful completion, instead of a silent no-op.</returns>
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
         // Fallback creation-context capture: a stream constructed off the subscriber's
