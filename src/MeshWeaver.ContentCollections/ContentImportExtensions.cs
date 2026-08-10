@@ -57,10 +57,31 @@ public static class ContentImportExtensions
         SyncFiles(contentService, request)
             .Subscribe(
                 count => hub.Post(ImportContentResponse.Ok(count), o => o.ResponseFor(delivery)),
-                ex => hub.Post(ImportContentResponse.Fail(ex.Message), o => o.ResponseFor(delivery)));
+                ex => hub.Post(FailureFor(delivery, ex), o => o.ResponseFor(delivery)));
 
         return delivery.Processed();
     }
+
+    /// <summary>
+    /// The answer to send when a sync failed.
+    ///
+    /// <para>🚨 A hub-disposal fault is TRANSIENT and must NOT be flattened into
+    /// <see cref="ImportContentResponse.Fail"/>. This hub is being recycled — the collection could
+    /// not even be created (<c>ContentCollection.CreateStream</c> cannot host its
+    /// <c>SynchronizationStream</c> once creation is frozen) — and the node is coming straight
+    /// back. Reported as an application failure, the caller can no longer tell "your request is
+    /// malformed" from "ask me again in a moment", so it gives up on work that would have
+    /// succeeded: the plugin installer declared a package's committed binaries lost and the assets
+    /// were never served (StaleStampRootBindingTest, the test that turned main red). Answering with
+    /// the typed <see cref="ErrorType.ShuttingDown"/> hands the caller the framework's own verdict
+    /// — "the address may reactivate; retry to get the authoritative answer" — which it can act on.
+    /// The reply still reaches the sender because <c>MessageService</c> forwards a correlated reply
+    /// through the live parent when this hub can no longer post it itself.</para>
+    /// </summary>
+    private static object FailureFor(IMessageDelivery delivery, Exception exception)
+        => HubDisposingException.IsHubDisposal(exception)
+            ? new DeliveryFailure(delivery, exception.Message) { ErrorType = ErrorType.ShuttingDown }
+            : ImportContentResponse.Fail(exception.Message);
 
     /// <summary>
     /// Writes each inline file under <c>TargetPath</c> (binary-safe — the bytes are streamed straight
@@ -284,7 +305,12 @@ public sealed class ContentImportBuilder
         // Typed request-response: pre-registers the response callback by message-id BEFORE posting
         // (canonical hub.Observe<TResponse> idiom) — no manual Post returning a nullable delivery.
         // Wrapped in Defer so the post still happens on Subscribe (cold), as before.
-        return Observable.Defer(() => _hub
+        // 🚨 Issued off the router: mesh-singleton callers (the plugin default-install seed) hold
+        // the DI root mesh hub, and an ImportContentRequest posted there addresses its response
+        // straight back at mesh/{id} — the production ROUTER_TRAFFIC line "ImportContentResponse
+        // has the mesh hub as target (sender: Agent…)". NodeOperationIssuingHub is a no-op for
+        // every non-router hub, so node/import/portal-hub callers are unchanged.
+        return Observable.Defer(() => _hub.NodeOperationIssuingHub()
             .Observe(request, o => o.WithTarget(address))
             .Select(d => d.Message)
             .Take(1));
@@ -368,7 +394,9 @@ public sealed class SyncContentFilesBuilder
             SourceOwnedPaths = _sourceOwnedPaths,
         };
         var address = new Address(_nodePath);
-        return Observable.Defer(() => _hub
+        // Off-router issuing, same reason as ContentImportBuilder.Post: the router must be neither
+        // end of the request/response pair (ROUTER_TRAFFIC); a non-router hub gets itself back.
+        return Observable.Defer(() => _hub.NodeOperationIssuingHub()
             .Observe(request, o => o.WithTarget(address))
             .Select(d => d.Message)
             .Take(1));

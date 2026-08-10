@@ -34,6 +34,16 @@ public sealed class StaleStreamStateException : InvalidOperationException
 /// </summary>
 public static class JsonSynchronizationStream
 {
+    /// <summary>
+    /// How many times one stream re-arms after the owner rejected its SubscribeRequest for being
+    /// mid-recycle. A recycle answers within milliseconds and the re-ask activates the fresh hub,
+    /// so the healthy case needs one; the bound exists purely so an owner stuck in a recycle LOOP
+    /// degrades to the pre-existing orphaned-stream behaviour rather than becoming a resubscribe
+    /// storm. It is not a budget to widen — if a stream needs more than this, the owner is
+    /// recycling pathologically and THAT is the bug.
+    /// </summary>
+    private const int MaxRecycleReArms = 3;
+
     // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
     // Mesh.Contract in the project graph and cannot reference it. Same literal
     // recognized by AccessService.ImpersonateAsSystem and PostgreSqlMeshQuery's
@@ -334,6 +344,16 @@ public static class JsonSynchronizationStream
         // by RouteStreamMessage); a DeliveryFailure / NotFound — the owner ADDRESS DOES NOT EXIST —
         // surfaces as OnError, so we fault subscribers and dispose the keep-alive so nothing
         // heartbeats/resubscribes a non-existent owner. Reactive end-to-end: no await.
+        //
+        // 🚨 Carries the "the owner rejected us because it is recycling" signal from the subscribe
+        // arm below to the re-arm wired further down (where Resubscribe is in scope).
+        //
+        // REPLAY, not a bare Subject. The rejection normally arrives long after both ends are
+        // wired, but a same-process owner can NACK inside the subscribe call itself — before this
+        // method reaches the re-arm — and a bare Subject drops an emission that has no subscriber
+        // yet. That would resurrect the orphaned stream in exactly the fast local case this fix
+        // exists for, and only sometimes: the classic invisible race.
+        var rejectedByRecycle = new System.Reactive.Subjects.ReplaySubject<string>(1);
         var observeSubscription = Observable
             .Using(
                 // Apply an explicit identity SCOPE for the post — do NOT rely on the ambient AsyncLocal
@@ -376,8 +396,18 @@ public static class JsonSynchronizationStream
                     {
                         logger.LogDebug(
                             "SubscribeRequest for stream {StreamId} rejected — owner {Owner} is shutting down "
-                            + "(recycle/restart in flight); keeping the stream alive for the resubscribe latch",
+                            + "(recycle/restart in flight); keeping the stream alive and re-arming",
                             reduced.StreamId, owner);
+                        // 🚨 …and RE-ARM, because the latch alone cannot recover this. The latch's
+                        // only trigger is a mesh change-feed event on the owner's path, and a pure
+                        // RECYCLE writes nothing — so a subscriber the recycle rejected waits for
+                        // an announce that never comes. That hole was invisible while this
+                        // rejection was silently swallowed (the sender just timed out and the
+                        // consumer tore down); once the owner started answering honestly, the
+                        // orphaned stream became the visible symptom — a freshly installed root
+                        // whose area never renders (StaleStampRootBindingTest, 120 s with the
+                        // client sitting idle after the NACK landed).
+                        rejectedByRecycle.OnNext("rejected our SubscribeRequest while shutting down");
                         return;
                     }
 
@@ -476,9 +506,47 @@ public static class JsonSynchronizationStream
                                     "Stream {StreamId}: resubscribe failed.",
                                     reduced.StreamId);
                                 Interlocked.Exchange(ref resubscribing, 0);
+                                // A re-ask that itself raced the SAME recycle window gets the same
+                                // transient ShuttingDown verdict — push it back through the re-arm
+                                // carrier so the next bounded attempt fires (shared MaxRecycleReArms
+                                // budget; measured in StaleStampRootBindingTest, where the first
+                                // re-ask can land while the teardown is still draining).
+                                if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
+                                    rejectedByRecycle.OnNext(
+                                        "re-ask was itself rejected while the owner was still shutting down");
                             });
                 }
             }
+
+            // 🚨 THE UN-ANNOUNCED RECYCLE. The change-feed latch below is the recycled-owner
+            // detector, but it can only fire on a mesh change event for the owner's path — and a
+            // recycle IS NOT A WRITE. Recycle the owner while a SubscribeRequest is in flight and
+            // that subscriber is orphaned until something unrelated happens to write the node:
+            // no announce, no event, no recovery. The heartbeat cannot rescue it either — it is
+            // fire-and-forget and deliberately does not resubscribe.
+            //
+            // So the rejection itself is the event. The owner told us, in the same breath, both
+            // that it is going and that it is coming back ("the address may reactivate; retry to
+            // get the authoritative answer"), and by the time that verdict is produced the hub is
+            // already at RunLevel Dead — so the re-ask lands on a FRESH activation, which a
+            // SubscribeRequest creates on arrival.
+            //
+            // This is not the forbidden watchdog: nothing polls, nothing runs on a timer, and it
+            // fires only in response to an explicit typed rejection. It reuses Resubscribe, so it
+            // inherits the in-flight guard, ExpectResubscribeFull (the mirror must accept a
+            // re-snapshot stamped below its cached frame version) and the System impersonation.
+            // The re-ask asks for the CURRENT snapshot — it never re-asserts a cached frame, which
+            // is the #945 shape and the opposite of what this does. Bounded so that an owner stuck
+            // in a recycle LOOP degrades to the pre-existing "orphaned" behaviour instead of
+            // trading a stalled stream for a storm.
+            var recycleReArms = 0;
+            var recycleReArm = rejectedByRecycle
+                .Where(_ => Interlocked.Increment(ref recycleReArms) <= MaxRecycleReArms)
+                .Subscribe(
+                    reason => Resubscribe(reason),
+                    ex => logger.LogDebug(ex,
+                        "Stream {StreamId}: recycle re-arm stream faulted", reduced.StreamId));
+            reduced.RegisterForDisposal(recycleReArm);
 
             // 🚨 THE LOST INITIAL — and why the first heartbeat comes EARLY.
             //
