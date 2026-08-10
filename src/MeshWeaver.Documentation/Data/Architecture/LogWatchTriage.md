@@ -90,6 +90,38 @@ The lifecycle runs on the `Status` / `RequestedStatus` control-plane pair
 Because the state lives in the mesh, a portal restart mid-triage strands nothing: the node still
 says what it is waiting for and the next query emission picks it up.
 
+### The one state nothing requests: `Triaging`
+
+`Triaging` is entered by the control plane and is supposed to be left by the **agent**, which writes
+its draft and asks to `File`. Nothing in the table above can leave it, and the ingest path's retry
+rule re-triages `New` and `Failed` but never `Triaging` — it cannot tell "the round is running"
+from "the round died". So a round that ends without writing back parks the incident permanently:
+invisible, un-ticketed, and still parked after the cause is fixed. That is what a missing triage
+agent looks like — nineteen incidents accumulated that way on `memex.systemorph.com` while
+`LogTriage` was absent from the served agent catalog.
+
+The control plane therefore **reconciles** a `Triaging` incident against the thread it is waiting
+on. This is not a timer or a retry watchdog: it fires only on a query emission that already carries
+a stranded-looking incident, and it asks the only authority there is — the thread node.
+
+- Round still running (`Executing`, or queued input not yet drained) ⇒ nothing happens.
+- Round over and the incident still `Triaging` with nothing requested ⇒ `Failed`, with an `Error`
+  naming the configured agent and the thread. `Failed` is re-triaged on the next recurrence, so the
+  incident heals itself once the missing dependency is back.
+- The incident moved on in the meantime (a draft landed, `RequestedStatus` now asks to `File`) ⇒
+  nothing happens. The status is re-read at write time, so a successful triage the reconcile merely
+  raced is never overwritten.
+
+### Where the triage agent comes from
+
+`TriageAgent` is a **name**, resolved against the mesh's agent catalog at run time — a name with no
+agent behind it fails inside the thread, not at startup. On a portal that catalog is the `Agent`
+partition, served from the database and filled by the pre-installed **`Agent` plugin**
+(`MeshWeaver.Plugins/Agent/`); the framework's `content/ai/Agent` copy serves only the in-memory
+hosts (tests, monolith, MAUI). An agent added to one copy and not the other therefore resolves in
+every test host and in no deployment — the parity gate `scripts/check-agent-parity.py` in
+MeshWeaver.Plugins exists to make that impossible.
+
 ## Repository routing
 
 Configured category prefixes decide, longest prefix first, so a specific route beats a catch-all:
