@@ -707,6 +707,11 @@ public sealed class InstanceAutoRegistrationService(
     /// that needs it will install and then fail at use, and that is a symptom nobody could otherwise
     /// trace back to a missing grant.</para>
     ///
+    /// <para><b>A COMMERCIAL requirement is never pulled in.</b> Selection is source-scoped on
+    /// purpose: an instance is routinely granted paid content it may buy but must not receive
+    /// automatically, and a requirement edge would otherwise be a back door around that scoping.
+    /// The boot has no authorizing principal, so such an install would be refused anyway.</para>
+    ///
     /// <para>Cycles terminate: a package already in the result is never expanded twice.</para>
     /// </summary>
     /// <param name="catalog">Every package every configured source listed, deduped by id.</param>
@@ -723,6 +728,7 @@ public sealed class InstanceAutoRegistrationService(
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
         var closure = new Dictionary<string, PackageManifest>(StringComparer.Ordinal);
         var missing = new SortedSet<string>(StringComparer.Ordinal);
+        var priced = new SortedSet<string>(StringComparer.Ordinal);
         var pending = new Stack<PackageManifest>(selected);
 
         while (pending.Count > 0)
@@ -736,12 +742,31 @@ public sealed class InstanceAutoRegistrationService(
                 var id = PackageDependencyGraph.DependencyId(requirement);
                 if (id.Length == 0 || closure.ContainsKey(id))
                     continue;
-                if (byId.TryGetValue(id, out var dependency))
-                    pending.Push(dependency);
-                else
+                if (!byId.TryGetValue(id, out var dependency))
+                {
                     missing.Add(id);
+                    continue;
+                }
+                // 🚨 A COMMERCIAL requirement is never pulled in. Selection is deliberately
+                // source-scoped so that an instance granted paid content (course catalogues,
+                // customer modules) does not auto-install what it merely may buy — and a
+                // requirement edge must not become a back door around that. The boot has no
+                // authorizing principal either, so PackageEntitlement.Authorize would refuse it
+                // anyway: pulling it in would buy nothing but a failed install every boot.
+                if (dependency.IsCommercial())
+                {
+                    priced.Add(id);
+                    continue;
+                }
+                pending.Push(dependency);
             }
         }
+
+        if (priced.Count > 0)
+            logger?.LogWarning(
+                "[DefaultInstall] {Count} required package(s) are COMMERCIAL and were not installed: "
+                + "[{Priced}]. A paid dependency has to be acquired deliberately — install it from "
+                + "the catalog as a global admin.", priced.Count, string.Join(", ", priced));
 
         if (missing.Count > 0)
             logger?.LogWarning(
