@@ -253,6 +253,151 @@ public class CompileWaitDoesNotTimeoutTest
     }
 
     /// <summary>
+    /// 🚨 THE memex 2026-08-10 BOOT FAILURE, in miniature: a PARKED NodeType must fault at once,
+    /// never sit out a no-progress budget it cannot possibly beat.
+    ///
+    /// <para>Parking is the registry's recorded decision that this type will not be compiled again
+    /// until its source changes — so Phase A's premise ("a compile might still start") is FALSE by
+    /// construction and the budget can only expire. In production that turned into a hard failure
+    /// rather than mere waste: <c>Store/Plugin</c> parked on a source error, every plugin partition
+    /// root is typed by it, and each activation therefore burned the full 60 s. The writer that
+    /// triggered the activation — <c>UpdateRemote</c>'s initial-state read — bounds at 30 s, so it
+    /// always lost the race and every default-install package failed with "no initial state arrived
+    /// within 30s", on every boot, for as long as the type stayed broken.</para>
+    ///
+    /// <para>Red-before: with no parked probe the subscription sits silent until the budget
+    /// elapses. Green-after: the fault is raised with ZERO virtual time advanced, and carries the
+    /// recorded compile error so the overlay can name the real cause.</para>
+    /// </summary>
+    [Fact]
+    public void ParkedType_FaultsImmediately_WithoutBurningTheBudget()
+    {
+        var scheduler = new TestScheduler();
+        var typeStream = new Subject<MeshNode>();
+
+        // The framework-stale heal's rule — the production path: only a usable build settles, so a
+        // parked Error can never resolve this wait.
+        var settledUsableOnly = typeStream
+            .Where(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LatestAssemblyPath))
+            .Take(1);
+
+        MeshNode? emitted = null;
+        Exception? error = null;
+        NodeTypeEnrichmentHelpers
+            .WaitForCompileSettled(typeStream, settledUsableOnly, Budget,
+                () => new TimeoutException("no compile in flight"), scheduler,
+                options: null,
+                parkedFault: () => new NodeTypeParkedException(
+                    "Store/Plugin", "CS0117: 'AiSettingsNodeType' does not contain 'AddSkillSource'"))
+            .Subscribe(n => emitted = n, ex => error = ex);
+
+        // NOT ONE TICK of virtual time advanced — the answer was already recorded.
+        Assert.Null(emitted);
+        var parked = Assert.IsType<NodeTypeParkedException>(error);
+        Assert.Equal("Store/Plugin", parked.NodeTypePath);
+        Assert.Contains("AddSkillSource", parked.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The production SEQUENCE, not just the steady state: the compile that parks the type is the
+    /// same event that drops the in-flight level. The re-arm must consult the park and fault there,
+    /// rather than starting another full budget that can only expire.
+    /// </summary>
+    [Fact]
+    public void CompileThatParksMidWait_FaultsOnTheReArm_NotAfterAnotherFullBudget()
+    {
+        var scheduler = new TestScheduler();
+        var typeStream = new Subject<MeshNode>();
+
+        var settledUsableOnly = typeStream
+            .Where(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LatestAssemblyPath))
+            .Take(1);
+
+        var isParked = false;
+        MeshNode? emitted = null;
+        Exception? error = null;
+        NodeTypeEnrichmentHelpers
+            .WaitForCompileSettled(typeStream, settledUsableOnly, Budget,
+                () => new TimeoutException("no compile in flight"), scheduler,
+                options: null,
+                // Re-read per arm — exactly what the deferred probe guarantees.
+                parkedFault: () => isParked
+                    ? new NodeTypeParkedException("Store/Plugin", "CS0117: …")
+                    : null)
+            .Subscribe(n => emitted = n, ex => error = ex);
+
+        typeStream.OnNext(Node(CompilationStatus.Compiling));   // disarms the wall clock
+        scheduler.AdvanceBy(Budget.Ticks * 2);
+        Assert.Null(error);
+
+        // The compile fails deterministically: RunCompile writes the terminal Error AND the
+        // registry parks the type. The wait re-arms — and must take the parked branch.
+        isParked = true;
+        typeStream.OnNext(Node(CompilationStatus.Error));
+
+        Assert.Null(emitted);
+        Assert.IsType<NodeTypeParkedException>(error);          // no second budget burned
+    }
+
+    /// <summary>
+    /// Negative control on the probe itself: a probe that answers "not parked" must leave the
+    /// two-phase bound byte-for-byte unchanged — the budget still runs in full and still sinks to
+    /// the caller's own timeout. Without this the fix could silently shorten every ordinary wait.
+    /// </summary>
+    [Fact]
+    public void NotParked_KeepsTheFullBudget_AndTheOriginalTimeout()
+    {
+        var scheduler = new TestScheduler();
+        var typeStream = new Subject<MeshNode>();
+
+        Exception? error = null;
+        NodeTypeEnrichmentHelpers
+            .WaitForCompileSettled(typeStream, Settled(typeStream), Budget,
+                () => new TimeoutException("no compile in flight"), scheduler,
+                options: null, parkedFault: () => null)
+            .Subscribe(_ => { }, ex => error = ex);
+
+        typeStream.OnNext(Node(status: null, configuration: "config => config"));
+
+        scheduler.AdvanceBy(Budget.Ticks - 1);
+        Assert.Null(error);                                     // not one tick early
+
+        scheduler.AdvanceBy(2);
+        Assert.IsType<TimeoutException>(error);                 // the original fault, unchanged
+    }
+
+    /// <summary>
+    /// A parked type whose terminal state the caller's predicate ACCEPTS still resolves as a VALUE.
+    /// <c>BuildSlowPath</c>'s <c>IsCompileSettled</c> admits <c>Error</c>, so the ordinary
+    /// compile-error overlay path must keep flowing through the value channel — the park probe adds
+    /// a terminal for waits that would otherwise never end, it never pre-empts a real answer.
+    /// </summary>
+    [Fact]
+    public void ParkedButSettledForThisCaller_StillEmitsTheNode_NotTheFault()
+    {
+        var scheduler = new TestScheduler();
+        var typeStream = new ReplaySubject<MeshNode>(1);
+        var failed = Node(CompilationStatus.Error);
+        typeStream.OnNext(failed);                              // already terminal at subscribe
+
+        MeshNode? emitted = null;
+        Exception? error = null;
+        NodeTypeEnrichmentHelpers
+            .WaitForCompileSettled(typeStream, Settled(typeStream), Budget,
+                () => new TimeoutException("no compile in flight"), scheduler,
+                options: null,
+                parkedFault: () => new NodeTypeParkedException("Store/Plugin", "CS0117: …"))
+            .Subscribe(n => emitted = n, ex => error = ex);
+
+        Assert.Null(error);
+        Assert.Same(failed, emitted);
+    }
+
+    /// <summary>
     /// A NodeType that is already settled Ok at first observation resolves immediately
     /// — the wall-clock never even starts to matter.
     /// </summary>
