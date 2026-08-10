@@ -105,7 +105,12 @@ public sealed class LogIncidentIngestService(
             "Red log first sighting {Fingerprint} in {Category} ({Occurrences} line(s)) — opening incident",
             report.Fingerprint, report.Category, report.Occurrences);
 
-        return hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
+        // 🚨 Issued off the router: this service holds the DI root mesh hub, and a target-less
+        // CreateOrUpdateNodeRequest posted there EXECUTES on the router's action block and stamps
+        // mesh/{id} on both ends of the exchange (ROUTER_TRAFFIC — the very detector whose reports
+        // this service ingests). NodeOperationIssuingHub is the shared off-router seam.
+        return hub.NodeOperationIssuingHub()
+            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
             .FirstAsync()
             .Select(d => d.Message)
             .SelectMany(response => response.Success

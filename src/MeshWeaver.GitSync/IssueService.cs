@@ -184,7 +184,10 @@ public sealed class IssueService
         // The write runs as the calling user: AccessContext is an AsyncLocal that ExecutionContext
         // carries across the IoPool's ConfigureAwait(false) hops, so it is still set here even after
         // the repoClient round-trip. Return the server-reconciled node (version/normalization) on success.
-        return hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
+        // Off-router issuing: this service holds the DI root mesh hub — a target-less
+        // CreateOrUpdateNodeRequest posted there runs on the router (ROUTER_TRAFFIC).
+        return hub.NodeOperationIssuingHub()
+            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
             .FirstAsync()
             .Select(d => d.Message)
             .SelectMany(resp => resp.Success
