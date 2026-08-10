@@ -49,6 +49,9 @@ public static class OrleansConnectionExtensions
         // See Doc/Architecture/PartitionedPersistence.md.
         services.AddPartitionedInMemoryPersistence();
         services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
+        // Deterministic streaming-readiness signal (cluster-client lifecycle → Active) that the
+        // routing service orders its Orleans stream subscriptions on — see OrleansStreamingReadiness.
+        services.AddOrleansStreamingReadiness();
         return services;
     }
 
