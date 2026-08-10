@@ -35,6 +35,24 @@ public enum PreWarmStatus
     /// doing that for a fan-out of dependents is how one broken type used to stall a whole sweep.
     /// </summary>
     UpstreamFailed,
+    /// <summary>
+    /// NOT ATTEMPTED, and NOT a verdict: a NodeType this one draws sources from was itself never
+    /// evaluated (it timed out, or ITS upstream did). The sweep therefore knows nothing about this
+    /// type either — "I don't know" propagates as "I don't know".
+    ///
+    /// <para>🚨 This member exists because the alternative silently freezes the fleet. A cross-silo
+    /// <c>SubscribeRequest</c> timeout on a shared upstream (core #694) is not evidence that anything
+    /// is broken, and <see cref="NodeTypeBakeGateState"/> correctly refuses to gate on a direct
+    /// <see cref="TimedOut"/>. But before this status existed, that same unevaluated upstream turned
+    /// every previously-healthy DEPENDENT into <see cref="UpstreamFailed"/> — which DOES gate. So the
+    /// leniency stopped at depth 1 and the false regression simply reappeared one hop downstream,
+    /// re-creating the 2026-08-02 memex-cloud stall through the back door.</para>
+    ///
+    /// <para>Deliberately distinct from <see cref="UpstreamFailed"/>: a dependent of a genuinely
+    /// broken (<see cref="CompileError"/>) upstream still gates, because that upstream IS a verdict.
+    /// Only "no answer" propagates as "no answer".</para>
+    /// </summary>
+    UpstreamUnevaluated,
     /// <summary>The warm subscription faulted (best-effort — the lazy path still works).</summary>
     Faulted
 }
@@ -350,16 +368,33 @@ public static class DynamicTypePreWarmer
                 cyclic.Count, string.Join(", ", cyclic));
 
         // FAIL GRACEFULLY DOWNSTREAM. A type whose upstream did not reach a usable build
-        // cannot build either, so it is not attempted: it is reported as UpstreamFailed
-        // naming the blocker, and joins the failed set so ITS dependents are skipped too
-        // — the propagation is transitive purely because we walk in topological order.
-        // Without this, one broken type costs every dependent a full per-type budget of
-        // waiting for something that cannot succeed.
+        // cannot build either, so it is not attempted: it is reported naming the blocker,
+        // and joins a skip set so ITS dependents are skipped too — the propagation is
+        // transitive purely because we walk in topological order. Without this, one broken
+        // type costs every dependent a full per-type budget of waiting for something that
+        // cannot succeed.
         //
-        // The set is mutated inside a Concat, which subscribes strictly one at a time,
+        // 🚨 TWO skip sets, not one, because "it broke" and "I never found out" must NOT
+        // propagate as the same thing. A readiness gate may stall a rollout on the first
+        // and must never stall on the second:
+        //
+        //   verdictFailed — the sweep got an answer and the answer was bad (CompileError,
+        //     Faulted, or a dependent of one of those). Dependents get UpstreamFailed,
+        //     which GATES.
+        //   unevaluated   — the sweep got no answer at all (TimedOut, or a dependent of
+        //     something unevaluated). Dependents get UpstreamUnevaluated, which does NOT
+        //     gate. A cross-silo SubscribeRequest timeout on a shared upstream (core #694)
+        //     is not evidence that anything is broken, so it must not become one downstream.
+        //
+        // Collapsing these back into one set is exactly how the 2026-08-02 memex-cloud
+        // stall would return: the direct-timeout leniency in NodeTypeBakeGateState would
+        // still hold, and the false regression would simply reappear one hop downstream.
+        //
+        // The sets are mutated inside a Concat, which subscribes strictly one at a time,
         // so there is no concurrent access — and each step is wrapped in Defer so it
-        // reads the set as it stands WHEN ITS TURN COMES, not when the chain was built.
-        var failed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // reads them as they stand WHEN ITS TURN COMES, not when the chain was built.
+        var verdictFailed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var unevaluated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // Concat, never Merge: the next type is SUBSCRIBED only after the previous one
         // has completed, so "dependencies first" is structural rather than a convention.
@@ -379,20 +414,33 @@ public static class DynamicTypePreWarmer
                         return Observable.Return(new PreWarmOutcome(
                             p, PreWarmStatus.AlreadyBaked, "assembly store already holds this build"));
 
-                    var blocker = NodeTypeDependencyGraph.FirstBlockedBy(p, dependencies, failed);
+                    // A real verdict upstream wins over a merely-unevaluated one: if ANY dependency
+                    // actually failed to compile, this type is genuinely blocked and must gate,
+                    // regardless of some other dependency having also timed out.
+                    var blocker = NodeTypeDependencyGraph.FirstBlockedBy(p, dependencies, verdictFailed);
+                    var unevaluatedBlocker = blocker is null
+                        ? NodeTypeDependencyGraph.FirstBlockedBy(p, dependencies, unevaluated)
+                        : null;
                     var missingBytes = bytesMissing.Contains(p);
-                    if (blocker is not null)
+                    if (blocker is not null || unevaluatedBlocker is not null)
                     {
-                        failed.Add(p);
+                        var isVerdict = blocker is not null;
+                        var named = blocker ?? unevaluatedBlocker!;
+                        var outcome = isVerdict
+                            ? PreWarmStatus.UpstreamFailed
+                            : PreWarmStatus.UpstreamUnevaluated;
+                        (isVerdict ? verdictFailed : unevaluated).Add(p);
+                        // {Outcome} carries WHICH cascade this is as a queryable token — the two
+                        // differ in whether they may stall a rollout, so a log that blurred them
+                        // would hide the thing an operator most needs to know.
                         logger?.LogWarning(
                             "DynamicTypePreWarmer: skipping {TypePath} — its dependency {Blocker} "
-                            + "did not reach a usable build, so it cannot compile either "
+                            + "did not yield a usable build ({Outcome}), so it cannot compile either "
                             + "(lazy compile still applies if the upstream recovers)",
-                            p, blocker);
+                            p, named, outcome);
                         // No pacing for a skip: it activates nothing, so there is no
                         // burst to spread out and no reason to slow the sweep down.
-                        return Observable.Return(new PreWarmOutcome(
-                            p, PreWarmStatus.UpstreamFailed, $"blocked by {blocker}"));
+                        return Observable.Return(new PreWarmOutcome(p, outcome, $"blocked by {named}"));
                     }
 
                     // 🚨 A type whose BYTES are gone cannot be warmed by activation alone.
@@ -409,8 +457,13 @@ public static class DynamicTypePreWarmer
                         .DelaySubscription(i == 0 ? TimeSpan.Zero : BetweenTypes)
                         .Do(o =>
                         {
-                            if (!o.ReachedUsableBuild)
-                                failed.Add(p);
+                            // A timeout is not a verdict — route it to `unevaluated` so its
+                            // dependents inherit "no answer", not "it broke". Everything else that
+                            // missed a usable build (CompileError, Faulted) is a verdict.
+                            if (o.Status is PreWarmStatus.TimedOut)
+                                unevaluated.Add(p);
+                            else if (!o.ReachedUsableBuild)
+                                verdictFailed.Add(p);
                         });
                 }))
                 .Concat()
