@@ -626,10 +626,11 @@ public sealed class InstanceAutoRegistrationService(
                 // zero plugins while reporting a green boot. The lister always knows which source
                 // it read from, so that is where the stamp belongs; an already-stamped value
                 // (arriving over the wire) is left alone.
+                // The WHOLE listing is carried forward, not just the selected packages: a selected
+                // package's requirements are resolved against the full catalog below, and a
+                // dependency that is neither pre-installed nor pattern-matched exists only here.
                 .Select(packages => packages
                     .Select(p => string.IsNullOrEmpty(p.Source) ? p with { Source = source.Name } : p)
-                    .Where(p => (baseline && p.PreInstalled)
-                                || wanted.Any(w => w.Matches(p.Source ?? "", p.Id)))
                     .Select(p => new InstallCandidate(source, p))
                     .ToList())
                 .Catch((Exception exception) =>
@@ -644,38 +645,152 @@ public sealed class InstanceAutoRegistrationService(
             .ToList()
             .Select(perSource =>
             {
-                var deduped = perSource
+                var catalog = perSource
                     .SelectMany(list => list)
                     .GroupBy(c => c.Package.Id, StringComparer.Ordinal)
                     .Select(g => g.First())
                     .OrderBy(c => c.Package.Id, StringComparer.Ordinal)
                     .ToList();
+                var selected = catalog
+                    .Where(c => (baseline && c.Package.PreInstalled)
+                                || wanted.Any(w => w.Matches(c.Package.Source ?? "", c.Package.Id)))
+                    .ToList();
                 // 🚨 Judge the OPERATOR'S patterns on their own, not on whether the pass matched
-                // anything overall. `deduped.Count == 0` alone is masked by the pre-installed
+                // anything overall. `selected.Count == 0` alone is masked by the pre-installed
                 // baseline: with 8 baseline packages selected, "matched something" is true while
                 // every InstallByDefault pattern matched nothing — which is exactly how a local
                 // registry came up with no plugins and no warning.
                 if (wanted.Count > 0
-                    && !deduped.Any(c => wanted.Any(w => w.Matches(c.Package.Source ?? "", c.Package.Id))))
+                    && !selected.Any(c => wanted.Any(w => w.Matches(c.Package.Source ?? "", c.Package.Id))))
                     logger.LogWarning(
                         "The default install matched no packages for the operator's patterns "
                         + "(wanted [{Wanted}]; {Baseline} pre-installed package(s) were still "
                         + "selected). If the registry predates source-stamped catalog entries, a "
                         + "Source/* pattern cannot match — it fails closed rather than guessing.",
-                        string.Join(", ", wanted), deduped.Count);
+                        string.Join(", ", wanted), selected.Count);
+
+                // 🚨 A selected package's REQUIREMENTS are selected too, even when nothing selects
+                // them directly. Ordering the selection was never enough: every pre-installed
+                // package declares `requires: ["Store@^1.0.0"]` while `Store` is itself
+                // `preInstalled: false`, so an unattended boot installed 8 packages that all need
+                // the Store and never installed the Store — no install record, therefore no
+                // declared-access pass, therefore a partition only `system-security` could read,
+                // therefore no catalog page to install it from by hand. Exactly the state `atioz`
+                // was found in on 2026-08-10. The closure is taken over the FULL catalog, so a
+                // dependency outside the selection is pulled in rather than silently ignored.
+                var withDependencies = DependencyClosure(
+                    catalog.Select(c => c.Package).ToList(),
+                    selected.Select(c => c.Package).ToList(),
+                    logger);
+
                 // The TOLERANT sort: a cycle warns and still yields every package exactly once
                 // (the requirement closing the loop is ignored; order within the cycle is
                 // arbitrary — see InDependencyOrder's remarks) rather than refusing, because
                 // nobody is present at boot to fix a malformed repo and one bad package must not
                 // strand the whole instance. The Install CLICK uses the same graph with the strict
                 // policy (PackageDependencyGraph.InstallClosure).
-                var ordered = PackageDependencyGraph.InDependencyOrder(
-                    deduped.Select(c => c.Package).ToList(), logger);
-                var bySource = deduped.ToDictionary(c => c.Package.Id, StringComparer.Ordinal);
+                var ordered = PackageDependencyGraph.InDependencyOrder(withDependencies, logger);
+                var bySource = catalog.ToDictionary(c => c.Package.Id, StringComparer.Ordinal);
                 return (IReadOnlyList<InstallCandidate>)ordered
                     .Select(p => bySource[p.Id])
                     .ToList();
             }));
+
+    /// <summary>
+    /// <paramref name="selected"/> plus everything it transitively REQUIRES that the catalog can
+    /// supply — the unattended twin of <see cref="PackageDependencyGraph.InstallClosure"/>, kept
+    /// TOLERANT for the same reason the boot sort is: nobody is present to fix a malformed manifest,
+    /// so an unresolvable requirement is named and stepped over rather than failing the pass.
+    ///
+    /// <para>A requirement the catalog does not carry is genuinely unfixable here (the instance was
+    /// not granted it, or the source is down) — it is logged once at Warning, because the package
+    /// that needs it will install and then fail at use, and that is a symptom nobody could otherwise
+    /// trace back to a missing grant.</para>
+    ///
+    /// <para><b>A COMMERCIAL requirement is never pulled in.</b> Selection is source-scoped on
+    /// purpose: an instance is routinely granted paid content it may buy but must not receive
+    /// automatically, and a requirement edge would otherwise be a back door around that scoping.
+    /// The boot has no authorizing principal, so such an install would be refused anyway.</para>
+    ///
+    /// <para>Cycles terminate: a package already in the result is never expanded twice.</para>
+    /// </summary>
+    /// <param name="catalog">Every package every configured source listed, deduped by id.</param>
+    /// <param name="selected">The packages the baseline + operator patterns chose.</param>
+    /// <param name="logger">Receives the unresolvable-requirement warning.</param>
+    /// <returns>The selection closed over its requirements, ordered by id (the sort orders it).</returns>
+    internal static IReadOnlyList<PackageManifest> DependencyClosure(
+        IReadOnlyList<PackageManifest> catalog,
+        IReadOnlyList<PackageManifest> selected,
+        ILogger? logger = null)
+    {
+        var byId = catalog
+            .GroupBy(p => p.Id, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        var closure = new Dictionary<string, PackageManifest>(StringComparer.Ordinal);
+        var missing = new SortedSet<string>(StringComparer.Ordinal);
+        var priced = new SortedSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<PackageManifest>(selected);
+
+        while (pending.Count > 0)
+        {
+            var package = pending.Pop();
+            // Already expanded — this is also what makes a requirement cycle terminate.
+            if (!closure.TryAdd(package.Id, package))
+                continue;
+            foreach (var requirement in package.Requires ?? [])
+            {
+                var id = PackageDependencyGraph.DependencyId(requirement);
+                if (id.Length == 0 || closure.ContainsKey(id))
+                    continue;
+                if (!byId.TryGetValue(id, out var dependency))
+                {
+                    missing.Add(id);
+                    continue;
+                }
+                // 🚨 A COMMERCIAL requirement is never pulled in. Selection is deliberately
+                // source-scoped so that an instance granted paid content (course catalogues,
+                // customer modules) does not auto-install what it merely may buy — and a
+                // requirement edge must not become a back door around that. The boot has no
+                // authorizing principal either, so PackageEntitlement.Authorize would refuse it
+                // anyway: pulling it in would buy nothing but a failed install every boot.
+                if (dependency.IsCommercial())
+                {
+                    priced.Add(id);
+                    continue;
+                }
+                pending.Push(dependency);
+            }
+        }
+
+        if (priced.Count > 0)
+            logger?.LogWarning(
+                "[DefaultInstall] {Count} required package(s) are COMMERCIAL and were not installed: "
+                + "[{Priced}]. A paid dependency has to be acquired deliberately — install it from "
+                + "the catalog as a global admin.", priced.Count, string.Join(", ", priced));
+
+        if (missing.Count > 0)
+            logger?.LogWarning(
+                "[DefaultInstall] {Count} required package(s) are not in any configured source and "
+                + "cannot be installed: [{Missing}]. Whatever depends on them will install and then "
+                + "fail at use — check the instance's plugin grants and that every source is "
+                + "reachable.", missing.Count, string.Join(", ", missing));
+
+        var selectedIds = selected
+            .Select(p => p.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var pulled = closure.Keys
+            .Where(id => !selectedIds.Contains(id))
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+        if (pulled.Count > 0)
+            logger?.LogInformation(
+                "[DefaultInstall] {Count} package(s) pulled in as requirements of the selection — "
+                + "[{Pulled}]", pulled.Count, string.Join(", ", pulled));
+
+        return closure.Values
+            .OrderBy(p => p.Id, StringComparer.Ordinal)
+            .ToList();
+    }
 
     /// <summary>Installs the selected packages sequentially and folds their outcomes into one summary.</summary>
     private IObservable<DefaultInstallSummary> InstallAll(IReadOnlyList<InstallCandidate> candidates)

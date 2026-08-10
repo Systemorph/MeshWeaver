@@ -14,8 +14,9 @@ The short version:
 | **d. Downstream content** (`education`) | CI → GitSync → import | **~5-15 min** | no |
 
 > **Numbers marked *(measured)* are real observations, dated. Everything else is an estimate and
-> says so.** Do not quote an estimate as a fact — the spread on the core path in particular is wide
-> and nobody has timed a full bake on memex yet.
+> says so.** Do not quote an estimate as a fact. The bake figures below were estimates until
+> 2026-08-10, when production Loki was read across all three portals — and the estimate was **37x
+> too high** (see [the bake tax](#the-bake-tax)). Two deploy budgets had been sized from it.
 
 ---
 
@@ -54,13 +55,30 @@ older code would mint a higher `-ci.<n>` and roll installs backwards.
 > is enabled on any environment. If it ever needs cutting, the lever is publishing it on a schedule
 > or only on release tags — not trimming its references.
 
-### Not every core release invalidates the compile cache
+### Every core release invalidates the compile cache — plan for the bake on all of them
 
-The compile cache keys on **Graph's MVID** — a *content* identity, not a per-build stamp. It changes
-when `MeshWeaver.Graph`, or anything Graph depends on, is rebuilt with different content. A release
-that only touches, say, `MeshWeaver.Blazor.Portal` leaves Graph's bytes identical, so **every cached
-assembly stays valid and there is no bake at all**. Graph sits low in the stack, so this is common
-but far from universal — check whether your change reaches Graph before assuming the expensive path.
+This page used to claim the opposite: that a release touching only, say, `MeshWeaver.Blazor.Portal`
+leaves Graph's bytes identical, so "every cached assembly stays valid and there is no bake at all".
+**That is false, and it is false twice over.** Do not plan a release around it.
+
+The compile cache keys on **Graph's MVID** (`NodeTypeCompilationHelpers.FrameworkVersion` — the
+`MeshWeaver.Graph` module's content hash). Both halves of the old claim break down:
+
+1. **The MVID is not content-stable in CI.** `Directory.Build.props` stamps the
+   `InformationalVersion` property with `$([System.DateTime]::UtcNow.Ticks)` under `CIRun`, and that
+   attribute is compiled *into* every assembly — Graph included. So **Graph's MVID changes on every
+   CI build regardless of which source files the release touched**, and every cached assembly is
+   invalidated on every core release. That stamp is deliberate and load-bearing (see point 2); the
+   mistake was reasoning about the MVID as if it were a pure content hash of Graph's *source*.
+2. **Graph's dependency closure is not the ABI boundary anyway.** A NodeType compiles against
+   `AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")` — **every assembly in the image**, not just
+   what Graph references (`MeshNodeCompilationService.GetDefaultReferences`). So a breaking change
+   in an assembly Graph never references is still inside a NodeType's reference set, and a
+   content-stable Graph MVID would happily declare those stale assemblies valid and load them.
+
+Together: the ticks stamp is what keeps invalidation *conservative* over that wider reference set.
+**Budget every core release as a full bake** — which, at the real measured cost below, is minutes,
+not the hours this page used to imply.
 
 ---
 
@@ -114,18 +132,48 @@ framework — by design, for ABI safety (assemblies built against the old framew
 members whose signatures moved).
 
 **This cost is not new and the bake does not add it.** Without the bake it is paid *lazily*:
-unordered, on user requests, on a pod already serving, ~90s at a time in front of whoever arrives
+unordered, on user requests, on a pod already serving, ~2.4 s at a time in front of whoever arrives
 first. The bake moves the same work ahead of the rollout, where nobody is waiting.
+
+### The real cost: ~2.4 s per NodeType *(measured 2026-08-10)*
+
+Read from production Loki across **all three portals running the same image** — the per-type figure
+agrees to within 3% across a 10x spread in mesh size, which is what makes it trustworthy:
+
+| Portal | Types | Full warm-up (median) | Per type |
+|---|---|---|---|
+| **memex-cloud** | 237-241 | **567 s** (~9.5 min) | **~2.4 s** |
+| **memex** | 72-81 | **179 s** (~3 min) | **~2.3 s** |
+| **atioz** | 22-36 | **68 s** (~1 min) | **~2.3 s** |
+
+Other measurements, for context:
 
 | Observation | |
 |---|---|
-| 4 small Doc types, full bake | **7.8s** *(measured, local k3s, 2026-07-28)* |
-| `Store/Plugin` alone (~30 source files) | **92s** *(measured, memex)* |
-| memex full bake (60-100 types) | **not measured** |
+| Resident memory per compiled type | **~46 MiB** *(measured 2026-08-10)* |
+| `Store/Plugin` alone (~30 source files) | **92 s** *(measured, memex)* — an outlier, ~38x the median |
+| 4 small Doc types, full bake | **7.8 s** *(measured, local k3s, 2026-07-28)* |
 
-The honest range for a memex full bake is wide: extrapolating the *largest* type gives ~1.5-2.5 h,
-but the local types averaged ~2s each, so the real figure depends entirely on how many memex types
-resemble `Store/Plugin`. **Measure it on the first real run rather than trusting either end.**
+**A full bake on the largest production mesh is ~10 minutes.** Not the "~1.5-2.5 h" this page
+carried until 2026-08-10.
+
+> #### 🚨 How the old number went wrong, and what it cost
+>
+> The retired estimate was **"~90 s per NodeType"** — **37x** the measured ~2.4 s. It came from
+> extrapolating the single *largest* type (`Store/Plugin`, 92 s, ~30 source files) across the whole
+> mesh. The page even flagged the alternative — "the local types averaged ~2s each" — and that end
+> of the range turned out to be the right one.
+>
+> This was not a harmless doc error: **two production deploy budgets were sized from it** — the
+> startup-probe budget (10 × 1080 = 3 h) and the bake Job's `activeDeadlineSeconds` (14400 = 4 h).
+> A budget derived from a 37x-overstated constant does not fail loudly; it silently stops being a
+> detector. Every real bake finishes inside ~10 minutes, so the remaining 2h50m of that probe window
+> separated nothing: a wedged pod and a healthy one look identical for the rest of it. Both budgets
+> have been re-derived from the measured figure — 30 min and 1 h respectively, with the arithmetic
+> written next to each value in `deploy/helm/values.yaml`.
+>
+> The lesson worth keeping: **never extrapolate a population from its largest member**, and treat a
+> budget whose constant was never measured as unsized rather than generous.
 
 Properties that bound the damage:
 
