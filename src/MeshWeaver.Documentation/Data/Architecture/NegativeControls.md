@@ -102,6 +102,7 @@ The rebuilt suite makes each test single-variable, and demands a leak before bel
 // ── Control: without the policy the slide MUST reach the listener. ──
 probe.Reset();
 await renderer.Render(WithoutPolicy(html)).FirstAsync().ToTask();
+var leaked = probe.Connections;
 leaked.Should().BeGreaterThan(0,
     "the control must demonstrate the vector is real — a slide CAN otherwise make the "
     + "server's browser open a connection of its choosing. At 0 the assertion below would "
