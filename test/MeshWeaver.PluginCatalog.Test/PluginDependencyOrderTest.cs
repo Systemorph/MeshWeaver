@@ -348,4 +348,85 @@ public class PluginDependencyOrderTest(ITestOutputHelper output) : MonolithMeshT
         def.CompilationStatus.Should().Be(CompilationStatus.Ok,
             $"the dependent must compile against its dependency's shared source; error: {def.CompilationError}");
     }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  The UNATTENDED closure — a requirement is SELECTED, not merely ordered
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private static PackageManifest Manifest(string id, bool preInstalled, params string[] requires) =>
+        new()
+        {
+            Id = id,
+            Source = "Plugins",
+            PreInstalled = preInstalled,
+            Requires = requires.ToImmutableList(),
+        };
+
+    /// <summary>
+    /// THE atioz DEFECT (2026-08-10). The boot pass selected the pre-installed baseline and ORDERED
+    /// it, which quietly assumes every requirement is itself selected. It is not: every pre-installed
+    /// package declares <c>requires: ["Store@^1.0.0"]</c> while <c>Store</c> is
+    /// <c>preInstalled: false</c>. The instance installed 8 packages that all need the Store, never
+    /// installed the Store, and therefore had no install record for it, no declared-access pass, a
+    /// partition only <c>system-security</c> could read — and no catalog page to install it from.
+    /// </summary>
+    [Fact]
+    public void PreInstalledSelection_PullsInARequirementThatIsNotItselfPreInstalled()
+    {
+        var catalog = new List<PackageManifest>
+        {
+            Manifest("Agent", preInstalled: true, "Store@^1.0.0"),
+            Manifest("Skill", preInstalled: true, "Store@^1.0.0"),
+            Manifest("Store", preInstalled: false),
+            Manifest("Chess", preInstalled: false, "Store@^1.0.0", "Training@^1.0.0"),
+            Manifest("Training", preInstalled: false),
+        };
+        var selected = catalog.Where(p => p.PreInstalled).ToList();
+
+        var closure = InstanceAutoRegistrationService
+            .DependencyClosure(catalog, selected, NullLogger.Instance)
+            .Select(p => p.Id)
+            .ToList();
+
+        closure.Should().Contain("Store",
+            "the baseline's requirement must be installed even though nothing selects it directly");
+        closure.Should().HaveCount(3);
+        closure.Should().Contain("Agent").And.Contain("Skill");
+        closure.Should().NotContain("Chess",
+            "a package nobody selected and nobody requires stays out");
+        closure.Should().NotContain("Training",
+            "a requirement of an UNSELECTED package is not pulled in either");
+    }
+
+    /// <summary>A requirement no configured source carries cannot strand the boot.</summary>
+    [Fact]
+    public void AnUnresolvableRequirement_IsSteppedOver_NotThrown()
+    {
+        var catalog = new List<PackageManifest> { Manifest("Agent", true, "Missing@^1.0.0") };
+
+        var closure = InstanceAutoRegistrationService
+            .DependencyClosure(catalog, catalog, NullLogger.Instance)
+            .Select(p => p.Id)
+            .ToList();
+
+        closure.Should().Equal("Agent");
+    }
+
+    /// <summary>A requirement cycle terminates instead of spinning — each package expands once.</summary>
+    [Fact]
+    public void ARequirementCycle_Terminates()
+    {
+        var catalog = new List<PackageManifest>
+        {
+            Manifest("A", preInstalled: true, "B@^1.0.0"),
+            Manifest("B", preInstalled: false, "A@^1.0.0"),
+        };
+
+        var closure = InstanceAutoRegistrationService
+            .DependencyClosure(catalog, [catalog[0]], NullLogger.Instance)
+            .Select(p => p.Id)
+            .ToList();
+
+        closure.Should().Equal("A", "B");
+    }
 }
