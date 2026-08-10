@@ -389,7 +389,16 @@ public class DynamicCompilationSiloConfigurator : ISiloConfigurator, IHostConfig
     public void Configure(ISiloBuilder siloBuilder)
     {
         siloBuilder.ConfigureMeshWeaverServer()
-            .AddMemoryGrainStorageAsDefault();
+            .AddMemoryGrainStorageAsDefault()
+            // 🚨 Same reason TestSiloConfigurator does it, and this configurator was the
+            // one place missing it: without an xUnit logger on the SILO, a failure in a
+            // class built on this configurator shows only the test's own Output.WriteLine.
+            // OrleansBrokenNodeTypeAccessTest is exactly that shape — it times out waiting
+            // for enrichment to produce an overlay, and every line that says WHICH overlay
+            // branch was taken (the [ENRICH-DIAG] trace, the probe-faulted warning) is
+            // written by the silo. Two days of this cluster were investigated with those
+            // lines invisible.
+            .ConfigureLogging(logging => logging.AddXUnitLogger());
         siloBuilder.ConfigureServices(services =>
             services.AddFileSystemAssemblyStore(TestSiloConfigurator.AssemblyStoreRoot));
     }
