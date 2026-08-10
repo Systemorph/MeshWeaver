@@ -184,13 +184,15 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 logger.LogDebug("Orleans: {MessageType} → {Address} rejected as {ErrorType} — host is shutting down",
                     delivery.Message?.GetType().Name, address, nameof(ErrorType.ShuttingDown));
 
-                // Same NACK-once contract as RoutingServiceBase.PostNotFound: never answer a
-                // DeliveryFailure (that loops) and never answer a [CanBeIgnored] message, but
+                // Same NACK-once contract as RoutingServiceBase.PostNotFound (see MayAnswer), but
                 // DO classify the returned delivery either way so whoever finishes it can.
-                var senderNacked = delivery.Message is not DeliveryFailure
-                                   && delivery.Message?.GetType().HasAttribute<CanBeIgnoredAttribute>() != true;
-                if (senderNacked)
-                    SendDeliveryFailure(delivery, shutdownMessage, ErrorType.ShuttingDown);
+                //
+                // 🚨 senderNacked is the POST's verdict, not the permission to post. FailedAndNacked
+                // means "the sender has been answered" and suppresses downstream reporting, so
+                // claiming it when SendDeliveryFailure could not post (no mesh hub) would leave an
+                // Observe(...) caller waiting out its full budget with the failure recorded nowhere.
+                var senderNacked = MayAnswer(delivery)
+                                   && SendDeliveryFailure(delivery, shutdownMessage, ErrorType.ShuttingDown);
 
                 return Observable.Return(senderNacked
                     ? delivery.FailedAndNacked(shutdownMessage)
@@ -221,8 +223,16 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                         else
                             logger.LogError(ex, "Failed to deliver to {Address}", address);
                         OrleansRouteTrace.Write($"OrleansRoutingService.Deliver DISPATCH_FAILED addr={address} id={delivery.Id} shuttingDown={shuttingDown} ex={ex.Message}");
-                        SendDeliveryFailure(delivery, $"Failed to deliver to {address}: {ex.Message}",
-                            shuttingDown ? ErrorType.ShuttingDown : ErrorType.Failed);
+
+                        // 🚨 The same answer-once contract the shutdown branch above applies —
+                        // this path used to answer unconditionally. A DeliveryFailure answered
+                        // with a DeliveryFailure loops, and a [CanBeIgnored] control message has
+                        // no one waiting, so the NACK is pure added traffic. Both matter most
+                        // precisely here: dispatch fails in bulk while a silo is leaving, which is
+                        // when the mesh can least afford an answering storm.
+                        if (MayAnswer(delivery))
+                            SendDeliveryFailure(delivery, $"Failed to deliver to {address}: {ex.Message}",
+                                shuttingDown ? ErrorType.ShuttingDown : ErrorType.Failed);
                         return Observable.Empty<IMessageDelivery>();
                     })
                     .Finally(() =>
@@ -321,12 +331,37 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             });
     }
 
+    /// <summary>
+    /// Whether a NACK may be sent for <paramref name="delivery"/> AT ALL — the routing layer's
+    /// answer-once contract, stated in one place so every path that gives up on a delivery
+    /// applies it identically (the same contract as <c>RoutingServiceBase.PostNotFound</c>).
+    ///
+    /// <para>Never answer a <see cref="DeliveryFailure"/>: the answer is itself a
+    /// <see cref="DeliveryFailure"/>, so answering one loops. Never answer a
+    /// <see cref="CanBeIgnoredAttribute"/> message: nobody is awaiting it, so the NACK is pure
+    /// added traffic — and it is added at exactly the worst moment, since the paths that give up
+    /// are shutdown and dispatch failure, when the volume of control messages is highest and the
+    /// process has least capacity. That is how a teardown turns into a failure storm.</para>
+    /// </summary>
+    private static bool MayAnswer(IMessageDelivery delivery) =>
+        delivery.Message is not DeliveryFailure
+        && delivery.Message?.GetType().HasAttribute<CanBeIgnoredAttribute>() != true;
+
     /// <param name="delivery">The delivery that could not be routed.</param>
     /// <param name="message">The failure message returned to the sender.</param>
     /// <param name="errorType">How the sender should read the failure. <see cref="ErrorType.Failed"/>
     /// is TERMINAL; pass <see cref="ErrorType.ShuttingDown"/> whenever the cause is this process
     /// going away, so consumers with recovery machinery ride it out instead of tearing down.</param>
-    private void SendDeliveryFailure(IMessageDelivery delivery, string message,
+    /// <returns>
+    /// 🚨 <c>true</c> only when the NACK was actually POSTED. The caller stamps the returned
+    /// delivery <c>FailedAndNacked</c> on the strength of this, and that state tells everyone
+    /// downstream "the sender has been answered, stop reporting" — so returning <c>true</c>
+    /// without having posted converts a routing failure into a silent one, and the
+    /// <c>hub.Observe(...)</c> caller waits out its whole request budget with nothing to show.
+    /// The mesh hub is genuinely absent in some hosts (a routing service built without one), which
+    /// is why this cannot be assumed.
+    /// </returns>
+    private bool SendDeliveryFailure(IMessageDelivery delivery, string message,
         ErrorType errorType = ErrorType.Failed)
     {
         try
@@ -343,30 +378,41 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // (feedback_access_context_always_set). We never invent a user here; we either
             // pass through the failed delivery's own AccessContext or use System.
             var meshHub = serviceProvider.GetService<IMessageHub>();
-            if (meshHub != null)
+            if (meshHub == null)
             {
-                var failureAccess = serviceProvider.GetService<AccessService>();
-                using (delivery.AccessContext is null ? failureAccess?.ImpersonateAsSystem() : null)
-                {
-                    meshHub.Post(
-                        new DeliveryFailure(delivery)
-                        {
-                            ErrorType = errorType,
-                            Message = message
-                        },
-                        o =>
-                        {
-                            o = o.WithTarget(delivery.Sender).WithRequestIdFrom(delivery);
-                            return delivery.AccessContext is not null
-                                ? o.WithAccessContext(delivery.AccessContext)
-                                : o;
-                        });
-                }
+                // No hub to post through: say so rather than letting the caller record a NACK
+                // that was never sent. Warning, not Debug — a sender is about to hang.
+                logger.LogWarning(
+                    "Cannot NACK {MessageType} → {Sender}: no IMessageHub is registered, so the "
+                    + "sender will not be told the delivery failed ({Message})",
+                    delivery.Message?.GetType().Name, delivery.Sender, message);
+                return false;
             }
+
+            var failureAccess = serviceProvider.GetService<AccessService>();
+            using (delivery.AccessContext is null ? failureAccess?.ImpersonateAsSystem() : null)
+            {
+                meshHub.Post(
+                    new DeliveryFailure(delivery)
+                    {
+                        ErrorType = errorType,
+                        Message = message
+                    },
+                    o =>
+                    {
+                        o = o.WithTarget(delivery.Sender).WithRequestIdFrom(delivery);
+                        return delivery.AccessContext is not null
+                            ? o.WithAccessContext(delivery.AccessContext)
+                            : o;
+                    });
+            }
+
+            return true;
         }
         catch (Exception ex)
         {
             logger.LogDebug(ex, "Failed to send delivery failure for {MessageId}", delivery.Id);
+            return false;
         }
     }
 

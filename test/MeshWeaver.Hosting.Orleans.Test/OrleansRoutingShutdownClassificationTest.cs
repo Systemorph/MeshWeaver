@@ -45,7 +45,12 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
     private static readonly Address SenderAddress = new("portal", "shutdown-test-sender");
     private static readonly Address TargetAddress = new("SomeNamespace", "SomeNode");
 
-    private readonly TaskCompletionSource<DeliveryFailure> nack = new();
+    // RunContinuationsAsynchronously: without it, everything awaiting this TCS resumes INLINE on
+    // whatever thread completed it — here the hub's message-handling thread — so the awaiting test
+    // body would run on the single-threaded action block it is still driving. Same reason as
+    // OrleansCrossSiloStreamProbeTest.cs:53.
+    private readonly TaskCompletionSource<DeliveryFailure> nack =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly IHostApplicationLifetime lifetime;
 
     public OrleansRoutingShutdownClassificationTest(ITestOutputHelper output) : base(output)
