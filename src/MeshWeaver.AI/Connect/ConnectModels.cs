@@ -93,8 +93,12 @@ public sealed class ConnectSession : IDisposable
 /// <see cref="CompleteConnect"/> drives it to completion — writing the pasted code to stdin
 /// (Claude, <see cref="RequiresPastedCode"/> <c>true</c>) or polling auth status (Copilot,
 /// <c>false</c>) — and emits the captured raw token exactly once. Both return cold observables;
-/// the session manager subscribes. <c>Observable.FromAsync</c> is used only at the subprocess /
-/// SDK boundary (per the "nothing async ever" rule).</para>
+/// the session manager subscribes. The subprocess / SDK boundary is carried by the
+/// <see cref="MeshWeaver.Mesh.Threading.IoPoolNames.Process"/> <c>IIoPool</c> —
+/// <c>Invoke</c> / <c>InvokeBlocking</c> for the async leaves only (spawn, stdin write, file read),
+/// with the scrape composed as an ordinary observable. <b>Never <c>Observable.FromAsync</c></b>,
+/// which is forbidden outside <c>IoPool</c>: it would run the prologue on the SUBSCRIBING thread
+/// and bound nothing. See ControlledIoPooling.md.</para>
 /// </summary>
 public interface IConnectStrategy
 {

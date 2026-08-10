@@ -497,7 +497,7 @@ public static class MeshNodeLayoutAreas
     /// Builds the right-aligned button row: Edit, Move, Copy, Delete, plus Configuration on
     /// NodeType nodes and a node-type Configuration link on instance nodes.
     /// All buttons use anchor-style navigation (no <c>await</c>); Delete routes through the
-    /// dedicated Delete area which uses Post + RegisterCallback with a progress indicator.
+    /// dedicated Delete area which uses Post + hub.Observe(...) with a progress indicator.
     /// </summary>
     private static UiControl BuildHeaderActionRow(
         LayoutAreaHost host, MeshNode? node, string nodePath, bool canEdit)

@@ -113,7 +113,7 @@ function useMessageCells(
   return cells;
 }
 
-/** Agent/model options from the mesh (nodeType:Agent / nodeType:Model), when the ops expose search. */
+/** Agent/model options from the mesh (nodeType:Agent / nodeType:LanguageModel), when the ops expose search. */
 function useSearchOptions(ops: MeshOps | null, query: string): { path: string; name: string }[] {
   const [options, setOptions] = useState<{ path: string; name: string }[]>([]);
   useEffect(() => {
@@ -301,7 +301,7 @@ function lastSegment(path: string): string {
 /**
  * A read-only selection chip — the twin of Blazor's `.thread-chat-status-item`. Surfaces the
  * composer's bound harness/agent/model selection so the DEFAULT is visible even when there are no
- * mesh options to pick from (the `nodeType:Agent`/`nodeType:Model` search returned nothing, or the
+ * mesh options to pick from (the `nodeType:Agent`/`nodeType:LanguageModel` search returned nothing, or the
  * host exposes no `search`). Blazor's status row is likewise display-only (selection happens via the
  * /harness /agent /model slash-commands, which the React composer has no twin for yet).
  */
@@ -467,7 +467,7 @@ export function ThreadChatView({ control }: { control: UiControl }): ReactNode {
   const effectiveAgent = agent ?? str(composer.agentName);
   const effectiveModel = model ?? str(composer.modelName);
   const agentOptions = useSearchOptions(ops, "nodeType:Agent");
-  const modelOptions = useSearchOptions(ops, "nodeType:Model");
+  const modelOptions = useSearchOptions(ops, "nodeType:LanguageModel");
 
   // Auto-scroll to the latest bubble (Blazor's ChatMessageList behavior).
   const endRef = useRef<HTMLDivElement | null>(null);
