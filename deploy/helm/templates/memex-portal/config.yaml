@@ -51,10 +51,11 @@ data:
   #    1. PreWarm__DynamicTypes must ALSO be true — the gate reads state only the sweep
   #       writes, so gate-without-sweep is permanently green. The portal logs that
   #       combination at Critical on startup.
-  #    2. A startupProbe ON /health with a budget covering a full COLD bake (~90 s per
-  #       NodeType, sequential). See probes.startup in values — turning the gate on without
-  #       raising it means Kubernetes kills the pod mid-bake, every time, forever. Nothing
-  #       else reads the gate: a namespace probing /alive or /healthz ignores it entirely.
+  #    2. A startupProbe ON /health with a budget covering a full COLD bake (~2.4 s per
+  #       NodeType, sequential, measured 2026-08-10 — ~10 min on the largest mesh we run).
+  #       See probes.startup in values — turning the gate on without raising it means
+  #       Kubernetes kills the pod mid-bake, every time, forever. Nothing else reads the
+  #       gate: a namespace probing /alive or /healthz ignores it entirely.
   #    3. strategy.maxUnavailable: 0 — the gate works by making the NEW pod refuse
   #       readiness, which protects nothing if the serving pod was already deleted.
   PreWarm__DynamicTypes: "{{ .Values.config.memex_portal.PreWarm__DynamicTypes }}"
