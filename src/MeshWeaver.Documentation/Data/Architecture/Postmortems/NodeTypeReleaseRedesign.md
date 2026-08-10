@@ -89,6 +89,13 @@ remain as history.
 
 ## Schema
 
+> 🚨 **Proposed shape, not the shipped one.** The real type is `NodeTypeRelease`
+> (`MeshWeaver.Graph.Configuration`) — a plain record that does **not** derive from
+> `ActivityLog`. It carries `Status` as a mirrored string plus `CompilationActivityPath`
+> (the link to the live message log), and adds `AssemblyCollection` /
+> `AssemblyContentPath` / `AssemblyStoreVersion` for cross-silo activation and
+> `SourceVersions` / `TestVersions` snapshots. Code against that type.
+
 ```csharp
 public sealed record Release : ActivityLog("NodeTypeRelease")
 {
@@ -151,7 +158,16 @@ via `workspace.GetMeshNodeStream(releasePath)`, cancellation via
 
 ### 1. Create-release request
 
+> 🚨 **Superseded — do not write a request type for this.** The shipped trigger is a
+> `stream.Update` control-plane field: set `NodeTypeDefinition.RequestedReleaseAt` (with
+> `RequestedReleaseForce` for "bypass the sources-unchanged short-circuit") through
+> `workspace.GetMeshNodeStream(nodeTypePath).Update(...)`, or call
+> `hub.RequestNodeTypeRelease(...)`. The per-NodeType hub's watcher reacts and dispatches
+> the compile, idempotently, off the last-handled stamp.
+
 ```csharp
+// ❌ HISTORICAL shape. The legacy `CreateNodeTypeReleaseRequest`/`Response` pair still
+//    exists as plumbing — never post one from new code.
 public sealed record CreateReleaseRequest(string NodeTypePath, string? Version, MarkdownContent? Notes)
     : IRequest<CreateReleaseResponse>;
 
@@ -212,20 +228,28 @@ during the compile, using the same per-Activity logger pattern as the kernel.
 
 ### 3. Resolution: which release is active?
 
-`NodeTypeService.GetCachedConfiguration(nodeTypePath)` becomes a stream-backed
-read keyed off the release feed:
+> 🚨 **Superseded — and the proposal below is the shape that was rejected.** Resolving
+> the active release with a `Query` is eventually consistent (stale right after a
+> compile) and costs a round-trip, and the `.Wait()` is a blocking sync-over-async read
+> that deadlocks on a hub. What shipped instead: the answer is a **field on the NodeType
+> node** — `NodeTypeDefinition.LatestReleasePath`, written by the compile watcher after a
+> successful compile and **preserved across failed compiles**, so consumers keep loading
+> the last-known-good release. Read it off `GetMeshNodeStream(nodeTypePath)`; never query
+> for it. `RequestedReleasePath`, when set, pins activation to a specific historical
+> release instead (production pinning / rollback).
+
+The proposal was for `NodeTypeService.GetCachedConfiguration(nodeTypePath)` to become a
+stream-backed read keyed off a release feed:
 
 ```csharp
+// ❌ HISTORICAL — do not copy. `.Wait()` blocks the caller; the Query below is
+//    eventually consistent. Read NodeTypeDefinition.LatestReleasePath instead.
 public NodeTypeConfiguration? GetCachedConfiguration(string nodeTypePath) =>
     GetActiveReleaseStream(nodeTypePath)
         .Take(1)
         .Select(release => release?.AssemblyPath is { } path ? LoadConfig(path) : null)
         .Wait(); // sync read for the cached path; observable variant for hot paths
-```
 
-`GetActiveReleaseStream` returns the latest succeeded release:
-
-```csharp
 private IObservable<Release?> GetActiveReleaseStream(string nodeTypePath) =>
     meshService.Query<MeshNode>(
             MeshQueryRequest.FromQuery($"namespace:{nodeTypePath}/Release nodeType:Release"))
@@ -236,9 +260,9 @@ private IObservable<Release?> GetActiveReleaseStream(string nodeTypePath) =>
             .FirstOrDefault());
 ```
 
-**The active release is always the latest Succeeded one.** Failed compiles
-never become active; users keep running on the previous release until they
-ship a fix in a new release.
+**The active release is always the latest Succeeded one.** That property did survive:
+failed compiles never become active, and users keep running on the previous release until
+they ship a fix in a new one.
 
 ### 4. ALC management
 
@@ -291,10 +315,10 @@ the old implicit path is deleted last.
 | 5 | Back-compat shim: existing NodeTypes without Releases auto-release on first compile, writing a Release MeshNode with the auto-stamped version. | Medium |
 | 6 | Delete `InvalidateCache`, `_compilationErrors`, `_compilingInProgress` from `NodeTypeService`. The whole implicit-invalidation path goes away. | High — fan-out across many call sites. |
 
-`CodeEditRecompileTest` un-skips at phase 3. The test rewrites itself as:
-_create V1 release → read V1 → create V2 release → read V2 marker_. This
-exercises the explicit-release path with no `InvalidateCache` call and no
-file-delete race.
+`CodeEditRecompileTest` was to un-skip at phase 3, rewritten as:
+_create V1 release → read V1 → create V2 release → read V2 marker_ — exercising the
+explicit-release path with no `InvalidateCache` call and no file-delete race. It is
+un-skipped and running today.
 
 ---
 
