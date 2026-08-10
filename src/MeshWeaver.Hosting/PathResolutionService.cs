@@ -70,6 +70,22 @@ namespace MeshWeaver.Hosting;
 /// permanent 404 (repro: <c>PathResolutionCacheTest.NullResolution_IsNotCached</c>).
 /// Only a non-null resolution is added to the map, so negatives are never served.</para>
 ///
+/// <para>🚨 <b>Positive-only is not enough on its own</b> — two ways a non-null answer is
+/// still a negative in disguise, both of which pinned a path PERMANENTLY:
+/// <list type="bullet">
+///   <item><b>A fill that lands after its own invalidation.</b> The query is a live
+///     round-trip; a write during it invalidates a cache entry that does not exist yet, so
+///     the sweep finds nothing and the pre-write answer is stored afterwards — and no later
+///     event removes it. A resolution therefore CLAIMS its key before querying
+///     (<see cref="_pendingFills"/>) and commits only if the claim survived.</item>
+///   <item><b>A fabricated bare-partition-root placeholder.</b>
+///     <see cref="SynthesizePartitionRoot"/> invents a NodeType-less node so a bare
+///     partition path can still answer Ping. It is applied OUTSIDE the cache and never
+///     stored; caching it silently binds the partition root's hub to the mesh default
+///     configuration for the life of the process.</item>
+/// </list>
+/// Repros: <c>PathResolutionCachePoisonTest</c>.</para>
+///
 /// <para><b>Invalidation</b>: the constructor subscribes the optional
 /// <see cref="IMeshChangeFeed"/> (the same post-commit broadcast
 /// <c>MeshNodeStreamCache</c> uses). Any <see cref="MeshChangeEvent"/> with path
@@ -101,6 +117,20 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// </summary>
     private readonly ConcurrentDictionary<string, AddressResolution>? _resolutionCache;
 
+    /// <summary>
+    /// In-flight fill claims: joined segment path → the monotonic claim stamped when its
+    /// resolution query started. <see cref="OnMeshChange"/> drops matching claims, so an
+    /// answer computed from a PRE-change snapshot can no longer be committed to
+    /// <see cref="_resolutionCache"/> after the invalidation swept an entry that did not
+    /// exist yet. Bounded by the number of CONCURRENT resolutions (entries are removed in
+    /// the resolution's <c>Finally</c>), never by the number of paths. Non-null exactly
+    /// when <see cref="_resolutionCache"/> is.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, long>? _pendingFills;
+
+    /// <summary>Monotonic source for <see cref="_pendingFills"/> claims.</summary>
+    private long _fillSequence;
+
     /// <summary>Change-feed invalidation subscription; disposed with the singleton.</summary>
     private readonly IDisposable? _changeFeedSubscription;
 
@@ -121,6 +151,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
         if (changeFeed is not null)
         {
             _resolutionCache = new ConcurrentDictionary<string, AddressResolution>(StringComparer.Ordinal);
+            _pendingFills = new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
             _changeFeedSubscription = changeFeed.Subscribe(OnMeshChange);
         }
         // Gates the partition-root MeshNode synthesis below — we only fall back
@@ -207,16 +238,35 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// null / errored / never-emitting query caches nothing and can never poison the
     /// path (see the class doc). Without a registered <see cref="IMeshChangeFeed"/>
     /// there is no cache and every call queries.
+    ///
+    /// <para>🚨 The <see cref="SynthesizePartitionRoot"/> fallback is appended HERE, past
+    /// the cache write, so a fabricated bare-partition-root placeholder is never stored —
+    /// see that method for why pinning it is a permanent, silent mis-binding of the
+    /// partition root's hub.</para>
     /// </summary>
     private IObservable<AddressResolution?> ResolveSegments(string[] segments)
     {
-        if (_resolutionCache is null)
-            return ResolveSegmentsCore(segments);
+        if (_resolutionCache is null || _pendingFills is null)
+            return ResolveSegmentsCore(segments)
+                .SelectMany(resolution => resolution is not null
+                    ? Observable.Return<AddressResolution?>(resolution)
+                    : SynthesizePartitionRoot(segments));
 
         var key = string.Join("/", segments);
         if (_resolutionCache.TryGetValue(key, out var cached))
             return Observable.Return<AddressResolution?>(cached);
 
+        // 🚨 CLAIM the fill BEFORE the query runs. The query is a live round-trip that
+        // can take milliseconds-to-seconds under load; a write landing WHILE it is in
+        // flight invalidates an entry that does not exist yet, so the sweep in
+        // OnMeshChange finds nothing and the answer computed from the PRE-write snapshot
+        // is added AFTERWARDS — and nothing ever removes it again, because the write
+        // that would have invalidated it has already happened. That fill-after-invalidate
+        // race is how a freshly-created node answers "No node found" (or resolves to its
+        // ancestor with a remainder) for the rest of the process.
+        // Repro: PathResolutionCachePoisonTest.InvalidationDuringInFlightQuery_DoesNotPinThePreChangeAnswer.
+        var claim = Interlocked.Increment(ref _fillSequence);
+        _pendingFills[key] = claim;
         return ResolveSegmentsCore(segments)
             .Do(resolution =>
             {
@@ -225,10 +275,33 @@ internal class PathResolutionService : IPathResolver, IDisposable
                 // be propagating — and a query that never emits or errors stores
                 // nothing at all, so it can only stall its own caller, never the
                 // whole path. The change feed invalidates positive entries on write.
-                if (resolution is not null)
-                    _resolutionCache.TryAdd(key, resolution);
-            });
+                if (resolution is null)
+                    return;
+                if (!ClaimStillHeld(key, claim))
+                    return;
+                _resolutionCache.TryAdd(key, resolution);
+                // Re-check AFTER the add: an invalidation that ran between the check
+                // above and the add would have swept an empty slot. Undoing here makes
+                // the pair safe in BOTH interleavings — worst case the entry is dropped
+                // twice and the next resolution re-queries.
+                if (!ClaimStillHeld(key, claim))
+                    _resolutionCache.TryRemove(key, out _);
+            })
+            .Finally(() => _pendingFills.TryRemove(new KeyValuePair<string, long>(key, claim)))
+            .SelectMany(resolution => resolution is not null
+                ? Observable.Return<AddressResolution?>(resolution)
+                : SynthesizePartitionRoot(segments));
     }
+
+    /// <summary>
+    /// True while this resolution's fill claim is still the live one for <paramref name="key"/>:
+    /// no invalidation for that key has run since the query started
+    /// (<see cref="OnMeshChange"/> drops matching claims).
+    /// </summary>
+    private bool ClaimStillHeld(string key, long claim) =>
+        _pendingFills is not null
+        && _pendingFills.TryGetValue(key, out var current)
+        && current == claim;
 
     /// <summary>
     /// Change-feed invalidation: any Created/Updated/Deleted event with path
@@ -239,6 +312,12 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// resolved to or through P. Runs synchronously on the publisher's thread —
     /// pure dictionary ops, no I/O, no hub post. Full-dictionary iteration is
     /// deliberate: change events are rare relative to resolutions.
+    ///
+    /// <para>The SAME sweep is applied to the IN-FLIGHT fill claims: a resolution whose
+    /// query started before this event computed its answer from a pre-change snapshot,
+    /// so dropping its claim is what stops that answer from being cached once it lands.
+    /// The pending map is bounded by the number of concurrent resolutions, not by the
+    /// number of paths.</para>
     /// </summary>
     private void OnMeshChange(MeshChangeEvent change)
     {
@@ -248,10 +327,20 @@ internal class PathResolutionService : IPathResolver, IDisposable
         var childPrefix = path + "/";
         foreach (var key in _resolutionCache.Keys)
         {
-            if (string.Equals(key, path, StringComparison.Ordinal)
-                || key.StartsWith(childPrefix, StringComparison.Ordinal))
+            if (Affected(key))
                 _resolutionCache.TryRemove(key, out _);
         }
+        if (_pendingFills is null)
+            return;
+        foreach (var key in _pendingFills.Keys)
+        {
+            if (Affected(key))
+                _pendingFills.TryRemove(key, out _);
+        }
+
+        bool Affected(string key) =>
+            string.Equals(key, path, StringComparison.Ordinal)
+            || key.StartsWith(childPrefix, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -326,55 +415,79 @@ internal class PathResolutionService : IPathResolver, IDisposable
             })
             // Query returns Observable.Empty when no provider matches.
             // Without DefaultIfEmpty the chain dies silently on completion and
-            // RoutingServiceBase's .Take(1) waits forever.
-            .DefaultIfEmpty()
-            // Partition-root fallback runs AFTER DefaultIfEmpty so the empty-
-            // upstream case (no match for the requested path or any ancestor)
-            // gets a chance to synthesize. Doing this inside the upstream Select
-            // wouldn't help: when Query emits nothing, Scan never emits,
-            // Select never runs — the only emission is the null from
-            // DefaultIfEmpty. The Select below intercepts that null.
-            //
-            // If the request is for a bare partition path (a single segment)
-            // AND there's at least one writable partition provider that could
-            // own it, synthesize a placeholder MeshNode so MessageHubGrain.
-            // OnActivateAsync sees something to bind to. The grain then
-            // activates against DefaultNodeHubConfiguration; PingRequest and
-            // other default-hub operations route normally. Without this, the
-            // routing-grain emits NotFound and the user's home page hangs the
-            // full Orleans response budget — prod symptom: /rbuergi start
-            // screen blank, 30s "Response did not arrive on time".
-            // Repro: PartitionRootActivationTest.BarePartitionPath_NoMeshNode_RespondsToPing.
-            .SelectMany(resolution =>
+            // RoutingServiceBase's .Take(1) waits forever. The null it emits is what
+            // ResolveSegments turns into the bare-partition-root synthesis — which
+            // runs AFTER this (and OUTSIDE the cache; see SynthesizePartitionRoot),
+            // because when Query emits nothing the Select above never runs at all and
+            // the only emission is this default.
+            .DefaultIfEmpty();
+    }
+
+    /// <summary>
+    /// The bare-partition-root fallback: when a SINGLE-segment path matches no node but
+    /// there is at least one writable partition provider that could own it, fabricate a
+    /// placeholder <see cref="MeshNode"/> so <c>MessageHubGrain.OnActivateAsync</c> has
+    /// something to bind to. The grain then activates against
+    /// <c>DefaultNodeHubConfiguration</c>; <c>PingRequest</c> and other default-hub
+    /// operations route normally. Without it the routing grain emits NotFound and the
+    /// user's home page hangs the full Orleans response budget — prod symptom: /rbuergi
+    /// start screen blank, 30s "Response did not arrive on time".
+    /// Repro: <c>PartitionRootActivationTest.BarePartitionPath_NoMeshNode_RespondsToPing</c>.
+    ///
+    /// <para>🚨 Synthesize a placeholder root ONLY for a partition that actually exists.
+    /// A single-segment path that matches no node AND no provisioned partition — a
+    /// mistyped/garbage URL like <c>markdown</c>, <c>code</c>, <c>search?q=…</c>,
+    /// <c>login?returnurl=…</c> — must resolve to NotFound (a clean 404), NOT a synthetic
+    /// root. The synthetic activated a grain that queried the never-provisioned
+    /// <c>&lt;segment&gt;.mesh_nodes</c> schema → Npgsql 42P01, and the bogus segment
+    /// leaked into a junk partition schema (prod log storm). Existence is a global OR
+    /// across the WRITABLE providers: synthesize unless a provider that could own it
+    /// definitively says it is absent (some <c>false</c>, none <c>true</c>).
+    /// <c>true</c>/<c>null</c> (indeterminate, InMemory test, probe hiccup) still
+    /// synthesize, so the real-partition home-page fast path (<c>/rbuergi</c>) is never
+    /// regressed.</para>
+    ///
+    /// <para>🚨 <b>Never cached.</b> This is a FABRICATION, not an observed fact — the
+    /// node carries no NodeType and no Content. Pinning it in the resolution cache is the
+    /// same defect as pinning a <c>null</c> (a permanent 404), only harder to see: every
+    /// later activation of that partition root then routes on a NodeType-less node, so
+    /// <c>NodeTypeEnrichmentHelpers.EnrichWithNodeType</c> takes its silent
+    /// <c>string.IsNullOrEmpty(nodeType)</c> branch and binds the mesh
+    /// <c>DefaultNodeHubConfiguration</c> — the root serves ONLY the framework's default
+    /// layout areas and none of its real NodeType's, with no log line and no self-heal,
+    /// for the life of the process. That was the plugin gate's <c>Store/Catalog</c> RED
+    /// ("No renderer is registered for area <c>Tests</c> on hub <c>Store</c>", listing
+    /// exactly the framework defaults): the install provisions the <c>Store</c> partition
+    /// BEFORE writing its root, so any routed touch inside that window fabricated the
+    /// placeholder, and the fabrication outlived every later write.
+    /// Repro: <c>PathResolutionCachePoisonTest.SynthesizedPartitionRoot_IsNotCached</c>.</para>
+    /// </summary>
+    private IObservable<AddressResolution?> SynthesizePartitionRoot(string[] segments)
+    {
+        if (segments.Length != 1
+            || string.IsNullOrEmpty(segments[0])
+            || !_hasWritablePartitionProvider)
+            return Observable.Return<AddressResolution?>(null);
+        var partitionPath = segments[0];
+        return PartitionConfirmedAbsent(partitionPath)
+            .Select<bool, AddressResolution?>(confirmedAbsent =>
             {
-                if (resolution is not null)
-                    return Observable.Return<AddressResolution?>(resolution);
-                if (segments.Length != 1
-                    || string.IsNullOrEmpty(segments[0])
-                    || !_hasWritablePartitionProvider)
-                    return Observable.Return<AddressResolution?>(null);
-                var partitionPath = segments[0];
-                // 🚨 Synthesize a placeholder root ONLY for a partition that actually
-                // exists. A single-segment path that matches no node AND no provisioned
-                // partition — a mistyped/garbage URL like `markdown`, `code`,
-                // `search?q=…`, `login?returnurl=…` — must resolve to NotFound (a clean
-                // 404), NOT a synthetic root. The synthetic activated a grain that queried
-                // the never-provisioned `<segment>.mesh_nodes` schema → Npgsql 42P01, and
-                // the bogus segment leaked into a junk partition schema (prod log storm).
-                // Existence is a global OR across the WRITABLE providers: synthesize unless
-                // a provider that could own it definitively says it is absent (some `false`,
-                // none `true`). `true`/`null` (indeterminate, InMemory test, probe hiccup)
-                // still synthesize, so the real-partition home-page fast path (`/rbuergi`)
-                // is never regressed.
-                return PartitionConfirmedAbsent(partitionPath)
-                    .Select<bool, AddressResolution?>(confirmedAbsent => confirmedAbsent
-                        ? null
-                        : BuildResolution(partitionPath, segments, matchedSegments: 1,
-                            matchedNode: new MeshNode(partitionPath)
-                            {
-                                Name = partitionPath,
-                                State = MeshNodeState.Active
-                            }));
+                if (confirmedAbsent)
+                    return null;
+                // Greppable, because the consequence is invisible otherwise: whoever
+                // routes on this resolution activates the partition root against the
+                // mesh DEFAULT hub configuration (the node has no NodeType to bind).
+                _logger?.LogDebug(
+                    "PathResolution: no node at bare partition path '{Partition}' — synthesizing a "
+                    + "placeholder root; its hub activates on the default configuration until the "
+                    + "real root node is visible",
+                    partitionPath);
+                return BuildResolution(partitionPath, segments, matchedSegments: 1,
+                    matchedNode: new MeshNode(partitionPath)
+                    {
+                        Name = partitionPath,
+                        State = MeshNodeState.Active
+                    });
             });
     }
 
