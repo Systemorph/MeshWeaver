@@ -6,8 +6,9 @@ using System.Text.RegularExpressions;
 namespace MeshWeaver.Observability;
 
 /// <summary>
-/// Turns raw .NET console log lines into the (category, normalized message, top frame)
-/// triple the incident fingerprint is computed over.
+/// Turns raw .NET console log lines into the <see cref="LogBurst"/> the incident fingerprint is
+/// computed over — log site (category, event id), fault (exception type, top application frame),
+/// and the message, which is carried for the report but never hashed.
 ///
 /// <para>This type lives in the framework — NOT in the watcher — on purpose: the watcher and the
 /// portal must agree on what "the same error" means, and the portal's tests are where that
@@ -30,9 +31,6 @@ public static partial class LogLineParser
             .Add("fail", LogSeverity.Error)
             .Add("crit", LogSeverity.Critical);
 
-    /// <summary>How much of a normalized message survives into the fingerprint. Long messages
-    /// (a serialized payload, a wall of SQL) differ in their tails far more often than in the
-    /// part that identifies the fault, so the tail is deliberately not fingerprinted.</summary>
     /// <summary>The parsed head of a red log burst.</summary>
     /// <param name="Severity">Error or Critical.</param>
     /// <param name="Category">The .NET log category.</param>
@@ -41,8 +39,10 @@ public static partial class LogLineParser
     /// carry no exception or stack frame.</param>
     /// <param name="Message">The message as logged (volatile parts intact).</param>
     /// <param name="NormalizedMessage">The message with volatile parts masked.</param>
-    /// <param name="ExceptionType">The exception type name, when present.</param>
-    /// <param name="TopFrame">The top application stack frame, when present.</param>
+    /// <param name="ExceptionType">The exception type name — read from the burst's own exception
+    /// line, or recovered from the message when the call site formatted the exception into it.</param>
+    /// <param name="TopFrame">The top application stack frame, when present — where the fault IS,
+    /// and therefore the incident's locator in preference to the reporting category.</param>
     public record ParsedBurst(
         LogSeverity Severity,
         string Category,
@@ -98,6 +98,18 @@ public static partial class LogLineParser
             .Trim();
         if (message.Length == 0)
             message = exceptionIndex >= 0 ? body[exceptionIndex] : header;
+
+        // 🚨 A call site that interpolates the exception INTO its message — `LogError("… after {Ms}ms:
+        // {Exception}", …)` — leaves no own-line exception header, so the rule above finds nothing,
+        // while the SAME fault logged as `LogError(ex, "…")` yields the type. That asymmetry is a
+        // property of the caller's formatting, not of the fault, and it is half of why #1170 and
+        // #1171 became two tickets for one ObjectDisposedException. Recover the type from the message
+        // when no exception line exists; an own-line header always wins.
+        exceptionType ??= InlineException().Match(message) switch
+        {
+            { Success: true } inline => inline.Groups["type"].Value,
+            _ => null,
+        };
 
         return new ParsedBurst(
             severity,
@@ -172,6 +184,15 @@ public static partial class LogLineParser
 
     [GeneratedRegex(@"^(?<type>[A-Z][\w.]*(?:Exception|Error))(?::|\s*$)", RegexOptions.CultureInvariant)]
     private static partial Regex ExceptionLine();
+
+    // The same type name, but anywhere in a line rather than anchored at its start — the shape a
+    // message gets when the caller formatted the exception into it. `(?<![\w.])` pins the match to
+    // the START of the qualified name so `System.ObjectDisposedException` is never read as the bare
+    // `ObjectDisposedException`, and the trailing `:` keeps prose out ("Error during shutdown …" has
+    // no colon after "Error", so it does not match — which is why this is a fallback, not a rewrite).
+    [GeneratedRegex(@"(?<![\w.])(?<type>(?:[A-Za-z_]\w*\.)*[A-Z]\w*(?:Exception|Error))\s*:\s",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex InlineException();
 
     [GeneratedRegex(@"^\s*at\s+(?<frame>.+)$", RegexOptions.CultureInvariant)]
     private static partial Regex StackFrame();

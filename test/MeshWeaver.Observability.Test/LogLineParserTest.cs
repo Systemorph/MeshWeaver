@@ -72,14 +72,75 @@ public class LogLineParserTest
         second.Should().NotBe(first);
     }
 
+    /// <summary>
+    /// The category names who CAUGHT and printed the fault, not where the fault is. When the burst
+    /// carries an application frame, that frame is the locator and the category is dropped — one
+    /// exception unwinding through two catch sites is one defect however many of them log it
+    /// (production 2026-08-10: issues #1170 and #1171, one ObjectDisposedException, two tickets).
+    /// </summary>
     [Fact]
-    public void Fingerprint_DiffersForADifferentCategory()
+    public void Fingerprint_IgnoresTheReportingCategory_WhenTheBurstNamesAFaultSite()
     {
         var different = NodeNotFound.ToArray();
         different[0] = "fail: MeshWeaver.Graph.MeshCatalog[0]";
 
         LogLineParser.Fingerprint(LogLineParser.Parse(different)!)
-            .Should().NotBe(LogLineParser.Fingerprint(LogLineParser.Parse(NodeNotFound)!));
+            .Should().Be(LogLineParser.Fingerprint(LogLineParser.Parse(NodeNotFound)!));
+    }
+
+    /// <summary>
+    /// …and the other half of that rule: with no frame to locate the fault, the log site IS the
+    /// locator, so two categories are two incidents.
+    /// </summary>
+    [Fact]
+    public void Fingerprint_DiffersForADifferentCategory_WhenThereIsNoFaultSite()
+    {
+        string[] bare = ["crit: Memex.Portal.Startup[0]", "      Could not connect to the database"];
+        string[] elsewhere = ["crit: Memex.Portal.Shutdown[0]", "      Could not connect to the database"];
+
+        LogLineParser.Fingerprint(LogLineParser.Parse(elsewhere)!)
+            .Should().NotBe(LogLineParser.Fingerprint(LogLineParser.Parse(bare)!));
+    }
+
+    /// <summary>
+    /// The exception type must be recovered even when the call site formatted it INTO the message
+    /// instead of passing it to the logger — otherwise one fault reported both ways forks on nothing
+    /// but the caller's format string.
+    /// </summary>
+    [Fact]
+    public void Parse_ExtractsAnExceptionTypeFormattedIntoTheMessage()
+    {
+        var burst = LogLineParser.Parse(
+        [
+            "fail: MeshWeaver.Messaging.MessageHub[0]",
+            "      Error during shutdown of hub sync/KVk1hB2Tw02ESgrSpL3Cgg after 0ms (total disposal "
+            + "time: 0ms): System.ObjectDisposedException: Cannot access a disposed object.",
+            "         at MeshWeaver.Data.Serialization.SynchronizationStream`1.OnCompleted()",
+        ]);
+
+        burst.Should().NotBeNull();
+        burst!.ExceptionType.Should().Be("System.ObjectDisposedException");
+        // The message is still the logged text — only the TYPE is recovered, nothing is rewritten.
+        burst.Message.Should().StartWith("Error during shutdown of hub");
+    }
+
+    /// <summary>
+    /// The inline rule is a fallback and must stay one: prose that merely contains the word "Error"
+    /// is not an exception type, and an own-line exception header always wins over the message.
+    /// </summary>
+    [Fact]
+    public void Parse_DoesNotMistakeProseForAnExceptionType()
+    {
+        LogLineParser.Parse(
+            ["fail: Memex.Portal.Startup[0]", "      Error: could not reach the database"])!
+            .ExceptionType.Should().BeNull();
+
+        LogLineParser.Parse(
+        [
+            "fail: Memex.Portal.Startup[0]",
+            "      Retrying after a TimeoutException: attempt 2",
+            "      System.OperationCanceledException: The operation was canceled.",
+        ])!.ExceptionType.Should().Be("System.OperationCanceledException");
     }
 
     [Theory]

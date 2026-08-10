@@ -91,8 +91,11 @@ public record LogIncidentDraft
 public record LogIncident
 {
     /// <summary>
-    /// Stable hash over (category, normalized message, top stack frame) — the node id, and the
-    /// identity of "the same error happening again".
+    /// The node id, and the identity of "the same error happening again": a stable hash over the
+    /// FAULT — its top application frame and exception type — falling back to the log site
+    /// (category + event id) for a burst that names no frame. The message never participates, and
+    /// neither does the category of whoever caught and printed the fault. See
+    /// <see cref="StructuralLogIncidentIdentity"/>.
     /// </summary>
     [Browsable(false)]
     [Key]

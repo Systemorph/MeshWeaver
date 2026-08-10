@@ -12,7 +12,7 @@ agent-written description of what is probably broken, filed in the repository th
                                 ▼
                        mw-log-watcher            (ns monitoring, its own PVC)
                           │ group lines into bursts
-                          │ fingerprint  =  hash(category, exception, normalized message, top frame)
+                          │ fingerprint  =  hash(top app frame, exception)  — or hash(log site) with no frame
                           │ queue to disk
                           ▼  POST /api/log-incidents   (Bearer, in-cluster)
                        Portal
@@ -41,28 +41,45 @@ GitHub App credential already live.
 
 ## One fault, one ticket
 
-The fingerprint (`StructuralLogIncidentIdentity.Compute`) is
-`sha256(category, eventId, discriminator)` truncated to **16 hex characters** (the first 8 bytes),
-where the discriminator is `"{exceptionType}|{topFrame}"` — or whichever of the two is present, or
-the empty string when neither is. Four details make it collapse the right things and only the right
-things:
+The fingerprint (`StructuralLogIncidentIdentity.Compute`) identifies **the fault, not the reporter**.
+It is a `sha256` truncated to **16 hex characters** (the first 8 bytes) over one of two payloads,
+chosen by the burst itself:
 
-- **🚨 The message text is NOT hashed — deliberately, and this is the part that changed.** Earlier
-  revisions folded a *normalized* message (guids, timestamps, paths, quoted literals, hex blobs and
-  bare numbers masked) into the identity. That still fanned out: the varying subject sits in an
-  arbitrary position that no masking rule reliably anticipates, and one defect produced ~50
-  incidents. The message is now structurally excluded. It is still normalized and *carried* on the
-  report (`NormalizedMessage`), it just does not contribute to identity.
-- **Category + `EventId` identify the log SITE**, and are the whole identity for a bare diagnostic
-  with no exception and no frame — so every burst from one site is one incident.
-- **The exception type is part of the identity.** The same log line can precede different failures;
-  folding them together would hide the second bug behind the first one's already-filed ticket.
-- **The top frame excludes framework code** (`System.` / `Microsoft.` prefixes are skipped) and
-  drops its `in /path/file.cs:line NNN` suffix, so an unrelated edit above the faulting line does
-  not fork the fingerprint into a second ticket.
+| The burst names… | The identity is | Why |
+|---|---|---|
+| an application stack frame | `("frame", topFrame, exceptionType)` | the frame names the exact method that faulted — the most specific locator available |
+| no application frame | `("site", category, eventId, exceptionType)` | there is no location to key on, so the log site the code assigns is the locator |
+
+- **🚨 The reporting category is NOT in the identity when a frame is present.** The category names
+  the class that *caught and printed* the fault, which is not where the fault is. One exception
+  unwinding through two catch sites is one defect however many of them log it — production
+  2026-08-10 filed issues #1170 and #1171 for a single `ObjectDisposedException` raised at
+  `SynchronizationStream<T>.OnCompleted()` during a single hub teardown, on one pod, at one instant,
+  because `MessageHub` and `HostedHubsCollection` each logged it on the way out.
+- **🚨 The message text is NOT hashed, in either branch.** Earlier revisions folded a *normalized*
+  message (guids, timestamps, paths, quoted literals, hex blobs and bare numbers masked) into the
+  identity. That still fanned out: the varying subject sits in an arbitrary position that no masking
+  rule reliably anticipates, and one defect produced ~50 incidents. The message is still normalized
+  and *carried* on the report (`NormalizedMessage`), it just does not contribute to identity.
+- **The exception type is part of the identity in both branches** — the same method can fail two
+  ways, and folding those together would hide the second bug behind the first one's ticket. It is
+  compared on its **simple** name: `ex.ToString()` prints `System.ObjectDisposedException` while a
+  message interpolating `ex.GetType().Name` prints `ObjectDisposedException`, and one fault must not
+  fork on the caller's formatting. For the same reason the parser recovers the type from the message
+  text when the call site formatted the exception *into* it instead of passing it to the logger.
+- **The top frame excludes framework code** (`System.` / `Microsoft.` / `Npgsql.` / `Orleans.`
+  prefixes are skipped) and drops its `in /path/file.cs:line NNN` suffix, so an unrelated edit above
+  the faulting line does not fork the fingerprint into a second ticket.
 - **Namespace and pod are NOT in the fingerprint.** The same defect on two pods is one ticket; the
   pods are recorded on the incident instead — and so a defect every tenant hits opens one ticket
   rather than one per tenant.
+
+The direction of the remaining trade is deliberate: two genuinely different faults raised at the
+same frame with the same exception type collapse into one incident. An under-split incident is one
+ticket a human can split; an over-split one is fifty tickets nobody reads, and fifty is what
+production actually produced. What identity must *never* do is discard the fault site to make
+unrelated reporters agree — issues #1183 and #1184 (one logger, one event id, one exception type,
+two different health checks) are two code sites and stay two incidents.
 
 The fingerprint is also the incident's node id, so redelivery is idempotent by construction. That
 is what lets the watcher retry freely.
