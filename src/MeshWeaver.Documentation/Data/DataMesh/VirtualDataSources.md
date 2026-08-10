@@ -82,7 +82,7 @@ The stream provider receives the hub's `IWorkspace`, so it can compose with othe
 |---|---|
 | Mesh query mirror | `ws => provider.Query<T>(MeshQueryRequest.FromQuery(q), opts).Select(c => c.Items)` — or just `WithMeshQuery<T>(q)`. |
 | Cross-hub subscription | `ws => ws.GetRemoteStream<TReduced, TRef>(siblingAddress, ref).Select(c => Project(c.Value))` |
-| Polled external API | `ws => Observable.Interval(TimeSpan.FromSeconds(30)).SelectMany(_ => Observable.FromAsync(FetchFromGitHub)).Select(items => (IEnumerable<T>)items)` |
+| Polled external API | `ws => Observable.Interval(TimeSpan.FromSeconds(30)).SelectMany(_ => httpPool.Invoke(ct => FetchFromGitHub(ct))).Select(items => (IEnumerable<T>)items)` — the fetch goes through an `IIoPool` (`IoPoolRegistry.Get(IoPoolNames.Http)`). **Never `Observable.FromAsync`**, which is forbidden outside `IoPool`: it runs the prologue on the subscribing thread and bounds nothing. |
 | Computed projection | `ws => ws.GetStream<RawA>().CombineLatest(ws.GetStream<RawB>(), Compose)` |
 | In-process event subject | `ws => myEventSubject.Scan(ImmutableList<T>.Empty, (acc, e) => acc.Add(e))` |
 

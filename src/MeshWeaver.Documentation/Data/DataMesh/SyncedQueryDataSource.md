@@ -257,7 +257,7 @@ Reads and writes go through the framework's data-layer messages.
 
 - `NodeFactory.CreateNode(node)` — create a source node.
 - `NodeFactory.UpdateNode(node)` — write at the source side.
-- `ReadNodeAsync(path)` — read a `MeshNode` via `GetDataRequest + MeshNodeReference` on a dedicated reader hub.
+- `ReadNode(path)` — read a `MeshNode` on a dedicated reader hub; returns `IObservable<MeshNode?>` (the old `ReadNodeAsync` was deleted).
 
 Verification follows an observe-until-condition rhythm (mirrors `ObservableQueryTests`). The synced collection stays subscribed the whole time — no `Take(1)`, no draining.
 
@@ -273,10 +273,12 @@ public async Task DataChangeRequestOnSubscriber_PropagatesToOwningHub()
     // Source-side state.
     await NodeFactory.CreateNode(MakeSubject("alpha", "Original"))
         .FirstAsync().ToTask(ct);
-    await Task.Delay(500, ct);                 // synced collection picks it up.
 
-    // Read the current value (standard data-layer read).
-    var current = await ReadNodeAsync(path);
+    // Wait for the CONDITION, never a fixed sleep: a Task.Delay races CI load —
+    // too short and it flakes, too long and it wastes the suite's budget.
+    var current = await ReadNode(path)
+        .Where(n => n is not null)
+        .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
 
     // Write at the SUBSCRIBER via DataChangeRequest. The subscriber's
     // synced data source routes the update through its cached per-node
@@ -285,11 +287,12 @@ public async Task DataChangeRequestOnSubscriber_PropagatesToOwningHub()
             new DataChangeRequest { Updates = [current! with { Name = "Updated" }] },
             o => o.WithTarget(new Address(SubscriberPath)))
         .FirstAsync().ToTask(ct);
-    await Task.Delay(500, ct);
 
-    // Source side reflects the write.
-    var reread = await ReadNodeAsync(path);
-    reread!.Name.Should().Be("Updated");
+    // Source side reflects the write — again, observe until the condition holds.
+    await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        .SelectMany(_ => ReadNode(path))
+        .Where(n => n?.Name == "Updated")
+        .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
 }
 ```
 
