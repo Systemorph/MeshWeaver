@@ -351,6 +351,12 @@ stays reactive. Same principle as `IIoPool` — the async boundary is pushed to 
 never an ambient `await` mid-flow. Full order + failure mode: [Mesh Lifecycle](/Doc/Architecture/MeshLifecycle). See also
 [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls).
 
+🚨 **Ambient context does not cross the pool.** Work handed to `IIoPool` runs on a pooled thread whose
+`ExecutionContext` is not yours: an `AsyncLocal` you set upstream is not readable inside the leaf, and a
+value written inside the leaf is not visible to the caller. Capture what the leaf needs into the closure
+before handing it over — see [AsyncLocal Across Scheduler Hops](/Doc/Architecture/AsyncLocalAcrossHops)
+and, for identity specifically, [AccessContext Propagation](/Doc/Architecture/AccessContextPropagation).
+
 ---
 
 ## Applied to (current scope)

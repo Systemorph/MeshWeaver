@@ -231,6 +231,8 @@ The PostgreSQL provider does not enumerate schemas at startup. Instead, per firs
 
 ## References
 
+- [Change-Feed Isolation](/Doc/Architecture/ChangeFeedIsolation) — what `IStorageAdapter.Changes` guarantees, and why an adapter must publish through `IsolatedChangeFeed` rather than a plain `Subject<T>`.
+- [Silent Completion](/Doc/Architecture/SilentCompletion) — why `Write`'s `null` decline sentinel must never be filtered away.
 - `src/MeshWeaver.Mesh.Contract/Services/IStorageAdapter.cs` — the adapter contract.
 - `src/MeshWeaver.Mesh.Contract/Services/IPartitionStorageProvider.cs` — the provider contract.
 - `src/MeshWeaver.Hosting/Persistence/PersistenceService.cs` — try-then-claim write, fan-out read/delete.

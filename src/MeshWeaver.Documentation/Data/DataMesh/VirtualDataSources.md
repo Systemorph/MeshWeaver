@@ -43,7 +43,7 @@ The infrastructure lives in `VirtualDataSource`, built on `VirtualTypeSource<T>`
 | Helper | Use when |
 |---|---|
 | `WithVirtualType<T>(...)` | General case — any `IObservable<IEnumerable<T>>` is fair game. |
-| `WithMeshQuery<T>(query)` | Most common case — a mesh-query result set kept live in the workspace. Documented in [Synced Query Data Source](/Doc/DataMesh/SyncedQueryDataSource). |
+| `WithMeshQuery(query)` | Most common case — a mesh-query result set kept live in the workspace. Documented in [Synced Query Data Source](/Doc/DataMesh/SyncedQueryDataSource). |
 
 ---
 
@@ -80,7 +80,7 @@ The stream provider receives the hub's `IWorkspace`, so it can compose with othe
 
 | Pattern | Stream provider expression |
 |---|---|
-| Mesh query mirror | `ws => provider.Query<T>(MeshQueryRequest.FromQuery(q), opts).Select(c => c.Items)` — or just `WithMeshQuery<T>(q)`. |
+| Mesh query mirror | `ws => provider.Query<T>(MeshQueryRequest.FromQuery(q), opts).Select(c => c.Items)` — or just `WithMeshQuery(q)`. |
 | Cross-hub subscription | `ws => ws.GetRemoteStream<TReduced, TRef>(siblingAddress, ref).Select(c => Project(c.Value))` |
 | Polled external API | `ws => Observable.Interval(TimeSpan.FromSeconds(30)).SelectMany(_ => httpPool.Invoke(ct => FetchFromGitHub(ct))).Select(items => (IEnumerable<T>)items)` — the fetch goes through an `IIoPool` (`IoPoolRegistry.Get(IoPoolNames.Http)`). **Never `Observable.FromAsync`**, which is forbidden outside `IoPool`: it runs the prologue on the subscribing thread and bounds nothing. |
 | Computed projection | `ws => ws.GetStream<RawA>().CombineLatest(ws.GetStream<RawB>(), Compose)` |
@@ -173,7 +173,7 @@ The snippet below renders a live summary of the available stream shapes so you c
 MeshWeaver.Layout.Controls.Markdown(@"
 | Pattern | Stream provider expression |
 |---|---|
-| Mesh query mirror | `WithMeshQuery<T>(query)` |
+| Mesh query mirror | `WithMeshQuery(query)` |
 | Cross-hub subscription | `workspace.GetRemoteStream<TReduced, TRef>(addr, ref)` |
 | Polled external API | `Observable.Interval(30s).SelectMany(_ => FetchAsync())` |
 | Computed projection | `GetStream<A>().CombineLatest(GetStream<B>(), Compose)` |
@@ -185,7 +185,7 @@ MeshWeaver.Layout.Controls.Markdown(@"
 
 ## Related
 
-- [Synced Query Data Source](/Doc/DataMesh/SyncedQueryDataSource) — `WithMeshQuery<T>`, the most common virtual-source shape.
+- [Synced Query Data Source](/Doc/DataMesh/SyncedQueryDataSource) — `WithMeshQuery`, the most common virtual-source shape.
 - [Data Configuration](/Doc/DataMesh/DataConfiguration) — broader data-source patterns (`AddSource`, `AddHubSource`, `WithInitialData`).
 - [Access Control](/Doc/Architecture/AccessControl) — the per-node-hub cache pattern in production use.
 - [CQRS & Content Access](/Doc/Architecture/CqrsAndContentAccess) — why query mirrors are preferred over re-querying on every read.
