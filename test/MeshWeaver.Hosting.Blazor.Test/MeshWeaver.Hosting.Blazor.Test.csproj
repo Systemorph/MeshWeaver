@@ -5,6 +5,10 @@
   <ItemGroup>
     <PackageReference Include="NSubstitute" />
     <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+    <!-- Virtual-time Rx (TestScheduler) — DegradedCircuitIdentityRecoveryTest drives the
+         degraded-identity repair entirely on a virtual clock; the window it exercises (the mesh
+         user index unable to answer) cannot be held open against a live mesh. -->
+    <PackageReference Include="Microsoft.Reactive.Testing" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
