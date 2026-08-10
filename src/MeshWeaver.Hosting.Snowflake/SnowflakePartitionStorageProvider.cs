@@ -45,6 +45,13 @@ public sealed class SnowflakePartitionStorageProvider : IPartitionStorageProvide
     private readonly SnowflakeStorageOptions _options;
     private readonly IEmbeddingProvider? _embeddingProvider;
     private readonly ILogger<SnowflakePartitionStorageProvider>? _logger;
+
+    /// <summary>
+    /// The provider's logger, shared with the router's <see cref="IsolatedChangeFeed"/> so a
+    /// dropped or faulting change-feed observer is reported instead of vanishing (the PG twin's
+    /// null logger left the equivalent event logged NOWHERE for four investigations).
+    /// </summary>
+    internal ILogger? Logger => _logger;
     private readonly SnowflakeCapabilityHolder? _capabilities;
     // Registered partition definitions, keyed by namespace (first segment),
     // case-insensitive. Seeded by the boot-time static-partition provider, by
