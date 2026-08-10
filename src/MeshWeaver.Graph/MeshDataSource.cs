@@ -1,5 +1,6 @@
 using System.Reactive;
 ﻿using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -976,6 +977,32 @@ public static class MeshDataSourceExtensions
                 var teardownSignal = hub.ServiceProvider.GetService<MeshTeardownSignal>();
                 hub.RegisterForDisposal(_ =>
                     UnloadNodeAssemblyContexts(compilationCache, sanitizedNodeName, meshHub, teardownSignal));
+
+                // 🚨 …and the OTHER half of that ownership: the ALC unloaded above belongs to a
+                // NODE TYPE, and every INSTANCE hub of that type executes the same assembly. So an
+                // instance hub leases its NodeType's context for its whole lifetime, and the
+                // NodeType hub's disposal (or a recompile's superseded-context eviction) defers the
+                // unload until the last of them is gone. Without the lease the unload raises
+                // Unloading under live hubs, TypeRegistry drops the types, and every
+                // Workspace.GetStream<T>() on those hubs throws "Type T is unknown." for the rest of
+                // their life — the /Store outage, pinned by NodeTypeAlcSharedWithInstancesTest.
+                // Reclaim is unaffected: Unload is cooperative, so the context could not have been
+                // collected while those hubs held references to its types anyway.
+                var nodeTypeLease = new SerialDisposable();
+                hub.RegisterForDisposal(nodeTypeLease);
+                hub.RegisterForDisposal(ownStream
+                    .Select(node => node?.NodeType)
+                    .Where(nodeType => !string.IsNullOrWhiteSpace(nodeType))
+                    .Take(1)
+                    // SerialDisposable, not SingleAssignmentDisposable: a hub torn down before its
+                    // own node arrives has already disposed this, and assigning then releases the
+                    // lease immediately instead of throwing.
+                    .Subscribe(
+                        nodeType => nodeTypeLease.Disposable =
+                            compilationCache.LeaseNodeContexts(compilationCache.SanitizeNodeName(nodeType!)),
+                        ex => hub.ServiceProvider.GetService<ILogger<MeshDataSource>>()?
+                            .LogWarning(ex, "Could not lease the NodeType assembly context for {Path}",
+                                hub.Address.Path)));
             }
 
             // 🚨 Memory: same per-node reclaim for the LSP workspace cache. The language service is a
