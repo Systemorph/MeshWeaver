@@ -34,7 +34,7 @@ These rules apply just as strictly to test code: a NodeType test that does `awai
 
 **Every `.cs` that lives in a mesh node — NodeType `Source/*.cs`, Script nodes, layout areas — compiles at RUNTIME in the portal, never in `dotnet build`.** The repo's node trees are `<None>` content, not code (`samples/Graph/MeshWeaver.Samples.Graph.csproj`), so **12k+ lines of C# under `samples/Graph/Data/` and `content/` are invisible to the compiler, to `-warnaserror`, and to every test.** Green build, green CI, clean review and a merged PR say **nothing** about whether the mesh still compiles.
 
-**The deployed mesh's copy outranks the repo's.** A node carries its own version history and drifts from the file that seeded it. Reading the repo file does not tell you what the portal will compile.
+**A NodeType's `configuration` lambda is C# stored in a JSON string field.** That is the blind spot that shipped the outage: C# no `.cs`-shaped habit can see — not `grep --include='*.cs'`, not `dotnet build`, not a compile gate that only scans `Source/`. When you remove a framework symbol, search the node **JSON** as well.
 
 **A framework-version bump recompiles EVERY dynamic NodeType** ([rule 3 of `HasUsableBuild`](@/Doc/Architecture/NodeTypeCompilation)). Breakage therefore does not trickle in — the entire accumulated backlog detonates on one deploy.
 

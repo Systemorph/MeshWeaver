@@ -10,6 +10,7 @@
         <!-- Icon-only mode with plain HTML dropdown -->
         <div Style="@($"width: {Width}; {Style}; position: relative;")" class="icon-only-menu-container">
             <FluentButton Appearance="@ButtonAppearance"
+                Class="@Class"
                 IconStart="@ButtonIcon"
                 Style="border-radius: 4px;"
                 OnClick="ToggleMenu" />
@@ -32,11 +33,13 @@
         <!-- Has top-level action AND sub-menus: Split button with main action and expand arrow -->
         <div Style="@($"display: flex; gap: 0; width: {Width}; {Style}; position: relative;")">
             <FluentButton Appearance="@ButtonAppearance" OnClick="OnClick"
+                Class="@Class"
                 IconStart="@ButtonIcon"
                 Style="flex: 1; border-radius: 4px 0 0 4px; text-align: left; justify-content: flex-start; display: flex;">
                 @Title
             </FluentButton>
             <FluentButton Appearance="@ButtonAppearance"
+                Class="@Class"
                 IconEnd="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size12.ChevronDown())"
                 Style="border-radius: 0 4px 4px 0; width: 32px; flex-shrink: 0;"
                 OnClick="ToggleMenu" />
@@ -59,6 +62,7 @@
         <!-- No top-level action: Clicking button expands menu -->
         <div Style="@($"width: {Width}; {Style}; position: relative;")">
             <FluentButton Appearance="@ButtonAppearance"
+                Class="@Class"
                 IconStart="@ButtonIcon"
                 IconEnd="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size12.ChevronDown())"
                 Style="width: 100%; text-align: left; justify-content: flex-start; display: flex;"
@@ -85,6 +89,7 @@ else
     <!-- Regular menu item without sub-menus -->
     <div Style="@($"width: {Width}; {Style}")">
         <FluentButton OnClick="OnClick" Appearance="@ButtonAppearance"
+            Class="@Class"
             IconStart="@ButtonIcon"
             Style="width: 100%; text-align: left; justify-content: flex-start; display: flex;">
             @Title
