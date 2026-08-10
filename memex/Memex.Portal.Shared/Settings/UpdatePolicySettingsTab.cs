@@ -153,17 +153,23 @@ public static class UpdatePolicySettingsTab
 
         var verifiedAt = localize("ui.updateVerifiedAtLine",
             [verdict.VerifiedAt.ToString("yyyy-MM-dd HH:mm"), verdict.ImageDigest ?? "?"]);
+        // 🚨 Caveats are surfaced on EVERY verdict — ComboVerification.Caveats documents them as
+        // mandatory-to-surface. A Green over a moving pin, or a Red whose input diverged, must
+        // never render as an unqualified answer (Copilot review on #1099).
         return verdict.Verdict switch
         {
             ComboVerdictKind.Green =>
                 available + "\n\n"
                 + localize("ui.updateVerifiedGreen", [verdict.Modules.Count])
-                + " " + verifiedAt,
+                + " " + verifiedAt
+                + CaveatBlock(verdict, localize),
             ComboVerdictKind.Red =>
                 localize("ui.updateBlocked", [tag]) + "\n\n"
-                + FailedModuleList(verdict, localize) + "\n\n" + verifiedAt,
+                + FailedModuleList(verdict, localize)
+                + CaveatBlock(verdict, localize) + "\n\n" + verifiedAt,
             _ =>
                 localize("ui.updateNotVerifiable", [tag]) + "\n\n"
+                + NotVerifiedModuleList(verdict)
                 + CaveatList(verdict, localize) + "\n\n" + verifiedAt,
         };
     }
@@ -180,6 +186,28 @@ public static class UpdatePolicySettingsTab
                 : "";
             return $"- **{module.ModuleId}** — {first}{more}";
         }));
+
+    /// <summary>The per-module reasons of a NotVerifiable verdict: every module the gate could
+    /// not evaluate that carries a named reason (a refusal, a fetch failure, a missing root, not
+    /// discovered) — never truncated, so one blocked module does not hide another. Modules that
+    /// merely rode along (materialised fine, gate never ran) carry no reason and are not
+    /// listed.</summary>
+    private static string NotVerifiedModuleList(ComboVerification verdict)
+    {
+        var lines = verdict.Modules
+            .Where(m => m.Outcome == ModuleVerificationOutcome.NotVerified && m.Failures.Count > 0)
+            .Select(m => $"- **{m.ModuleId}** — {Sanitize(m.Failures[0])}")
+            .ToList();
+        return lines.Count == 0 ? "" : string.Join("\n", lines) + "\n\n";
+    }
+
+    /// <summary>The caveats as a labeled block appended to a Green/Red verdict; empty when there
+    /// are none.</summary>
+    private static string CaveatBlock(
+        ComboVerification verdict, Func<string, object?[], string> localize) =>
+        verdict.Caveats.Count == 0
+            ? ""
+            : "\n\n" + localize("ui.updateCaveats", []) + "\n\n" + CaveatList(verdict, localize);
 
     private static string CaveatList(
         ComboVerification verdict, Func<string, object?[], string> localize)

@@ -120,6 +120,7 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
                         FailedModule("Store", "install: import faulted"),
                         PassedModule("Edu"),
                     ],
+                    Caveats = ["'Store' has diverged from its install record"],
                 },
             ],
         };
@@ -133,6 +134,30 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
         markdown.Should().Contain("**Store**").And.Contain("import faulted");
         markdown.Should().NotContain("**Edu**", "only failing modules are listed");
         markdown.Should().Contain("ui.updateVerifiedAtLine");
+        markdown.Should().Contain("ui.updateCaveats").And.Contain("diverged",
+            "caveats are mandatory-to-surface on EVERY verdict, red included");
+    }
+
+    [Fact]
+    public void StatusMarkdown_GreenWithCaveats_NeverRendersAsAnUnqualifiedPass()
+    {
+        var content = new UpdatePolicyContent
+        {
+            LatestAvailableTag = Tag,
+            ComboVerifications =
+            [
+                GreenVerdict(Tag) with
+                {
+                    Caveats = ["'Widget' was materialised from a MOVING ref"],
+                },
+            ],
+        };
+
+        var markdown = UpdatePolicySettingsTab.StatusMarkdown(content, EchoLocalizer);
+
+        markdown.Should().Contain("ui.updateVerifiedGreen[1]");
+        markdown.Should().Contain("ui.updateCaveats").And.Contain("MOVING",
+            "a green over a moving pin must not read as reproducible evidence");
     }
 
     [Fact]
@@ -162,6 +187,14 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
                 {
                     Verdict = ComboVerdictKind.NotVerifiable,
                     Caveats = ["the tester produced no structured report (exit 2)"],
+                    Modules =
+                    [
+                        PassedModule("Widget") with
+                        {
+                            Outcome = ModuleVerificationOutcome.NotVerified,
+                            Failures = ["Refused: pinned only to a moving ref"],
+                        },
+                    ],
                 },
             ],
         };
@@ -171,6 +204,8 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
         markdown.Should().Contain($"ui.updateNotVerifiable[{Tag}]");
         markdown.Should().Contain("no structured report",
             "a partial answer must never read as a healthy one");
+        markdown.Should().Contain("**Widget**").And.Contain("moving ref",
+            "the per-module reason names WHICH module prevented verification");
     }
 
     [Fact]
