@@ -45,7 +45,7 @@ MeshWeaver speaks to multiple LLM providers — Claude via Anthropic, GPT-class 
   <line x1="100" y1="90" x2="100" y2="258" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5"/>
   <rect x="310" y="80" width="160" height="60" rx="10" fill="#43a047"/>
   <text x="390" y="105" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Agent Definition</text>
-  <text x="390" y="122" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c8e6c9">PreferredModel / ModelTier</text>
+  <text x="390" y="122" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c8e6c9">ModelTier</text>
   <rect x="310" y="170" width="160" height="60" rx="10" fill="#f57c00"/>
   <text x="390" y="195" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">AgentChatClient</text>
   <text x="390" y="212" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#ffe0b2">GetFactoryForModel</text>
@@ -207,7 +207,7 @@ To wire in a new provider (a second Azure OpenAI deployment, a hosted local mode
 1. **Implement `IChatClientFactory`** and register it via DI (`services.AddAzureOpenAI(...)` or similar).
 2. **Bind its options** from a new section in `MemexConfiguration.cs` — endpoint and auth fields only, **not** model names.
 3. **Add Aspire parameters** in `memex/aspire/Memex.AppHost/Program.cs` for the endpoint (and a key, if it doesn't share `azure-foundry-key`).
-4. **Reference the new model** in agent definitions via `PreferredModel` or `ModelTier`.
+4. **Label the new model's node** with a `tier` (`ModelDefinition.Tier`), so agents reach it by declaring `modelTier` in their front matter. An agent names a tier, never a model id — there is no per-agent "preferred model" field.
 
 > **Do not hardcode model identifiers in framework code.** If you find yourself writing `"gpt-4o"` or `"claude-sonnet-4-5"` in a `.cs` file outside an agent definition, that is precisely the pattern this page exists to prevent.
 

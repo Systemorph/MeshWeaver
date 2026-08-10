@@ -87,13 +87,10 @@ Export requires `Permission.Export`, which is granted to the **Editor** and **Ad
 
 ## Programmatic Export
 
-```csharp
-var exportService = hub.ServiceProvider.GetRequiredService<IMeshExportService>();
-var result = await exportService.ExportToDirectoryAsync("org/acme/project", outputDir);
-// result.NodesExported, result.PartitionsExported, result.Success
-```
-
-`IMeshExportService` uses `FileFormatParserRegistry` to select the appropriate serializer for each node based on its content type. Partition data (sub-paths like `Source`, `layoutAreas`) is exported as JSON.
+Export is driven from the **Export** node-menu action and the `ExportLayoutArea`; there is no
+`IMeshExportService`. The writer uses `FileFormatParserRegistry` to select the serializer for each
+node from its content type — partition data (sub-paths like `Source`, `layoutAreas`) is written as
+JSON.
 
 ## Export–Import Round Trip
 
@@ -117,18 +114,24 @@ Import reads files from a directory or ZIP and creates nodes in the mesh. Three 
 | **Upload File** | Single `.md`, `.json`, `.yaml`, `.csv`, or `.html` file |
 | **Upload Folder (ZIP)** | Directory structure or ZIP archive |
 
-The import service (`IMeshImportService`) uses `FileFormatParserRegistry` to parse each file into a `MeshNode` based on its extension.
+Import uses `FileFormatParserRegistry` to parse each file into a `MeshNode` based on its extension (`StaticRepoImporter` does the work).
 
 ## Programmatic Import
 
+Import is a request on the hub — observe it, never await it:
+
 ```csharp
-var importService = hub.ServiceProvider.GetRequiredService<IMeshImportService>();
-var result = await importService.ImportNodesAsync(
-    sourcePath: "/tmp/exported-data",
-    targetRootPath: "org/acme/project",
-    force: true,           // overwrite existing nodes
-    removeMissing: false); // don't delete nodes absent from source
+hub.Observe<ImportNodesResponse>(
+        new ImportNodesRequest("/tmp/exported-data", "org/acme/project") { Force = true })
+    .Subscribe(
+        response => logger.LogInformation(
+            "Imported {Nodes} nodes, skipped {Skipped}",
+            response.Message.NodesImported, response.Message.NodesSkipped),
+        ex => logger.LogWarning(ex, "Import failed"));
 ```
+
+`ImportNodesResponse` carries `NodesImported`, `PartitionsImported`, `NodesSkipped`,
+`PartitionsSkipped`, `NodesRemoved`, `Elapsed`, and `Error` (null on success).
 
 ---
 
@@ -148,12 +151,17 @@ Copy duplicates a node and all its descendants to a new namespace. The source no
 
 ## Programmatic Copy
 
+`CopyNodeTree` returns `IObservable<int>` (the node count) — subscribe, don't await:
+
 ```csharp
-var nodesCopied = await NodeCopyHelper.CopyNodeTreeAsync(
-    meshService, meshService, hub,
-    sourcePath: "org/acme",
-    targetNamespace: "org/backup",
-    force: false);
+NodeCopyHelper.CopyNodeTree(
+        meshService, meshService, hub,
+        sourcePath: "org/acme",
+        targetNamespace: "org/backup",
+        force: false)
+    .Subscribe(
+        nodesCopied => logger.LogInformation("Copied {Count} nodes", nodesCopied),
+        ex => logger.LogWarning(ex, "Copy failed"));
 ```
 
 ---

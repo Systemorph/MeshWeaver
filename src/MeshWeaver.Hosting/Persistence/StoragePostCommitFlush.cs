@@ -40,7 +40,7 @@ internal sealed class StoragePostCommitFlush(IMessageHub hub) : IPostCommitFlush
             .DefaultIfEmpty(true);
     }
 
-    // Feed-only publish for the MeshNode cross-hub ATOMIC apply (ApplyMeshNodePatchAtomic),
+    // Feed-only publish for the MeshNode cross-hub ATOMIC apply (ApplyMeshNodePatchInTurn),
     // which persists off-turn via DataSourceWithStorage.Synchronize and so must NOT call Flush
     // (that would double-write). The atomic path dropped the post-commit Flush to keep the ack
     // emit-onstart — but Flush was ALSO what published the Updated event that evicts the
