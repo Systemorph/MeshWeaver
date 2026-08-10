@@ -1,6 +1,5 @@
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -29,7 +28,11 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
     private readonly ITextEmbedder? _embedder;
     private readonly ILogger? _logger;
     private readonly object _gate = new();
-    private readonly Subject<DataChangeNotification> _changes = new();
+    // 🚨 An IsolatedChangeFeed, NEVER a plain Subject<T>: Subject.OnNext delivers synchronously
+    // in subscription order, so ONE subscriber throwing (a synced query caught mid-teardown, with
+    // a disposed changeBuffer still attached) aborts delivery to every subscriber after it — and
+    // the publish site's `catch { }` made that silent. Issues #889 (Postgres) and #1053 (in-memory).
+    private readonly IsolatedChangeFeed _changes;
 
     /// <summary>
     /// Opens the SQLite store, holding one dedicated connection for the adapter's lifetime and
@@ -48,6 +51,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
         _ioPool = ioPool ?? IoPool.Unbounded;
         _embedder = embedder;
         _logger = logger;
+        _changes = new IsolatedChangeFeed(logger, "sqlite");
         // One dedicated connection held for the adapter's lifetime — pooling is pointless and would
         // retain the file handle past Dispose (so the DB file can't be deleted/reopened cleanly).
         var csb = new SqliteConnectionStringBuilder(connectionString) { Pooling = false };
@@ -57,7 +61,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
     }
 
     /// <inheritdoc />
-    public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
+    public IObservable<DataChangeNotification> Changes => _changes;
 
     private static string Norm(string? path) => path?.Trim('/') ?? "";
 
@@ -153,7 +157,8 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
                 cmd.Parameters.AddWithValue("$emb", vector is null ? DBNull.Value : ToBlob(vector));
                 cmd.ExecuteNonQuery();
             }
-            try { _changes.OnNext(DataChangeNotification.Updated(path, node)); } catch { /* never throw */ }
+            // No try/catch: IsolatedChangeFeed already isolates and LOGS a faulty observer.
+            _changes.OnNext(DataChangeNotification.Updated(path, node));
             return node;
         }));
     }
@@ -225,7 +230,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
                 cmd.Parameters.AddWithValue("$p", p);
                 cmd.ExecuteNonQuery();
             }
-            try { _changes.OnNext(DataChangeNotification.Deleted(p, null)); } catch { /* never throw */ }
+            _changes.OnNext(DataChangeNotification.Deleted(p, null));
             return path;
         });
 
