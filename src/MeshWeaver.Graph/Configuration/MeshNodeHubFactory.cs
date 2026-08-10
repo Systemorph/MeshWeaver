@@ -42,6 +42,14 @@ internal class MeshNodeHubFactory(
                         enriched.Path, enriched.NodeType);
                 }
 
-                return enriched;
+                // 🚨 The binding above is made ONCE and then PINNED by address: routing
+                // short-circuits on GetHostedHub for an already-hosted address and never resolves
+                // the path again, so nothing re-reads the NodeType for the hub's whole lifetime.
+                // Arm the rebind watcher HERE — the single funnel every activation path (Monolith
+                // routing AND MessageHubGrain) goes through — so a node that acquires or changes
+                // its type recycles its hub instead of serving the wrong configuration forever
+                // (issue #1104). See NodeTypeRebindWatcher for why the mesh change feed, not the
+                // hub's own node stream, is the signal.
+                return NodeTypeRebindWatcher.WithNodeTypeRebind(enriched, meshHub, logger);
             });
 }

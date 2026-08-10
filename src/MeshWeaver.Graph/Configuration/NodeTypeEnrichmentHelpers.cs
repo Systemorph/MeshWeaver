@@ -552,11 +552,30 @@ internal static class NodeTypeEnrichmentHelpers
     ///     (the wedge that previously required a manual recycle).</item>
     /// </list></para>
     ///
-    /// <para>Reactive-only: an <c>Observable.Timer</c> gated by <c>TakeUntil</c> on the
-    /// in-flight signal, merged with <paramref name="settled"/>. The timer never emits
-    /// OnNext, so <c>Merge</c> forwards only the settled node (or the timer's OnError
-    /// when Phase A elapses). <paramref name="scheduler"/> is for deterministic
-    /// virtual-time tests; production uses the default scheduler.</para>
+    /// <para>🚨 The disarm is a LEVEL, not a one-shot edge — it lasts exactly as long as a
+    /// compile is actually running, and the budget RE-ARMS the moment the type leaves
+    /// Pending/Compiling without <paramref name="settled"/> accepting the result. It used to be
+    /// <c>TakeUntil(compileInFlight.Take(1))</c>, which cancelled the wall clock FOREVER on the
+    /// first in-flight emission. That is only sound when every terminal state satisfies
+    /// <paramref name="settled"/>. It does not for the framework-stale self-heal, whose
+    /// <see cref="IsRecompileSettled"/> accepts ONLY a genuinely usable build: a rebuild that ends
+    /// at <c>Error</c> — a node repo's committed stale stamp whose source no longer compiles — is
+    /// not an answer, no further compile is coming, and with the clock permanently disarmed
+    /// NOTHING bounded the wait. The per-instance hub's enrichment then never completed and never
+    /// faulted: its hub was never created, and every message routed to that node parked until the
+    /// SENDER's own timeout. Measured on the installer: a package whose root is typed by such a
+    /// NodeType stalled 60.3 s on its content publish (the mesh hub's RequestTimeout) and then
+    /// dropped the package's binaries. A wait that ends only at someone else's timeout is a silent
+    /// hang; re-arming turns it back into the graceful sink the caller can overlay.</para>
+    ///
+    /// <para>Reactive-only: the in-flight LEVEL selects either <c>Observable.Never</c> (disarmed)
+    /// or a fresh <c>Observable.Timer</c> (armed), flattened with <c>Switch</c> so only the
+    /// current one is live. <c>DistinctUntilChanged</c> is load-bearing: without it every
+    /// non-in-flight emission would restart the budget, and a chatty stream would never elapse —
+    /// the same silent hang by another route. <c>StartWith(false)</c> arms it at subscribe, so
+    /// Phase A is unchanged. The timer never emits OnNext, so <c>Merge</c> forwards only the
+    /// settled node. <paramref name="scheduler"/> is for deterministic virtual-time tests;
+    /// production uses the default scheduler.</para>
     /// </summary>
     internal static IObservable<MeshNode> WaitForCompileSettled(
         IObservable<MeshNode> typeStream,
@@ -566,27 +585,30 @@ internal static class NodeTypeEnrichmentHelpers
         System.Reactive.Concurrency.IScheduler? scheduler = null,
         System.Text.Json.JsonSerializerOptions? options = null)
     {
+        var clock = scheduler ?? System.Reactive.Concurrency.Scheduler.Default;
+
         // A compile is genuinely in flight for this NodeType — its terminal write is
-        // guaranteed by RunCompile, so the wait is bounded by the compile FINISHING,
-        // not a wall clock. Observing it DISARMS the no-progress deadline.
+        // guaranteed by RunCompile, so while that holds the wait is bounded by the compile
+        // FINISHING, not a wall clock.
         // Read the definition through ContentAs, not a CLR type test: an un-materialized
         // (JsonElement / JsonNode) mirror snapshot is the normal shape off a sync stream, and a
         // CLR test blinds this to an in-flight compile — see IsCompileSettled's remarks.
         var opts = options ?? System.Text.Json.JsonSerializerOptions.Default;
-        var compileInFlight = typeStream
-            .Where(t => t.ContentAs<NodeTypeDefinition>(opts) is { } d
+        var noProgressDeadline = typeStream
+            .Select(t => t.ContentAs<NodeTypeDefinition>(opts) is { } d
                 && d.CompilationStatus is CompilationStatus.Pending
                                        or CompilationStatus.Compiling)
-            .Take(1);
-
-        var noProgressDeadline = Observable
-            .Timer(noProgressBudget, scheduler ?? System.Reactive.Concurrency.Scheduler.Default)
-            .TakeUntil(compileInFlight)                 // disarm once a compile is running
+            .StartWith(false)                       // armed from subscribe (Phase A)
+            .DistinctUntilChanged()                 // only transitions restart/cancel the budget
+            .Select(inFlight => inFlight
+                ? Observable.Never<long>()          // disarmed while a compile runs
+                : Observable.Timer(noProgressBudget, clock))
+            .Switch()
             .SelectMany(_ => Observable.Throw<MeshNode>(onNoProgress()));
 
-        // The timer never emits OnNext (only OnError, or it completes empty once
-        // disarmed), so the only value flowing through Merge is the settled node.
-        // Take(1) then unsubscribes the still-armed timer on the happy path.
+        // The timer never emits OnNext (only OnError), so the only value flowing through
+        // Merge is the settled node. Take(1) then unsubscribes the still-armed timer on the
+        // happy path.
         return settled.Merge(noProgressDeadline).Take(1);
     }
 
