@@ -155,7 +155,8 @@ Current publishers, all on the same class:
 | `CosmosStorageAdapter` | `cosmos` |
 | `PostgreSqlStorageAdapter` | the partition's schema (or `public`) |
 | `SnowflakeStorageAdapter` | the partition's schema (or `public`) |
-| `PostgreSqlPathRoutingAdapter` / `SnowflakePathRoutingAdapter` | `path-router` |
+| `PostgreSqlPathRoutingAdapter` | `path-router` |
+| `SnowflakePathRoutingAdapter` | `sf-path-router` |
 
 ## Reading the symptom
 
