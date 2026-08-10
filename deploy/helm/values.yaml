@@ -293,10 +293,31 @@ config:
     ASPNETCORE_HTTP_PORTS: "8080"
     Deployment__Backend: "Filesystem"
     Deployment__DataRoot: "/data"
-    # Both OFF by default. The bake is a deliberate operational choice, not something a
-    # self-host should inherit: it front-loads every NodeType compile into startup, and the
-    # gate can hold a pod out of rotation. Enable them together, and raise probes.startup
-    # in the same change. See config.yaml for what each one does.
+    # 🔗 ONE setting in two keys — they are not independent, and the gate is worthless
+    # without the sweep. GateReadiness gates on state that ONLY the sweep writes, and the
+    # health check reports Healthy while the sweep has not started (by design: a config
+    # mistake must never black-hole a pod). So GateReadiness=true with DynamicTypes=false
+    # is a gate that is registered, permanently green, and protects NOTHING — silently.
+    # The portal now logs that combination at Critical on startup rather than letting a
+    # deployment believe it is gated ("NodeType bake gate requested but the sweep is off").
+    #
+    # Both stay OFF by default — a considered decision, not an oversight:
+    #   • The sweep enumerates EVERY NodeType across EVERY partition and activates and
+    #     compiles each dynamic one. On a large mesh that is a boot-time subscribe/compile
+    #     storm that starves the hubs; multi-silo it starved the Orleans membership probes
+    #     into the "I have been told I am dead" restart loop (memex, 2026-07-22). Turning
+    #     that on for every chart consumer — including single-node k3s, e2e and dev
+    #     instances — would ship a known incident by default.
+    #   • Correctness never needs it: types compile lazily on first access. The sweep buys
+    #     deploy-time latency and a gateable signal, which is an operational trade a MANAGED
+    #     env makes knowingly (see deploy/aks/values.aks.yaml, where both are "true").
+    #   • The gate additionally needs a startupProbe on /health with a budget covering a full
+    #     cold bake (~90 s per type, sequential — HOURS on a real mesh) and
+    #     strategy.maxUnavailable:0. Defaulting it on with the chart's 5-minute startup
+    #     budget would kill every pod mid-bake, forever.
+    # An instance that wants the protection turns BOTH on and raises probes.startup in the
+    # same change; progressDeadlineSeconds follows probes.startup automatically. See
+    # config.yaml for what each key does.
     PreWarm__DynamicTypes: "false"
     PreWarm__GateReadiness: "false"
     Deployment__Orleans__Clustering: "Localhost"
