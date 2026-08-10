@@ -81,7 +81,7 @@ public static class CodeQueryResolver
     /// <summary>
     /// Expands one raw query entry from <see cref="NodeTypeDefinition.Sources"/> or
     /// <see cref="NodeTypeDefinition.Tests"/> into one-or-more concrete mesh query
-    /// strings ready for <c>IMeshService.QueryAsync&lt;MeshNode&gt;</c>. An optional
+    /// strings ready for <c>IMeshService.Query&lt;MeshNode&gt;</c>. An optional
     /// <c>name=</c> prefix is stripped first — the compiler ignores grouping.
     /// </summary>
     public static IEnumerable<string> Expand(string rawQuery, string selfPath)
