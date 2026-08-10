@@ -268,6 +268,10 @@ need different evidence and have different fixes:
 | **Still running** (slow upstream) | last stage is the *await*, nothing after | the `Timeout` | nothing — or a budget that reflects the real wait |
 | **Terminated empty** | a `*_COMPLETED_EMPTY` stage | **nothing** | `DefaultIfEmpty` / an explicit empty arm |
 
+[Silent Completion](/Doc/Architecture/SilentCompletion) treats that second row on its own terms — the
+shape, its instances outside the request/response path (a filtered decline sentinel, a render generator
+that never delivers), and how to guard a chain so its empty terminal case fails closed.
+
 `EnsurePartitionBootstrap`'s authorization probe carries both stages for exactly this reason —
 `BOOTSTRAP_PERM_AWAIT` before the fold, then one of `BOOTSTRAP_PERM_VERDICT` /
 `BOOTSTRAP_PERM_FAULTED` / `BOOTSTRAP_PERM_COMPLETED_EMPTY`. A capture that ends at
