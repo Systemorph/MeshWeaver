@@ -41,12 +41,23 @@ public static class InstanceRegistrationPayloads
 /// </summary>
 public sealed class InstanceRegistrationClient(IMessageHub hub)
 {
+    /// <summary>
+    /// The named <see cref="HttpClient"/> every plugin-registry HTTP call resolves (this client and
+    /// <see cref="RegistryPackageSource"/>). Hosts SHOULD give this name its own resilience pipeline
+    /// (<c>AddHttpClient(HttpClientName).RemoveAllResilienceHandlers().AddStandardResilienceHandler()</c>):
+    /// under Aspire-style <c>ConfigureHttpClientDefaults</c> every client shares ONE unnamed
+    /// pipeline, so a boot-time registry timeout logs <c>Source: '-standard//…'</c> with an empty
+    /// operation key and cannot be attributed to the registry call path (#1133/#1137). A named
+    /// pipeline makes the same event read <c>plugin-registry-standard//…</c>.
+    /// </summary>
+    public const string HttpClientName = "plugin-registry";
+
     private static readonly HttpClient SharedHttp = new();
 
     private readonly IIoPool _httpPool =
         hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
     private readonly HttpClient _http =
-        hub.ServiceProvider.GetService<IHttpClientFactory>()?.CreateClient("plugin-registry") ?? SharedHttp;
+        hub.ServiceProvider.GetService<IHttpClientFactory>()?.CreateClient(HttpClientName) ?? SharedHttp;
 
     /// <summary>
     /// Registers this installation at <paramref name="registryUrl"/>. Cold; the call happens on
