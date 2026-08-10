@@ -1306,6 +1306,33 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 RequestFreshSnapshot();
                 return;
             }
+            // 🚨 LOSS DETECTION (issue #1081). The owner chains consecutive frames: each
+            // DataChangedEvent carries the Version of the frame SENT immediately before it
+            // (JsonSynchronizationStream.ToDataChanged). The transport underneath (Orleans
+            // memory streams) is at-most-once — a frame published before the subscriber's
+            // stream subscription attached, or dropped under pressure, simply never arrives,
+            // and NOTHING re-sends it. Before this check, that loss was invisible: later
+            // patches kept applying cleanly on top (they touch other areas/entities), so the
+            // mirror tracked the owner forever at a constant deficit — the measured shape of
+            // the wedge: the owner pushed the compile-error-overlay Full (v6, the one frame
+            // the test waits for), the client applied v1–v5 and then v7, v8; the page sat on
+            // "awaiting first data" for the full 45s detector with no error anywhere. A Patch
+            // whose BasedOnVersion is NOT the version we last applied proves the gap; the only
+            // sound reaction is a fresh authoritative snapshot from the owner (event-driven,
+            // storm-gated by _resyncInFlight — no timer, no retry loop). Applies to
+            // DataChangedEvent (owner→mirror) only: a PatchDataChangeRequest's chain is stamped
+            // by the SENDING mirror and is not comparable to this stream's applied version.
+            // Fulls need no gap check — a Full re-establishes the complete state, and a LOST
+            // Full is caught here by the first Patch that chained onto it.
+            if (delivery.Message is DataChangedEvent { BasedOnVersion: >= 0 } chained
+                && chained.BasedOnVersion != Current.Version)
+            {
+                logger.LogWarning(
+                    "[SYNC_STREAM] Frame loss detected for {StreamId}: incoming Patch v{In} chains onto v{Based} but the last applied frame is v{Cur} — a frame was lost in transport; requesting fresh snapshot from {Owner}",
+                    StreamId, delivery.Message.Version, chained.BasedOnVersion, Current.Version, StreamIdentity.Owner);
+                RequestFreshSnapshot();
+                return;
+            }
             try
             {
                 (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);

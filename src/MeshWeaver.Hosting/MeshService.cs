@@ -67,10 +67,7 @@ internal sealed class MeshService(
     /// this scoped service's lifetime.</para>
     /// </summary>
     private IMessageHub? _issuingHub;
-    private IMessageHub IssuingHub => _issuingHub ??=
-        string.Equals(hub.Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal)
-            ? hub.NodeOperationExecutionHub() ?? hub
-            : hub;
+    private IMessageHub IssuingHub => _issuingHub ??= hub.NodeOperationIssuingHub();
 
     /// <summary>
     /// Per-call timeout ceiling. Every CRUD observable is bounded by this so a lost response
