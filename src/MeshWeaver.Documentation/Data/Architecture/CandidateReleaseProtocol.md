@@ -133,12 +133,43 @@ an outage for exactly that portal. Only the instance knows its own set.
 
 So the gate moves to the deploy boundary:
 
-> Before a portal **adopts** a candidate image, it verifies that every plugin it has installed still
-> compiles against that candidate. If any regresses, the instance does not roll — it keeps serving
-> the image it is on and reports what broke.
+> Before a portal **adopts** a candidate image, that exact combination — the candidate image × the
+> module versions THAT instance has installed — is built and its tests run. Every module must build
+> and every test must be green for **that very combo**. If anything fails, the instance does not
+> roll: it keeps serving the image it is on and reports what broke.
 
 This is a *deploy* gate, not a release gate. A broken candidate stops at whichever instances it would
 break and rolls everywhere else.
+
+### The unit of verification is the COMBO, and it includes TESTS
+
+Two things are easy to get subtly wrong here, and both were wrong in earlier drafts of this page.
+
+**It is a combo, not a repo.** A node repo's CI verifies *that repo at HEAD* against *a pinned image*.
+Neither factor matches production: an instance runs a specific image and a specific, cross-repo set of
+module **versions**, which no single repo can see. `PackageManifest` already pins exactly what is
+needed per instance — `Id`, `Version`, `ModuleVersion`, `Source`/`SourceFolder`, `Requires` — so the
+combo is fully identifiable from the instance's own install records.
+
+**It is build AND tests, not compilation.** A NodeType that compiles can still be broken: a signature
+survives while its behaviour changes. "Green" means every module builds, every default area renders,
+and every module's `Tests` area passes — **for that combo**.
+
+That is not a new harness. `mw-plugin-test` (`tools/MeshWeaver.PluginTester`) already does precisely
+this: it boots a fresh in-process mesh, installs each package, waits for every NodeType to reach a
+terminal `CompilationStatus` (printing Roslyn diagnostics on error), renders each type's default
+area, and **executes each type's `Tests` layout area — a red test fails the run**. Exit 0 = all green.
+
+**What is missing is only the combo assembler.** `mw-plugin-test` today takes a *repo root* — every
+module in one checkout, at HEAD. The gate needs it pointed at *an instance's set*: read that
+instance's install records, materialise each module at its recorded `ModuleVersion` (the node repos
+already tag per module, e.g. `Store/v1.0.15`), assemble that set, and run the tool inside the
+**candidate** image. Same executable, different input.
+
+**Therefore the surge pod is NOT sufficient on its own.** `DynamicTypePreWarmer` compiles this
+instance's NodeTypes on the candidate image, which is the right *scope* — but it is compile-only and
+it runs after the pod is already up. It is a good last line; it is not the combo check, and it must
+not be mistaken for one.
 
 ### Most of this already exists — and it fired too late
 
@@ -187,13 +218,17 @@ replacement is ready — so on that portal readiness refusal protects nothing ev
 armed, and any slow start is a hard outage. Arming the gate without first setting
 `maxUnavailable: 0` there would create false confidence. Fix the strategy and the gate together.
 
-**And the surge pod IS the pre-adoption verification.** Adoption is not the image patch; adoption is
-when traffic moves, and readiness controls that. The surge pod runs the candidate image, compiles this
-instance's own installed set against it, and if anything healthy regresses it never joins the Service.
-So the gate does not belong in the self-update poller: that poller patches the image and cannot know
-compatibility without running the candidate's assemblies — a framework-identity change invalidates the
+**The surge pod is the LAST line, not the gate.** Adoption is not the image patch; adoption is when
+traffic moves, and readiness controls that — so a surge pod that never joins the Service does contain
+the damage. But it only *compiles*, it runs no module tests, and it discovers the problem by failing
+in production rather than before shipping. Treat it as the backstop that catches what the combo check
+missed, never as the check itself.
+
+The combo check therefore runs **before** the image is offered to that instance at all, off-cluster,
+in the candidate image — not in the self-update poller. The poller patches the image and cannot know
+compatibility without running the candidate's assemblies: a framework-identity change invalidates the
 whole assembly cache by design, and `UpdatePolicyContent` carries no declared-compatibility metadata
-to evaluate instead. A check there would be a guess.
+to evaluate instead. A check there would be a guess; the combo run is an answer.
 
 ### What actually has to change
 
