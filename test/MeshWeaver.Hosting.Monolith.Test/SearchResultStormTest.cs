@@ -86,6 +86,13 @@ public class SearchResultStormTest(ITestOutputHelper output) : MonolithMeshTestB
 {
     private IMeshService Query => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
+    /// <summary>
+    /// Id of the marker node created after the catalog's real leaves. Its arrival is the ordered
+    /// change feed's proof that the initial load — including any trailing <c>Added</c> frames from
+    /// an index that lagged a create — has been fully applied and counted.
+    /// </summary>
+    private const string QuiesceId = "zz-quiesce";
+
     private static Task WaitUntil(Func<bool> condition, TimeSpan timeout) =>
         Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Select(_ => condition())
@@ -100,6 +107,7 @@ public class SearchResultStormTest(ITestOutputHelper output) : MonolithMeshTestB
         var root = $"{TestPartition}/storm";
         var catalogQuery = $"path:{root} scope:descendants";
         var targetPath = $"{root}/a";
+        var quiescePath = $"{root}/{QuiesceId}";
 
         // A small live catalog: three leaves the search view would render as cards.
         await NodeFactory.CreateNode(
@@ -116,6 +124,8 @@ public class SearchResultStormTest(ITestOutputHelper output) : MonolithMeshTestB
         var accumulator = new SearchResultAccumulator();
         var rerenders = 0;
         var updatedForTarget = 0;
+        // -1 until the load is provably finished; latched inside the subscription. See the 🚨 below.
+        var rerendersAtQuiescence = -1;
 
         using var subscription = Query.Query<MeshNode>(MeshQueryRequest.FromQuery(catalogQuery))
             .Subscribe(change =>
@@ -126,11 +136,33 @@ public class SearchResultStormTest(ITestOutputHelper output) : MonolithMeshTestB
 
                 if (accumulator.Apply(change))
                     Interlocked.Increment(ref rerenders);
+
+                // Latched AFTER the increment, so the baseline can never miss the render that
+                // completed the load, and inside the callback, so no reader sees the pair
+                // half-updated.
+                if (rerendersAtQuiescence < 0
+                    && accumulator.Nodes.Any(n => string.Equals(n.Path, quiescePath, StringComparison.OrdinalIgnoreCase)))
+                    Volatile.Write(ref rerendersAtQuiescence, Volatile.Read(ref rerenders));
             });
 
-        // Let the initial set settle (Initial, plus any trailing Added if the index lagged a create).
-        await WaitUntil(() => accumulator.Nodes.Count >= 3, ReadNodeTimeout);
-        var rerendersAfterLoad = Volatile.Read(ref rerenders);
+        // 🚨 The baseline needs a POSITIVE signal that structural churn has finished, and a count
+        // threshold is not one. Waiting for `Nodes.Count >= 3` releases the moment the third node
+        // lands, but the load is not over then: the index can lag a create, so trailing `Added`
+        // frames for the first three keep arriving and each is a structural render. The old
+        // baseline was therefore whatever the count happened to be at an arbitrary point inside
+        // that churn, and the final exact-equality assertion blamed the storm for renders that had
+        // already happened — reproduced locally as "Expected 1, but found 3", and it reds
+        // unrelated PRs (seen on #1176, shard 1). It is a defect in the test, not in the code
+        // under test.
+        //
+        // A marker node created AFTER the first three turns ordering into that signal: the change
+        // feed is ordered, so once the marker has been applied, every structural frame for a/b/c
+        // is already applied AND already counted. No sleep, no tolerance, no weakened assertion —
+        // the storm must still add exactly zero.
+        await NodeFactory.CreateNode(
+            new MeshNode(QuiesceId, root) { Name = "quiesce marker", NodeType = "Markdown" }).Should().Emit();
+        await WaitUntil(() => Volatile.Read(ref rerendersAtQuiescence) >= 0, ReadNodeTimeout);
+        var rerendersAfterLoad = Volatile.Read(ref rerendersAtQuiescence);
         rerendersAfterLoad.Should().BeGreaterThanOrEqualTo(1, "the first frame is a structural render");
 
         // Fire a storm of content updates to ONE node — exactly what a busy mesh does to a thread.
