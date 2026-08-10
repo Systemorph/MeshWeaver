@@ -1,9 +1,11 @@
 using System;
 using System.Reactive.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
@@ -195,6 +197,142 @@ public class ActivityControlPlaneResubscribeTest
         GC.KeepAlive(watcher);
 
         return new WeakReference(captured);
+    }
+
+    /// <summary>
+    /// memex-cloud prod drip: every per-NodeType hub teardown emitted three
+    /// <c>fail: MeshWeaver.Graph.CompileWatcher — "&lt;watcher&gt; faulted on &lt;path&gt; —
+    /// re-establishing"</c> lines (Compile watcher / ReleaseRequestWatcher / Sources watcher),
+    /// on real types (Claims, Chess, Edu, SwissSolvencyTest, …) and on the short-lived
+    /// <c>_schema_validation/{guid}</c> + <c>$model-probe/{guid}</c> hubs alike. The captured
+    /// fault is exactly this shape:
+    /// <code>
+    /// System.Reflection.TargetInvocationException
+    ///  ---&gt; MeshWeaver.Messaging.HubDisposingException: Hub Claims is shutting down —
+    ///       cannot create '/MeshNode'.
+    ///    at MeshWeaver.Mesh.MeshNodeStreamHandle.GetStream()
+    ///    at MeshWeaver.Mesh.MeshNodeStreamHandle.Subscribe(IObserver`1 observer)
+    /// </code>
+    /// The hub is disposing, so it refuses the <c>sync/</c> sub-hub the own-node stream needs.
+    /// That is routine teardown, not a fault to recover from: the watcher must stop (its hub
+    /// is gone; the next activation installs a fresh one), never arm a re-establish timer that
+    /// roots the hub being collected (#991).
+    /// </summary>
+    [Fact]
+    public void OwnHubDisposing_IsTerminal_DoesNotResubscribe()
+    {
+        var address = new Address("mesh", "1");
+        // The production shape: HubDisposingException wrapped by the reflective Reduce dispatch.
+        var teardown = new TargetInvocationException(
+            new HubDisposingException(address, "/MeshNode"));
+        var subscriptions = 0;
+        var reEstablishes = 0;
+        var log = new RecordingLogger();
+
+        using var _ = ActivityControlPlaneExtensions.SubscribeWithReEstablish<int>(
+            () => Observable.Defer(() => { subscriptions++; return Observable.Throw<int>(teardown); }),
+            _ => { },
+            address,
+            log,
+            faultLogContext: "Compile watcher",
+            scheduleReEstablish: reEstablish =>
+            {
+                if (reEstablishes++ < 5) reEstablish();
+                return System.Reactive.Disposables.Disposable.Empty;
+            });
+
+        subscriptions.Should().Be(1,
+            "a hub that is disposing can never serve its own-node stream again — re-establishing "
+            + "logs prod ERRORs for routine teardown and arms a timer rooted at the dying hub");
+        reEstablishes.Should().Be(0, "teardown must not schedule anything at all");
+        log.ErrorCount.Should().Be(0,
+            "routine teardown must not reach the ERROR channel — this is the memex-cloud drip "
+            + $"(first line was: {log.FirstError ?? "(none)"})");
+        log.DebugCount.Should().Be(1, "the stop is still reported, at the level teardown deserves");
+    }
+
+    /// <summary>
+    /// Minimal recording <see cref="ILogger"/> — counts only, no mutable collection.
+    /// </summary>
+    private sealed class RecordingLogger : ILogger
+    {
+        public int ErrorCount { get; private set; }
+        public int DebugCount { get; private set; }
+        public string? FirstError { get; private set; }
+
+        IDisposable? ILogger.BeginScope<TState>(TState state) => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel >= LogLevel.Error)
+            {
+                ErrorCount++;
+                FirstError ??= formatter(state, exception);
+            }
+            else if (logLevel == LogLevel.Debug)
+                DebugCount++;
+        }
+    }
+
+    /// <summary>
+    /// The other half of the asymmetry: a hub OTHER than ours going down is genuinely transient
+    /// (the sources watcher reads source nodes owned by other hubs; that address may reactivate),
+    /// so it must still re-establish. Without the address scoping, the teardown fix would have
+    /// silently killed watchers on every neighbouring recycle.
+    /// </summary>
+    [Fact]
+    public void AnotherHubDisposing_StaysTransient_AndResubscribes()
+    {
+        var foreignTeardown = new TargetInvocationException(
+            new HubDisposingException(new Address("mesh", "2"), "/MeshNode"));
+        var subscriptions = 0;
+        var scheduled = 0;
+
+        using var _ = ActivityControlPlaneExtensions.SubscribeWithReEstablish<int>(
+            () => Observable.Defer(() => { subscriptions++; return Observable.Throw<int>(foreignTeardown); }),
+            _ => { },
+            new Address("mesh", "1"),
+            logger: null,
+            faultLogContext: "test",
+            scheduleReEstablish: reEstablish =>
+            {
+                if (scheduled++ < 2) reEstablish();
+                return System.Reactive.Disposables.Disposable.Empty;
+            });
+
+        subscriptions.Should().Be(3,
+            "another hub's disposal is transient for us — the watched node may reactivate");
+    }
+
+    [Fact]
+    public void IsOwnHubDisposing_MatchesOwnAddressOnly_ThroughWrappers()
+    {
+        var own = new Address("mesh", "1");
+        var bare = new HubDisposingException(own, "/MeshNode");
+
+        ActivityControlPlaneExtensions.IsOwnHubDisposing(bare, own).Should().BeTrue();
+        // Production wrapping: reflective Reduce dispatch → TargetInvocationException.
+        ActivityControlPlaneExtensions.IsOwnHubDisposing(
+            new TargetInvocationException(bare), own).Should().BeTrue();
+        // …and through an AggregateException fan-out.
+        ActivityControlPlaneExtensions.IsOwnHubDisposing(
+            new AggregateException(new InvalidOperationException("unrelated"), bare), own)
+            .Should().BeTrue();
+        // A hosted address renders as `path~host`; the question is about the node path.
+        ActivityControlPlaneExtensions.IsOwnHubDisposing(
+            new HubDisposingException(own.WithHost(new Address("portal", "p1")), "/MeshNode"), own)
+            .Should().BeTrue();
+
+        // Someone else's teardown is NOT ours — it stays transient.
+        ActivityControlPlaneExtensions.IsOwnHubDisposing(
+            new HubDisposingException(new Address("mesh", "2"), "/MeshNode"), own).Should().BeFalse();
+        // Ordinary faults are unaffected.
+        ActivityControlPlaneExtensions.IsOwnHubDisposing(
+            new InvalidOperationException("hub hiccup"), own).Should().BeFalse();
+        ActivityControlPlaneExtensions.IsOwnHubDisposing(null, own).Should().BeFalse();
     }
 
     [Fact]

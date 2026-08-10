@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "Controlled I/O Pooling — bounding the async edge"
-Abstract: "Hub and grain code is single-threaded and turn-based; genuine I/O (file system, blob, HTTP, compile, process) must run off that scheduler, on the shared ThreadPool, and bounded so a fan-out can't exhaust handles/sockets or starve Orleans. IIoPool is the one hidden primitive that does this — the generalization of the Postgres Observable.FromAsync(work, Scheduler.Default) + connection-pool pattern to every resource that carries no pool of its own."
+Abstract: "Hub and grain code is single-threaded and turn-based; genuine I/O (file system, blob, HTTP, compile, process) must run off that scheduler, on the shared ThreadPool, and bounded so a fan-out can't exhaust handles/sockets or starve Orleans. IIoPool is the one hidden primitive that does this — a bounded gate plus off-scheduler subscribe, for every resource class, generalizing the connection-pool governor Postgres had to those that carry no pool of their own."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#00695c'/><rect x='4' y='5' width='16' height='3' rx='1.5' fill='white'/><rect x='4' y='10.5' width='11' height='3' rx='1.5' fill='white'/><rect x='4' y='16' width='6' height='3' rx='1.5' fill='white'/></svg>"
 Authors:
   - "Roland Buergi"
@@ -23,7 +23,7 @@ Genuine I/O at the leaves — a file read, a blob download, an HTTP call, a Rosl
 1. **Run off the hub scheduler.** A bare `await` inside a handler captures `TaskScheduler.Current` and queues its continuation back onto the hub's single turn — blocking the action block, or (across hubs that share a scheduler) deadlocking. The work has to be handed explicitly to the ThreadPool.
 2. **Be bounded.** Without a cap, a mesh of thousands of per-node hubs can each subscribe to the same kind of I/O at once, issuing thousands of concurrent file handles or sockets. This exhausts the resource and — for sync-blocking work — triggers ThreadPool thread-injection that starves the very pool Orleans' grain turns rely on.
 
-Postgres already solved this: `Observable.FromAsync(work, Scheduler.Default)` pushes the DB round-trip onto the ThreadPool, and Npgsql's connection pool (`MaxPoolSize`, sized per role — 20/2/1) is the concurrency governor. File system, blob, HTTP, compile, and process carry **no pool of their own**. `IIoPool` is that missing governor, generalized and uniform.
+Postgres had half of this already: Npgsql's connection pool (`MaxPoolSize`, sized per role) is a real concurrency governor for DB work. What it never provided is requirement 1 — the old `Observable.FromAsync(work, Scheduler.Default)` sites did **not** get the round-trip off the hub scheduler, because `FromAsync`'s scheduler argument schedules *notification delivery*, not where the function is invoked (see "The hybrid governor" below). File system, blob, HTTP, compile, and process carry no pool of their own and had neither half. `IIoPool` supplies both, uniformly: off-scheduler by construction, and bounded per resource class.
 
 ---
 
@@ -169,15 +169,27 @@ The concurrency cap is enforced two ways, chosen per leaf kind:
 
 Pools are keyed by resource class and resolved lazily from `IoPoolRegistry` (a mesh-scoped singleton, disposed with the mesh — no static state). Caps come from `IoPoolOptions`, with sensible defaults that a host can override via `AddIoPools(o => o with { Blob = 64 })` without any call-site change.
 
-| Pool (`IoPoolNames`) | Default cap | Wave |
+Defaults below are the values on `IoPoolOptions` — read that record for the reasoning behind each
+one, which is often *not* "how much parallelism can this resource take".
+
+| Pool (`IoPoolNames`) | Default cap | What the cap is for |
 |---|---|---|
-| `FileSystem` | `Environment.ProcessorCount` | 1 |
-| `Blob` | 32 | 1 |
-| `Http` | 16 | 2 |
-| `Compile` | `Environment.ProcessorCount` | 3 |
-| `Process` | 4 | 3 |
-| `Routing` | 256 | — |
-| `pg:{adapter}` (per Postgres adapter) | **1** (mirrors the adapter's single Npgsql connection) | — |
+| `FileSystem` | 256 | Runaway-fan-out stop. Async leaves release the thread during the await; sync directory walks are not pooled at all |
+| `Blob` | 128 | Same — async, thread released during await |
+| `Http` | 16 | A real throttle on outbound calls |
+| `Ai` | 256 | Runaway-fan-out STOP, not a throttle. A round holds its slot for the whole round, and a *delegating* round holds one while awaiting a sub-round that needs its own |
+| `AgentStore` | 128 | Deliberately independent of `Ai`: a store call runs inside a tool call inside a round that already holds an `Ai` slot. Re-entering the same bounded pool is the nested-gate deadlock |
+| `Query` | 256 | Drain hook, not a throttle — the slot is held only for the bounded subscribe window |
+| `Layout` | 256 | Drain hook, as `Query` (a page renders many nested areas at once) |
+| `Routing` | 256 | Isolation boundary — see below |
+| `Compile` | `Environment.ProcessorCount` | CPU-bound |
+| `Process` | 4 | Heavy external processes |
+| `pg:{adapter}` / `sf:{adapter}` (per write adapter) | **1** | The gate *is* the single write connection — never a parallel bound on top of it |
+| `pg-read:{adapter}` / `sf-read:{adapter}` | 16 | Keeps read fan-out below the shared connection pool's `MaxPoolSize` so reads can't starve writes |
+| anything else | `Environment.ProcessorCount` | `IoPoolOptions.Default` |
+
+Note the prefix-shadowing order in `MaxConcurrencyFor`: `pg-read:` is tested **before** `pg:`
+(and `sf-read:` before `sf:`), because the read prefix also starts with the write prefix.
 
 **`Routing` is an ISOLATION boundary, not a throttle.** `RoutingGrain` is `[StatelessWorker(1)]` and
 non-reentrant, so a silo has exactly ONE routing turn — and Orleans' request timeout applies to
@@ -197,9 +209,13 @@ terminates costs one slot and nothing else. See issue #1028.
 A leaf takes an optional `IIoPool? pool = null` and stores `_pool = pool ?? IoPool.Unbounded`. Each leaf reads uniformly:
 
 ```csharp
-// HTTP leaf (McpRemoteMeshClient) — was Observable.FromAsync(async ct => …)
+// HTTP leaf (McpRemoteMeshClient) — was Observable.FromAsync(async ct => …).
+// Connect() is the promise-cached one-shot handshake (pool.Run, ReplaySubject-backed);
+// each call composes off it with SelectMany, so the handshake runs once for all callers.
 public IObservable<MeshNode?> Get(string path)
-    => _httpPool.Invoke(async ct => { var client = await GetClientAsync(ct); … });
+    => Connect().SelectMany(client =>
+        _pool.Invoke(async ct => Parse(await client.CallToolAsync("get", …, ct)
+            .ConfigureAwait(false))));
 
 // CPU / process leaf — InvokeBlocking on the dedicated limited-concurrency scheduler
 => _compilePool.InvokeBlocking(ct => RunRoslynScript(…));   // KernelExecutor
@@ -317,7 +333,12 @@ So the mesh teardown awaits **all three**, in order, before the scope is dispose
 1. `IMessageHub.DisposalCompleted` — action blocks + message round-trips. (Resources enqueue their
    async cleanup onto the `AsyncDisposeQueue` during this synchronous-`Dispose()` phase — `Dispose()`
    must never block, so async cleanup is *queued*, not run inline.)
-2. `IoPoolRegistry.WhenDrained(timeout)` — offloaded ThreadPool I/O (`TotalInFlight == 0`).
+2. `IoPoolRegistry.DrainAll()` — offloaded ThreadPool I/O. **CANCEL + JOIN, not wait.** 🚨 Do *not*
+   use the wait-only `WhenDrained(timeout)` here: a live change-feed leaf never completes on its own,
+   so a polled wait times out and lets the scope dispose *while the leaf is still running* — its
+   ThreadPool thread then dereferences a collectible node ALC's freed metadata after unload, a
+   native use-after-unload **SIGSEGV**. `DrainAll()` cancels every leaf so it stops, then joins, and
+   returns the count it had to leak.
 3. `AsyncDisposeQueue.DrainAsync(timeout)` — the queued async cleanup. A TPL `ActionBlock` drains it;
    `DrainAsync` `Complete()`s the block and awaits the remainder (bounded), so it converges even under
    continuous influx — a *version-target* wait would not (the queue is a message stream / endless
@@ -339,17 +360,22 @@ mesh.Dispose();
 await mesh.DisposalCompleted
     .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
     .FirstOrDefaultAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(15));   // phase 1
-if (ioPools is not null)
-    await ioPools.WhenDrained(TimeSpan.FromSeconds(15)).FirstAsync().ToTask();   // phase 2
+var leakedIoLeaves = ioPools?.DrainAll() ?? 0;   // phase 2 — cancel + join, NOT a polled wait
 if (disposeQueue is not null)
     await disposeQueue.DrainAsync(TimeSpan.FromSeconds(15));               // phase 3
 // ONLY NOW dispose the service scope.
 ```
 
-"Only drainage of async pipelines is allowed": the `await` lives at that one (two-phase) drain, the work
+"Only drainage of async pipelines is allowed": the `await` lives at that one three-phase drain, the work
 stays reactive. Same principle as `IIoPool` — the async boundary is pushed to the edge and bounded; it is
 never an ambient `await` mid-flow. Full order + failure mode: [Mesh Lifecycle](/Doc/Architecture/MeshLifecycle). See also
 [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls).
+
+🚨 **Ambient context does not cross the pool.** Work handed to `IIoPool` runs on a pooled thread whose
+`ExecutionContext` is not yours: an `AsyncLocal` you set upstream is not readable inside the leaf, and a
+value written inside the leaf is not visible to the caller. Capture what the leaf needs into the closure
+before handing it over — see [AsyncLocal Across Scheduler Hops](/Doc/Architecture/AsyncLocalAcrossHops)
+and, for identity specifically, [AccessContext Propagation](/Doc/Architecture/AccessContextPropagation).
 
 ---
 
@@ -359,7 +385,7 @@ never an ambient `await` mid-flow. Full order + failure mode: [Mesh Lifecycle](/
 |---|---|
 | **Http** | `McpRemoteMeshClient` (MCP mirror), Social publishers (`ScheduledPostPublisher` / `PostStatsRefresher` / `PastPostIngestJob`), `CopilotConnectStrategy` (SDK calls), `KernelExecutor` (`#r nuget` restore), `GoogleGeocodingService` (geocode fan-out) |
 | **Process** | `MeshPlugin.RunTests` (`dotnet test` via `Process.Start`), `ClaudeConnectStrategy` / `CopilotConnectStrategy` (CLI spawn + scrape) |
-| **Compile** | `KernelExecutor.RunOnePass` (the interactive Roslyn script compile+execute). The per-submission `executionLock` still serialises REPL order; the pool only bounds compiles across kernels and shares the gate with NodeType compilation, so a script compile and a NodeType compile never race on the same collectible-ALC assembly file (the deadlock a thread dump caught) |
+| **Compile** | `KernelExecutor.RunOnePass` (the interactive Roslyn script compile+execute). REPL order is serialised by the submission pump — `submissions.Select(RunSubmission).Concat().Subscribe()`, which subscribes the next submission only after the previous completes — *not* by a lock. The pool only bounds compiles across kernels and shares the gate with NodeType compilation, so a script compile and a NodeType compile never race on the same collectible-ALC assembly file (the deadlock a thread dump caught) |
 | **FileSystem** | `TypeSource` initial-data load, `MeshExtensions` post-creation handler invoke |
 | **`pg:{adapter}` / Cosmos** | `PostgreSqlStorageAdapter`, `PostgreSqlVersionQuery`, `PostgreSqlPartitionedMeshQuery`, `PostgreSqlPartitionStorageProvider`, `CosmosStorageAdapter`, `CosmosMeshQuery` — every DB round-trip goes through `_ioPool.Invoke`/`Run` |
 

@@ -304,15 +304,14 @@ public static class MarkdownViewLogic
     /// must reach the kernel sequentially so block #2's
     /// <c>scriptState.ContinueWithAsync</c> sees block #1's variable.
     /// <para>
-    /// The naive shape — <c>foreach Post</c> without waiting — relies on the
-    /// kernel's <c>executionLock</c> SemaphoreSlim to serialise execution and
-    /// hopes that the SemaphoreSlim acquires in arrival order. SemaphoreSlim
-    /// is FIFO under contention, but each <c>Hub.Observe</c> + <c>Subscribe</c>
-    /// pair runs on the calling hub's action block; the inner WaitAsync
-    /// continuations resume on the TaskPool, so the order in which the script
-    /// pipeline acquires the lock can interleave on a busy CI thread pool —
-    /// surfaced as block #2 reaching <c>CSharpScript.RunAsync</c> before
-    /// block #1 has stored <c>scriptState</c>, then failing with
+    /// The naive shape — <c>foreach Post</c> without waiting — leaves ordering to
+    /// whatever order the posts happen to reach the kernel. The kernel itself
+    /// serialises correctly: <c>KernelExecutor</c> runs submissions on a reactive
+    /// serial queue (<c>Subject</c> + <c>Concat</c>, which subscribes the next
+    /// submission only after the previous <c>Execute</c> completes and
+    /// <c>scriptState</c> is assigned). But that guarantees order of ARRIVAL, not
+    /// the order this pipeline intended, so posting without waiting can still let
+    /// block #2 arrive before block #1 — surfaced as
     /// <c>error CS0103: The name 'counter' does not exist in the current
     /// context</c>.
     /// </para>

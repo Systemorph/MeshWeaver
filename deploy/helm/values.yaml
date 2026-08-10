@@ -157,10 +157,26 @@ migration:
 bake:
   enabled: false
   image: "ghcr.io/systemorph/memex-bake:latest"
-  # A cold bake is ~90 s per NodeType and strictly sequential — 60-100 types is 2-3 hours. This
-  # deadline kills the Job, so size it above the real worst case: tripping it reports a failure for
-  # work that was only slow, which is the one wrong answer a gate must not give.
-  activeDeadlineSeconds: 14400   # 4h
+  # ⏱️ DERIVED from the MEASURED per-type bake cost — do not adjust either number alone.
+  #
+  #   measured 2026-08-10 (production Loki, all three portals on one image): ~2.4 s per NodeType,
+  #   agreeing within 3% across a 10x spread in mesh size —
+  #     memex-cloud 237-241 types / 567 s   memex 72-81 / 179 s   atioz 22-36 / 68 s
+  #
+  #   largest production mesh   ~240 types x 2.4 s  ~= 570 s  (~10 min)
+  #   + Job overhead            image pull + wait-for-postgres init + process boot
+  #   worst realistic run                           ~= 15 min
+  #   x4 headroom                                    = 3600 s (1 h)
+  #
+  # Headroom is deliberately WIDER here than on the startup probe (30 min): tripping this deadline
+  # kills the Job and reports a FAILURE for work that was only slow, which is the one wrong answer a
+  # gate must not give. 1 h still covers ~1500 types — 6x the largest mesh we run — and a bake past
+  # an hour is stuck, not slow.
+  #
+  # 🚨 This was 14400 (4 h) until 2026-08-10, sized from a "~90 s per NodeType" estimate that
+  # measurement showed to be 37x too high. A deadline that generous is not a safety margin; it is an
+  # absent detector. See deploy/CHANGE-PROPAGATION.md#the-bake-tax.
+  activeDeadlineSeconds: 3600   # 1h
   ttlSecondsAfterFinished: 3600
 
 # ---- Startup probe budget ------------------------------------------------------------------------
@@ -169,10 +185,27 @@ bake:
 # provisioning + static import).
 #
 # ⚠️ If you enable config.memex_portal.PreWarm__GateReadiness, raise failureThreshold in the SAME
-# change. The bake compiles every dynamic NodeType sequentially at ~90 s each, so a mesh with 60-100
-# types needs 2-3 HOURS. Suggested paired setting: periodSeconds 10, failureThreshold 1080 (3h).
-# Under-budgeting here is not a slow rollout — it is a pod that is killed mid-bake and never
+# change — the gate holds /health red for the whole bake. Suggested paired setting:
+#   periodSeconds: 10, failureThreshold: 180   →  1800 s = 30 min
+#
+# ⏱️ DERIVED from the MEASURED per-type bake cost (2026-08-10, production Loki, three portals):
+#   ~2.4 s per NodeType, sequential — memex-cloud 237-241 types / 567 s, memex 72-81 / 179 s,
+#   atioz 22-36 / 68 s.
+#
+#   largest production mesh   ~240 types x 2.4 s  ~= 570 s   (~10 min)
+#   + plain cold boot         schema provisioning + static import (the ungated 5 min budget)
+#   worst realistic startup                       ~= 870 s   (~15 min)
+#   x2 headroom                                    = 1800 s  (30 min)
+#
+# 1800 s also covers ~750 types — 3x the largest mesh we run — so growth has room without another
+# resize. Under-budgeting here is not a slow rollout: it is a pod killed mid-bake that never
 # converges, on every single attempt.
+#
+# 🚨 The suggestion here was 10 x 1080 (3 h) until 2026-08-10, sized from a "~90 s per NodeType"
+# estimate that measurement showed to be 37x too high. The point of this budget is that a genuinely
+# STUCK bake is DETECTED, and at 3 h it could not be: every real bake finishes inside 10 min, so the
+# remaining 2h50m distinguished nothing — a wedged pod and a healthy one are indistinguishable for
+# the rest of that window. See deploy/CHANGE-PROPAGATION.md#the-bake-tax.
 probes:
   startup:
     periodSeconds: 5
@@ -312,9 +345,9 @@ config:
     #     deploy-time latency and a gateable signal, which is an operational trade a MANAGED
     #     env makes knowingly (see deploy/aks/values.aks.yaml, where both are "true").
     #   • The gate additionally needs a startupProbe on /health with a budget covering a full
-    #     cold bake (~90 s per type, sequential — HOURS on a real mesh) and
-    #     strategy.maxUnavailable:0. Defaulting it on with the chart's 5-minute startup
-    #     budget would kill every pod mid-bake, forever.
+    #     cold bake (~2.4 s per type, sequential — ~10 min on the largest mesh we run;
+    #     measured 2026-08-10) and strategy.maxUnavailable:0. Defaulting it on with the
+    #     chart's 5-minute startup budget would kill every pod mid-bake, forever.
     # An instance that wants the protection turns BOTH on and raises probes.startup in the
     # same change; progressDeadlineSeconds follows probes.startup automatically. See
     # config.yaml for what each key does.

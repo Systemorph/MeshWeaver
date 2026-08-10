@@ -170,19 +170,36 @@ internal static class NodeTypeEnrichmentHelpers
                     }
                     if (outcome == ProbeOutcome.Indeterminate)
                     {
-                        var msg =
-                            $"The registration lookup for NodeType '{nodeType}' did not complete within "
-                            + $"{NodeTypeProbeTimeout.TotalSeconds:0}s.\n"
-                            + $"Instance '{node.Path}' is rendering this fallback until the lookup succeeds.";
-                        var (intro, callToAction, guidance) = OverlayCopy(OverlayCause.LookupTimedOut);
-                        // NULL version gate for the same reason as the missing case:
-                        // no type node was ever read here, so the first usable
-                        // emission is genuine news.
-                        return Observable.Return(
-                            WithOverlaySelfHeal(
-                                WithCompilationErrorOverlay(node, nodeType, msg, meshConfiguration,
-                                    guidance: guidance, intro: intro, callToAction: callToAction),
-                                meshHub, nodeType, typeVersionAtOverlay: null, logger));
+                        // 🚨 INDETERMINATE IS NOT A VERDICT — so it must not be as FINAL as
+                        // "definitely absent". This branch used to return a terminal overlay,
+                        // and THAT is the one-way degradation behind the memex 2026-08-09
+                        // '@Store' incident: every self-update roll changes the framework hash,
+                        // all ~240 dynamic NodeTypes rebuild sequentially (~10 min), the 3 s
+                        // probe loses that race for a handful of them, and the instance is
+                        // bound — for the grain's whole lifetime — to a config that never ran
+                        // the type's `WithContentType<T>()`. Its row's '$type' then resolves on
+                        // NO registry, MeshNodeTypeSource degrades Content to an untyped
+                        // JsonElement, and the value renders empty / reactive waits time out
+                        // long after the type finished compiling. It is a RACE, so it hit only
+                        // 2 of 5 pods in 24 h — the worst kind of "works on the other pod".
+                        //
+                        // The remedy is NOT a bigger NodeTypeProbeTimeout (that just moves the
+                        // race). The probe exists for exactly ONE job: fail FAST when the mesh
+                        // ANSWERS "nothing is registered there" (the Missing branch above). An
+                        // unanswered lookup grants no licence to fail fast, so we fall through
+                        // to the same reactive path a Registered outcome takes:
+                        // BuildEnrichmentChain subscribes the NodeType's OWN mesh-node stream
+                        // and settles the moment the type actually shows up — registration and
+                        // compile completion ARE emissions on that stream. No poll, no timer,
+                        // no retry loop: the re-resolution is the framework's own observable.
+                        // The wait is bounded exactly as the Registered path is
+                        // (WaitForCompileSettled: a wall clock only while NOTHING is
+                        // compiling, disarmed while a compile is genuinely in flight), and it
+                        // still ends in the graceful sink — an overlay whose copy names the
+                        // unanswered LOOKUP, never "correct the code".
+                        return BuildEnrichmentChain(
+                            meshHub, meshConfiguration, compilationService, node, nodeType, logger,
+                            afterIndeterminateProbe: true);
                     }
                     return BuildEnrichmentChain(meshHub, meshConfiguration, compilationService, node, nodeType, logger);
                 });
@@ -192,12 +209,21 @@ internal static class NodeTypeEnrichmentHelpers
     }
 
     /// <summary>
-    /// Existence probe timeout — short on purpose. The probe is a one-shot
-    /// "does a node at path:{nodeType} exist" query against the static and
-    /// storage providers; missing-type scenarios should surface in &lt;1s on
-    /// a healthy mesh. Anything longer almost certainly means a real backend
-    /// problem the operator needs to see, so we treat probe timeouts as
-    /// "missing" and emit the error overlay.
+    /// Existence probe timeout — short on purpose, and short is SAFE because a
+    /// timeout here is not a verdict. The probe is a one-shot "does a node at
+    /// path:{nodeType} exist" query against the static and storage providers;
+    /// missing-type scenarios should surface in &lt;1s on a healthy mesh, and
+    /// that ANSWERED absence is the only thing this budget is allowed to decide
+    /// (<see cref="ProbeOutcome.Missing"/> → fail fast with the "not registered"
+    /// overlay).
+    ///
+    /// <para>🚨 A probe that does not answer inside the budget yields
+    /// <see cref="ProbeOutcome.Indeterminate"/>, which falls through to the
+    /// normal reactive enrichment chain — so widening this number can never be
+    /// the fix for a type that "renders empty after a deploy". The old code DID
+    /// treat a timeout as terminal, and under a post-roll recompile storm
+    /// (~240 dynamic NodeTypes rebuilding sequentially) that permanently bound
+    /// healthy instances to a fallback config.</para>
     /// </summary>
     private static readonly TimeSpan NodeTypeProbeTimeout = TimeSpan.FromSeconds(3);
 
@@ -220,13 +246,23 @@ internal static class NodeTypeEnrichmentHelpers
         Indeterminate
     }
 
+    /// <param name="afterIndeterminateProbe">
+    /// True when the existence probe reached NO verdict and this chain is the
+    /// re-resolution that replaces it (see the <see cref="ProbeOutcome.Indeterminate"/>
+    /// branch of <see cref="EnrichWithNodeType"/>). It changes nothing about how the
+    /// chain WAITS — only what the overlay says if the wait also comes up empty: the
+    /// cause is then the unanswered LOOKUP, not an unsettled build, so the operator is
+    /// not sent chasing a compile that was never consulted (#641's mistake, one layer
+    /// down).
+    /// </param>
     private static IObservable<MeshNode> BuildEnrichmentChain(
         IMessageHub meshHub,
         MeshConfiguration meshConfiguration,
         IMeshNodeCompilationService? compilationService,
         MeshNode node,
         string nodeType,
-        ILogger? logger)
+        ILogger? logger,
+        bool afterIndeterminateProbe = false)
     {
         // Slow path: subscribe to the NodeType MeshNode stream directly via
         // the mesh hub's workspace. The workspace's per-(addr, ref) cache
@@ -278,7 +314,19 @@ internal static class NodeTypeEnrichmentHelpers
                 // that page swaps the "correct the code" copy for the
                 // auto-recovery story (see UnsettledBuildIntro/Guidance).
                 var timedOut = ex is TimeoutException;
-                var userMessage = timedOut
+                // 🚨 When we got here BECAUSE the registration lookup never answered, the
+                // honest cause is still "the lookup did not answer" — the build was never
+                // consulted, so "the build did not settle" would be a guess dressed as a
+                // diagnostic. Keep the LookupTimedOut copy and name BOTH budgets that
+                // elapsed, so the operator can tell a slow storage/mesh-hub from a genuinely
+                // unsettled compile.
+                var lookupNeverAnswered = timedOut && afterIndeterminateProbe;
+                var userMessage = lookupNeverAnswered
+                    ? $"The registration lookup for NodeType '{nodeType}' did not complete within "
+                      + $"{NodeTypeProbeTimeout.TotalSeconds:0}s, and the type did not show up on its own "
+                      + $"stream within a further {SlowPathTimeout.TotalSeconds:0}s.\n"
+                      + $"Instance '{node.Path}' is rendering this fallback until the lookup succeeds."
+                    : timedOut
                     ? $"NodeType '{nodeType}' build did not settle within {SlowPathTimeout.TotalSeconds:0}s.\n"
                       + $"Instance '{node.Path}' is rendering this fallback until the type's build settles."
                     // A non-timeout abort still isn't the author's code: name the
@@ -286,7 +334,9 @@ internal static class NodeTypeEnrichmentHelpers
                     : $"NodeType '{nodeType}' could not be prepared for instance '{node.Path}'\n"
                       + $"{ex.GetType().Name}: {ex.Message}";
                 var (intro, callToAction, guidance) = OverlayCopy(
-                    timedOut ? OverlayCause.BuildNotSettled : OverlayCause.EnrichmentFaulted);
+                    lookupNeverAnswered ? OverlayCause.LookupTimedOut
+                    : timedOut ? OverlayCause.BuildNotSettled
+                    : OverlayCause.EnrichmentFaulted);
                 // Self-heal with a NULL version gate: no type node is in hand
                 // here, and a currently-usable state would have settled instead
                 // of timing out — so the first usable emission is genuine news

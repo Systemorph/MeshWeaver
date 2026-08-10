@@ -90,18 +90,19 @@ the gate is closed, every inbound delivery is queued — except those that pass 
 bypass predicate. When `hub.OpenGate(name)` is called, the queue drains in order.
 Closing again after opening is a no-op: gates are one-way.
 
-Register a gate on `MessageHubConfiguration`:
+Register a gate on `MessageHubConfiguration`. The signature is
+`WithInitializationGate(string name, Predicate<IMessageDelivery>? allowDuringInit = null)`:
 
 ```csharp
 config.WithInitializationGate(
-    gateName: MeshNodeExtensions.MeshNodeInitGateName,
-    letThrough: d => d.Message is CreateNodeRequest);
+    MeshNodeExtensions.MeshNodeInitGateName,
+    d => d.Message is CreateNodeRequest);
 ```
 
 | Parameter | Purpose |
 |---|---|
-| `gateName` | String identifier that lets multiple gates coexist and tells `OpenGate` which to flip. Always use a named constant — never inline the string. |
-| `letThrough` | Predicate evaluated on every queued delivery. Return `true` for messages that must bypass the gate. For the canonical mesh-node init gate, `CreateNodeRequest` always passes so the hub can come into existence without timing out. |
+| `name` | String identifier that lets multiple gates coexist and tells `OpenGate` which to flip. Always use a named constant — never inline the string. |
+| `allowDuringInit` | Predicate evaluated on every queued delivery. Return `true` for messages that must bypass the gate. For the canonical mesh-node init gate, `CreateNodeRequest` always passes so the hub can come into existence without timing out. |
 
 `hub.OpenGate(name)` is **idempotent**: call it from multiple branches (success, failure,
 no-persisted-node paths) without worry.
@@ -120,9 +121,9 @@ You need a gate when all three of these are true:
 Without a gate, an early request reads an empty or null stream and gets a "not found"
 response — not a wait. The gate turns that race into "wait until loaded, then respond."
 
-**Canonical example:** `MeshNodeInitGateName`, opened by `MeshNodeTypeSource.Initialize`
-after persistence reads the hub's own `MeshNode`. Without the gate, a `GetDataRequest`
-for `MeshNodeReference` would race the load and silently return null.
+**Canonical example:** `MeshNodeInitGateName`, opened by `MeshNodeTypeSource` once the hub's
+own `MeshNode` has been read. Without the gate, a `GetDataRequest` for `MeshNodeReference`
+would race the load and silently return null.
 
 > If your data is available synchronously — built-in nodes, `WithInitialData([...])`,
 > a static provider — you don't need a gate at all. Open it eagerly at config time so
@@ -171,15 +172,22 @@ larger observable that bridges to `Task` only at the outer edge, e.g. inside
 `WithInitialization`). The `Initialize` body itself must contain no `await`, no
 `.ToTask`, and no `Observable.FromAsync` over a hub round-trip.
 
-### When is `Observable.FromAsync` permitted?
+### `Observable.FromAsync` is never permitted
 
-`Observable.FromAsync(ct => DbCallAsync(ct))` is **sanctioned** for genuinely
-Task-based primitives that do not post messages to the hub — a pure DB hit, file I/O,
-an EF query, or an HTTP fetch.
+🚨 **`Observable.FromAsync` is FORBIDDEN anywhere in `src/`** — including for a "pure" DB
+hit, file I/O, an EF query or an HTTP fetch. A bare `FromAsync` runs the function's
+synchronous prologue on the **subscribing thread** (the hub scheduler when the subscribe
+happens mid-handler) and applies no concurrency bound. The only occurrence in the tree is
+sealed inside `IoPool` itself; every other mention in `src/` is a comment saying "never".
 
-It is **forbidden** over hub round-trips: `hub.RegisterCallback`, `hub.AwaitResponse`,
-`meshService.QueryAsync`, `workspace.GetRemoteStream(...).Take(1).ToTask()`, or anything
-whose `Task` completion depends on the hub's own action block making forward progress.
+A genuinely-async leaf goes through **`IIoPool`** — `pool.Invoke(ct => SomethingAsync(ct))`
+for a `Task<T>` leaf, `pool.InvokeBlocking(...)` for a sync-blocking/CPU leaf — see
+[Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling).
+
+It is doubly wrong over a **hub round-trip** — anything whose completion depends on the
+hub's own action block making forward progress (a cross-hub request, a
+`workspace.GetRemoteStream(...).Take(1).ToTask()`): pooling it does not help, because the
+thing it waits for can never be dequeued. Compose those reactively and `Subscribe`.
 See [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) for the full rule.
 
 ---
@@ -197,15 +205,17 @@ internal IObservable<InstanceCollection> Initialize(
 Implementations emit exactly one `InstanceCollection`. The framework's data-source
 initializer (`GenericUnpartitionedDataSource.GetInitialValueAsync` and its partitioned
 twin) composes per-type-source `Initialize` calls via `SelectMany` + `Aggregate`, then
-bridges to `Task<EntityStore>` exactly **once** at the `WithInitialization(...)` edge.
+bridges to `Task<EntityStore>` exactly **once** at the
+`StreamConfiguration<T>.WithInitialization(...)` edge (that overload consumes a
+`Func<…, Task<TStream>>`; the bridge is the single `.FirstAsync().ToTask(...)` there).
 
 | Type source | Init source | Bridge inside `Initialize` |
 |---|---|---|
-| `TypeSource` (base) | User callback `InitializationFunction` (Task) | `Observable.FromAsync` — sanctioned, opaque user callback. |
-| `MeshNodeTypeSource` | `IStorageService.GetNode` (already `IObservable`) | None — pure `.FirstAsync().Select(...)`. |
-| `TypeSourceWithTypeWithDataStorage<T>` | `IDataStorage.Query<T>().ToDictionaryAsync` (DB) | `IIoPool.Invoke` — the async DB leaf bridges through the pool (see [ControlledIoPooling](/Doc/Architecture/ControlledIoPooling)). |
+| `TypeSource` (base) | `InitializationFunction`, which is itself `Func<WorkspaceReference<InstanceCollection>, IObservable<IEnumerable<object>>>` | None — pure `.Select(...)`. There is no `Task` and no `FromAsync` on this path. |
+| `MeshNodeTypeSource` | the hub's own-node stream, or `IMeshNodePersistenceCore.Read` (already `IObservable`) | None — `Concat` of the durable + routing legs, then `.Where(...).Select(...)`. |
+| `TypeSourceWithTypeWithDataStorage<T>` | `IDataStorage.Query<T>().ToDictionaryAsync` (EF/DB) | `Observable.Defer(() => LoadFromStorageAsync().ToObservable())` — `Defer` keeps it cold, `.ToObservable()` bridges the EF `Task`. Not pooled today. |
 | `VirtualDataSource.VirtualTypeSource` | `StreamUpdates()` (already `IObservable`) | None — `.Take(1).Timeout(...).Select(...)`. |
-| `PartitionTypeSource<T>` | `IStorageService.GetPartitionObjectsAsync` (DB) | `IIoPool.Invoke` — same pooled bridge. |
+| `PartitionTypeSource<T>` | `IMeshNodePersistenceCore.GetPartitionObjects` (already `IObservable`) | None — the async DB leaf is pooled through `IIoPool` *inside the persistence core*, not here. |
 
 `ITypeSource.Initialize` is `IObservable<InstanceCollection>` — implementations compose
 reactively; there is no `Task`-returning surface to await.
@@ -267,29 +277,37 @@ the gate in hub config and open it from a `WithInitialization(...)` hook:
 config
     .WithInitializationGate(MyGateName, d => d.Message is BootstrapRequest)
     .WithInitialization(hub =>
-    {
-        // Subscribe to the readiness observable. The gate opens on first emission;
-        // subsequent emissions are no-ops (OpenGate is idempotent).
-        // NEVER `await`-bridge inside this method.
-        var sub = readinessObservable
+        // Return the readiness observable — the framework composes the BuildupActions with
+        // Observable.Concat and opens the framework Initialize gate when they complete.
+        // The side effect (OpenGate) rides the emission; NEVER `await`-bridge here.
+        readinessObservable
             .Take(1)
-            .Subscribe(
-                _ => hub.OpenGate(MyGateName),
-                ex =>
-                {
-                    logger.LogError(ex, "Readiness signal failed; opening gate to release queued traffic");
-                    hub.OpenGate(MyGateName);
-                });
-
-        hub.RegisterForDisposal(sub);
-        return Task.CompletedTask;   // hook signature is Task; body stays sync
-    });
+            .Select(_ => { hub.OpenGate(MyGateName); return Unit.Default; })
+            .Catch<Unit, Exception>(ex =>
+            {
+                logger.LogError(ex, "Readiness signal failed; opening gate to release queued traffic");
+                hub.OpenGate(MyGateName);
+                return Observable.Return(Unit.Default);
+            }));
 ```
 
-`WithInitialization` accepts a `Func<IMessageHub, CancellationToken, Task>`. The hook
-body must remain synchronous — return `Task.CompletedTask` and let `Subscribe` carry
-the deferred work. Awaiting inside this hook is the same deadlock as awaiting inside
-`Initialize`.
+`MessageHubConfiguration` has exactly **two** `WithInitialization` overloads, and neither
+returns a `Task`:
+
+| Overload | Runs |
+|---|---|
+| `WithInitialization(Action<IMessageHub>)` | Synchronously during `Build()`, *before* message processing starts (`SyncBuildupActions`). |
+| `WithInitialization(Func<IMessageHub, IObservable<Unit>>)` | As a `BuildupAction`, composed with `Observable.Concat` when `InitializeHubRequest` is handled. |
+
+There is **no** `Func<IMessageHub, CancellationToken, Task>` overload — `return Task.CompletedTask;`
+does not compile here. (The `Task`-returning `WithInitialization` you may have seen belongs to
+`StreamConfiguration<T>`, a different type, used by the data-source layer.)
+
+A hang inside the observable overload is bounded: `HandleInitialize` wraps the composed
+`Concat` in `.Timeout(Configuration.StartupTimeout ?? 120s)` and, on fault **or** timeout,
+puts the hub in a FAILED state and opens the framework gate anyway so rejections can flow —
+see [Hub Initialization Failure](/Doc/Architecture/HubInitializationFailure). Awaiting inside
+this hook is still the same deadlock as awaiting inside `Initialize`.
 
 ---
 
@@ -388,16 +406,13 @@ protected override async Task<InstanceCollection> InitializeAsync(...)
 // ❌ Opening the gate eagerly before the data is loaded.
 //    Defeats the purpose: queued reads now run against an empty collection.
 config.WithInitializationGate(name, d => d.Message is CreateNodeRequest)
-      .WithInitialization(hub => { hub.OpenGate(name); return Task.CompletedTask; });
+      .WithInitialization(hub => hub.OpenGate(name));   // the Action<IMessageHub> overload
 
-// ❌ Wrapping a hub round-trip in Observable.FromAsync, then opening from Subscribe.
-//    Same deadlock as pattern one, hidden one level deeper.
+// ❌ Observable.FromAsync at all — forbidden outside IoPool, and over a hub
+//    round-trip it is the same deadlock as pattern one, hidden one level deeper.
 .WithInitialization(hub =>
-{
     Observable.FromAsync(ct => SomeHubAwait(ct))
-        .Subscribe(_ => hub.OpenGate(name));  // SomeHubAwait awaits a hub round-trip
-    return Task.CompletedTask;
-});
+        .Select(_ => { hub.OpenGate(name); return Unit.Default; }));
 
 // ❌ No error handler — gate stays closed forever on load failure.
 //    Every queued message eventually times out with no useful error surfaced.
@@ -421,11 +436,12 @@ public static class MeshNodeExtensions
     /// <summary>
     /// Gate name for "the per-hub MeshNode collection has been loaded from
     /// persistence". Bypasses CreateNodeRequest. Opened by
-    /// <see cref="MeshNodeTypeSource.Initialize"/> on first emission of
-    /// <c>IStorageService.GetNode</c>. Idempotent — safe to open from multiple
-    /// branches (load success, load failure, hubs without a persisted node).
+    /// <c>MeshNodeTypeSource</c> once the own-node emission is accepted (and by
+    /// <c>MeshDataSource</c> on the built-in / static branches). Idempotent — safe to
+    /// open from multiple branches (load success, load failure, hubs without a
+    /// persisted node).
     /// </summary>
-    public const string MeshNodeInitGateName = "mesh-node-init";
+    public const string MeshNodeInitGateName = "MeshNodeInit";
 }
 ```
 
@@ -441,5 +457,7 @@ public static class MeshNodeExtensions
   implementation that opens `MeshNodeInitGateName`.
 - `src/MeshWeaver.Data/GenericUnpartitionedDataSource.cs` — `GetInitialValueAsync`
   shows the framework-edge bridge: per-type-source `Initialize` calls composed via
-  `SelectMany` + `Aggregate`, with a single `.ToTask` at the `WithInitialization`
-  boundary.
+  `SelectMany` + `Aggregate`, with a single `.ToTask` at the
+  `StreamConfiguration<T>.WithInitialization` boundary.
+- `src/MeshWeaver.Messaging.Hub/MessageHub.cs` — `HandleInitialize`, the reactive
+  `BuildupActions` composition with its `StartupTimeout` liveness bound.

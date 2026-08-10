@@ -31,13 +31,12 @@ There are three access patterns, each covering a distinct class of operation:
 > typed); **write** via `.Update(current => current with { … }).Subscribe(...)` (cold
 > observable — the write only runs on `Subscribe`).
 >
-> `workspace.GetRemoteStream<MeshNode, …>` / `GetRemoteStream<MeshNode>(addr)` is
-> **discouraged** — the single-node remote reduce does not converge (divergent mirror
-> streams, writes invisible to readers). Calling it **logs a warning** from the
-> `MeshWeaver.Data` Workspace logger; grep that channel after a run to find stragglers to
-> migrate. The only sanctioned callers are the cache's own upstream and the MeshNode
-> reduce-callback plumbing, which use an internal `GetRemoteStreamUnchecked` overload to
-> avoid the warning.
+> `workspace.GetRemoteStream<MeshNode, …>` / `GetRemoteStream<MeshNode>(addr)` **throws
+> `InvalidOperationException`** — the single-node remote reduce does not converge (divergent
+> mirror streams, writes invisible to readers), so `Workspace.ThrowIfMeshNode` refuses it at
+> the call site rather than letting a latent bug ship. The only sanctioned callers are the
+> cache's own upstream and the MeshNode reduce-callback plumbing, which use the internal
+> `GetRemoteStreamUnchecked` overload.
 
 ---
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 320" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
@@ -71,39 +70,53 @@ There are three access patterns, each covering a distinct class of operation:
 
 ## 1. Reads — IMeshQuery
 
-All read operations go through `IMeshQuery`, which uses a GitHub-style query syntax to filter, search, and enumerate nodes.
+All read operations go through the query surface — `IMeshQuery.Query<T>(MeshQueryRequest)` (or the
+same-shaped `IMeshService.Query<T>(...)` extensions) — which uses a GitHub-style query syntax to
+filter, search, and enumerate nodes. It is **reactive**: the first emission carries the full initial
+result set (`ChangeType == Initial`), later emissions carry `Added` / `Updated` / `Removed` deltas.
+
+> 🚨 **There is no `QueryAsync` on the interface.** `QueryAsync` survives only as a **test-only**
+> bridge (`MeshWeaver.Fixture/IMeshQueryTestExtensions`) that materialises the Initial emission as
+> `IAsyncEnumerable`. Production code composes `IObservable<T>` end-to-end — see
+> [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls). And for a **live** collection, don't
+> call the query surface directly at all: use `workspace.GetQuery(id, queries…)`
+> ([Synced Mesh Node Queries](/Doc/Architecture/SyncedMeshNodeQueries)).
 
 ```csharp
 // Resolve from the hub's service provider
 var query = hub.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-// Get a single node by exact path
-var node = await query.QueryAsync("path:org/Acme", maxResults: 1)
-    .FirstOrDefaultAsync(ct);
+// List direct children of a path — project to the fields you consume.
+query.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        "path:org/Acme scope:children select:path,name,nodeType"))
+    .Take(1)
+    .Subscribe(change => { /* change.Items */ },
+               ex => logger.LogWarning(ex, "query failed"));
 
-// List direct children of a path
-await foreach (var child in query.QueryAsync("parent:org/Acme"))
-{
-    // process child nodes
-}
-
-// Search by name within a namespace
-await foreach (var match in query.QueryAsync("name:Report parent:org", maxResults: 10))
-{
-    // process matches
-}
+// Search by text within a namespace, capped.
+query.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        "namespace:org nodeType:Team Report limit:10"))
+    .Subscribe(change => { /* change.Items */ },
+               ex => logger.LogWarning(ex, "query failed"));
 ```
 
-**Supported query syntax:**
+**Reserved qualifiers** (`QueryParser.ReservedQualifiers`) — everything else in the string is either
+a **property filter** (`field:value`, with `>`/`<`/`>=`/`<=`, `*` wildcards, `A|B|C` alternation and
+`-` negation) or **free text** (routed to vector search on Postgres when an embedding provider is
+registered):
 
 | Token | Meaning |
 |---|---|
-| `path:<exact-path>` | Exact path match |
-| `parent:<path>` | Direct children of a path |
-| `name:<text>` | Name contains text |
-| `type:<node-type>` | Filter by NodeType |
+| `path:<path>` | Anchor path (combine with `scope:` to walk) |
+| `namespace:<path>` | Anchor namespace; implies `scope:children` unless `scope:` is given |
+| `scope:<exact\|children\|descendants\|subtree\|ancestors\|selfAndAncestors\|hierarchy\|nextLevel>` | How to walk from the anchor |
+| `select:<fields>` | Column projection — `content` is loaded **only** if named |
+| `sort:<field>[-desc]` · `limit:<n>` | Ordering and cap |
+| `source:<activity\|accessed>` · `context:<ctx>` · `is:main` | Result source / visibility filters |
 
-Tokens compose freely: `"parent:org type:Team name:Alpha"` matches all Team nodes under `org` whose name contains "Alpha".
+Filter by node type with the ordinary property filter `nodeType:Team` — there is no `type:` or
+`parent:` qualifier. Tokens compose freely: `"path:org scope:descendants nodeType:Team Alpha"`
+matches Team nodes under `org` scored against the text "Alpha".
 
 ---
 
@@ -296,10 +309,15 @@ hub.Observe(new MoveNodeRequest("old/path", "new/path"),
 **Registering the handler:**
 
 ```csharp
-config.WithHandler<MoveNodeRequest>(async (hub, delivery, ct) =>
+// 🚨 Synchronous handler — never `async`, never `await` (it deadlocks the hub's
+// single-threaded action block). Long work composes reactively and posts the
+// response from inside the Subscribe callback; the handler returns immediately.
+config.WithHandler<MoveNodeRequest>((hub, delivery) =>
 {
     // process the request...
-    return delivery.Processed(new MoveNodeResponse { Success = true, Node = moved });
+    hub.Post(new MoveNodeResponse { Success = true, Node = moved },
+        o => o.ResponseFor(delivery));
+    return delivery.Processed();
 });
 ```
 
