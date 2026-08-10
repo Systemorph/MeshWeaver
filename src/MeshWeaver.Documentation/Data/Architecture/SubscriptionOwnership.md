@@ -56,7 +56,9 @@ if (Interlocked.CompareExchange(ref _publishScheduled, 1, 0) == 0)
 
 `SerialDisposable` is the right holder rather than a plain field for two reasons that both matter: assigning a new value **disposes the previous one**, so re-arming can never orphan a pending timer; and a value assigned *after* the `SerialDisposable` has been disposed is disposed on assignment, so there is no race in which teardown and a last-moment arm cross.
 
-The same shape, with a re-establish rather than a flush, is what `ActivityControlPlaneExtensions.SubscribeWithReEstablish`, `ThreadSubmission.InstallSubmissionWatcher` and `ThreadExecution` do: a stream that faults schedules a 1 s retry, and the schedule goes into a `pendingReEstablish` `SerialDisposable` that the watcher's own `Dispose` drops **before** it drops the live subscription — the pending timer is what roots the closure graph, the live subscription is merely what is running.
+The same shape, with a re-establish rather than a flush, is what `ActivityControlPlaneExtensions.SubscribeWithReEstablish`, `ThreadSubmissionServer.InstallServerWatcher` and `ThreadExecution`'s two watchers do: a stream that faults schedules a 1 s retry, and the schedule goes into a `pendingReEstablish` `SerialDisposable` that the watcher's own `Dispose` drops **before** it drops the live subscription — the pending timer is what roots the closure graph, the live subscription is merely what is running.
+
+Same *shape*, not the same *code*: the three thread watchers are hand-rolled loops that share only the scheduling (`ReEstablishSchedule.Arm`, which re-reads the `disposed` flag when the timer fires and sinks a synchronous re-establish throw into the logger). They do **not** route through `SubscribeWithReEstablish` and so do **not** have its terminal fault classification — an own-node-gone `NotFound` or poisoned content re-establishes there rather than stopping. Converting them is open work; don't read the shared shape as shared behaviour.
 
 ## Sub-shape 2 — held, but pinning an owner that may never be disposed
 
