@@ -150,17 +150,68 @@ REFUSING READINESS — N NodeType(s) regressed on this image.
 The rollout will stall with the previous image still serving.
 ```
 
-That sentence is the intent, and it is what makes the design cheap to finish. But in the incident the
-portal went down anyway, so the mechanism has a gap to close:
+That sentence is the intent. **It is also, today, a lie** — and that is the whole defect.
 
-- **The check runs inside the NEW pod, after it is already live.** Readiness refusal only protects
-  the portal while a previous pod is still serving. On a **single-replica** deployment there is no
-  previous pod — the old one is already gone — so "the rollout will stall with the previous image
-  still serving" is simply false and the portal is down. The Deployment's `replicas`,
-  `maxUnavailable` and `maxSurge` are therefore part of this gate, not incidental.
-- **Verification happens after adoption, not before it.** The natural home is the self-update path
-  (`SelfUpdateOptions.PollInterval`): verify the candidate, *then* adopt — rather than adopt, then
-  discover.
+**The gate is not armed.** The health check that consumes the regression state is registered only
+when `PreWarm:GateReadiness` is true. On all three portals it is **false**. So the sweep runs, records
+every regression into `NodeTypeBakeGateState` — and nothing reads it. The gate *state* is registered
+unconditionally, so the `REFUSING READINESS` line fires regardless, while the pod goes Ready and takes
+traffic. Anyone reading the pod log believes they were protected. That single misleading line is why
+the outage looked inexplicable from the logs.
+
+**Why it was switched off, and why that reason expired the next day:**
+
+| | |
+|---|---|
+| `563019ee6` (2026-08-03) | *"Revert `PreWarm__GateReadiness` to off"* — the first gated roll stalled on "7 NodeType(s) regressed" with **zero** compiler diagnostics: all cross-silo `SubscribeRequest` timeouts, i.e. false regressions. |
+| `974016bf4` (2026-08-04) | *"Bake gate: a timeout is not a regression"* — `MarkOutcome` routes `TimedOut` to *unevaluated*; only `CompileError`/`UpstreamFailed` on a previously-healthy type sets `Regressed`. |
+| — | The config was **never turned back on**, and the "gate OFF" rationale in `values.aks.yaml` still argues from the pre-fix code. |
+
+**The rollout shape is mostly NOT the problem.** It is tempting to blame single-replica deployments;
+that is wrong for two of the three portals. `maxSurge: 1 / maxUnavailable: 0` is surge-first —
+Kubernetes creates the new pod and keeps the old one serving until the new one passes its probes, and
+never deletes first. While the startup probe fails, readiness is suspended and the surge pod stays out
+of the Service. **A 1-replica portal is fully protected by readiness refusal — provided the check is
+registered.**
+
+🚨 **But the strategy is not uniform, and one portal is genuinely unsafe.** Measured live:
+
+| namespace | maxSurge | maxUnavailable | surge-first? |
+|---|---|---|---|
+| memex-cloud | 1 | **0** | yes |
+| atioz | 1 | **0** | yes |
+| **memex** | 1 | **1** | **NO** |
+
+With `maxUnavailable: 1` at `replicas: 1`, Kubernetes may delete the only serving pod before the
+replacement is ready — so on that portal readiness refusal protects nothing even once the gate is
+armed, and any slow start is a hard outage. Arming the gate without first setting
+`maxUnavailable: 0` there would create false confidence. Fix the strategy and the gate together.
+
+**And the surge pod IS the pre-adoption verification.** Adoption is not the image patch; adoption is
+when traffic moves, and readiness controls that. The surge pod runs the candidate image, compiles this
+instance's own installed set against it, and if anything healthy regresses it never joins the Service.
+So the gate does not belong in the self-update poller: that poller patches the image and cannot know
+compatibility without running the candidate's assemblies — a framework-identity change invalidates the
+whole assembly cache by design, and `UpdatePolicyContent` carries no declared-compatibility metadata
+to evaluate instead. A check there would be a guess.
+
+### What actually has to change
+
+1. **Arm it** — `PreWarm:GateReadiness = true`, and replace the stale rationale with the
+   post-`974016bf4` reasoning. The paired startup budget is already correct.
+2. **`progressDeadlineSeconds` ≥ the startup budget.** It is unset, so Kubernetes defaults to 600 s
+   against a 3 h startup budget: a legitimately-baking pod reports `ProgressDeadlineExceeded` after
+   ten minutes and a healthy long bake reads as a failed rollout.
+3. **Make the log honest.** When the health check is not registered it must say *"gate not armed:
+   this pod WILL take traffic with N regressed types"* — never claim a stall it cannot enforce.
+4. **Report the verdict where an admin looks.** A blocked upgrade is currently invisible: the admin
+   tab shows "update available" forever, the poller re-patches the same tag every 20 minutes (a no-op),
+   and the only evidence lives in the log and `/health` of a pod that never becomes Ready — the
+   hardest place to look. The surge pod's verdict must land on `Admin/UpdatePolicy` as "cannot update
+   to X — these installed types do not compile against it".
+
+**Known boundary:** the sweep covers dynamic NodeTypes only. A break in a non-NodeType surface — a
+standalone script, a layout area — is not swept and this gate will not catch it.
 
 ### The node repo's own pin stays
 
