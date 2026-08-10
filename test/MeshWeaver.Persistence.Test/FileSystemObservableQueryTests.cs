@@ -9,6 +9,7 @@ using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Persistence.Test.TestHelpers;
 using Xunit;
 
 namespace MeshWeaver.Persistence.Test;
