@@ -12,8 +12,8 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// Pins where node CRUD is TARGETED. The mesh hub is the router: running create/delete/move on its
 /// action block starves real routing traffic and wedges the portal (prod 2026-06-11 —
 /// "11× CreateOrUpdateNodeRequest + 3× CreateNodeRequest@mesh/&lt;self&gt; stale &gt;60s"). So a hub that
-/// declared itself an execution target must serve its own writes, and everything else keeps falling
-/// back to the router exactly as before.
+/// declared itself an execution target must serve its own writes, and everything else falls back to
+/// the mesh's DEDICATED off-router execution hub — never to the router.
 /// </summary>
 public class NodeOperationTargetTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -38,13 +38,18 @@ public class NodeOperationTargetTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact]
-    public void HubWithoutTheOptIn_FallsBackToTheMeshRoot()
+    public void HubWithoutTheOptIn_FallsBackToTheDedicatedExecutionHub_NeverTheRouter()
     {
-        // A plain client hub never opted in, and neither does anything between it and the root —
-        // the fallback keeps such hosts working exactly as before this change.
+        // A plain client hub never opted in, and neither does anything between it and the root.
+        // The fallback is the mesh's own off-router execution hub — it used to be the ROUTER, which
+        // is what made every per-node-hub create run on the mesh hub's action block and stamped the
+        // response `Sender = mesh/{id}` (the production ROUTER_TRAFFIC lines).
         var client = GetClient();
 
-        client.NodeOperationTarget().Should().Be(Mesh.Address);
+        var target = client.NodeOperationTarget();
+
+        target.Type.Should().NotBe(AddressExtensions.MeshType, "the router must never be the work target");
+        target.Should().Be(Mesh.NodeOperationExecutionHub()!.Address);
     }
 
     [Fact]
@@ -72,7 +77,7 @@ public class NodeOperationTargetTest(ITestOutputHelper output) : MonolithMeshTes
     /// stay two markers.
     /// </summary>
     [Fact]
-    public void HubWithHandlersButNoExecutionOptIn_StillFallsBackToTheRouter()
+    public void HubWithHandlersButNoExecutionOptIn_StillFallsBackToTheSharedExecutionHub()
     {
         // Exactly the shape AddMeshDataSource gives every per-node hub: the handlers, nothing more.
         var nodeShaped = Mesh.GetHostedHub(
@@ -81,7 +86,7 @@ public class NodeOperationTargetTest(ITestOutputHelper output) : MonolithMeshTes
             HostedHubCreation.Always)!;
 
         nodeShaped.NodeOperationTarget().Should().Be(
-            Mesh.Address,
+            Mesh.NodeOperationExecutionHub()!.Address,
             "a node hub handles ops for its OWN node; it is not a work queue for someone else's write");
     }
 }
