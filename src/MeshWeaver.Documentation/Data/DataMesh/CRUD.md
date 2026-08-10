@@ -293,33 +293,30 @@ Deleting a **node** (as opposed to an entity in a collection) is a lifecycle ope
 
 # Data Validation
 
-Attach validators to enforce business rules before any change is applied. The workspace calls every registered validator and returns `DataValidationResult.Failed(...)` to the caller if any rule is violated.
+Attach validators to enforce business rules before any change is applied. The workspace calls every registered validator and returns `DataValidationResult.Invalid(...)` to the caller if any rule is violated.
 
 ```csharp
 public class TodoValidator : IDataValidator
 {
-    public List<DataOperation> SupportedOperations =>
+    // Reactive, never Task<T> — this runs on the hub.
+    public IReadOnlyCollection<DataOperation> SupportedOperations { get; } =
         [DataOperation.Create, DataOperation.Update];
 
-    public Task<DataValidationResult> ValidateAsync(
-        DataValidationContext context,
-        CancellationToken ct)
+    public IObservable<DataValidationResult> Validate(DataValidationContext context)
     {
         if (context.Entity is TodoItem todo && string.IsNullOrEmpty(todo.Title))
-            return Task.FromResult(
-                DataValidationResult.Failed("Title is required"));
+            return Observable.Return(
+                DataValidationResult.Invalid("Title is required"));
 
-        return Task.FromResult(DataValidationResult.Success());
+        return Observable.Return(DataValidationResult.Valid());
     }
 }
 ```
 
-Register validators in the data configuration:
+Register validators in DI — the workspace resolves every registered `IDataValidator`:
 
 ```csharp
-.AddData(data => data
-    .WithValidator<TodoValidator>()
-)
+services.AddScoped<IDataValidator, TodoValidator>();
 ```
 
 ---
@@ -336,9 +333,9 @@ Restrict operations based on user context. Access restrictions run before valida
         (action, context, accessCtx) =>
         {
             if (action == AccessAction.Read)
-                return Task.FromResult(true);          // anyone can read
+                return Observable.Return(true);          // anyone can read
 
-            return Task.FromResult(accessCtx.UserContext != null); // writes require login
+            return Observable.Return(accessCtx.UserContext != null); // writes require login
         },
         "RequireAuthForWrites"
     )
@@ -354,8 +351,8 @@ Restrict operations based on user context. Access restrictions run before valida
         {
             var todo = ctx as TodoItem;
             // Only the owner may modify their own todos
-            return Task.FromResult(
-                todo?.OwnerId == accessCtx.UserContext?.UserId
+            return Observable.Return(
+                todo?.OwnerId == accessCtx.UserContext?.ObjectId
             );
         }, "OwnerOnly")
     )
@@ -373,17 +370,18 @@ A complete data source setup showing multiple types, a virtual path, a validator
     .AddSource(src => src
         .WithType<TodoItem>(type => type
             .WithKey(todo => todo.Id)
-            .WithInitialData(async (ref, ct) =>
-                await LoadTodosFromDatabaseAsync(ct))
+            .WithInitialData(() => LoadTodos())
         )
         .WithType<Project>(type => type
             .WithKey(proj => proj.Id)
         )
     )
     .WithVirtualPath("Dashboard", ComputeDashboard)
-    .WithValidator<TodoValidator>()
     .WithAccessRestriction(RequireAuthentication, "Auth")
 )
+
+// Validators are registered in DI, not on the data configuration:
+services.AddScoped<IDataValidator, TodoValidator>();
 ```
 
 ---
@@ -430,7 +428,7 @@ sequenceDiagram
 ## Best Practices
 
 1. **Use typed observables** — prefer `GetObservable<T>()` over raw streams for compile-time safety.
-2. **Check the response** — inspect `DataChangeResponse.Error` for validation failures before assuming success.
+2. **Check the response** — inspect `DataChangeResponse.Status` (`Committed` / `Failed`) before assuming success; the detail is in `.Log`. Note a `Warning` status still COMMITS.
 3. **Batch related changes** — group inserts, updates, and deletes into a single `DataChangeRequest` for atomic delivery.
 4. **Register validators** — enforce data integrity at the data layer rather than in each call site.
 5. **Protect with access restrictions** — declare who may read or write each type alongside the type configuration.

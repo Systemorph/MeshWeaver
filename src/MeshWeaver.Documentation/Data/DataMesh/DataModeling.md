@@ -276,7 +276,7 @@ public string? Description { get; init; }
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `EditorHeight` | auto | Height of the edit pane |
+| `EditorHeight` | `300px` | Height of the edit pane |
 | `ShowPreview` | `true` | Show live preview alongside the editor |
 
 ### `[Dimension<T>]`
