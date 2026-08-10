@@ -309,11 +309,19 @@ public class MessageService : IMessageService
     /// (<see cref="ErrorType.NotFound"/>) depending on whether this address can still come back;
     /// see the two 🚨 paragraphs below for the fork and why it matters.
     ///
-    /// <para>Used by BOTH paths on which a hub going down abandons a delivery a sender is
-    /// awaiting: the intake gate (a message arriving after RunLevel flipped) and disposal
-    /// (a message already parked in the deferred queue behind a closed init gate). Both used
-    /// to vanish silently, leaving the sender's <c>hub.Observe(...)</c> to burn its full
+    /// <para>Used by EVERY path on which a hub going down abandons a delivery a sender is
+    /// awaiting: the intake gate (a message arriving after RunLevel flipped), disposal (a message
+    /// already parked in the deferred queue behind a closed init gate), and the two seams in
+    /// <c>HandleMessage</c> — a delivery accepted while the hub was healthy whose turn comes after
+    /// <c>ShutDown</c>, and a handler that faulted with <see cref="HubDisposingException"/>. All
+    /// four used to vanish silently, leaving the sender's <c>hub.Observe(...)</c> to burn its full
     /// request budget with nothing to show for it.</para>
+    ///
+    /// <para>🚨 The <c>HandleMessage</c> seams must come through HERE rather than through
+    /// <see cref="ReportFailure"/>: that one posts through this hub's own <see cref="Post"/> and
+    /// declines entirely once <c>RunLevel &gt;= DisposeHostedHubs</c>, which is exactly the state
+    /// a disposal-race NACK is computed in — so its answer was classified correctly and then
+    /// dropped on the floor.</para>
     ///
     /// <para>Gated to deliveries a caller can actually be awaiting:
     /// <list type="bullet">
@@ -354,24 +362,40 @@ public class MessageService : IMessageService
     ///   <item><c>MeshWeaver.Hosting.Monolith.Test.PostDeleteReadVerdictTest</c> — the end-to-end
     ///     #1029 repro: create → read → delete → read, which before the fix sat silent for the
     ///     reader's whole budget.</item>
+    ///   <item><c>MeshWeaver.Messaging.Hub.Test.DisposalRaceNackTest</c> — the two
+    ///     <c>HandleMessage</c> seams, both driven to <c>RunLevel=Dead</c> deterministically.</item>
     /// </list></para>
     /// </summary>
-    private void NackThroughParent(IMessageDelivery delivery, string reason)
+    /// <param name="delivery">The delivery being abandoned.</param>
+    /// <param name="reason">Why it was abandoned; becomes the transient NACK's message.</param>
+    /// <returns>
+    /// True when the sender has its answer — either a <see cref="DeliveryFailure"/> was posted
+    /// through the parent, or an authoritative one had already been posted for this delivery.
+    /// False when nothing could carry it (no live parent, or traffic nobody awaits), which is the
+    /// caller's cue to fall back to <see cref="ReportFailure"/> if it can still post.
+    /// </returns>
+    private bool NackThroughParent(IMessageDelivery delivery, string reason)
     {
         if (delivery.Message is not IRequest
             && !(delivery.Message is RawJson rawJson
                  && !rawJson.Content.Contains(nameof(DeliveryFailure), StringComparison.Ordinal)))
-            return;
+            return false;
         if (delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
-            return;
+            return false;
+        // The same "ONE request, ONE failure response" rule ReportFailure applies: an
+        // authoritative, typed DeliveryFailure has already been posted for this delivery, so a
+        // second one here would make the classification a coin toss for whichever arrives first.
+        // Reported as handled — the sender HAS its answer, which is what the caller is asking.
+        if (delivery.Properties.ContainsKey(FailureAlreadyReported))
+            return true;
         if (delivery.Sender is null || delivery.Sender.Equals(Address))
-            return;
+            return false;
         // No live parent ⇒ nothing can carry the NACK. At a full mesh teardown the parent is
         // itself past DisposeHostedHubs, so this correctly stays silent: every sender is going
         // away too. Only a TARGETED hub disposal (recycle, node delete) under a live parent
         // NACKs — exactly the case where a sender is still there to hear it.
         if (ParentHub is not { } parent || parent.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
-            return;
+            return false;
         // Gone for good (node deleted) ⇒ authoritative NotFound; anything else ⇒ transient.
         // The delete source tombstones every planned path SYNCHRONOUSLY, before its response
         // returns, so this lookup is already authoritative for a delivery that raced the teardown.
@@ -408,12 +432,14 @@ public class MessageService : IMessageService
             parent.Post(
                 new DeliveryFailure(delivery) { ErrorType = errorType, Message = message },
                 o => o.ResponseFor(delivery));
+            return true;
         }
         catch (Exception ex)
         {
             logger.LogDebug(ex,
                 "Failed to NACK {MessageType} (ID: {MessageId}) abandoned by shutting-down hub {Address}",
                 delivery.Message.GetType().Name, delivery.Id, Address);
+            return false;
         }
     }
 
@@ -1245,6 +1271,29 @@ public class MessageService : IMessageService
             var jsonMessage = JsonSerializer.Serialize(delivery, hub.JsonSerializerOptions);
             logger.LogWarning("Hub {Address} is disposing. Not processing message {Message}", hub.Address, jsonMessage);
             fate?.Add($"NOT_PROCESSED_DISPOSING runLevel={hub.RunLevel}", Address);
+            // 🚨 ANSWER it — never just drop it. This is the FOURTH door into the silent-
+            // abandonment park, and the one neither #672 fix covers: the delivery was ACCEPTED
+            // while the hub was healthy (so ScheduleNotify's intake gate never saw it) and it sat
+            // in the MAIN queue, not the deferred one (so the disposal drain has no tracker to
+            // answer for it) — it simply arrived at its turn after RunLevel passed ShutDown.
+            // Returning it unchanged ends the pipeline with no response and no failure, so the
+            // sender's hub.Observe(...) burns its ENTIRE RequestTimeout in silence.
+            //
+            // Measured, main-red: StaleStampRootBindingTest (CI run 31390882509) — the plugin
+            // installer's SyncContentFilesRequest activated a package root's hub, the root was
+            // recycled 94 ms later, the request executed at runLevel=Dead and was dropped here.
+            // The installer waited the full 60 s and reported "the package's nodes are installed
+            // but its binaries are not being served"; the committed asset never landed.
+            //
+            // Through the PARENT, because our own Post would re-enter this service's shutdown
+            // gate and be dropped — the very reason NackThroughParent exists. It applies the
+            // tombstone fork itself (transient ShuttingDown for an address that may reactivate,
+            // authoritative NotFound for a deleted one) and skips traffic nobody awaits.
+            NackThroughParent(delivery,
+                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — "
+                + $"{delivery.Message.GetType().Name} (id={delivery.Id}) was accepted before "
+                + "disposal began and its turn came too late to process. The address may "
+                + "reactivate (recycle / restart); retry to get the authoritative answer.");
             exec = Observable.Return(delivery);
         }
 
@@ -1304,11 +1353,12 @@ public class MessageService : IMessageService
                     // Debug line is evaluated even when Debug is off and was itself a hot-path
                     // regression (the LogText storm, core #608).
                     // 🚨 …UNLESS the address is gone for good. This is the SECOND door into the
-                    // #1029 park, and it is not the one NackThroughParent guards: there the hub
-                    // ABANDONS a delivery (intake gate / disposal drain); here it ACCEPTED one and
-                    // the handler then threw, because HostedHubsCollection is already frozen while
-                    // RunLevel still reads Started. Same tombstone, same verdict — an
-                    // accepted-then-faulted delivery is not more recoverable than an abandoned one.
+                    // #1029 park: on the other two the hub ABANDONS a delivery (intake gate /
+                    // disposal drain); here it ACCEPTED one and the handler then threw, because
+                    // HostedHubsCollection is already frozen while RunLevel can still read Started.
+                    // Same tombstone, same verdict — an accepted-then-faulted delivery is not more
+                    // recoverable than an abandoned one, so it takes the same NackThroughParent
+                    // route (see the 🚨 below for why routing it through ReportFailure lost it).
                     //
                     // Reporting it as transient is what kept #1029 alive after that fix: the
                     // consumer's sync stream rides ShuttingDown out waiting for a reactivation that
@@ -1323,19 +1373,37 @@ public class MessageService : IMessageService
                     // matches — it would re-classify this verdict as retryable even under
                     // ErrorType.NotFound. Both halves are pinned by
                     // DeletedAddressNackClassificationTest.
+                    // 🚨 THROUGH THE PARENT FIRST — and this is the whole reason the verdict above
+                    // was going missing. ReportFailure posts through OUR OWN hub, and it declines
+                    // to post at all once RunLevel >= DisposeHostedHubs ("recipients are likely
+                    // also disposing"). That gate is satisfied in precisely the situation this
+                    // branch exists for, so the NACK it so carefully classifies was computed,
+                    // logged, and then silently dropped — the sender heard nothing and burned its
+                    // whole RequestTimeout. Locally reproduced with StaleStampRootBindingTest: a
+                    // client SubscribeRequest reached LayoutAreaHost in the root's recycle window,
+                    // faulted with HubDisposingException, and the subscriber sat idle for 60 s.
+                    //
+                    // NackThroughParent is the primitive built for exactly this ("our own Post
+                    // would re-enter this service's shutdown gate and be dropped") and it applies
+                    // the SAME tombstone fork internally. ReportFailure stays as the fallback for
+                    // the cases it can still serve — a root hub with no parent, or a parent that
+                    // is itself past DisposeHostedHubs — so no caller loses an answer it used to
+                    // get, and nobody gets two (the "ONE request, ONE failure" rule).
                     if (IsAddressDeleted())
                     {
                         logger.LogDebug(e,
                             "{MessageType} (ID: {MessageId}) faulted in {Address} after {Duration}ms because the hub is tearing down, and the address is TOMBSTONED — NACKing as authoritative NotFound.",
                             messageTypeName, delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
-                        ReportFailure(delivery.Failed(DeletedAddressMessage), ErrorType.NotFound);
+                        if (!NackThroughParent(delivery, e.ToString()))
+                            ReportFailure(delivery.Failed(DeletedAddressMessage), ErrorType.NotFound);
                     }
                     else
                     {
                         logger.LogDebug(e,
                             "{MessageType} (ID: {MessageId}) raced hub disposal in {Address} after {Duration}ms — NACKing as transient (ShuttingDown).",
                             messageTypeName, delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
-                        ReportFailure(delivery.Failed(e.ToString()), ErrorType.ShuttingDown);
+                        if (!NackThroughParent(delivery, e.ToString()))
+                            ReportFailure(delivery.Failed(e.ToString()), ErrorType.ShuttingDown);
                     }
                 }
                 else
@@ -1539,6 +1607,43 @@ public class MessageService : IMessageService
         if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
             && message is not ShutdownRequest and not DisposeRequest)
         {
+            // 🚨 …EXCEPT an ANSWER somebody is awaiting. A message carrying RequestId IS the reply
+            // to a pending hub.Observe(...) callback, and refusing it here strands that caller for
+            // its ENTIRE RequestTimeout — the handler ran, produced a verdict, and the verdict died
+            // on the way out. That is the third seam of the same defect the two NackThroughParent
+            // sites above close, and it is the one the fate ledger calls out by name: "a reply WAS
+            // posted for this correlation and the callback is STILL pending — the reply was lost
+            // between the responder and the requester."
+            //
+            // Measured, main-red: StaleStampRootBindingTest — the plugin installer's
+            // SyncContentFilesRequest was HANDLED by the recycling root (HANDLER_ENTER +55ms,
+            // RESPONSE_POSTED +70ms, HANDLER_EXIT Processed +70ms) and the installer still waited
+            // the full 60 s, because that ImportContentResponse was refused right here.
+            //
+            // Hand it to the PARENT, which is alive and is already the carrier for every other
+            // thing a disposing hub still has to say (NackThroughParent). Scoped to correlated
+            // replies only: fire-and-forget traffic from a teardown keeps the historical refusal,
+            // so this cannot resurrect the ObjectDisposedException/storm class the guard exists
+            // for — nobody is waiting on those.
+            if (correlatedRequestId is not null
+                && ParentHub is { } replyParent
+                && replyParent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            {
+                try
+                {
+                    replyParent.Post(message, _ => opt);
+                    postFate?.Add($"REPLY_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel}", Address);
+                    return delivery;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex,
+                        "Could not forward the reply {MessageType} (ID: {MessageId}) for request {RequestId} "
+                        + "through the parent of shutting-down hub {Address}",
+                        message!.GetType().Name, delivery.Id, correlatedRequestId, Address);
+                }
+            }
+
             postFate?.Add($"POST_REFUSED_SHUTTING_DOWN runLevel={hub.RunLevel}", Address);
             return ((IMessageDelivery)delivery).Failed("Hub is shutting down");
         }
