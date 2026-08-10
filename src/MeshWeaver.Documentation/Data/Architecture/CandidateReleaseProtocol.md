@@ -160,11 +160,20 @@ this: it boots a fresh in-process mesh, installs each package, waits for every N
 terminal `CompilationStatus` (printing Roslyn diagnostics on error), renders each type's default
 area, and **executes each type's `Tests` layout area — a red test fails the run**. Exit 0 = all green.
 
-**What is missing is only the combo assembler.** `mw-plugin-test` today takes a *repo root* — every
-module in one checkout, at HEAD. The gate needs it pointed at *an instance's set*: read that
-instance's install records, materialise each module at its recorded `ModuleVersion` (the node repos
-already tag per module, e.g. `Store/v1.0.15`), assemble that set, and run the tool inside the
-**candidate** image. Same executable, different input.
+**The combo pipeline exists, as three composable steps.** `mw-plugin-test` takes a *repo root*;
+the gate points it at *an instance's set*:
+
+1. **Read** — `InstanceComboReader` (a mesh singleton) states the instance's combo: every module
+   with its source and pinned ref, folded from both recording shapes. Its JSON is `combo.json`.
+2. **Assemble** — `mw-combo-assemble` (`tools/MeshWeaver.ComboAssembler`) materialises every module
+   at its RECORDED ref into a repo-root layout, plus the manifest `combo-assembly.json` naming
+   module → resolved ref → content hash.
+3. **Verify** — `mw-combo-verify` (`tools/MeshWeaver.ComboVerifier`) runs the whole check as one
+   job: assemble, then execute `mw-plugin-test` over that root **inside the candidate image**
+   (`docker run … --entrypoint /app/mw-plugin-test`, the same contract as the plugins repo's
+   `test-repos` CI job — never a `container:` job), read the tester's structured
+   `combo-gate-report.json` (`--report`), and fold everything into one verdict. Same executable,
+   different input.
 
 ### The combo IS recorded — in two shapes, not one
 
@@ -266,11 +275,38 @@ to evaluate instead. A check there would be a guess; the combo run is an answer.
    ten minutes and a healthy long bake reads as a failed rollout.
 3. **Make the log honest.** When the health check is not registered it must say *"gate not armed:
    this pod WILL take traffic with N regressed types"* — never claim a stall it cannot enforce.
-4. **Report the verdict where an admin looks.** A blocked upgrade is currently invisible: the admin
-   tab shows "update available" forever, the poller re-patches the same tag every 20 minutes (a no-op),
-   and the only evidence lives in the log and `/health` of a pod that never becomes Ready — the
-   hardest place to look. The surge pod's verdict must land on `Admin/UpdatePolicy` as "cannot update
-   to X — these installed types do not compile against it".
+4. **Report the verdict where an admin looks — WIRED.** A blocked upgrade used to be invisible: the
+   admin tab showed "update available" forever, and the only evidence lived in the log and `/health`
+   of a pod that never becomes Ready — the hardest place to look. The verdict now lands on
+   `Admin/UpdatePolicy`: `UpdatePolicyContent.ComboVerifications` carries, per candidate tag, the
+   verified-at time, the image digest it ran against, the manifest reference (module → resolved
+   ref → content hash), and one of three verdicts — **Green** (every module compiles, renders and
+   tests green), **Red** with the complete per-module failure list, or **NotVerifiable** with the
+   caveats naming why the question could not be answered (the three are never conflated: "we could
+   not find out" reads as neither "broken" nor "all clear"). The admin **Updates** settings tab
+   joins this against the poller's `LatestAvailableTag`, so a red candidate renders "cannot update
+   to X — these modules do not compile or test against it" instead of an eternal "update
+   available". Writes go through `UpdatePolicyNodeType.RecordVerification` (stream.Update, upsert
+   by tag, bounded).
+
+#### Running the gate for one instance × one candidate
+
+```bash
+# 1. The instance states its combo (as System — e.g. an admin execute_script on that portal):
+#    hub.ServiceProvider.GetRequiredService<InstanceComboReader>().Read()  → save as combo.json
+# 2. Verify the candidate against it (docker + a GitHub token for the module repos):
+GITHUB_TOKEN=… mw-combo-verify combo.json meshweaver.azurecr.io/memex-portal-ai:<candidate-tag> \
+    --source plugins=https://github.com/Systemorph/MeshWeaver.Plugins
+# exit 0 = GREEN. Anything else: the summary names every failing module and every caveat,
+# and the work root is kept for inspection.
+# 3. Land the verdict where the instance's admins look: combo-verdict.json is a
+#    ComboVerification — merge it into Admin/UpdatePolicy → content.comboVerifications
+#    (upsert by candidateTag), e.g. via the meshweaver MCP: get → merge → patch.
+```
+
+The verify job itself holds no portal credential — reading the combo (step 1) and landing the
+verdict (step 3) are the operator's/CD's authenticated touches on the instance; the verification
+in between needs only docker, the candidate image, and read access to the module repos.
 
 **Known boundary:** the sweep covers dynamic NodeTypes only. A break in a non-NodeType surface — a
 standalone script, a layout area — is not swept and this gate will not catch it.

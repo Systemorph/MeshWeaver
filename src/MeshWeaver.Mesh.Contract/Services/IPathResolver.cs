@@ -39,6 +39,26 @@ public interface IPathResolver
     IObservable<AddressResolution?> ResolvePath(string path);
 
     /// <summary>
+    /// ROUTE-SHAPE resolution: like <see cref="ResolvePath"/>, but the caller only consumes
+    /// <see cref="AddressResolution.Prefix"/> / <see cref="AddressResolution.Remainder"/> — never
+    /// <see cref="AddressResolution.Node"/>. That contract lets the implementation serve a cached
+    /// entry whose NODE snapshot is stale: an in-place <c>Updated</c> write cannot change any
+    /// path's resolution SHAPE (the node existed at that path before the write and still does),
+    /// so only <c>Created</c>/<c>Deleted</c> invalidate this view.
+    ///
+    /// <para>🚨 This is what keeps the silo router off the storage backend for hot-WRITTEN paths
+    /// (issue #1172): a compile activity receives one routed <c>PatchDataRequest</c> per appended
+    /// log line, and each write used to invalidate the very cache entry the NEXT routed message
+    /// needed — so during the boot NodeType bake every route to <c>…/_Activity/compile-*</c> paid
+    /// a fresh storage query while holding a RoutingGrain in-flight slot. 64+ slots filled, the
+    /// pre-warmer's own stream waits timed out behind the saturated router, and the bake inflated
+    /// ~10× — the routing/compile feedback loop. Callers that read <see cref="AddressResolution.Node"/>
+    /// (grain activation, monolith hub creation, navigation) MUST stay on
+    /// <see cref="ResolvePath"/>, which re-queries when the node snapshot is stale.</para>
+    /// </summary>
+    IObservable<AddressResolution?> ResolveRoute(string path) => ResolvePath(path);
+
+    /// <summary>
     /// Navigation-only resolution: <see cref="ResolvePath"/> plus the legacy
     /// <c>/User/{id}[/area]</c> home rewrite (strips the obsolete <c>User/</c> prefix and
     /// re-resolves against the user's own root partition so the home area renders on the
