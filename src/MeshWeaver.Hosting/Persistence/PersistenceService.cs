@@ -75,6 +75,30 @@ public sealed class PersistenceService : IStorageAdapter
         // that subscribe to IStorageAdapter.Changes see writes from any
         // provider (per-node hub reconciliation in MeshDataSource etc.).
         _changes = Observable.Merge(_allOrdered.Select(p => p.Adapter.Changes));
+
+        // Probed once, replayed to every later consult (see LegacyPartitionExists).
+        _legacyPartitionExists = Observable
+            .Defer(() => _allOrdered.Count == 0
+                ? Observable.Return<bool?>(null)
+                : Observable
+                    .Merge(_allOrdered.Select(p =>
+                        p.PartitionExists(LegacyUserPartitionRepair.LegacyPartition)
+                            .Catch((Exception ex) =>
+                            {
+                                // A provider that cannot answer is INDETERMINATE, never "absent" —
+                                // answering false here would disable healing on a genuinely legacy
+                                // store because one backend was unreachable.
+                                _logger?.LogDebug(ex,
+                                    "[Persistence] Legacy-partition probe failed on a provider; "
+                                    + "treating its answer as indeterminate.");
+                                return Observable.Return<bool?>(null);
+                            })))
+                    .ToList()
+                    .Select(answers => answers.Any(a => a is true)
+                        ? true
+                        : answers.All(a => a is false) ? false : (bool?)null))
+            .Replay(1)
+            .RefCount();
     }
 
     private readonly IObservable<DataChangeNotification> _changes;
@@ -94,7 +118,21 @@ public sealed class PersistenceService : IStorageAdapter
             path,
             p => ReadCore(p, options),
             n => Write(n, options).Select(saved => (MeshNode?)saved),
-            _logger);
+            _logger,
+            LegacyPartitionExists);
+
+    /// <summary>
+    /// Does the legacy <c>User</c> partition exist? OR-folded across providers — one definite
+    /// <c>true</c> wins, all-<c>false</c> answers <c>false</c>, and anything indeterminate stays
+    /// <see langword="null"/> (the same fold <c>PartitionWriteGuardValidator</c> applies).
+    ///
+    /// <para>Answered ONCE per service and replayed: the repair consults this on every
+    /// partition-root miss, and a schema probe per miss would put a round-trip in front of the
+    /// hot read path. Instance field, so the cache dies with the mesh.</para>
+    /// </summary>
+    private IObservable<bool?> LegacyPartitionExists() => _legacyPartitionExists;
+
+    private readonly IObservable<bool?> _legacyPartitionExists;
 
     private IObservable<MeshNode?> ReadCore(string path, JsonSerializerOptions options)
         => _allOrdered

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -189,6 +190,88 @@ public class LegacyUserPartitionRepairTest : IDisposable
 
         node.Should().BeNull();
         File.Exists(Path.Combine(_dir, "Alice.json")).Should().BeFalse("only a bare partition-root read repairs");
+    }
+
+    /// <summary>
+    /// A provider that has NO legacy <c>User</c> partition and raises when asked to read inside
+    /// one — the Postgres shape on a store that never onboarded a legacy user, where the schema
+    /// does not exist and the backend answers <c>42P01 relation "user.mesh_nodes" does not
+    /// exist</c> rather than "no such node".
+    /// </summary>
+    private sealed record NoLegacyPartitionProvider(IStorageAdapter Adapter) : IPartitionStorageProvider
+    {
+        public string Name => "test-no-legacy";
+        public bool IsReadOnly => false;
+        public IObservable<bool?> PartitionExists(string @namespace) =>
+            Observable.Return<bool?>(
+                !string.Equals(@namespace, LegacyUserPartitionRepair.LegacyPartition,
+                    StringComparison.OrdinalIgnoreCase));
+    }
+
+    private sealed class ThrowsInsideLegacyPartitionAdapter(IStorageAdapter inner) : IStorageAdapter
+    {
+        public IObservable<DataChangeNotification> Changes => inner.Changes;
+
+        public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options) =>
+            path.StartsWith(LegacyUserPartitionRepair.LegacyPartition + "/", StringComparison.OrdinalIgnoreCase)
+                ? Observable.Throw<MeshNode?>(new InvalidOperationException(
+                    "Unexpected error: 42P01: relation \"user.mesh_nodes\" does not exist"))
+                : inner.Read(path, options);
+
+        public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options) =>
+            inner.Write(node, options);
+
+        // Everything else is plain delegation — only Read inside the legacy partition is special.
+        public IObservable<string> Delete(string path) => inner.Delete(path);
+
+        public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
+            ListChildPaths(string? parentPath) => inner.ListChildPaths(parentPath);
+
+        public IObservable<bool> Exists(string path) => inner.Exists(path);
+
+        public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
+            string path, JsonSerializerOptions options) => inner.FindBestPrefixMatch(path, options);
+
+        public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
+            string path, JsonSerializerOptions options) => inner.ResolvePath(path, options);
+
+        public IObservable<object> GetPartitionObjects(
+            string nodePath, string? subPath, JsonSerializerOptions options) =>
+            inner.GetPartitionObjects(nodePath, subPath, options);
+
+        public IObservable<System.Reactive.Unit> SavePartitionObjects(
+            string nodePath, string? subPath, IReadOnlyCollection<object> objects,
+            JsonSerializerOptions options) =>
+            inner.SavePartitionObjects(nodePath, subPath, objects, options);
+
+        public IObservable<System.Reactive.Unit> DeletePartitionObjects(
+            string nodePath, string? subPath = null) =>
+            inner.DeletePartitionObjects(nodePath, subPath);
+
+        public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(
+            string nodePath, string? subPath = null) =>
+            inner.GetPartitionMaxTimestamp(nodePath, subPath);
+    }
+
+    /// <summary>
+    /// 🚨 The absence of a legacy partition is an ANSWER, not a failure. A store that never had
+    /// one must not probe <c>User/{id}</c> at all: that path's partition segment is the literal
+    /// <c>User</c>, so on Postgres the probe hits an unprovisioned schema and faults the read.
+    /// Because a bare root is the shape of EVERY Space and package root, that fault landed on all
+    /// of them — the startup import of Skill failed and six other packages timed out, leaving
+    /// their hubs unsettled and pages bound to them subscribing forever.
+    /// </summary>
+    [Fact]
+    public async Task RootMiss_WhenNoLegacyPartitionExists_AnswersNull_WithoutProbingTheLegacyTwin()
+    {
+        var persistence = new PersistenceService(
+            [new NoLegacyPartitionProvider(
+                new ThrowsInsideLegacyPartitionAdapter(new FileSystemStorageAdapter(_dir)))]);
+
+        // Before the existence guard this FAULTED with the 42P01 surrogate instead of answering.
+        var node = await persistence.Read("Skill", _options).FirstAsync().ToTask();
+
+        node.Should().BeNull("a root miss on a store with no legacy partition is simply a miss");
     }
 
     public void Dispose()
