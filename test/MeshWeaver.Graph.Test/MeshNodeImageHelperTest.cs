@@ -79,4 +79,90 @@ public class MeshNodeImageHelperTest
     [InlineData("not an svg")]
     public void SizeInlineSvg_PassesThrough_NonSvg(string? value)
         => MeshNodeImageHelper.SizeInlineSvg(value!, 48).Should().Be(value);
+
+    // ── Fluent icon NAMES resolve to the shipped glyph of the same name ────────────────────
+
+    /// <summary>
+    /// 🚨 THE BUG THIS FIXES. A Fluent name resolved to nothing, so every node carrying one fell
+    /// through to its NodeType default — which is why EVERY Skill in the Store rendered the same
+    /// <c>sparkle</c> no matter which icon it declared. Skills author Fluent names because that is
+    /// what the nav and the chat composer render; a card built as an HTML string has no Blazor
+    /// component to render one with, so it needs a URL.
+    /// </summary>
+    [Theory]
+    [InlineData("Sparkle", "/static/NodeTypeIcons/sparkle.svg")]
+    [InlineData("Presentation", "/static/NodeTypeIcons/presentation.svg")]
+    [InlineData("People", "/static/NodeTypeIcons/people.svg")]
+    [InlineData("Key", "/static/NodeTypeIcons/key.svg")]
+    [InlineData("Bot", "/static/NodeTypeIcons/bot.svg")]
+    // The names skills use that had NO shipped glyph until now — each one was a generic sparkle.
+    [InlineData("Location", "/static/NodeTypeIcons/location.svg")]
+    [InlineData("LockClosed", "/static/NodeTypeIcons/lockclosed.svg")]
+    [InlineData("Layout", "/static/NodeTypeIcons/layout.svg")]
+    [InlineData("History", "/static/NodeTypeIcons/history.svg")]
+    [InlineData("DeviceMobile", "/static/NodeTypeIcons/devicemobile.svg")]
+    [InlineData("Add", "/static/NodeTypeIcons/add.svg")]
+    [InlineData("PuzzlePiece", "/static/NodeTypeIcons/puzzlepiece.svg")]
+    [InlineData("CloudArrowUp", "/static/NodeTypeIcons/cloudarrowup.svg")]
+    [InlineData("Bug", "/static/NodeTypeIcons/bug.svg")]
+    public void AFluentName_ResolvesToTheShippedGlyphOfThatName(string icon, string expected)
+        => MeshNodeImageHelper.ShippedIconFor(icon).Should().Be(expected);
+
+    /// <summary>A Fluent name with no shipped glyph must NOT invent a URL — the node-type default
+    /// still has to take over, or the card would 404 on an asset that was never built.</summary>
+    [Fact]
+    public void AFluentName_WithNoShippedGlyph_ResolvesToNothing()
+        => MeshNodeImageHelper.ShippedIconFor("NoSuchIconNameAtAll").Should().BeNull();
+
+    /// <summary>Only Fluent NAMES take this path — a URL, inline SVG or emoji is already
+    /// renderable and must pass through the earlier branches untouched.</summary>
+    [Theory]
+    [InlineData("/static/NodeTypeIcons/code.svg")]
+    [InlineData("<svg viewBox=\"0 0 20 20\"></svg>")]
+    [InlineData("🧊")]
+    [InlineData(null)]
+    [InlineData("")]
+    public void NonFluentIcons_AreNotRoutedThroughTheShippedSet(string? icon)
+        => MeshNodeImageHelper.ShippedIconFor(icon).Should().BeNull();
+
+    /// <summary>
+    /// End to end on a real Skill node: the declared icon wins over the type default. Before, both
+    /// of these resolved to sparkle and every skill in the Store looked identical.
+    /// </summary>
+    [Fact]
+    public void ASkill_KeepsItsOwnIcon_InsteadOfTheGenericSparkle()
+    {
+        var navigate = new MeshNode("navigate", "Essentials/Skill") { NodeType = "Skill", Icon = "Location" };
+        var history = new MeshNode("recap", "Essentials/Skill") { NodeType = "Skill", Icon = "History" };
+
+        MeshNodeImageHelper.ResolveNodeIcon(navigate).Should().Be("/static/NodeTypeIcons/location.svg");
+        MeshNodeImageHelper.ResolveNodeIcon(history).Should().Be("/static/NodeTypeIcons/history.svg");
+    }
+
+    /// <summary>A skill whose Fluent name has no glyph still falls back to the Skill type's
+    /// sparkle — the guarantee that a card never renders a bare letter is unchanged.</summary>
+    [Fact]
+    public void ASkill_WithAnUnknownFluentName_StillFallsBackToItsTypeIcon()
+    {
+        var node = new MeshNode("x", "Essentials/Skill") { NodeType = "Skill", Icon = "SomethingUnmapped" };
+
+        MeshNodeImageHelper.ResolveNodeIcon(node).Should().Be("/static/NodeTypeIcons/sparkle.svg");
+    }
+
+    /// <summary>
+    /// The three glyphs that were REFERENCED by shipped skills but never built — they answered 404
+    /// live, so those skills rendered a broken image rather than an icon.
+    /// </summary>
+    [Theory]
+    [InlineData("book")]
+    [InlineData("target")]
+    [InlineData("library")]
+    public void TheIconsSkillsAlreadyReference_AreActuallyShipped(string name)
+    {
+        var resource = $"MeshWeaver.Graph.Icons.{name}.svg";
+
+        typeof(MeshNodeImageHelper).Assembly.GetManifestResourceNames()
+            .Should().Contain(resource,
+                "a skill already points at /static/NodeTypeIcons/{0}.svg — without the asset it is a broken image", name);
+    }
 }

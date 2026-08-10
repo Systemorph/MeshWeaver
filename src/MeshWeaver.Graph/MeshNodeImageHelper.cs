@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 
@@ -36,11 +37,46 @@ public static class MeshNodeImageHelper
     public static string? ResolveNodeIcon(MeshNode? node) =>
         node == null ? null
             // Guarantee a resolved icon for ANY non-null node so a card / avatar NEVER falls back to
-            // the bare-initial (blue) placeholder: own Icon → NodeType default → a neutral box glyph
-            // (covers a typeless node, where DefaultIconForNodeType returns null).
+            // the bare-initial (blue) placeholder: own Icon → the shipped glyph of the same name →
+            // NodeType default → a neutral box glyph (covers a typeless node, where
+            // DefaultIconForNodeType returns null).
             : ResolveContentPath(node.Icon, node.Path)
+              ?? ShippedIconFor(node.Icon)
               ?? DefaultIconForNodeType(node.NodeType)
               ?? $"/static/NodeTypeIcons/{NeutralNodeIcon}.svg";
+
+    /// <summary>
+    /// The shipped glyph matching a FLUENT ICON NAME, or null when none is shipped under that name.
+    ///
+    /// <para>🚨 Without this a Fluent name resolved to NOTHING and every node carrying one fell
+    /// through to its NodeType default — which is why every Skill in the Store rendered the same
+    /// <c>sparkle</c> regardless of the icon it declared. Skills author Fluent names because that
+    /// is what the nav and the chat composer render (<c>NavLink</c> resolves them through
+    /// <c>Icon.ToFluentIcon</c>); but a card built as an HTML string has no Blazor component to
+    /// render one with, so it needs a URL. Matching the name against the icons this assembly
+    /// already ships gives it one.</para>
+    ///
+    /// <para>The set is read from the assembly's own manifest at type-init and never written, so
+    /// dropping a new <c>Icons/*.svg</c> in makes that name resolve with no list to update.</para>
+    /// </summary>
+    public static string? ShippedIconFor(string? icon) =>
+        !string.IsNullOrEmpty(icon) && IsFluentIconName(icon)
+        && ShippedIconNames.Contains(icon.ToLowerInvariant())
+            ? $"/static/NodeTypeIcons/{icon.ToLowerInvariant()}.svg"
+            : null;
+
+    private const string IconResourcePrefix = "MeshWeaver.Graph.Icons.";
+
+    /// <summary>
+    /// Every glyph this assembly ships, lower-cased. An immutable, read-only lookup built once from
+    /// the manifest — a constant, not a cache: nothing writes to it at runtime.
+    /// </summary>
+    private static readonly System.Collections.Immutable.ImmutableHashSet<string> ShippedIconNames =
+        typeof(MeshNodeImageHelper).Assembly.GetManifestResourceNames()
+            .Where(name => name.StartsWith(IconResourcePrefix, StringComparison.Ordinal)
+                           && name.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+            .Select(name => name[IconResourcePrefix.Length..^".svg".Length].ToLowerInvariant())
+            .ToImmutableHashSet();
 
     /// <summary>The neutral glyph used when a node has no own icon and its NodeType has no mapping.</summary>
     private const string NeutralNodeIcon = "box";
