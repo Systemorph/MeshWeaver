@@ -247,9 +247,12 @@ namespace:Doc                  # Immediate children of Doc
 
 **limit** — Limits the number of results: `limit:10`, `limit:50`
 
-**source** — Specifies the data source:
+**source** — Switches the data source backing the query:
 ```
-source:activity    # Results ordered by user's last access time
+source:activity    # Main nodes that HAVE Activity satellites — a change feed,
+                   # newest activity first. NOT "what I looked at".
+source:accessed    # Only nodes the CALLER has opened, newest access first
+                   # (joins the caller's own UserActivity log — works across partitions)
 ```
 
 **context** — Filters results by visibility context:
