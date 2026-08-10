@@ -16,7 +16,8 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Layout.Test;
 
 /// <summary>
-/// What a failed layout-area render REPORTS about itself — issue #1182.
+/// What a failed layout-area render REPORTS about itself — issue #1182, the half its fix (#1189)
+/// left unpinned.
 ///
 /// <para>Production filed an incident reading, four times over twelve hours:</para>
 /// <code>
@@ -24,21 +25,24 @@ namespace MeshWeaver.Layout.Test;
 ///       Rendering failed for area (null)
 ///       System.UnauthorizedAccessException: User 'carson' lacks Read permission on 'Profiles/RolandLinkedIn'
 /// </code>
-/// <para>Two separate defects, neither of them the access decision — the denial is CORRECT and this
-/// fixture deliberately keeps it: the user genuinely lacks Read, and the gate is doing its job.</para>
-/// <list type="number">
-///   <item><b>The area had no name.</b> <c>LayoutAreaHost</c> logged <c>Reference.Area</c>, which is
-///   <c>null</c> for every subscriber that asked for a node's DEFAULT area
-///   (<c>new LayoutAreaReference(null)</c> — the shape the portal's thread / side-panel path builds).
-///   The one field that says WHICH area was denied was the one field the line could not carry.</item>
-///   <item><b>The severity was wrong.</b> The Blazor client already classifies this exact failure as
-///   a user-action outcome and logs it at Warning (<c>NamedAreaView</c> →
-///   <see cref="AreaErrorClassifier.IsExpectedUserActionFailure"/>). The server logged it at Error,
-///   and Error is what the red-log filer turns into a production incident. A correct denial opened
-///   a ticket.</item>
+/// <para>Neither defect was the access decision — the denial is CORRECT and this fixture
+/// deliberately keeps it: the user genuinely lacks Read, and the gate is doing its job. What was
+/// wrong was the REPORT: it named no area (<c>Reference.Area</c> is <c>null</c> for every subscriber
+/// that asked for a node's DEFAULT area), and it was written at Error, the level the red-log filer
+/// turns into a ticket.</para>
+///
+/// <para><b>Why this fixture exists alongside <c>LayoutTest</c>'s denial tests.</b> Those subscribe
+/// with a NAMED area and assert on the rendered control. Neither reaches this:</para>
+/// <list type="bullet">
+///   <item>With a named reference, <c>Reference.Area</c> and <c>context.Area</c> are the SAME
+///   string — so a regression that read the reference again would still pass them. The
+///   <c>(null)</c> only appears for a default-area subscription, which is what this fixture
+///   drives.</item>
+///   <item>The log LEVEL is not observable from the rendered control at all. The fix chose Warning
+///   for a denial; nothing else asserts that it stays chosen.</item>
 /// </list>
-/// <para>Both halves are pinned below, together with the guard that matters more than either: an
-/// ordinary engineering fault on the same path must STILL land at Error.</para>
+/// <para>Both are pinned below, together with the guard that matters more than either: an ordinary
+/// engineering fault on the same path must STILL land at Error.</para>
 /// </summary>
 public class RenderFailureDiagnosticsTest : HubTestBase
 {
@@ -92,12 +96,13 @@ public class RenderFailureDiagnosticsTest : HubTestBase
             CreateHostAddress(),
             new LayoutAreaReference(null));
 
-        // The area the null reference resolves to is where the visible error must land.
+        // The area the null reference resolves to is where the visible outcome must land — the
+        // standard access-denied presentation, not the internal permission banner (#1189).
         var control = await stream.GetControlStream(DeniedDefaultView)
             .Should().Within(10.Seconds()).Match(x => x is MarkdownControl);
-        control.Should().BeOfType<MarkdownControl>()
-            .Which.Markdown!.ToString().Should().Contain(DenialMessage,
-                "the denial is correct and must still be surfaced to the viewer verbatim");
+        var text = control.Should().BeOfType<MarkdownControl>().Subject.Markdown?.ToString() ?? string.Empty;
+        text.Should().NotContain("lacks Read permission",
+            "the viewer gets the standard denial copy; the internal banner stays in the log");
 
         var record = Records().Should().ContainSingle(
             "one denied render must produce exactly one report").Subject;
@@ -109,10 +114,10 @@ public class RenderFailureDiagnosticsTest : HubTestBase
         record.Area.Should().NotBeNull("'(null)' is what the production line actually rendered");
 
         record.Level.Should().Be(LogLevel.Warning,
-            "an access denial is the user asking for something they may not have — the same "
-            + "classifier the Blazor client uses (AreaErrorClassifier.IsExpectedUserActionFailure) "
-            + "puts it at Warning. At Error it auto-files a production incident for access control "
-            + "working correctly");
+            "an access denial is the user asking for something they may not have — the Blazor "
+            + "client already classifies this exact failure that way (NamedAreaView → "
+            + "AreaErrorClassifier). At Error it auto-files a production incident for access "
+            + "control working correctly");
         record.Exception.Should().BeOfType<UnauthorizedAccessException>(
             "downgrading the level must not drop the exception — the cause and its stack stay");
     }
