@@ -1490,12 +1490,23 @@ internal class MeshNodeCompilationService(
                 // while we reflect over its assembly, or the scan faults with
                 // "TypeLoadException: could not load type '…MeshNodeProviderAttribute' … because the
                 // format is invalid" (the flaky Orleans dynamic-compilation race). The pin releases
-                // when this method returns; Dispose() drains pins before Unload(). Pin throws if the
-                // context is already unloading → the catch below records it as a load miss (retryable).
-                var context = assemblyLocation.StartsWith("memory://", StringComparison.Ordinal)
-                    ? cacheService.GetOrCreateLoadContext(nodeName)
-                    : cacheService.GetOrCreateLoadContextForPath(nodeName, assemblyLocation);
-                using var scanPin = context.Pin();
+                // when this method returns; Dispose() drains pins before Unload().
+                //
+                // 🚨 Resolve and pin as ONE operation (PinForScan), never as two statements. This
+                // used to resolve the context, then pin it — and an eviction landing in between
+                // (a concurrent recompile superseding this assembly) made the pin throw on a
+                // reference that was live one instruction earlier. The catch below then recorded
+                // an EMPTY configuration list, which the per-instance activation path reads as
+                // authoritative: the hub binds the mesh defaults and, because a hub resolves its
+                // configuration exactly once at activation, serves "Area not found" for its whole
+                // lifetime. That is #1151's residual — a freshly installed package's root left
+                // without its own type's areas by a recompile it merely ran next to.
+                using var pinned = cacheService.PinForScan(
+                    nodeName,
+                    assemblyLocation.StartsWith("memory://", StringComparison.Ordinal)
+                        ? null
+                        : assemblyLocation);
+                var context = pinned.Context;
                 var assembly = context.LoadNodeAssembly();
                 if (assembly == null)
                 {
@@ -2132,8 +2143,11 @@ internal class MeshNodeCompilationService(
             // PIN across load + the GetTypes/MeshNodeProviderAttribute scan below — same
             // unload-during-scan race as CompileResultFromAssembly (TypeLoadException 'format is
             // invalid'). Released when the method returns; Dispose() drains pins before Unload().
-            var context = cacheService.GetOrCreateLoadContextForRelease(release, releaseFolder);
-            using var scanPin = context.Pin();
+            // Resolve+pin is ONE operation for the reason spelled out there: an eviction landing
+            // between the two steps otherwise yields an empty configuration list that reads as
+            // authoritative (#1151).
+            using var pinned = cacheService.PinForScanOfRelease(release, releaseFolder);
+            var context = pinned.Context;
             var assembly = context.LoadNodeAssembly();
             if (assembly == null)
             {
