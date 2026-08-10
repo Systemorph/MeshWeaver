@@ -3,7 +3,7 @@ Name: Live views no longer go quiet after a save
 Category: Fix
 Description: A list, table or search result could silently stop updating after new content appeared; it now always catches the change.
 Icon: Sparkle
-Order: -20260809
+Order: -20260810
 ---
 
 # Live views no longer go quiet after a save
