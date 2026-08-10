@@ -111,6 +111,11 @@ public sealed class DbVersionGate(
 /// </summary>
 public sealed class DbVersionHealthCheck(NpgsqlDataSource dataSource) : IHealthCheck
 {
+    /// <summary>
+    /// Runs the db_version probe. Returns <c>Unhealthy</c> for anything the DATABASE says, and
+    /// propagates a cancellation the CALLER raised — those are different events and only one of
+    /// them is a verdict about the database.
+    /// </summary>
     public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context, CancellationToken cancellationToken = default)
     {
@@ -127,23 +132,31 @@ public sealed class DbVersionHealthCheck(NpgsqlDataSource dataSource) : IHealthC
                 : HealthCheckResult.Unhealthy(
                     $"db_version={version} < expected {DbVersionGate.ExpectedDbVersion}");
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            // 🚨 The CALLER gave up — the /health request was aborted, or the host is stopping.
+            // Nothing was learned about the database, so there is no verdict to report: on
+            // 2026-08-10 this check was cancelled 3.46 s into `PoolingDataSource.RentAsync`, i.e.
+            // still waiting to RENT a connector, before a connection was even open. Reporting that
+            // as Unhealthy claims a database failure that was never observed.
+            //
+            // Swallowing it into `Unhealthy(exception)` is also what put it on the board (#1183).
+            // DefaultHealthCheckService logs an Unhealthy entry at ERROR with the attached stack
+            // (HealthCheckEnd, event 103) — and its own catch filter is
+            // `catch (Exception ex) when (ex as OperationCanceledException == null)`, commented
+            // "Allow cancellation to propagate if it's not a timeout". Catching first denies the
+            // framework that classification, turning an aborted probe into a production incident
+            // for a pod that was 19 s past "Application started" and served for three more hours.
+            // Rethrow, and an aborted check unwinds silently the way the framework intends; a
+            // registration TIMEOUT (a linked token, caller not cancelled) still lands on the
+            // framework's timeout branch and is still reported.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Everything the DATABASE says — refused, unauthenticated, missing table, timed out —
+            // is a genuine verdict and stays Unhealthy.
             return HealthCheckResult.Unhealthy("db_version check threw", ex);
         }
-        // A cancellation is NOT a database failure and must not be folded into the
-        // Unhealthy("db_version check threw", ex) entry above — DefaultHealthCheckService
-        // logs that entry at Error, which auto-filed a production incident for a probe
-        // that was merely cancelled mid-query (issue #1183). The health-check framework
-        // already classifies OperationCanceledException by token, so PROPAGATE it:
-        //   • caller-cancelled (probe deadline hit / client disconnect / shutdown):
-        //     DefaultHealthCheckService.RunCheckAsync's own filter
-        //     `catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)`
-        //     does NOT match, the exception flows to the middleware, and the (already
-        //     abandoned) probe request ends without a fail-level report;
-        //   • cancelled without the caller asking (a registration timeout / an internal
-        //     Npgsql token): that same filter DOES match and reports the standard
-        //     "A timeout occurred while running check." Unhealthy entry — a legible
-        //     reason for a genuine timeout.
     }
 }

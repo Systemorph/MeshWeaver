@@ -9,59 +9,76 @@ using Xunit;
 namespace Memex.Portal.Shared.Test;
 
 /// <summary>
-/// Issue #1183: the <c>db_version</c> health probe being CANCELLED mid-query (probe
-/// deadline, client disconnect, shutdown) is an EXPECTED outcome, not a database failure.
-/// The old catch-all folded the <see cref="OperationCanceledException"/> into
-/// <c>HealthCheckResult.Unhealthy("db_version check threw", ex)</c> — which
-/// <c>DefaultHealthCheckService</c> logs at Error and ops auto-files as a production
-/// incident — for a probe nobody was waiting on any more. The health-check framework
-/// already classifies <see cref="OperationCanceledException"/> by token (its
-/// <c>RunCheckAsync</c> catch filter converts only a NON-caller-requested cancellation
-/// into the standard "A timeout occurred while running check." entry, and lets a
-/// caller-requested one propagate to the middleware, which ends the abandoned probe
-/// without a fail-level report), so the check must let the cancellation PROPAGATE
-/// instead of reporting it as a database fault.
+/// What <see cref="DbVersionHealthCheck"/> is allowed to call a database failure — issue #1183.
+///
+/// <para>Production, 2026-08-10 19:28:57Z:</para>
+/// <code>
+/// fail: Microsoft.Extensions.Diagnostics.HealthChecks.DefaultHealthCheckService[103]
+///       Health check db_version with status Unhealthy completed after 3462.0492ms with message 'db_version check threw'
+///       System.OperationCanceledException: The operation was canceled.
+///          at Npgsql.PoolingDataSource.RentAsync(...)
+/// </code>
+/// <para>The pod was NOT shutting down — it logged "Application started." at 19:28:38.552Z and
+/// served for three more hours. It was 19 s into a fresh rollout, mid NodeType-bake, and the
+/// startup probe's <c>/health</c> request was cancelled while the check was still waiting to RENT a
+/// connector — before a connection was even open. Nothing was learned about Postgres.</para>
+///
+/// <para>The check nevertheless converted its caller's cancellation into
+/// <c>HealthCheckResult.Unhealthy(exception)</c>. <c>DefaultHealthCheckService</c> logs an Unhealthy
+/// entry at ERROR with the attached stack, and the red-log filer turns Error into an incident — so
+/// an aborted probe opened a production ticket. The framework's own catch filter is
+/// <c>catch (Exception ex) when (ex as OperationCanceledException == null)</c>, commented
+/// "Allow cancellation to propagate if it's not a timeout"; catching first is what denied it that
+/// classification.</para>
+///
+/// <para>Both halves are pinned: a caller's cancellation propagates, and a database that genuinely
+/// cannot be reached is still Unhealthy.</para>
 /// </summary>
 public class DbVersionHealthCheckTest
 {
-    // Never actually connected to: the cancelled-token test throws before any I/O
-    // (Npgsql checks the token when renting from the pool — the exact frame in the
-    // incident's stack), and the genuine-failure test gets connection-refused
-    // immediately on loopback (Timeout=1 bounds the worst case).
-    private static NpgsqlDataSource CreateUnreachableDataSource() =>
-        NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Username=none;Password=none;Database=none;Timeout=1");
+    /// <summary>
+    /// A data source that can never answer — nothing listens on this loopback port. Which failure
+    /// the connect produces is irrelevant to both tests below; what matters is that the check has
+    /// to go to the database, so the cancellation is observed on the same code path production
+    /// took (<c>NpgsqlConnection.Open</c> → <c>PoolingDataSource</c>).
+    /// </summary>
+    private static NpgsqlDataSource UnreachableDataSource()
+        => NpgsqlDataSource.Create(
+            "Host=127.0.0.1;Port=59321;Username=nobody;Password=nothing;Database=nowhere;Timeout=2");
 
-    private static HealthCheckContext Context(IHealthCheck check) => new()
-    {
-        Registration = new HealthCheckRegistration("db_version", check, null, null)
-    };
-
+    /// <summary>
+    /// 🚨 The regression pin. A cancellation raised by the CALLER is not a verdict about the
+    /// database, so it must leave the check as a cancellation — not as an Unhealthy report carrying
+    /// an exception for <c>DefaultHealthCheckService</c> to log at Error.
+    /// </summary>
     [Fact]
-    public async Task CancelledProbe_PropagatesTheCancellation_InsteadOfReportingUnhealthy()
+    public async Task ACallerCancellation_Propagates_InsteadOfBeingReportedAsAnUnhealthyDatabase()
     {
-        await using var dataSource = CreateUnreachableDataSource();
+        await using var dataSource = UnreachableDataSource();
         var check = new DbVersionHealthCheck(dataSource);
         using var cts = new CancellationTokenSource();
-        cts.Cancel();
+        await cts.CancelAsync();
 
-        // Before the fix this RETURNED Unhealthy("db_version check threw", oce) — the
-        // fail-level misclassification that auto-filed #1183. Propagating hands the
-        // decision to DefaultHealthCheckService, which knows whose token cancelled.
-        var act = () => check.CheckHealthAsync(Context(check), cts.Token);
-        await act.Should().ThrowAsync<OperationCanceledException>();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => check.CheckHealthAsync(new HealthCheckContext(), cts.Token));
     }
 
+    /// <summary>
+    /// The guard that keeps the fix honest: propagating cancellations must not stop the check
+    /// reporting a database it genuinely could not reach. This is the whole reason the check
+    /// exists (a half-migrated or unreachable DB behind a portal that started anyway).
+    /// </summary>
     [Fact]
-    public async Task UnreachableDatabase_WithoutCancellation_StillReportsUnhealthyWithTheReason()
+    public async Task AnUnreachableDatabase_IsStillReportedUnhealthy()
     {
-        await using var dataSource = CreateUnreachableDataSource();
+        await using var dataSource = UnreachableDataSource();
         var check = new DbVersionHealthCheck(dataSource);
 
-        var result = await check.CheckHealthAsync(Context(check), TestContext.Current.CancellationToken);
+        var result = await check.CheckHealthAsync(
+            new HealthCheckContext(), TestContext.Current.CancellationToken);
 
-        result.Status.Should().Be(HealthStatus.Unhealthy,
-            "a genuine connection failure is a real Unhealthy verdict — only cancellations propagate");
+        result.Status.Should().Be(HealthStatus.Unhealthy);
         result.Exception.Should().NotBeNull(
-            "the entry must carry the underlying reason for operators");
+            "the cause has to reach the log — only CANCELLATION is excluded, never a real fault");
     }
 }

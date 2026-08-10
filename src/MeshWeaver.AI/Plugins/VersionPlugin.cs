@@ -1,9 +1,11 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Reactive.Concurrency;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -32,6 +34,75 @@ public class VersionPlugin(IMessageHub hub)
     private readonly IMeshService meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
     /// <summary>
+    /// 🚨 SECURITY — the per-partition version tables are a SECOND read surface for a node's
+    /// FULL content (metadata + <c>Content</c> at every historical version), so every version
+    /// read enforces the SAME per-user gate as the live read: the effective-permission fold
+    /// (<c>hub.GetEffectivePermissions</c> → <c>PermissionEvaluator</c>) requiring
+    /// <see cref="Permission.Read"/> — exactly the predicate
+    /// <c>MeshNodeStreamCache.GetStreamRaw</c> applies to <c>GetMeshNodeStream(path)</c>.
+    ///
+    /// <para>Before this gate, <c>get_versions</c> / <c>get_version</c> went straight to
+    /// <see cref="IVersionQuery"/> and returned paywalled node content (including compile
+    /// internals) to any authenticated user who knew or guessed a path, while <c>get</c> /
+    /// <c>search</c> on the same path correctly denied. Found during the #1105/#1130
+    /// investigation.</para>
+    ///
+    /// <para>Pass-throughs mirror the live gate: a type-definition path (first segment is a
+    /// NodeType name, not a partition) and a hub-shaped principal that leaked onto AsyncLocal
+    /// are not per-user-gated. An absent identity means UNAUTHENTICATED on this agent/MCP-facing
+    /// surface, so it falls back to <see cref="WellKnownUsers.Anonymous"/> — same as
+    /// <c>MeshOperations.FetchNode</c> — never to the system fallback that holds
+    /// <see cref="Permission.All"/>. Without RLS the evaluator returns <see cref="Permission.All"/>,
+    /// so unsecured meshes are unaffected.</para>
+    ///
+    /// <para>Denial is masked by the CALLERS as the exact absence answer ("No version history
+    /// found…" / "Version N not found…") so a deny is indistinguishable from a missing node —
+    /// anything else would be an existence oracle for gated paths.</para>
+    /// </summary>
+    private IObservable<bool> GateOnRead(string path)
+    {
+        // Type-definition paths are not partition data — same pass-through as the live read gate.
+        if (LooksLikeNodeTypePath(path))
+            return Observable.Return(true);
+
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        // Capture the caller synchronously, on the caller's thread — AccessContext is an
+        // AsyncLocal and does not survive the SubscribeOn hop below.
+        var caller = accessService?.Context ?? accessService?.CircuitContext
+            ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = "Anonymous", IsVirtual = true };
+        // A hub address is not a user — evaluating it yields Permission.None and would falsely
+        // deny infrastructure flows; the live gate passes these through to its system upstream.
+        if (AccessService.LooksLikeHubPrincipal(caller.ObjectId))
+            return Observable.Return(true);
+
+        return Observable.Defer(() =>
+        {
+            // Restore the captured context across the SYNCHRONOUS evaluator capture so
+            // claim-based roles resolve — same shape as MeshNodeStreamCache.ProbeEffectivePermissions.
+            using (accessService?.SwitchAccessContext(caller) ?? Disposable.Empty)
+            {
+                // Real storage work follows the decision, so leave the evaluator's Rx gate first.
+                return hub.CheckPermission(path, caller.ObjectId, Permission.Read)
+                    .TakeDecisionOutsideGate();
+            }
+        });
+    }
+
+    /// <summary>
+    /// Mirror of <c>MeshNodeStreamCache.LooksLikeNodeTypePath</c>: a path whose first segment is
+    /// a NodeType name (e.g. "Thread") is a type-definition node, not user-partition data, and
+    /// the per-user gate does not apply.
+    /// </summary>
+    private static bool LooksLikeNodeTypePath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return true;
+        var slashIdx = path.IndexOf('/');
+        var firstSegment = slashIdx < 0 ? path : path[..slashIdx];
+        if (string.IsNullOrEmpty(firstSegment)) return true;
+        return PartitionDefinition.IsSatelliteNodeType(firstSegment);
+    }
+
+    /// <summary>
     /// MCP/agent tool: lists every available version of a node, newest first —
     /// version number, modification date, who changed it, name and node type.
     /// </summary>
@@ -47,19 +118,31 @@ public class VersionPlugin(IMessageHub hub)
         logger.LogInformation("GetVersions called for path={Path}", path);
 
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        versionQuery.GetVersions(path)
-            .Select(v => (object)new
+        GateOnRead(path)
+            .SelectMany(canRead =>
             {
-                v.Version,
-                // ISO-8601 UTC with the Z: this value round-trips into RestoreFromPointInTime,
-                // where a zone-less string would be parsed in the SERVER's local zone. Agent
-                // tool output is machine-facing — the UI localizes via AccessService.ToDisplayTime.
-                LastModified = v.LastModified.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ"),
-                v.ChangedBy,
-                v.Name,
-                v.NodeType
+                if (!canRead)
+                {
+                    // Masked EXACTLY as absence — same semantics as the live read's "Not found"
+                    // masking, so a deny never discloses that a gated node exists at this path.
+                    logger.LogInformation(
+                        "GetVersions DENIED for {Path} — caller lacks Read (gated content)", path);
+                    return Observable.Return((IList<object>)ImmutableList<object>.Empty);
+                }
+                return versionQuery.GetVersions(path)
+                    .Select(v => (object)new
+                    {
+                        v.Version,
+                        // ISO-8601 UTC with the Z: this value round-trips into RestoreFromPointInTime,
+                        // where a zone-less string would be parsed in the SERVER's local zone. Agent
+                        // tool output is machine-facing — the UI localizes via AccessService.ToDisplayTime.
+                        LastModified = v.LastModified.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                        v.ChangedBy,
+                        v.Name,
+                        v.NodeType
+                    })
+                    .ToList();
             })
-            .ToList()
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 versions => tcs.TrySetResult(versions.Count == 0
@@ -90,7 +173,19 @@ public class VersionPlugin(IMessageHub hub)
         logger.LogInformation("GetVersion called for path={Path}, version={Version}", path, version);
 
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        versionQuery.GetVersion(path, version, hub.JsonSerializerOptions)
+        GateOnRead(path)
+            .SelectMany(canRead =>
+            {
+                if (!canRead)
+                {
+                    // Masked EXACTLY as absence — a deny must be indistinguishable from a
+                    // missing version so gated paths gain no existence oracle.
+                    logger.LogInformation(
+                        "GetVersion DENIED for {Path} — caller lacks Read (gated content)", path);
+                    return Observable.Return<MeshNode?>(null);
+                }
+                return versionQuery.GetVersion(path, version, hub.JsonSerializerOptions);
+            })
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 node => tcs.TrySetResult(node == null
@@ -122,7 +217,19 @@ public class VersionPlugin(IMessageHub hub)
         logger.LogInformation("RestoreVersion called for path={Path}, version={Version}", path, version);
 
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        versionQuery.GetVersion(path, version, hub.JsonSerializerOptions)
+        GateOnRead(path)
+            .SelectMany(canRead =>
+            {
+                if (!canRead)
+                {
+                    // A restore READS the historical content, so it carries the same gate and
+                    // the same absence masking as GetVersion.
+                    logger.LogInformation(
+                        "RestoreVersion DENIED for {Path} — caller lacks Read (gated content)", path);
+                    return Observable.Return<MeshNode?>(null);
+                }
+                return versionQuery.GetVersion(path, version, hub.JsonSerializerOptions);
+            })
             .SubscribeOn(TaskPoolScheduler.Default)
             .SelectMany(historicalNode =>
             {
@@ -164,10 +271,21 @@ public class VersionPlugin(IMessageHub hub)
             return Task.FromResult($"Error: Invalid timestamp '{timestamp}'. Use ISO 8601 format (e.g., '2026-03-25T14:30:00Z').");
 
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        versionQuery.GetVersions(path)
-            .Where(v => v.LastModified <= targetTime)
-            .Take(1)
-            .DefaultIfEmpty()
+        GateOnRead(path)
+            .SelectMany(canRead =>
+            {
+                if (!canRead)
+                {
+                    // Same gate + masking as RestoreVersion: the deny reads as "no version found".
+                    logger.LogInformation(
+                        "RestoreFromPointInTime DENIED for {Path} — caller lacks Read (gated content)", path);
+                    return Observable.Return<MeshNodeVersion>(null!);
+                }
+                return versionQuery.GetVersions(path)
+                    .Where(v => v.LastModified <= targetTime)
+                    .Take(1)
+                    .DefaultIfEmpty();
+            })
             .SubscribeOn(TaskPoolScheduler.Default)
             .SelectMany(targetVersion =>
             {
