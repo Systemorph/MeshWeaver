@@ -24,7 +24,7 @@ Every `path:` / `namespace:` / `nodeType:` / `source:` query in the mesh flows t
 <text x="290" y="97" text-anchor="middle" fill="#fff" font-size="11">prefix 100 · sub 50 · prox 40</text>
 <rect x="210" y="118" width="160" height="52" rx="8" fill="#26a69a"/>
 <text x="290" y="139" text-anchor="middle" fill="#fff" font-weight="bold">StaticNodeQuery</text>
-<text x="290" y="157" text-anchor="middle" fill="#fff" font-size="11">FuzzyScorer 0..1000 / 0</text>
+<text x="290" y="157" text-anchor="middle" fill="#fff" font-size="11">FuzzyScorer / unscored</text>
 <rect x="210" y="178" width="160" height="52" rx="8" fill="#8e24aa"/>
 <text x="290" y="199" text-anchor="middle" fill="#fff" font-weight="bold">Custom Provider</text>
 <text x="290" y="217" text-anchor="middle" fill="#fff" font-size="11">Scores[ ] or null</text>
@@ -58,7 +58,7 @@ Every `path:` / `namespace:` / `nodeType:` / `source:` query in the mesh flows t
 | `Query` | The parsed query, giving the aggregator access to `OrderBy`. |
 | `Version`, `Timestamp` | Bookkeeping for change feeds. |
 
-When `Scores` is `null`, the aggregator treats the batch as **unscored** and falls back to insertion order. When non-null, its length **must equal** `Items.Count`. Each provider independently decides whether to score its results.
+When `Scores` is `null`, the aggregator pairs **every** item in that batch with `0.0`. Because `OrderByDescending` is stable, an all-unscored result keeps its insertion order — but against a provider that *did* score, an unscored batch competes as score 0 and lands below any positive hit. When non-null, its length **must equal** `Items.Count`. Each provider independently decides whether to score its results.
 
 ## Sort Dimensions
 
@@ -74,7 +74,7 @@ After sorting, `Skip` and `Limit` clip the window. The `select:` projection runs
 
 ## Per-Provider Scoring Conventions
 
-> **Cross-provider comparability is the key invariant.** Score scales must be comparable across providers for the same query. A `PostgreSqlMeshQuery` name-prefix hit (score 100) should beat a `StaticNodeQueryProvider` plain-listing hit (score 0) when the same query reaches both providers.
+> **Cross-provider comparability is the key invariant.** Score scales must be comparable across providers for the same query. A `PostgreSqlMeshQuery` name-prefix hit (score 100) should beat a `StaticNodeQueryProvider` plain-listing hit (which emits no score, so it competes as 0) when the same query reaches both providers.
 
 ### `StaticNodeQueryProvider`
 
@@ -82,30 +82,35 @@ Source: `src/MeshWeaver.Hosting/Persistence/Query/StaticNodeQueryProvider.cs`
 
 | Query shape | Score |
 |---|---|
-| Text search (`textSearch:foo` or free-text tokens in the query) | `FuzzyScorer.Score(name, query)` — fzf-style with boundary bonuses, consecutive-character bonus, case bonus, and camelCase boost. Range ~0..1000. |
-| Filter / namespace / nodeType only | `0` — the provider's role is to surface seed nodes; ranking is the engine's job when multiple providers contribute. |
+| Text search (`textSearch:foo` or free-text tokens in the query) | `FuzzyScorer.Score(...)` against the node's `Name` (falling back to `Path`) — fzf-style: ~16 points per matched character plus boundary / consecutive / camelCase / after-separator bonuses. **Not normalised** — the magnitude scales with query length, so a typical 5–10 character term lands in the low hundreds. Non-`MeshNode` items score `0`. |
+| Filter / namespace / nodeType only | `Scores = null` — no relevance signal to surface ("give me all Threads in this namespace" is unordered with respect to score). The aggregator then treats every item as 0. |
 
 ### `StorageAdapterMeshQueryProvider`
 
 Source: `src/MeshWeaver.Hosting/Persistence/Query/StorageAdapterMeshQueryProvider.cs`
 
-When the wrapped adapter has a native query layer (Postgres, Cosmos), the adapter computes scores and the provider passes them through unchanged. For plain in-memory or file-system adapters, scores default to `0` — the static catalog handles ranking for those cases.
+**This provider does not score.** Every `Initial` it emits leaves `Scores` unset (`null`), whatever adapter is wrapped — it uses a fuzzy score internally for its *own* autocomplete/suggestion ordering, but never publishes one on the `QueryResultChange`. Its items therefore enter the merge at 0 and keep their insertion order among themselves.
 
 ### `PostgreSqlMeshQuery` and `PostgreSqlPartitionedMeshQuery`
 
-Sources: `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlMeshQuery.cs` and `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSqlGenerator.cs`
+Sources: `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlMeshQuery.cs`, `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionedMeshQuery.cs`, `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSqlGenerator.cs`
 
-The PostgreSQL layer composes a score entirely in SQL so the database ranks rows on the indexed side. The individual components:
+There are **two distinct rankings** in the PostgreSQL layer; do not conflate them.
 
-| Component | Score | Source |
-|---|---|---|
-| Name prefix match | `100 - (name.Length - prefixLength)` — shorter prefix-matched names rank higher | `PostgreSqlMeshQuery.cs` |
-| Name substring match | `50` | `PostgreSqlMeshQuery.cs` |
-| Path substring match | `30` | `PostgreSqlMeshQuery.cs` |
-| Path proximity boost | `PathProximity.Score(contextPath, resultPath)` — max 40, decays with namespace segment distance | `src/MeshWeaver.Mesh.Contract/Query/PathProximity.cs` |
-| Vector embedding similarity | `1 - (embedding <=> queryEmbedding)` cosine distance, scaled to the same range as the prefix/substring buckets | `PostgreSqlSqlGenerator.GenerateVectorSearchQuery` |
+**(1) The published `Scores[]` are computed in C#**, by `PostgreSqlMeshQuery.ComputeRowScores`, over the rows the initial emission carries:
 
-The composite score is the `SUM` of all applicable components for each row. The provider emits `Scores[i]` matching that sum.
+| Component | Score |
+|---|---|
+| Name prefix match | `100 - (name.Length - termLength)` — shorter prefix-matched names rank higher |
+| Name substring match | `50` |
+| Path substring match | `30` |
+| Path proximity boost | `PathProximity.ComputeBoost(contextPath, resultPath)` — `40 / (1 + segmentDistance)`, so max 40, decaying with namespace segment distance (`src/MeshWeaver.Mesh.Contract/Query/PathProximity.cs`) |
+
+The three text buckets are **mutually exclusive** (first match wins — prefix, else substring, else path); the proximity boost is then *added*. `ComputeRowScores` returns **`null`** — i.e. no scoring at all — when the item is not a `MeshNode`, or when the query has neither a text term nor a context path, so a purely structured query is deliberately left unranked rather than amplifying a constant 0.
+
+**(2) A separate SQL-side relevance ladder decides which rows survive `LIMIT`**, on its own scale (exact name 1000, name-prefix 600, id-prefix 500, name-substring 300, id-substring 200, description-substring 100) in `PostgreSqlSqlGenerator`. It exists so the database keeps the most relevant rows when it clips, *before* the C# merge ever sees them. It is **not** what lands in `Scores[]`.
+
+Vector search is a third, separate ordering: `GenerateVectorSearchQuery` orders by cosine distance (`n.embedding <=> @queryVector`, with a lexical tier in front when a term is present) and projects `_distance`. Cosine similarity is **not** folded into `Scores[]` — rows returned by the vector path are re-scored by `ComputeRowScores` like any other. See [Vector Search](/Doc/Architecture/VectorSearch).
 
 ## Adding a New Scored Provider
 
@@ -121,7 +126,7 @@ A single provider can rank within its own result set, but cross-provider tie-bre
 
 ## Legacy: The "Writable First, Static Last" Ordering
 
-Before the current scoring contract, `MeshQuery.MergeProviderObservables` ordered provider buckets as *writable-persistence first, static catalog last* to prevent static entries from crowding out user content under a `limit:` clause. That heuristic was a stand-in for proper scoring. With per-provider `Scores` it is gone: PostgreSQL sets a high score for relevant rows, the static catalog sets `0` for filter-only matches, and `Limit` clips exactly the right tail.
+Before the current scoring contract, `MeshQuery.MergeProviderObservables` ordered provider buckets as *writable-persistence first, static catalog last* to prevent static entries from crowding out user content under a `limit:` clause. That heuristic was a stand-in for proper scoring. With per-provider `Scores` it is gone — the merge is now a flat concat with no priority shuffle: PostgreSQL sets a high score for relevant rows, the static catalog leaves `Scores` null for filter-only matches (so its items enter at 0), and `Limit` clips exactly the right tail.
 
 ## See Also
 

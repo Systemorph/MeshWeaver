@@ -757,7 +757,7 @@ public static class DataExtensions
             // Applying the patch is fire-and-forget relative to the handler —
             // the helper reads the stream reactively (.Take(1).Subscribe), merges,
             // and commits via workspace.RequestChange. The response is posted from
-            // inside the subscribe callback so the caller's RegisterCallback fires
+            // inside the subscribe callback so the caller's Observe subscription fires
             // AFTER the commit (otherwise a racing read sees pre-patch state).
             var applyPatch = typeof(DataExtensions)
                 .GetMethod(nameof(ApplyJsonMergePatchAndUpdate),
@@ -1264,7 +1264,7 @@ public static class DataExtensions
                     // which blocked the handler's action block; the reducer's
                     // emission then couldn't be processed by the same hub →
                     // deadlock under load. The post-commit response timing
-                    // is preserved (caller's RegisterCallback fires after the
+                    // is preserved (caller's Observe subscription fires after the
                     // commit lands, before any subsequent Get).
                     var postSub = stream
                         .Skip(1)

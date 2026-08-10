@@ -14,7 +14,7 @@ namespace MeshWeaver.Hosting.Completion;
 /// Orchestrates chat autocomplete by blending multiple sources:
 /// <list type="bullet">
 ///   <item>Source A — AutocompleteRequest via hub Post+Observe to the current node hub (custom providers)</item>
-///   <item>Source B — IMeshService.QueryAsync with <c>path:current scope:subtree</c> (subtree search)</item>
+///   <item>Source B — IMeshService.Query with <c>path:current scope:subtree</c> (subtree search)</item>
 ///   <item>Source C — Adaptive broadening: partition-level fan-out when primary results are sparse</item>
 ///   <item>Partition list — when typing <c>@/</c> or <c>@/&lt;filter&gt;</c></item>
 ///   <item>Partition drill-down — when typing <c>@/Partition/</c></item>

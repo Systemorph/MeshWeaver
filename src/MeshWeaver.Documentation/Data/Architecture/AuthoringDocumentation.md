@@ -59,7 +59,7 @@ Icon: <svg …/>                           # inline SVG, content:file.svg, or an
 ---
 ```
 
-`Thumbnail`, `Authors`, `Tags`, and `Abstract` (alias of `Description`) are also supported — see `MarkdownFileParser.MarkdownFrontMatter`.
+`Thumbnail`, `Authors`, and `Tags` are also supported. `Abstract` is the canonical name for the summary and `Description` is accepted as its legacy alias — both land on the node's `Description`. `Title` is likewise a legacy alias of `Name`. See `MarkdownFileParser.MarkdownFrontMatter` (`src/MeshWeaver.Hosting/Persistence/Parsers/MarkdownFileParser.cs`). `Icon` falls back to `Thumbnail` when omitted.
 
 ## Images and diagrams
 
