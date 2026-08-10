@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using NSubstitute;
@@ -180,6 +181,53 @@ public class NodeTypeRebindWatcherTest
 
         feed.Publish(Change(InstancePath, nodeType: null, MeshChangeKind.Deleted));
         AssertNoDispose(hub);
+    }
+
+    /// <summary>
+    /// 🚨 A null HubConfiguration must SURVIVE the wrap. Both activation sites
+    /// (<c>MonolithRoutingService.CreateHub</c>, <c>MessageHubGrain</c>) branch on it to activate
+    /// the fail-fast NACK-fallback hub, which answers every message with a typed DeliveryFailure
+    /// naming the node type and DeactivateOnIdle's so the next access retries. Making it non-null
+    /// unconditionally would kill that branch and swap fail-fast for a bare hub that Ignores typed
+    /// requests — the park class, where senders wait out their whole budget instead of getting a
+    /// diagnostic. Same rule <c>NodeTypeEnrichmentHelpers.ApplyStreamResult</c> states for its wrap.
+    /// </summary>
+    [Fact]
+    public void NullHubConfiguration_IsLeftNull()
+    {
+        var meshHub = Substitute.For<IMessageHub>();
+        var node = new MeshNode("Catalog", "Store") { NodeType = "Store/Catalog" };
+        node.HubConfiguration.Should().BeNull("precondition: the wrap's input has no configuration");
+
+        var wrapped = NodeTypeRebindWatcher.WithNodeTypeRebind(node, meshHub, logger: null);
+
+        wrapped.HubConfiguration.Should().BeNull(
+            "the fail-fast NACK-fallback branch keys on a null HubConfiguration — a hub with no "
+            + "configuration at all already retries on the next access, so it was never pinned");
+        wrapped.Should().BeSameAs(node, "there is nothing to wrap, so the node passes through");
+    }
+
+    /// <summary>
+    /// The ordinary case: a node that DOES carry a configuration keeps it (composed), so the wrap
+    /// never replaces the type's own areas — it only appends the watcher's initialization.
+    /// </summary>
+    [Fact]
+    public void NonNullHubConfiguration_IsComposedNotReplaced()
+    {
+        var meshHub = Substitute.For<IMessageHub>();
+        var applied = 0;
+        var node = new MeshNode("Catalog", "Store")
+        {
+            NodeType = "Store/Catalog",
+            HubConfiguration = c => { applied++; return c; }
+        };
+
+        var wrapped = NodeTypeRebindWatcher.WithNodeTypeRebind(node, meshHub, logger: null);
+
+        wrapped.HubConfiguration.Should().NotBeNull().And.NotBeSameAs(node.HubConfiguration);
+        wrapped.HubConfiguration!(new MessageHubConfiguration(
+            Substitute.For<IServiceProvider>(), new Address("Store")));
+        applied.Should().Be(1, "the node's own configuration must still be applied");
     }
 
     [Fact]
