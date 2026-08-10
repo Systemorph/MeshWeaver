@@ -166,28 +166,32 @@ instance's install records, materialise each module at its recorded `ModuleVersi
 already tag per module, e.g. `Store/v1.0.15`), assemble that set, and run the tool inside the
 **candidate** image. Same executable, different input.
 
-### 🚨 Blocker: an instance does not currently RECORD its combo
+### The combo IS recorded — in two shapes, not one
 
-The gate cannot verify a combination the instance cannot state. Measured on memex-cloud:
+An earlier revision of this page claimed an instance cannot state its combo. **That was wrong**, and
+the correction matters because it changes the first task from "add recording" to "read what is there".
 
-- **The module SET is knowable** — every installed module is a top-level `Store/Plugin` node
-  (`nodeType:Store/Plugin`, 40+ of them).
-- **The module VERSIONS are NOT.** `Plugins/*` — the partition `PackageInstaller` writes its
-  `Package` records into (`InstalledPartition = "Plugins"`, `PackageNodeType = "Package"`) — contains
-  only `_Policy`. There are no install records, so nothing pins `ModuleVersion` per module. The
-  plugin root node's `PluginContent` carries no version either.
+Modules reach an instance by two paths, and each records its coordinate differently:
 
-The reason is that these modules arrived by **GitSync / repo import**, not through `PackageInstaller`.
-Only the installer path writes a `PackageManifest` record; the sync path does not. So on this portal
-"which version of each module am I running" has no answer on the instance.
+| path | where the coordinate lives | what pins the version |
+|---|---|---|
+| **GitSync / repo import** (how most modules actually arrive) | `{Space}/_GitSync`, `nodeType:GitHubSyncConfig` | `repositoryUrl` + `branch` + `subdirectory` + **`lastSyncCommitSha`** |
+| **PackageInstaller** | `Plugins/{id}`, `nodeType:Package` | `PackageManifest.ModuleVersion` |
 
-**Consequence for implementation order.** Building the combo assembler first would produce a gate that
-verifies *the latest of each repo* — which is emphatically NOT the instance's combo, and would give
-exactly the false confidence this whole design exists to remove. The first task is therefore to make
-**every** path that lands a module on an instance record what it landed: module id + `ModuleVersion` +
-source ref, in one place, whether it came from the installer or from sync.
+Verified live on memex-cloud — `SocialMedia/_GitSync` carries
+`repositoryUrl=…/MeshWeaver.SocialMedia`, `branch=main`, `subdirectory=SocialMedia`,
+`lastSyncCommitSha=d19534d6…`. That is a complete, exact combo coordinate.
 
-Only then is the combo identifiable, and only then is verifying it meaningful.
+The reason the mistake was easy: `Plugins/*` holds only `_Policy` on that portal — **zero install
+records** — and it is tempting to read "no install records" as "no version recorded". But
+`ModuleDiscoveryService` documents the true state plainly: *"on real instances modules arrive through
+per-Space `{Space}/_GitSync` entries, not the plugin catalog: memex carries 37 sync configs and zero
+install records."* The information was never missing; it was in the other shape.
+
+**So the first task is a READER, not a writer:** one query that returns an instance's full combo —
+every module with its source and pinned ref — folding both shapes into one list. A reader that
+handles only `Package` records would report almost nothing on a real portal and look like a healthy
+empty set, which is the same false-confidence failure in a new place.
 
 **Therefore the surge pod is NOT sufficient on its own.** `DynamicTypePreWarmer` compiles this
 instance's NodeTypes on the candidate image, which is the right *scope* — but it is compile-only and
