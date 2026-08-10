@@ -202,4 +202,88 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
                 "a broken type contains its blast radius to its own dependents; unrelated types "
                 + "must still end up with a usable build");
     }
+
+    /// <summary>
+    /// 🚨 "I don't know" must propagate as "I don't know" — the wiring behind the readiness gate's
+    /// timeout leniency.
+    ///
+    /// <para><see cref="NodeTypeBakeGateState"/> refuses to gate a rollout on a type that merely
+    /// TIMED OUT, because a cross-silo <c>SubscribeRequest</c> timeout (core #694) says nothing
+    /// about whether the type builds. That leniency was worth nothing while it stopped at depth 1:
+    /// the unevaluated upstream still turned every previously-healthy DEPENDENT into
+    /// <see cref="PreWarmStatus.UpstreamFailed"/>, which DOES gate — so the false regression that
+    /// stalled memex-cloud on 2026-08-02 simply reappeared one hop downstream.</para>
+    ///
+    /// <para>A budget too small for any real compile makes the upstream time out deterministically,
+    /// with no dependence on machine speed in the direction that matters: the assertion is that the
+    /// dependent is reported <see cref="PreWarmStatus.UpstreamUnevaluated"/> — NOT
+    /// <see cref="PreWarmStatus.UpstreamFailed"/> — and so cannot stall a roll.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task WarmDynamicTypes_DependentOfAnUnevaluatedUpstream_IsUnevaluatedNotFailed()
+    {
+        const string upstream = $"{Partition}Slow/SlowUpstream";
+        const string dependent = $"{Partition}Slow/SlowDependent";
+
+        // Perfectly VALID — the point is that the sweep never gets an answer about it, not that
+        // it is broken. With the sub-millisecond budget below it can only time out.
+        await NodeFactory.CreateNode(new MeshNode("SlowUpstream", $"{Partition}Slow")
+        {
+            Name = "Slow Upstream",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Compiles fine — but not within the budget this sweep allows.",
+                Configuration = "config => config"
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        await NodeFactory.CreateNode(new MeshNode("SlowDependent", $"{Partition}Slow")
+        {
+            Name = "Slow Dependent",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Draws source out of the slow upstream's subtree.",
+                Configuration = "config => config",
+                Sources = ["namespace:Source scope:subtree", $"shared=@{upstream}/Source"]
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        var logger = Mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("PreWarmUnevaluated");
+
+        var outcomes = await DynamicTypePreWarmer
+            .WarmDynamicTypes(Mesh, logger, perTypeBudget: TimeSpan.FromMilliseconds(1))
+            .Where(o => o.TypePath == upstream || o.TypePath == dependent)
+            .Take(2)
+            .ToList()
+            .Timeout(TimeSpan.FromSeconds(110))
+            .ToTask();
+
+        foreach (var o in outcomes)
+            Output.WriteLine($"{o.TypePath} → {o.Status} {o.Detail}");
+
+        outcomes.Single(o => o.TypePath == upstream).Status
+            .Should().Be(PreWarmStatus.TimedOut,
+                "the budget is far too small for a real compile — this pins the premise of the test");
+
+        var blocked = outcomes.Single(o => o.TypePath == dependent);
+        blocked.Status.Should().Be(PreWarmStatus.UpstreamUnevaluated,
+            "a dependent of a type the sweep never evaluated is itself unevaluated — reporting it "
+            + "as UpstreamFailed would gate the rollout on a timeout, which is exactly the false "
+            + "regression the direct-timeout leniency exists to prevent");
+        blocked.Detail.Should().Contain(upstream,
+            "the outcome must NAME the blocker — 'something upstream' is not actionable");
+
+        // The gate is the consumer that matters: an unevaluated cascade must not hold readiness.
+        var gate = new NodeTypeBakeGateState();
+        gate.MarkRunning("go");
+        foreach (var o in outcomes)
+            gate.MarkOutcome(o);
+        gate.MarkComplete("done");
+
+        gate.Phase.Should().Be(BakePhase.Complete,
+            "a sweep that only failed to get answers has proved nothing bad — it must not stall the roll");
+        gate.Regressions.Should().BeEmpty();
+    }
 }
