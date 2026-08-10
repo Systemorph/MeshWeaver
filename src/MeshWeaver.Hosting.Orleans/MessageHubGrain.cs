@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
@@ -221,9 +222,12 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         else
         {
             logger.LogDebug("[ACTIVATE] Grain {StreamId}: no static node with HubConfig, merging path resolver + mesh-node cache", streamId);
-            // Path resolver gives a fast in-process answer (no SubscribeRequest round-trip)
-            // for routable paths; the mesh-node cache backs it up for dynamic / freshly-
-            // created nodes that the path resolver hasn't indexed yet.
+            // Path resolver gives the AUTHORITATIVE in-process answer (no SubscribeRequest
+            // round-trip) for routable paths; the mesh-node cache is an ACCELERATOR that
+            // replays an already-hydrated entry (a reader kept this path warm across an idle
+            // collection) so a reactivation can skip the storage read. It can only ever
+            // contribute a VALUE — see ComposeActivationSource for why its terminal is
+            // meaningless by construction and must not fault this activation.
             var pathResolver = meshHub.ServiceProvider.GetRequiredService<IPathResolver>();
             var accessService = meshHub.ServiceProvider.GetService<AccessService>();
             // 🚨 Grain activation is INFRASTRUCTURE — reading the node to learn its
@@ -243,11 +247,18 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 using (accessService?.ImpersonateAsSystem())
                     return streamCache.GetStream(addressPath, meshHub.JsonSerializerOptions);
             });
-            sourceStream = Observable.Merge(
+            sourceStream = ComposeActivationSource(
                 pathResolver.ResolvePath(addressPath)
                     .Where(r => r is { Node: not null })
                     .Select(r => r!.Node!),
-                cacheStream);
+                cacheStream,
+                ex => logger.LogWarning(ex,
+                    "[ACTIVATE] Grain {StreamId}: the mesh-node-cache read of this grain's OWN address " +
+                    "('{Path}') terminated with an error. That read is a SubscribeRequest routed back to " +
+                    "THIS grain, so it cannot be answered until this activation completes — its terminal " +
+                    "says nothing about the node and must not fault the activation. Node resolution " +
+                    "continues on the path resolver.",
+                    streamId, addressPath));
         }
 
         // Non-blocking activation: subscribe to the source stream; when it emits a
@@ -273,19 +284,16 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // the source emits, Amb commits to it and the timer is unsubscribed, so a
         // legitimately slow enrichment (cold compile, bounded internally by the
         // slow-path budgets) is never cut short.
-        _activationSubscription = Observable.Amb(
+        _activationSubscription = BuildActivationChain(
                 sourceStream,
-                Observable.Timer(FirstNodeResolutionTimeout).SelectMany(_ =>
-                    Observable.Throw<MeshNode>(new TimeoutException(
-                        $"No MeshNode emitted for '{addressPath}' within {FirstNodeResolutionTimeout.TotalSeconds:0}s. " +
-                        "Either the node does not exist or no query provider claims its partition."))))
-            .SelectMany(node =>
-            {
-                logger.LogDebug("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
-                    streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
-                return ResolveHubConfigurationObservable(node);
-            })
-            .Take(1)
+                addressPath,
+                FirstNodeResolutionTimeout,
+                node =>
+                {
+                    logger.LogDebug("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
+                        streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
+                    return ResolveHubConfigurationObservable(node);
+                })
             .Subscribe(
                 node => CompleteActivation(streamId, address, grainScheduler, node, sourceStream),
                 ex =>
@@ -314,6 +322,96 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Composes the activation SOURCE from its two branches, and neutralises the one branch
+    /// whose terminal is meaningless by construction.
+    ///
+    /// <para><b>The branches.</b> <paramref name="pathResolverStream"/> is authoritative: it reads
+    /// the node straight out of storage, in-process, with no hub round-trip.
+    /// <paramref name="ownAddressCacheStream"/> is an ACCELERATOR: when the process-wide
+    /// <c>IMeshNodeStreamCache</c> already holds a hydrated entry for this path (a reader kept it
+    /// warm across an idle-collection), it replays the node instantly and activation skips the
+    /// storage read.</para>
+    ///
+    /// <para>🚨 <b>Why the cache branch may supply a VALUE but never a TERMINAL.</b> The cache
+    /// opens its upstream with <c>GetMeshNodeStreamBypassCache(path)</c> — a
+    /// <c>SubscribeRequest</c> addressed at <c>path</c>. For the grain's OWN address that request
+    /// is routed straight back to THIS grain, where <see cref="DeliverMessage"/> parks it on
+    /// <see cref="_hubReadyRaw"/> until <see cref="CompleteActivation"/> runs. So on a COLD entry
+    /// the branch is a strict self-loop: it cannot answer until the very activation it feeds has
+    /// finished. Its only possible terminal is "the grain did not answer itself", which carries no
+    /// information about the node — and letting <c>Observable.Merge</c> forward it made that
+    /// terminal the ACTIVATION's terminal.
+    ///
+    /// <para>Measured consequence (memex.systemorph.com, 2026-08-09/10 — ~36 activation faults an
+    /// hour, every one of them a <c>nodeType:Store/Plugin</c> node): the cache hub's request budget
+    /// (<c>MessageHubConfiguration.RequestTimeout</c>, 60 s) became a hard 60 s ceiling on TOTAL
+    /// activation, and it fired as <c>"No response received in hub cache/… for request
+    /// SubscribeRequest → target Edu"</c> — an error naming the activating grain as an unreachable
+    /// target. That ceiling pre-empted BOTH of the deliberate slow-path designs downstream:
+    /// <c>NodeTypeEnrichmentHelpers.WaitForCompileSettled</c> DISARMS its wall clock while a
+    /// compile is in flight (a cold pod compiling many dynamic types legitimately runs past the
+    /// budget), and <c>BuildEnrichmentChain</c> catches a stuck type into a visible
+    /// compilation-error OVERLAY so the hub activates anyway. Neither could ever be reached: the
+    /// self-loop faulted the activation first, 100% of the time. Orleans then retried, the cache's
+    /// transient-streak breaker replayed the cached timeout into each fresh activation, and the
+    /// retries faulted in milliseconds — the node stayed unreadable to users and to MCP.</para></para>
+    ///
+    /// <para><b>This is not a swallowed fault.</b> The exception is logged in full via
+    /// <paramref name="onOwnAddressCacheFault"/>, and activation keeps a COMPLETE set of terminal
+    /// outcomes without it: a node from the path resolver drives enrichment; nothing from either
+    /// branch within <see cref="FirstNodeResolutionTimeout"/> throws the precise
+    /// "no MeshNode emitted / no query provider claims its partition" TimeoutException; both
+    /// branches finishing with no node completes the source (the "no usable node" handler in
+    /// <see cref="OnActivateAsync"/>); and an enrichment fault surfaces as the overlay. Collapsing
+    /// the branch to <c>Empty</c> rather than <c>Never</c> is what keeps that last case PROMPT —
+    /// a genuinely missing node is reported immediately instead of waiting out the budget.</para>
+    /// </summary>
+    internal static IObservable<MeshNode> ComposeActivationSource(
+        IObservable<MeshNode> pathResolverStream,
+        IObservable<MeshNode> ownAddressCacheStream,
+        Action<Exception> onOwnAddressCacheFault)
+        => Observable.Merge(
+            pathResolverStream,
+            ownAddressCacheStream.Catch<MeshNode, Exception>(ex =>
+            {
+                onOwnAddressCacheFault(ex);
+                // The branch stops contributing — exactly as if it had never had anything to
+                // say, which is the truth for a request routed back at the activating grain.
+                return Observable.Empty<MeshNode>();
+            }));
+
+    /// <summary>
+    /// The activation chain: bound the wait for the FIRST node, enrich it with a
+    /// HubConfiguration, and take the first enriched result.
+    ///
+    /// <para>The <c>Amb</c> timer bounds ONLY the wait for the first source emission — once the
+    /// source emits, Amb commits to it and the timer is unsubscribed, so a legitimately slow
+    /// enrichment (a cold compile, bounded internally by the slow-path budgets) is never cut
+    /// short. That "never cut short" property is only real because
+    /// <see cref="ComposeActivationSource"/> has already stopped the self-referential cache branch
+    /// from injecting its own deadline into the same chain.</para>
+    ///
+    /// <para><paramref name="scheduler"/> exists so the budget can be driven in virtual time by
+    /// <c>MessageHubGrainActivationSourceTest</c> (same seam as
+    /// <c>NodeTypeEnrichmentHelpers.WaitForCompileSettled</c>); production passes null and uses
+    /// the default scheduler.</para>
+    /// </summary>
+    internal static IObservable<MeshNode> BuildActivationChain(
+        IObservable<MeshNode> sourceStream,
+        string addressPath,
+        TimeSpan firstNodeResolutionTimeout,
+        Func<MeshNode, IObservable<MeshNode>> enrich,
+        IScheduler? scheduler = null)
+        => Observable.Amb(
+                sourceStream,
+                Observable.Timer(firstNodeResolutionTimeout, scheduler ?? Scheduler.Default)
+                    .SelectMany(_ => Observable.Throw<MeshNode>(new TimeoutException(
+                        $"No MeshNode emitted for '{addressPath}' within {firstNodeResolutionTimeout.TotalSeconds:0}s. " +
+                        "Either the node does not exist or no query provider claims its partition."))))
+            .SelectMany(enrich)
+            .Take(1);
 
     /// <summary>
     /// Builds the hosted hub and feeds it onto <see cref="_hubReadyRaw"/>. Called from
