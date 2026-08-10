@@ -285,17 +285,42 @@ public static class PluginGateRunner
                 if (!type.DeclaresTestsArea)
                     return Observable.Return(afterRender with { Tests = CheckOutcome.Skipped });
                 return ResolveTestsHost(harness, type.Path)
-                    .SelectMany(hostPath => AreaProbe.ExecuteTestsArea(
-                        harness.Client, hostPath, options.RenderTimeout))
-                    .Catch((Exception ex) => Observable.Return(new AreaVerdict(
-                        CheckOutcome.Failed,
-                        $"could not execute Tests area: {ex.GetType().Name}: {ex.Message}")))
-                    .Select(tests => afterRender with
+                    // Bounded: the host lookup queries the (eventually consistent) index and may
+                    // create a node — both are message round-trips with no budget of their own, and
+                    // an unbounded wait here would spend the whole JOB timeout and report nothing.
+                    // Same budget as the render it feeds; a resolve is sub-second when it works.
+                    .Timeout(options.RenderTimeout)
+                    .Catch((TimeoutException _) => Observable.Return(new TestsHost(
+                        Path: null,
+                        Description: $"unresolved — no Tests host within " +
+                                     $"{options.RenderTimeout.TotalSeconds:F0}s (neither a shipped " +
+                                     $"instance of {type.Path} nor a created probe)")))
+                    .SelectMany(host => (host.Path is null
+                            ? Observable.Return(new AreaVerdict(
+                                CheckOutcome.Failed, "no host to execute the Tests area on"))
+                            : AreaProbe.ExecuteTestsArea(
+                                harness.Client, host.Path, options.RenderTimeout))
+                        .Catch((Exception ex) => Observable.Return(new AreaVerdict(
+                            CheckOutcome.Failed,
+                            $"could not execute Tests area: {ex.GetType().Name}: {ex.Message}")))
+                        .Select(tests => afterRender with
+                        {
+                            Tests = tests.Outcome,
+                            TestsDetail = tests.Detail,
+                            TestsHost = host.Description,
+                        }))
+                    .Catch((Exception ex) => Observable.Return(afterRender with
                     {
-                        Tests = tests.Outcome,
-                        TestsDetail = tests.Detail,
-                    });
+                        Tests = CheckOutcome.Failed,
+                        TestsDetail = $"could not resolve a Tests host: " +
+                                      $"{ex.GetType().Name}: {ex.Message}",
+                    }));
             });
+
+    /// <summary>The node whose hub runs a type's <c>Tests</c> area, and how the gate picked it.</summary>
+    /// <param name="Path">The host node's path; null when no host could be resolved.</param>
+    /// <param name="Description">The human-readable account printed in the report.</param>
+    private sealed record TestsHost(string? Path, string Description);
 
     /// <summary>
     /// The node whose hub serves the type's <c>Tests</c> area: the area is registered by the
@@ -303,8 +328,16 @@ public static class PluginGateRunner
     /// served by the NodeType editor). Prefers an instance the package ships; otherwise creates
     /// a throwaway probe instance under the type path (system-impersonated — the same footing
     /// as the install).
+    ///
+    /// <para>🚨 The two branches are NOT equivalent, so the report names which one ran. A shipped
+    /// instance can be a node whose hub was activated earlier in the install — e.g. a package ROOT
+    /// retyped to the package's own NodeType, activated while it was still the Space placeholder —
+    /// and an instance hub never re-binds its configuration, so it can serve only the framework's
+    /// default areas while the type's own are missing. A freshly created probe cannot be in that
+    /// state. That is the difference between the same commit's green and red gate runs, and
+    /// without the host in the report the RED reads as "the plugin is broken" (issue #1077).</para>
     /// </summary>
-    private static IObservable<string> ResolveTestsHost(GateMesh harness, string typePath)
+    private static IObservable<TestsHost> ResolveTestsHost(GateMesh harness, string typePath)
     {
         var meshService = harness.ServiceProvider.GetRequiredService<IMeshService>();
         return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{typePath}"))
@@ -316,7 +349,10 @@ public static class PluginGateRunner
                     .OrderBy(n => n.Path, StringComparer.Ordinal)
                     .FirstOrDefault();
                 if (shipped is not null)
-                    return Observable.Return(shipped.Path);
+                    return Observable.Return(new TestsHost(
+                        shipped.Path,
+                        $"{shipped.Path} — an instance of {typePath} already in the mesh " +
+                        $"({change.Items.Count} candidate(s)); its hub may predate this install"));
 
                 var probePath = $"{typePath}/GateProbe";
                 var probe = new MeshNode("GateProbe", typePath)
@@ -330,7 +366,10 @@ public static class PluginGateRunner
                 return Observable.Using(
                         () => access.ImpersonateAsSystem(),
                         _ => meshService.CreateNode(probe))
-                    .Select(created => created.Path);
+                    .Select(created => new TestsHost(
+                        created.Path,
+                        $"{created.Path} — a throwaway probe instance the gate created " +
+                        $"(no instance of {typePath} was visible)"));
             });
     }
 
