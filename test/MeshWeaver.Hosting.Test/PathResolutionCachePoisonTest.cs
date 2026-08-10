@@ -244,4 +244,137 @@ public class PathResolutionCachePoisonTest
         Assert.Null(fresh.Remainder);
         Assert.True(query.Calls >= 2, "the pre-change answer must not be served from cache");
     }
+
+    /// <summary>
+    /// 🚨 Issue #1172 — an in-place UPDATE must not evict the route-shape cache.
+    ///
+    /// <para>An Updated event cannot change any path's resolution SHAPE: the node existed at that
+    /// path before the write and still does (moves publish Deleted+Created). Yet the sweep used to
+    /// REMOVE the entry, so a hot-WRITTEN path — a compile activity receiving one routed
+    /// <c>PatchDataRequest</c> per appended log line — paid a fresh storage query for EVERY routed
+    /// message, each holding a RoutingGrain in-flight slot for the query's duration. During the
+    /// boot NodeType bake that saturated the silo's routing window at 64, the bake's own stream
+    /// waits timed out behind the saturated router, and the bake inflated ~10× (pods not-Ready for
+    /// 80+ minutes). Route-shape resolution (<see cref="IPathResolver.ResolveRoute"/>) must stay a
+    /// warm cache hit across Updated writes; node-reading resolution
+    /// (<see cref="IPathResolver.ResolvePath"/>) must re-query for the fresh node.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task UpdatedNode_KeepsRouteResolutionWarm_WhileNodeReadersRefresh()
+    {
+        var feed = new InProcessMeshChangeFeed();
+        var (svc, query) = BuildService(_ => InitialWith("B", "A"), changeFeed: feed);
+
+        var first = await svc.ResolvePath("A/B").Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        Assert.Equal("A/B", first!.Prefix);
+        var callsAfterFill = query.Calls;
+
+        // The hot-write: the node at A/B is updated in place (an activity-log append).
+        feed.Publish(MeshChangeEvent.Updated(new MeshNode("B", "A") { NodeType = "Markdown" }));
+
+        // ROUTE-shape resolution is served synchronously from the cache — NO new query. This is
+        // the silo router's per-message lookup; before the fix the Updated sweep removed the
+        // entry and this line ran a fresh storage query (the #1172 amplifier).
+        AddressResolution? routed = null;
+        using (svc.ResolveRoute("A/B").Take(1).Subscribe(r => routed = r))
+            Assert.NotNull(routed);
+        Assert.Equal("A/B", routed!.Prefix);
+        Assert.Null(routed.Remainder);
+        // The stale entry must not pin the superseded node (whole Content) in memory — the
+        // route-only answer carries no node.
+        Assert.Null(routed.Node);
+        Assert.Equal(callsAfterFill, query.Calls);
+
+        // A NODE-reading caller (grain activation) sees the same entry as a miss and re-queries.
+        var refreshed = await svc.ResolvePath("A/B").Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        Assert.Equal("A/B", refreshed!.Prefix);
+        Assert.NotNull(refreshed.Node);
+        Assert.True(query.Calls > callsAfterFill, "a node-reading caller must re-query after Updated");
+
+        // …and its fresh commit repairs the entry for node readers too: the next ResolvePath is
+        // a warm hit again.
+        var callsAfterRefresh = query.Calls;
+        AddressResolution? warmAgain = null;
+        using (svc.ResolvePath("A/B").Take(1).Subscribe(r => warmAgain = r))
+            Assert.NotNull(warmAgain);
+        Assert.Equal(callsAfterRefresh, query.Calls);
+    }
+
+    /// <summary>
+    /// 🚨 Issue #1172, the storm shape: on a path written CONTINUOUSLY, an Updated lands during
+    /// every resolution query, so dropping the fill claim on Updated (the old behaviour) meant
+    /// the cache could NEVER commit an entry for exactly the paths that need it most — every
+    /// routed message paid a fresh storage query forever. The fill must still commit
+    /// (stale-marked: its route shape is valid), so the NEXT routed message is a cache hit.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task UpdatedDuringInFlightFill_StillCommitsTheRouteShape()
+    {
+        var feed = new InProcessMeshChangeFeed();
+        var inFlight = new Subject<QueryResultChange<MeshNode>>();
+        var (svc, query) = BuildService(
+            call => call == 1 ? inFlight : InitialWith("B", "A"),
+            changeFeed: feed);
+
+        AddressResolution? first = null;
+        using var subscription = svc.ResolveRoute("A/B").Take(1).Subscribe(r => first = r);
+
+        // The node is UPDATED while the resolution query is open — the per-log-line write storm.
+        feed.Publish(MeshChangeEvent.Updated(new MeshNode("B", "A") { NodeType = "Markdown" }));
+
+        inFlight.OnNext(Snapshot(new MeshNode("B", "A") { NodeType = "Markdown" }));
+        Assert.NotNull(first);
+        Assert.Equal("A/B", first!.Prefix);
+        var callsAfterFill = query.Calls;
+
+        // The route shape committed despite the mid-flight Updated: the next routed message is a
+        // synchronous cache hit. Before the fix the Updated dropped the claim, nothing was
+        // committed, and this ran query #2 — as would every routed message after it.
+        AddressResolution? second = null;
+        using (svc.ResolveRoute("A/B").Take(1).Subscribe(r => second = r))
+            Assert.NotNull(second);
+        Assert.Equal("A/B", second!.Prefix);
+        Assert.Equal(callsAfterFill, query.Calls);
+
+        // But the mid-flight Updated must have marked the committed entry stale for NODE readers:
+        // ResolvePath re-queries rather than serving a node snapshot from a pre-update query.
+        var refreshed = await svc.ResolvePath("A/B").Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        Assert.Equal("A/B", refreshed!.Prefix);
+        Assert.True(query.Calls > callsAfterFill,
+            "a node-reading caller must not be served the pre-update node snapshot");
+    }
+
+    /// <summary>
+    /// Created and Deleted CAN change a path's resolution shape (deepen it / remove it), so they
+    /// must keep invalidating the route-shape view too — the #1172 fix is scoped to Updated only.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreatedAndDeleted_StillInvalidateRouteResolution()
+    {
+        var feed = new InProcessMeshChangeFeed();
+        // Query #1: only the ancestor A exists → A/B/C resolves to prefix A. Query #2 (after
+        // Created(A/B)): the deeper node exists → prefix A/B. Query #3 (after Deleted(A/B)):
+        // back to prefix A.
+        var (svc, query) = BuildService(call => call switch
+        {
+            1 => Answer(Snapshot(new MeshNode("A"))),
+            2 => Answer(Snapshot(new MeshNode("A"), new MeshNode("B", "A") { NodeType = "Markdown" })),
+            _ => Answer(Snapshot(new MeshNode("A")))
+        }, changeFeed: feed);
+
+        var shallow = await svc.ResolveRoute("A/B/C").Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        Assert.Equal("A", shallow!.Prefix);
+
+        // Created(A/B) deepens the resolution of A/B/C — the cached route entry must go.
+        feed.Publish(MeshChangeEvent.Created(new MeshNode("B", "A") { NodeType = "Markdown" }));
+        var deeper = await svc.ResolveRoute("A/B/C").Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        Assert.Equal("A/B", deeper!.Prefix);
+        Assert.True(query.Calls >= 2, "Created must invalidate the route-shape cache");
+
+        // Deleted(A/B) shallows it again.
+        feed.Publish(MeshChangeEvent.Deleted("A/B"));
+        var shallowAgain = await svc.ResolveRoute("A/B/C").Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        Assert.Equal("A", shallowAgain!.Prefix);
+        Assert.True(query.Calls >= 3, "Deleted must invalidate the route-shape cache");
+    }
 }
