@@ -168,7 +168,7 @@ public static class DeleteLayoutArea
     }
 
     /// <summary>
-    /// Kicks off the delete via Post + RegisterCallback — no <c>await</c>. Drives the progressId
+    /// Kicks off the delete via Post + <c>hub.Observe(...)</c> — no <c>await</c>. Drives the progressId
     /// data stream so the user sees "Deleting…" while the callback is pending, and "Deleted" /
     /// "Failed" once the response arrives. See Doc/Architecture/AsynchronousCalls.
     /// </summary>

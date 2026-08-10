@@ -9,16 +9,18 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 For the step-by-step how-to (author → publish → install → own registry) see the [Plugin Manual](/Doc/Architecture/PluginAuthoring).
 
-[Plugins](/Doc/Architecture/Plugins) are folders of mesh nodes in a git repo, each carrying a
-`package.json` [manifest](/Doc/Architecture/PluginAuthoring). Installing one means importing its
-nodes and compiling its node types live. But you do **not** want *every* installation to hold GitHub
-credentials for a private plugins repo just to receive a plugin.
+[Plugins](/Doc/Architecture/Plugins) are folders of mesh nodes in a git repo, each rooted in a
+node-native `<Plugin>/index.json` **Store/Plugin** node carrying a `PluginContent`
+([anatomy](/Doc/Architecture/PluginAuthoring)) — a `package.json` manifest is the alternate,
+non-default source format. Installing one means importing its nodes and compiling its node types
+live. But you do **not** want *every* installation to hold GitHub credentials for a private plugins
+repo just to receive a plugin.
 
 The registry solves that. **One** MeshWeaver instance (memex.meshweaver.cloud) is the registry: it
-alone holds the source credential, reads the plugins repo, and **re-serves the catalog over a public
-HTTP surface**. Every other installation's platform admin browses and installs from the registry,
-never from git. The credential is **encapsulated in the registry** — exactly like npm or NuGet, where
-the registry has source access and clients just speak HTTP.
+alone holds the source credential, reads the plugins repo, and **re-serves the catalog over an
+authenticated HTTP surface**. Every other installation browses and installs from the registry, never
+from git. The credential is **encapsulated in the registry** — exactly like npm or NuGet, where the
+registry has source access and clients just speak HTTP.
 
 ```text
   Systemorph/MeshWeaver.Plugins (git, private)
@@ -26,23 +28,32 @@ the registry has source access and clients just speak HTTP.
                 ▼
         ┌───────────────┐   GET  /api/plugins            ┌────────────────────────┐
         │   registry     │◀───────────────────────────────│ installation (consumer)│
-        │ memex.mesh…    │   POST /api/plugins/files {id}  │  Settings ▸ Admin ▸     │
-        │ holds the cred │────────────────────────────────▶│  Plugin Catalog        │
-        └───────────────┘     {packages} / {files}         │  (platform admins)     │
-                                                            │  no GitHub credential  │
+        │ memex.mesh…    │   (Bearer mwi_ instance key)    │  the Store's catalog   │
+        │ holds the cred │   POST /api/plugins/files {id}  │  + boot-time default   │
+        │                │────────────────────────────────▶│  install               │
+        └───────────────┘     {packages} / {files}         │  no GitHub credential  │
                                                             └────────────────────────┘
 ```
 
 ## The surface — registered instances only, curated
 
 Two endpoints, mapped by `PluginRegistryEndpoints` (`memex/Memex.Portal.Shared/Api`). The surface is
-**not public**: it serves only **registered MeshWeaver instances**. Registering an instance means
-issuing it a token and adding that token to the registry's `PluginCatalog:RegistryTokens` list
-(config/secret on the registry); the consumer sends its token as `Authorization: Bearer` (its
-`PluginCatalog:RegistryToken`, or per-registry `Registries:N:Token`), and a request without a valid
-token is 401 (validated fixed-time by `PluginRegistryTokens`, the shared producer/consumer contract).
-Only when **no** tokens are configured — the local-dev / e2e-stub mode — does the registry answer
-anonymously; a production registry always configures tokens.
+**not public**: it serves only **registered MeshWeaver instances**. A caller presents its instance
+key as `Authorization: Bearer mwi_…` (its `PluginCatalog:RegistryToken`, or per-registry
+`Registries:N:Token`); `InstanceRegistryAuthenticator` resolves that key to a `MeshWeaverInstance`
+node and the admin-owned `PluginGrant` that says which `(source, package)` pairs it may read, and a
+request without a valid key is **401**.
+
+The gate **fails closed**: `PluginCatalog:RequireInstanceKey` defaults to `true`, so a registry that
+configures nothing refuses anonymous callers rather than serving them everything. The anonymous mode
+must be asked for explicitly (`RequireInstanceKey=false` — local dev / the e2e stub) and warns on
+every request.
+
+> 🚨 The flat `PluginCatalog:RegistryTokens` allowlist this replaced is **obsolete and no longer
+> read** (`PluginRegistryTokens.SectionName`/`.Validate` are `[Obsolete]`). It was *open when unset*,
+> which is how this registry served its private sources to anonymous callers until 2026-08-06, and a
+> flat list could never express WHICH plugins an instance may pull. Adding a token to it today gates
+> nothing.
 
 Registration itself is self-service (Settings ▸ Instances issues an `mwi_` instance key), but it is
 **identity, not entitlement**: what an instance may pull is decided per `(source, package)` by a
@@ -68,11 +79,20 @@ created; a bootstrap key is never accepted on the catalog surface, and an instan
 accepted for registration (`mwr_` vs `mwi_` — disjoint by shape).
 
 **And it installs.** A grant is entitlement, not content — so a registered instance would still show
-an empty (if authorized) catalog until an admin clicked Install on each package. `PluginCatalog:InstallByDefault`
-closes that: on first startup an installation with **no install records yet** installs every catalog
-entry matching its `Source/Package` patterns, through the same path the Install button uses. Our
-deployments set `["Plugins/*"]`, so a new portal comes up with the platform plugins — the Store
-included — already present and (per `AutoUpdateByDefault`) tracking their repo.
+an empty (if authorized) catalog until an admin clicked Install on each package. Two keys close that,
+and they are independent:
+
+- **`PluginCatalog:InstallPreInstalledPackages`** (default **`true`**) reconciles the packages whose
+  manifest declares `PreInstalled` — the platform's own baseline (Agents, Skills, Essentials, …) — on
+  **every** boot, because that baseline is what the platform needs to function and what must survive
+  a self-update. On an up-to-date instance the content-identity gate turns it into one catalog
+  listing and no writes. It is also the only mechanism that can heal an instance whose baseline
+  partition was lost.
+- **`PluginCatalog:InstallByDefault`** (default empty) *seeds* a fresh deployment once: on startup an
+  installation with **no install records yet** installs every catalog entry matching its
+  `Source/Package` patterns, through the same path the Install button uses. Our deployments set
+  `["Plugins/*"]`, so a new portal comes up with the platform plugins — the Store included — already
+  present and (per `AutoUpdateByDefault`) tracking their repo.
 
 > 🚨 The selection is **source-scoped, and that is a security property, not a convenience**. An
 > instance is routinely granted the platform repo *and* paid course content; "install everything I'm
@@ -125,19 +145,24 @@ contribution (logged), never a broken catalog. The legacy single-source keys
 is advisory. The wire shapes are produced by `PluginRegistryPayloads` and parsed by
 `RegistryPackageSource`, one place each, so producer and consumer cannot drift.
 
-## The consumer — a platform-admin tab, not a Space
+## The consumer — the Store's catalog area, not a Space
 
-On every installation the catalog is a **Settings tab** — `PluginCatalogSettingsTab`, grouped under
-**Administration** beside Global Administration, and gated the same way (`hub.IsGlobalAdmin`). It is
-**not** a browsable `Plugins` Space: a catalog is a platform-admin feature, and a Space partition
-would (correctly) deny read to everyone else — the very "Access denied on 'Plugins'" a Space produced.
+On every installation the catalog is a **layout area** (`CatalogLayoutAreas`), rendered as the
+Overview of a `PluginCatalog` node — browsing and provisioning is the **Store's** job. It is **not** a
+browsable `Plugins` Space: a Space partition would (correctly) deny read to everyone else — the very
+"Access denied on 'Plugins'" a Space produced.
 
-The tab reads `PluginCatalog:RegistryUrl` (e.g. `https://memex.meshweaver.cloud`) — or, to consume
-**several registries**, a `PluginCatalog:Registries` list of `{ Name, Url, Ref }` entries, rendered
-as one titled catalog section each. It lists each registry's packages via `RegistryPackageSource`
-(an `IPackageSource` over HTTP, on the mesh's Http I/O pool), and joins them against this
-instance's install registry — the `Package` nodes under the `Plugins` partition — to render
-**Install / Update / Installed** per module.
+> The platform-admin **Settings ▸ Administration ▸ Plugin Catalog** tab that used to consume this
+> same rendering was **retired**. What remains under global settings is the read-only installed
+> inventory on the **About** tab (`CatalogLayoutAreas.ObserveInstalledManifests`). Install / Update /
+> Remove actions still gate on `hub.IsGlobalAdmin` where they need to.
+
+The catalog reads `PluginCatalog:RegistryUrl` (e.g. `https://memex.meshweaver.cloud`) — or, to consume
+**several registries**, a `PluginCatalog:Registries` list of `{ Name, Url, Ref, Token }` entries,
+rendered as one titled catalog section each. It lists each registry's packages via
+`RegistryPackageSource` (an `IPackageSource` over HTTP, on the mesh's Http I/O pool), and joins them
+against this instance's install registry — the `Package` nodes under the `Plugins` partition — to
+render **Install / Update / Installed** per module.
 
 ## Installing
 
@@ -207,11 +232,12 @@ system-impersonated identity that wrote the record. Two properties matter:
 
 - **Credential encapsulation.** GitHub access lives on exactly one instance. Onboarding a new
   installation is "point `PluginCatalog:RegistryUrl` at the registry," not "provision it a GitHub App."
-- **Not a Space.** The catalog is an admin tab reading a remote registry; there is no partition for a
+- **Not a Space.** The catalog is a layout area reading a remote registry; there is no partition for a
   non-admin to navigate into and be denied.
-- **Registered + curated.** Only registered instances (their issued token in
-  `PluginCatalog:RegistryTokens`) can read, and only `package.json` folders are exposed — the
-  catalog lists real modules (Publish, Edu, …), not every partition that happens to define a type.
+- **Registered + curated.** Only registered instances (their `mwi_` key, scoped by an admin-owned
+  `PluginGrant`) can read, and only published plugin folders are exposed — a `<Plugin>/index.json`
+  Store/Plugin root, or a `package.json` on a `package-json`-format source. The catalog lists real
+  modules (Publish, Edu, …), not every partition that happens to define a type.
 - **Capability, not data.** A package ships its `NodeType`/`Code`/content folder — never a partition's
   user data — so installing a plugin gives you the types and their code, not anyone's records.
 

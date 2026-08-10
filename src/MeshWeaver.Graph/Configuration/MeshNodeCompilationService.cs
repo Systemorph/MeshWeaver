@@ -956,6 +956,15 @@ internal class MeshNodeCompilationService(
                         }
                         return (finalPath, finalLog.Finish((int)hub.Version, ActivityStatus.Succeeded));
                     })
+                    // 🚨 THE SINGLE REPORTER of a compile failure. Every CompilationException —
+                    // Roslyn diagnostics from the disk emit (EmitCompilationToDirectory) or the
+                    // in-memory emit (CompileToMemory), and the "could not be persisted" loss from
+                    // EmitToDiskWithRetry — funnels here, and ONLY here is the exception logged.
+                    // This is the only site that has all three of: the exception + its stack, the
+                    // node path, and the source-discovery report. The emit sites used to log the
+                    // same diagnostics too, which double-counted every failure in prod and put a
+                    // context-free record first — do not re-add a log next to a `throw new
+                    // CompilationException`.
                     .Catch<(string?, ActivityLog), CompilationException>(ex =>
                     {
                         var diag = BuildSourceDiscoveryReport(executedQueries, matchedCodePaths);
@@ -1780,44 +1789,78 @@ internal class MeshNodeCompilationService(
     /// 2026-06-22) — the grain never recompiled. We now re-emit the lost artifact (a genuine compile
     /// error is NOT retried) and, if it still cannot be persisted, surface a clear, loud failure
     /// instead of a silent poison. See <see cref="EmitToDiskWithRetry"/>.</para>
+    ///
+    /// <para>⚠️ The self-heal above is about a LOST WRITE, not about a failing emit. A Roslyn
+    /// emit that reports errors is a normal, deterministic outcome (the node's C# does not
+    /// compile) and travels out of here as a <see cref="CompilationException"/> — which is why
+    /// <see cref="EmitToDiskWithRetry"/> shows up on the stack of every compile failure without
+    /// having failed at anything. Do not read that frame as an IO fault.</para>
     /// </summary>
     private Task<string> CompileToDiskAsync(CSharpCompilation compilation, string nodeName, string nodePath, CancellationToken ct)
         => Task.FromResult(EmitToDiskWithRetry(
             cacheService.CacheDirectory, nodeName, DiskEmitAttempts, logger,
-            releaseDir =>
-            {
-                var dllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
-                var pdbPath = Path.Combine(releaseDir, $"{nodeName}.pdb");
-                var xmlDocPath = Path.Combine(releaseDir, $"DynamicNode_{nodeName}.xml");
+            releaseDir => EmitCompilationToDirectory(compilation, nodeName, nodePath, releaseDir, ct)));
 
-                using (var dllStream = File.Create(dllPath))
-                using (var pdbStream = File.Create(pdbPath))
-                using (var xmlDocStream = File.Create(xmlDocPath))
-                {
-                    var emitOptions = new EmitOptions(
-                        debugInformationFormat: DebugInformationFormat.PortablePdb,
-                        pdbFilePath: pdbPath);
+    /// <summary>
+    /// Runs the real Roslyn emit for <paramref name="nodeName"/> into <paramref name="releaseDir"/>
+    /// (dll + pdb + XML doc) and returns the DLL path it wrote. A failed emit throws a
+    /// <see cref="CompilationException"/> carrying the formatted diagnostics.
+    ///
+    /// <para>🚨 It does NOT log. A compile failure is reported EXACTLY ONCE, by the compile
+    /// pipeline's single <c>.Catch&lt;…, CompilationException&gt;</c> funnel in
+    /// <c>CompileAsyncCore</c> — the only place that also has the exception, its stack and the
+    /// source-discovery report (which queries ran, which Code nodes matched). Logging the same
+    /// diagnostics here as well double-counted EVERY compile failure in production: the ~150
+    /// ERROR lines/24h across the memex/memex-cloud/atioz portals were ~72 real failures logged
+    /// twice, and the duplicate came FIRST — context-free and exception-free, so red-log
+    /// fingerprinting (which keys on category+eventId+exception+frame) filed it as a second,
+    /// distinct fault whose only visible frame was the emit path. That is what made a plain
+    /// "your C# does not compile" read like an emit/IO defect. Extracted and <c>internal</c> so
+    /// the log-once contract is unit-testable against a real broken compilation.</para>
+    /// </summary>
+    internal static string EmitCompilationToDirectory(
+        CSharpCompilation compilation, string nodeName, string nodePath, string releaseDir, CancellationToken ct)
+    {
+        var dllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
+        var pdbPath = Path.Combine(releaseDir, $"{nodeName}.pdb");
+        var xmlDocPath = Path.Combine(releaseDir, $"DynamicNode_{nodeName}.xml");
 
-                    var emitResult = compilation.Emit(
-                        dllStream, pdbStream, xmlDocumentationStream: xmlDocStream,
-                        options: emitOptions, cancellationToken: ct);
+        using (var dllStream = File.Create(dllPath))
+        using (var pdbStream = File.Create(pdbPath))
+        using (var xmlDocStream = File.Create(xmlDocPath))
+        {
+            var emitOptions = new EmitOptions(
+                debugInformationFormat: DebugInformationFormat.PortablePdb,
+                pdbFilePath: pdbPath);
 
-                    if (!emitResult.Success)
-                    {
-                        // Deterministic compile error — propagates straight out of the retry loop.
-                        var errorMessage = FormatCompileFailure(nodePath, emitResult.Diagnostics);
-                        logger.LogError("{ErrorMessage}", errorMessage);
-                        throw new CompilationException(nodePath, errorMessage);
-                    }
-                }
-                // Streams flushed + closed here, before EmitToDiskWithRetry verifies the file.
-                return dllPath;
-            }));
+            var emitResult = compilation.Emit(
+                dllStream, pdbStream, xmlDocumentationStream: xmlDocStream,
+                options: emitOptions, cancellationToken: ct);
+
+            if (!emitResult.Success)
+                // Deterministic compile error — propagates straight out of the retry loop,
+                // unlogged, to the pipeline's single reporting funnel.
+                throw new CompilationException(nodePath, FormatCompileFailure(nodePath, emitResult.Diagnostics));
+        }
+        // Streams flushed + closed here, before EmitToDiskWithRetry verifies the file.
+        return dllPath;
+    }
 
     /// <summary>
     /// Number of times <see cref="EmitToDiskWithRetry"/> re-emits when a "successful" Roslyn
     /// emit leaves no assembly on disk (ephemeral-cache eviction). Three attempts recover a
     /// transient lost write while still failing fast on a genuinely unwritable cache directory.
+    ///
+    /// <para>Why a retry is legitimate here (and is NOT covering for a defect of ours): the
+    /// condition is genuinely EXTERNAL and transient — a container runtime reclaiming an
+    /// ephemeral <c>/tmp</c> under memory pressure between our write and our read. Nothing in
+    /// this process can prevent it, there is no lock/slot/budget being leaked, and the retry is
+    /// bounded, stateless and timer-free: three synchronous attempts, then a loud terminal
+    /// failure. A deterministic compile error is explicitly NOT retried. Its counterfactual is a
+    /// permanently poisoned NodeType (prod AgenticPension/Datenpunkt, 2026-06-22), not a slower
+    /// recovery. Evidence that it is not masking anything: across memex + memex-cloud + atioz it
+    /// has fired ZERO times in 7 days (31M log lines) — every ERROR the compile service emits in
+    /// production is a genuine Roslyn diagnostic, never a lost write.</para>
     /// </summary>
     internal const int DiskEmitAttempts = 3;
 
@@ -1915,6 +1958,10 @@ internal class MeshNodeCompilationService(
 
     /// <summary>
     /// Compiles and loads assembly directly to memory (no disk I/O).
+    ///
+    /// <para>🚨 Like <see cref="EmitCompilationToDirectory"/>, a failed emit throws UNLOGGED —
+    /// the pipeline's single <c>.Catch&lt;…, CompilationException&gt;</c> funnel is the one
+    /// reporter of a compile failure.</para>
     /// </summary>
     private void CompileToMemory(CSharpCompilation compilation, string nodeName, string nodePath, CancellationToken ct)
     {
@@ -1927,11 +1974,7 @@ internal class MeshNodeCompilationService(
         var emitResult = compilation.Emit(dllStream, pdbStream, options: emitOptions, cancellationToken: ct);
 
         if (!emitResult.Success)
-        {
-            var errorMessage = FormatCompileFailure(nodePath, emitResult.Diagnostics);
-            logger.LogError("{ErrorMessage}", errorMessage);
-            throw new CompilationException(nodePath, errorMessage);
-        }
+            throw new CompilationException(nodePath, FormatCompileFailure(nodePath, emitResult.Diagnostics));
 
         // Load assembly from bytes immediately
         var assemblyBytes = dllStream.ToArray();

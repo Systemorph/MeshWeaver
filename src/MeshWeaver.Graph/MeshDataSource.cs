@@ -27,6 +27,41 @@ namespace MeshWeaver.Graph;
 public static class MeshDataSourceExtensions
 {
     /// <summary>
+    /// Marker declaring that a hub exists ONLY to be interrogated for type information and
+    /// will be disposed immediately — see <see cref="AsTransientNodeProbe"/>.
+    /// </summary>
+    internal sealed record TransientNodeProbe;
+
+    /// <summary>
+    /// Declares this hub a <b>transient probe</b>: it applies a NodeType's configuration purely
+    /// so its <see cref="MeshWeaver.Domain.ITypeRegistry"/> / <see cref="MeshDataSource.ContentType"/>
+    /// can be read, and is disposed in the same breath. Such a hub gets the data context (which is
+    /// what carries the type information) but NOT the per-node control plane —
+    /// the own-node subscription, the persistence sampler, the compile / release-request / sources
+    /// watchers, and the compile-state mirror.
+    ///
+    /// <para><b>Why this exists.</b> Those watchers are long-lived, self-healing machinery for a
+    /// node that lives for months. Installing them on a hub that lives for microseconds is a pure
+    /// mismatch: each one immediately opens mesh-node streams (spinning up a <c>sync/</c> sub-hub
+    /// apiece) and then faults as the hub is torn down out from under it —
+    /// <c>HubDisposingException: Hub … is shutting down — cannot create '/MeshNode'</c> — which the
+    /// watchers report as a fault and retry. Measured on the AKS portals: ~22 error/warning log
+    /// lines per probe, every one of them attributable to this teardown race and none of them
+    /// actionable. Skipping the control plane removes the machinery that had nothing to do, so
+    /// there is no fault to report and no <c>sync/</c> sub-hub to create.</para>
+    ///
+    /// <para>The probe still gets everything it reads: <c>WithContentType</c> registers into the
+    /// hub's <c>TypeRegistry</c> from the data-source configuration (data-context build), the
+    /// <c>GetDataRequest</c>/<c>SchemaReference</c> handler is a plain message handler, and
+    /// <c>DataContext.DataSources</c> / <c>TypeSources</c> are built as usual.</para>
+    ///
+    /// <para>🚨 A probe hub must never be used to WRITE. With no own-node subscription and no
+    /// persistence sampler it has no node identity and would not persist anything.</para>
+    /// </summary>
+    public static MessageHubConfiguration AsTransientNodeProbe(this MessageHubConfiguration config)
+        => config.Set(new TransientNodeProbe());
+
+    /// <summary>
     /// Marker that records every <see cref="AddMeshDataSource(MessageHubConfiguration, Func{MeshDataSource, MeshDataSource})"/>
     /// call's configuration callback. Used to make AddMeshDataSource idempotent at the
     /// framework-registration level — handlers, init hooks, and the gate are registered
@@ -831,9 +866,16 @@ public static class MeshDataSourceExtensions
     /// <c>MessageHubConfiguration.Build</c>). A named static method, not a lambda: the observable
     /// <c>WithInitialization</c> overload de-duplicates on DELEGATE IDENTITY, and a fresh lambda
     /// per configurator call would stack N subscriptions instead of collapsing to one.
+    /// <para>
+    /// Skipped entirely on a <see cref="TransientNodeProbe"/> hub — see
+    /// <see cref="AsTransientNodeProbe"/> for why a probe must not run the node control plane.
+    /// </para>
     /// </summary>
     private static IObservable<Unit> SubscribeToOwnDeletionInit(IMessageHub hub)
     {
+        if (hub.Configuration.Get<TransientNodeProbe>() is not null)
+            return Observable.Return(Unit.Default);
+
         SubscribeToOwnDeletion(hub);
         return Observable.Return(Unit.Default);
     }
@@ -1349,8 +1391,12 @@ public static class MeshDataSourceExtensions
                                     return Observable.Empty<GetDataResponse>();
 
                                 var dummyAddress = new Address($"$schema-probe/{Guid.NewGuid():N}");
+                                // 🚨 AsTransientNodeProbe: built to answer one SchemaReference and
+                                // disposed in the Finally below. It must not install the per-node
+                                // control plane — those watchers would only open `sync/` sub-hubs
+                                // and then fault as this hub is torn down out from under them.
                                 var subHub = hub.GetHostedHub(dummyAddress, c =>
-                                    matching.HubConfiguration(c.AddData()));
+                                    matching.HubConfiguration(c.AddData()).AsTransientNodeProbe());
 
                                 var schemaDelivery = subHub.Post(new GetDataRequest(new SchemaReference()))!;
                                 return subHub.Observe(schemaDelivery)
@@ -1514,6 +1560,48 @@ public static class MeshDataSourceExtensions
         => source.Where(node => node?.Content is not NodeTypeDefinition def
             || (def.CompilationStatus != CompilationStatus.Compiling
                 && def.CompilationStatus != CompilationStatus.Pending));
+
+    /// <summary>
+    /// Holds a NodeType MeshNode stream until the type is settled AND is not advertising a build
+    /// the framework cannot load — i.e. until an INSTANCE activating against it can be given the
+    /// type's real configuration.
+    ///
+    /// <para>Stricter than <see cref="AwaitCompilationSettled"/> in exactly one way: a settled
+    /// <c>Ok</c> whose assembly coordinates are present but whose
+    /// <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/> does not match the live framework
+    /// (or whose bytes this process cannot resolve) is NOT accepted. That state is what a node repo
+    /// COMMITS — MeshWeaver.Plugins ships <c>Store/Catalog</c> with <c>compilationStatus: Ok</c> and
+    /// a July framework hash — and it is transient by construction: the per-NodeType hub's
+    /// framework-stale kickoff flips it to Pending and rebuilds. An instance enriched inside that
+    /// window binds ONCE to the fallback configuration and then serves only the generic areas
+    /// ("No renderer is registered for area <c>Tests</c> on hub <c>Store</c>").</para>
+    ///
+    /// <para>A type that never compiled at all (no assembly coordinates) and a type whose compile
+    /// genuinely FAILED both pass straight through — the assembly fields are only ever written by a
+    /// successful compile, so "nothing built" is a settled answer, not a stale build. Callers must
+    /// still bound the wait (a type that can never produce a loadable build would otherwise hold
+    /// forever) and degrade rather than fail.</para>
+    ///
+    /// <para>Non-NodeType nodes answer <c>true</c>, so this is safe to ask about any MeshNode.</para>
+    /// </summary>
+    /// <param name="node">The NodeType MeshNode to judge.</param>
+    /// <returns>False only while the node is mid-compile or is advertising an unloadable build.</returns>
+    public static bool HasLoadableBuild(this MeshNode? node)
+        => node?.Content is not NodeTypeDefinition def
+            || (def.CompilationStatus != CompilationStatus.Compiling
+                && def.CompilationStatus != CompilationStatus.Pending
+                && (string.IsNullOrEmpty(def.LatestAssemblyPath)
+                    || NodeTypeCompilationHelpers.HasUsableBuild(node, def)));
+
+    /// <summary>
+    /// Stream form of <see cref="HasLoadableBuild"/> — holds a NodeType MeshNode stream until the
+    /// type is settled and not advertising a build the framework cannot load. Callers must bound
+    /// the wait: a type that can never produce a loadable build would otherwise hold forever.
+    /// </summary>
+    /// <param name="source">The NodeType's MeshNode stream.</param>
+    /// <returns>The same stream, filtered to loadable-build emissions.</returns>
+    public static IObservable<MeshNode> AwaitLoadableBuild(this IObservable<MeshNode> source)
+        => source.Where(node => node.HasLoadableBuild());
 
     // StartCompile relocated to NodeTypeCompilationHelpers.RunCompile so the
     // per-NodeType-hub auto-watcher and the CreateReleaseRequest handler share

@@ -30,7 +30,7 @@ Two companion node types carry everything a chat-client factory needs:
 | Node type | Holds | Path shape |
 |---|---|---|
 | `ModelProvider` | credentials shared by its models — `Endpoint`, `ApiKey` (encrypted at rest), `Label`, the model-id list | `Provider/{Provider}` (platform) · `{user}/_Memex/{Provider}` (user) |
-| `LanguageModel` | one model — `Id`, `Provider`, `ProviderRef` (→ its provider node), `ModelTier`, `Description` | `{providerPath}/{modelId}` (nested under its provider) |
+| `LanguageModel` | one model — `Id`, `Provider`, `ProviderRef` (→ its provider node), `Tier`, `Description` | `{providerPath}/{modelId}` (nested under its provider) |
 
 The platform catalog lives in the top-level **`Provider`** partition — a DB-synced [NodeType catalog](/Doc/Architecture/NodeTypeCatalogs), exactly like `Agent` / `Skill` / `Harness`. A user's **own** providers live in their dotfile namespace `{user}/_Memex/…`. A `LanguageModel` is always **nested under its provider** and never stores a key; it points at its `ModelProvider` via `ProviderRef`, and the resolver follows that reference to fetch `Endpoint` + `ApiKey`.
 
@@ -116,7 +116,7 @@ This is exactly how the shared **Azure AI Foundry (Systemorph)** provider was cr
     "displayName": "DeepSeek V3 (High)",
     "provider": "AzureFoundry",
     "providerRef": "Systemorph/Provider/AzureFoundry",
-    "modelTier": "heavy",
+    "tier": "coding",
     "order": 1
   }
 }

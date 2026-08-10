@@ -230,12 +230,17 @@ internal static class NodeTypeDataModelAreas
     /// <see cref="ITypeDefinition"/>s stay valid (the assembly load context is owned
     /// by the compilation cache, not the probe).
     /// </summary>
-    private static IObservable<NodeTypeInstanceModel?> ProbeInstanceModel(
+    internal static IObservable<NodeTypeInstanceModel?> ProbeInstanceModel(
         IMessageHub hub,
         Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {
         var probeAddress = new Address($"$model-probe/{Guid.NewGuid():N}");
-        var probe = hub.GetHostedHub(probeAddress, c => config(c.AddData()));
+        // 🚨 AsTransientNodeProbe: this hub exists to be read and disposed. It must get the data
+        // context (DataSources / TypeSources / SchemaReference are exactly what SnapshotModel
+        // reads) but NOT the per-node control plane — the compile / release-request / sources
+        // watchers and the compile-state mirror are month-scale machinery that, on a
+        // microsecond-scale hub, only opened `sync/` sub-hubs and then faulted on teardown.
+        var probe = hub.GetHostedHub(probeAddress, c => config(c.AddData()).AsTransientNodeProbe());
         if (probe == null)
             return Observable.Return<NodeTypeInstanceModel?>(null);
 

@@ -648,11 +648,11 @@ public record LayoutAreaHost : IDisposable
     /// <summary>
     /// Reactive render of a top-level area whose generator is produced asynchronously
     /// (<c>Func&lt;…, Task&lt;IObservable&lt;T?&gt;&gt;&gt;</c>). The Task is bridged at the
-    /// boundary via <see cref="Observable.FromAsync{TResult}(Func{CancellationToken, Task{TResult}})"/>
-    /// (the only sanctioned Task→observable seam) and the resulting view stream is
-    /// rendered through <see cref="RenderObservable"/>, so every emission flows through
-    /// the layout-area init subscription's <c>SetCurrent</c> rather than a
-    /// dropped-during-init <c>Stream.Update</c>.
+    /// boundary via <see cref="FromViewBuilder{T}"/> — <b>never</b>
+    /// <c>Observable.FromAsync</c>, which is forbidden outside <c>IoPool</c> — and the
+    /// resulting view stream is rendered through <see cref="RenderObservable"/>, so every
+    /// emission flows through the layout-area init subscription's <c>SetCurrent</c> rather
+    /// than a dropped-during-init <c>Stream.Update</c>.
     /// </summary>
     internal IObservable<EntityStoreAndUpdates> RenderArea<T>(
         RenderingContext context,
@@ -746,8 +746,8 @@ public record LayoutAreaHost : IDisposable
     /// <summary>
     /// Reactive render of a top-level area whose generator is an observable of
     /// <see cref="ViewDefinition"/>s. Each ViewDefinition is invoked (bridged via
-    /// <see cref="Observable.FromAsync{TResult}(Func{CancellationToken, Task{TResult}})"/>)
-    /// and the resulting control rendered through <see cref="RenderObservable"/>.
+    /// <see cref="FromViewBuilder{T}"/>, never <c>Observable.FromAsync</c>) and the
+    /// resulting control rendered through <see cref="RenderObservable"/>.
     /// </summary>
     internal IObservable<EntityStoreAndUpdates> RenderAreaObservable(
         RenderingContext context, IObservable<ViewDefinition> generator, EntityStore store)
@@ -1144,8 +1144,9 @@ public record LayoutAreaHost : IDisposable
         var ret = DisposeExistingAreas(store, context);
 
         // Reactive: bridge the Task-producing generator at the boundary via
-        // Observable.FromAsync (no await in hub-reachable code), flatten to the inner
-        // control stream, and feed UpdateArea on each emission.
+        // FromViewBuilder (no await in hub-reachable code, and never
+        // Observable.FromAsync), flatten to the inner control stream, and feed
+        // UpdateArea on each emission.
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
             ScheduleRenderSubscribe(
                     FromViewBuilder(ct => asyncGenerator.Invoke(this, context, store, ct))
@@ -1278,8 +1279,9 @@ public record LayoutAreaHost : IDisposable
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, ViewDefinition generator, EntityStore store)
     {
         var ret = DisposeExistingAreas(store, context);
-        // Reactive: bridge the Task-producing ViewDefinition via Observable.FromAsync
-        // (no await in hub-reachable code) and feed UpdateArea once it resolves.
+        // Reactive: bridge the Task-producing ViewDefinition via FromViewBuilder
+        // (no await in hub-reachable code, never Observable.FromAsync) and feed
+        // UpdateArea once it resolves.
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
             ScheduleRenderSubscribe(FromViewBuilder(ct => generator.Invoke(this, context, ct)))
                 // 🚨 NEVER ON THE MAIN HUB — subscribe off the owning hub's action block (this path is
@@ -1294,8 +1296,9 @@ public record LayoutAreaHost : IDisposable
         EntityStore store)
     {
         // Reactive: for each emitted ViewDefinition, bridge its Task via
-        // Observable.FromAsync (no await in hub-reachable code) and feed UpdateArea.
-        // Switch() keeps only the latest definition's resolution in flight.
+        // FromViewBuilder (no await in hub-reachable code, never Observable.FromAsync)
+        // and feed UpdateArea. Switch() keeps only the latest definition's resolution
+        // in flight.
         RegisterForDisposal(context.Area,
             ScheduleRenderSubscribe(
                     generator
