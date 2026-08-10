@@ -487,6 +487,7 @@ If step 3 had stamped `ImpersonateAsHub(Hub.Address)` instead of carrying `user`
 
 ## Related docs
 
+- @../AsyncLocalAcrossHops — the general rule behind this page: an `AsyncLocal` write made inside an `async` method is discarded on return, and a scheduler hop starts from a context where your slot was never set.
 - @../AsynchronousCalls — reactive end-to-end patterns; `AccessContext` rides for free through framework primitives.
 - @../CqrsAndContentAccess — `GetStream` is access-checked; details the TTL cache and `GetPermissionRequest` handshake.
 - @../AccessControl — `IsPortalIdentity` and the per-NodeType access-rule pattern used to sanction hub-shaped principals.
