@@ -32,25 +32,40 @@ NodeTypes at start, so an un-visited type can no longer sit "no definition" unti
 Managed envs run the sweep ON — an env with it off has no deploy-time compile at all on this
 channel.
 
-**⛔ The self-update does NOT currently wait for the compile.** The companion readiness gate
-(`PreWarm__GateReadiness`) is designed to do exactly that — hold the new pod's `/health` red until
-every NodeType is built against ITS image, with the `startupProbe` on `/health` and
-`maxUnavailable: 0` keeping the old pod serving — so a regressed type STALLS the roll instead of
-surfacing as user-facing errors. It is **off**.
+**✅ The self-update waits for the compile.** The companion readiness gate
+(`PreWarm__GateReadiness`) holds the new pod's `/health` red until every NodeType is built against
+ITS image; with the `startupProbe` on `/health` and `maxUnavailable: 0` keeping the old pod serving,
+a regressed type STALLS the roll instead of surfacing as user-facing errors.
 
 It was enabled on 2026-08-02 and reverted the same day. The first gated roll on memex-cloud stalled
 with `7 NodeType(s) regressed on this image`, and those were **false** regressions: the pod log
 contained no `CS####` compile error at all, only the sweep timing out across the roll window —
 `No response received in hub cache/… within 00:01:00 for request SubscribeRequest → target
 Claims / Reinsurance / SocialMedia / ClaimsDeepfield / RiskTransfer`. During a roll the baking pod
-and the serving pod are two silos and the sweep cannot resolve shared sources across that boundary.
-This is core #694 residue: #718 + #719 (2026-07-29) did NOT close it, so the earlier 2026-07-30
-observation stands unexplained by them.
+and the serving pod are two silos and the sweep cannot always resolve shared sources across that
+boundary — core #694 residue, which #718 + #719 (2026-07-29) did NOT close.
 
-Until the sweep's cross-silo source resolution is fixed, database migration is the only part of the
-roll that is gated (the unconditional `db_version` health check), and NodeType compiles fall back to
-the pod-side sweep with lazy compile on failure. ⚠️ Do not re-enable the gate by widening the probe
-budget — the sweep is not slow, it is erroring.
+**What makes it safe now is that the gate stopped treating "no answer" as "it broke".** Core #694 is
+still open; the gate simply no longer depends on it being closed:
+
+- A `TimedOut` outcome is filed under **unevaluated** and can never set `Regressed`. Every one of
+  the 7 false regressions was exactly this shape.
+- That leniency survives the **cascade**. A dependent of an unevaluated upstream is reported
+  `UpstreamUnevaluated` (also non-gating) rather than `UpstreamFailed`. Without this the leniency
+  stopped at depth 1: one timed-out shared source — `Claims`, say — still gated through every
+  previously-healthy type that drew source from it, and the same stall returned one hop downstream.
+- Only a real verdict on a **previously-healthy** type gates: a `CompileError`, or an
+  `UpstreamFailed` cascading from one. A type already broken before the deploy never gates, so one
+  abandoned NodeType cannot freeze the fleet.
+
+Non-blocking is not invisible — unevaluated types are named in the `/health` payload, so a swallowed
+timeout still surfaces instead of hiding a genuine regression.
+
+⚠️ The gate is only as real as the namespace it runs in: it needs a `startupProbe` **on `/health`**
+(nothing else reads it) and `strategy.maxUnavailable: 0` (otherwise the serving pod can be deleted
+before the replacement is ready). Verify both before trusting it — see DEPLOY-RUNBOOK.md §7. And if
+a roll DOES stall, investigate it: the old image keeps serving, so there is no outage, but
+self-update stops advancing until someone looks.
 
 ## Update policy (Admin → Platform updates)
 
