@@ -233,10 +233,9 @@ internal sealed class RequestFateLedger
             // shutdown ate the reply" is a strictly sharper answer than "it was lost in transit".
             if (Has("RESPONSE_REFUSED_SHUTTING_DOWN"))
                 return "the handler REPLIED but the responding hub was already past "
-                     + "DisposeHostedHubs, so its own teardown guard refused the post — nothing "
-                     + "reached the requester and nothing NACKed it, so the caller burns its whole "
-                     + "RequestTimeout. The responder is the one shutting down; look at what "
-                     + "recycled/deleted that address mid-handler, not at the requester.";
+                     + "DisposeHostedHubs, so its own teardown guard refused the post and the "
+                     + "caller burns its whole RequestTimeout un-NACKed — chase what "
+                     + "recycled/deleted the RESPONDER's address mid-handler, not the requester";
             if (Has("RESPONSE_POSTED"))
                 return "a reply WAS posted for this correlation and the callback is STILL pending — "
                      + "the reply was lost between the responder and the requester, so chase the "
