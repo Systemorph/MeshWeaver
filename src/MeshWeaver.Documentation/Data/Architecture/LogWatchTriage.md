@@ -131,8 +131,17 @@ A recurrence is therefore always folded onto the ticket that exists:
 
 The claim keys on `RequestedStatus`, never on the status, so the in-flight statuses (`Triaging`,
 `Filing`) are not dead ends: a crash between the claim and the write-back parks the incident there,
-and asking again — an admin in the incident view, or the stranded-triage reconcile below — is
-honoured.
+and asking again is honoured. **Something has to do the asking**, though, and that differs by status:
+
+- `Triaging` — the stranded-triage reconcile below, which asks the thread whether the round is over.
+  Only the thread can tell "still running" from "died", so nothing may re-request on a timer.
+- `Filing` **with no `IssueNumber`** — the next recurrence re-requests `File` (`NextRequest`). The
+  claim was taken and nothing came back, and unlike `Triaging` there is no in-mesh authority to ask:
+  the only record of whether the issue was opened is GitHub. Re-asking is safe because the claim
+  itself is the guard — if the incident has since been ticketed, the request is granted as a
+  `Comment`, never as a second issue.
+- `Filing` **with** an `IssueNumber` is not in-flight at all: the write-back lands the link, so that
+  state is a completed file whose status simply settled, and the issue-link rule keeps it quiet.
 
 ### The one state nothing requests: `Triaging`
 
