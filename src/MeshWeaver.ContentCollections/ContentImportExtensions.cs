@@ -57,10 +57,31 @@ public static class ContentImportExtensions
         SyncFiles(contentService, request)
             .Subscribe(
                 count => hub.Post(ImportContentResponse.Ok(count), o => o.ResponseFor(delivery)),
-                ex => hub.Post(ImportContentResponse.Fail(ex.Message), o => o.ResponseFor(delivery)));
+                ex => hub.Post(FailureFor(delivery, ex), o => o.ResponseFor(delivery)));
 
         return delivery.Processed();
     }
+
+    /// <summary>
+    /// The answer to send when a sync failed.
+    ///
+    /// <para>🚨 A hub-disposal fault is TRANSIENT and must NOT be flattened into
+    /// <see cref="ImportContentResponse.Fail"/>. This hub is being recycled — the collection could
+    /// not even be created (<c>ContentCollection.CreateStream</c> cannot host its
+    /// <c>SynchronizationStream</c> once creation is frozen) — and the node is coming straight
+    /// back. Reported as an application failure, the caller can no longer tell "your request is
+    /// malformed" from "ask me again in a moment", so it gives up on work that would have
+    /// succeeded: the plugin installer declared a package's committed binaries lost and the assets
+    /// were never served (StaleStampRootBindingTest, the test that turned main red). Answering with
+    /// the typed <see cref="ErrorType.ShuttingDown"/> hands the caller the framework's own verdict
+    /// — "the address may reactivate; retry to get the authoritative answer" — which it can act on.
+    /// The reply still reaches the sender because <c>MessageService</c> forwards a correlated reply
+    /// through the live parent when this hub can no longer post it itself.</para>
+    /// </summary>
+    private static object FailureFor(IMessageDelivery delivery, Exception exception)
+        => HubDisposingException.IsHubDisposal(exception)
+            ? new DeliveryFailure(delivery, exception.Message) { ErrorType = ErrorType.ShuttingDown }
+            : ImportContentResponse.Fail(exception.Message);
 
     /// <summary>
     /// Writes each inline file under <c>TargetPath</c> (binary-safe — the bytes are streamed straight
