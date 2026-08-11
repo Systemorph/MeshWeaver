@@ -86,12 +86,13 @@ public static class OgCardLayoutArea
     }
 
     /// <summary>An external target's card, built from its fetched Open Graph metadata (URL host
-    /// as the title fallback when the page declared none).</summary>
+    /// as the title fallback when the page declared none). The visual is the page's ICON, not its
+    /// og:image poster — see <see cref="OpenGraphPreview.CardIcon"/> for the order and why.</summary>
     private static MeshNodeCardControl ExternalCard(string url, OpenGraphPreview preview) =>
         new(NodePath: string.Empty,
             Title: preview.Title ?? HostOf(url),
             Description: preview.Description,
-            ImageUrl: preview.Image,
+            ImageUrl: preview.CardIcon,
             Href: url);
 
     /// <summary>The placeholder card shown until a target's data arrives (and the terminal card

@@ -69,8 +69,35 @@ public class OgCardLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
         var typed = (MeshNodeCardControl)card!;
         typed.Href.Should().Be(url);
         typed.Description.Should().Be("Served description.");
+        // This page declares NO icon link, so the card falls through to the og:image poster —
+        // the page's only declared visual. See the icon-preferred case below.
         typed.ImageUrl.Should().Be(server.BaseUrl + "og.png");
         typed.NodePath.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// The user-visible point of the card: when the page declares an icon, THAT is the visual —
+    /// not the wide og:image poster, which the card's fixed 48 px square would crop into a
+    /// meaningless sliver.
+    /// </summary>
+    [HubFact]
+    public async Task ExternalUrl_WithDeclaredIcon_RendersIconNotPoster()
+    {
+        server.IconHref = "/favicon.ico";
+        // A distinct URL — the preview promise-cache is keyed per URL.
+        var url = server.BaseUrl + "with-icon";
+        var reference = new LayoutAreaReference(OgCardLayoutArea.AreaName) { Id = $"?url={url}" };
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(), reference);
+
+        var card = await stream.GetControlStream($"{reference.Area}/Card0")
+            .Should().Within(10.Seconds())
+            .Match(x => x is MeshNodeCardControl { Title: "Served Title" });
+
+        var typed = (MeshNodeCardControl)card!;
+        typed.ImageUrl.Should().Be(server.BaseUrl + "favicon.ico");
+        typed.ImageUrl.Should().NotContain("og.png");
     }
 
     [HubFact]
