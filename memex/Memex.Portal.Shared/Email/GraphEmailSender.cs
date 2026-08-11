@@ -86,7 +86,12 @@ public sealed class GraphEmailSender : IEmailSender, IDisposable
                     OdataType = "#microsoft.graph.fileAttachment",
                     Name = a.FileName,
                     ContentType = a.MimeType,
-                    ContentBytes = a.Content
+                    ContentBytes = a.Content,
+                    // An INLINE part is drawn where the body's <img src="cid:…"> points, instead
+                    // of being listed as a file to open. Both fields are required: IsInline alone
+                    // still lists it, and a ContentId alone is never matched to the img.
+                    ContentId = a.ContentId,
+                    IsInline = a.IsInline
                 })
             ];
         }

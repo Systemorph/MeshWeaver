@@ -134,6 +134,54 @@ the `IEmailSender` singleton and every `Mesh.SendEmail(...)` call routes through
 
 ---
 
+## Sending a document AS the email
+
+The node menu's **Email this document** entry (`SendDocumentLayoutArea`, alongside Export to PDF and
+Export to DOCX) can put a rendered document in the message **body** instead of attaching a file.
+`DocumentDelivery.EmailBody` runs the standard node ⇒ file pipeline with
+`ExportFormat.Html` — `Templates/Export/Html` — and uses the result as `htmlBody`; the sender's
+covering note is prepended into the document so it is not lost.
+`DocumentDelivery.Attachment` keeps the original PDF-attachment behaviour.
+
+### Why an email needs its own renderer
+
+Email is not a browser. Outlook on Windows renders through the **Word** engine, so
+`EmailDocumentComposer` produces markup for that lowest common denominator:
+
+| Constraint | What the renderer does |
+|---|---|
+| No stylesheets survive (Gmail/Outlook.com strip them) | All CSS is inline; no `<style>`, no `<link>` |
+| Word has no flexbox or grid | Multi-column layout is a `<table>` |
+| **Word ignores `<colgroup>`** | `EmailTableSizer` writes the width on **every** `<td>`/`<th>`, as both the attribute and the style |
+| Equal columns read badly | Widths are proportional to each column's content volume, **square-root damped** with a floor and a cap, so a prose column cannot starve the short ones |
+| Word shows inline SVG as a broken box | `EmailHtmlSanitizer` strips `<svg>` entirely — an omitted icon beats a broken one |
+| A mail client has no page origin | Every `href`/`src` is made absolute against the portal base URL |
+| `data:` URIs are stripped; remote images are blocked until "Download pictures" | `EmailImageInliner` converts embedded pictures into **`cid:` inline parts** (`EmailAttachment.ContentId`), which travel inside the message and render immediately |
+
+🚨 Do **not** test "is this URL already absolute" with `Uri.TryCreate(value, UriKind.Absolute, …)`.
+On Unix that parses a root-relative path (`/Some/Page`) as an implicit `file:` URI and reports it
+absolute, so the link ships relative and is dead in an inbox — while the same call returns `false`
+on Windows, hiding the bug. `EmailHtmlSanitizer.HasScheme` inspects the scheme instead.
+
+### Embedded layout areas are resolved
+
+This is the capability PDF and DOCX do not have. A markdown document can embed a live view with
+`@@(…)`; the markdown pipeline only emits an empty `<div class='layout-area'>` anchor that a
+**browser** fills. The PDF/DOCX templates parse markdown with a pipeline that has never heard of the
+embed syntax, so an embed is printed as its **literal source text**; the pixel path emits the anchor
+and prints a blank.
+
+`EmailAreaResolver` closes that hole server-side: for each anchor it opens the area's synchronization
+stream (the same one the browser subscribes to, under the **caller's** `AccessContext`), snapshots
+the settled control tree, and `EmailControlRenderer` serializes it to table-based markup.
+
+A live area has no completion signal — `OgCard` emits placeholder cards and fills each in as its node
+stream or Open Graph fetch lands — so the snapshot is taken when the tree has been **quiescent** for
+`EmailHtmlOptions.SettleWindow`, or at the `Timeout` deadline, whichever comes first. Taking the
+first emission would export the placeholders.
+
+---
+
 ## Related
 
 - [Script Execution](/Doc/Architecture/ScriptExecution) — the `Mesh`/`Log`/`Ct` globals and progress conventions.

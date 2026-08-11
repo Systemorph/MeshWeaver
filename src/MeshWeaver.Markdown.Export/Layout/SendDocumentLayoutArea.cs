@@ -32,8 +32,18 @@ public static class SendDocumentLayoutArea
     /// <summary>Area name for the send-to-contacts dialog.</summary>
     public const string SendArea = "SendDocument";
 
-    /// <summary>Menu label for the send-to-contacts item.</summary>
-    public const string SendLabel = "Send to contacts";
+    /// <summary>
+    /// Menu label for the email item. Kept as the fallback English text for the
+    /// <c>menu.sendToContacts</c> key, which now reads "Email this document" — the entry sends
+    /// the document itself, not merely a covering note with a file bolted on.
+    /// </summary>
+    public const string SendLabel = "Email this document";
+
+    /// <summary>Form value selecting <see cref="DocumentDelivery.EmailBody"/>.</summary>
+    private const string DeliveryBody = "body";
+
+    /// <summary>Form value selecting <see cref="DocumentDelivery.Attachment"/>.</summary>
+    private const string DeliveryAttachment = "attachment";
 
     /// <summary>
     /// Renders the send-to-contacts form when the caller has Read on the node; otherwise an
@@ -64,41 +74,63 @@ public static class SendDocumentLayoutArea
             ["recipient"] = "",
             ["email"] = "",
             ["subject"] = $"Shared with you: {nodeName}",
-            ["message"] = $"Hi,\n\nPlease find \"{nodeName}\" attached as a PDF.\n\nBest regards",
+            ["message"] = host.Localize("ui.sendDocument.defaultMessage"),
+            // Reading the document IN the message is the better default: nothing to open, and no
+            // attachment for a mail gateway to strip. Attachment stays one click away.
+            ["delivery"] = DeliveryBody,
         });
         var dataContext = LayoutAreaReference.GetDataPointer(formId);
 
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; max-width: 720px;");
-        stack = stack.WithView(Controls.H2($"Send “{nodeName}” to contacts").WithStyle("margin: 0 0 8px 0;"));
-        stack = stack.WithView(Controls.Markdown(
-            "Exports this node to a PDF and emails it as an attachment. Pick a user, or type an email address.")
+        stack = stack.WithView(Controls.H2($"{host.Localize("ui.sendDocument.title")}: “{nodeName}”")
+            .WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.Markdown(host.Localize("ui.sendDocument.intro"))
             .WithStyle("margin-bottom: 16px;"));
+
+        // How the document travels. Body delivery is the one that renders embedded layout areas
+        // into the mail itself; the attachment path keeps the original PDF behaviour.
+        stack = stack.WithView(Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("margin-bottom: 16px;")
+            .WithView(Controls.Body(host.Localize("ui.sendDocument.deliveryLabel"))
+                .WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(new RadioGroupControl(
+                new JsonPointerReference("delivery"),
+                new Option<string>[]
+                {
+                    new(DeliveryBody, host.Localize("ui.sendDocument.deliveryBody")),
+                    new(DeliveryAttachment, host.Localize("ui.sendDocument.deliveryAttachment"))
+                },
+                nameof(String))
+            {
+                DataContext = dataContext
+            }.WithOrientation(Orientation.Vertical)));
 
         // Recipient user picker — stores the selected User node PATH.
         stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("recipient"))
         {
-            Label = "Recipient (user)",
-            Placeholder = "Search users…",
+            Label = host.Localize("ui.sendDocument.recipient"),
+            Placeholder = host.Localize("ui.sendDocument.searchUsers"),
             DataContext = dataContext
         }.WithQueries("nodeType:User").WithMaxResults(15).WithStyle("width: 100%; margin-bottom: 12px;"));
 
         // Raw-email fallback (for non-portal contacts, or in addition to the picked user).
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("email"))
         {
-            Label = "Or email address",
+            Label = host.Localize("ui.sendDocument.orEmail"),
             Placeholder = "name@example.com",
             DataContext = dataContext
         }.WithStyle("width: 100%; margin-bottom: 12px;"));
 
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("subject"))
         {
-            Label = "Subject",
+            Label = host.Localize("ui.sendDocument.subject"),
             DataContext = dataContext
         }.WithStyle("width: 100%; margin-bottom: 12px;"));
 
         stack = stack.WithView(new TextAreaControl(new JsonPointerReference("message"))
         {
-            Label = "Message",
+            Label = host.Localize("ui.sendDocument.message"),
             DataContext = dataContext
         }.WithRows(5).WithStyle("width: 100%; margin-bottom: 16px;"));
 
@@ -133,44 +165,53 @@ public static class SendDocumentLayoutArea
 
                 if (string.IsNullOrWhiteSpace(recipient) && string.IsNullOrWhiteSpace(email))
                 {
-                    ShowDialog(actx, "Validation Error",
-                        "Please select a recipient user or enter an email address.");
+                    ShowDialog(actx, host.Localize("error.validationFailed"),
+                        host.Localize("ui.sendDocument.noRecipient"));
                     return;
                 }
                 if (string.IsNullOrWhiteSpace(subject))
-                    subject = "Shared with you";
+                    subject = host.Localize("ui.sendDocument.defaultSubject");
 
                 string[] userPaths = string.IsNullOrWhiteSpace(recipient) ? [] : [recipient];
                 string[] rawEmails = string.IsNullOrWhiteSpace(email) ? [] : [email];
-                var htmlBody = BuildHtmlBody(message);
+                var htmlBody = BuildHtmlBody(message, host.Localize("ui.sendDocument.attachedNote"));
 
-                var options = new DocumentExportOptions { Format = ExportFormat.Pdf };
+                // Body delivery needs the email-safe HTML export — the only format that is inline
+                // -CSS/table-based AND that resolves embedded layout areas. Attachment keeps PDF.
+                var asBody = !string.Equals(Get("delivery"), DeliveryAttachment, StringComparison.Ordinal);
+                var delivery = asBody ? DocumentDelivery.EmailBody : DocumentDelivery.Attachment;
+                var options = new DocumentExportOptions
+                {
+                    Format = asBody ? ExportFormat.Html : ExportFormat.Pdf
+                };
 
                 SendDocumentDispatch.ExportAndSend(
                         host.Hub, host.Workspace, hubPath, options,
-                        userPaths, rawEmails, subject, htmlBody, logger: logger)
+                        userPaths, rawEmails, subject, htmlBody, delivery, logger: logger)
                     .Subscribe(
                         result =>
                         {
                             if (result.Success)
-                                ShowDialog(actx, "Sent",
-                                    $"Sent **{hubPath.Split('/').Last()}** to:\n\n"
+                                ShowDialog(actx, host.Localize("ui.sendDocument.sent"),
+                                    $"**{hubPath.Split('/').Last()}** →\n\n"
                                     + string.Join("\n", result.SentTo.Select(r => $"- {r}")));
                             else
-                                ShowDialog(actx, "Send failed", result.Error ?? "The document could not be sent.");
+                                ShowDialog(actx, host.Localize("ui.sendDocument.failed"),
+                                    result.Error ?? host.Localize("ui.sendDocument.failedBody"));
                         },
                         ex =>
                         {
                             logger?.LogWarning(ex, "SendDocument: send failed for {Path}", hubPath);
-                            ShowDialog(actx, "Send failed", $"The document could not be sent: {ex.Message}");
+                            ShowDialog(actx, host.Localize("ui.sendDocument.failed"),
+                                $"{host.Localize("ui.sendDocument.failedBody")} {ex.Message}");
                         });
             });
     }
 
-    private static string BuildHtmlBody(string message)
+    private static string BuildHtmlBody(string message, string fallback)
     {
         if (string.IsNullOrWhiteSpace(message))
-            return "<p>Please find the attached document.</p>";
+            return $"<p>{WebUtility.HtmlEncode(fallback)}</p>";
         // Plain-text message → minimal HTML: encode, then keep line breaks.
         var encoded = WebUtility.HtmlEncode(message).Replace("\n", "<br/>");
         return $"<p>{encoded}</p>";
