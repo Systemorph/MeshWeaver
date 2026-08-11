@@ -14,6 +14,6 @@ two causes behind that have since been found and fixed, and the preparation step
 answer at all rather than guess when it cannot see everything.
 
 It has since run clean on every portal — a full fleet of 237 content types prepared in about a
-minute, where the previous approach took nearly nineteen. So it is the default again for any
+minute, where the previous approach took nearly nineteen minutes. So it is the default again for any
 deployment that waits for preparation before serving, and the setting that controls it goes back to
 being an override for the rare case that needs the older, slower path.
