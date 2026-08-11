@@ -35,7 +35,7 @@ public class SkillNodeTypeTest
 
         var skills = nodes.Where(n => n.NodeType == SkillNodeType.NodeType).ToList();
         skills.Should().OnlyContain(n => n.Namespace == SkillNodeType.RootNamespace);
-        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("access", "activity", "agent", "clear", "code", "feedback", "group", "harness", "layout-area", "markdown", "maui", "model", "navigate", "presentation", "provider-keys", "pull-request", "slide", "space", "thread");
+        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal(BuiltInSkillCatalog.ExpectedIds);
 
         var def = (SkillDefinition)skills.Single(n => n.Id == "model").Content!;
         def.Action!.Kind.Should().Be(SkillActionKind.Pick);
