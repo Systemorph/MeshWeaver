@@ -411,6 +411,15 @@ public sealed class SnowflakePartitionedMeshQuery : IMeshQueryProvider
         if (!string.IsNullOrEmpty(queryForSql.Path) && queryForSql.Path.Contains('*'))
             queryForSql = queryForSql with { Path = null, Scope = QueryScope.Exact };
 
+        // 🚨 Carry the REQUEST-level limit into the parsed query — the same propagation the
+        // per-schema delegate does (SnowflakeMeshQuery) and the exact twin of the PostgreSQL fix for
+        // issue #1216. Without it `request.Limit` is silently DROPPED on the unpinned path, because
+        // QueryAcrossSchemasAsync reads only ParsedQuery.Limit and substitutes a hard default of 50.
+        // A request that states no limit at all still gets that default: an unanchored UNION over
+        // every partition schema needs SOME bound.
+        if (request.Limit.HasValue)
+            queryForSql = queryForSql with { Limit = request.Limit };
+
         var userId = GetEffectiveUserId(request);
         // activityUserId is only meaningful for source:accessed today (joins
         // user_activities); source:activity reads the activity satellite,
