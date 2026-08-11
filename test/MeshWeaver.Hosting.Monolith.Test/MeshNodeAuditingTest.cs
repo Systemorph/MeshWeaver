@@ -71,7 +71,7 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
         // UpdateNodeRequest stamped from UpdatedBy, now that UpdateNodeRequest is retired.
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var originalCtx = accessService.CircuitContext;
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "bob@example.com", Name = "bob@example.com" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "bob@example.com", Name = "bob@example.com" });
         MeshNode updated;
         try
         {
@@ -81,7 +81,7 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
         }
         finally
         {
-            accessService.SetCircuitContext(originalCtx);
+            accessService.SetHostIdentity(originalCtx);
         }
 
         updated.CreatedDate.Should().Be(originalCreatedDate,

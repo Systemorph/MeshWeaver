@@ -40,7 +40,7 @@ public class PersistenceRunsAsSystemTest : IDisposable
     {
         // Emission-scheduler condition: neither per-request nor circuit identity present.
         _access.SetContext(null);
-        _access.SetCircuitContext(null);
+        _access.SetHostIdentity(null);
 
         string? beforeAwait = null;
         string? afterAwait = null;
@@ -77,7 +77,7 @@ public class PersistenceRunsAsSystemTest : IDisposable
     public async Task WithoutImpersonation_PersistenceBodyObservesNullAmbient_TheFailClosedCondition()
     {
         _access.SetContext(null);
-        _access.SetCircuitContext(null);
+        _access.SetHostIdentity(null);
 
         string? observed = "unset";
 

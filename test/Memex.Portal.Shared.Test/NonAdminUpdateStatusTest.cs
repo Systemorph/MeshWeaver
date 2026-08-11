@@ -101,7 +101,7 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
     private void Become(AccessContext user)
     {
         Access.SetContext(user);
-        Access.SetCircuitContext(user);
+        Access.SetHostIdentity(user);
     }
 
     /// <summary>The identity the mesh actually sees, so no test here can assert against the wrong user.</summary>
