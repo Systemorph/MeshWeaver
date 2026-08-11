@@ -30,15 +30,21 @@ public static class NodeAccessExtensions
     /// Grants read access to all authenticated users.
     /// Registers both a node-level access rule (for row-level security)
     /// and a hub-level permission rule (for AccessControlPipeline).
+    ///
+    /// <para>🚨 "Authenticated" is <see cref="WellKnownUsers.IsAuthenticated"/>, never
+    /// <c>!string.IsNullOrEmpty(userId)</c> — an unauthenticated caller arrives NAMED
+    /// (<see cref="WellKnownUsers.Anonymous"/>), so the emptiness spelling grants this blanket
+    /// Read to the logged-out internet. That is the exact defect that leaked private partitions'
+    /// content files; this helper carried an identical copy of it.</para>
     /// </summary>
     public static MessageHubConfiguration WithPublicRead(this MessageHubConfiguration config)
         => config
             .AddAccessRule(
                 [NodeOperation.Read],
-                (_, userId) => !string.IsNullOrEmpty(userId))
+                (_, userId) => WellKnownUsers.IsAuthenticated(userId))
             .AddHubPermissionRule(
                 Permission.Read,
-                (_, userId) => !string.IsNullOrEmpty(userId));
+                (_, userId) => WellKnownUsers.IsAuthenticated(userId));
 
     /// <summary>
     /// Allows users to edit nodes under their own partition (path = userId or userId/...).

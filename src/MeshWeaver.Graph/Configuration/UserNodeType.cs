@@ -200,18 +200,27 @@ public static class UserNodeType
     }
 
     /// <summary>
-    /// Grants public read access ONLY on the User node itself (path == "{userId}"),
+    /// Grants read access to every SIGNED-IN user on the User node itself (path == "{userId}"),
     /// not on its children (threads, activities, etc.). Children inherit normal
     /// access control — the user gets read access via UserScopeGrantHandler.
     /// Post-v10 paths are root-level ({userId}); legacy "User/{userId}" still
     /// matches so transitional data does not lose visibility before migration.
+    ///
+    /// <para>🚨 "Public" here has always meant <b>every authenticated user</b>, never "the
+    /// anonymous internet". The gate is <see cref="WellKnownUsers.IsAuthenticated"/> — spelled
+    /// <c>!string.IsNullOrEmpty(userId)</c>, it admitted the caller literally named
+    /// <c>"Anonymous"</c>, and since the hub-permission rule below applies to EVERY
+    /// <c>[RequiresPermission(Read)]</c> message reaching a user-partition hub, that one predicate
+    /// served logged-out callers the partition's content collection over
+    /// <c>/api/content/{user}/…</c>. An anonymous caller is not shut out by this: it falls through
+    /// to the real evaluator, where an explicit Anonymous grant still allows the read.</para>
     /// </summary>
     private static MessageHubConfiguration WithUserNodePublicRead(this MessageHubConfiguration config)
         => config.AddAccessRule(
             [NodeOperation.Read],
             (context, userId) =>
             {
-                if (string.IsNullOrEmpty(userId)) return false;
+                if (!WellKnownUsers.IsAuthenticated(userId)) return false;
                 var nodePath = context.Node.Path;
                 if (string.IsNullOrEmpty(nodePath)) return false;
                 // Root-level user node ("Alice") with no namespace separator: public.
@@ -223,7 +232,7 @@ public static class UserNodeType
             })
         .AddHubPermissionRule(
             Permission.Read,
-            (_, userId) => !string.IsNullOrEmpty(userId));
+            (_, userId) => WellKnownUsers.IsAuthenticated(userId));
 
     /// <summary>
     /// Adds a create-access rule for portal namespace hubs (onboarding flow).
