@@ -408,6 +408,12 @@ public static class MeshNodeExtensions
     {
         typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
         typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
+        // The compile control-plane's own state, mirrored onto the NodeType node and therefore
+        // serialised by every per-NodeType hub that compiles. Unregistered it is auto-registered
+        // under its short name on that hub's first write, with the resolver's "register it
+        // explicitly" warning — which is asking for exactly this line, so that a receiving hub
+        // resolves it typed rather than as an untyped JsonElement.
+        typeRegistry.WithType(typeof(NodeTypeCompileState), nameof(NodeTypeCompileState));
         typeRegistry.WithType(typeof(Comment), nameof(Comment));
         typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
         // Slide MeshNode Content — presentation pages (see SlideNodeType). Registered
