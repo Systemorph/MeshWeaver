@@ -58,6 +58,17 @@ A portal mid-restart, a login wall, or any SPA catch-all answers **200 with its 
 
 Every Blazor portal serves `<base href="/">` plus a relative `href="favicon.ico"`. Resolved against the *page* URL that yields `/Some/Section/favicon.ico`, which a catch-all-routed SPA answers **200 text/html** rather than 404 — a silently broken image that looks like a working link.
 
+### A `data:` URI icon works in browsers and NOT in email
+
+A node whose icon is an **inline `<svg>`** publishes it as a `data:image/svg+xml,…` URI. Every browser renders that — tab, card, unfurl. **Email does not.** Outlook renders through Word, which supports no inline SVG at all, and classic Outlook for Windows blocks `data:` URIs outright; the icon silently becomes a broken image or nothing.
+
+So **any email or export path needs a RASTER icon at an `http(s)` URL** — never the head's `data:` URI. Two things already on that side of the line and safe to use:
+
+- **`/api/og/{nodePath}`** — the generated PNG share card, an ordinary cacheable http URL. It is a wide card, not a square icon, but it is a real raster.
+- A node whose icon is stored as a **file** (`content:mark.png`) already resolves to an http content-route URL rather than a data URI, so it is email-safe as authored.
+
+For a square raster icon of an inline-SVG node there is currently **no route** — the icon exists only as markup in the head. Rasterising it is a separate endpoint, not something to fake by inlining.
+
 ### Ties between icons are broken by the LAST declaration
 
 Site chrome emits its favicon early; a page that declares its own icon emits it later. Preferring the first would mean a page could never override the site-wide mark, and every card in a grid would draw the same portal logo.
