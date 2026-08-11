@@ -1,6 +1,6 @@
 ---
 Name: "Owner Injection — the standing access identity for a node's hub"
-Abstract: "In any node/thread/activity context the NODE OWNER (resolved from the node) is the standing access context, injected everywhere and carried forward across Rx hops via CircuitContext. Genuine infrastructure (doc sync, cache hydration) runs as System. An empty access context is NEVER faked — it is rejected instantly."
+Abstract: "In any node/thread/activity context the NODE OWNER (resolved from the node) is the standing access context, injected everywhere and carried forward across Rx hops via the owning hub's standing identity. Genuine infrastructure (doc sync, cache hydration) runs as System. An empty access context is NEVER faked — it is rejected instantly."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#00897b'/><circle cx='12' cy='8' r='3.2' fill='white'/><path d='M5 19c0-3.6 3.1-5.5 7-5.5s7 1.9 7 5.5' fill='white'/></svg>"
 Authors:
   - "Roland Buergi"
@@ -37,12 +37,22 @@ continuation.
    owner. The owner is who the work is *for*; the access check that admitted the work already
    happened upstream.
 
-2. **Carry it forward — `CircuitContext`, not just `Context`.** `AccessService.Context` is an
-   `AsyncLocal` that is **wiped across every Rx hop** (a `Subscribe` callback, a `Throttle` tick,
-   a remote-stream initial-snapshot continuation, a deferred sync write). `CircuitContext` is
-   mesh-global per hub and **survives** those hops. Owner injection therefore stamps
-   **`SetCircuitContext(owner)`** (the carry-forward slot), not only `SetContext(owner)`. A write
-   that only set `Context` is lost the moment it crosses a scheduler boundary.
+2. **Carry it forward — `SetStandingIdentity(hub, owner)`, not just `Context`.**
+   `AccessService.Context` is an `AsyncLocal` that is **wiped across every Rx hop** (a
+   `Subscribe` callback, a `Throttle` tick, a remote-stream initial-snapshot continuation, a
+   deferred sync write). The hub's **standing identity** survives those hops. Owner injection
+   therefore stamps **`SetStandingIdentity(hub, owner)`** (the carry-forward slot), not only
+   `SetContext(owner)`. A write that only set `Context` is lost the moment it crosses a
+   scheduler boundary.
+
+   > 🚨 **Keyed by hub — never process-wide.** This slot used to be `SetCircuitContext(owner)`,
+   > which wrote a single shared `persistentCircuitContext` field on the mesh-wide
+   > `AccessService` singleton. That made the owner of whichever thread hub activated last the
+   > ambient fallback identity for *every* other hub, every other user, and every anonymous
+   > render in the process — a cross-user identity bleed reaching RLS, write attribution and the
+   > permission fold. `GetStandingIdentity(hub)` can only ever yield **that hub's** owner.
+   > `CircuitContext` no longer has any process-wide fallback on a server: off a circuit's own
+   > call tree it is `null` and identity resolution fails closed.
 
 3. **Empty → reject instantly. Never fake an identity.** If no owner can be resolved and there is
    no live caller, the operation is **rejected closed** — the never-null `PostPipeline` guard
@@ -105,8 +115,8 @@ loses the cold-start race.
 
 | Layer | What injects the owner |
 |---|---|
-| Thread hub | `ThreadExecution.SetThreadHubIdentity` — reads the thread node's `CreatedBy` and stamps it as **both** `Context` and `CircuitContext` (carry-forward) on hub activation. |
-| Activity hub | The activity control-plane establishes the activity owner the same way (resolve from the activity node, inject as CircuitContext). |
+| Thread hub | `ThreadExecution.SetThreadHubIdentity` — reads the thread node's `CreatedBy` and stamps it as **both** `Context` and this hub's standing identity (`SetStandingIdentity(hub, owner)`, the carry-forward slot) on hub activation. |
+| Activity hub | The activity control-plane establishes the activity owner the same way (resolve from the activity node, inject as the hub's standing identity). |
 | Per-node data source / sync stream | `SynchronizationStream.Update` resolves the node OWNER **synchronously from the node already in its own `Current`** when neither a live AsyncLocal context nor a captured creation context survives — via `IStreamOwnerResolver`, resolved off `Host.ServiceProvider`. Genuine infra streams (doc sync) carry System. |
 | One-shot helpers | `AccessContextScope.FromNode(node, accessService)` — runs a block under the node's owner (`CreatedBy`/`LastModifiedBy`), falling back to System only for an unattributed node. |
 

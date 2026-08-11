@@ -626,7 +626,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         try
         {
             var accessService = hub.ServiceProvider.GetService<AccessService>();
-            return accessService?.Context ?? accessService?.CircuitContext;
+            // Context (this delivery) → CircuitContext (this flow's circuit / single-identity
+            // host) → this HUB's standing owner identity. The last arm is owner injection: on a
+            // deferred continuation both AsyncLocals are wiped, and the owning per-node hub
+            // carries its node OWNER. It is keyed by hub, so it can only ever yield THIS hub's
+            // owner — never whichever user touched the process most recently.
+            return accessService?.Context
+                   ?? accessService?.CircuitContext
+                   ?? accessService?.GetStandingIdentity(hub);
         }
         catch (ObjectDisposedException)
         {
