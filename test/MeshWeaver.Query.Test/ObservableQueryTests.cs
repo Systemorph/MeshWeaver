@@ -298,7 +298,11 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         // The third emission should be the second update — never any emission for the child.
         afterChild[2].ChangeType.Should().Be(QueryChangeType.Updated);
-        afterChild.Should().HaveCount(3, "child create must not produce an emission for path:exact");
+        // 🚨 SHAPE, not count. `HaveCount(3)` after Match(Count >= 3) could never fail — Scan adds one
+        // per emission, so the first matching snapshot has Count == 3 by construction. It read as the
+        // child-create guard while enforcing nothing. Name the child instead.
+        afterChild.SelectMany(c => c.Items).Select(n => n.Path).Should().OnlyContain(path => path == p,
+            "a child create must not produce an emission for a path:exact query");
     }
 
     [Fact]

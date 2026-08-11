@@ -115,6 +115,19 @@ internal static class NodeTypeBatchBake
     ///
     /// <para>Overlap is free: the results fold into one path-keyed map, and the in-memory matcher
     /// then selects each type's set from it exactly as before.</para>
+    ///
+    /// <para>🚨 <b>The union's COMPLETENESS is what makes the in-memory match sound</b>, and it rests
+    /// on <c>scope:subtree</c> meaning the same thing for a WILDCARD namespace as for a concrete
+    /// one. It did not, and that was the residual half of #1216: the wildcard form cannot become a
+    /// <c>ParsedQuery.Path</c>, so it is emitted as a <c>namespace LIKE '%/Source'</c> filter and the
+    /// scope — which only ever drove a PATH walk — was silently dropped. The fetch then reached only
+    /// the Code nodes sitting DIRECTLY in a <c>…/Source</c> folder, and a type whose sources include
+    /// a cross-partition <c>shared=@Other/SampleData/Source/Fixtures</c> resolved a PARTIAL set: its
+    /// own sources present, that one absent, a convincing <c>CS0103</c> out of Roslyn, and the bake
+    /// gate refusing readiness on healthy content. A partial set is strictly worse than an empty
+    /// one — the emptiness invariant below cannot see it. <c>QueryParser</c> now widens the wildcard
+    /// namespace to self-or-below (<c>WidenWildcardNamespacesToSubtree</c>), which is what lets the
+    /// matcher keep serving these queries from the global map instead of re-running them.</para>
     /// </summary>
     private static IReadOnlyList<string> GlobalCodeQueries =>
     [
