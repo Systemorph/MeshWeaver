@@ -393,6 +393,7 @@
   "ui.compileTypesReady": "{0} of {1} types compiled",
   "ui.compileNowCompiling": "Now compiling: {0}",
   "ui.compileQueued": "{0} more queued",
+  "ui.noNodeTypeDefinition": "This node has no NodeTypeDefinition — nothing to compile.",
   "ui.noConfiguration": "No Configuration defined.",
   "ui.noConfigLambda": "No configuration lambda defined.",
   "ui.noneConfigured": "None configured.",
