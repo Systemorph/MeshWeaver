@@ -75,6 +75,7 @@ public static class ExportDocumentHandler
     {
         ExportFormat.Pdf => $"{MarkdownExportTemplates.TemplatesNamespace}/{MarkdownExportTemplates.ExportPdfId}",
         ExportFormat.Docx => $"{MarkdownExportTemplates.TemplatesNamespace}/{MarkdownExportTemplates.ExportDocxId}",
+        ExportFormat.Html => $"{MarkdownExportTemplates.TemplatesNamespace}/{MarkdownExportTemplates.ExportHtmlId}",
         _ => throw new NotSupportedException($"Unsupported format {format}")
     };
 }

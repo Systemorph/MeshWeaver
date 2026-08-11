@@ -67,6 +67,10 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
                         Order: 28,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea))
                         { LabelKey = "menu.exportDocx" },
+                    // Sits with the export entries as the third member of the same block: the two
+                    // above produce a FILE, this one delivers the document itself. It is the
+                    // former "Send to contacts" grown up — same entry, same slot, now able to put
+                    // the rendered document in the email BODY rather than only attaching a PDF.
                     new NodeMenuItemDefinition(
                         Label: SendDocumentLayoutArea.SendLabel,
                         Area: SendDocumentLayoutArea.SendArea,

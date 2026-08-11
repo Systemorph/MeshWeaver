@@ -23,6 +23,6 @@ internal static class BuiltInSkillCatalog
     [
         "access", "activity", "agent", "clear", "code", "feedback", "group", "harness",
         "layout-area", "markdown", "maui", "model", "navigate", "og-card", "presentation",
-        "provider-keys", "pull-request", "slide", "space", "thread",
+        "provider-keys", "pull-request", "share-email", "slide", "space", "thread",
     ];
 }
