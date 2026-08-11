@@ -49,4 +49,32 @@ public static class HubEmailExtensions
             ? Observable.Return(false)
             : sender.SendEmail(toAddress, subject, htmlBody, attachments);
     }
+
+    /// <summary>
+    /// Sends with an explicit sender identity — as the signed-in user (their own delegated
+    /// credential) or from the shared mailbox with a reply-to. See <see cref="EmailDelivery"/>.
+    /// Cold observable — subscribe to drive. Emits <c>false</c> if no sender is registered.
+    /// </summary>
+    public static IObservable<bool> SendEmail(
+        this IMessageHub hub, string toAddress, string subject, string htmlBody,
+        IReadOnlyCollection<EmailAttachment> attachments, EmailDelivery delivery)
+    {
+        var sender = hub.ServiceProvider.GetService(typeof(IEmailSender)) as IEmailSender;
+        return sender is null
+            ? Observable.Return(false)
+            : sender.SendEmail(toAddress, subject, htmlBody, attachments, delivery);
+    }
+
+    /// <summary>
+    /// Whether the registered sender can send AS <paramref name="userObjectId"/> right now (the
+    /// user has connected their Microsoft 365 mailbox). Ask before composing so the UI can state
+    /// which identity will be used — never discover it at send time.
+    /// </summary>
+    public static IObservable<bool> CanSendAsUser(this IMessageHub hub, string userObjectId)
+    {
+        var sender = hub.ServiceProvider.GetService(typeof(IEmailSender)) as IEmailSender;
+        return sender is null
+            ? Observable.Return(false)
+            : sender.CanSendAsUser(userObjectId);
+    }
 }
