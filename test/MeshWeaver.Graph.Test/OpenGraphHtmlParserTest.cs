@@ -171,6 +171,54 @@ public class OpenGraphHtmlParserTest
             OpenGraphHtmlParser.Parse(Url, html).Icon);
     }
 
+    /// <summary>
+    /// 🚨 THE DEFECT that made every card in a grid draw the same portal logo: a MeshWeaver page
+    /// declares TWO icons — the site-wide favicon its shared layout emits first, then (for a node
+    /// page) the NODE's own icon from the per-page SEO head. Preferring the first meant a page
+    /// could never override the site mark, so eight different modules rendered eight identical
+    /// MeshWeaver logos. A tie is broken by the LAST declaration, as browsers break it.
+    /// </summary>
+    [Fact]
+    public void Parse_PageIconDeclaredAfterSiteFavicon_Wins()
+    {
+        // Same effective rank (both sizeless rel="icon"): the later one — the page's own — wins.
+        const string sameRank = """
+            <head><base href="/">
+            <link rel="icon" type="image/png" href="favicon.ico">
+            <link rel="icon" href="/api/content/Space/Page/mark.png">
+            </head>
+            """;
+        Assert.Equal("https://portal.example.org/api/content/Space/Page/mark.png",
+            OpenGraphHtmlParser.Parse(Url, sameRank).Icon);
+
+        // The real shape: the node's icon travels as an inline-SVG data URI, which also outranks
+        // the raster favicon outright.
+        const string svgDataUri = "data:image/svg+xml,%3Csvg%3E%3C/svg%3E";
+        var nodePage = $"""
+            <head><base href="/">
+            <link rel="icon" type="image/png" href="favicon.ico">
+            <link rel="icon" href="{svgDataUri}" type="image/svg+xml">
+            </head>
+            """;
+        Assert.Equal(svgDataUri, OpenGraphHtmlParser.Parse(Url, nodePage).Icon);
+    }
+
+    /// <summary>A LOWER-ranked later icon still loses — the tie-break relaxes ties only, it does
+    /// not turn ranking into "last one wins".</summary>
+    [Fact]
+    public void Parse_LaterButSmallerIcon_DoesNotWin()
+    {
+        const string html = """
+            <head>
+            <link rel="icon" sizes="192x192" href="/large.png">
+            <link rel="icon" sizes="16x16" href="/small.png">
+            </head>
+            """;
+
+        Assert.Equal("https://portal.example.org/large.png",
+            OpenGraphHtmlParser.Parse(Url, html).Icon);
+    }
+
     [Fact]
     public void Parse_DataUriIcon_ReturnedVerbatim()
     {
