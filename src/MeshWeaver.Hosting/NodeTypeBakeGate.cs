@@ -37,6 +37,7 @@ public sealed class NodeTypeBakeGateState
 {
     private readonly ConcurrentDictionary<string, string> regressions = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> unevaluated = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> contentBroken = new(StringComparer.OrdinalIgnoreCase);
     private int phase = (int)BakePhase.NotStarted;
     private volatile string detail = "pre-warm not started";
 
@@ -71,6 +72,14 @@ public sealed class NodeTypeBakeGateState
     /// is not "it broke". See <see cref="MarkOutcome"/>.
     /// </summary>
     public IReadOnlyDictionary<string, string> Unevaluated => unevaluated;
+
+    /// <summary>
+    /// Types broken by CONTENT on this image — their declared source queries match zero Code nodes
+    /// (the sources were deleted from the mesh), or an upstream in that state blocks them. Visible
+    /// for diagnosis, deliberately NOT readiness-blocking: no image caused it and no rollout can
+    /// fix it. See <see cref="PreWarmStatus.NoSources"/> for the incident that mandates this.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ContentBroken => contentBroken;
 
     /// <summary>The sweep has begun.</summary>
     public void MarkRunning(string message)
@@ -118,6 +127,20 @@ public sealed class NodeTypeBakeGateState
             return;
         }
 
+        // A CONTENT verdict is not an IMAGE verdict. NoSources means the type's declared source
+        // queries no longer match anything on the mesh — its sources were deleted out from under
+        // it (2026-08-10: four KmuBasics/* types whose course was re-installed under a new id,
+        // the type nodes left behind, stalled memex-cloud's self-update across two images). No
+        // image can change what a mesh query matches, so no rollout may be held hostage to it —
+        // the same deploy-freeze rule as WasHealthyBeforeBake, arriving through content deletion
+        // instead of an abandoned Error record. UpstreamContentBroken is the same condition one
+        // hop downstream (the depth-1 rule, again).
+        if (outcome.Status is PreWarmStatus.NoSources or PreWarmStatus.UpstreamContentBroken)
+        {
+            contentBroken[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
+            return;
+        }
+
         regressions[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
         Interlocked.Exchange(ref phase, (int)BakePhase.Regressed);
         detail = $"{regressions.Count} NodeType(s) regressed on this image";
@@ -137,13 +160,21 @@ public sealed class NodeTypeBakeGateState
         }
 
         Interlocked.Exchange(ref phase, (int)BakePhase.Complete);
-        // Ready, but say so honestly: a type we could not evaluate is not a type we verified.
-        // Surfacing it in the health payload is what keeps "non-blocking" from becoming "invisible"
-        // — a silently-swallowed timeout is how a real regression would hide behind this change.
-        detail = unevaluated.IsEmpty
+        // Ready, but say so honestly: a type we could not evaluate is not a type we verified, and
+        // a content-broken type is broken RIGHT NOW even though it must not stall the rollout.
+        // Surfacing both in the health payload is what keeps "non-blocking" from becoming
+        // "invisible" — a silently-swallowed bucket is how a real problem would hide behind this
+        // leniency.
+        var addenda = new List<string>(2);
+        if (!unevaluated.IsEmpty)
+            addenda.Add($"{unevaluated.Count} not evaluated — "
+                + string.Join(", ", unevaluated.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        if (!contentBroken.IsEmpty)
+            addenda.Add($"{contentBroken.Count} content-broken, sources missing — "
+                + string.Join(", ", contentBroken.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        detail = addenda.Count == 0
             ? message
-            : $"{message} ({unevaluated.Count} not evaluated — "
-                + string.Join(", ", unevaluated.Keys.OrderBy(k => k, StringComparer.Ordinal)) + ")";
+            : $"{message} ({string.Join("; ", addenda)})";
     }
 }
 
