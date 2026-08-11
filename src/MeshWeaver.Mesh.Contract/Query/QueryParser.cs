@@ -457,6 +457,10 @@ public partial class QueryParser
         // built-in + per-context + per-NodeType + per-user instances (see AgentPickerProjection).
         string[]? namespaceAlternation = null;
         bool namespaceAlternationNegated = false;
+        // Where each wildcard `namespace:*/X` LIKE filter landed in filterTokens, so the post-loop
+        // pass can widen it to the SUBTREE once `scope:` is known (the qualifier may appear AFTER
+        // the namespace token). See WidenWildcardNamespacesToSubtree.
+        List<int>? namespaceWildcardIndices = null;
         OrderByClause? orderBy = null;
         int? limit = null;
         var source = QuerySource.Default;
@@ -510,7 +514,11 @@ public partial class QueryParser
                     }
                     if (value.Contains('*'))
                     {
-                        // Wildcard namespace: add as LIKE filter (e.g., namespace:*/_Thread)
+                        // Wildcard namespace: add as LIKE filter (e.g., namespace:*/_Thread).
+                        // REMEMBER where it landed — `scope:` may still be ahead of us in the token
+                        // stream, and a subtree scope widens this single LIKE into a self-or-below
+                        // OR pair (WidenWildcardNamespacesToSubtree).
+                        (namespaceWildcardIndices ??= []).Add(filterTokens.Count);
                         filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
                             new QueryCondition("namespace", QueryOperator.Like, [value.Replace("*", "%")])));
                     }
@@ -621,6 +629,13 @@ public partial class QueryParser
             scope = QueryScope.Descendants;
         }
 
+        // A WILDCARD namespace carries its own scope, because it never produced a Path to walk.
+        if (namespaceWildcardIndices is not null
+            && scope is QueryScope.Subtree or QueryScope.Descendants)
+        {
+            WidenWildcardNamespacesToSubtree(filterTokens, namespaceWildcardIndices);
+        }
+
         // Resolve a deferred `namespace:A|B|C` alternation into a `namespace IN (...)` membership
         // FILTER. With scope:selfAndAncestors each value expands to itself + every ancestor
         // namespace, so a node whose namespace is the value OR any ancestor matches (closest-wins
@@ -647,6 +662,62 @@ public partial class QueryParser
 
         var textSearch = textSearchParts.Count > 0 ? string.Join(" ", textSearchParts) : null;
         return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths);
+    }
+
+    /// <summary>
+    /// Widens every wildcard <c>namespace:*/X</c> LIKE filter to cover the whole SUBTREE:
+    /// <c>(namespace LIKE '%/X' OR namespace LIKE '%/X/%')</c>.
+    ///
+    /// <para><b>Why this exists (issue #1216).</b> A concrete <c>namespace:A/B</c> becomes a
+    /// <see cref="ParsedQuery.Path"/> plus a <see cref="QueryScope"/>, and every backend walks that
+    /// path — so <c>scope:subtree</c> genuinely reaches nodes nested any number of levels below.
+    /// A WILDCARD namespace cannot become a Path (there is no path to walk: <c>*</c> spans
+    /// partitions), so it is emitted as a <c>namespace LIKE</c> FILTER instead — and a filter is all
+    /// the backend ever sees. <c>scope:subtree</c> was therefore silently DROPPED for the wildcard
+    /// form: <c>namespace:*/Source scope:subtree</c> matched only rows whose namespace ENDS in
+    /// <c>/Source</c>, i.e. the Code nodes sitting DIRECTLY in some <c>…/Source</c> folder, and
+    /// nothing one level deeper. No error, no warning — just a strictly narrower answer than the
+    /// query asked for.</para>
+    ///
+    /// <para>That is what stalled the memex-cloud rollout on 2026-08-11. The batch bake's global
+    /// source fetch (<c>NodeTypeBatchBake.GlobalCodeQueries</c>) is exactly this shape, and it is the
+    /// ONLY way to reach the per-schema <c>code</c> satellite table across partitions. Four NodeTypes
+    /// whose sources include a cross-partition <c>shared=@Claims/SampleData/Source/Fixtures</c> —
+    /// one level below <c>/Source</c> — had that source silently missing from the global fetch, so
+    /// the in-memory matcher selected a PARTIAL source set and Roslyn produced a perfectly
+    /// convincing <c>CS0103: The name 'MtplClaimFixtures' does not exist</c>. The bake gate read the
+    /// false CompileError as an image regression and refused readiness. A partial set is worse than
+    /// an empty one: the emptiness invariant added in #1220 cannot see it, because those types have
+    /// plenty of OTHER sources.</para>
+    ///
+    /// <para>Widening in the PARSER (rather than in any one caller's query text) is what makes the
+    /// fix hold for every backend at once — Postgres, Snowflake, Cosmos and the in-memory
+    /// evaluator all consume the same <see cref="ParsedQuery.Filter"/> — and it is what stops the
+    /// next author of a <c>namespace:*/X scope:subtree</c> query from inheriting the same silent
+    /// truncation.</para>
+    /// </summary>
+    /// <param name="filterTokens">The filter token stream being assembled; edited in place.</param>
+    /// <param name="indices">Positions of the single-LIKE wildcard namespace tokens to widen.</param>
+    private static void WidenWildcardNamespacesToSubtree(List<Token> filterTokens, List<int> indices)
+    {
+        // Descending, so an earlier index is still valid after a later one has been expanded.
+        foreach (var index in indices.OrderByDescending(i => i))
+        {
+            if (filterTokens[index].Condition is not { } self || self.Value.Length == 0)
+                continue;
+            var pattern = self.Value;
+            var below = new QueryCondition(
+                self.Selector, QueryOperator.Like, [$"{pattern.TrimEnd('/')}/%"]);
+            filterTokens.RemoveAt(index);
+            filterTokens.InsertRange(index,
+            [
+                new Token(TokenType.LeftParen, "("),
+                new Token(TokenType.Comparison, string.Empty, self),
+                new Token(TokenType.Or, "OR"),
+                new Token(TokenType.Comparison, string.Empty, below),
+                new Token(TokenType.RightParen, ")"),
+            ]);
+        }
     }
 
     /// <summary>
