@@ -147,6 +147,72 @@ public class OgCardLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
         OgCardLayoutArea.ParseTargets("?urls=").Should().BeEmpty();
     }
 
+    /// <summary>
+    /// 🚨 The reported defect: the bare PATH/areaId form did not split on commas AT ALL — it fell
+    /// through to a single-target return, so four URLs became ONE card whose href was the four
+    /// URLs concatenated. That fetch can never succeed, so the card degraded to the bare domain
+    /// and read as a broken link to the portal. Both forms now split, and the separator may arrive
+    /// raw or percent-encoded.
+    /// </summary>
+    [Fact]
+    public void ParseTargets_SplitsMultipleTargets_InEveryForm()
+    {
+        const string a = "https://memex.meshweaver.cloud/Reinsurance";
+        const string b = "https://memex.meshweaver.cloud/Underwriting";
+        const string c = "https://memex.meshweaver.cloud/Claims";
+        const string d = "https://memex.meshweaver.cloud/Pricing";
+
+        // The EXACT areaId from the live repro: path form, percent-encoded whole (%2C separators).
+        OgCardLayoutArea.ParseTargets(
+                "https%3A%2F%2Fmemex.meshweaver.cloud%2FReinsurance"
+                + "%2Chttps%3A%2F%2Fmemex.meshweaver.cloud%2FUnderwriting"
+                + "%2Chttps%3A%2F%2Fmemex.meshweaver.cloud%2FClaims"
+                + "%2Chttps%3A%2F%2Fmemex.meshweaver.cloud%2FPricing")
+            .Should().Equal(a, b, c, d);
+
+        // Path form with RAW commas.
+        OgCardLayoutArea.ParseTargets($"{a},{b},{c},{d}").Should().Equal(a, b, c, d);
+
+        // Query form, raw and encoded separators.
+        OgCardLayoutArea.ParseTargets($"?urls={a},{b}").Should().Equal(a, b);
+        OgCardLayoutArea.ParseTargets("?urls=https%3A%2F%2Fa.org%2FX%2Chttps%3A%2F%2Fa.org%2FY")
+            .Should().Equal("https://a.org/X", "https://a.org/Y");
+
+        // Trailing / doubled separators and stray whitespace produce no empty targets.
+        OgCardLayoutArea.ParseTargets($"{a},{b},").Should().Equal(a, b);
+        OgCardLayoutArea.ParseTargets($"?urls={a}, {b} ,,").Should().Equal(a, b);
+
+        // A SINGLE target still yields exactly one card, in every form.
+        OgCardLayoutArea.ParseTargets(a).Should().Equal(a);
+        OgCardLayoutArea.ParseTargets($"?url={a}").Should().Equal(a);
+        OgCardLayoutArea.ParseTargets("Some/Node/Path").Should().Equal("Some/Node/Path");
+
+        // The singular form never splits — a comma there is data, not a separator.
+        OgCardLayoutArea.ParseTargets($"?url={a},{b}").Should().Equal($"{a},{b}");
+    }
+
+    /// <summary>
+    /// An unreachable target must stay HONEST: it names the page it points at (the last path
+    /// segment) rather than the bare domain, and its href remains the real target — so the card
+    /// never masquerades as a link to the portal root.
+    /// </summary>
+    [HubFact]
+    public async Task UnfetchableUrl_CardNamesThePage_AndKeepsTheRealHref()
+    {
+        server.StatusCode = 500;
+        var url = server.BaseUrl + "Reinsurance";
+        var reference = new LayoutAreaReference(OgCardLayoutArea.AreaName) { Id = $"?url={url}" };
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(), reference);
+
+        var card = await stream.GetControlStream($"{reference.Area}/Card0")
+            .Should().Within(10.Seconds())
+            .Match(x => x is MeshNodeCardControl { Title: "Reinsurance" });
+
+        ((MeshNodeCardControl)card!).Href.Should().Be(url);
+    }
+
     [Fact]
     public void BuildLayout_SingleCardBounded_MultipleCardsGrid()
     {
