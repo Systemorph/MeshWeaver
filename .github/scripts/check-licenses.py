@@ -76,11 +76,15 @@ ALLOWED_COMPOUND = {
 EXCEPTIONS = {
     # --- Known-incompatible, removal in flight. These are DEBT, not approvals. ---
     "questpdf": (
-        "VIOLATION, removal tracked by #1230. Dual-licensed: the Community tier is "
-        "free only below a revenue threshold, above which a paid commercial licence "
-        "is required. Cannot be deleted in isolation - the browser (Chromium) export "
-        "path does not yet render cover pages, TOC or running headers/footers, so the "
-        "deletion lands with the document-export migration. Delete this entry with it."
+        "VIOLATION, added 2026-08-11, removal tracked by #1230 and BLOCKED on it. "
+        "Dual-licensed: the Community tier is free only below a revenue threshold, "
+        "above which a paid commercial licence is required. It is not deletable today "
+        "for a hard reason: the intended replacement is the headless-Chromium renderer, "
+        "and Chromium is deliberately NOT in the deployed base image "
+        "(deploy/base-images/portal-ai/Dockerfile), so removing QuestPDF now would "
+        "leave the portal with NO PDF renderer at all. Sequence: #1222 -> #1234 -> a "
+        "base-image decision on shipping Chromium -> this removal. Delete this entry "
+        "with it; until then the exception is dated debt, not an approval."
     ),
     "jsonpatch.net": (
         "Open Source Maintenance Fee (OSMFEULA.txt); decision tracked by #1231. The "
