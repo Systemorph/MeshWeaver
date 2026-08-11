@@ -9,5 +9,14 @@ public enum ExportFormat
     Pdf,
 
     /// <summary>Microsoft Word .docx via DocumentFormat.OpenXml.</summary>
-    Docx
+    Docx,
+
+    /// <summary>
+    /// Self-contained, email-client-safe HTML: inline CSS only, table-based layout, absolute
+    /// URLs, no script — and, unlike <see cref="Pdf"/>/<see cref="Docx"/>, embedded LIVE LAYOUT
+    /// AREAS resolved to static markup (see <c>Email/EmailControlRenderer</c>). Produced by
+    /// <c>Templates/Export/Html</c>; downloadable as a file and usable directly as the BODY of an
+    /// email rather than an attachment.
+    /// </summary>
+    Html
 }

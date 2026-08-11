@@ -141,6 +141,7 @@ public static class MarkdownExportExtensions
             .AddLayout(layout => layout
                 .WithView(ExportDocumentLayoutArea.PdfArea, ExportDocumentLayoutArea.RenderPdf)
                 .WithView(ExportDocumentLayoutArea.DocxArea, ExportDocumentLayoutArea.RenderDocx)
+                .WithView(ExportDocumentLayoutArea.HtmlArea, ExportDocumentLayoutArea.RenderHtml)
                 .WithView(SendDocumentLayoutArea.SendArea, SendDocumentLayoutArea.RenderSend)));
 
         return builder;
