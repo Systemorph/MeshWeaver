@@ -152,7 +152,7 @@ public static class MarkupToDocument
     /// Flattens a subtree to a run of inlines, inserting a line break at each block boundary so a
     /// card's title / description / link stay on separate lines inside one table cell.
     /// </summary>
-    internal static ImmutableArray<InlineElement> Flatten(MarkupNode node)
+    public static ImmutableArray<InlineElement> Flatten(MarkupNode node)
     {
         var builder = ImmutableArray.CreateBuilder<InlineElement>();
         FlattenInto(node, builder, bold: false, italic: false);
@@ -205,24 +205,36 @@ public static class MarkupToDocument
             return;
         }
 
+        // Emphasis arrives BOTH ways and both must be honoured. Markdown-authored emphasis comes as
+        // <strong>/<em>; the control renderer's own emphasis comes as inline CSS, because inline
+        // CSS is the only styling an email client obeys. Reading only the tags silently flattened
+        // every card TITLE to body text — the grid printed correctly but read as one undifferentiated
+        // block, which is visible the moment you look at a generated PDF rather than at its text.
+        //
+        // 🚨 Computed BEFORE the <a> branch: a card title is a STYLED LINK
+        // (MarkupStyles.CardTitle carries font-weight:700), so an early return there would drop
+        // exactly the emphasis this exists to preserve.
+        var style = Attribute(element, "style");
+        var isBold = bold
+                     || element.Tag.Equals("b", StringComparison.OrdinalIgnoreCase)
+                     || element.Tag.Equals("strong", StringComparison.OrdinalIgnoreCase)
+                     || IsBoldStyle(style);
+        var isItalic = italic
+                       || element.Tag.Equals("i", StringComparison.OrdinalIgnoreCase)
+                       || element.Tag.Equals("em", StringComparison.OrdinalIgnoreCase)
+                       || style?.Contains("font-style:italic", StringComparison.OrdinalIgnoreCase) == true;
+
         if (element.Tag.Equals("a", StringComparison.OrdinalIgnoreCase))
         {
             var href = Attribute(element, "href");
             var content = ImmutableArray.CreateBuilder<InlineElement>();
             foreach (var child in element.Children)
-                FlattenInto(child, content, bold, italic);
+                FlattenInto(child, content, isBold, isItalic);
             TrimBreaks(content);
             if (content.Count > 0)
                 builder.Add(new LinkInline(href ?? string.Empty, null, content.ToImmutable()));
             return;
         }
-
-        var isBold = bold
-                     || element.Tag.Equals("b", StringComparison.OrdinalIgnoreCase)
-                     || element.Tag.Equals("strong", StringComparison.OrdinalIgnoreCase);
-        var isItalic = italic
-                       || element.Tag.Equals("i", StringComparison.OrdinalIgnoreCase)
-                       || element.Tag.Equals("em", StringComparison.OrdinalIgnoreCase);
 
         var block = IsBlock(element.Tag);
         if (block)
@@ -263,6 +275,23 @@ public static class MarkupToDocument
             builder.RemoveAt(builder.Count - 1);
         while (builder.Count > 0 && builder[0] is LineBreakInline)
             builder.RemoveAt(0);
+    }
+
+    /// <summary>
+    /// Whether an inline <c>style</c> declares bold. Accepts the keyword and the numeric weights
+    /// email markup actually uses (600–900); anything lighter is not bold.
+    /// </summary>
+    private static bool IsBoldStyle(string? style)
+    {
+        if (string.IsNullOrEmpty(style)) return false;
+        var index = style.IndexOf("font-weight", StringComparison.OrdinalIgnoreCase);
+        if (index < 0) return false;
+
+        var value = style[(index + "font-weight".Length)..].TrimStart(':', ' ');
+        if (value.StartsWith("bold", StringComparison.OrdinalIgnoreCase)) return true;
+
+        var digits = new string(value.TakeWhile(char.IsDigit).ToArray());
+        return int.TryParse(digits, out var weight) && weight >= 600;
     }
 
     private static string? Attribute(MarkupElement element, string name)

@@ -81,6 +81,51 @@ public class MarkupToDocumentTests
             .Contain(l => l.Url == "https://portal.example.com/Underwriting");
     }
 
+    /// <summary>
+    /// The card TITLE must arrive bold, so a card reads as a card rather than as three
+    /// indistinguishable lines of body text.
+    ///
+    /// <para>Found by generating a PDF and looking at it, not by an assertion: the grid was
+    /// structurally perfect and visually flat. The control renderer carries emphasis as inline CSS
+    /// (<c>font-weight:700</c>) because that is the only styling a mail client obeys — never as
+    /// <c>&lt;strong&gt;</c> — and the title is a styled <c>&lt;a&gt;</c>, so a mapper that reads
+    /// only tags, or that handles links before reading style, drops it.</para>
+    /// </summary>
+    [Fact]
+    public void CardTitle_ArrivesBold_ThoughItsEmphasisIsInlineCssOnALink()
+    {
+        var card = MarkupNode.El("td")
+            .Add(MarkupNode.El("a").With("href", "https://portal.example.com/X")
+                .Style(MarkupStyles.CardTitle)
+                .Add(MarkupNode.Text("Underwriting")))
+            .Add(MarkupNode.El("div").Style(MarkupStyles.CardDescription)
+                .Add(MarkupNode.Text("How risk is priced.")));
+
+        var inlines = MarkupToDocument.Flatten(card);
+
+        var title = inlines.OfType<LinkInline>()
+            .SelectMany(l => l.Content.OfType<TextInline>())
+            .Single(t => t.Text == "Underwriting");
+        title.Bold.Should().BeTrue("MarkupStyles.CardTitle declares font-weight:700");
+
+        inlines.OfType<TextInline>().Single(t => t.Text.StartsWith("How risk"))
+            .Bold.Should().BeFalse("the description is body text and must stay unemphasised");
+    }
+
+    [Theory]
+    [InlineData("font-weight:700", true)]
+    [InlineData("font-weight:bold", true)]
+    [InlineData("font-weight: 600", true)]
+    [InlineData("font-weight:400", false)]
+    [InlineData("color:#333", false)]
+    public void InlineCssBoldIsRecognised_ForTheWeightsEmailMarkupActuallyUses(string css, bool bold)
+    {
+        var inlines = MarkupToDocument.Flatten(
+            MarkupNode.El("span").Style(css).Add(MarkupNode.Text("x")));
+
+        inlines.OfType<TextInline>().Single().Bold.Should().Be(bold);
+    }
+
     [Fact]
     public void ShortFinalRow_IsPadded_SoColumnsStayAligned()
     {
