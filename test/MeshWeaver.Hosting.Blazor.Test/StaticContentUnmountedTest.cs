@@ -304,6 +304,62 @@ public class StaticContentUnmountedTest(ITestOutputHelper output) : MonolithMesh
         body.Should().Be(SecretBody);
     }
 
+    /// <summary>
+    /// 🚨 THE ASSERTION THAT WAS MISSING. Every other <c>/api/content</c> test in this file passes
+    /// <c>asAdmin: true</c>, so the whole suite would stay green if the route stopped denying
+    /// anonymous callers entirely — the one regression that re-opens issue #587, just one route
+    /// over. <c>/static</c> is pinned against the unauthenticated caller; the route the content
+    /// MOVED to was not.
+    ///
+    /// <para>The deny is not a property of the endpoint — it is the owning hub's
+    /// <c>[RequiresPermission(Read)]</c> on the <c>GetDataRequest</c> that reads the collection
+    /// config. A denial arrives as a <c>DeliveryFailure</c>, which is not a <c>GetDataResponse</c>,
+    /// so the config reads back null and the route 404s without ever opening the file. That chain
+    /// is load-bearing and has no test holding it in place.</para>
+    ///
+    /// <para><b>The chain is conditional</b>, which is the real reason to pin it:
+    /// <c>AccessControlPipeline</c> skips every check when no <c>EffectivePermissionsDelegate</c>
+    /// is registered (<c>rlsDisabled</c>), and unlike <c>AnonymousGate</c> — which returns false
+    /// outright in that state precisely because the default evaluator would answer
+    /// <c>Permission.All</c> — the content route carries no equivalent fail-closed probe. This test
+    /// runs on a base that DOES register RLS, so it pins the enforced path.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task ContentRoute_RefusesAnAnonymousCaller()
+    {
+        var response = await GetAsync(
+            $"{ContentCollectionsExtensions.ContentFileRoutePrefix}/{PrivateSpace}/{SecretFile}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "an unauthenticated caller holds no Read on the owning node, so the collection config " +
+            "must not resolve — this is the #587 hole re-checked on the route content moved to");
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        body.Should().NotContain(SecretBody);
+        body.Should().NotContain("Access denied",
+            "the denial reason is server-side diagnostics — echoing it hands an anonymous caller " +
+            "the permission model, the principal and proof the node exists");
+        body.Should().NotContain(PrivateSpace);
+    }
+
+    /// <summary>
+    /// 🚨 THE ENUMERATION ORACLE. A refused read and a missing one must be BYTE-indistinguishable
+    /// from outside. While the denial surfaced as <c>500</c> and a genuine miss as <c>404</c>, the
+    /// status code alone told an unauthenticated prober which partitions exist and are private —
+    /// map the whole mesh with no credential and one request per guess. That is the enumeration
+    /// half of #587, and no assertion covered it because every other content test is an admin.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task ContentRoute_DeniedAndMissing_AreIndistinguishable()
+    {
+        var denied = await GetAsync(
+            $"{ContentCollectionsExtensions.ContentFileRoutePrefix}/{PrivateSpace}/{SecretFile}");
+        var missing = await GetAsync(
+            $"{ContentCollectionsExtensions.ContentFileRoutePrefix}/NoSuchNodeAtAll/{SecretFile}");
+
+        denied.StatusCode.Should().Be(missing.StatusCode,
+            "a node the caller may not read must answer exactly like a node that does not exist");
+    }
+
     /// <summary>Gated content is never shared-cacheable: a CDN or proxy that saw one authorized
     /// fetch would otherwise keep replaying it to callers the owning hub denies.</summary>
     [Fact(Timeout = 30000)]

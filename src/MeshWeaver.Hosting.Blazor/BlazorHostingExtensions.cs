@@ -388,8 +388,30 @@ public static class BlazorHostingExtensions
             // No await on hub round-trips — chain via SelectMany; deadlock surface
             // (await pathResolver.ResolvePath / hub.Observe) eliminated.
             return ResolveContentFile(context, mainHub, path, caller)
-                .Catch<IResult, Exception>(ex =>
-                    Observable.Return(Results.Problem($"Error retrieving content: {ex.Message}")))
+                // 🚨 A DENIAL IS NOT AN ERROR — it must be indistinguishable from absence.
+                // The owning hub refuses a GetDataRequest the caller lacks Read on by posting a
+                // DeliveryFailure, which hub.Observe surfaces through onError as a
+                // DeliveryFailureException. That is the ONLY way a denial arrives here: the
+                // documented "config reads back null ⇒ 404" path never runs for one, because the
+                // stream faults instead of delivering null. Catching it as a generic error gave
+                // BOTH of the following to any unauthenticated caller:
+                //
+                //   • a 500-vs-404 ORACLE — "500" meant the node exists and you are denied, "404"
+                //     meant no such file, so a prober could map every private partition by URL
+                //     alone, which is the enumeration half of the #587 hole on the route the
+                //     content MOVED to; and
+                //   • the denial text itself, verbatim, in the problem body:
+                //     "Access denied: user 'Anonymous' lacks Read permission on 'Doc'" — the
+                //     permission model, the principal and the node's existence, unauthenticated.
+                //
+                // So a refused read answers exactly like a missing one: 404, no detail. The
+                // AccessControlPipeline has already logged the real reason server-side, which is
+                // where it belongs. Genuine faults (transport, IO) keep Problem — they are not
+                // caller-triggerable this way — but never echo the exception text.
+                .Catch<IResult, Exception>(ex => Observable.Return(
+                    ex is DeliveryFailureException
+                        ? Results.NotFound()
+                        : Results.Problem("Error retrieving content")))
                 .FirstAsync()
                 .ToTask(context.RequestAborted);
         });
