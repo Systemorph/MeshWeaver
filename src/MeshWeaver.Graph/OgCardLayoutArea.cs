@@ -128,17 +128,31 @@ public static class OgCardLayoutArea
         if (value.StartsWith("urls=", StringComparison.OrdinalIgnoreCase))
             return value["urls=".Length..]
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(Uri.UnescapeDataString)
+                .Select(SafeUnescape)
                 .Where(entry => !string.IsNullOrWhiteSpace(entry))
                 .ToImmutableList();
 
         if (value.StartsWith("url=", StringComparison.OrdinalIgnoreCase))
         {
-            var single = Uri.UnescapeDataString(value["url=".Length..].Trim());
+            var single = SafeUnescape(value["url=".Length..].Trim());
             return string.IsNullOrWhiteSpace(single) ? [] : [single];
         }
 
-        return [Uri.UnescapeDataString(value)];
+        return [SafeUnescape(value)];
+    }
+
+    /// <summary>Unescapes a user-authored target defensively: a malformed percent sequence in
+    /// markdown must degrade to the raw token, never fault the whole area render.</summary>
+    private static string SafeUnescape(string value)
+    {
+        try
+        {
+            return Uri.UnescapeDataString(value);
+        }
+        catch (UriFormatException)
+        {
+            return value;
+        }
     }
 
     private static bool IsExternal(string target) =>

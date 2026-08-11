@@ -44,7 +44,11 @@ public sealed class OpenGraphPreviewService
     // Shared fallback when no IHttpClientFactory is registered — HttpClient is designed to be
     // long-lived and shared (per Microsoft guidance); a per-call `new HttpClient()` leaks sockets.
     // Immutable shared resource, not a cache, so it does not fall under the no-static-state rule.
-    private static readonly HttpClient SharedHttp = new();
+    // Auto-redirects are OFF, matching the named-client registration in AddGraph: a public target
+    // 302-ing to a private address must not be followed (a redirecting page just gets the
+    // URL-only fallback card — authors embed the canonical URL).
+    private static readonly HttpClient SharedHttp =
+        new(new HttpClientHandler { AllowAutoRedirect = false });
 
     private readonly Func<IIoPool> pool;
     private readonly Func<HttpClient> http;
@@ -111,6 +115,23 @@ public sealed class OpenGraphPreviewService
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(FetchTimeout);
+
+        // 🚨 Second SSRF gate, DNS-side: IsFetchable vets LITERAL addresses, but a hostname that
+        // RESOLVES to a private/link-local address (wildcard DNS like 169.254.169.254.nip.io)
+        // would pass it. Resolve here — already off-hub on the Http pool — and refuse when ANY
+        // resolved address is private: the request never leaves the process. (A rebinding race
+        // between this resolve and the client's own remains theoretically possible; the practical
+        // wildcard-DNS bypass is closed.)
+        if (!allowLoopback
+            && Uri.TryCreate(url, UriKind.Absolute, out var target)
+            && !IPAddress.TryParse(target.Host.Trim('[', ']'), out _))
+        {
+            var addresses = await System.Net.Dns.GetHostAddressesAsync(target.Host, cts.Token)
+                .ConfigureAwait(false);
+            if (addresses.Length == 0 || addresses.Any(IsPrivateOrLocal))
+                throw new InvalidOperationException(
+                    $"Refusing to fetch '{target.Host}': resolves to a private or local address.");
+        }
 
         // Per-REQUEST headers — never on the client: it can be the process-wide SharedHttp.
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
