@@ -36,6 +36,17 @@ public sealed class DynamicTypePreWarmerHostedService(
     /// <summary>Config key that opts a deployment into the startup warm-up (default: off).</summary>
     public const string EnabledConfigKey = "PreWarm:DynamicTypes";
 
+    /// <summary>
+    /// Config key overriding the per-type warm budget, as a <see cref="TimeSpan"/> string
+    /// (e.g. <c>"00:00:30"</c>). Default: <see cref="DynamicTypePreWarmer.DefaultPerTypeBudget"/>.
+    /// The budget only bites on types that never settle — a healthy compile is seconds — so this
+    /// knob bounds how long a WEDGED type can hold the sweep, per type, without a code change:
+    /// on 2026-08-11 (memex-cloud) every remaining compile timed out cross-silo at the full
+    /// default 5 minutes and 67 pending types priced the sweep at ~5.5 hours, with no way to
+    /// shorten it from the outside.
+    /// </summary>
+    public const string PerTypeBudgetConfigKey = "PreWarm:PerTypeBudget";
+
     private IDisposable? _warmSubscription;
     private IDisposable? _startedRegistration;
 
@@ -76,6 +87,23 @@ public sealed class DynamicTypePreWarmerHostedService(
             return;
         }
 
+        // Optional per-type budget override — raw string + TryParse like EnabledConfigKey, so a
+        // malformed value degrades to the default rather than faulting the warm-up. Zero/negative
+        // is refused for the same reason: a budget that can never elapse into a verdict would turn
+        // one wedged type into an eternal sweep.
+        TimeSpan? perTypeBudget = null;
+        var budgetRaw = services.GetService<IConfiguration>()?[PerTypeBudgetConfigKey];
+        if (!string.IsNullOrWhiteSpace(budgetRaw))
+        {
+            if (TimeSpan.TryParse(budgetRaw, out var parsed) && parsed > TimeSpan.Zero)
+                perTypeBudget = parsed;
+            else
+                logger.LogWarning(
+                    "DynamicTypePreWarmer: ignoring invalid {Key}='{Value}' — using the default "
+                    + "per-type budget {Default}",
+                    PerTypeBudgetConfigKey, budgetRaw, DynamicTypePreWarmer.DefaultPerTypeBudget);
+        }
+
         var startedAt = DateTimeOffset.UtcNow;
         var compiled = 0;
         var alreadyBaked = 0;
@@ -83,6 +111,7 @@ public sealed class DynamicTypePreWarmerHostedService(
         var timedOut = 0;
         var skipped = 0;
         var faulted = 0;
+        var contentBroken = 0;
 
         // The readiness gate reads this. Resolved (not required) so a host that never called
         // AddNodeTypeBakeGate simply warms without gating — the warmer stays a latency optimisation
@@ -92,7 +121,7 @@ public sealed class DynamicTypePreWarmerHostedService(
 
         logger.LogInformation("DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs");
         _warmSubscription = DynamicTypePreWarmer
-            .WarmDynamicTypes(mesh, logger)
+            .WarmDynamicTypes(mesh, logger, perTypeBudget)
             .Subscribe(
                 outcome =>
                 {
@@ -111,6 +140,10 @@ public sealed class DynamicTypePreWarmerHostedService(
                         // it in the health payload, while UpstreamFailed gates.)
                         case PreWarmStatus.UpstreamFailed:
                         case PreWarmStatus.UpstreamUnevaluated: Interlocked.Increment(ref skipped); break;
+                        // Broken by deleted CONTENT, not by this image — the gate files these
+                        // under ContentBroken (never gating); the count keeps them visible here.
+                        case PreWarmStatus.NoSources:
+                        case PreWarmStatus.UpstreamContentBroken: Interlocked.Increment(ref contentBroken); break;
                         default: Interlocked.Increment(ref faulted); break;
                     }
                 },
@@ -131,10 +164,11 @@ public sealed class DynamicTypePreWarmerHostedService(
                     var elapsed = DateTimeOffset.UtcNow - startedAt;
                     logger.LogInformation(
                         "DynamicTypePreWarmer: warm-up complete in {Elapsed} — compiled={Compiled} alreadyBaked={AlreadyBaked} "
-                        + "compileErrors={Errored} timedOut={TimedOut} skipped={Skipped} faulted={Faulted}",
+                        + "compileErrors={Errored} timedOut={TimedOut} skipped={Skipped} contentBroken={ContentBroken} faulted={Faulted}",
                         elapsed,
                         Volatile.Read(ref compiled), Volatile.Read(ref alreadyBaked), Volatile.Read(ref errored),
-                        Volatile.Read(ref timedOut), Volatile.Read(ref skipped), Volatile.Read(ref faulted));
+                        Volatile.Read(ref timedOut), Volatile.Read(ref skipped), Volatile.Read(ref contentBroken),
+                        Volatile.Read(ref faulted));
 
                     // MarkComplete keeps a recorded regression red — completion is not absolution.
                     gate?.MarkComplete(

@@ -1,3 +1,4 @@
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -257,4 +258,126 @@ public class NodeTypeBakeGateStateTest
     [Fact]
     public void OutcomeWasHealthyBeforeBake_DefaultsToTrue() =>
         new PreWarmOutcome("A", PreWarmStatus.Compiled).WasHealthyBeforeBake.Should().BeTrue();
+
+    /// <summary>
+    /// 🚨 A CONTENT verdict is not an IMAGE verdict. A type whose declared source queries match
+    /// nothing any more — its sources deleted out from under it — fails on EVERY image, so gating
+    /// on it freezes the fleet exactly like the abandoned-Error case the WasHealthyBeforeBake rule
+    /// exists for. Lived through on 2026-08-10: four KmuBasics/* types (their course re-installed
+    /// under a new id, the type nodes left behind) stalled memex-cloud's self-update across two
+    /// successive images, while the stuck-but-baking pod wedged the cluster's routing.
+    /// </summary>
+    [Fact]
+    public void NoSourcesOnAPreviouslyHealthyType_DoesNotGate()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome(
+            "KmuBasics/Buchungsjournal", PreWarmStatus.NoSources, "0 source nodes matched")
+        {
+            WasHealthyBeforeBake = true
+        });
+        state.MarkComplete("done");
+
+        state.Phase.Should().Be(BakePhase.Complete);
+        state.Regressions.Should().BeEmpty();
+        state.ContentBroken.Keys.Should().Contain("KmuBasics/Buchungsjournal");
+    }
+
+    /// <summary>
+    /// The depth-1 rule, content edition: leniency on the direct NoSources verdict is worth
+    /// nothing if the identical condition gates through the dependents as UpstreamFailed.
+    /// </summary>
+    [Fact]
+    public void UpstreamContentBrokenOnAPreviouslyHealthyType_DoesNotGate()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome(
+            "Dependent", PreWarmStatus.UpstreamContentBroken, "blocked by KmuBasics/Buchungsjournal")
+        {
+            WasHealthyBeforeBake = true
+        });
+        state.MarkComplete("done");
+
+        state.Phase.Should().Be(BakePhase.Complete);
+        state.Regressions.Should().BeEmpty();
+        state.ContentBroken.Keys.Should().Contain("Dependent");
+    }
+
+    /// <summary>Non-blocking must not mean invisible — the health payload names what content broke.</summary>
+    [Fact]
+    public void ContentBrokenTypes_AreNamedInTheHealthDetail()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome("Gone/Type", PreWarmStatus.NoSources)
+        {
+            WasHealthyBeforeBake = true
+        });
+        state.MarkComplete("all good");
+
+        state.Detail.Should().Contain("Gone/Type").And.Contain("content-broken");
+    }
+
+    /// <summary>A content-broken type must not dilute a REAL regression happening beside it.</summary>
+    [Fact]
+    public void CompileErrorStillGates_EvenAlongsideAContentBrokenType()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome("Gone/Type", PreWarmStatus.NoSources)
+        {
+            WasHealthyBeforeBake = true
+        });
+        state.MarkOutcome(Failed("Broken/Type", wasHealthy: true));
+        state.MarkComplete("done");
+
+        state.Phase.Should().Be(BakePhase.Regressed);
+        state.Regressions.Keys.Should().Equal("Broken/Type");
+    }
+
+    /// <summary>
+    /// The classifier that feeds the buckets above: declared source queries + an EXPLICITLY empty
+    /// live snapshot = the sources are gone = <see cref="PreWarmStatus.NoSources"/>.
+    /// </summary>
+    [Fact]
+    public void ClassifyCompileFailure_DeclaredSourcesWithEmptySnapshot_IsNoSources() =>
+        DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
+        {
+            Sources = ["namespace:Source scope:subtree"],
+            CurrentSourceVersions = new Dictionary<string, long>()
+        }).Should().Be(PreWarmStatus.NoSources);
+
+    /// <summary>
+    /// 🚨 A NULL snapshot is "the watcher never seeded", NOT "the sources are gone" — the sweep
+    /// does not actually know, so the failure keeps gating. A real regression must not hide
+    /// behind an unseeded snapshot.
+    /// </summary>
+    [Fact]
+    public void ClassifyCompileFailure_NullSnapshot_StaysCompileError() =>
+        DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
+        {
+            Sources = ["namespace:Source scope:subtree"]
+        }).Should().Be(PreWarmStatus.CompileError);
+
+    /// <summary>Sources still matching = the failure is about the CODE on this image. It gates.</summary>
+    [Fact]
+    public void ClassifyCompileFailure_MatchedSources_StaysCompileError() =>
+        DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
+        {
+            Sources = ["namespace:Source scope:subtree"],
+            CurrentSourceVersions = new Dictionary<string, long> { ["P/Source/A"] = 42 }
+        }).Should().Be(PreWarmStatus.CompileError);
+
+    /// <summary>
+    /// A type that declares NO source queries compiles from its Configuration alone — an empty
+    /// snapshot is its normal state, so a failure is a verdict about this image and gates.
+    /// </summary>
+    [Fact]
+    public void ClassifyCompileFailure_NoDeclaredSources_StaysCompileError() =>
+        DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
+        {
+            CurrentSourceVersions = new Dictionary<string, long>()
+        }).Should().Be(PreWarmStatus.CompileError);
 }
