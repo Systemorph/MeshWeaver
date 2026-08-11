@@ -117,7 +117,7 @@ public class AccessService
     /// null is deliberate: identity resolution FAILS CLOSED rather than handing back whichever
     /// user happened to touch the process last. Code that needs an identity across such a hop
     /// must carry it explicitly — <c>delivery.AccessContext</c>, <c>ICircuitContextAccessor.UserContext</c>
-    /// (per-circuit), or <see cref="GetStandingIdentity"/> (per-hub owner injection).</para>
+    /// (per-circuit), or <see cref="GetStandingIdentity(IMessageHub)"/> (per-hub owner injection).</para>
     ///
     /// In Orleans grains, this is always null (identity flows per-message only).
     /// </summary>
@@ -246,7 +246,22 @@ public class AccessService
     /// <see cref="SetStandingIdentity"/>, or null when none was established.
     /// </summary>
     public AccessContext? GetStandingIdentity(IMessageHub hub)
-        => standingIdentities.TryGetValue(hub.Address.ToFullString(), out var ctx) ? ctx : null;
+        => GetStandingIdentity(hub.Address.ToFullString());
+
+    /// <summary>
+    /// Returns the standing owner identity recorded for the hub at <paramref name="address"/>,
+    /// or null when none was established.
+    ///
+    /// <para>The address overload is what lets a stream resolve the identity of the node it
+    /// belongs to rather than of whichever hub happens to be running the continuation: a deferred
+    /// data-source sync write executes on the SYNC hub, not on the owning per-node hub, so looking
+    /// the owner up by the running hub misses. The stream's <c>Owner</c> address is the node path
+    /// that owner injection registered under.</para>
+    /// </summary>
+    public AccessContext? GetStandingIdentity(string? address)
+        => !string.IsNullOrEmpty(address) && standingIdentities.TryGetValue(address, out var ctx)
+            ? ctx
+            : null;
 
     /// <summary>
     /// Temporarily switches the access context. Restores the previous value when disposed.
