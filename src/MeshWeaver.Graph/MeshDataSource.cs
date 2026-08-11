@@ -810,10 +810,11 @@ public static class MeshDataSourceExtensions
     /// this hub). Keeping both on the same lookup guarantees "served static" ⇔ "not
     /// auto-persisted" can never drift apart.</para>
     /// </summary>
+    /// <remarks>Thin alias over <see cref="StaticNodeProviderExtensions.FindServedStaticNode"/> —
+    /// the ONE definition, shared with the create path and the plugin installer's shadowing
+    /// pre-flight so every "who serves this path" seam answers identically (#1209).</remarks>
     internal static MeshNode? FindServedStaticNode(IServiceProvider serviceProvider, string hubPath)
-        => serviceProvider.EnumerateStaticNodes()
-            .FirstOrDefault(n => !n.IsDefinitionOnly
-                && string.Equals(n.Path, hubPath, StringComparison.OrdinalIgnoreCase));
+        => serviceProvider.FindServedStaticNode(hubPath);
 
     /// <summary>
     /// Emits a diagnostic that can NEVER take down its caller — the ONLY sanctioned way to log from
