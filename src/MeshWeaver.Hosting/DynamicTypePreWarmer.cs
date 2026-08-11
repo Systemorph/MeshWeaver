@@ -53,6 +53,36 @@ public enum PreWarmStatus
     /// Only "no answer" propagates as "no answer".</para>
     /// </summary>
     UpstreamUnevaluated,
+    /// <summary>
+    /// The compile settled at Error AND the type's declared source queries currently match ZERO
+    /// Code nodes (<see cref="NodeTypeDefinition.CurrentSourceVersions"/> is EXPLICITLY empty) —
+    /// the sources were deleted or moved out from under the type. This is a CONTENT verdict, not
+    /// an image verdict: which nodes a mesh query matches is a property of the mesh, not of the
+    /// framework being rolled out, so no image caused it and no rollout can fix it.
+    ///
+    /// <para>🚨 This member exists because on 2026-08-10 four such types (KmuBasics/* — their
+    /// Source subtrees removed when the course was re-installed under a new id, the type nodes
+    /// left behind) were counted as image regressions and stalled memex-cloud's self-update for a
+    /// day, across two successive images. A failure the image cannot influence must never hold
+    /// the image out of rotation — the same deploy-freeze rule as
+    /// <see cref="PreWarmOutcome.WasHealthyBeforeBake"/>, arriving through content deletion
+    /// instead of an abandoned Error record.</para>
+    ///
+    /// <para>Deliberately narrow: only an EXPLICITLY empty snapshot reclassifies. A null snapshot
+    /// means the sources watcher never seeded, so the sweep does not actually know the sources are
+    /// gone — that stays <see cref="CompileError"/>, because a real regression must not hide
+    /// behind an unseeded snapshot.</para>
+    /// </summary>
+    NoSources,
+    /// <summary>
+    /// NOT ATTEMPTED, and content-broken one hop up: a NodeType this one draws sources from is
+    /// <see cref="NoSources"/>-broken, so this type cannot build either — for the same
+    /// content-not-image reason, which must propagate AS ITSELF rather than as a gating
+    /// <see cref="UpstreamFailed"/>. This is the same depth-1 hole
+    /// <see cref="UpstreamUnevaluated"/> closes for timeouts: leniency on the direct outcome is
+    /// worth nothing if the identical condition gates through the dependents.
+    /// </summary>
+    UpstreamContentBroken,
     /// <summary>The warm subscription faulted (best-effort — the lazy path still works).</summary>
     Faulted
 }
@@ -395,6 +425,10 @@ public static class DynamicTypePreWarmer
         // reads them as they stand WHEN ITS TURN COMES, not when the chain was built.
         var verdictFailed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var unevaluated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Third cascade, same reasoning one axis over: a type whose sources were DELETED
+        // (PreWarmStatus.NoSources) is a verdict — but a CONTENT verdict, and its dependents must
+        // inherit "content-broken", not the gating UpstreamFailed. See PreWarmStatus.NoSources.
+        var contentBroken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // Concat, never Merge: the next type is SUBSCRIBED only after the previous one
         // has completed, so "dependencies first" is structural rather than a convention.
@@ -416,20 +450,26 @@ public static class DynamicTypePreWarmer
 
                     // A real verdict upstream wins over a merely-unevaluated one: if ANY dependency
                     // actually failed to compile, this type is genuinely blocked and must gate,
-                    // regardless of some other dependency having also timed out.
+                    // regardless of some other dependency having also timed out. A content-broken
+                    // upstream sits between the two: it IS a verdict (so it beats "I don't know"),
+                    // but a content verdict — its dependents inherit content-broken, never gating.
                     var blocker = NodeTypeDependencyGraph.FirstBlockedBy(p, dependencies, verdictFailed);
-                    var unevaluatedBlocker = blocker is null
+                    var contentBlocker = blocker is null
+                        ? NodeTypeDependencyGraph.FirstBlockedBy(p, dependencies, contentBroken)
+                        : null;
+                    var unevaluatedBlocker = blocker is null && contentBlocker is null
                         ? NodeTypeDependencyGraph.FirstBlockedBy(p, dependencies, unevaluated)
                         : null;
                     var missingBytes = bytesMissing.Contains(p);
-                    if (blocker is not null || unevaluatedBlocker is not null)
+                    if (blocker is not null || contentBlocker is not null || unevaluatedBlocker is not null)
                     {
-                        var isVerdict = blocker is not null;
-                        var named = blocker ?? unevaluatedBlocker!;
-                        var outcome = isVerdict
-                            ? PreWarmStatus.UpstreamFailed
+                        var named = blocker ?? contentBlocker ?? unevaluatedBlocker!;
+                        var outcome = blocker is not null ? PreWarmStatus.UpstreamFailed
+                            : contentBlocker is not null ? PreWarmStatus.UpstreamContentBroken
                             : PreWarmStatus.UpstreamUnevaluated;
-                        (isVerdict ? verdictFailed : unevaluated).Add(p);
+                        (blocker is not null ? verdictFailed
+                            : contentBlocker is not null ? contentBroken
+                            : unevaluated).Add(p);
                         // {Outcome} carries WHICH cascade this is as a queryable token — the two
                         // differ in whether they may stall a rollout, so a log that blurred them
                         // would hide the thing an operator most needs to know.
@@ -458,10 +498,14 @@ public static class DynamicTypePreWarmer
                         .Do(o =>
                         {
                             // A timeout is not a verdict — route it to `unevaluated` so its
-                            // dependents inherit "no answer", not "it broke". Everything else that
-                            // missed a usable build (CompileError, Faulted) is a verdict.
+                            // dependents inherit "no answer", not "it broke". Deleted sources are
+                            // a CONTENT verdict — dependents inherit content-broken, never gating.
+                            // Everything else that missed a usable build (CompileError, Faulted)
+                            // is an image verdict.
                             if (o.Status is PreWarmStatus.TimedOut)
                                 unevaluated.Add(p);
+                            else if (o.Status is PreWarmStatus.NoSources)
+                                contentBroken.Add(p);
                             else if (!o.ReachedUsableBuild)
                                 verdictFailed.Add(p);
                         });
@@ -541,7 +585,7 @@ public static class DynamicTypePreWarmer
                                     return d.CompilationStatus switch
                                     {
                                         CompilationStatus.Error => new PreWarmOutcome(
-                                            typePath, PreWarmStatus.CompileError, d.CompilationError),
+                                            typePath, ClassifyCompileFailure(d), d.CompilationError),
                                         // The rebuild never reported an answer — not a
                                         // compile failure, so never labelled one.
                                         CompilationStatus.Unavailable => new PreWarmOutcome(
@@ -593,6 +637,20 @@ public static class DynamicTypePreWarmer
         succeeded is { } s && (baseline is not { } b || s > b);
 
     /// <summary>
+    /// Classify a compile that settled at Error. A type that DECLARES source queries whose live
+    /// snapshot (<see cref="NodeTypeDefinition.CurrentSourceVersions"/>, maintained by the
+    /// per-NodeType sources watcher) is EXPLICITLY empty is broken by CONTENT — its sources were
+    /// deleted from the mesh — and reports <see cref="PreWarmStatus.NoSources"/>; see that member
+    /// for why it must not gate a rollout. Anything else is
+    /// <see cref="PreWarmStatus.CompileError"/>: in particular a NULL snapshot (watcher never
+    /// seeded) stays a gating compile error, so a real regression cannot hide behind "not seeded".
+    /// </summary>
+    public static PreWarmStatus ClassifyCompileFailure(NodeTypeDefinition d) =>
+        d.Sources is { Count: > 0 } && d.CurrentSourceVersions is { Count: 0 }
+            ? PreWarmStatus.NoSources
+            : PreWarmStatus.CompileError;
+
+    /// <summary>
     /// Activate one dynamic NodeType's hub by subscribing to its own MeshNode stream —
     /// which routes a SubscribeRequest to the owning hub, activating it and firing the
     /// compile watcher's framework-stale / first-build kickoff. Holds the subscription
@@ -624,7 +682,7 @@ public static class DynamicTypePreWarmer
                         return d.CompilationStatus switch
                         {
                             CompilationStatus.Error => new PreWarmOutcome(
-                                typePath, PreWarmStatus.CompileError, d.CompilationError),
+                                typePath, ClassifyCompileFailure(d), d.CompilationError),
                             // TimedOut, never CompileError: the type is not broken, its
                             // state simply never came back.
                             CompilationStatus.Unavailable => new PreWarmOutcome(
