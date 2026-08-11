@@ -90,6 +90,47 @@ public static class JsonSynchronizationStream
         || objectId.StartsWith("activity/", StringComparison.OrdinalIgnoreCase)
         || objectId.StartsWith("portal/", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// The identity a remote subscribe runs under, resolved from the ambient
+    /// <see cref="AccessService"/> context. <see cref="Id"/> is the value stamped on
+    /// <c>SubscribeRequest.Identity</c>; <see cref="RealUser"/> is the captured context to
+    /// re-apply around the post (null ⇒ the subscribe runs as System).
+    /// </summary>
+    internal readonly record struct RemoteSubscribeIdentity(string Id, AccessContext? RealUser)
+    {
+        /// <summary>True when a genuine end-user identity was resolved (not the System fallback).</summary>
+        public bool IsRealUser => RealUser is not null;
+    }
+
+    /// <summary>
+    /// Resolves the identity that <see cref="CreateExternalClient{TReduced,TReference}"/> will
+    /// stamp on its <c>SubscribeRequest</c>.
+    ///
+    /// <para>🚨 This is ALSO the identity component of <c>Workspace._remoteStreamCache</c>'s key.
+    /// The owner applies its RLS gate ONCE, at subscribe time, for exactly this identity — so the
+    /// resulting stream carries that identity's permission view for its whole life. Cache key and
+    /// subscribe identity must therefore be computed from the SAME function: if they ever drift,
+    /// one identity's stream is served to another, which is a cross-user information disclosure
+    /// (and, in the other ordering, a refused stream handed to a permitted reader whose view then
+    /// renders empty). Both directions are pinned by
+    /// <c>MeshWeaver.Security.Test/RemoteStreamCacheIdentityTest</c>.</para>
+    ///
+    /// <para>Prefer the REAL user when the ambient AccessContext identifies one (the typical
+    /// Blazor-circuit / API-token path). Fall back to System ONLY when AsyncLocal carries no user
+    /// — empty, or a hub-shaped principal (<c>sync/</c>, <c>mesh/</c>, <c>node/</c>, …) that leaked
+    /// from a workspace emission scheduler.</para>
+    /// </summary>
+    internal static RemoteSubscribeIdentity ResolveSubscribeIdentity(AccessService? accessService)
+    {
+        var ambient = accessService?.Context ?? accessService?.CircuitContext;
+        var isRealUser = ambient is not null
+            && !string.IsNullOrEmpty(ambient.ObjectId)
+            && !LooksLikeHubPrincipal(ambient.ObjectId);
+        return isRealUser
+            ? new RemoteSubscribeIdentity(ambient!.ObjectId!, ambient)
+            : new RemoteSubscribeIdentity(SystemUserId, null);
+    }
+
     private static ILogger GetLogger(IServiceProvider serviceProvider)
     {
         try
@@ -311,11 +352,12 @@ public static class JsonSynchronizationStream
         // for the page owner. Per-user identity must flow into the SubscribeRequest
         // so the owner's RLS can enforce per-user reads; System fallback exists
         // only for the bare-infrastructure paths where no user identity exists.
-        var ambient = accessService?.Context ?? accessService?.CircuitContext;
-        var isRealUser = ambient is not null
-            && !string.IsNullOrEmpty(ambient.ObjectId)
-            && !LooksLikeHubPrincipal(ambient.ObjectId);
-        var identityForSubscribe = isRealUser ? ambient!.ObjectId : SystemUserId;
+        // 🚨 Resolved through the SHARED helper so this identity is bit-for-bit the one
+        // Workspace._remoteStreamCache keyed this stream under — see ResolveSubscribeIdentity.
+        var subscribeIdentity = ResolveSubscribeIdentity(accessService);
+        var ambient = subscribeIdentity.RealUser;
+        var isRealUser = subscribeIdentity.IsRealUser;
+        var identityForSubscribe = subscribeIdentity.Id;
 
         // Keep-alive machinery (the 45s heartbeat + the change-feed resubscribe) for a
         // REMOTE owner is collected here so a TERMINAL failure of the initial
