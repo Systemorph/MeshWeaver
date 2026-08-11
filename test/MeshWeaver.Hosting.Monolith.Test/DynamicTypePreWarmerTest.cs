@@ -318,6 +318,9 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
     /// write lags it (the owner's debounced persistence sampler), so a test that stages state
     /// for the sweep after watching only the live stream races the very read the sweep makes:
     /// the probe would see a pre-stamp record and re-bake a type the test believed was settled.
+    ///
+    /// <para>🚨 A storage poll STAGES NOTHING — it only observes. See <see cref="Precompile"/>:
+    /// polling storage for a compile nobody triggered waits forever.</para>
     /// </summary>
     private Task<NodeTypeDefinition> WhenPersisted(
         string path, Func<NodeTypeDefinition, bool> predicate, TimeSpan timeout)
@@ -334,11 +337,41 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// Stages "the share lost its bytes" — the cleared / remounted assembly-cache state the
-    /// level-triggered probe exists to catch. Every previously-compiled type reports
-    /// <see cref="BakeState.BytesMissing"/> on the next probe, so the sweep must genuinely
-    /// (re)build it: <see cref="PreWarmStatus.AlreadyBaked"/> is impossible, which is what makes
-    /// the batch-compile assertions deterministic instead of a race against create-time compiles.
+    /// 🚨 Drives a NodeType's FIRST compile the only way the framework ever drives one — by
+    /// ACTIVATING its own hub — and returns once that compile has settled BOTH on the live
+    /// stream and in storage.
+    ///
+    /// <para>There is no such thing as a "create-time compile". Creating a NodeType node writes
+    /// a record; the compile watcher and its first-build kickoff are installed by
+    /// <c>NodeTypeCompilationHelpers.InstallCompileWatcher</c> from the per-NodeType hub's
+    /// initialization hook, so they exist only once that hub is ACTIVATED — which is what
+    /// subscribing to the node's stream does (the same activation
+    /// <see cref="DynamicTypePreWarmer"/>'s activation-driven sweep performs, and the very one
+    /// #1207's batch mode removes). <see cref="WhenPersisted"/> reads the storage adapter
+    /// directly and therefore activates nothing: polling it for a compile no one triggered can
+    /// only time out, which is exactly how these tests used to hang before reaching the batch
+    /// path at all.</para>
+    ///
+    /// <para>So: subscribe to the LIVE stream first (that is the trigger AND the settle), then
+    /// wait for the durable record, because the sweep under test enumerates persistence and the
+    /// owner's debounced persistence sampler lags the stream.</para>
+    /// </summary>
+    private async Task<NodeTypeDefinition> Precompile(
+        string path, Func<NodeTypeDefinition, bool> settled)
+    {
+        await WhenDefinition(path, settled, TimeSpan.FromSeconds(60));
+        return await WhenPersisted(path, settled, TimeSpan.FromSeconds(30));
+    }
+
+    /// <summary>
+    /// Empties the shared assembly store this test class compiles into, so a type this test
+    /// has not itself compiled CANNOT come back <see cref="PreWarmStatus.AlreadyBaked"/>.
+    ///
+    /// <para>The store root is per test CLASS (see <c>MonolithMeshTestBase.AssemblyStoreRoot</c>)
+    /// and its keys are <c>(typePath, version)</c> under the live framework tag — so a sibling
+    /// <c>[Fact]</c>, or a previous process that happened to reuse this pid, can leave bytes
+    /// that make the probe report a type baked before this test compiled anything. Clearing is
+    /// a PRECONDITION, not a stage: it makes "the batch really built this" deterministic.</para>
     /// </summary>
     private void ClearAssemblyStore()
     {
@@ -399,22 +432,12 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             Content = new NodeTypeDefinition { Configuration = "config => config" }
         }).Should().Within(30.Seconds()).Emit();
 
-        // Let the create-time compiles SETTLE — on the PERSISTED record, because that is what
-        // the sweep's enumeration reads — before staging: the batch sweep must be the only
-        // writer while its assertions run.
-        var baselines = new System.Collections.Generic.Dictionary<string, DateTimeOffset?>();
-        foreach (var path in new[] { upstream, dependent, unrelated })
-        {
-            var settled = await WhenPersisted(path,
-                d => d.CompilationStatus == CompilationStatus.Ok
-                    && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
-                    && d.LastCompiledVersion is not null,
-                TimeSpan.FromSeconds(60));
-            baselines[path] = settled.LastCompileSucceededAt;
-        }
-
-        // Stage: the share loses its bytes (cleared/remounted cache). Every type is now
-        // BytesMissing — pending, previously healthy — so the batch MUST rebuild each one.
+        // 🚨 NOTHING has compiled these types, and nothing will until something activates their
+        // hubs — which is precisely the state an INITIAL BAKE finds and precisely what #1207 is
+        // about. So there is no create-time compile to "let settle": every type is NeverBuilt,
+        // i.e. pending AND previously-healthy (BakeState.NeverBuilt ⇒ WasHealthy), and the batch
+        // must build all three without activating anything. Emptying the share makes that
+        // airtight — no sibling [Fact]'s bytes can make one of them report AlreadyBaked.
         ClearAssemblyStore();
 
         var logger = Mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("BatchBake");
@@ -433,7 +456,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
         outcomes.Should().OnlyContain(o => o.Status == PreWarmStatus.Compiled,
             "with the share cleared every type needs a real build, and the batch must deliver one per type");
         outcomes.Should().OnlyContain(o => o.WasHealthyBeforeBake,
-            "all three compiled cleanly before the share was cleared");
+            "a never-built type is not damaged goods — nothing here may read as a regression that gates a roll");
 
         // Dependencies first: the type whose source the dependent consumes builds before it.
         var emissionOrder = outcomes.Select(o => o.TypePath).ToList();
@@ -443,11 +466,12 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
         var store = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
         foreach (var path in new[] { upstream, dependent, unrelated })
         {
-            // The stamp is the activation path's field-set, written storage-level and folded
-            // into the live per-node hub (this read goes through the owner).
+            // The stamp is the activation path's field-set, written storage-level and read back
+            // here through the OWNER's live stream — so this also proves a hub that activates
+            // after a batch bake hydrates the batch's record rather than a pre-bake one.
             var stamped = await WhenDefinition(path,
                 d => d.CompilationStatus == CompilationStatus.Ok
-                    && d.LastCompileSucceededAt > baselines[path],
+                    && d.LastCompileSucceededAt is not null,
                 TimeSpan.FromSeconds(30));
             stamped.CompiledFrameworkVersion.Should().Be(NodeTypeCompilationHelpers.FrameworkVersion,
                 "lazy activations gate on HasUsableBuild, which compares this to the live framework");
@@ -515,18 +539,14 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             Content = new NodeTypeDefinition { Configuration = "config => config" }
         }).Should().Within(30.Seconds()).Emit();
 
-        // Settle the create-time compiles ON THE PERSISTED record (what the sweep enumerates):
-        // the broken one at Error, the healthy ones at Ok — then clear the share so both
-        // healthy types are genuinely pending for the batch.
-        await WhenPersisted(broken,
-            d => d.CompilationStatus == CompilationStatus.Error, TimeSpan.FromSeconds(60));
-        foreach (var path in new[] { dependent, unrelated })
-            await WhenPersisted(path,
-                d => d.CompilationStatus == CompilationStatus.Ok
-                    && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
-                    && d.LastCompiledVersion is not null,
-                TimeSpan.FromSeconds(60));
+        // The share holds nothing for these paths, so `dependent` and `unrelated` are simply
+        // NeverBuilt — pending, and previously healthy. `broken`, though, has to arrive at the
+        // sweep ALREADY at CompilationStatus.Error: that is the whole point of
+        // WasHealthyBeforeBake, and a type nobody ever compiled is not "already broken". Drive
+        // exactly that one compile through the hub activation the framework uses (Precompile),
+        // and only that one — the batch sweep is otherwise the first thing to touch these types.
         ClearAssemblyStore();
+        await Precompile(broken, d => d.CompilationStatus == CompilationStatus.Error);
 
         var logger = Mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("BatchBakeDown");
         var outcomes = await DynamicTypePreWarmer
@@ -577,14 +597,14 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             Content = new NodeTypeDefinition { Configuration = "config => config" }
         }).Should().Within(30.Seconds()).Emit();
 
-        // Settle on the PERSISTED record — the sweep's enumeration reads persistence, and the
-        // durable write lags the own-hub stream, so a live-stream wait alone races the probe
-        // into re-baking a type whose stamp had not landed durably yet.
-        var settled = await WhenPersisted(warm,
+        // Put the bytes on the share the ordinary ("usual compile") way — activate the type's
+        // own hub and let its compile watcher build + upload — and settle on the PERSISTED
+        // record, because the sweep's enumeration reads persistence and the durable write lags
+        // the own-hub stream.
+        var settled = await Precompile(warm,
             d => d.CompilationStatus == CompilationStatus.Ok
                 && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
-                && d.LastCompiledVersion is not null,
-            TimeSpan.FromSeconds(60));
+                && d.LastCompiledVersion is not null);
         var baseline = settled.LastCompileSucceededAt;
 
         var logger = Mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("BatchBakeWarm");
