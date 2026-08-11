@@ -312,6 +312,15 @@ internal static class NodeTypeBatchBake
                 if (ok)
                     return new PreWarmOutcome(typePath, PreWarmStatus.Compiled);
 
+                // 🚨 The compile never RAN because its source set could not be established — an
+                // availability failure, not a verdict about the code (issue #1218). It reports
+                // TimedOut, which the gate files under "not evaluated"; the stamp above already
+                // recorded CompilationStatus.Unavailable for the same reason. The batch driver
+                // hands the compiler a pre-resolved snapshot, so this normally cannot arise here
+                // — but the status vocabulary must not depend on WHICH driver ran the compile.
+                if (error is SourceDiscoveryUnavailableException)
+                    return new PreWarmOutcome(typePath, PreWarmStatus.TimedOut, error.Message);
+
                 // Same classification the activation path applies (ClassifyCompileFailure): a
                 // type that DECLARES source queries whose resolution is EXPLICITLY empty is
                 // broken by CONTENT (its sources were deleted from the mesh) — NoSources, which

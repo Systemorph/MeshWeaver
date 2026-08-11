@@ -767,6 +767,16 @@ public static class DynamicTypePreWarmer
                                 typePath, ClassifyCompileFailure(d), d.CompilationError),
                             // TimedOut, never CompileError: the type is not broken, its
                             // state simply never came back.
+                            //
+                            // 🚨 This is also where a compile that REFUSED TO RUN lands. A
+                            // compile whose source set could not be established never reaches
+                            // Roslyn and stamps CompilationStatus.Unavailable rather than Error
+                            // (SourceDiscoveryUnavailableException → ApplyCompileFailure), so the
+                            // "starved cross-silo discovery ⇒ phantom CS0246 ⇒ false regression"
+                            // class arrives here as a non-verdict — issue #1218. Do NOT add a
+                            // classification for it below: the distinction is made where the
+                            // knowledge is (the compiler saw WHICH query died), and this branch
+                            // is what carries it into the non-gating bucket.
                             CompilationStatus.Unavailable => new PreWarmOutcome(
                                 typePath, PreWarmStatus.TimedOut, d.CompilationError),
                             _ => new PreWarmOutcome(typePath, PreWarmStatus.Compiled)
