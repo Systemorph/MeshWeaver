@@ -214,6 +214,13 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // image: the regression is retracted and the pod may go Ready without a human.
                     // #1214: a bake that compiled a half-applied plugin update recorded four false
                     // regressions and hung the rollout although the content converged seconds later.
+                    //
+                    // MarkOutcome returns true only for a DIRECTLY-MEASURED regression. A derived
+                    // one (a dependent skipped because its upstream failed) is recorded and still
+                    // gates, but is deliberately NOT watched: the sweep skipped it to avoid
+                    // activating its hub at all, and one broken upstream would otherwise activate
+                    // its whole fan-out and hold it for the pod's lifetime. Those are retracted
+                    // through their blocker instead (NodeTypeBakeGateState.RetractRegression).
                     if (gate?.MarkOutcome(outcome) == true)
                     {
                         if (outcome.SourcesMovedDuringCompile)

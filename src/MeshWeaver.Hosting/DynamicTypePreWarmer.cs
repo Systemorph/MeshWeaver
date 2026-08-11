@@ -127,6 +127,22 @@ public record PreWarmOutcome(string TypePath, PreWarmStatus Status, string? Deta
     /// at 3am that the image is broken (issue #1214, proposal 3).</para>
     /// </summary>
     public bool SourcesMovedDuringCompile { get; init; }
+
+    /// <summary>
+    /// For a DERIVED outcome — <see cref="PreWarmStatus.UpstreamFailed"/>,
+    /// <see cref="PreWarmStatus.UpstreamContentBroken"/>,
+    /// <see cref="PreWarmStatus.UpstreamUnevaluated"/> — the upstream type that blocked this one.
+    /// <c>null</c> for an outcome the sweep measured directly.
+    ///
+    /// <para>It is what makes a derived regression retractable WITHOUT touching this type: such a
+    /// verdict's entire evidentiary basis is the blocker's verdict (the sweep never attempted this
+    /// type — deliberately, since attempting it would burn a whole per-type budget on a build that
+    /// cannot succeed). So when the blocker's regression is withdrawn, this one has nothing left
+    /// holding it up and is withdrawn too. The alternative — watching each dependent for its own
+    /// recovery — would ACTIVATE every skipped dependent's hub and hold it for the pod's lifetime,
+    /// undoing exactly the saving the skip exists for.</para>
+    /// </summary>
+    public string? BlockedBy { get; init; }
 }
 
 /// <summary>
@@ -544,7 +560,13 @@ public static class DynamicTypePreWarmer
                             p, named, outcome);
                         // No pacing for a skip: it activates nothing, so there is no
                         // burst to spread out and no reason to slow the sweep down.
-                        return Observable.Return(new PreWarmOutcome(p, outcome, $"blocked by {named}"));
+                        //
+                        // BlockedBy carries the blocker as DATA, not just inside the detail text:
+                        // a derived regression is retracted when its blocker's is, and parsing that
+                        // relationship back out of a message would be the kind of coupling that
+                        // breaks the next time the wording changes.
+                        return Observable.Return(
+                            new PreWarmOutcome(p, outcome, $"blocked by {named}") { BlockedBy = named });
                     }
 
                     // Batch mode drives the ONE compiler directly with the pre-resolved source

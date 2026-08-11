@@ -278,6 +278,74 @@ public class NodeTypeBakeGateStateTest
     }
 
     /// <summary>
+    /// 🚨 A DERIVED regression is retracted WITH its blocker, and is never watched on its own.
+    ///
+    /// <para>A dependent skipped as <see cref="PreWarmStatus.UpstreamFailed"/> was never compiled —
+    /// the sweep skips it precisely so it does not have to activate its hub. Its regression's whole
+    /// evidence is "my upstream failed", so when the upstream's verdict is withdrawn this one has
+    /// nothing holding it up. Watching each dependent for its own recovery instead would activate
+    /// every skipped dependent of one broken upstream and hold them for the pod's lifetime, undoing
+    /// the saving the skip exists for.</para>
+    /// </summary>
+    [Fact]
+    public void RetractingABlocker_AlsoRetractsTheRegressionsDerivedFromIt()
+    {
+        var state = new NodeTypeBakeGateState { GatesReadiness = true };
+        state.MarkRunning("go");
+
+        state.MarkOutcome(Failed("Store/Plugin", wasHealthy: true))
+            .Should().BeTrue("a directly-measured verdict is the one worth watching");
+        state.MarkOutcome(new PreWarmOutcome(
+                "Store/Catalog", PreWarmStatus.UpstreamFailed, "blocked by Store/Plugin")
+            { WasHealthyBeforeBake = true, BlockedBy = "Store/Plugin" })
+            .Should().BeFalse("a derived regression must not start a watch — that is what would "
+                + "activate the whole fan-out of one broken upstream");
+        // Transitive: a dependent of the dependent.
+        state.MarkOutcome(new PreWarmOutcome(
+                "Store/Order", PreWarmStatus.UpstreamFailed, "blocked by Store/Catalog")
+            { WasHealthyBeforeBake = true, BlockedBy = "Store/Catalog" })
+            .Should().BeFalse();
+        state.MarkComplete("baked");
+
+        state.Phase.Should().Be(BakePhase.Regressed,
+            "all three gate — a derived regression still stalls the rollout");
+        state.Regressions.Keys.OrderBy(k => k, StringComparer.Ordinal).Should().Equal(
+            "Store/Catalog", "Store/Order", "Store/Plugin");
+
+        // The blocker rebuilds. Its dependents' verdicts had no other basis.
+        state.RetractRegression("Store/Plugin", "rebuilt on this image").Should().BeTrue();
+
+        state.Phase.Should().Be(BakePhase.Complete,
+            "with the only measured failure withdrawn, nothing that was derived from it may keep "
+            + "the pod out of rotation");
+        state.Regressions.Should().BeEmpty();
+        state.Retracted.Keys.OrderBy(k => k, StringComparer.Ordinal).Should().Equal(
+            "Store/Catalog", "Store/Order", "Store/Plugin");
+    }
+
+    /// <summary>
+    /// The cascade is keyed on the ACTUAL blocker — an unrelated regression is not swept up with
+    /// it. Otherwise retracting one type would quietly release the gate on everything.
+    /// </summary>
+    [Fact]
+    public void RetractingABlocker_LeavesUnrelatedRegressionsStanding()
+    {
+        var state = new NodeTypeBakeGateState { GatesReadiness = true };
+        state.MarkRunning("go");
+        state.MarkOutcome(Failed("Store/Plugin", wasHealthy: true));
+        state.MarkOutcome(new PreWarmOutcome(
+                "Store/Catalog", PreWarmStatus.UpstreamFailed, "blocked by Store/Plugin")
+            { WasHealthyBeforeBake = true, BlockedBy = "Store/Plugin" });
+        state.MarkOutcome(Failed("Unrelated/Type", wasHealthy: true));
+        state.MarkComplete("baked");
+
+        state.RetractRegression("Store/Plugin", "rebuilt on this image").Should().BeTrue();
+
+        state.Phase.Should().Be(BakePhase.Regressed);
+        state.Regressions.Keys.Should().Equal("Unrelated/Type");
+    }
+
+    /// <summary>
     /// The torn-snapshot EVIDENCE (issue #1214, proposal 3): a source whose <c>LastModified</c> is
     /// at or after the compile's start stamp proves the compile sampled a source set the mesh was
     /// mid-way through replacing. It is diagnostic only — it names the suspicion in the log and
