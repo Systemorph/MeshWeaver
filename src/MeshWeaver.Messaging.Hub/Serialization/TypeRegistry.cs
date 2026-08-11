@@ -284,7 +284,26 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
     private void IndexFullNameAlias(Type type, TypeDefinition definition, string canonicalName)
     {
         var fullName = (type.FullName ?? type.Name).Replace('+', '.');
-        if (fullName != canonicalName)
+        if (fullName == canonicalName)
+            return;
+
+        // 🚨 …EXCEPT for a COLLECTIBLE type, where "full names are unique" is false. Every recompile
+        // of a dynamic node mints a NEW assembly whose types carry the SAME full name, so TryAdd
+        // hands the alias to the FIRST build and never lets go: a full-name $type discriminator
+        // then keeps resolving a SUPERSEDED assembly's type long after a newer build replaced it.
+        // Content deserialised into it fails every `Content is X` downstream — the bound view
+        // renders empty or its reactive wait never emits (the foreign-assembly content class).
+        //
+        // This used to be masked: the superseded context unloaded almost immediately and its
+        // entries were swept. Neither is true now — the entries are DEMOTED to the weak shadow
+        // rather than dropped, and a context LEASED by a live hub (NodeAssemblyLoadContext.Lease)
+        // does not begin unloading at all, so nothing clears the way for the newer registration.
+        //
+        // Newest-wins is the correct rule for a rebuild and changes nothing for ordinary
+        // assemblies, whose full names genuinely are unique.
+        if (type.Assembly.IsCollectible)
+            aliasByName[fullName] = definition;
+        else
             aliasByName.TryAdd(fullName, definition);
     }
 
