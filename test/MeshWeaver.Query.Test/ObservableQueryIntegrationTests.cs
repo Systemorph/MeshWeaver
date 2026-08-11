@@ -62,8 +62,15 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
         var taskChanges = await tasks.Should(WaitTimeout).Match(acc => acc.Count >= 2);
         taskChanges[1].ChangeType.Should().Be(QueryChangeType.Added);
 
-        projects.Value.Should().HaveCount(2, "project subscription must not see task changes");
-        tasks.Value.Should().HaveCount(2, "task subscription must not see project changes");
+        // 🚨 SHAPE, not count. `projects.Value.Should().HaveCount(2)` read like an isolation guard but
+        // was a race in both directions: it samples a BehaviorSubject at an arbitrary moment, so a leak
+        // arriving 1 ms later passes, and one extra legitimate emission (a resubscribe Initial, a
+        // framework satellite) reds it. The actual contract is WHAT each subscription saw, not how many
+        // times it was told — and that is assertable without racing.
+        projects.Value.SelectMany(c => c.Items).Should().OnlyContain(n => n.NodeType == "Markdown",
+            "the Markdown query must never see a Code node — that would be a cross-query leak");
+        tasks.Value.SelectMany(c => c.Items).Should().OnlyContain(n => n.NodeType == "Code",
+            "the Code query must never see a Markdown node — that would be a cross-query leak");
     }
 
     [Fact]
@@ -87,7 +94,12 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
         var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
 
         changes[2].ChangeType.Should().Be(QueryChangeType.Updated);
-        changes.Should().HaveCount(3, "child create must not produce an emission for exact-path query");
+        // 🚨 SHAPE, not count. `HaveCount(3)` here could NEVER fail: Scan grows the list by exactly one
+        // per emission, so the first snapshot satisfying Match(Count >= 3) has Count == 3 by
+        // construction. The assertion looked like the child-create guard and enforced nothing — the
+        // leak it was written to catch would have sailed through. Assert what actually emitted.
+        changes.SelectMany(c => c.Items).Select(n => n.Path).Should().OnlyContain(path => path == p,
+            "an exact-path query must emit only for that node — the child create must never appear");
     }
 
     [Fact]
@@ -184,8 +196,11 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
 
         var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
 
-        changes.Should().HaveCount(3, "sibling create must not emit for ancestors scope");
         changes[2].ChangeType.Should().Be(QueryChangeType.Updated);
+        // 🚨 SHAPE, not count — HaveCount(3) after Match(Count >= 3) is a tautology (see ScopeExact).
+        // The sibling-create guard is only real when it names the sibling.
+        changes.SelectMany(c => c.Items).Select(n => n.Path).Should().NotContain($"{p}/Project/Task2",
+            "a sibling create must not emit for an ancestors-scope query");
     }
 
     [Fact]
@@ -203,9 +218,28 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
         await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
 
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" }).Should().Emit();
-        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
 
-        changes.Should().HaveCount(3);
+        // 🚨 Wait on the SHAPE, never on a count — and note that this test's only assertion used to be
+        // `changes.Should().HaveCount(3)`, which was wrong in BOTH directions at once:
+        //   1. it could never fail (Scan adds one per emission, so the first snapshot satisfying
+        //      Match(Count >= 3) has Count == 3 by construction), and
+        //   2. the Count >= 3 gate it depended on was satisfied by an UNRELATED emission — the
+        //      framework's own `{p}/_Access/…` satellite create landed third. So the test declared
+        //      success on a satellite and never observed the descendant at all: scope:subtree could
+        //      have stopped emitting for descendants entirely and this stayed green.
+        // Gating on the emissions we actually care about fixes both — an absent emission now times out
+        // (red) instead of being papered over by whatever else happened to arrive.
+        var changes = await accumulated.Should(WaitTimeout).Match(acc =>
+            acc.Any(c => c.ChangeType == QueryChangeType.Updated && c.Items.Any(n => n.Path == p))
+            && acc.Any(c => c.ChangeType == QueryChangeType.Added
+                            && c.Items.Any(n => n.Path == $"{p}/Project")));
+
+        changes.Should().Contain(
+            c => c.ChangeType == QueryChangeType.Updated && c.Items.Any(n => n.Path == p),
+            "scope:subtree must emit when the node ITSELF changes");
+        changes.Should().Contain(
+            c => c.ChangeType == QueryChangeType.Added && c.Items.Any(n => n.Path == $"{p}/Project"),
+            "scope:subtree must emit when a DESCENDANT is created");
     }
 
     [Fact]
@@ -231,9 +265,21 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
         await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 4);
 
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/HCo/Project/Task") with { Name = "Task", NodeType = "Code" }).Should().Emit();
-        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 5);
 
-        changes.Should().HaveCount(5);
+        // 🚨 Same defect as ScopeSubtree, same fix: `HaveCount(5)` was the ONLY assertion and could
+        // never fail, while the `Count >= 5` gate it rode on could be satisfied by unrelated framework
+        // emissions (an `_Access` satellite create). Wait on the four paths whose emission IS the
+        // contract of scope:hierarchy — ancestor, self, descendant, and a newly-created deep descendant.
+        var expected = new[] { p, $"{p}/HCo", $"{p}/HCo/Project", $"{p}/HCo/Project/Task" };
+        var changes = await accumulated.Should(WaitTimeout).Match(acc =>
+        {
+            var emitted = acc.SelectMany(c => c.Items).Select(n => n.Path).ToHashSet();
+            return expected.All(emitted.Contains);
+        });
+
+        changes.SelectMany(c => c.Items).Select(n => n.Path).ToHashSet()
+            .Should().Contain(expected,
+                "scope:hierarchy must emit for ancestors, the node itself, AND descendants");
     }
 
     [Fact]
