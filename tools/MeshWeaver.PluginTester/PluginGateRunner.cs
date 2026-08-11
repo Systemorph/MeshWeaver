@@ -429,7 +429,7 @@ public static class PluginGateRunner
                 // The AI node types (Agent / Skill / Model / …) — plugin packages ship Agent
                 // and Skill nodes (LinkedIn, Feedback, ExplainerVideo), and a portal always
                 // registers these; without them those installs are refused "not registered".
-                .AddAI()
+                .AddAI(MeshWeaver.AI.AiContentSources.ContentPartitions)
                 .AddPluginCatalog()
                 .AddMeshNodes(RootAdminAccess())
                 // Per-run isolated assembly store + compilation cache (AddInMemoryPersistence
