@@ -58,8 +58,21 @@ public record MeshNodeThumbnailControl(
     /// User-entered paths starting with <c>content:</c> or <c>content/</c> are resolved
     /// against the node's content collection; an inline <c>&lt;svg&gt;…&lt;/svg&gt;</c> value is
     /// returned verbatim (never treated as a path) so the client renders it inline.
+    ///
+    /// <para><paramref name="includeThumbnail"/> selects between the two SHAPES this resolution
+    /// serves. A thumbnail tile is poster-shaped, so it keeps
+    /// <see cref="MarkdownContent.Thumbnail"/> in the chain (the default). A CARD is not: its
+    /// image box is a fixed 48 px square with <c>object-fit: cover</c>, and a wide banner cropped
+    /// into that yields a meaningless sliver — so <see cref="MeshNodeCardControl"/> passes
+    /// <c>false</c> and falls straight through to the node's own icon, which is drawn for exactly
+    /// that size. An explicitly authored <c>avatar</c>/<c>logo</c>/<c>icon</c> on the content still
+    /// wins in both shapes.</para>
     /// </summary>
-    public static string? GetImageUrlForNode(MeshNode? node)
+    /// <param name="node">The node to resolve an image for.</param>
+    /// <param name="includeThumbnail">Whether <see cref="MarkdownContent.Thumbnail"/> (the wide
+    /// poster) participates. <c>true</c> for poster-shaped tiles, <c>false</c> for icon-shaped
+    /// cards.</param>
+    public static string? GetImageUrlForNode(MeshNode? node, bool includeThumbnail = true)
     {
         if (node == null)
             return null;
@@ -141,7 +154,7 @@ public record MeshNodeThumbnailControl(
         // reads the value from BOTH the typed MarkdownContent AND the degraded JsonElement frame,
         // so the resolved image URL doesn't alternate (typed → thumbnail vs JsonElement → node.Icon)
         // across frames and storm the card.
-        var thumbnail = GetThumbnail(node.Content);
+        var thumbnail = includeThumbnail ? GetThumbnail(node.Content) : null;
         if (!string.IsNullOrEmpty(thumbnail))
         {
             // Inline SVG thumbnail — return verbatim; it is markup, not a content-collection path.

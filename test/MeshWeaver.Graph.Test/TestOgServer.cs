@@ -29,6 +29,15 @@ internal sealed class TestOgServer : IDisposable
     /// <summary>The og:title the served head declares.</summary>
     public volatile string Title = "Served Title";
 
+    /// <summary>An optional <c>&lt;link rel="icon"&gt;</c> href for the served head. Null (the
+    /// default) declares NO icon link, so the card falls through to the og:image poster.</summary>
+    public volatile string? IconHref;
+
+    /// <summary>Serve the SPA catch-all shell instead — HTTP 200 with a plain <c>&lt;title&gt;</c>
+    /// and no <c>og:*</c> tags — the successful-but-useless response a portal returns while it is
+    /// restarting.</summary>
+    public volatile bool OmitOgTags;
+
     public TestOgServer()
     {
         // HttpListener cannot bind port 0; reserve a free port via TcpListener first.
@@ -59,11 +68,17 @@ internal sealed class TestOgServer : IDisposable
             }
 
             Interlocked.Increment(ref requestCount);
-            var html =
-                $"<html><head><meta property=\"og:title\" content=\"{Title}\">" +
-                "<meta property=\"og:description\" content=\"Served description.\">" +
-                "<meta property=\"og:image\" content=\"/og.png\">" +
-                "</head><body></body></html>";
+            var iconHref = IconHref;
+            var iconLink = iconHref is null ? string.Empty : $"<link rel=\"icon\" href=\"{iconHref}\">";
+            var head = OmitOgTags
+                // The SPA catch-all shell a portal serves mid-restart: HTTP 200, a plain
+                // <title>, and NO og:* tags whatsoever.
+                ? "<title>Memex Portal</title>" + iconLink
+                : $"<meta property=\"og:title\" content=\"{Title}\">"
+                  + "<meta property=\"og:description\" content=\"Served description.\">"
+                  + "<meta property=\"og:image\" content=\"/og.png\">"
+                  + iconLink;
+            var html = $"<html><head>{head}</head><body></body></html>";
             var bytes = Encoding.UTF8.GetBytes(html);
             try
             {

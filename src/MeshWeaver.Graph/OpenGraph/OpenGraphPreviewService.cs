@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -53,6 +54,7 @@ public sealed class OpenGraphPreviewService
     private readonly Func<IIoPool> pool;
     private readonly Func<HttpClient> http;
     private readonly bool allowLoopback;
+    private readonly Func<ILogger?> logger;
 
     /// <summary>The per-URL promise cache: instance state on this mesh-scoped singleton, so it
     /// dies with the mesh.</summary>
@@ -69,7 +71,8 @@ public sealed class OpenGraphPreviewService
             () => serviceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
                   ?? IoPool.Unbounded,
             () => serviceProvider.GetService<IHttpClientFactory>()?.CreateClient(HttpClientName)
-                  ?? SharedHttp)
+                  ?? SharedHttp,
+            logger: () => serviceProvider.GetService<ILogger<OpenGraphPreviewService>>())
     {
     }
 
@@ -78,11 +81,16 @@ public sealed class OpenGraphPreviewService
     /// <paramref name="allowLoopback"/> lets a test point the service at its local listener,
     /// which the production guard refuses.
     /// </summary>
-    internal OpenGraphPreviewService(Func<IIoPool> pool, Func<HttpClient> http, bool allowLoopback = false)
+    internal OpenGraphPreviewService(
+        Func<IIoPool> pool,
+        Func<HttpClient> http,
+        bool allowLoopback = false,
+        Func<ILogger?>? logger = null)
     {
         this.pool = pool;
         this.http = http;
         this.allowLoopback = allowLoopback;
+        this.logger = logger ?? (() => null);
     }
 
     /// <summary>
@@ -101,11 +109,34 @@ public sealed class OpenGraphPreviewService
             return Observable.Return(OpenGraphPreview.Unavailable(url));
 
         return pool().Run(ct => FetchAsync(url, ct))
+            // 🚨 A SUCCESSFUL fetch that carried no Open Graph metadata must not be cached
+            // either. A portal mid-restart / login wall / SPA catch-all answers 200 with its
+            // shell page, so nothing throws and the exception path below never runs — that
+            // response would otherwise be pinned for the process lifetime, leaving one card
+            // stuck on the catch-all's <title> while its neighbours render fine. Evicting it
+            // makes the next page view re-fetch, which is what such a transient response needs.
+            .Do(preview =>
+            {
+                if (preview.IsResolved)
+                    return;
+                logger()?.LogInformation(
+                    "Open Graph fetch of {Url} returned no og: metadata (HTTP succeeded); not "
+                    + "caching it, the next view re-fetches.", url);
+                cache.TryRemove(url, out _);
+            })
             // A failed fetch is a normal state for a card (target down, 404, DNS): surface the
             // URL-only fallback and EVICT the entry — the next page view's subscriber re-runs
             // the fetch once. TryRemove is idempotent across concurrent subscribers.
             .Catch<OpenGraphPreview, Exception>(ex =>
             {
+                // Don't swallow the fault silently: a degraded card is byte-identical to the
+                // pre-fetch PLACEHOLDER card — same title (the host), same absent image — so
+                // this line is the only thing that distinguishes "this target is failing" from
+                // "this frame is simply the placeholder". The original catch discarded `ex`,
+                // leaving a genuine fetch fault with no trace anywhere.
+                logger()?.LogWarning(ex,
+                    "Open Graph fetch failed for {Url}; its card falls back to the URL alone.",
+                    url);
                 cache.TryRemove(url, out _);
                 return Observable.Return(OpenGraphPreview.Unavailable(url));
             });
