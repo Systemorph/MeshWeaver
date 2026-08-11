@@ -526,7 +526,14 @@ internal static class NodeTypeBatchBake
                     ? PreWarmStatus.NoSources
                     : PreWarmStatus.CompileError;
                 return new PreWarmOutcome(
-                    typePath, status, NodeTypeCompilationHelpers.SummarizeCompileError(result, error));
+                    typePath, status, NodeTypeCompilationHelpers.SummarizeCompileError(result, error))
+                {
+                    // Same torn-snapshot evidence the activation path carries (#1214): whether the
+                    // type's sources moved while this compile ran. Read off the type record, which
+                    // holds both the compile-start stamp and the live source snapshot.
+                    SourcesMovedDuringCompile =
+                        def is not null && DynamicTypePreWarmer.SourcesMovedDuringCompile(def)
+                };
             });
     }
 

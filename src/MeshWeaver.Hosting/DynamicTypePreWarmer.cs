@@ -112,6 +112,21 @@ public record PreWarmOutcome(string TypePath, PreWarmStatus Status, string? Deta
     /// would let one abandoned NodeType block every future deploy.</para>
     /// </summary>
     public bool WasHealthyBeforeBake { get; init; } = true;
+
+    /// <summary>
+    /// Evidence that this compile sampled a TORN source snapshot: at least one of the type's
+    /// sources was last modified AT OR AFTER the compile started
+    /// (<see cref="DynamicTypePreWarmer.SourcesMovedDuringCompile(NodeTypeDefinition)"/>), so the
+    /// diagnostics describe a source set the mesh was in the middle of replacing.
+    ///
+    /// <para>Diagnostic only — it deliberately does NOT reclassify the outcome. A source moving
+    /// mid-compile makes a failure SUSPECT, not innocent, and a torn compile of genuinely broken
+    /// code must still gate. What clears the gate is the type actually rebuilding on this image
+    /// (<c>NodeTypeBakeGateState.RetractRegression</c>); this flag is what lets the log say WHY the
+    /// pod is refusing readiness on content that may repair itself, instead of telling an operator
+    /// at 3am that the image is broken (issue #1214, proposal 3).</para>
+    /// </summary>
+    public bool SourcesMovedDuringCompile { get; init; }
 }
 
 /// <summary>
@@ -678,8 +693,7 @@ public static class DynamicTypePreWarmer
                                     var d = (NodeTypeDefinition)n!.Content!;
                                     return d.CompilationStatus switch
                                     {
-                                        CompilationStatus.Error => new PreWarmOutcome(
-                                            typePath, ClassifyCompileFailure(d), d.CompilationError),
+                                        CompilationStatus.Error => FromFailedCompile(typePath, d),
                                         // The rebuild never reported an answer — not a
                                         // compile failure, so never labelled one.
                                         CompilationStatus.Unavailable => new PreWarmOutcome(
@@ -745,6 +759,124 @@ public static class DynamicTypePreWarmer
             : PreWarmStatus.CompileError;
 
     /// <summary>
+    /// Whether the type's SOURCES MOVED while this compile was running — at least one entry of
+    /// <see cref="NodeTypeDefinition.CurrentSourceVersions"/> (each value is that Code node's
+    /// <c>LastModified.UtcTicks</c>, written by the per-NodeType sources watcher) is at or after
+    /// <see cref="NodeTypeDefinition.LastCompileStartedAt"/> (stamped on the Pending → Compiling
+    /// transition). When that holds, Roslyn's verdict was produced against a source set the mesh
+    /// was concurrently replacing — a half-applied plugin auto-update, a git sync, a bulk edit.
+    ///
+    /// <para>Both fields survive a failed compile: <c>ApplyCompileFailure</c> nulls
+    /// <c>CompiledSources</c> but leaves the start stamp and the live snapshot alone, so the
+    /// evidence is readable exactly where the verdict is formed.</para>
+    ///
+    /// <para>🚨 SUSPICION, NOT ABSOLUTION. This never downgrades an outcome: a torn compile of
+    /// code that is genuinely broken must still gate, and the check is one-sided anyway — a source
+    /// written a second AFTER the compile failed is just as much a torn snapshot but is invisible
+    /// here until the write lands (in the 2026-08-11 incident the callers landed at 11:06:57, after
+    /// the failures). That asymmetry is precisely why the CURE is
+    /// <c>NodeTypeBakeGateState.RetractRegression</c> — level-triggered on the type rebuilding —
+    /// and this predicate is only what names the suspicion in the log.</para>
+    /// </summary>
+    public static bool SourcesMovedDuringCompile(NodeTypeDefinition d) =>
+        d.LastCompileStartedAt is { } started
+        && d.CurrentSourceVersions is { Count: > 0 } current
+        && current.Values.Any(ticks => ticks >= started.UtcTicks);
+
+    /// <summary>
+    /// The outcome for a compile that settled at <see cref="CompilationStatus.Error"/>: Roslyn's
+    /// verdict classified by <see cref="ClassifyCompileFailure"/>, carrying the torn-snapshot
+    /// evidence (<see cref="SourcesMovedDuringCompile(NodeTypeDefinition)"/>) so the reporting
+    /// layer can say whether the source set was stable when the verdict was formed.
+    /// </summary>
+    internal static PreWarmOutcome FromFailedCompile(string typePath, NodeTypeDefinition d) =>
+        new(typePath, ClassifyCompileFailure(d), d.CompilationError)
+        {
+            SourcesMovedDuringCompile = SourcesMovedDuringCompile(d)
+        };
+
+    /// <summary>
+    /// Watch a REGRESSED NodeType until it reaches a usable build on this image, then retract its
+    /// regression from <paramref name="gate"/> — the cure for issue #1214, where a bake compiled a
+    /// half-applied plugin update, recorded four false regressions, and stalled the rollout even
+    /// though the content converged (and the types recompiled green) seconds later.
+    ///
+    /// <para><b>Observation, not a watchdog.</b> Nothing here triggers, retries or polls: the
+    /// platform's own park registry already un-parks and recompiles a failed type the moment its
+    /// source snapshot changes (<c>NodeTypeCompileParkRegistry.ShouldRetryForSourceChange</c>), and
+    /// a lazy activation compiles it too. This subscription only READS the type's own node stream
+    /// — the same level-triggered surface the sweep and the GUI use — and stops at the first
+    /// emission that shows a usable build. There is deliberately no timeout: a regression that is
+    /// never repaired must gate forever, which is what "no emission" already means.</para>
+    ///
+    /// <para>Holding the subscription also keeps the condemned type's per-node hub ACTIVATED, which
+    /// is what keeps its sources watcher — the thing that notices the repair — installed and
+    /// running. So the watch is not merely a listener for a recovery; on an idle pod it is part of
+    /// why the recovery can happen at all.</para>
+    ///
+    /// <para>🚨 <b>The recovery must be a compile that is demonstrably FRESH</b> — a settled
+    /// <see cref="CompilationStatus.Ok"/> whose
+    /// <see cref="NodeTypeDefinition.LastCompileSucceededAt"/> is strictly newer than the one this
+    /// watch observed when it started. <see cref="NodeTypeCompilationHelpers.HasUsableBuild"/>
+    /// alone is NOT sufficient and matching on it would silently disable the whole gate: a failed
+    /// compile keeps the PREVIOUS build's assembly coordinates and framework stamp
+    /// (<c>ApplyCompileFailure</c> clears only the status, the error and
+    /// <c>CompiledSources</c>), so any type that had ever compiled successfully on this image would
+    /// satisfy that check the instant its regression was recorded, and every regression would
+    /// retract itself immediately. The <see cref="RebuildMissingBytes"/> path guards the identical
+    /// trap the identical way; this is the same <see cref="IsFreshSuccess"/> rule.</para>
+    ///
+    /// <para>The subscription is returned so its owner disposes it at shutdown; a discarded
+    /// subscription would root the hub.</para>
+    /// </summary>
+    public static IDisposable WatchForRecovery(
+        IMessageHub mesh, NodeTypeBakeGateState gate, string typePath, ILogger? logger)
+    {
+        var workspace = mesh.GetWorkspace();
+        var accessService = mesh.ServiceProvider.GetService<AccessService>();
+        // System-scoped for the same reason the sweep's reads are: watching a NodeType record
+        // across partitions is infrastructure, not a user-attributable read.
+        return Observable
+            .Using(
+                () => AccessContextScope.AsSystem(accessService),
+                _ =>
+                {
+                    // One shared handle (IMeshNodeStreamCache): the baseline read and the wait are
+                    // the SAME stream, and it replays its latest node to the second subscriber — so
+                    // a success landing between the two cannot fall through the gap.
+                    var stream = workspace.GetMeshNodeStream(typePath);
+                    return stream
+                        .Take(1)
+                        .Select(current =>
+                            (current?.Content as NodeTypeDefinition)?.LastCompileSucceededAt)
+                        .SelectMany(baseline => stream
+                            .Where(n => n?.Content is NodeTypeDefinition d
+                                && d.CompilationStatus == CompilationStatus.Ok
+                                && NodeTypeCompilationHelpers.HasUsableBuild(n, d)
+                                && IsFreshSuccess(d.LastCompileSucceededAt, baseline))
+                            .Take(1));
+                })
+            .Subscribe(
+                _ =>
+                {
+                    if (gate.RetractRegression(
+                            typePath, "rebuilt to a usable build on this image after the bake"))
+                        logger?.LogWarning(
+                            "DynamicTypePreWarmer: RETRACTING the regression recorded for "
+                            + "{TypePath} — it has since reached a usable build on THIS image, so "
+                            + "the earlier failure was not evidence against the image (typically a "
+                            + "compile that sampled a half-applied content update — issue #1214). "
+                            + "Gate now: {Detail}",
+                            typePath, gate.Detail);
+                },
+                ex => logger?.LogWarning(ex,
+                    "DynamicTypePreWarmer: recovery watch for the regressed type {TypePath} "
+                    + "faulted — the regression STANDS (a watch that cannot observe a recovery "
+                    + "must never be read as one)",
+                    typePath));
+    }
+
+    /// <summary>
     /// Activate one dynamic NodeType's hub by subscribing to its own MeshNode stream —
     /// which routes a SubscribeRequest to the owning hub, activating it and firing the
     /// compile watcher's framework-stale / first-build kickoff. Holds the subscription
@@ -775,8 +907,7 @@ public static class DynamicTypePreWarmer
                         var d = (NodeTypeDefinition)n!.Content!;
                         return d.CompilationStatus switch
                         {
-                            CompilationStatus.Error => new PreWarmOutcome(
-                                typePath, ClassifyCompileFailure(d), d.CompilationError),
+                            CompilationStatus.Error => FromFailedCompile(typePath, d),
                             // TimedOut, never CompileError: the type is not broken, its
                             // state simply never came back.
                             //

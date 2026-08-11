@@ -291,6 +291,230 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     // =============================================================================================
+    // TORN SNAPSHOT (issue #1214): the bake can compile a HALF-APPLIED content update and report
+    // it as an image regression. memex-cloud, 2026-08-11 11:04–11:12 UTC — the plugins repo had
+    // reverted a branch and the portal's plugin auto-update was applying that revert WHILE the bake
+    // compiled: `Store/Plugin/Source/Localizer` landed at 11:04:59 with two members removed, its
+    // callers only at 11:06:57. The bake (10:47→11:06) compiled inside that two-minute gap, got
+    // CS0117 on members that no source references any more, and refused readiness for four
+    // `Store/*` types. Nothing was wrong with the image; the content converged seconds later and
+    // the platform recompiled every one of them green — but BakePhase.Regressed is sticky, so the
+    // pod never went Ready and the rollout hung until a human intervened.
+    // =============================================================================================
+
+    /// <summary>
+    /// 🚨 THE #1214 CONTRACT, both halves in one mesh so the negative half has a real
+    /// synchronisation point rather than a sleep.
+    ///
+    /// <para><b>Positive.</b> A previously-healthy type is broken by the FIRST write of a two-write
+    /// content update (the helper loses a member its caller still calls — `Localizer` at 11:04:59),
+    /// the gate records the regression and refuses readiness, and then the SECOND write lands (the
+    /// caller stops calling it — 11:06:57). Nothing else happens: no deliberate retry, no restart,
+    /// no human. The platform's own park registry un-parks and recompiles the type on the source
+    /// change, and the gate must FOLLOW it back to Complete.</para>
+    ///
+    /// <para><b>Negative.</b> A second type is genuinely broken on a source set that nobody
+    /// touches. Its regression must STAND — the retraction is driven by the type reaching a usable
+    /// build, which a broken type never does. By the time the first type has been retracted the
+    /// watch machinery has demonstrably run, so "still gated" here is evidence, not latency.</para>
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task RegressedType_ThatRebuildsAfterTheContentConverges_IsRetracted_ButARealBreakStillGates()
+    {
+        var workspace = Mesh.GetWorkspace();
+        const string ns = $"{Partition}Torn";
+        const string tornPath = $"{ns}/TornType";
+        const string helperPath = $"{ns}/TornType/Source/helper";
+        const string callerPath = $"{ns}/TornType/Source/caller";
+        const string brokenPath = $"{ns}/StaysBroken";
+        const string brokenSourcePath = $"{ns}/StaysBroken/Source/code";
+
+        // ── The torn type: ONE package update rewrites TWO source nodes, and the bake compiles
+        //    between the two writes. Helper defines the member; Caller uses it.
+        await NodeFactory.CreateNode(new MeshNode("helper", $"{tornPath}/Source")
+        {
+            Name = "Helper",
+            NodeType = "Code",
+            Content = new CodeConfiguration
+            {
+                Code = "public static class TornHelper { public static int Answer() => 42; }",
+                Language = "csharp"
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        await NodeFactory.CreateNode(new MeshNode("caller", $"{tornPath}/Source")
+        {
+            Name = "Caller",
+            NodeType = "Code",
+            Content = new CodeConfiguration
+            {
+                Code = "public static class TornCaller { public static int Get() => TornHelper.Answer(); }",
+                Language = "csharp"
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        await NodeFactory.CreateNode(new MeshNode("TornType", ns)
+        {
+            Name = "Torn Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Broken by a half-applied two-write content update, then repaired.",
+                Configuration = "config => config"
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        // ── The genuinely broken type: invalid C# in a source nobody will touch.
+        await NodeFactory.CreateNode(new MeshNode("code", $"{brokenPath}/Source")
+        {
+            Name = "Code",
+            NodeType = "Code",
+            Content = new CodeConfiguration { Code = "this is not valid C#;", Language = "csharp" }
+        }).Should().Within(30.Seconds()).Emit();
+
+        await NodeFactory.CreateNode(new MeshNode("StaysBroken", ns)
+        {
+            Name = "Stays Broken",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "A real compile error on a source set that never changes.",
+                Configuration = "config => config"
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        // Healthy on the way in — the WasHealthyBeforeBake baseline a real sweep takes when it
+        // starts (the torn type was Ok at 10:47). The broken one settles at Error by itself.
+        await Precompile(tornPath, d => d.CompilationStatus == CompilationStatus.Ok);
+        var reallyBroken = await WhenDefinition(brokenPath,
+            d => d.CompilationStatus == CompilationStatus.Error, TimeSpan.FromSeconds(120));
+
+        // ── 11:04:59. The revert lands on the HELPER: the member is gone, the caller still calls
+        //    it. The bake DRIVES the compile that samples this state (the sweep activates and
+        //    compiles each type), so the trigger here is explicit, exactly as it was in production.
+        await workspace.GetMeshNodeStream(helperPath).Update(curr =>
+                curr with
+                {
+                    Content = new CodeConfiguration
+                    {
+                        Code = "public static class TornHelper { }", Language = "csharp"
+                    }
+                })
+            .Should().Within(30.Seconds()).Emit();
+        await workspace.GetMeshNodeStream(tornPath).Update(curr =>
+            {
+                if (curr?.Content is not NodeTypeDefinition def) return curr!;
+                return curr with
+                {
+                    Content = def with
+                    {
+                        RequestedReleaseAt = DateTimeOffset.UtcNow,
+                        RequestedReleaseForce = true
+                    }
+                };
+            })
+            .Should().Within(30.Seconds()).Emit();
+
+        var tornFailure = await WhenDefinition(tornPath,
+            d => d.CompilationStatus == CompilationStatus.Error, TimeSpan.FromSeconds(120));
+        Output.WriteLine($"{tornPath} → Error: {tornFailure.CompilationError}");
+        tornFailure.CompilationError.Should().MatchRegex(@"CS\d{4}",
+            "the premise of this test is a REAL Roslyn diagnostic produced against a source set "
+            + "that is being replaced — an infrastructure abort would prove nothing");
+
+        // ── The bake's verdict. Both types were previously healthy as far as this gate is
+        //    concerned, so both failures read as regressions and the pod refuses readiness.
+        var logger = Mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("TornSnapshot");
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        gate.MarkRunning("baking");
+        gate.MarkOutcome(new PreWarmOutcome(
+                tornPath, PreWarmStatus.CompileError, tornFailure.CompilationError)
+            { WasHealthyBeforeBake = true })
+            .Should().BeTrue();
+        gate.MarkOutcome(new PreWarmOutcome(
+                brokenPath, PreWarmStatus.CompileError, reallyBroken.CompilationError)
+            { WasHealthyBeforeBake = true })
+            .Should().BeTrue();
+        gate.MarkComplete("baked in 00:19:00");
+        gate.Phase.Should().Be(BakePhase.Regressed, "two previously-healthy types failed to build");
+
+        // The production wiring: every type the gate condemned is WATCHED for a recovery.
+        using var tornWatch = DynamicTypePreWarmer.WatchForRecovery(Mesh, gate, tornPath, logger);
+        using var brokenWatch = DynamicTypePreWarmer.WatchForRecovery(Mesh, gate, brokenPath, logger);
+
+        // 🚨 THE TRAP THIS PINS. A failed compile KEEPS the previous build's assembly coordinates
+        // and framework stamp — ApplyCompileFailure clears only the status, the error text and
+        // CompiledSources — so `HasUsableBuild` is still TRUE for a type that has just failed. A
+        // recovery watch that matched on it would retract every regression the instant it was
+        // recorded and quietly disable the entire gate. (The first draft of this change did exactly
+        // that, and this assertion is what caught it.) Nothing has driven a compile since the
+        // failure, so the watch must be sitting still.
+        gate.Retracted.Should().BeEmpty(
+            "the torn type still carries the assembly of its LAST GOOD build — only a compile that "
+            + "is demonstrably NEWER than the failure may retract a regression");
+        gate.Phase.Should().Be(BakePhase.Regressed);
+
+        // ── 11:06:57. The update's SECOND write lands and the content is self-consistent again.
+        //    NOTHING ELSE HAPPENS — no compile trigger, no recycle, no restart.
+        await workspace.GetMeshNodeStream(callerPath).Update(curr =>
+                curr with
+                {
+                    Content = new CodeConfiguration
+                    {
+                        Code = "public static class TornCaller { public static int Get() => 7; }",
+                        Language = "csharp"
+                    }
+                })
+            .Should().Within(30.Seconds()).Emit();
+
+        // The platform recompiles the parked type on its own (the park registry's
+        // "retry only if the sources changed" path) — and the GATE must let go of it.
+        await WhenGate(gate, g => g.Retracted.ContainsKey(tornPath), TimeSpan.FromSeconds(150));
+
+        Output.WriteLine($"gate → {gate.Phase}: {gate.Detail}");
+        gate.Regressions.Keys.Should().NotContain(tornPath,
+            "the type rebuilt on THIS image, so the earlier failure was never evidence against it");
+        gate.Detail.Should().Contain("retracted",
+            "a regression that healed still happened — it must stay visible in the health payload");
+
+        // …and it was a FRESH build that retracted it, not the stale one the failure kept. This is
+        // the deterministic half of the same guard as the Retracted-is-empty check above.
+        var rebuilt = await WhenDefinition(tornPath,
+            d => d.CompilationStatus == CompilationStatus.Ok, TimeSpan.FromSeconds(30));
+        (rebuilt.LastCompileSucceededAt > tornFailure.LastCompileSucceededAt).Should().BeTrue(
+            "the retraction must be driven by a compile that ran AFTER the regression was recorded "
+            + "— the record's pre-failure success timestamp must never be enough. Failure carried "
+            + $"{tornFailure.LastCompileSucceededAt:O}, rebuild {rebuilt.LastCompileSucceededAt:O}");
+
+        // ── The negative half. The watch machinery has now demonstrably run (it retracted the
+        //    torn type), so the genuinely broken type still being held is evidence, not latency:
+        //    a real compile error on a source set nobody touched STILL GATES, and the pod stays
+        //    out of rotation — which is the entire point of the gate and must not have been
+        //    weakened by any of the above.
+        gate.Retracted.Keys.Should().NotContain(brokenPath,
+            "a genuinely broken type never reaches a usable build, so nothing may retract it");
+        gate.Regressions.Keys.Should().Equal(brokenPath);
+        gate.Phase.Should().Be(BakePhase.Regressed,
+            "one real compile error on a stable source set is enough to refuse readiness — "
+            + "retracting the torn type must not have released the gate");
+    }
+
+    /// <summary>
+    /// Waits (level-triggered) until the gate satisfies <paramref name="predicate"/>. The gate is a
+    /// deliberately non-reactive, lock-free singleton — the readiness probe pulls it synchronously
+    /// — so there is no stream to filter on and the sanctioned interval re-read applies
+    /// (WritingTests.md → "Polling loops around QueryAsync"); never a fixed <c>Task.Delay</c>.
+    /// </summary>
+    private static Task WhenGate(
+        NodeTypeBakeGateState gate, Func<NodeTypeBakeGateState, bool> predicate, TimeSpan timeout)
+        => Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+            .Select(_ => gate)
+            .Where(predicate)
+            .FirstAsync()
+            .Timeout(timeout)
+            .ToTask();
+
+    // =============================================================================================
     // Batch bake (issue #1207): the initial-bake mode drives the ONE compiler directly — batched
     // source discovery, no per-type hub activation, no compile-watcher settle — and must produce
     // the same artifacts (per-type assemblies on the share, compile-state stamps on the type
