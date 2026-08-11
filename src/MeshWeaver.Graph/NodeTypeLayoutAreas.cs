@@ -169,7 +169,7 @@ public static class NodeTypeLayoutAreas
                 var def = node?.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
                 if (node is null || def is null)
                     return (UiControl?)Controls.Markdown(
-                        "*This node has no NodeTypeDefinition — nothing to compile.*");
+                        $"*{host.Localize("ui.noNodeTypeDefinition")}*");
 
                 // Compile finished cleanly → redirect to the now-addressable page. The user
                 // only landed here because activation could not complete mid-compile; once
@@ -249,7 +249,7 @@ public static class NodeTypeLayoutAreas
                 // framework bump every dynamic type recompiles, and "your page plus 40
                 // more are queued" is the honest answer to "why is this taking so long".
                 if (def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling)
-                    stack = AppendSweepSummary(stack, host, sweepNodes, nodeTypePath);
+                    stack = AppendSweepSummary(stack, host, sweepNodes);
 
                 return (UiControl?)stack;
             });
@@ -263,7 +263,7 @@ public static class NodeTypeLayoutAreas
     /// flight/queued: a solitary recompile keeps its focused single-type page.
     /// </summary>
     private static StackControl AppendSweepSummary(
-        StackControl stack, LayoutAreaHost host, IEnumerable<MeshNode> sweepNodes, string selfPath)
+        StackControl stack, LayoutAreaHost host, IEnumerable<MeshNode> sweepNodes)
     {
         var defs = sweepNodes
             .Select(n => (Node: n, Def: n.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions)))

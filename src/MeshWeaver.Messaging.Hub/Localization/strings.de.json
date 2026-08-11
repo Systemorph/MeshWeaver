@@ -393,6 +393,7 @@
   "ui.compileTypesReady": "{0} von {1} Typen kompiliert",
   "ui.compileNowCompiling": "Wird gerade kompiliert: {0}",
   "ui.compileQueued": "{0} weitere in der Warteschlange",
+  "ui.noNodeTypeDefinition": "Dieser Knoten hat keine NodeTypeDefinition — nichts zu kompilieren.",
   "ui.noConfiguration": "Keine Konfiguration definiert.",
   "ui.noConfigLambda": "Kein Konfigurations-Lambda definiert.",
   "ui.noneConfigured": "Nichts konfiguriert.",
