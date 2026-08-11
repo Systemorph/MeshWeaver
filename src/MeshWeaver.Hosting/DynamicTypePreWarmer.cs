@@ -584,6 +584,15 @@ public static class DynamicTypePreWarmer
         // Batch discovery first — ONE pass resolving every pending type's source queries.
         // Only a DISCOVERY failure falls back to the activation-driven sweep (before any
         // outcome was produced); a failure inside the sweep itself propagates as usual.
+        //
+        // 🚨 "Discovery failure" is now ASSERTED, not assumed (issue #1216). ResolveSources errors
+        // when its query hit its own ceiling (possible truncation) or when a type that declares
+        // source queries resolved to an empty set with nothing corroborating it. Both mean the batch
+        // does not know what the sources ARE, and a compile driven from a set you did not establish
+        // produces verdicts about code from evidence you do not have — on memex-cloud 2026-08-11
+        // that read as "169 of 237 types are content-broken" and, on an ungated pod, would have
+        // baked a fleet of empty assemblies with nothing refusing readiness. Whole-batch fallback is
+        // the only safe answer: the activation-driven sweep resolves each type's sources itself.
         return NodeTypeBatchBake
             .ResolveSources(batchMeshService!, accessService, definitions, pending, logger)
             .Select(index =>
@@ -591,8 +600,11 @@ public static class DynamicTypePreWarmer
             .Catch<ImmutableDictionary<string, IReadOnlyList<MeshNode>>?, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
-                    "DynamicTypePreWarmer: batched source discovery failed — falling back to the "
-                    + "activation-driven sweep");
+                    "DynamicTypePreWarmer: batched source discovery did not establish the source "
+                    + "sets — abandoning the batch and falling back to the activation-driven sweep "
+                    + "for ALL {Pending} pending type(s). No type is reported from this pass, so "
+                    + "nothing here can be mistaken for a content or compile verdict.",
+                    pending.Count);
                 return Observable.Return(
                     (ImmutableDictionary<string, IReadOnlyList<MeshNode>>?)null);
             })
