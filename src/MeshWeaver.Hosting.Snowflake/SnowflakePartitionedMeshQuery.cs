@@ -417,7 +417,10 @@ public sealed class SnowflakePartitionedMeshQuery : IMeshQueryProvider
         // QueryAcrossSchemasAsync reads only ParsedQuery.Limit and substitutes a hard default of 50.
         // A request that states no limit at all still gets that default: an unanchored UNION over
         // every partition schema needs SOME bound.
-        if (request.Limit.HasValue)
+        // 🚨 POSITIVE limits only — same guard as the PostgreSQL twin. `Limit <= 0` means "do not
+        // clip" upstream (MeshQuery.ClipMergedInitial applies a limit only when `limit > 0`), but in
+        // SQL a zero is a literal `LIMIT 0`: zero rows for a caller that asked for everything.
+        if (request.Limit is > 0)
             queryForSql = queryForSql with { Limit = request.Limit };
 
         var userId = GetEffectiveUserId(request);
