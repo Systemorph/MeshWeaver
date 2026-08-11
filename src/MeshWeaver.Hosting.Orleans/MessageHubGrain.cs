@@ -21,10 +21,26 @@ namespace MeshWeaver.Hosting.Orleans;
 /// node's <c>HubConfiguration</c> reactively and builds the hub; incoming deliveries park
 /// on a ready-signal until the hub is available and are then dispatched to it. The grain is
 /// reentrant so deliveries can be queued while activation is still in flight.
+///
+/// <para><b>Why <c>[PreferLocalPlacement]</c> and not the default Random.</b> A new activation
+/// should live on the silo whose traffic caused it. Random placement sprays activations across
+/// every compatible silo — including one that is mid-rollout: a pod whose NodeType bake gate is
+/// refusing readiness is OUT of the k8s Service (no HTTP reaches it) yet fully IN the Orleans
+/// cluster, so with Random up to half of the serving pod's new hub activations landed on the
+/// not-ready silo. On 2026-08-10/11 (memex-cloud) that silo's routing had additionally wedged,
+/// so every activation placed there died on the 60s SubscribeRequest timeout — the whole store
+/// crawled for a day while the gate (correctly, per its own rules at the time) held the rollout.
+/// Prefer-local keeps the two worlds apart with no coordination: the serving silo's user traffic
+/// activates hubs ON the serving silo, and the baking silo's warm sweep activates the type hubs
+/// it is compiling ON ITSELF — which the bake REQUIRES, because the assemblies must be built
+/// against the NEW image's framework version. (Single-activation semantics are untouched: this
+/// only biases where a NOT-yet-activated grain comes to life; an existing activation anywhere
+/// still wins.)</para>
 /// </summary>
 /// <param name="logger">Logger for activation, deactivation and delivery diagnostics.</param>
 /// <param name="meshHub">The mesh hub used to resolve services, addresses and node streams.</param>
 [global::Orleans.Concurrency.Reentrant]
+[global::Orleans.Placement.PreferLocalPlacement]
 public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHub)
     : Grain, IMessageHubGrain
 {
