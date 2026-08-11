@@ -20,17 +20,29 @@ namespace MeshWeaver.Markdown.Export.Ast;
 public class DocumentBuilder
 {
     private readonly MarkdownPipeline _pipeline;
+    private readonly ImmutableDictionary<string, ImmutableArray<DocumentElement>> _resolvedAreas;
 
     /// <summary>
-    /// Initializes a new instance of the <c>DocumentBuilder</c> class, building the Markdig
-    /// pipeline with advanced extensions and page-break support enabled.
+    /// Initializes a new instance of the <c>DocumentBuilder</c> class.
     /// </summary>
-    public DocumentBuilder()
+    /// <param name="currentNodePath">
+    /// The exported node's own path, which is what makes a RELATIVE <c>@@("area:…")</c> embed
+    /// resolvable. Null still parses embeds; only relative resolution is lost.
+    /// </param>
+    /// <param name="resolvedAreas">
+    /// Embedded layout areas already resolved to document content, keyed as
+    /// <see cref="Html.DocumentAreaResolution.KeyFor"/> forms them. Reading an area is reactive and
+    /// cross-hub while this walk is synchronous, so resolution happens in a prior pass and the
+    /// result is looked up here — the same split the export already uses for client-captured
+    /// Mermaid/Math SVGs. Passing nothing renders embeds as a visible notice rather than silently
+    /// dropping them.
+    /// </param>
+    public DocumentBuilder(
+        string? currentNodePath = null,
+        ImmutableDictionary<string, ImmutableArray<DocumentElement>>? resolvedAreas = null)
     {
-        _pipeline = new MarkdownPipelineBuilder()
-            .UseAdvancedExtensions()
-            .UsePageBreaks()
-            .Build();
+        _pipeline = ExportMarkdownPipeline.For(currentNodePath);
+        _resolvedAreas = resolvedAreas ?? ImmutableDictionary<string, ImmutableArray<DocumentElement>>.Empty;
     }
 
     /// <summary>
@@ -171,11 +183,42 @@ public class DocumentBuilder
                     // Render raw HTML as a code block fallback — pure C# can't faithfully reproduce HTML.
                     elements.Add(new CodeBlockElement("html", html.Lines.ToString()));
                     break;
+                // 🚨 MUST precede the generic ContainerBlock case: LayoutAreaComponentInfo IS a
+                // ContainerBlock, so falling through would walk an embed's (empty) children and
+                // emit nothing at all — a silent hole exactly where the author put a view.
+                case LayoutAreaComponentInfo areaInfo:
+                    elements.AddRange(ResolveArea(areaInfo));
+                    break;
                 case ContainerBlock container2:
                     WalkBlocks(container2, options, elements, tocHeadings, ref mermaidIndex, ref mathIndex);
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// Substitutes an embedded layout area with the content resolved for it beforehand.
+    ///
+    /// <para>When no entry exists the embed becomes a VISIBLE notice naming the area, never
+    /// nothing: a missing entry means the resolution pass did not run for this document, and a
+    /// document that silently omits a section its author embedded is the defect this whole change
+    /// exists to remove. (Areas that ran but produced nothing already carry a localized notice
+    /// placed by <see cref="Html.DocumentAreaResolution"/>; this fallback covers the caller that
+    /// never resolved at all, so it deliberately stays free of hub/localization dependencies.)</para>
+    /// </summary>
+    private ImmutableArray<DocumentElement> ResolveArea(LayoutAreaComponentInfo info)
+    {
+        var key = Html.DocumentAreaResolution.KeyFor(info);
+        if (_resolvedAreas.TryGetValue(key, out var resolved) && !resolved.IsEmpty)
+            return resolved;
+
+        var label = info.Area ?? info.RawPath ?? string.Empty;
+        return
+        [
+            new ParagraphElement(
+                ImmutableArray.Create<InlineElement>(
+                    new TextInline($"[{label}]", Bold: false, Italic: true, Strike: false)))
+        ];
     }
 
     private static TableElement ReadTable(Table table)

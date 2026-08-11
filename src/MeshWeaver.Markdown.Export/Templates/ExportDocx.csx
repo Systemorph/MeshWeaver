@@ -15,9 +15,12 @@ using MeshWeaver.Markdown.Export.Ast;
 using MeshWeaver.Markdown.Export.Branding;
 using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Markdown.Export.Docx;
+using MeshWeaver.Markdown.Export.Html;
 using MeshWeaver.Markdown.Export.Messaging;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 if (!Inputs.TryGetValue("sourcePath", out var sourcePathEl) || sourcePathEl.ValueKind != JsonValueKind.String)
@@ -86,8 +89,18 @@ if (options.IncludeChildren)
     Log.LogInformation("Collected {Count} chapters", chapters.Count);
 }
 
+// Resolve embedded layout areas BEFORE the (synchronous) document build — see ExportPdf.csx for
+// why this is a separate pass. Without it a `@@(…)` embed lands in Word as a visible notice
+// instead of the view the author placed; before this change it landed as literal source text.
+Log.LogInformation("Resolving embedded layout areas");
+var resolvedAreas = await DocumentAreaResolution
+    .Resolve(Mesh, chapters, sourcePath, new DocumentHtmlOptions(PortalBaseUrl(Mesh, options)), Log)
+    .FirstAsync()
+    .ToTask(Ct);
+
 Log.LogInformation("Rendering DOCX");
-var document = new DocumentBuilder().Build(title, chapters, options, branding);
+var document = new DocumentBuilder(sourcePath, resolvedAreas)
+    .Build(title, chapters, options, branding);
 var bytes = new DocxDocumentRenderer().Render(document);
 Log.LogInformation("Rendered {Bytes} bytes", bytes.Length);
 
@@ -102,6 +115,18 @@ static string ExtractMarkdown(MeshNode node)
     if (node.Content is MarkdownContent mc) return mc.Content ?? "";
     if (node.Content is string s) return s;
     return "";
+}
+
+// The portal's public origin — a resolved area's links are dead without one once the file leaves
+// this machine. Same key order as ExportPdf.csx and the HTML export.
+static string PortalBaseUrl(IMessageHub mesh, DocumentExportOptions options)
+{
+    if (!string.IsNullOrWhiteSpace(options.BaseUrl)) return options.BaseUrl;
+    var configuration = mesh.ServiceProvider.GetService<IConfiguration>();
+    return configuration?["Portal:BaseUrl"]
+           ?? configuration?["PublicBaseUrl"]
+           ?? configuration?["Email:WebhookBaseUrl"]
+           ?? "";
 }
 
 static string Sanitize(string s)

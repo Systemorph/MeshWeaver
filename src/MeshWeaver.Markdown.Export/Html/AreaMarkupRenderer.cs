@@ -4,7 +4,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 
-namespace MeshWeaver.Markdown.Export.Email;
+namespace MeshWeaver.Markdown.Export.Html;
 
 /// <summary>
 /// Turns a LIVE layout area's control tree into static, email-safe markup.
@@ -22,7 +22,7 @@ namespace MeshWeaver.Markdown.Export.Email;
 /// cell, text becomes a paragraph. A control with no email meaning contributes nothing rather
 /// than a broken approximation.</para>
 /// </summary>
-public static class EmailControlRenderer
+public static class AreaMarkupRenderer
 {
     /// <summary>
     /// Guards against a self-referential area graph. Nesting deeper than this in a document
@@ -33,18 +33,18 @@ public static class EmailControlRenderer
     /// <summary>
     /// Renders the control at <paramref name="area"/> (and its child areas) to an email HTML node.
     /// Emits exactly once and completes; never faults — an area that cannot be read contributes
-    /// <see cref="EmailNode.Empty"/> so one bad embed can never fail a whole document export.
+    /// <see cref="MarkupNode.Empty"/> so one bad embed can never fail a whole document export.
     /// </summary>
-    public static IObservable<EmailNode> Render(
+    public static IObservable<MarkupNode> Render(
         ISynchronizationStream<JsonElement> stream,
         string area,
-        EmailHtmlOptions options)
+        DocumentHtmlOptions options)
         => RenderArea(stream, area, options, depth: 0).Select(r => r.Node);
 
     private static IObservable<Rendered> RenderArea(
         ISynchronizationStream<JsonElement> stream,
         string area,
-        EmailHtmlOptions options,
+        DocumentHtmlOptions options,
         int depth)
     {
         if (depth > MaxDepth)
@@ -63,12 +63,12 @@ public static class EmailControlRenderer
     /// then replaces each one as its node stream or Open Graph fetch returns. Taking the first
     /// emission would therefore export the PLACEHOLDERS. So "done" is defined as quiescent:
     /// the tree is snapshotted once it has stopped changing for
-    /// <see cref="EmailHtmlOptions.SettleWindow"/>, or — for an area that never goes quiet — as
-    /// whatever it last held at the <see cref="EmailHtmlOptions.Timeout"/> deadline, whichever
+    /// <see cref="DocumentHtmlOptions.SettleWindow"/>, or — for an area that never goes quiet — as
+    /// whatever it last held at the <see cref="DocumentHtmlOptions.Timeout"/> deadline, whichever
     /// comes first. An area that never emits at all yields null and renders as nothing.</para>
     /// </summary>
     private static IObservable<UiControl?> Settle(
-        IObservable<UiControl?> source, EmailHtmlOptions options)
+        IObservable<UiControl?> source, DocumentHtmlOptions options)
         => source
             .Publish(shared => shared
                 .Throttle(options.SettleWindow)
@@ -79,7 +79,7 @@ public static class EmailControlRenderer
     private static IObservable<Rendered> RenderControl(
         ISynchronizationStream<JsonElement> stream,
         UiControl? control,
-        EmailHtmlOptions options,
+        DocumentHtmlOptions options,
         int depth)
         => control switch
         {
@@ -91,15 +91,15 @@ public static class EmailControlRenderer
             MarkdownControl markdown =>
                 Observable.Return(new Rendered(
                     markdown,
-                    EmailNode.Raw(Markdig.Markdown.ToHtml(AsText(markdown.Markdown))))),
+                    MarkupNode.Raw(Markdig.Markdown.ToHtml(AsText(markdown.Markdown))))),
 
             HtmlControl html =>
-                Observable.Return(new Rendered(html, EmailNode.Raw(AsText(html.Data)))),
+                Observable.Return(new Rendered(html, MarkupNode.Raw(AsText(html.Data)))),
 
             LabelControl label =>
                 Observable.Return(new Rendered(
                     label,
-                    EmailNode.El("p").Style("margin:0 0 10px 0").Add(EmailNode.Text(AsText(label.Data))))),
+                    MarkupNode.El("p").Style("margin:0 0 10px 0").Add(MarkupNode.Text(AsText(label.Data))))),
 
             IContainerControl container =>
                 RenderContainer(stream, container, options, depth),
@@ -113,7 +113,7 @@ public static class EmailControlRenderer
     private static IObservable<Rendered> RenderContainer(
         ISynchronizationStream<JsonElement> stream,
         IContainerControl container,
-        EmailHtmlOptions options,
+        DocumentHtmlOptions options,
         int depth)
     {
         var areas = container.Areas
@@ -132,7 +132,7 @@ public static class EmailControlRenderer
             .Take(1)
             .Select(rendered =>
             {
-                var present = rendered.Where(r => r.Node != EmailNode.Empty).ToArray();
+                var present = rendered.Where(r => r.Node != MarkupNode.Empty).ToArray();
                 if (present.Length == 0)
                     return Rendered.None;
 
@@ -142,7 +142,7 @@ public static class EmailControlRenderer
                 // container's CSS, so it holds however the area chose to style itself.
                 return present.All(r => r.IsCard)
                     ? new Rendered(null, CardTable(present.Select(r => r.Node), options))
-                    : new Rendered(null, EmailNode.Fragment(present.Select(r => r.Node)));
+                    : new Rendered(null, MarkupNode.Fragment(present.Select(r => r.Node)));
             });
     }
 
@@ -151,7 +151,7 @@ public static class EmailControlRenderer
     /// per-cell width makes the columns divide evenly regardless of content, and short rows are
     /// padded with empty cells so the last row stays aligned with the ones above it.
     /// </summary>
-    private static EmailNode CardTable(IEnumerable<EmailNode> cards, EmailHtmlOptions options)
+    private static MarkupNode CardTable(IEnumerable<MarkupNode> cards, DocumentHtmlOptions options)
     {
         var columns = Math.Max(1, options.CardColumns);
         var cellWidth = $"{100 / columns}%";
@@ -162,61 +162,61 @@ public static class EmailControlRenderer
             .Select(chunk =>
             {
                 var cells = chunk
-                    .Select(card => EmailNode.El("td")
+                    .Select(card => MarkupNode.El("td")
                         .With("width", cellWidth)
                         .With("valign", "top")
-                        .Style(EmailStyles.CardCell)
+                        .Style(MarkupStyles.CardCell)
                         .Add(card))
                     .ToList();
 
                 // Pad the final row so its columns keep the same widths as every other row.
                 while (cells.Count < columns)
-                    cells.Add(EmailNode.El("td").With("width", cellWidth));
+                    cells.Add(MarkupNode.El("td").With("width", cellWidth));
 
-                return (EmailNode)EmailNode.El("tr").Add(cells);
+                return (MarkupNode)MarkupNode.El("tr").Add(cells);
             });
 
-        return Table().Style(EmailStyles.GridTable).Add(rows);
+        return Table().Style(MarkupStyles.GridTable).Add(rows);
     }
 
     /// <summary>
     /// One link-preview card: a bordered table of FIXED height carrying the title, a clipped
     /// description and the target URL — all three the same link.
     /// </summary>
-    private static EmailNode RenderCard(MeshNodeCardControl card, EmailHtmlOptions options)
+    private static MarkupNode RenderCard(MeshNodeCardControl card, DocumentHtmlOptions options)
     {
         var href = ResolveHref(card, options);
         var title = string.IsNullOrWhiteSpace(card.Title)
             ? DisplayUrl(href, options)
             : card.Title!;
 
-        var body = EmailNode.El("td")
+        var body = MarkupNode.El("td")
             .With("valign", "top")
             .With("height", options.CardHeightPx)
-            .Style(EmailStyles.CardBody(options.CardHeightPx))
-            .Add(EmailNode.El("a").With("href", href).Style(EmailStyles.CardTitle)
-                .Add(EmailNode.Text(title)));
+            .Style(MarkupStyles.CardBody(options.CardHeightPx))
+            .Add(MarkupNode.El("a").With("href", href).Style(MarkupStyles.CardTitle)
+                .Add(MarkupNode.Text(title)));
 
         var description = Clip(card.Description, options.CardDescriptionMaxChars);
         if (!string.IsNullOrEmpty(description))
-            body = body.Add(EmailNode.El("div").Style(EmailStyles.CardDescription)
-                .Add(EmailNode.Text(description)));
+            body = body.Add(MarkupNode.El("div").Style(MarkupStyles.CardDescription)
+                .Add(MarkupNode.Text(description)));
 
-        body = body.Add(EmailNode.El("div").Style("margin-top:7px")
-            .Add(EmailNode.El("a").With("href", href).Style(EmailStyles.CardLink)
-                .Add(EmailNode.Text(DisplayUrl(href, options) + " ›"))));
+        body = body.Add(MarkupNode.El("div").Style("margin-top:7px")
+            .Add(MarkupNode.El("a").With("href", href).Style(MarkupStyles.CardLink)
+                .Add(MarkupNode.Text(DisplayUrl(href, options) + " ›"))));
 
         return Table()
-            .Style(EmailStyles.CardFrame(options.CardHeightPx))
-            .Add(EmailNode.El("tr").Add(body));
+            .Style(MarkupStyles.CardFrame(options.CardHeightPx))
+            .Add(MarkupNode.El("tr").Add(body));
     }
 
     /// <summary>
     /// A presentation table with the belt-and-braces attributes Word honours more reliably than
     /// the equivalent CSS.
     /// </summary>
-    private static EmailElement Table() =>
-        EmailNode.El("table")
+    private static MarkupElement Table() =>
+        MarkupNode.El("table")
             .With("role", "presentation")
             .With("width", "100%")
             .With("cellpadding", "0")
@@ -227,15 +227,15 @@ public static class EmailControlRenderer
     /// The card's link target: an explicit (external) href wins, otherwise the node path resolved
     /// against the portal origin. Always absolute — a relative link is dead in an inbox.
     /// </summary>
-    private static string ResolveHref(MeshNodeCardControl card, EmailHtmlOptions options)
+    private static string ResolveHref(MeshNodeCardControl card, DocumentHtmlOptions options)
     {
         if (!string.IsNullOrWhiteSpace(card.Href))
-            return EmailHtmlSanitizer.Absolutize(card.Href, options.NormalizedBaseUrl);
-        return EmailHtmlSanitizer.Absolutize(card.NodePath?.TrimStart('/'), options.NormalizedBaseUrl);
+            return HtmlDowngrade.Absolutize(card.Href, options.NormalizedBaseUrl);
+        return HtmlDowngrade.Absolutize(card.NodePath?.TrimStart('/'), options.NormalizedBaseUrl);
     }
 
     /// <summary>The link line's text: the URL without its scheme, which reads cleaner in a card.</summary>
-    private static string DisplayUrl(string url, EmailHtmlOptions options)
+    private static string DisplayUrl(string url, DocumentHtmlOptions options)
     {
         var text = url.Replace("https://", string.Empty, StringComparison.OrdinalIgnoreCase)
             .Replace("http://", string.Empty, StringComparison.OrdinalIgnoreCase);
@@ -266,8 +266,8 @@ public static class EmailControlRenderer
     /// A rendered child: its markup plus the two facts the parent needs to lay it out — whether
     /// it produced anything, and whether it is a card (so a run of them becomes a column table).
     /// </summary>
-    private readonly record struct Rendered(UiControl? Control, EmailNode Node, bool IsCard = false)
+    private readonly record struct Rendered(UiControl? Control, MarkupNode Node, bool IsCard = false)
     {
-        public static Rendered None { get; } = new(null, EmailNode.Empty);
+        public static Rendered None { get; } = new(null, MarkupNode.Empty);
     }
 }

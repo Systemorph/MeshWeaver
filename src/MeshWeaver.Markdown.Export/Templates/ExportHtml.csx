@@ -5,7 +5,7 @@
 // templates feed the node's raw markdown into a bare Markdig pipeline that has never heard of the
 // `@@(...)` embed syntax, so an embed lands in the output as literal source text. Here the
 // framework's own pipeline renders the markdown (emitting the same layout-area anchors the portal
-// emits) and EmailDocumentComposer then reads each area's live control tree off its
+// emits) and DocumentHtmlComposer then reads each area's live control tree off its
 // synchronization stream and serializes it to static, table-based markup.
 //
 // Triggered via ExecuteScriptRequest with Inputs:
@@ -32,6 +32,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Markdown.Export;
 using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Markdown.Export.Email;
+using MeshWeaver.Markdown.Export.Html;
 using MeshWeaver.Markdown.Export.Messaging;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -169,10 +170,10 @@ if (string.IsNullOrWhiteSpace(baseUrl))
         "No portal base URL configured (Portal:BaseUrl / PublicBaseUrl / Email:WebhookBaseUrl). "
         + "Relative links and images will stay relative and will NOT resolve from a mail client.");
 
-var emailOptions = new EmailHtmlOptions(baseUrl);
+var emailOptions = new DocumentHtmlOptions(baseUrl);
 
 Log.LogInformation("Composing email HTML for {Path} (baseUrl={BaseUrl})", sourcePath, baseUrl);
-var html = await EmailDocumentComposer
+var html = await DocumentHtmlComposer
     .Compose(Mesh, title, markdown.ToString(), sourcePath, emailOptions, Log)
     .FirstAsync()
     .ToTask(Ct);

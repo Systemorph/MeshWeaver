@@ -7,6 +7,7 @@ using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Markdown.Export.Email;
+using MeshWeaver.Markdown.Export.Html;
 using MeshWeaver.Markdown.Export.Messaging;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -147,7 +148,7 @@ public static class SendDocumentDispatch
                         // whole point of "send it as the email".
                         if (delivery == DocumentDelivery.EmailBody)
                         {
-                            var documentHtml = EmailDocumentComposer.PrependIntro(
+                            var documentHtml = DocumentHtmlComposer.PrependIntro(
                                 Encoding.UTF8.GetString(rendered.Content), htmlBody);
 
                             return EmailImageInliner.Inline(documentHtml, hub)

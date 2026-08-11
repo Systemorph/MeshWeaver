@@ -1,9 +1,9 @@
-namespace MeshWeaver.Markdown.Export.Email;
+namespace MeshWeaver.Markdown.Export.Html;
 
 /// <summary>
 /// Tuning for the email-safe HTML renderer. Every default here encodes a constraint of the
 /// LOWEST common denominator among mail clients (Outlook desktop, which renders through Word),
-/// not a stylistic preference — see <see cref="EmailStyles"/> for the rationale per token.
+/// not a stylistic preference — see <see cref="MarkupStyles"/> for the rationale per token.
 /// </summary>
 /// <param name="BaseUrl">
 /// Absolute origin every relative link and image is rewritten against (e.g.
@@ -30,7 +30,7 @@ namespace MeshWeaver.Markdown.Export.Email;
 /// Upper bound on one area's resolution. On expiry the area renders as whatever it last emitted
 /// (a placeholder card grid), never as an empty div and never faulting the whole export.
 /// </param>
-public record EmailHtmlOptions(
+public record DocumentHtmlOptions(
     string BaseUrl,
     int ContentWidthPx = 840,
     int CardHeightPx = 118,
