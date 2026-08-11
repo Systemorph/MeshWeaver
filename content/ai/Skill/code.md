@@ -316,6 +316,37 @@ public record Project
 - `INamed` — Provides `DisplayName` for lookup columns
 - `IContentInitializable` — `Initialize()` called after creation (computed fields)
 
+## 🚨 Reading a node's content — `ContentAs<T>`, never a cast
+
+Inside a layout area, a watcher or any code that receives a `MeshNode`, **`node.Content as MyType` /
+`node.Content is MyType` is a trap-door.** It works while you are testing and returns a silent
+`null` in production, because content does not always arrive as your CLR type:
+
+- a hub whose TypeRegistry cannot resolve the `$type` gets a raw `JsonElement` (the converter
+  degrades rather than throws);
+- freshly written content is still the as-written `JsonObject` until it is re-typed;
+- **every recompile of your NodeType mints a new assembly**, so "the same" record has a different
+  CLR identity per build — the cast fails against your own type from the previous compile.
+
+All three look the same from outside: the field reads as empty, the view renders blank, a reactive
+wait never finishes. Nothing throws and nothing is logged.
+
+```csharp
+// ❌ silently null the moment content is untyped or from another build
+var project = node.Content as Project;
+
+// ✅ recovers all three shapes, and logs loudly when it genuinely cannot convert
+var project = node.ContentAs<Project>(host.Hub.JsonSerializerOptions);
+```
+
+For a payload that is not node content (a control's `Data`, a message payload), the same conversion
+is `value.As<T>(hub.JsonSerializerOptions)`.
+
+**And prefer to read where the type is registered.** The `$type` resolves against the TypeRegistry
+behind the options you pass, so content read on a hub that never declared your type is untyped by
+construction — `ContentAs<T>` is then rescuing a routing mistake. Your NodeType's own hub knows its
+content type; that is where the read belongs.
+
 ## Reference Data Pattern
 
 ```csharp
