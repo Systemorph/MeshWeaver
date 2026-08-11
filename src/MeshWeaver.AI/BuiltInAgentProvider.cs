@@ -167,11 +167,28 @@ public class BuiltInAgentProvider : IStaticNodeProvider
     /// <summary>Parses one embedded/on-disk content file into a node, or null when it cannot be
     /// parsed. <c>internal</c> so the content guard test can prove malformed front matter is SKIPPED
     /// rather than thrown on — an exception here fails mesh startup (BuiltInAgentContentTest).</summary>
-    internal static MeshNode? ParseEmbeddedNode(string content, string relativePath)
+    internal static MeshNode? ParseEmbeddedNode(string content, string relativePath) =>
+        TryParseEmbeddedNode(content, relativePath, out _);
+
+    /// <summary>
+    /// Parses one content file into a node, and on failure says WHY — the reason the guard test asserts
+    /// on. A bare null cannot distinguish "reported and skipped" from "silently vanished", and it is the
+    /// silent case that leaves an author with <i>"my agent doesn't appear and nothing is red"</i>.
+    /// </summary>
+    /// <param name="content">The file's text (YAML front matter + markdown body).</param>
+    /// <param name="relativePath">The file, named so a failure can be fixed.</param>
+    /// <param name="error">Null on success; otherwise an author-actionable reason.</param>
+    /// <returns>The parsed node, or null when <paramref name="error"/> is set.</returns>
+    internal static MeshNode? TryParseEmbeddedNode(string content, string relativePath, out string? error)
     {
+        error = null;
         var document = Markdig.Markdown.Parse(content, Pipeline);
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
-        if (yamlBlock == null) return null;
+        if (yamlBlock == null)
+        {
+            error = "no YAML front matter — the file must open with a '---' fenced block";
+            return null;
+        }
 
         var yamlContent = yamlBlock.Lines.ToString();
         var markdownBody = content[(yamlBlock.Span.End + 1)..].TrimStart('\r', '\n');
@@ -199,9 +216,9 @@ public class BuiltInAgentProvider : IStaticNodeProvider
             // No logger is reachable from this static startup path; stderr is the sink that reaches
             // pod logs. Naming the file is the whole point — the next broken front matter should be
             // one obvious line, not an unexplained startup crash.
-            Console.Error.WriteLine(
-                $"[BuiltInAgentProvider] Skipping '{relativePath}': invalid YAML front matter. "
-                + $"An unquoted ':' inside a value is the usual cause — quote the value. {ex.Message}");
+            error = "invalid YAML front matter. An unquoted ':' inside a value is the usual cause — "
+                    + $"quote the value. {ex.Message}";
+            Console.Error.WriteLine($"[BuiltInAgentProvider] Skipping '{relativePath}': {error}");
             return null;
         }
     }

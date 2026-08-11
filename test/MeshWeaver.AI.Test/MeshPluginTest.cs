@@ -76,18 +76,27 @@ public class MeshPluginTest : MonolithMeshTestBase
         var tools = plugin.CreateTools();
 
         tools.Should().NotBeNull();
-        // Read-only tools: Get, Search, NavigateTo, GetDiagnostics, RunTests
-        tools.Should().HaveCount(5);
 
         var toolNames = tools.OfType<AIFunction>().Select(t => t.Name).ToList();
         toolNames.Should().Contain("Get");
         toolNames.Should().Contain("Search");
         toolNames.Should().Contain("NavigateTo");
         toolNames.Should().Contain("GetDiagnostics");
-        toolNames.Should().Contain("RunTests");
         toolNames.Should().NotContain("Create");
         toolNames.Should().NotContain("Update");
         toolNames.Should().NotContain("Delete");
+
+        // 🚨 The real contract of CreateTools is an ALLOWLIST — it is the read-only surface, so nothing
+        // outside this set may appear. `HaveCount(5)` was a proxy for that, and a bad one twice over:
+        // it names nothing when it fails ("expected 5, found 6" — which tool leaked?), and it is
+        // ENVIRONMENT-DEPENDENT, because RunTests is registered only when the process runs inside a repo
+        // checkout (MeshPlugin.RunTestsAvailable). Running the suite from outside the tree failed this
+        // test for a reason unrelated to any code. A subset assertion is exact, self-naming, and stable.
+        toolNames.Should().OnlyHaveUniqueItems();
+        toolNames.Should().BeSubsetOf(
+            new[] { "Get", "Search", "NavigateTo", "GetDiagnostics", "RunTests" },
+            "CreateTools is the READ-ONLY tool surface — any tool beyond this allowlist is a capability "
+            + "handed to an agent that must not have it, and adding one must be a deliberate review");
     }
 
     [Fact]
@@ -117,9 +126,11 @@ public class MeshPluginTest : MonolithMeshTestBase
         toolNames.Should().Contain("Recycle");
         toolNames.Should().Contain("RunTests");
 
-        // All tools: Get, Search, NavigateTo, Create, Update, Patch, EditContent, Delete, Move, Copy, GetDiagnostics, Recycle, RunTests
-        // (RunTests is present because tests run inside the repo — it is omitted in deployed containers.)
-        tools.Should().HaveCount(13);
+        // No count. It added nothing over the thirteen named assertions above — and RunTests is
+        // registered only when the process runs inside a repo checkout, so the count was
+        // environment-dependent and would red a run from outside the tree for no code reason.
+        toolNames.Should().OnlyHaveUniqueItems(
+            "a duplicate tool name shadows the earlier registration in the model's tool list");
     }
 
     #endregion
