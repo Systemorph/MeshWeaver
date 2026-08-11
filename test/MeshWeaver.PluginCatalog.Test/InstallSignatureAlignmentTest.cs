@@ -118,4 +118,96 @@ public class InstallSignatureAlignmentTest(ITestOutputHelper output) : MonolithM
         PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
             .Should().BeTrue("nodes identical in every applied field (Order included) stay unchanged");
     }
+
+    /// <summary>
+    /// 🚨 The MIRROR of the diagnosed churn — the flap that SURVIVED the one-sided alignment
+    /// (FractalStars/Stars, 2026-08-11): the persisted side was read BEFORE the module's own type
+    /// registration resolved, so it is a raw <c>JsonElement</c> omitting defaulted properties,
+    /// while the incoming repo file deserialized TYPED and materializes them. Same values → MUST
+    /// read as unchanged; the alignment has to run on whichever side is the element.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void UntypedCurrent_VsTypedIncomingMaterializingDefaults_IsUnchanged()
+    {
+        var current = Node(Element("""{"$type":"PluginCatalogContent","sourceRepoPath":"/repo"}"""));
+        var incoming = Node(new PluginCatalogContent { SourceRepoPath = "/repo" });
+
+        PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
+            .Should().BeTrue(
+                "an untyped persisted element vs a typed incoming with only materialized defaults " +
+                "is NOT a change — this exact asymmetry re-wrote FractalStars/Stars on every install");
+    }
+
+    /// <summary>An authored value differing from the persisted one is still a change — mirror side.</summary>
+    [Fact(Timeout = 30000)]
+    public void UntypedCurrent_TypedIncomingWithRealChange_IsStillDetected()
+    {
+        var current = Node(Element(
+            """{"$type":"PluginCatalogContent","sourceRepoPath":"/repo","sourceRef":"v2"}"""));
+        var incoming = Node(new PluginCatalogContent { SourceRepoPath = "/repo" });
+
+        PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
+            .Should().BeFalse("sourceRef v2 → HEAD is a real change the mirror alignment must not mask");
+    }
+
+    /// <summary>A $type change is never masked by coercing the persisted element into the incoming's type.</summary>
+    [Fact(Timeout = 30000)]
+    public void UntypedCurrentWithDifferentType_VsTypedIncoming_IsStillDetected()
+    {
+        var current = Node(Element("""{"$type":"SomeOtherContent","sourceRepoPath":"/repo"}"""));
+        var incoming = Node(new PluginCatalogContent { SourceRepoPath = "/repo" });
+
+        PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
+            .Should().BeFalse("a differing $type IS a real change — alignment only applies same-type");
+    }
+
+    /// <summary>
+    /// A member the persisted element carries but the incoming type lacks routes to the raw compare
+    /// (change detected) — the strict Disallow guard, mirror side. The following rewrite normalizes
+    /// the persisted shape; a silent drop would mask the schema drift forever.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void UnknownPersistedProperty_VsTypedIncoming_IsStillDetected()
+    {
+        var current = Node(Element(
+            """{"$type":"PluginCatalogContent","sourceRepoPath":"/repo","legacyProperty":"x"}"""));
+        var incoming = Node(new PluginCatalogContent { SourceRepoPath = "/repo" });
+
+        PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
+            .Should().BeFalse(
+                "a persisted member the incoming type lacks is schema drift — raw compare, one " +
+                "normalizing rewrite, never a silent drop");
+    }
+
+    /// <summary>
+    /// A repo file that legitimately OMITS the discriminator (the node's nodeType implies the
+    /// content type) still aligns — refusing to would re-open the materialized-default churn for
+    /// every discriminator-less content file.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void MissingDiscriminator_StillAligns_AndReadsUnchanged()
+    {
+        var current = Node(new PluginCatalogContent { SourceRepoPath = "/repo" });
+        var incoming = Node(Element("""{"sourceRepoPath":"/repo"}"""));
+
+        PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
+            .Should().BeTrue(
+                "a discriminator-less file with only materialized-default differences is unchanged");
+    }
+
+    /// <summary>
+    /// A MALFORMED (non-string) discriminator skips alignment entirely: the raw compare shows the
+    /// malformed value as a change instead of the alignment silently stripping and repairing it.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void MalformedDiscriminator_SkipsAlignment_AndReadsChanged()
+    {
+        var current = Node(new PluginCatalogContent { SourceRepoPath = "/repo" });
+        var incoming = Node(Element("""{"$type":42,"sourceRepoPath":"/repo"}"""));
+
+        PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
+            .Should().BeFalse(
+                "a non-string $type is malformed content — it must surface as a change, never be " +
+                "silently coerced into the peer's type");
+    }
 }

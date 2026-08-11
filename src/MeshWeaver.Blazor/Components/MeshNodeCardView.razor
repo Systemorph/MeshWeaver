@@ -6,6 +6,13 @@
 {
     @CardContent
 }
+else if (!string.IsNullOrEmpty(Href))
+{
+    @* External link-preview card (OgCard): a real anchor to the absolute URL, new tab. *@
+    <a href="@Href" target="_blank" rel="noopener noreferrer" style="text-decoration: none; color: inherit; display: block; width: 100%; box-sizing: border-box;">
+        @CardContent
+    </a>
+}
 else
 {
     <a href="/@NodePath" style="text-decoration: none; color: inherit; display: block; width: 100%; box-sizing: border-box;">
@@ -18,6 +25,7 @@ else
     private string? Title { get; set; }
     private string? Description { get; set; }
     private string? ImageUrl { get; set; }
+    private string? Href { get; set; }
     private bool IsInlineSvg => ImageUrl?.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase) == true;
     private bool IsEmoji => !string.IsNullOrEmpty(ImageUrl) && !IsInlineSvg && !ImageUrl.Contains('/') && !ImageUrl.StartsWith("data:");
     private string? ItemArea { get; set; }
@@ -89,6 +97,7 @@ else
         DataBind(ViewModel.Title, x => x.Title);
         DataBind(ViewModel.Description, x => x.Description);
         DataBind(ViewModel.ImageUrl, x => x.ImageUrl);
+        DataBind(ViewModel.Href, x => x.Href);
         DataBind(ViewModel.ItemArea, x => x.ItemArea);
         DataBind(ViewModel.DisableNavigation, x => x.DisableNavigation);
     }
