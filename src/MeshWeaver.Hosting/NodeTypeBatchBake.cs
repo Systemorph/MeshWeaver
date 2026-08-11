@@ -387,6 +387,23 @@ internal static class NodeTypeBatchBake
                 ? Observable.Return(Unit.Default)
                 : storage
                     .WriteAndPublishUpdated(stampedNode, options, changeFeed)
+                    // 🚨 A REFUSED stamp must not be silent. The monotonic write guard answers a
+                    // backward write by emitting the STORED (winning) node — Version strictly
+                    // above the one we wrote — which here means a LIVE owner hub moved this
+                    // record between our read and our write. The bytes are on the share but the
+                    // record does not name them, so the type simply stays pending and the next
+                    // level-triggered probe re-bakes and re-stamps it. Saying so is the
+                    // difference between a self-healing skip and a stamp that vanished.
+                    .Do(saved =>
+                    {
+                        if (saved is not null && saved.Version > stampedNode.Version)
+                            logger?.LogWarning(
+                                "BatchBake: compile-state stamp for {TypePath} at Version={Written} "
+                                + "was REFUSED — the durable row is already at Version={Stored} (a "
+                                + "live owner hub is writing this record). The assembly is on the "
+                                + "share; the next probe re-bakes the type and re-stamps it.",
+                                typeNode.Path, stampedNode.Version, saved.Version);
+                    })
                     .Select(_ => Unit.Default))
             .Catch<Unit, Exception>(ex =>
             {
