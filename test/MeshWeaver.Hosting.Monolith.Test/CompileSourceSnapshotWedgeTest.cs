@@ -41,6 +41,13 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// TERMINALLY with a loud error naming the dead source query — and a fresh explicit trigger,
 /// once the query is healthy again, runs a REAL compile that settles Ok. Wedges-to-zero: every
 /// dispatched compile reaches exactly one terminal status.</para>
+///
+/// <para>🚨 The terminal status is <see cref="CompilationStatus.Unavailable"/>, not
+/// <see cref="CompilationStatus.Error"/> (issue #1218). A source set that could not be
+/// ESTABLISHED is not a verdict about the code: Roslyn never ran, so calling it an Error told
+/// every reader — the instance overlay, and the bake readiness gate — that the author's code was
+/// broken. The wedge contract this test exists for is unchanged and is what still matters: the
+/// compile SETTLES, terminally, naming the dead query, and a fresh trigger recovers.</para>
 /// </summary>
 public class CompileSourceSnapshotWedgeTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output), IDisposable
@@ -118,15 +125,21 @@ public class CompileSourceSnapshotWedgeTest(ITestOutputHelper output)
         // 2. 🚨 THE WEDGE ASSERTION. The dispatched compile's snapshot never receives an
         //    Initial. BEFORE the fix: the NodeType sticks at Compiling forever — no terminal
         //    write, no error, and no later trigger can recover it (the absorbing wedge) — this
-        //    wait times out and the test is RED. AFTER the fix: the bounded snapshot errors
-        //    loudly and the compile settles TERMINALLY at Error, naming the dead source query.
+        //    wait times out and the test is RED. AFTER the fix: the bounded snapshot settles
+        //    UNESTABLISHED and the compile terminates at Unavailable, naming the dead source
+        //    query — a terminal state that is honest about WHAT failed (#1218).
         var failed = await Mesh.GetWorkspace().GetMeshNodeStream(TypePath)
             .Should().Within(TimeSpan.FromSeconds(40))
             .Match(n => n?.Content is NodeTypeDefinition d
-                && d.CompilationStatus == CompilationStatus.Error);
+                && d.CompilationStatus is CompilationStatus.Error or CompilationStatus.Unavailable);
         var failedDef = (NodeTypeDefinition)failed.Content!;
-        Output.WriteLine($"=== Terminal error landed: {failedDef.CompilationError} ===");
-        failedDef.CompilationError.Should().Contain("Source snapshot",
+        Output.WriteLine($"=== Terminal state landed: {failedDef.CompilationStatus} / {failedDef.CompilationError} ===");
+        failedDef.CompilationStatus.Should().Be(CompilationStatus.Unavailable,
+            "Roslyn never ran — the source set could not be established — so this is an "
+            + "AVAILABILITY failure, never a verdict on the author's code (#1218). Recording it "
+            + "as Error is what made every instance page say 'please correct the code' and made "
+            + "the bake gate read an unreadable mesh as an image regression");
+        failedDef.CompilationError.Should().Contain("Source discovery",
             "the terminal error must name the true defect — the source query that never emitted — "
             + "not a generic compile failure");
         failedDef.LatestReleasePath.Should().BeNullOrEmpty(

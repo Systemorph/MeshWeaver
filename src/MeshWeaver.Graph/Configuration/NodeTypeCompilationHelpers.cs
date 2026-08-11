@@ -1137,6 +1137,15 @@ internal static class NodeTypeCompilationHelpers
     /// THE terminal stamp of a FAILED compile — the exact field set <see cref="RunCompile"/>'s
     /// write-back has always applied on failure, extracted for the same one-stamp-shape reason
     /// as <see cref="ApplyCompileSuccess"/>.
+    ///
+    /// <para>🚨 The status is <see cref="CompilationStatus.Error"/> — Roslyn's verdict — EXCEPT
+    /// when the compile never ran because its SOURCE SET could not be established
+    /// (<see cref="SourceDiscoveryUnavailableException"/>). That is an availability failure, so it
+    /// stamps <see cref="CompilationStatus.Unavailable"/>: "the compile state could not be
+    /// determined; nothing is known to be wrong with the source". Everything downstream already
+    /// reads the two apart — the instance overlay drops "please correct the code",
+    /// <c>EnsureCompileDispatched</c> re-dispatches on the next request, and the bake gate files it
+    /// as unevaluated rather than as an image regression (issue #1218).</para>
     /// </summary>
     internal static NodeTypeDefinition ApplyCompileFailure(
         NodeTypeDefinition def,
@@ -1145,7 +1154,9 @@ internal static class NodeTypeCompilationHelpers
         string? activityPath)
         => def with
         {
-            CompilationStatus = CompilationStatus.Error,
+            CompilationStatus = error is SourceDiscoveryUnavailableException
+                ? CompilationStatus.Unavailable
+                : CompilationStatus.Error,
             CompilationError = SummarizeCompileError(result, error),
             CompilationDiagnostics = result?.Diagnostics is { Count: > 0 } ds
                 ? System.Collections.Immutable.ImmutableList.CreateRange(ds)
@@ -1535,8 +1546,15 @@ internal static class NodeTypeCompilationHelpers
                             LogLevel.Information));
                     else
                     {
+                        // 🚨 Say WHICH failure this is. "Roslyn failed" in front of a source
+                        // snapshot that never answered is the log-line version of the #1218 bug:
+                        // Roslyn was never invoked, so a reader (or an operator reading a stalled
+                        // rollout's activity log) must not be told it rejected anything.
+                        var failureLead = outcome.Error is SourceDiscoveryUnavailableException
+                            ? "Compile NOT ATTEMPTED — source set could not be established"
+                            : "Roslyn failed";
                         activityMessages.Add(new LogMessage(
-                            $"Roslyn failed: {outcome.Error?.Message ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs ? string.Join("; ", errs.Select(m => m.Message)) : "Compilation produced no assembly")}",
+                            $"{failureLead}: {outcome.Error?.Message ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs ? string.Join("; ", errs.Select(m => m.Message)) : "Compilation produced no assembly")}",
                             LogLevel.Error));
                         // 🚨 Non-Roslyn abort (an infrastructure exception escaping the compile
                         // pipeline — NOT a CompilationException, whose message already carries the
