@@ -212,6 +212,33 @@ button — the terminal status is settled, so the next trigger dispatches normal
 
 ---
 
+## Activations behind an in-flight compile show LIVE progress — never a silent park
+
+An instance hub activating while its NodeType is `Pending`/`Compiling` waits for the compile
+to settle — but only **briefly** in silence. After a short grace
+(`NodeTypeEnrichmentHelpers.InFlightOverlayGrace`, 5 s), the activation stops holding every
+delivery and settles onto the **compilation-in-progress overlay**
+(`WithCompilationInProgressOverlay`):
+
+- The instance's **Overview renders the type's live progress page**
+  (`NodeTypeLayoutAreas.CompileProgressView`): current status, the streaming compile
+  activity log, and — when more types are queued (the framework-bump warm-up recompiles
+  every dynamic type) — the whole sweep as an "N of M types compiled" progress bar with the
+  type currently compiling and the queued count. On `Ok` it redirects back to the instance.
+- **Typed requests fail fast** with `ErrorType.CompilationInProgress` naming the NodeType
+  (`UnhandledMessageNack`), instead of parking until the caller's own 60 s request timeout.
+  Area clients handle that NACK by swapping to the type's `Progress` area
+  (`AreaErrorClassifier.TryGetCompilationInProgressNodeType`).
+- The standard **overlay self-heal** watches the type: the compile's terminal write advances
+  the node version, the watcher recycles the instance, and the next access enriches against
+  the settled build.
+
+A compile that settles inside the grace never surfaces any of this — short compiles activate
+the real hub directly. The grace is a *visibility* bound, not a compile bound: the compile
+keeps running however long it needs (see the stage bounds above).
+
+---
+
 ## Cancelling a compile
 
 Compilation is an Activity, so it cancels through the **Activity Control Plane**
