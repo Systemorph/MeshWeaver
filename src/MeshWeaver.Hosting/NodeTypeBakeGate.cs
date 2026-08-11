@@ -41,6 +41,13 @@ public sealed class NodeTypeBakeGateState
     private readonly ConcurrentDictionary<string, string> retracted = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// For each DERIVED regression (an <c>Upstream*</c> outcome), the upstream that blocked it —
+    /// see <see cref="PreWarmOutcome.BlockedBy"/>. Retracting a blocker cascades to these, because
+    /// their only evidence was the blocker's verdict. Guarded by <see cref="verdict"/>.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string> blockedBy = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Guards the (regressions ↔ phase ↔ detail) invariant across the four writers, so a
     /// retraction that empties the set cannot interleave with a fresh regression and leave the
     /// phase disagreeing with the dictionary.
@@ -125,9 +132,16 @@ public sealed class NodeTypeBakeGateState
     /// abandoned NodeType freeze the platform.
     /// </summary>
     /// <returns>
-    /// <c>true</c> when this outcome RECORDED A REGRESSION — i.e. the caller now holds a verdict
-    /// that stalls the rollout, and should therefore watch the named type for the recovery that
-    /// retracts it (<see cref="RetractRegression"/>). <c>false</c> for every non-gating outcome.
+    /// <c>true</c> when this outcome recorded a regression the caller should WATCH FOR RECOVERY —
+    /// a DIRECTLY-MEASURED verdict on a type the sweep actually compiled
+    /// (<see cref="RetractRegression"/> is what a recovery then calls).
+    ///
+    /// <para><c>false</c> for every non-gating outcome AND for a DERIVED regression (one carrying
+    /// <see cref="PreWarmOutcome.BlockedBy"/>), which is still recorded and still gates but must
+    /// NOT be watched: the sweep skipped that type precisely to avoid activating its hub, and
+    /// watching it would activate every skipped dependent of one broken upstream and hold them for
+    /// the pod's lifetime. A derived regression is retracted through its blocker instead — see the
+    /// cascade in <see cref="RetractRegression"/>.</para>
     /// </returns>
     public bool MarkOutcome(PreWarmOutcome outcome)
     {
@@ -182,10 +196,14 @@ public sealed class NodeTypeBakeGateState
             // A fresh verdict supersedes an earlier retraction of the SAME type: if it broke again
             // after recovering, the health payload must say "regressed", not "recovered".
             retracted.TryRemove(outcome.TypePath, out _);
+            if (outcome.BlockedBy is { Length: > 0 } blocker)
+                blockedBy[outcome.TypePath] = blocker;
+            else
+                blockedBy.TryRemove(outcome.TypePath, out _);
             Interlocked.Exchange(ref phase, (int)BakePhase.Regressed);
             detail = RegressedDetail();
         }
-        return true;
+        return outcome.BlockedBy is null;
     }
 
     /// <summary>
@@ -231,6 +249,34 @@ public sealed class NodeTypeBakeGateState
                 return false;
 
             retracted[typePath] = $"{reason} (had been {was})";
+
+            // 🚨 CASCADE THROUGH THE DERIVED VERDICTS. A dependent skipped as UpstreamFailed was
+            // never compiled — its regression's ENTIRE evidence is "my upstream failed". With that
+            // verdict withdrawn there is nothing left saying this type is broken, so it must be
+            // withdrawn too; leaving it would keep the pod out of rotation on a claim whose basis
+            // no longer exists. This is the same principle the Upstream* statuses already encode —
+            // a derived verdict is only ever as strong as the one it derives from.
+            //
+            // Transitive (a dependent of a dependent), and terminating: each round removes at least
+            // one entry from a finite, shrinking set.
+            var cascade = new Queue<string>();
+            cascade.Enqueue(typePath);
+            while (cascade.Count > 0)
+            {
+                var blocker = cascade.Dequeue();
+                foreach (var dependent in blockedBy
+                             .Where(kv => string.Equals(
+                                 kv.Value, blocker, StringComparison.OrdinalIgnoreCase))
+                             .Select(kv => kv.Key)
+                             .ToList())
+                {
+                    blockedBy.TryRemove(dependent, out _);
+                    if (!regressions.TryRemove(dependent, out var derived))
+                        continue;
+                    retracted[dependent] = $"its blocker {blocker} was retracted (had been {derived})";
+                    cascade.Enqueue(dependent);
+                }
+            }
 
             if (!regressions.IsEmpty)
             {
