@@ -8,6 +8,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Blazor.Services;
 using MeshWeaver.Mesh.Services;
@@ -388,12 +389,82 @@ public static class BlazorHostingExtensions
             // No await on hub round-trips — chain via SelectMany; deadlock surface
             // (await pathResolver.ResolvePath / hub.Observe) eliminated.
             return ResolveContentFile(context, mainHub, path, caller)
-                .Catch<IResult, Exception>(ex =>
-                    Observable.Return(Results.Problem($"Error retrieving content: {ex.Message}")))
+                .Catch<IResult, Exception>(ex => Observable.Return(ContentFailure(ex)))
                 .FirstAsync()
                 .ToTask(context.RequestAborted);
         });
     }
+
+    /// <summary>
+    /// The body a refused content read answers with. Byte-identical to the "no such file" answer on
+    /// purpose: a caller who may not read <c>{partition}/{file}</c> must not be able to learn from
+    /// the response whether it exists. The URL scheme is fully predictable, so a distinguishable
+    /// refusal is itself a disclosure — an existence oracle over every partition.
+    /// </summary>
+    private const string ContentNotFound = "Content not found";
+
+    /// <summary>
+    /// 🚨 THE AUTHORIZATION GATE ON THE CONTENT ROUTE — Read on the OWNING NODE, decided by the
+    /// REAL <c>PermissionEvaluator</c>, before a single byte is read.
+    ///
+    /// <para><b>Why this is explicit and not inherited.</b> The route used to lean entirely on the
+    /// collection-config <c>GetDataRequest</c> being <c>[RequiresPermission(Read)]</c> — "the file
+    /// is gated by exactly the decision an ordinary node read makes". That is true only while no
+    /// hub-level rule short-circuits the check, and on a USER partition one did:
+    /// <c>UserNodeType</c>'s blanket read rule is PATH-BLIND (its predicate takes only the delivery
+    /// and the user id), so it satisfied the check for the whole hub — collection config included —
+    /// and the bytes followed. Riding an incidental permission is what made a single wrong
+    /// predicate into a file disclosure; asking the evaluator directly cannot be short-circuited
+    /// that way.</para>
+    ///
+    /// <para><b>Anonymous takes the SEO route's predicate, exactly.</b>
+    /// <see cref="AnonymousGate.AllowAnonymous"/> — an explicit positive Anonymous Read grant, and
+    /// fail-closed when no <c>EffectivePermissionsDelegate</c> is registered (where the default
+    /// evaluator would otherwise answer <see cref="Permission.All"/> and open every partition to
+    /// the internet). So <c>/api/content</c> and <c>/api/og</c> now answer the same question the
+    /// same way, and a public plugin page's card keeps serving because that partition really does
+    /// carry the grant.</para>
+    ///
+    /// <para><b>Fail closed.</b> Any error in the probe settles on false — a read is served only on
+    /// a positive verdict, never on the absence of a negative one.</para>
+    /// </summary>
+    /// <param name="hub">The hub used to evaluate the permission.</param>
+    /// <param name="caller">The request's identity (never null; anonymous is a named context).</param>
+    /// <param name="owner">The node the content reference resolved to.</param>
+    /// <returns>True when this caller may read this node's content.</returns>
+    private static IObservable<bool> AllowContentRead(IMessageHub hub, AccessContext caller, Address owner)
+    {
+        var ownerPath = owner.ToString() ?? string.Empty;
+        if (string.IsNullOrEmpty(ownerPath))
+            return Observable.Return(false);
+
+        return WellKnownUsers.IsAuthenticated(caller.ObjectId)
+            ? Observable.Defer(() =>
+                    hub.CheckPermission(ownerPath, caller.ObjectId!, Permission.Read).Take(1))
+                .Catch<bool, Exception>(_ => Observable.Return(false))
+            : AnonymousGate.AllowAnonymous(hub, ownerPath);
+    }
+
+    /// <summary>
+    /// Maps a faulted content read onto its HTTP answer, keeping the tri-state the access pipeline
+    /// took care to preserve (#974): "we checked, you may not" and "we could not check" are
+    /// different answers and must not collapse into one.
+    /// </summary>
+    /// <param name="ex">The exception that faulted the read.</param>
+    /// <returns>The response to send.</returns>
+    private static IResult ContentFailure(Exception ex) => ex switch
+    {
+        // Refused: answer exactly as a missing file, so the status cannot be used to probe which
+        // paths exist. (A 403 here would confirm the file to a caller who may not see it.)
+        DeliveryFailureException { Failure.ErrorType: ErrorType.Unauthorized } =>
+            Results.NotFound(ContentNotFound),
+        // No verdict reached — a degraded dependency, NOT a statement about this caller's rights.
+        // Still fail closed (nothing is served), but 503 so the caller retries instead of caching
+        // an absence that was never asserted.
+        DeliveryFailureException { Failure.ErrorType: ErrorType.Unavailable } =>
+            Results.StatusCode(StatusCodes.Status503ServiceUnavailable),
+        _ => Results.Problem($"Error retrieving content: {ex.Message}")
+    };
 
     /// <summary>
     /// The identity of a content-file request. NEVER null — an unauthenticated caller resolves to
@@ -451,21 +522,30 @@ public static class BlazorHostingExtensions
             if (!sourceConfig.IsStatic)
                 return Observable.Return(NotServable(sourceConfig.Name));
 
-            // The portal hub is where the resolved config is cached and the bytes are read.
-            // Fall back to the mesh hub for hosts that do not run the Blazor portal (the
-            // sidecar, tests) — the access decision has already been made above.
-            var portal = mainHub.ServiceProvider.GetService<PortalApplication>()?.Hub ?? mainHub;
-            var portalContentService = portal.ServiceProvider.GetService<IContentService>();
-            if (portalContentService is null)
-                return Observable.Return(Results.NotFound("Content service not configured"));
+            // 🚨 THE ACCESS DECISION, taken HERE and on the resolved OWNER — not inherited from
+            // the config read above, which a path-blind hub rule can satisfy for the whole hub.
+            // Nothing below this line may run for a caller the owner would refuse.
+            return AllowContentRead(mainHub, caller, resolution.Owner).SelectMany(allowed =>
+            {
+                if (!allowed)
+                    return Observable.Return(Results.NotFound(ContentNotFound));
 
-            portalContentService.AddConfiguration(resolution.QualifiedConfig);
-            // Pure composition — collection resolution and the file read both run on the
-            // collection's own IIoPool; ServeFile only shapes the (already-read) result.
-            return portalContentService.GetCollection(resolution.QualifiedName)
-                .SelectMany(contentCollection => contentCollection == null
-                    ? Observable.Return(Results.NotFound($"Content collection '{sourceConfig.Name}' not found"))
-                    : ServeFile(context, contentCollection, resolution.FilePath));
+                // The portal hub is where the resolved config is cached and the bytes are read.
+                // Fall back to the mesh hub for hosts that do not run the Blazor portal (the
+                // sidecar, tests) — the access decision has already been made above.
+                var portal = mainHub.ServiceProvider.GetService<PortalApplication>()?.Hub ?? mainHub;
+                var portalContentService = portal.ServiceProvider.GetService<IContentService>();
+                if (portalContentService is null)
+                    return Observable.Return(Results.NotFound("Content service not configured"));
+
+                portalContentService.AddConfiguration(resolution.QualifiedConfig);
+                // Pure composition — collection resolution and the file read both run on the
+                // collection's own IIoPool; ServeFile only shapes the (already-read) result.
+                return portalContentService.GetCollection(resolution.QualifiedName)
+                    .SelectMany(contentCollection => contentCollection == null
+                        ? Observable.Return(Results.NotFound($"Content collection '{sourceConfig.Name}' not found"))
+                        : ServeFile(context, contentCollection, resolution.FilePath));
+            });
         });
     }
 

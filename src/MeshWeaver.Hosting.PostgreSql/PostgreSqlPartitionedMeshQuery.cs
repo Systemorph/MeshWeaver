@@ -874,6 +874,24 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         if (!string.IsNullOrEmpty(queryForSql.Path) && queryForSql.Path.Contains('*'))
             queryForSql = queryForSql with { Path = null, Scope = QueryScope.Exact };
 
+        // 🚨 Carry the REQUEST-level limit into the parsed query — the same propagation the
+        // per-schema delegate does (PostgreSqlMeshQuery: `if (request.Limit.HasValue) parsedQuery =
+        // parsedQuery with { Limit = request.Limit }`). Without it, `request.Limit` was silently
+        // DROPPED on the unpinned path: QueryAcrossSchemasAsync reads only ParsedQuery.Limit and
+        // substitutes a hard default of 50, so a caller asking for 500 across partitions got 50 and
+        // had no way to tell (issue #1216 — the batch bake's global `nodeType:Code` fetch is exactly
+        // this shape and resolved 50 Code nodes out of thousands). A request that states no limit at
+        // all still gets the fan-out's default: an unanchored UNION over every partition schema
+        // needs SOME bound, and changing that default is a separate decision.
+        // 🚨 POSITIVE limits only. `Limit <= 0` means "do not clip" upstream —
+        // MeshQuery.ClipMergedInitial applies a limit only `if (effectiveLimit is int limit &&
+        // limit > 0)` — but propagated into SQL a zero becomes a literal `LIMIT 0`, i.e. ZERO ROWS
+        // returned for a caller that asked for everything. That is the same silent-empty-result
+        // failure this very PR exists to fix (#1216: discovery that cannot see rows reports the
+        // content as missing), so it must not be re-introduced one layer down.
+        if (request.Limit is > 0)
+            queryForSql = queryForSql with { Limit = request.Limit };
+
         var userId = GetEffectiveUserId(request);
         // activityUserId is only meaningful for source:accessed today (joins
         // user_activities); source:activity reads the activity satellite,
