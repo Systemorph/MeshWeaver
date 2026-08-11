@@ -99,6 +99,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     private readonly string _assemblyStoreRoot;
 
     /// <summary>
+    /// Filesystem root of this test class's isolated <see cref="FileSystemAssemblyStore"/> —
+    /// exposed so bake tests can stage the "share lost its bytes" states (clear the store and
+    /// watch the level-triggered probe re-bake) without touching any NodeType record. Deleting
+    /// under this root is safe: the store re-creates directories on the next Put.
+    /// </summary>
+    protected string AssemblyStoreRoot => _assemblyStoreRoot;
+
+    /// <summary>
     /// Per-test-CLASS compilation cache directory (ProcessId + test-class name). SHARED across every
     /// <c>[Fact]</c> of one class, so a NodeType compiled by the first test is a cache HIT for the
     /// rest (1 compile + N hits — the within-class speedup that the old per-Guid path threw away),

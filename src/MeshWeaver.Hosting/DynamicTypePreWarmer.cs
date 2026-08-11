@@ -186,7 +186,8 @@ public static class DynamicTypePreWarmer
     public static IObservable<PreWarmOutcome> WarmDynamicTypes(
         IMessageHub mesh,
         ILogger? logger = null,
-        TimeSpan? perTypeBudget = null)
+        TimeSpan? perTypeBudget = null,
+        bool batchBake = false)
     {
         var budget = perTypeBudget ?? DefaultPerTypeBudget;
         var meshService = mesh.ServiceProvider.GetService<IMeshService>();
@@ -210,7 +211,9 @@ public static class DynamicTypePreWarmer
                 .Timeout(EnumerationBudget)
                 .SelectMany(change =>
                 {
-                    var definitions = change.Items
+                    // The full nodes (not just their definitions): the batch driver feeds the
+                    // compiler the enumerated MeshNode directly — no re-fetch, no activation.
+                    var nodes = change.Items
                         .Where(n => !string.IsNullOrEmpty(n.Path)
                             && n.State == MeshNodeState.Active
                             && n.Content is NodeTypeDefinition d
@@ -220,8 +223,12 @@ public static class DynamicTypePreWarmer
                         .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
                         .ToDictionary(
                             g => g.Key,
-                            g => (NodeTypeDefinition?)g.First().Content,
+                            g => g.First(),
                             StringComparer.OrdinalIgnoreCase);
+                    var definitions = nodes.ToDictionary(
+                        kvp => kvp.Key,
+                        kvp => (NodeTypeDefinition?)kvp.Value.Content,
+                        StringComparer.OrdinalIgnoreCase);
 
                     // 🚨 ASK THE SHARE WHAT IS ACTUALLY THERE, before deciding what to build.
                     //
@@ -240,7 +247,8 @@ public static class DynamicTypePreWarmer
                     return NodeTypeBakeStatus
                         .Probe(definitions, store, logger: logger)
                         .SelectMany(report => BakeOrFollow(
-                            mesh, workspace, accessService, definitions, store, report, budget, logger));
+                            mesh, workspace, accessService, definitions, nodes, store, report,
+                            budget, batchBake, logger));
                 })
                 .Catch<PreWarmOutcome, Exception>(ex =>
                 {
@@ -286,18 +294,20 @@ public static class DynamicTypePreWarmer
         IWorkspace workspace,
         AccessService? accessService,
         IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IReadOnlyDictionary<string, MeshNode> nodes,
         IAssemblyStore store,
         NodeTypeBakeReport report,
         TimeSpan budget,
+        bool batchBake,
         ILogger? logger)
     {
         // Nothing outstanding — no lease needed, and nothing for a follower to wait for.
         if (report.IsComplete)
-            return WarmPending(workspace, accessService, definitions, report, budget, logger);
+            return WarmPending(mesh, workspace, accessService, definitions, nodes, report, budget, batchBake, logger);
 
         var coordination = mesh.ServiceProvider.GetService<BakeCoordination>();
         if (coordination is null)
-            return WarmPending(workspace, accessService, definitions, report, budget, logger);
+            return WarmPending(mesh, workspace, accessService, definitions, nodes, report, budget, batchBake, logger);
 
         var lease = NodeTypeBakeLease.TryAcquire(
             coordination.LeaseDirectory, report.FrameworkVersion, Environment.MachineName, logger);
@@ -308,7 +318,7 @@ public static class DynamicTypePreWarmer
             // fleet out until it went stale.
             return Observable.Using(
                 () => lease,
-                _ => WarmPending(workspace, accessService, definitions, report, budget, logger));
+                _ => WarmPending(mesh, workspace, accessService, definitions, nodes, report, budget, batchBake, logger));
 
         logger?.LogInformation(
             "DynamicTypePreWarmer: another pod holds the bake lease — following the shared assembly "
@@ -322,7 +332,7 @@ public static class DynamicTypePreWarmer
             .Timer(FollowPollInterval)
             .SelectMany(_ => NodeTypeBakeStatus.Probe(definitions, store, logger: logger))
             .SelectMany(fresh => BakeOrFollow(
-                mesh, workspace, accessService, definitions, store, fresh, budget, logger));
+                mesh, workspace, accessService, definitions, nodes, store, fresh, budget, batchBake, logger));
     }
 
     /// <summary>
@@ -331,11 +341,14 @@ public static class DynamicTypePreWarmer
     /// <see cref="PreWarmStatus.AlreadyBaked"/> and never activated.
     /// </summary>
     private static IObservable<PreWarmOutcome> WarmPending(
+        IMessageHub mesh,
         IWorkspace workspace,
         AccessService? accessService,
         IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IReadOnlyDictionary<string, MeshNode> nodes,
         NodeTypeBakeReport report,
         TimeSpan budget,
+        bool batchBake,
         ILogger? logger)
     {
         var baked = report.Entries
@@ -385,11 +398,30 @@ public static class DynamicTypePreWarmer
         var order = NodeTypeDependencyGraph.TopologicalOrder(dependencies, out var cyclic);
         var pending = order.Where(p => !baked.Contains(p)).ToList();
 
+        // Initial-bake fast path (issue #1207): drive the compiler DIRECTLY for every pending
+        // type — batched source discovery, no per-type hub activation, no compile-watcher
+        // settle, no cross-silo hop (the 2026-08-10/11 20-min/5-h bakes were per-type
+        // activation round-trips eating 5-minute timeouts on a wedged peer, not compilation).
+        // Only taken when requested (the pod's bake gates readiness, or PreWarm:BatchBake) AND
+        // the compiler + mesh service are actually on this host.
+        var batchCompiler = batchBake
+            ? mesh.ServiceProvider.GetService<IMeshNodeCompilationService>()
+            : null;
+        var batchMeshService = batchBake ? mesh.ServiceProvider.GetService<IMeshService>() : null;
+        var useBatch = batchBake && pending.Count > 0
+            && batchCompiler is not null && batchMeshService is not null;
+        if (batchBake && !useBatch && pending.Count > 0)
+            logger?.LogWarning(
+                "DynamicTypePreWarmer: batch bake requested but "
+                + "{Missing} is not registered — falling back to the activation-driven sweep",
+                batchCompiler is null ? "IMeshNodeCompilationService" : "IMeshService");
+
         logger?.LogInformation(
             "DynamicTypePreWarmer: {Pending} of {Total} dynamic NodeType(s) need building "
-            + "(sequential, dependency order, perTypeBudget={Budget}) — {Baked} already on the share. "
+            + "(sequential, dependency order, {Mode}, perTypeBudget={Budget}) — {Baked} already on the share. "
             + "{Report}. Building: {Order}",
-            pending.Count, order.Count, budget, baked.Count, report.Summary,
+            pending.Count, order.Count, useBatch ? "batch direct-compile" : "activation-driven",
+            budget, baked.Count, report.Summary,
             pending.Count == 0 ? "(nothing)" : string.Join(" → ", pending));
         if (!cyclic.IsEmpty)
             logger?.LogWarning(
@@ -434,10 +466,12 @@ public static class DynamicTypePreWarmer
         // has completed, so "dependencies first" is structural rather than a convention.
         // The gap between types keeps the sweep a background trickle rather than a queue
         // of back-to-back cold activations; it costs nothing, since the warm-up has no
-        // deadline and Part 2 compiles lazily regardless.
-        return order.Count == 0
-            ? Observable.Empty<PreWarmOutcome>()
-            : order
+        // deadline and Part 2 compiles lazily regardless. (The batch path skips the gap:
+        // it activates nothing, so there is no burst to spread out — and a gated pod
+        // serves nobody, so there is nothing to be gentle to.)
+        IObservable<PreWarmOutcome> Sweep(
+            ImmutableDictionary<string, IReadOnlyList<MeshNode>>? batchSources)
+            => order
                 .Select((p, i) => Observable.Defer(() =>
                 {
                     // Already on the share: report it and move on WITHOUT activating the hub.
@@ -483,18 +517,29 @@ public static class DynamicTypePreWarmer
                         return Observable.Return(new PreWarmOutcome(p, outcome, $"blocked by {named}"));
                     }
 
+                    // Batch mode drives the ONE compiler directly with the pre-resolved source
+                    // set — no activation, no watcher settle. It also subsumes the missing-bytes
+                    // case: a direct compile re-emits, re-uploads and re-stamps regardless of
+                    // what the record claims, so no record surgery is needed to force it.
+                    //
                     // 🚨 A type whose BYTES are gone cannot be warmed by activation alone.
                     // WarmOne waits for HasUsableBuild, which is a RECORD check that deliberately
                     // ignores status — and in this state the record is pristine. Activating the hub
                     // would therefore return "Compiled" instantly without rebuilding anything, and
                     // the sweep would report a green bake over a share that is still empty. The
                     // rebuild has to be DRIVEN.
-                    var warm = missingBytes
-                        ? RebuildMissingBytes(workspace, accessService, p, budget, logger)
-                        : WarmOne(workspace, accessService, p, budget, logger);
+                    var warm = batchSources is not null && nodes.TryGetValue(p, out var typeNode)
+                        ? NodeTypeBatchBake.BakeOne(
+                            mesh, typeNode,
+                            batchSources.TryGetValue(p, out var srcs) ? srcs : Array.Empty<MeshNode>(),
+                            budget, logger)
+                        : missingBytes
+                            ? RebuildMissingBytes(workspace, accessService, p, budget, logger)
+                            : WarmOne(workspace, accessService, p, budget, logger);
 
                     return warm
-                        .DelaySubscription(i == 0 ? TimeSpan.Zero : BetweenTypes)
+                        .DelaySubscription(
+                            i == 0 || batchSources is not null ? TimeSpan.Zero : BetweenTypes)
                         .Do(o =>
                         {
                             // A timeout is not a verdict — route it to `unevaluated` so its
@@ -515,6 +560,28 @@ public static class DynamicTypePreWarmer
                 // tell a NEW failure from one that was already broken on the way in, without having
                 // to re-read the report.
                 .Select(o => o with { WasHealthyBeforeBake = healthyBefore.Contains(o.TypePath) });
+
+        if (order.Count == 0)
+            return Observable.Empty<PreWarmOutcome>();
+        if (!useBatch)
+            return Sweep(null);
+
+        // Batch discovery first — ONE pass resolving every pending type's source queries.
+        // Only a DISCOVERY failure falls back to the activation-driven sweep (before any
+        // outcome was produced); a failure inside the sweep itself propagates as usual.
+        return NodeTypeBatchBake
+            .ResolveSources(batchMeshService!, accessService, definitions, pending, logger)
+            .Select(index =>
+                (ImmutableDictionary<string, IReadOnlyList<MeshNode>>?)index)
+            .Catch<ImmutableDictionary<string, IReadOnlyList<MeshNode>>?, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "DynamicTypePreWarmer: batched source discovery failed — falling back to the "
+                    + "activation-driven sweep");
+                return Observable.Return(
+                    (ImmutableDictionary<string, IReadOnlyList<MeshNode>>?)null);
+            })
+            .SelectMany(Sweep);
     }
 
     /// <summary>A NodeType has something for Roslyn to compile (so it is a dynamic type worth warming).</summary>
