@@ -29,6 +29,10 @@ internal sealed class TestOgServer : IDisposable
     /// <summary>The og:title the served head declares.</summary>
     public volatile string Title = "Served Title";
 
+    /// <summary>An optional <c>&lt;link rel="icon"&gt;</c> href for the served head. Null (the
+    /// default) declares NO icon link, so the card falls through to the og:image poster.</summary>
+    public volatile string? IconHref;
+
     public TestOgServer()
     {
         // HttpListener cannot bind port 0; reserve a free port via TcpListener first.
@@ -59,10 +63,13 @@ internal sealed class TestOgServer : IDisposable
             }
 
             Interlocked.Increment(ref requestCount);
+            var iconHref = IconHref;
+            var iconLink = iconHref is null ? string.Empty : $"<link rel=\"icon\" href=\"{iconHref}\">";
             var html =
                 $"<html><head><meta property=\"og:title\" content=\"{Title}\">" +
                 "<meta property=\"og:description\" content=\"Served description.\">" +
                 "<meta property=\"og:image\" content=\"/og.png\">" +
+                iconLink +
                 "</head><body></body></html>";
             var bytes = Encoding.UTF8.GetBytes(html);
             try
