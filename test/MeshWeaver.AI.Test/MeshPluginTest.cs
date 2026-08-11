@@ -805,7 +805,20 @@ public class MeshPluginTest : MonolithMeshTestBase
         }
         // Done in the test-only "force compile" preamble.
 
-        var diagnosticsJson = await plugin.GetDiagnostics($"@{nodeTypePath}");
+        // 🚨 Poll for a TERMINAL status; never assert on a single read. "Compiling" is a legitimate
+        // intermediate state — the compile runs off this thread and the Error status is written when
+        // Roslyn finishes, so a one-shot read is a race the test loses whenever the machine is
+        // loaded (CI saw "Compiling" after 10.7s, with the CS0246 arriving moments later). Waiting
+        // for the condition is the fix; a sleep or a widened timeout would only hide it. Polling —
+        // rather than a stream — because GetDiagnostics is request/response.
+        var diagnosticsJson = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => plugin.GetDiagnostics($"@{nodeTypePath}")))
+            .Where(json => !string.IsNullOrEmpty(json) && StatusOf(json) is not "Compiling")
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(40))
+            .ToTask(TestContext.Current.CancellationToken);
+
         diagnosticsJson.Should().NotBeNullOrEmpty();
 
         using var doc = JsonDocument.Parse(diagnosticsJson);
@@ -815,6 +828,23 @@ public class MeshPluginTest : MonolithMeshTestBase
         root.GetProperty("error").GetString()
             .Should().Contain("ThisTypeDoesNotExist",
                 "the cached error must include the unresolved type");
+
+        // Reads the diagnostics status defensively: a payload that is not the expected shape must
+        // keep the poll going rather than fault it, so a transient response cannot end the wait.
+        static string? StatusOf(string json)
+        {
+            try
+            {
+                using var probe = JsonDocument.Parse(json);
+                return probe.RootElement.TryGetProperty("status", out var status)
+                    ? status.GetString()
+                    : null;
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
     }
 
     /// <summary>
