@@ -1,22 +1,34 @@
 ---
-Name: Email a document instead of attaching it
+Name: Share a document as an email, in your own name
 Category: Feature
-Description: Send a document as the email itself — embedded views render into the message, so there is nothing to open and nothing goes missing.
+Description: Share ⇒ as email sends the document as the message itself, from your own mailbox, with embedded views rendered into it.
 Icon: Mail
 Order: -20260811
 ---
 
-# Email a document instead of attaching it
+# Share a document as an email, in your own name
 
 Sending a document used to mean sending a PDF. The node menu's send entry exported the
 page to a file, attached it, and put a one-line note in the message — so the recipient
 got an attachment to open rather than something to read, and the copy-and-paste
 alternative lost the parts of the page that matter most.
 
-**Email this document** now puts the document *in* the message. Open it from the node
-menu, next to Export to PDF and Export to DOCX, pick a contact or type an address, and
-the page arrives as the email itself. The PDF attachment is still there as an option
-when a file is what you actually want.
+**Share ⇒ as email** now puts the document *in* the message. Open it from the node menu,
+next to Export to PDF and Export to DOCX, pick a contact or type an address, and the page
+arrives as the email itself. The PDF attachment is still there as an option when a file is
+what you actually want.
+
+## It comes from you
+
+Sharing is a personal act, so the message goes out **from your own mailbox**, using the
+same Microsoft 365 connection your personal assistant uses. The recipient sees you, replies
+come straight back to you, and the message is in your own Sent Items where you would look
+for it.
+
+If you have not connected Microsoft 365 yet, the dialog says so and offers to connect —
+it will not quietly send a client-facing document from a generic portal address. Sending
+from the shared mailbox stays available as a deliberate choice, and then replies are still
+addressed to you.
 
 ## Embedded views now survive the trip
 
