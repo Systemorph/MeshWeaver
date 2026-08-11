@@ -337,7 +337,7 @@ public static class DynamicTypePreWarmer
             .Timer(FollowPollInterval)
             .SelectMany(_ => NodeTypeBakeStatus.Probe(definitions, store, logger: logger))
             .SelectMany(fresh => BakeOrFollow(
-                mesh, workspace, accessService, definitions, store, fresh, budget, logger));
+                mesh, workspace, accessService, definitions, store, fresh, budget, pacing, logger));
     }
 
     /// <summary>
