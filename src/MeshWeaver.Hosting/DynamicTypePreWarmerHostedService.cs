@@ -60,15 +60,15 @@ public sealed class DynamicTypePreWarmerHostedService(
     public const string BetweenTypesConfigKey = "PreWarm:BetweenTypes";
 
     /// <summary>
-    /// Config key overriding whether the sweep runs as ONE LINKED BATCH BUILD (issue #1207):
+    /// Config key opting a deployment INTO the ONE LINKED BATCH BUILD sweep (issue #1207):
     /// batched source discovery + direct compiler drive, no per-type hub activations, no
-    /// compile-watcher settles, no cross-silo hops. When the key is absent the mode follows the
-    /// SAME initial-bake discriminator as <see cref="BetweenTypesConfigKey"/>: a pod whose bake
-    /// GATES readiness batches (it serves nobody while it bakes, and every activation round-trip
-    /// it skips is one that cannot land on a wedged peer silo and eat a 5-minute timeout — the
-    /// 2026-08-10/11 20-min/5-h bakes); an ungated pod keeps the activation-driven background
-    /// trickle. Set <c>false</c> to force the activation path on a gated pod (the ops escape
-    /// hatch), or <c>true</c> to batch an ungated warm-up.
+    /// compile-watcher settles, no cross-silo hops.
+    ///
+    /// <para><b>Default: OFF, everywhere.</b> It is not yet trustworthy at production scale — see
+    /// the note in <c>KickWarmup</c> and #1216: its first production run resolved zero sources for
+    /// 169 of 237 types. Set <c>true</c> only where the discovery has been verified against that
+    /// mesh's own content, and check the sweep summary (`compiled` vs `contentBroken`) afterwards.
+    /// The activation-driven path remains the default and is unaffected by this key.</para>
     /// </summary>
     public const string BatchBakeConfigKey = "PreWarm:BatchBake";
 
@@ -161,11 +161,23 @@ public sealed class DynamicTypePreWarmerHostedService(
                     gate is { GatesReadiness: true } ? "gated (zero)" : "serving (trickle)");
         }
 
-        // Batch mode (issue #1207): explicit config wins; otherwise the SAME initial-bake
-        // discriminator as the pacing above — a readiness-GATED pod runs the bake as one linked
-        // batch build (direct compiler drive — no per-type activations) and an ungated pod keeps
-        // the activation-driven trickle. See BatchBakeConfigKey.
-        var batchBake = gate is { GatesReadiness: true };
+        // Batch mode (issue #1207) is OPT-IN — it must be asked for explicitly.
+        //
+        // 🚨 It shipped defaulting ON for a gated pod and was WRONG AT PRODUCTION SCALE the first
+        // time it ran there (memex-cloud, 2026-08-11, ci.2947): the sweep finished in 19s with
+        // `compiled=4 compileErrors=59 contentBroken=169` out of 237 — i.e. the batched source
+        // discovery resolved NO sources for 169 types and PARTIAL sources for 59 more, so types
+        // that compile fine on the activation path were reported broken. The bake gate caught it
+        // and refused readiness (no outage, previous image kept serving), but with the default ON
+        // every gated portal that self-updates would stall its own rollout the same way — and a
+        // helm upgrade would silently undo the live `PreWarm__BatchBake=false` patches.
+        //
+        // The defect is in the discovery, not the gate: a wrongly-empty source set becomes
+        // PreWarmStatus.NoSources ("content-broken"), which by design does NOT gate — so on an
+        // UNGATED pod the same bug would ship a fleet of empty assemblies silently. Until
+        // discovery is proven at scale, correctness beats speed: no config, no batch.
+        // Tracked in #1216.
+        var batchBake = false;
         var batchRaw = services.GetService<IConfiguration>()?[BatchBakeConfigKey];
         if (!string.IsNullOrWhiteSpace(batchRaw))
         {
