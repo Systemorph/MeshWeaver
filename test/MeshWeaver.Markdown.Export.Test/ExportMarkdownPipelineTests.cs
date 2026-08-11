@@ -113,6 +113,53 @@ public class ExportMarkdownPipelineTests
             .Should().BeLessThan(text.IndexOf("After.", System.StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// Two chapters from DIFFERENT nodes that write the SAME relative embed must not share a
+    /// resolved entry.
+    ///
+    /// <para>This is the collision, not merely the resolution: with <c>IncludeChildren</c> each
+    /// chapter is a different node, and <c>@@("area:Summary")</c> means "this node's Summary". Keyed
+    /// on the raw path alone the two are indistinguishable, so the first one resolved would be
+    /// rendered into BOTH chapters — one node silently displaying another's content, in a document
+    /// the author is about to send.</para>
+    /// </summary>
+    [Fact]
+    public void SameRelativeEmbed_InTwoChapters_ResolvesPerChapter_AndNeverCollides()
+    {
+        const string markdown = "@@(\"area:Summary\")\n";
+        var alpha = new ExportChapter("Alpha", markdown, "Space/Alpha");
+        var beta = new ExportChapter("Beta", markdown, "Space/Beta");
+
+        var alphaEmbed = Markdig.Markdown.Parse(markdown, ExportMarkdownPipeline.For(alpha.NodePath))
+            .Descendants<LayoutAreaComponentInfo>().Single();
+        var betaEmbed = Markdig.Markdown.Parse(markdown, ExportMarkdownPipeline.For(beta.NodePath))
+            .Descendants<LayoutAreaComponentInfo>().Single();
+
+        var alphaKey = MeshWeaver.Markdown.Export.Html.DocumentAreaResolution.KeyFor(alpha.NodePath, alphaEmbed);
+        var betaKey = MeshWeaver.Markdown.Export.Html.DocumentAreaResolution.KeyFor(beta.NodePath, betaEmbed);
+
+        alphaKey.Should().NotBe(betaKey,
+            "the owning node path is part of the key — otherwise the two chapters share one entry");
+
+        var resolved = ImmutableDictionary<string, ImmutableArray<DocumentElement>>.Empty
+            .Add(alphaKey, [new ParagraphElement([new TextInline("ALPHACONTENT", false, false, false)])])
+            .Add(betaKey, [new ParagraphElement([new TextInline("BETACONTENT", false, false, false)])]);
+
+        var document = new DocumentBuilder("Space", resolved)
+            .Build("Doc", [alpha, beta], Options, Branding);
+
+        var text = AllText(document);
+        text.Should().Contain("ALPHACONTENT");
+        text.Should().Contain("BETACONTENT");
+
+        // Each chapter got its OWN area: Alpha's content must precede Beta's chapter break.
+        var betaChapterAt = text.IndexOf("Beta", System.StringComparison.Ordinal);
+        text.IndexOf("ALPHACONTENT", System.StringComparison.Ordinal)
+            .Should().BeLessThan(betaChapterAt, "Alpha's area belongs to Alpha's chapter");
+        text.IndexOf("BETACONTENT", System.StringComparison.Ordinal)
+            .Should().BeGreaterThan(betaChapterAt, "Beta's area belongs to Beta's chapter");
+    }
+
     [Fact]
     public void PageBreakMarkers_StillWork_AfterThePipelineChange()
     {
