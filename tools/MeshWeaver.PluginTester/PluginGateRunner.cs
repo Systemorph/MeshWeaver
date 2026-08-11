@@ -462,8 +462,14 @@ public static class PluginGateRunner
                     _ = mesh.GetHostedHub(new Address(nodeTypePath), config);
             }
 
-            // The gate's admin circuit identity (DevLogin analogue).
-            provider.GetRequiredService<AccessService>().SetCircuitContext(GateAdmin);
+            // The gate's admin identity (DevLogin analogue). `mw-plugin-test` is a
+            // SINGLE-IDENTITY host — one gate admin for the whole run, no Blazor circuit — so this
+            // is SetHostIdentity, not SetCircuitContext: the identity must survive every Rx /
+            // scheduler hop, including the layout-area sync-stream subscribe the AreaProbe drives.
+            // (SetCircuitContext writes only the calling flow's AsyncLocal; a gate identity set
+            // there is gone by the time the render probe subscribes, and the area never
+            // materialises because RLS denies the context-less read.)
+            provider.GetRequiredService<AccessService>().SetHostIdentity(GateAdmin);
 
             // Activate hosted services DI registered but nothing started (no generic host here).
             foreach (var hosted in provider.GetServices<IHostedService>())
