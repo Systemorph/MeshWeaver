@@ -68,6 +68,68 @@ public sealed class OpenGraphPreviewServiceTest : IDisposable
         Assert.Equal(2, server.RequestCount);
     }
 
+    /// <summary>
+    /// 🚨 The pinned-degraded-card defect. A portal mid-restart answers HTTP <b>200</b> with its
+    /// SPA catch-all shell: a plain <c>&lt;title&gt;</c> and no <c>og:*</c> tags. Nothing throws,
+    /// so the exception-eviction path never fires — and that empty answer used to be cached for
+    /// the whole process lifetime, leaving one card stuck on "Memex Portal" with no description
+    /// while every neighbouring card rendered correctly. A successful-but-og-less fetch must be
+    /// evicted exactly like a failed one.
+    /// </summary>
+    [Fact]
+    public async Task Get_SuccessfulFetchWithoutOgTags_IsNotCachedAndRetries()
+    {
+        var service = CreateService();
+        var url = server.BaseUrl + "Ifrs17";
+
+        server.OmitOgTags = true;
+        var degraded = await Await(service.Get(url));
+
+        // The fetch SUCCEEDED — this is not the failure path — but it carried nothing usable.
+        Assert.True(degraded.Fetched);
+        Assert.False(degraded.IsResolved);
+        Assert.False(degraded.DeclaresOpenGraph);
+        // The catch-all's <title> is exactly why keying the cache on Title would not have
+        // caught this: the preview HAS a title, it is simply the wrong page's.
+        Assert.Equal("Memex Portal", degraded.Title);
+        Assert.Null(degraded.Description);
+        Assert.Equal(1, server.RequestCount);
+
+        // Not cached: the next view re-fetches, and now that the portal is back it resolves.
+        server.OmitOgTags = false;
+        var recovered = await Await(service.Get(url));
+
+        Assert.True(recovered.IsResolved);
+        Assert.Equal("Served Title", recovered.Title);
+        Assert.Equal("Served description.", recovered.Description);
+        Assert.Equal(2, server.RequestCount);
+
+        // And the good answer IS cached — the retry does not become a permanent re-fetch.
+        var replayed = await Await(service.Get(url));
+        Assert.Equal(recovered, replayed);
+        Assert.Equal(2, server.RequestCount);
+    }
+
+    /// <summary>An icon is found for practically any page, degraded ones included, so it must
+    /// never be mistaken for evidence that the metadata is good.</summary>
+    [Fact]
+    public async Task Get_OgLessPageWithAnIcon_IsStillNotCached()
+    {
+        var service = CreateService();
+        var url = server.BaseUrl + "shell";
+
+        server.OmitOgTags = true;
+        server.IconHref = "/favicon.ico";
+
+        var degraded = await Await(service.Get(url));
+
+        Assert.Equal(server.BaseUrl + "favicon.ico", degraded.Icon);
+        Assert.False(degraded.IsResolved);
+
+        await Await(service.Get(url));
+        Assert.Equal(2, server.RequestCount);
+    }
+
     [Fact]
     public async Task Get_GuardedTarget_YieldsFallbackWithoutAnyRequest()
     {
