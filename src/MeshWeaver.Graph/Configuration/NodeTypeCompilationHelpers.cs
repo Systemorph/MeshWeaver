@@ -1064,6 +1064,100 @@ internal static class NodeTypeCompilationHelpers
         && !string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal);
 
     /// <summary>
+    /// THE terminal stamp of a SUCCESSFUL compile — the exact field set
+    /// <see cref="RunCompile"/>'s write-back has always applied, extracted as a pure function so
+    /// the initial-bake batch driver (issue #1207, <c>NodeTypeBatchBake</c> in
+    /// <c>MeshWeaver.Hosting</c>) stamps IDENTICAL state without duplicating the compiler's
+    /// write-back logic. One compiler, one stamp shape — a field added here reaches both the
+    /// activation-driven and the batch-driven path by construction.
+    /// </summary>
+    /// <param name="def">The NodeType definition as currently persisted.</param>
+    /// <param name="result">The successful compile's result (assembly + store coordinates).</param>
+    /// <param name="currentNodeVersion">
+    /// Fallback for <see cref="NodeTypeDefinition.LastCompiledVersion"/> when the result carries no
+    /// store version — must be the version of the node the stamp lands on (see the inline note:
+    /// the stamped version must MATCH the version the <c>IAssemblyStore</c> upload used).
+    /// </param>
+    /// <param name="activityPath">The CONFIRMED compile-activity path, or null when none was created.</param>
+    /// <param name="releasePath">The CONFIRMED release-node path, or null when the create didn't land.</param>
+    internal static NodeTypeDefinition ApplyCompileSuccess(
+        NodeTypeDefinition def,
+        NodeCompilationResult result,
+        long currentNodeVersion,
+        string? activityPath,
+        string? releasePath)
+        => def with
+        {
+            CompilationStatus = CompilationStatus.Ok,
+            CompilationError = null,
+            CompilationDiagnostics = null,
+            LastCompileSucceededAt = DateTimeOffset.UtcNow,
+            // Stamp LastCompiledVersion to MATCH the version the IAssemblyStore upload used
+            // (set by UploadToStoreIfNeeded — the captured node Version at compile kickoff).
+            // A different version here would point activation at a store key that has no
+            // bytes — TryGetAssemblyPath miss, activation falls back to the default config.
+            LastCompiledVersion = result.Version ?? currentNodeVersion,
+            LastCompilationActivityPath = activityPath,
+            LatestReleasePath = releasePath ?? def.LatestReleasePath,
+            ReleaseNotes = releasePath is not null ? null : def.ReleaseNotes,
+            CompiledSources = result.CompiledSources
+                ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
+            // Cross-silo durable assembly reference, from the IAssemblyStore upload
+            // (UploadToStoreIfNeeded). Falls back to the previous values on a producer
+            // without a store so legacy consumers keep the AssemblyLocation path.
+            LatestAssemblyCollection = result.Collection ?? def.LatestAssemblyCollection,
+            LatestAssemblyPath = result.ContentPath ?? def.LatestAssemblyPath,
+            // The framework the assembly bound against — HasUsableBuild compares this to the
+            // live FrameworkVersion so a MeshWeaver redeploy forces a recompile instead of
+            // loading an ABI-stale DLL.
+            CompiledFrameworkVersion = FrameworkVersion,
+            // Clear the consumed release-requester so a later System-only recompile doesn't
+            // mis-attribute its release to a stale prior user.
+            RequestedReleaseBy = null
+        };
+
+    /// <summary>
+    /// The one-line summary of a FAILED compile for the node's
+    /// <see cref="NodeTypeDefinition.CompilationError"/> — names the exception TYPE for a
+    /// non-Roslyn abort (a bare "Object reference not set…" told CI triage nothing — #612).
+    /// Extracted with <see cref="ApplyCompileFailure"/> so both write-back paths summarize
+    /// identically.
+    /// </summary>
+    internal static string SummarizeCompileError(NodeCompilationResult? result, Exception? error)
+        => error switch
+        {
+            null => result?.Log?.Errors() is { Count: > 0 } errs
+                ? string.Join("; ", errs.Select(m => m.Message))
+                : "Compilation produced no assembly",
+            CompilationException ce => ce.Message,
+            { } other => $"{other.GetType().Name}: {other.Message}",
+        };
+
+    /// <summary>
+    /// THE terminal stamp of a FAILED compile — the exact field set <see cref="RunCompile"/>'s
+    /// write-back has always applied on failure, extracted for the same one-stamp-shape reason
+    /// as <see cref="ApplyCompileSuccess"/>.
+    /// </summary>
+    internal static NodeTypeDefinition ApplyCompileFailure(
+        NodeTypeDefinition def,
+        NodeCompilationResult? result,
+        Exception? error,
+        string? activityPath)
+        => def with
+        {
+            CompilationStatus = CompilationStatus.Error,
+            CompilationError = SummarizeCompileError(result, error),
+            CompilationDiagnostics = result?.Diagnostics is { Count: > 0 } ds
+                ? System.Collections.Immutable.ImmutableList.CreateRange(ds)
+                : null,
+            LastCompilationActivityPath = activityPath,
+            CompiledSources = null,
+            // Clear the consumed release-requester on failure too — the failed request is
+            // done; a fresh request must re-stamp it.
+            RequestedReleaseBy = null
+        };
+
+    /// <summary>
     /// Compile-and-write-back loop for one NodeType. Runs Roslyn via
     /// <see cref="IMeshNodeCompilationService.CompileAndGetConfigurations"/>,
     /// writes the outcome back to the NodeType's own MeshNode
@@ -1479,88 +1573,29 @@ internal static class NodeTypeCompilationHelpers
                         if (def is null)
                             return curr;
 
+                        // The stamp field-sets live in ApplyCompileSuccess / ApplyCompileFailure —
+                        // pure, shared with the initial-bake batch driver (issue #1207) so both
+                        // write-back paths stamp IDENTICAL state.
                         if (outcome.Error is null && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation))
                         {
                             logger?.LogInformation("Compile success for {HubPath} → {Assembly}",
                                 hubPath, outcome.Result!.AssemblyLocation);
                             return curr with
                             {
-                                Content = def with
-                                {
-                                    CompilationStatus = CompilationStatus.Ok,
-                                    CompilationError = null,
-                                    CompilationDiagnostics = null,
-                                    LastCompileSucceededAt = DateTimeOffset.UtcNow,
-                                    // Stamp LastCompiledVersion to MATCH the version the
-                                    // IAssemblyStore upload used (set by
-                                    // UploadToStoreIfNeeded — the captured pendingNode.Version
-                                    // at compile kickoff). Using curr.Version here would
-                                    // point activation at a different version than the one
-                                    // the store actually has — TryGetAssemblyPath miss,
-                                    // activation falls back to default config without
-                                    // AddMeshDataSource, IWorkspace fails to activate.
-                                    LastCompiledVersion = outcome.Result.Version ?? curr.Version,
-                                    LastCompilationActivityPath = resolvedActivityPath,
-                                    LatestReleasePath = newReleasePath ?? def.LatestReleasePath,
-                                    ReleaseNotes = newReleasePath is not null ? null : def.ReleaseNotes,
-                                    CompiledSources = outcome.Result.CompiledSources
-                                        ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
-                                    // Cross-silo durable assembly reference. Populated from
-                                    // the IAssemblyStore upload during compile (see
-                                    // MeshNodeCompilationService.UploadToStoreIfNeeded).
-                                    // Falls back to the previous values on a producer that
-                                    // hasn't wired a store yet (Null store keeps the new
-                                    // fields null and consumers still fall through to the
-                                    // legacy AssemblyLocation path during Stage 0/1).
-                                    LatestAssemblyCollection = outcome.Result.Collection ?? def.LatestAssemblyCollection,
-                                    LatestAssemblyPath = outcome.Result.ContentPath ?? def.LatestAssemblyPath,
-                                    // Stamp the framework version the assembly bound
-                                    // against — HasUsableBuild compares this to the live
-                                    // FrameworkVersion so a MeshWeaver redeploy forces a
-                                    // recompile instead of loading an ABI-stale DLL.
-                                    CompiledFrameworkVersion = FrameworkVersion,
-                                    // Clear the consumed release-requester. TryCreateReleaseNode
-                                    // already read it (off pendingNode) to stamp this release's
-                                    // owner; clearing it here ensures a SUBSEQUENT System-only
-                                    // recompile (first-build kickoff / framework-stale self-heal)
-                                    // doesn't mis-attribute its release to a stale prior user.
-                                    RequestedReleaseBy = null
-                                }
+                                Content = ApplyCompileSuccess(
+                                    def, outcome.Result, curr.Version, resolvedActivityPath, newReleasePath)
                             };
                         }
 
-                        // 🚨 Name the exception TYPE for a non-Roslyn abort. A bare `.Message`
-                        // ("Object reference not set to an instance of an object.") on the node's
-                        // CompilationError told the CI triage NOTHING about what died (#612 /
-                        // PR-884 occurrence); the full stack goes to the activity log above and to
-                        // the logger below — this UI-facing summary at least names the class.
-                        var errorSummary = outcome.Error switch
-                        {
-                            null => outcome.Result?.Log?.Errors() is { Count: > 0 } errs
-                                ? string.Join("; ", errs.Select(m => m.Message))
-                                : "Compilation produced no assembly",
-                            CompilationException ce => ce.Message,
-                            { } other => $"{other.GetType().Name}: {other.Message}",
-                        };
                         // Pass the exception OBJECT so the stack reaches the log sink — message-only
                         // logging is what left the recurring CI compile-NRE undiagnosable.
                         logger?.LogWarning(outcome.Error,
-                            "Compile failure for {HubPath}: {Error}", hubPath, errorSummary);
+                            "Compile failure for {HubPath}: {Error}", hubPath,
+                            SummarizeCompileError(outcome.Result, outcome.Error));
                         return curr with
                         {
-                            Content = def with
-                            {
-                                CompilationStatus = CompilationStatus.Error,
-                                CompilationError = errorSummary,
-                                CompilationDiagnostics = outcome.Result?.Diagnostics is { Count: > 0 } ds
-                                    ? System.Collections.Immutable.ImmutableList.CreateRange(ds)
-                                    : null,
-                                LastCompilationActivityPath = resolvedActivityPath,
-                                CompiledSources = null,
-                                // Clear the consumed release-requester on failure too — the
-                                // failed request is done; a fresh request must re-stamp it.
-                                RequestedReleaseBy = null
-                            }
+                            Content = ApplyCompileFailure(
+                                def, outcome.Result, outcome.Error, resolvedActivityPath)
                         };
                     })
                     .Subscribe(
