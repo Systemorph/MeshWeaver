@@ -30,7 +30,12 @@ public record MeshNodeCardControl(
     {
         var nodePath = node?.Path ?? fallbackPath;
         var title = node?.Name ?? fallbackPath;
-        var imageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(node);
+        // The ICON, never the poster: the card's image box is a fixed 48 px square with
+        // object-fit: cover, so a wide MarkdownContent.Thumbnail banner cropped into it is a
+        // meaningless sliver. Skipping it falls through to the node's own icon — an inline SVG
+        // drawn in currentColor, sized for exactly this box. MeshNodeThumbnailControl is the
+        // poster-shaped control and keeps the thumbnail.
+        var imageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(node, includeThumbnail: false);
         // Databind the card subtitle to the node's Description (blank when unset) —
         // no NodeType fallback, so the line reflects the real description, nothing else.
         var description = node?.Description;
