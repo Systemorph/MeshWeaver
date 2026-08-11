@@ -124,20 +124,58 @@ public static class NodeTypeLayoutAreas
     /// Pending → Compiling → Ok/Error.
     /// </summary>
     public static IObservable<UiControl?> Progress(LayoutAreaHost host, RenderingContext _)
+        => CompileProgressView(host, host.Workspace.GetMeshNodeStream(),
+            nodeTypePath: host.Hub.Address.Path,
+            redirectOnOk: $"/{host.Hub.Address.Path}");
+
+    /// <summary>
+    /// Core of the compile-progress page, shared by two surfaces: the per-NodeType hub's
+    /// own <see cref="ProgressArea"/> (redirects to the NodeType's page on Ok) and the
+    /// per-INSTANCE compilation-in-progress overlay
+    /// (<c>NodeTypeEnrichmentHelpers.WithCompilationInProgressOverlay</c>), which observes
+    /// the type's stream cross-hub and redirects back to the INSTANCE the user asked for.
+    /// Besides the type's own status + live activity log, it renders the compile SWEEP
+    /// context — how many NodeTypes are compiled vs still queued (the framework-bump
+    /// warm-up recompiles every dynamic type) — so a waiting user sees the whole queue
+    /// advance instead of a silent page.
+    /// </summary>
+    internal static IObservable<UiControl?> CompileProgressView(
+        LayoutAreaHost host,
+        IObservable<MeshNode?> typeNodeStream,
+        string nodeTypePath,
+        string redirectOnOk)
     {
-        var nodePath = host.Hub.Address.Path;
-        return host.Workspace.GetMeshNodeStream()
-            .Select(node =>
+        // Sweep context: the same synced NodeType query the GUI's compile indicator uses.
+        // StartWith keeps it from GATING the primary render (the progress page must never
+        // itself be a blank page), and a faulted query degrades to "no sweep section" with
+        // the fault logged — the type's own progress keeps rendering.
+        var sweepStream = host.Workspace
+            .GetQuery("nodetypes-compile-sweep",
+                "nodeType:NodeType select:path,id,name,nodeType,content")
+            .Catch((Exception ex) =>
             {
-                if (node?.Content is not NodeTypeDefinition def)
+                host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(NodeTypeLayoutAreas))
+                    .LogWarning(ex, "Compile-sweep query failed — progress page renders without sweep context");
+                return Observable.Return<IEnumerable<MeshNode>>([]);
+            })
+            .StartWith((IEnumerable<MeshNode>)[]);
+
+        return typeNodeStream.CombineLatest(sweepStream, (node, sweepNodes) =>
+            {
+                // ContentAs, not a CLR type test: on the overlay surface the type node
+                // arrives over a cross-hub sync stream and may still be an un-materialized
+                // JsonElement (see IsCompileSettled's remarks on exactly this trap).
+                var def = node?.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
+                if (node is null || def is null)
                     return (UiControl?)Controls.Markdown(
                         "*This node has no NodeTypeDefinition — nothing to compile.*");
 
-                // Compile finished cleanly → redirect to the now-addressable node. The user
-                // only landed on Progress because an instance area NACKed CompilationInProgress;
-                // once it's Ok the real view resolves, so send them there. "When it ends, we redirect."
+                // Compile finished cleanly → redirect to the now-addressable page. The user
+                // only landed here because activation could not complete mid-compile; once
+                // it's Ok the real view resolves, so send them there. "When it ends, we redirect."
                 if (def.CompilationStatus == CompilationStatus.Ok)
-                    return (UiControl?)Controls.Redirect($"/{nodePath}");
+                    return (UiControl?)Controls.Redirect(redirectOnOk);
 
                 var nodeName = node.Name ?? node.Id;
                 var (icon, header, body) = RenderProgressLines(def);
@@ -158,13 +196,15 @@ public static class NodeTypeLayoutAreas
                     // Do NOT embed the activity LayoutAreaControl here — the compile activity is
                     // history and may be unaddressable; subscribing to an inexistent address is the
                     // resubscribe storm that wedged the portal. The Recompile button flips
-                    // RequestedReleaseAt + Force on the NodeType's OWN node; the compile watcher reacts.
+                    // RequestedReleaseAt + Force on the NodeType's node via the shared stream
+                    // handle — cross-hub on the instance overlay surface, local on the NodeType's
+                    // own hub; the compile watcher reacts either way.
                     stack = AppendCompileErrorSources(stack, def);
                     stack = stack.WithView(Controls.Button(host.Localize("ui.recompile"))
                         .WithAppearance(Appearance.Accent)
                         .WithClickAction(_ =>
                         {
-                            host.Workspace.GetMeshNodeStream()
+                            host.Hub.GetMeshNodeStream(nodeTypePath)
                                 .Update(curr => curr?.Content is NodeTypeDefinition cd
                                     ? curr with
                                     {
@@ -178,7 +218,7 @@ public static class NodeTypeLayoutAreas
                                 .Subscribe(_ => { },
                                     ex => host.Hub.ServiceProvider.GetService<ILoggerFactory>()
                                         ?.CreateLogger(typeof(NodeTypeLayoutAreas))
-                                        .LogWarning(ex, "Recompile trigger failed for {Path}", nodePath));
+                                        .LogWarning(ex, "Recompile trigger failed for {Path}", nodeTypePath));
                             return Task.CompletedTask;
                         }));
                 }
@@ -204,8 +244,67 @@ public static class NodeTypeLayoutAreas
                             new LayoutAreaReference(ActivityLayoutAreas.ProgressArea))
                         .WithStyle("margin-top: 8px; padding: 12px; background: var(--neutral-layer-3); border-radius: 4px; min-height: 48px;"));
                 }
+
+                // While THIS type is queued/compiling, show the whole sweep: after a
+                // framework bump every dynamic type recompiles, and "your page plus 40
+                // more are queued" is the honest answer to "why is this taking so long".
+                if (def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling)
+                    stack = AppendSweepSummary(stack, host, sweepNodes, nodeTypePath);
+
                 return (UiControl?)stack;
             });
+    }
+
+    /// <summary>
+    /// Sweep context for the compile-progress page: an "N of M types compiled" progress
+    /// bar plus the type currently compiling and the queued count, derived from the synced
+    /// <c>nodeType:NodeType</c> query snapshot (works on every deployment — no dependency
+    /// on the pre-warmer being enabled). Rendered ONLY while more than one type is in
+    /// flight/queued: a solitary recompile keeps its focused single-type page.
+    /// </summary>
+    private static StackControl AppendSweepSummary(
+        StackControl stack, LayoutAreaHost host, IEnumerable<MeshNode> sweepNodes, string selfPath)
+    {
+        var defs = sweepNodes
+            .Select(n => (Node: n, Def: n.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions)))
+            .Where(x => x.Def is not null
+                // Only types that participate in compilation: with source to build or a
+                // compile state already recorded. Pure marker types stay out of the totals.
+                && (x.Def!.CompilationStatus is not null
+                    || !string.IsNullOrWhiteSpace(x.Def.Configuration)
+                    || !string.IsNullOrWhiteSpace(x.Def.HubConfiguration)
+                    || x.Def.Sources is { Count: > 0 }))
+            .ToList();
+
+        var total = defs.Count;
+        var pending = defs.Count(x => x.Def!.CompilationStatus == CompilationStatus.Pending);
+        var compiling = defs
+            .Where(x => x.Def!.CompilationStatus == CompilationStatus.Compiling)
+            .Select(x => x.Node.Name ?? x.Node.Id)
+            .ToList();
+        var inFlight = pending + compiling.Count;
+        // The sweep section only earns its place when the queue is bigger than this page's
+        // own type — otherwise the single-type view above already tells the whole story.
+        if (total == 0 || inFlight <= 1)
+            return stack;
+
+        var done = defs.Count(x => x.Def!.CompilationStatus
+            is CompilationStatus.Ok or CompilationStatus.Error or CompilationStatus.Unavailable);
+        var percent = (int)Math.Round(100.0 * done / total);
+
+        var lines = new List<string>();
+        if (compiling.Count > 0)
+            lines.Add(host.Localize("ui.compileNowCompiling", string.Join(", ", compiling)));
+        if (pending > 0)
+            lines.Add(host.Localize("ui.compileQueued", pending));
+
+        var sweep = Controls.Stack
+            .WithStyle("margin-top: 12px; gap: 4px;")
+            .WithView(Controls.Progress(
+                host.Localize("ui.compileTypesReady", done, total), percent));
+        if (lines.Count > 0)
+            sweep = sweep.WithView(Controls.Markdown(string.Join(" · ", lines)));
+        return stack.WithView(sweep);
     }
 
     /// <summary>
