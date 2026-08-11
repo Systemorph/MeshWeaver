@@ -1,6 +1,6 @@
-node_modules/
+# No trailing slash — see clients/react/.gitignore.
+node_modules
 dist/
 src/gen/
 *.tgz
 *.tsbuildinfo
-package-lock.json
