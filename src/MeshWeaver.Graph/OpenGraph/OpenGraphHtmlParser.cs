@@ -121,7 +121,11 @@ public static partial class OpenGraphHtmlParser
             AbsoluteUrl(baseUri, ogImage),
             NullIfEmpty(ogSiteName),
             Fetched: true,
-            Icon: AbsoluteUrl(baseUri, SelectIcon(head)));
+            Icon: AbsoluteUrl(baseUri, SelectIcon(head)),
+            // The page declared Open Graph proper — not merely a <title> that every HTML
+            // document has, including an SPA catch-all shell. Gates the preview cache; see
+            // OpenGraphPreview.IsResolved.
+            DeclaresOpenGraph: ogTitle is not null);
     }
 
     /// <summary>The head slice of the document: everything up to <c>&lt;/head&gt;</c>, else a

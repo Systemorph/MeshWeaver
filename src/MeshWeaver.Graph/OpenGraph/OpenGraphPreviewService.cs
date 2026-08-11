@@ -109,6 +109,21 @@ public sealed class OpenGraphPreviewService
             return Observable.Return(OpenGraphPreview.Unavailable(url));
 
         return pool().Run(ct => FetchAsync(url, ct))
+            // 🚨 A SUCCESSFUL fetch that carried no Open Graph metadata must not be cached
+            // either. A portal mid-restart / login wall / SPA catch-all answers 200 with its
+            // shell page, so nothing throws and the exception path below never runs — that
+            // response would otherwise be pinned for the process lifetime, leaving one card
+            // stuck on the catch-all's <title> while its neighbours render fine. Evicting it
+            // makes the next page view re-fetch, which is what such a transient response needs.
+            .Do(preview =>
+            {
+                if (preview.IsResolved)
+                    return;
+                logger()?.LogInformation(
+                    "Open Graph fetch of {Url} returned no og: metadata (HTTP succeeded); not "
+                    + "caching it, the next view re-fetches.", url);
+                cache.TryRemove(url, out _);
+            })
             // A failed fetch is a normal state for a card (target down, 404, DNS): surface the
             // URL-only fallback and EVICT the entry — the next page view's subscriber re-runs
             // the fetch once. TryRemove is idempotent across concurrent subscribers.
