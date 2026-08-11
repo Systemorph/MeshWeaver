@@ -1434,11 +1434,17 @@ public static class PackageInstaller
         try
         {
             // A differing $type IS a real change — never mask it by coercing into the wrong type.
-            // Both discriminators read defensively: a non-string $type on either side skips
-            // alignment (raw compare → change detected).
-            var candidateType = el.TryGetProperty("$type", out var it) && it.ValueKind == JsonValueKind.String
-                ? it.GetString()
-                : null;
+            // Three discriminator cases on the element side, each deliberate:
+            //   • absent      → align. Repo content files legitimately omit the discriminator (the
+            //                   node's nodeType implies the content type); skipping here would
+            //                   re-open the default-churn for every discriminator-less file.
+            //   • string      → align only when it MATCHES the peer's discriminator.
+            //   • non-string  → malformed; skip alignment entirely (raw compare → the malformed
+            //                   value shows as a change instead of being silently repaired).
+            var hasDiscriminator = el.TryGetProperty("$type", out var it);
+            if (hasDiscriminator && it.ValueKind != JsonValueKind.String)
+                return candidate;
+            var candidateType = hasDiscriminator ? it.GetString() : null;
             var peerType = JsonSerializer.SerializeToNode(peer, options)
                     is System.Text.Json.Nodes.JsonObject peerNode
                 && peerNode.TryGetPropertyValue("$type", out var pt)
