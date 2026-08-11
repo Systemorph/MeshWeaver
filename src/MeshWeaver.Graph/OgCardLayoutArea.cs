@@ -25,8 +25,12 @@ namespace MeshWeaver.Graph;
 /// <para>External URLs travel in the <c>?url=</c>/<c>?urls=</c> query form — the query suffix is
 /// the one areaId shape whose <c>://</c> survives every path-resolution hop verbatim. Entries may
 /// be percent-encoded (they are unescaped once); plain URLs without <c>&amp;</c>, <c>=</c>,
-/// <c>%</c> or commas work as written, and <c>urls</c> entries are comma-separated (a comma
-/// inside a URL is written <c>%2C</c>). Mesh paths and external URLs can be mixed.</para>
+/// <c>%</c> or commas work as written. Mesh paths and external URLs can be mixed.</para>
+/// <para>🚨 A MULTI-target list is comma-separated in EVERY form — the <c>?urls=</c> query form
+/// AND the bare path/areaId form alike — and the separator may arrive raw (<c>,</c>) or encoded
+/// (<c>%2C</c>), since a path-form areaId is commonly percent-encoded as one whole segment. A
+/// literal comma inside a URL must therefore be double-encoded (<c>%252C</c>), or carried by the
+/// singular <c>?url=</c> form, which never splits.</para>
 /// </summary>
 public static class OgCardLayoutArea
 {
@@ -90,7 +94,7 @@ public static class OgCardLayoutArea
     /// og:image poster — see <see cref="OpenGraphPreview.CardIcon"/> for the order and why.</summary>
     private static MeshNodeCardControl ExternalCard(string url, OpenGraphPreview preview) =>
         new(NodePath: string.Empty,
-            Title: preview.Title ?? HostOf(url),
+            Title: preview.Title ?? LabelOf(url),
             Description: preview.Description,
             ImageUrl: preview.CardIcon,
             Href: url);
@@ -99,7 +103,7 @@ public static class OgCardLayoutArea
     /// for an unreachable one): its name alone, still a working link.</summary>
     private static MeshNodeCardControl PlaceholderCard(string target) =>
         IsExternal(target)
-            ? new MeshNodeCardControl(NodePath: string.Empty, Title: HostOf(target), Href: target)
+            ? new MeshNodeCardControl(NodePath: string.Empty, Title: LabelOf(target), Href: target)
             : MeshNodeCardControl.FromNode(null, target.Trim('/'));
 
     /// <summary>One card renders width-bounded like a chat unfurl; several render as a
@@ -127,20 +131,44 @@ public static class OgCardLayoutArea
         var value = id.Trim().TrimStart('?');
 
         if (value.StartsWith("urls=", StringComparison.OrdinalIgnoreCase))
-            return value["urls=".Length..]
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(SafeUnescape)
-                .Where(entry => !string.IsNullOrWhiteSpace(entry))
-                .ToImmutableList();
+            return SplitTargets(value["urls=".Length..]);
 
         if (value.StartsWith("url=", StringComparison.OrdinalIgnoreCase))
         {
+            // The SINGULAR form is exactly one target and never splits — a comma in it is data.
             var single = SafeUnescape(value["url=".Length..].Trim());
             return string.IsNullOrWhiteSpace(single) ? [] : [single];
         }
 
-        return [SafeUnescape(value)];
+        return SplitTargets(value);
     }
+
+    /// <summary>
+    /// Splits a comma-separated target list into its entries.
+    ///
+    /// <para>🚨 The split runs on BOTH sides of the single unescape, because the separator itself
+    /// arrives raw or encoded depending on how the embed was authored. A PATH-form areaId is
+    /// commonly percent-encoded as one whole path segment — every <c>:</c>, <c>/</c> and
+    /// <c>,</c> alike — so its separators reach us as <c>%2C</c>; a query-form <c>?urls=</c> list
+    /// usually keeps its commas raw. Splitting raw, unescaping, then splitting again handles
+    /// either form (and a mix of the two) under one rule.</para>
+    ///
+    /// <para>Without this the path form did not split AT ALL: the whole joined string became a
+    /// single target, so four URLs rendered as ONE card whose href was the four URLs concatenated
+    /// — a fetch that could never succeed, degrading to a card titled with the bare domain that
+    /// read as a broken link to the portal.</para>
+    ///
+    /// <para>Consequence of treating <c>%2C</c> as a separator: a literal comma INSIDE a URL must
+    /// be double-encoded (<c>%252C</c>), or written with the singular <c>?url=</c> form, which
+    /// never splits.</para>
+    /// </summary>
+    private static IReadOnlyList<string> SplitTargets(string list) =>
+        list.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(SafeUnescape)
+            .SelectMany(entry =>
+                entry.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(entry => !string.IsNullOrWhiteSpace(entry))
+            .ToImmutableList();
 
     /// <summary>Unescapes a user-authored target defensively: a malformed percent sequence in
     /// markdown must degrade to the raw token, never fault the whole area render.</summary>
@@ -160,6 +188,21 @@ public static class OgCardLayoutArea
         target.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
         || target.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
 
-    private static string HostOf(string url) =>
-        Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host : url;
+    /// <summary>
+    /// The readable label for an external target whose page declared no title — the card's state
+    /// before the fetch lands, and its terminal state when the target is unreachable.
+    ///
+    /// <para>The LAST PATH SEGMENT, not the bare host: a grid of cards all titled
+    /// <c>memex.meshweaver.cloud</c> reads as "several broken links to the portal", while
+    /// <c>Reinsurance</c> / <c>Underwriting</c> says which page each one actually points at. The
+    /// href is always the real target, so the label and the link agree. Falls back to the host
+    /// for an origin-root URL, which genuinely has no segment to name it by.</para>
+    /// </summary>
+    private static string LabelOf(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return url;
+        var segment = uri.Segments.LastOrDefault()?.Trim('/');
+        return string.IsNullOrWhiteSpace(segment) ? uri.Host : SafeUnescape(segment);
+    }
 }
