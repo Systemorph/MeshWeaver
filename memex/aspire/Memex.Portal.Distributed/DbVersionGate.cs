@@ -82,6 +82,14 @@ public sealed class DbVersionGate(
                 "Refusing to start the portal.");
             lifetime.StopApplication();
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Host startup was aborted (shutdown raced startup) — not a migration
+            // problem. Honor the IHostedService cancellation contract and let the host
+            // finish tearing down; logging this Critical + StopApplication would
+            // misreport an ordinary shutdown as "DB version check failed unexpectedly".
+            throw;
+        }
         catch (Exception ex)
         {
             // Any other connection / auth error — also fail closed. Better to
