@@ -71,14 +71,14 @@ public class PaywallIdentityMatrixTests(PostgreSqlFixture fixture, ITestOutputHe
     private async Task<string> Read(AccessContext? identity, string path)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        access.SetCircuitContext(identity);
+        access.SetHostIdentity(identity);
         try
         {
             return await new MeshOperations(Mesh).Get(path).Should().Within(60.Seconds()).Emit();
         }
         finally
         {
-            access.SetCircuitContext(null);
+            access.SetHostIdentity(null);
         }
     }
 

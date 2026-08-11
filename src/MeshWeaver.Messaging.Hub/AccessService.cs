@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
@@ -46,13 +47,38 @@ public class AccessService
     private readonly AsyncLocal<AccessContext?> circuitContext = new();
 
     /// <summary>
-    /// Persistent fallback for circuit context. Used in test scenarios where
-    /// SetCircuitContext is called in InitializeAsync but the AsyncLocal value
-    /// doesn't flow to the test method (ExecutionContext copy-on-write).
-    /// In production Blazor, CircuitAccessHandler always sets the AsyncLocal
-    /// via CreateInboundActivityHandler, so this fallback is never reached.
+    /// Standing identity for a SINGLE-IDENTITY host — a process that serves exactly one
+    /// user for its whole lifetime: the MAUI device client and the xUnit test host. Those
+    /// hosts have no Blazor circuit to set <see cref="circuitContext"/> per inbound activity,
+    /// and an <c>AsyncLocal</c> written in an <c>async</c> setup method is discarded when that
+    /// method returns — so they need a standing value that survives every hop.
+    ///
+    /// <para>🚨 A MULTI-USER SERVER MUST NEVER WRITE THIS. It is process-wide and
+    /// last-writer-wins, so on a shared portal it would hand one user's identity to every
+    /// other user's context-less read. That was exactly the cross-user identity bleed fixed
+    /// here: <see cref="SetCircuitContext"/> used to write this field on every Blazor inbound
+    /// activity and on every thread-hub activation, making <see cref="CircuitContext"/> resolve
+    /// to "whoever touched the process last" on any thread where the AsyncLocal was unset.
+    /// The only writer is <see cref="SetHostIdentity"/>, which no server code path calls —
+    /// on a portal this stays <see langword="null"/> forever and identity resolution fails
+    /// closed instead of falling back to a stranger.</para>
+    ///
+    /// <para>Per-hub standing identity (owner injection) is a DIFFERENT concept and lives in
+    /// <see cref="standingIdentities"/> — scoped to the owning hub, never process-wide.</para>
     /// </summary>
-    private AccessContext? persistentCircuitContext;
+    private AccessContext? hostIdentity;
+
+    /// <summary>
+    /// Per-hub standing identity — "owner injection": a per-node / thread / activity hub
+    /// carries its node OWNER as the identity for work that runs on it after the live
+    /// <c>AsyncLocal</c> has been wiped (a deferred sync write, an Rx continuation).
+    /// Keyed by the owning hub's address, so hub A's owner can never be observed as hub B's
+    /// caller — the bug that a single process-wide field produced.
+    ///
+    /// <para>Instance field on a mesh-scoped singleton, so its lifetime IS the mesh's and it
+    /// dies with it (no <c>static</c>, no <c>Clear()</c> for test isolation).</para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, AccessContext> standingIdentities = new();
 
     private readonly ILogger? _logger;
 
@@ -81,12 +107,21 @@ public class AccessService
     public AccessContext? Context => context.Value;
 
     /// <summary>
-    /// Gets the circuit-level context. Returns the AsyncLocal value if set
-    /// (by CircuitAccessHandler per inbound activity), otherwise falls back
-    /// to the persistent context (set by test setup or initial authentication).
+    /// Gets the circuit-level context: the AsyncLocal set by CircuitAccessHandler for the
+    /// duration of each Blazor inbound activity, falling back to the
+    /// <see cref="hostIdentity"/> of a single-identity host (MAUI / test host).
+    ///
+    /// <para>🚨 On a multi-user server <see cref="hostIdentity"/> is never written, so this
+    /// resolves to the AsyncLocal ONLY and returns <see langword="null"/> off the circuit's own
+    /// call tree — every hub action-block thread, Rx/IIoPool hop and background service. That
+    /// null is deliberate: identity resolution FAILS CLOSED rather than handing back whichever
+    /// user happened to touch the process last. Code that needs an identity across such a hop
+    /// must carry it explicitly — <c>delivery.AccessContext</c>, <c>ICircuitContextAccessor.UserContext</c>
+    /// (per-circuit), or <see cref="GetStandingIdentity"/> (per-hub owner injection).</para>
+    ///
     /// In Orleans grains, this is always null (identity flows per-message only).
     /// </summary>
-    public AccessContext? CircuitContext => circuitContext.Value ?? persistentCircuitContext;
+    public AccessContext? CircuitContext => circuitContext.Value ?? hostIdentity;
 
     /// <summary>
     /// Sets the request-specific context (AsyncLocal).
@@ -106,22 +141,22 @@ public class AccessService
     }
 
     /// <summary>
-    /// Sets the circuit-level context (AsyncLocal).
-    /// Called by CircuitAccessHandler to restore per-circuit identity
-    /// at the start of each Blazor inbound activity.
-    /// When setting a non-null context, also stores as persistent fallback
-    /// for scenarios where AsyncLocal doesn't flow (test setup, non-Blazor).
+    /// Sets the circuit-level context — the <c>AsyncLocal</c> ONLY.
+    /// Called by CircuitAccessHandler to establish per-circuit identity at the start of each
+    /// Blazor inbound activity (and to clear it in the matching <c>finally</c>).
+    ///
+    /// <para>🚨 This deliberately does NOT write any process-wide field. It used to also assign
+    /// <c>persistentCircuitContext</c>, which made every circuit activity publish its user
+    /// process-wide: on a shared portal, user B's keystroke became the answer to user A's (and
+    /// an anonymous visitor's) context-less identity reads on hub/Rx threads — the cross-user
+    /// bleed. A single-identity host that genuinely has no circuit uses
+    /// <see cref="SetHostIdentity"/>; a hub that needs its node owner as a standing identity
+    /// uses <see cref="SetStandingIdentity"/>.</para>
     /// </summary>
     public void SetCircuitContext(AccessContext? accessContext)
     {
         var prev = circuitContext.Value?.ObjectId;
         circuitContext.Value = accessContext;
-        // Sync the persistent fallback so SetCircuitContext(null) truly clears identity.
-        // This ensures test code (SetCircuitContext in InitializeAsync) persists
-        // across async context boundaries where AsyncLocal doesn't flow.
-        // In production Blazor, CircuitAccessHandler always sets the AsyncLocal
-        // per inbound activity, so the persistent fallback is never reached.
-        persistentCircuitContext = accessContext;
 
         if (LooksLikeHubPrincipal(accessContext?.ObjectId))
             _logger?.LogError(
@@ -133,17 +168,85 @@ public class AccessService
     }
 
     /// <summary>
-    /// Clears the persistent circuit context fallback.
-    /// Called by CircuitAccessHandler on circuit close to prevent stale context.
+    /// Sets the standing identity of a SINGLE-IDENTITY host — a process that serves exactly one
+    /// user for its entire lifetime. The only legitimate callers are the MAUI device client
+    /// (<c>MauiProgram</c>, the signed-in device user) and the xUnit test host
+    /// (<c>TestUsers.DevLogin</c>). Both lack a Blazor circuit, so nothing sets the AsyncLocal
+    /// per inbound activity, and an AsyncLocal written in an <c>async</c> setup method is
+    /// discarded when that method returns.
+    ///
+    /// <para>🚨 NEVER call this from a multi-user server. The value is process-wide and
+    /// last-writer-wins; on a shared portal it hands one user's identity to every other user's
+    /// context-less read. Per-circuit identity is <see cref="SetCircuitContext"/> (AsyncLocal)
+    /// plus <c>ICircuitContextAccessor.UserContext</c>; per-hub owner identity is
+    /// <see cref="SetStandingIdentity"/>.</para>
     /// </summary>
-    public void ClearPersistentCircuitContext()
+    /// <param name="accessContext">The single user this process serves, or null to clear.</param>
+    public void SetHostIdentity(AccessContext? accessContext)
     {
-        if (persistentCircuitContext != null)
-        {
-            _logger?.LogDebug("ClearPersistentCircuitContext: {Previous} -> (null)", persistentCircuitContext.ObjectId);
-            persistentCircuitContext = null;
-        }
+        var prev = hostIdentity?.ObjectId;
+        hostIdentity = accessContext;
+        // Keep the AsyncLocal in step for the calling flow, so a host that sets its identity
+        // and immediately continues synchronously observes it through Context-less paths too.
+        circuitContext.Value = accessContext;
+
+        if (LooksLikeHubPrincipal(accessContext?.ObjectId))
+            _logger?.LogError(
+                "SetHostIdentity: hub-shaped principal {ObjectId} set as host identity — must never happen. " +
+                "Source stack:\n{Stack}",
+                accessContext!.ObjectId, new StackTrace(skipFrames: 1, fNeedFileInfo: true).ToString());
+        if (prev != accessContext?.ObjectId)
+            _logger?.LogDebug("SetHostIdentity: {Previous} -> {Current}", prev ?? "(null)", accessContext?.ObjectId ?? "(null)");
     }
+
+    /// <summary>
+    /// Clears the single-identity host's standing identity (see <see cref="SetHostIdentity"/>).
+    /// </summary>
+    public void ClearHostIdentity()
+    {
+        if (hostIdentity != null)
+        {
+            _logger?.LogDebug("ClearHostIdentity: {Previous} -> (null)", hostIdentity.ObjectId);
+            hostIdentity = null;
+        }
+        circuitContext.Value = null;
+    }
+
+    /// <summary>
+    /// Records the standing identity of <paramref name="hub"/> — "owner injection". A per-node,
+    /// thread or activity hub carries its node OWNER as the identity for work that runs on it
+    /// after the live AsyncLocal has been wiped (a deferred data-source sync write, an Rx
+    /// continuation). Scoped to the owning hub's address, so one hub's owner can never be
+    /// observed as another hub's caller.
+    /// </summary>
+    /// <param name="hub">The hub whose standing identity is being set.</param>
+    /// <param name="accessContext">The owner identity, or null to clear it.</param>
+    public void SetStandingIdentity(IMessageHub hub, AccessContext? accessContext)
+    {
+        var key = hub.Address.ToFullString();
+        if (accessContext is null)
+        {
+            standingIdentities.TryRemove(key, out _);
+            return;
+        }
+        if (LooksLikeHubPrincipal(accessContext.ObjectId))
+        {
+            _logger?.LogError(
+                "SetStandingIdentity: hub-shaped principal {ObjectId} set as the standing identity of {Hub} — " +
+                "must never happen. Source stack:\n{Stack}",
+                accessContext.ObjectId, key, new StackTrace(skipFrames: 1, fNeedFileInfo: true).ToString());
+            return;
+        }
+        standingIdentities[key] = accessContext;
+        _logger?.LogDebug("SetStandingIdentity: {Hub} -> {Current}", key, accessContext.ObjectId);
+    }
+
+    /// <summary>
+    /// Returns the standing owner identity recorded for <paramref name="hub"/> by
+    /// <see cref="SetStandingIdentity"/>, or null when none was established.
+    /// </summary>
+    public AccessContext? GetStandingIdentity(IMessageHub hub)
+        => standingIdentities.TryGetValue(hub.Address.ToFullString(), out var ctx) ? ctx : null;
 
     /// <summary>
     /// Temporarily switches the access context. Restores the previous value when disposed.

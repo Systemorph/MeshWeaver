@@ -62,7 +62,7 @@ public class NavigationServiceTest
         // proxy (TypeLoadException in CI). The two anonymous tests override this with a
         // virtual/empty context to exercise the gate.
         var systemAccess = new AccessService();
-        systemAccess.SetCircuitContext(new AccessContext { ObjectId = WellKnownUsers.System, Name = "System" });
+        systemAccess.SetHostIdentity(new AccessContext { ObjectId = WellKnownUsers.System, Name = "System" });
         _hubServiceProvider.GetService(typeof(AccessService)).Returns(systemAccess);
 
         _hub.Configuration.Returns(new MessageHubConfiguration(null, new Address("test", "nav")));
@@ -152,7 +152,7 @@ public class NavigationServiceTest
     private void MakeVisitorAnonymous()
     {
         var anon = new AccessService();
-        anon.SetCircuitContext(new AccessContext
+        anon.SetHostIdentity(new AccessContext
         {
             ObjectId = WellKnownUsers.Anonymous,
             Name = "Guest",

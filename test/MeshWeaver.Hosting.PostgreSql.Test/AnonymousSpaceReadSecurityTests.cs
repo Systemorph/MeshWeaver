@@ -129,7 +129,7 @@ public class AnonymousSpaceReadSecurityTests(PostgreSqlFixture fixture, ITestOut
         //    has no PublicRead policy). Before the fix the circuit had a NULL context that was
         //    elevated to system-security and wrongly succeeded.
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
+        accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = WellKnownUsers.Anonymous,
             Name = "Guest",
@@ -160,7 +160,7 @@ public class AnonymousSpaceReadSecurityTests(PostgreSqlFixture fixture, ITestOut
         }
         finally
         {
-            accessService.SetCircuitContext(null);
+            accessService.SetHostIdentity(null);
         }
     }
 }

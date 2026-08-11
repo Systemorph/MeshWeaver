@@ -42,7 +42,7 @@ public class RenderAreaAccessDeniedTest(ITestOutputHelper output) : MonolithMesh
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var noAccess = new AccessContext { ObjectId = "no-access-user", Name = "No Access" };
         access.SetContext(noAccess);
-        access.SetCircuitContext(noAccess);
+        access.SetHostIdentity(noAccess);
         try
         {
             var result = await new MeshOperations(Mesh)
@@ -59,7 +59,7 @@ public class RenderAreaAccessDeniedTest(ITestOutputHelper output) : MonolithMesh
         }
         finally
         {
-            access.SetCircuitContext(null);
+            access.SetHostIdentity(null);
         }
     }
 }

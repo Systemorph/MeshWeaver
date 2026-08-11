@@ -109,7 +109,7 @@ public class EducationStartExerciseTest(ITestOutputHelper output) : MonolithMesh
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var learner = new AccessContext { ObjectId = LearnerId, Name = "Learner" };
         access.SetContext(learner);
-        access.SetCircuitContext(learner);
+        access.SetHostIdentity(learner);
         try
         {
             var ops = new MeshOperations(Mesh);
@@ -156,7 +156,7 @@ public class EducationStartExerciseTest(ITestOutputHelper output) : MonolithMesh
         }
         finally
         {
-            access.SetCircuitContext(null);
+            access.SetHostIdentity(null);
             access.SetContext(null);
         }
     }
@@ -182,7 +182,7 @@ public class EducationStartExerciseTest(ITestOutputHelper output) : MonolithMesh
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var learner = new AccessContext { ObjectId = LearnerId, Name = "Learner" };
         access.SetContext(learner);
-        access.SetCircuitContext(learner);
+        access.SetHostIdentity(learner);
         try
         {
             var landingExpected = $"{LearnerId}/TestCourse/Module1/Ex1";
@@ -219,7 +219,7 @@ public class EducationStartExerciseTest(ITestOutputHelper output) : MonolithMesh
         }
         finally
         {
-            access.SetCircuitContext(null);
+            access.SetHostIdentity(null);
             access.SetContext(null);
         }
     }

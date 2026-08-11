@@ -73,7 +73,7 @@ public class DisplayTimeTest
     public void AccessServiceExtension_FallsBackToCircuitContext()
     {
         var access = new AccessService();
-        access.SetCircuitContext(new AccessContext { ObjectId = "u", TimeZoneId = "Europe/Zurich" });
+        access.SetHostIdentity(new AccessContext { ObjectId = "u", TimeZoneId = "Europe/Zurich" });
         try
         {
             // No request-scoped context set → resolves from the circuit context.
@@ -81,7 +81,7 @@ public class DisplayTimeTest
         }
         finally
         {
-            access.SetCircuitContext(null);
+            access.SetHostIdentity(null);
         }
     }
 
@@ -101,7 +101,7 @@ public class DisplayTimeTest
         var access = new AccessService();
         access.ViewerZoneId().Should().BeNull();
 
-        access.SetCircuitContext(new AccessContext { ObjectId = "u", TimeZoneId = "Europe/Zurich" });
+        access.SetHostIdentity(new AccessContext { ObjectId = "u", TimeZoneId = "Europe/Zurich" });
         try
         {
             access.ViewerZoneId().Should().Be("Europe/Zurich");
@@ -112,7 +112,7 @@ public class DisplayTimeTest
         }
         finally
         {
-            access.SetCircuitContext(null);
+            access.SetHostIdentity(null);
         }
 
         ((AccessService?)null).ViewerZoneId().Should().BeNull();
