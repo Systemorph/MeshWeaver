@@ -252,6 +252,113 @@ public class CompileWaitDoesNotTimeoutTest
         Assert.Same(ok, emitted);
     }
 
+    private static readonly TimeSpan Grace = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// The compilation-in-progress overlay's trigger: a compile CONTINUOUSLY in flight for
+    /// the grace emits the (unsettled) in-flight node as a VALUE — the caller's cue to stop
+    /// holding the activation and serve the live progress overlay instead. The discriminator
+    /// is the node's own Pending/Compiling status (every settle predicate rejects those).
+    /// </summary>
+    [Fact]
+    public void InFlightPastGrace_EmitsTheInFlightNode_ForTheProgressOverlay()
+    {
+        var scheduler = new TestScheduler();
+        var typeStream = new Subject<MeshNode>();
+
+        MeshNode? emitted = null;
+        Exception? error = null;
+        NodeTypeEnrichmentHelpers
+            .WaitForCompileSettled(typeStream, Settled(typeStream), Budget,
+                () => new TimeoutException("no compile in flight"), scheduler,
+                inFlightGrace: Grace)
+            .Subscribe(n => emitted = n, ex => error = ex);
+
+        var compiling = Node(CompilationStatus.Compiling);
+        typeStream.OnNext(compiling);
+
+        // Inside the grace: still waiting silently (a short compile stays invisible).
+        scheduler.AdvanceBy(Grace.Ticks - 1);
+        Assert.Null(emitted);
+        Assert.Null(error);
+
+        scheduler.AdvanceBy(2);
+        Assert.Null(error);
+        Assert.Same(compiling, emitted);        // the caller branches on Pending/Compiling
+    }
+
+    /// <summary>
+    /// A compile that settles INSIDE the grace behaves exactly as before the grace existed:
+    /// the settled node wins, no overlay emission, no flicker for short compiles.
+    /// </summary>
+    [Fact]
+    public void InFlightSettlingWithinGrace_EmitsSettled_NeverTheOverlayCue()
+    {
+        var scheduler = new TestScheduler();
+        var typeStream = new Subject<MeshNode>();
+
+        MeshNode? emitted = null;
+        Exception? error = null;
+        NodeTypeEnrichmentHelpers
+            .WaitForCompileSettled(typeStream, Settled(typeStream), Budget,
+                () => new TimeoutException("no compile in flight"), scheduler,
+                inFlightGrace: Grace)
+            .Subscribe(n => emitted = n, ex => error = ex);
+
+        typeStream.OnNext(Node(CompilationStatus.Compiling));
+        scheduler.AdvanceBy(Grace.Ticks / 2);
+
+        var ok = Node(CompilationStatus.Ok, withAssembly: true);
+        typeStream.OnNext(ok);
+        Assert.Same(ok, emitted);
+        Assert.Null(error);
+
+        // Long past the grace nothing else fires — Take(1) unsubscribed the grace timer.
+        scheduler.AdvanceBy(Grace.Ticks * 3);
+        Assert.Same(ok, emitted);
+        Assert.Null(error);
+    }
+
+    /// <summary>
+    /// Leaving Pending/Compiling BEFORE the grace elapses cancels the grace timer (the
+    /// level/Switch shape — same as the budget disarm), and the no-progress budget re-arms:
+    /// an unsettled non-in-flight terminal still ends at the graceful timeout sink, never
+    /// at a stale overlay cue.
+    /// </summary>
+    [Fact]
+    public void InFlightLeavingBeforeGrace_CancelsTheGrace_AndReArmsTheBudget()
+    {
+        var scheduler = new TestScheduler();
+        var typeStream = new Subject<MeshNode>();
+
+        // Settle predicate that rejects everything — isolates the timers.
+        var neverSettles = typeStream.Where(_ => false).Take(1);
+
+        MeshNode? emitted = null;
+        Exception? error = null;
+        NodeTypeEnrichmentHelpers
+            .WaitForCompileSettled(typeStream, neverSettles, Budget,
+                () => new TimeoutException("no compile in flight"), scheduler,
+                inFlightGrace: Grace)
+            .Subscribe(n => emitted = n, ex => error = ex);
+
+        typeStream.OnNext(Node(CompilationStatus.Compiling));
+        scheduler.AdvanceBy(Grace.Ticks / 2);
+
+        // The compile leaves in-flight without settling (a state this caller rejects).
+        typeStream.OnNext(Node(status: null, configuration: "config => config"));
+
+        // The grace must NOT fire — the compile is no longer in flight.
+        scheduler.AdvanceBy(Grace.Ticks);
+        Assert.Null(emitted);
+        Assert.Null(error);
+
+        // …and the re-armed budget ends the wait at the graceful sink.
+        scheduler.AdvanceBy(Budget.Ticks + 1);
+        Assert.Null(emitted);
+        Assert.IsType<TimeoutException>(error);
+    }
+
     /// <summary>
     /// A NodeType that is already settled Ok at first observation resolves immediately
     /// — the wall-clock never even starts to matter.
