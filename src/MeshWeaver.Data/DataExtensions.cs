@@ -201,6 +201,14 @@ public static class DataExtensions
             // ActivityLog content children — serialised inside log entries / user attribution.
             .WithType(typeof(LogMessage), nameof(LogMessage))
             .WithType(typeof(UserInfo), nameof(UserInfo))
+            // 🚨 Carried INSIDE a DataChangeRequest, so it crosses the wire on the ordinary write
+            // path. Unregistered, each hub auto-registers it under its short name the first time it
+            // writes one and logs the resolver's warning to say so. The auto-registered short name
+            // happens to agree everywhere, so nothing was breaking — but that is luck, not
+            // contract: the resolver's message asks for an explicit registration precisely because
+            // short names can collide across namespaces, and a receiving hub that never registered
+            // it reads the value as an untyped JsonElement.
+            .WithType(typeof(UpdateOptions), nameof(UpdateOptions))
             .RegisterDataEvents()
             .WithInitializationGate(DataContext.InitializationGateName, d => d.Message is PingRequest);
     }
