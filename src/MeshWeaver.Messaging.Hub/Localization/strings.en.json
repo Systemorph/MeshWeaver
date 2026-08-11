@@ -443,6 +443,7 @@
   "ui.inviteByEmail": "Invite by Email",
   "ui.launchScript": "Launch script",
   "ui.managePartition": "Manage partition",
+  "ui.ogCard.noTarget": "Add a link target, e.g. `OgCard?url=https://…`, `OgCard?urls=…,…` or `OgCard/Some/Node/Path`.",
   "ui.openModule": "Open module",
   "ui.openOriginal": "Open original",
   "ui.reimportAtCommit": "Re-import at this commit",

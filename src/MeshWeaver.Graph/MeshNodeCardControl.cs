@@ -9,7 +9,8 @@ namespace MeshWeaver.Graph;
 /// Supports two modes:
 /// 1. Default: renders a FluentCard with image/placeholder + title + description.
 /// 2. ItemArea: delegates rendering to a LayoutAreaView for the specified area.
-/// Navigation on click goes to /{NodePath}.
+/// Navigation on click goes to /{NodePath} — unless <paramref name="Href"/> carries an absolute
+/// EXTERNAL URL, which then wins and opens in a new tab (the <c>OgCard</c> link-preview cards).
 /// </summary>
 public record MeshNodeCardControl(
     string NodePath,
@@ -17,7 +18,8 @@ public record MeshNodeCardControl(
     string? Description = null,
     string? ImageUrl = null,
     string? ItemArea = null,
-    object? DisableNavigation = null
+    object? DisableNavigation = null,
+    string? Href = null
 ) : UiControl<MeshNodeCardControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     /// <summary>

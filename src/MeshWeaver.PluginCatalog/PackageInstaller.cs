@@ -1393,55 +1393,71 @@ public static class PackageInstaller
             return string.Equals(curDef.Configuration, inDef.Configuration, StringComparison.Ordinal)
                 && (curDef.Sources ?? []).SequenceEqual(inDef.Sources ?? [], StringComparer.Ordinal);
         // Otherwise compare the full content, applying the incoming over current so an omitted field
-        // does not read as a change — with the incoming ALIGNED to the current content's TYPE first
-        // (see AlignedIncoming): the persisted side is often typed and materializes C# property
-        // defaults the repo file legitimately omits.
-        return ContentSignature(AlignedIncoming(current.Content, incoming.Content, options) ?? current.Content, options)
-            == ContentSignature(current.Content, options);
+        // does not read as a change — with WHICHEVER side is a raw JsonElement ALIGNED to the other
+        // side's TYPE first (see AlignToPeer). Both mirror cases are live:
+        //   • current typed / incoming element — the persisted side materialized C# defaults the
+        //     repo file legitimately omits (the diagnosed PluginContent.Currency = "CHF" churn).
+        //   • current element / incoming typed — the reading hub had not resolved the module's own
+        //     type when the persisted side was read, while the incoming file deserialized typed and
+        //     materializes defaults the persisted element omits (FractalStars/Stars, 2026-08-11:
+        //     cur(JsonElement) {preset} vs inc(FractalContent) {children, deflection, generations,
+        //     preset, stepFactor} — the idempotence flap that SURVIVED the one-sided alignment; its
+        //     nondeterminism was exactly which side of the module's type-registration race the
+        //     persisted read landed on).
+        var effectiveIncoming = incoming.Content ?? current.Content;
+        return ContentSignature(AlignToPeer(effectiveIncoming, current.Content, options), options)
+            == ContentSignature(AlignToPeer(current.Content, effectiveIncoming, options), options);
     }
 
     /// <summary>
-    /// Materialized-default alignment for the content compare. The persisted side is often TYPED —
-    /// the owning hub re-serialized it, materializing C# property defaults (the diagnosed case:
-    /// <c>PluginContent.Currency = "CHF"</c>) — while the incoming side is the repo file's raw
-    /// <c>JsonElement</c>, which legitimately OMITS defaulted properties. Signing them as-is reads
-    /// every materialized default as a change: the NONDETERMINISTIC "re-install of the unchanged
-    /// snapshot wrote 1 node(s)" root churn behind the plugins gate's flapping idempotence check
-    /// (~14 packages allow-listed) — nondeterministic because it fires only once the hub happens to
-    /// have re-serialized the node before the re-install's read. Deserializing the incoming element
-    /// to the CURRENT content's type makes both sides materialize the same defaults.
+    /// Materialized-default alignment for the content compare: when ONE side is a raw
+    /// <c>JsonElement</c> and its peer is TYPED, deserialize the element to the peer's type so both
+    /// sides materialize the same C# property defaults. Signing a raw element against a typed peer
+    /// reads every materialized default as a change: the NONDETERMINISTIC "re-install of the
+    /// unchanged snapshot wrote 1 node(s)" root churn behind the plugins gate's flapping
+    /// idempotence check. The asymmetry runs BOTH ways — which is why the compare calls this once
+    /// per side: typed-current/element-incoming (the hub re-serialized the persisted node,
+    /// <c>PluginContent.Currency = "CHF"</c>) and element-current/typed-incoming (the persisted
+    /// read landed before the module's type registration while the repo file deserialized typed —
+    /// FractalStars/Stars, the flap that survived one-sided alignment).
     ///
-    /// <para>Guards: alignment happens only when the element's <c>$type</c> matches the current
+    /// <para>Guards: alignment happens only when the element's <c>$type</c> matches the peer
     /// content's serialized discriminator (a differing <c>$type</c> IS a real change and must never
     /// be masked by coercing into the wrong type), and a failed deserialize falls back to the raw
     /// element — worst case an idempotent rewrite, never a missed change.</para>
     /// </summary>
-    private static object? AlignedIncoming(object? current, object? incoming, JsonSerializerOptions options)
+    private static object? AlignToPeer(object? candidate, object? peer, JsonSerializerOptions options)
     {
-        if (incoming is not JsonElement { ValueKind: JsonValueKind.Object } el
-            || current is null or JsonElement)
-            return incoming;
+        if (candidate is not JsonElement { ValueKind: JsonValueKind.Object } el
+            || peer is null or JsonElement)
+            return candidate;
         try
         {
             // A differing $type IS a real change — never mask it by coercing into the wrong type.
-            // Both discriminators read defensively: a non-string $type on either side skips
-            // alignment (raw compare → change detected).
-            var incomingType = el.TryGetProperty("$type", out var it) && it.ValueKind == JsonValueKind.String
-                ? it.GetString()
+            // Three discriminator cases on the element side, each deliberate:
+            //   • absent      → align. Repo content files legitimately omit the discriminator (the
+            //                   node's nodeType implies the content type); skipping here would
+            //                   re-open the default-churn for every discriminator-less file.
+            //   • string      → align only when it MATCHES the peer's discriminator.
+            //   • non-string  → malformed; skip alignment entirely (raw compare → the malformed
+            //                   value shows as a change instead of being silently repaired).
+            var hasDiscriminator = el.TryGetProperty("$type", out var it);
+            if (hasDiscriminator && it.ValueKind != JsonValueKind.String)
+                return candidate;
+            var candidateType = hasDiscriminator ? it.GetString() : null;
+            var peerType = JsonSerializer.SerializeToNode(peer, options)
+                    is System.Text.Json.Nodes.JsonObject peerNode
+                && peerNode.TryGetPropertyValue("$type", out var pt)
+                && pt is System.Text.Json.Nodes.JsonValue pv
+                && pv.TryGetValue<string>(out var pts)
+                ? pts
                 : null;
-            var currentType = JsonSerializer.SerializeToNode(current, options)
-                    is System.Text.Json.Nodes.JsonObject curNode
-                && curNode.TryGetPropertyValue("$type", out var ct)
-                && ct is System.Text.Json.Nodes.JsonValue cv
-                && cv.TryGetValue<string>(out var cts)
-                ? cts
-                : null;
-            if (incomingType is not null
-                && !string.Equals(incomingType, currentType, StringComparison.Ordinal))
-                return incoming;
+            if (candidateType is not null
+                && !string.Equals(candidateType, peerType, StringComparison.Ordinal))
+                return candidate;
 
             // Deserialize WITHOUT tolerating unknown members: with the ambient Skip handling, a
-            // property the file ADDS but the current type lacks would be silently dropped and a
+            // property the element carries but the peer type lacks would be silently dropped and a
             // real change read as unchanged. Disallow makes that case throw → the catch below →
             // raw compare → change detected (worst case an idempotent rewrite, never a miss).
             // The $type discriminator is stripped first — deserializing to the CONCRETE type
@@ -1452,11 +1468,11 @@ public static class PackageInstaller
             };
             var withoutDiscriminator = System.Text.Json.Nodes.JsonObject.Create(el)!;
             withoutDiscriminator.Remove("$type");
-            return withoutDiscriminator.Deserialize(current.GetType(), strict) ?? incoming;
+            return withoutDiscriminator.Deserialize(peer.GetType(), strict) ?? candidate;
         }
         catch (JsonException)
         {
-            return incoming;                        // schema drift / unknown member — raw compare
+            return candidate;                       // schema drift / unknown member — raw compare
         }
     }
 

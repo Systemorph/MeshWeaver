@@ -48,15 +48,27 @@ public sealed class DynamicTypePreWarmerHostedService(
     public const string PerTypeBudgetConfigKey = "PreWarm:PerTypeBudget";
 
     /// <summary>
+    /// Config key overriding the pause between types, as a <see cref="TimeSpan"/> string. When the
+    /// key is absent the pacing DIFFERENTIATES by what the pod is doing (the initial-bake vs
+    /// usual-compile distinction): a pod whose bake GATES readiness serves nobody while it bakes,
+    /// so it sweeps at full speed (<see cref="TimeSpan.Zero"/>); an ungated pod is warming in the
+    /// background of live traffic, so it keeps the trickle
+    /// (<see cref="DynamicTypePreWarmer.BetweenTypes"/>). Measured 2026-08-11: the 2s trickle was
+    /// ~5.4 of a 7-minute sweep whose compiles summed to 51s — on a gated pod that pacing was pure
+    /// added rollout time.
+    /// </summary>
+    public const string BetweenTypesConfigKey = "PreWarm:BetweenTypes";
+
+    /// <summary>
     /// Config key overriding whether the sweep runs as ONE LINKED BATCH BUILD (issue #1207):
     /// batched source discovery + direct compiler drive, no per-type hub activations, no
     /// compile-watcher settles, no cross-silo hops. When the key is absent the mode follows the
-    /// initial-bake discriminator: a pod whose bake GATES readiness batches (it serves nobody
-    /// while it bakes, and every activation round-trip it skips is one that cannot land on a
-    /// wedged peer silo and eat a 5-minute timeout — the 2026-08-10/11 20-min/5-h bakes); an
-    /// ungated pod keeps the activation-driven background trickle. Set <c>false</c> to force the
-    /// activation path on a gated pod (the ops escape hatch), or <c>true</c> to batch an ungated
-    /// warm-up.
+    /// SAME initial-bake discriminator as <see cref="BetweenTypesConfigKey"/>: a pod whose bake
+    /// GATES readiness batches (it serves nobody while it bakes, and every activation round-trip
+    /// it skips is one that cannot land on a wedged peer silo and eat a 5-minute timeout — the
+    /// 2026-08-10/11 20-min/5-h bakes); an ungated pod keeps the activation-driven background
+    /// trickle. Set <c>false</c> to force the activation path on a gated pod (the ops escape
+    /// hatch), or <c>true</c> to batch an ungated warm-up.
     /// </summary>
     public const string BatchBakeConfigKey = "PreWarm:BatchBake";
 
@@ -132,9 +144,27 @@ public sealed class DynamicTypePreWarmerHostedService(
         var gate = services.GetService<NodeTypeBakeGateState>();
         gate?.MarkRunning("enumerating dynamic NodeTypes");
 
-        // Batch mode: explicit config wins; otherwise a readiness-GATED pod runs the initial
-        // bake as one linked batch build (direct compiler drive — no per-type activations) and
-        // an ungated pod keeps the activation-driven trickle. See BatchBakeConfigKey.
+        // Pacing: explicit config wins; otherwise a readiness-GATED pod sweeps at full speed (it
+        // serves nobody while it bakes — the initial-bake case) and an ungated pod keeps the
+        // serving-friendly trickle. See BetweenTypesConfigKey for the measurement behind this.
+        TimeSpan? betweenTypes = gate is { GatesReadiness: true } ? TimeSpan.Zero : null;
+        var pacingRaw = services.GetService<IConfiguration>()?[BetweenTypesConfigKey];
+        if (!string.IsNullOrWhiteSpace(pacingRaw))
+        {
+            if (TimeSpan.TryParse(pacingRaw, out var parsedPacing) && parsedPacing >= TimeSpan.Zero)
+                betweenTypes = parsedPacing;
+            else
+                logger.LogWarning(
+                    "DynamicTypePreWarmer: ignoring invalid {Key}='{Value}' — using the "
+                    + "{Mode} pacing default",
+                    BetweenTypesConfigKey, pacingRaw,
+                    gate is { GatesReadiness: true } ? "gated (zero)" : "serving (trickle)");
+        }
+
+        // Batch mode (issue #1207): explicit config wins; otherwise the SAME initial-bake
+        // discriminator as the pacing above — a readiness-GATED pod runs the bake as one linked
+        // batch build (direct compiler drive — no per-type activations) and an ungated pod keeps
+        // the activation-driven trickle. See BatchBakeConfigKey.
         var batchBake = gate is { GatesReadiness: true };
         var batchRaw = services.GetService<IConfiguration>()?[BatchBakeConfigKey];
         if (!string.IsNullOrWhiteSpace(batchRaw))
@@ -151,7 +181,7 @@ public sealed class DynamicTypePreWarmerHostedService(
 
         logger.LogInformation("DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs");
         _warmSubscription = DynamicTypePreWarmer
-            .WarmDynamicTypes(mesh, logger, perTypeBudget, batchBake)
+            .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake)
             .Subscribe(
                 outcome =>
                 {
