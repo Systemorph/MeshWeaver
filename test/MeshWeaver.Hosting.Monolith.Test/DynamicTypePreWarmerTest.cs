@@ -1,7 +1,10 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Threading.Tasks;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -285,5 +288,340 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
         gate.Phase.Should().Be(BakePhase.Complete,
             "a sweep that only failed to get answers has proved nothing bad — it must not stall the roll");
         gate.Regressions.Should().BeEmpty();
+    }
+
+    // =============================================================================================
+    // Batch bake (issue #1207): the initial-bake mode drives the ONE compiler directly — batched
+    // source discovery, no per-type hub activation, no compile-watcher settle — and must produce
+    // the same artifacts (per-type assemblies on the share, compile-state stamps on the type
+    // node) and the same PreWarmOutcome vocabulary as the activation-driven sweep.
+    // =============================================================================================
+
+    /// <summary>Waits (level-triggered) until the type at <paramref name="path"/> satisfies
+    /// <paramref name="predicate"/> on the OWNER's live stream — the same read surface the GUI
+    /// and the enrichment use, so for a batch-stamped type this also proves the storage-level
+    /// stamp reconciled into the live per-node hub via the adapter's change feed.</summary>
+    private Task<NodeTypeDefinition> WhenDefinition(
+        string path, Func<NodeTypeDefinition, bool> predicate, TimeSpan timeout)
+        => Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Select(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
+            .Where(d => d is not null && predicate(d!))
+            .Select(d => d!)
+            .Take(1)
+            .Timeout(timeout)
+            .ToTask();
+
+    /// <summary>
+    /// Waits until the PERSISTED node at <paramref name="path"/> satisfies
+    /// <paramref name="predicate"/> — a re-query poll against the storage adapter, which is the
+    /// input the sweep's enumeration reads. The own-hub stream settles FIRST and the durable
+    /// write lags it (the owner's debounced persistence sampler), so a test that stages state
+    /// for the sweep after watching only the live stream races the very read the sweep makes:
+    /// the probe would see a pre-stamp record and re-bake a type the test believed was settled.
+    ///
+    /// <para>🚨 A storage poll STAGES NOTHING — it only observes. See <see cref="Precompile"/>:
+    /// polling storage for a compile nobody triggered waits forever.</para>
+    /// </summary>
+    private Task<NodeTypeDefinition> WhenPersisted(
+        string path, Func<NodeTypeDefinition, bool> predicate, TimeSpan timeout)
+    {
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        return Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+            .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
+            .Select(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
+            .Where(d => d is not null && predicate(d!))
+            .Select(d => d!)
+            .FirstAsync()
+            .Timeout(timeout)
+            .ToTask();
+    }
+
+    /// <summary>
+    /// 🚨 Drives a NodeType's FIRST compile the only way the framework ever drives one — by
+    /// ACTIVATING its own hub — and returns once that compile has settled BOTH on the live
+    /// stream and in storage.
+    ///
+    /// <para>There is no such thing as a "create-time compile". Creating a NodeType node writes
+    /// a record; the compile watcher and its first-build kickoff are installed by
+    /// <c>NodeTypeCompilationHelpers.InstallCompileWatcher</c> from the per-NodeType hub's
+    /// initialization hook, so they exist only once that hub is ACTIVATED — which is what
+    /// subscribing to the node's stream does (the same activation
+    /// <see cref="DynamicTypePreWarmer"/>'s activation-driven sweep performs, and the very one
+    /// #1207's batch mode removes). <see cref="WhenPersisted"/> reads the storage adapter
+    /// directly and therefore activates nothing: polling it for a compile no one triggered can
+    /// only time out, which is exactly how these tests used to hang before reaching the batch
+    /// path at all.</para>
+    ///
+    /// <para>So: subscribe to the LIVE stream first (that is the trigger AND the settle), then
+    /// wait for the durable record, because the sweep under test enumerates persistence and the
+    /// owner's debounced persistence sampler lags the stream.</para>
+    /// </summary>
+    private async Task<NodeTypeDefinition> Precompile(
+        string path, Func<NodeTypeDefinition, bool> settled)
+    {
+        await WhenDefinition(path, settled, TimeSpan.FromSeconds(60));
+        return await WhenPersisted(path, settled, TimeSpan.FromSeconds(30));
+    }
+
+    /// <summary>
+    /// Empties the shared assembly store this test class compiles into, so a type this test
+    /// has not itself compiled CANNOT come back <see cref="PreWarmStatus.AlreadyBaked"/>.
+    ///
+    /// <para>The store root is per test CLASS (see <c>MonolithMeshTestBase.AssemblyStoreRoot</c>)
+    /// and its keys are <c>(typePath, version)</c> under the live framework tag — so a sibling
+    /// <c>[Fact]</c>, or a previous process that happened to reuse this pid, can leave bytes
+    /// that make the probe report a type baked before this test compiled anything. Clearing is
+    /// a PRECONDITION, not a stage: it makes "the batch really built this" deterministic.</para>
+    /// </summary>
+    private void ClearAssemblyStore()
+    {
+        if (Directory.Exists(AssemblyStoreRoot))
+            Directory.Delete(AssemblyStoreRoot, recursive: true);
+        Directory.CreateDirectory(AssemblyStoreRoot);
+    }
+
+    /// <summary>
+    /// The headline #1207 contract: a batch bake over three types with a real cross-type source
+    /// dependency (B compiles A's Code into its own assembly) compiles ALL of them, dependencies
+    /// first, writes per-type assemblies to the share, and stamps each type node with the same
+    /// compile-state field-set the activation path writes — including the batched discovery's
+    /// source snapshot (B's <see cref="NodeTypeDefinition.CompiledSources"/> names A's file).
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task BatchBake_CompilesPendingTypes_InDependencyOrder_AndStampsTheRecords()
+    {
+        const string ns = $"{Partition}Batch";
+        const string upstream = $"{ns}/Upstream";
+        const string dependent = $"{ns}/Dependent";
+        const string unrelated = $"{ns}/Unrelated";
+
+        // A real shared source file: the dependent's compile must pull THIS Code node out of the
+        // upstream's subtree — that is the dependency edge the topological order honours.
+        await NodeFactory.CreateNode(new MeshNode("Helper", $"{upstream}/Source")
+        {
+            Name = "Helper",
+            NodeType = CodeNodeType.NodeType,
+            Content = new CodeConfiguration
+            {
+                Code = "public static class BatchBakeHelper { public const int Answer = 42; }"
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        await NodeFactory.CreateNode(new MeshNode("Upstream", ns)
+        {
+            Name = "Upstream",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition { Configuration = "config => config" }
+        }).Should().Within(30.Seconds()).Emit();
+
+        await NodeFactory.CreateNode(new MeshNode("Dependent", ns)
+        {
+            Name = "Dependent",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Configuration = "config => config",
+                Sources = ["namespace:Source scope:subtree", $"shared=@{upstream}/Source"]
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        await NodeFactory.CreateNode(new MeshNode("Unrelated", ns)
+        {
+            Name = "Unrelated",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition { Configuration = "config => config" }
+        }).Should().Within(30.Seconds()).Emit();
+
+        // 🚨 NOTHING has compiled these types, and nothing will until something activates their
+        // hubs — which is precisely the state an INITIAL BAKE finds and precisely what #1207 is
+        // about. So there is no create-time compile to "let settle": every type is NeverBuilt,
+        // i.e. pending AND previously-healthy (BakeState.NeverBuilt ⇒ WasHealthy), and the batch
+        // must build all three without activating anything. Emptying the share makes that
+        // airtight — no sibling [Fact]'s bytes can make one of them report AlreadyBaked.
+        ClearAssemblyStore();
+
+        var logger = Mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("BatchBake");
+        var outcomes = await DynamicTypePreWarmer
+            .WarmDynamicTypes(Mesh, logger, perTypeBudget: TimeSpan.FromSeconds(90), batchBake: true)
+            .Where(o => o.TypePath is upstream or dependent or unrelated)
+            .Take(3)
+            .ToList()
+            .Timeout(TimeSpan.FromSeconds(100))
+            .ToTask();
+
+        foreach (var o in outcomes)
+            Output.WriteLine($"{o.TypePath} → {o.Status} {o.Detail}");
+
+        // All compiled — genuinely: the share was empty, so AlreadyBaked is impossible.
+        outcomes.Should().OnlyContain(o => o.Status == PreWarmStatus.Compiled,
+            "with the share cleared every type needs a real build, and the batch must deliver one per type");
+        outcomes.Should().OnlyContain(o => o.WasHealthyBeforeBake,
+            "a never-built type is not damaged goods — nothing here may read as a regression that gates a roll");
+
+        // Dependencies first: the type whose source the dependent consumes builds before it.
+        var emissionOrder = outcomes.Select(o => o.TypePath).ToList();
+        emissionOrder.IndexOf(upstream).Should().BeLessThan(emissionOrder.IndexOf(dependent),
+            "B compiles A's Code into its own assembly, so A must be built (and reported) first");
+
+        var store = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
+        foreach (var path in new[] { upstream, dependent, unrelated })
+        {
+            // The stamp is the activation path's field-set, written storage-level and read back
+            // here through the OWNER's live stream — so this also proves a hub that activates
+            // after a batch bake hydrates the batch's record rather than a pre-bake one.
+            var stamped = await WhenDefinition(path,
+                d => d.CompilationStatus == CompilationStatus.Ok
+                    && d.LastCompileSucceededAt is not null,
+                TimeSpan.FromSeconds(30));
+            stamped.CompiledFrameworkVersion.Should().Be(NodeTypeCompilationHelpers.FrameworkVersion,
+                "lazy activations gate on HasUsableBuild, which compares this to the live framework");
+            stamped.LastCompiledVersion.Should().NotBeNull();
+            stamped.CompilationError.Should().BeNull();
+
+            // Per-type assemblies exactly as today: the share holds bytes at the stamped key.
+            var assemblyPath = await store
+                .TryGetAssemblyPath(path, stamped.LastCompiledVersion!.Value)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .ToTask();
+            assemblyPath.Should().NotBeNullOrEmpty(
+                $"the batch bake must leave {path}'s assembly on the share at the stamped version");
+        }
+
+        // The batched discovery resolved the CROSS-TYPE source: the dependent's compile consumed
+        // the upstream's Code node, and the stamp records exactly what was compiled.
+        var dependentDef = await WhenDefinition(dependent,
+            d => d.CompiledSources is { Count: > 0 }, TimeSpan.FromSeconds(10));
+        dependentDef.CompiledSources!.ContainsKey($"{upstream}/Source/Helper").Should().BeTrue(
+            "the dependent declares shared=@Upstream/Source, so the batch discovery must hand its "
+            + "compile the upstream's file — this is the 'one linked build' of #1207");
+    }
+
+    /// <summary>
+    /// A broken type mid-graph must not abort the batch: it reports
+    /// <see cref="PreWarmStatus.CompileError"/>, its dependents inherit
+    /// <see cref="PreWarmStatus.UpstreamFailed"/> NAMING the blocker (same cascade as the
+    /// activation sweep), and unrelated types still reach a usable build.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task BatchBake_BrokenTypeMidGraph_YieldsCompileErrorAndUpstreamFailed_WithoutAbortingTheBatch()
+    {
+        const string ns = $"{Partition}BatchDown";
+        const string broken = $"{ns}/Broken";
+        const string dependent = $"{ns}/Dependent";
+        const string unrelated = $"{ns}/Unrelated";
+
+        await NodeFactory.CreateNode(new MeshNode("Broken", ns)
+        {
+            Name = "Broken",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Configuration = "config => this is not valid C# at all (("
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        await NodeFactory.CreateNode(new MeshNode("Dependent", ns)
+        {
+            Name = "Dependent",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Configuration = "config => config",
+                Sources = ["namespace:Source scope:subtree", $"shared=@{broken}/Source"]
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        await NodeFactory.CreateNode(new MeshNode("Unrelated", ns)
+        {
+            Name = "Unrelated",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition { Configuration = "config => config" }
+        }).Should().Within(30.Seconds()).Emit();
+
+        // The share holds nothing for these paths, so `dependent` and `unrelated` are simply
+        // NeverBuilt — pending, and previously healthy. `broken`, though, has to arrive at the
+        // sweep ALREADY at CompilationStatus.Error: that is the whole point of
+        // WasHealthyBeforeBake, and a type nobody ever compiled is not "already broken". Drive
+        // exactly that one compile through the hub activation the framework uses (Precompile),
+        // and only that one — the batch sweep is otherwise the first thing to touch these types.
+        ClearAssemblyStore();
+        await Precompile(broken, d => d.CompilationStatus == CompilationStatus.Error);
+
+        var logger = Mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("BatchBakeDown");
+        var outcomes = await DynamicTypePreWarmer
+            .WarmDynamicTypes(Mesh, logger, perTypeBudget: TimeSpan.FromSeconds(90), batchBake: true)
+            .Where(o => o.TypePath is broken or dependent or unrelated)
+            .Take(3)
+            .ToList()
+            .Timeout(TimeSpan.FromSeconds(100))
+            .ToTask();
+
+        foreach (var o in outcomes)
+            Output.WriteLine($"{o.TypePath} → {o.Status} {o.Detail}");
+
+        var brokenOutcome = outcomes.Single(o => o.TypePath == broken);
+        brokenOutcome.Status.Should().Be(PreWarmStatus.CompileError,
+            "the batch drives the compiler directly, and Roslyn's verdict must surface as the "
+            + "same CompileError the activation path reports");
+        brokenOutcome.WasHealthyBeforeBake.Should().BeFalse(
+            "the type was already broken before the sweep — the gate must not read it as a regression");
+
+        var blocked = outcomes.Single(o => o.TypePath == dependent);
+        blocked.Status.Should().Be(PreWarmStatus.UpstreamFailed,
+            "a dependent of a genuinely broken type is skipped with a verdict, not attempted");
+        blocked.Detail.Should().Contain(broken,
+            "the outcome must NAME the blocker");
+
+        outcomes.Single(o => o.TypePath == unrelated).Status
+            .Should().Be(PreWarmStatus.Compiled,
+                "one broken type must not abort the batch — unrelated types still build");
+    }
+
+    /// <summary>
+    /// A type whose bytes are already on the share is reported
+    /// <see cref="PreWarmStatus.AlreadyBaked"/> by the batch sweep and is NOT rebuilt — the
+    /// share probe short-circuits before any compile, exactly like the activation sweep. This is
+    /// what keeps the bake restartable and a second replica cheap.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task BatchBake_TypeAlreadyOnTheShare_ReportsAlreadyBaked_AndIsNotRebuilt()
+    {
+        const string ns = $"{Partition}BatchWarm";
+        const string warm = $"{ns}/WarmType";
+
+        await NodeFactory.CreateNode(new MeshNode("WarmType", ns)
+        {
+            Name = "Warm Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition { Configuration = "config => config" }
+        }).Should().Within(30.Seconds()).Emit();
+
+        // Put the bytes on the share the ordinary ("usual compile") way — activate the type's
+        // own hub and let its compile watcher build + upload — and settle on the PERSISTED
+        // record, because the sweep's enumeration reads persistence and the durable write lags
+        // the own-hub stream.
+        var settled = await Precompile(warm,
+            d => d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
+                && d.LastCompiledVersion is not null);
+        var baseline = settled.LastCompileSucceededAt;
+
+        var logger = Mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("BatchBakeWarm");
+        var outcome = await DynamicTypePreWarmer
+            .WarmDynamicTypes(Mesh, logger, perTypeBudget: TimeSpan.FromSeconds(90), batchBake: true)
+            .Where(o => o.TypePath == warm)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(100))
+            .ToTask();
+
+        Output.WriteLine($"{outcome.TypePath} → {outcome.Status} {outcome.Detail}");
+        outcome.Status.Should().Be(PreWarmStatus.AlreadyBaked,
+            "the share already holds this build — the batch must not spend a compile on it");
+
+        var after = await WhenDefinition(warm,
+            d => d.CompilationStatus == CompilationStatus.Ok, TimeSpan.FromSeconds(10));
+        after.LastCompileSucceededAt.Should().Be(baseline,
+            "AlreadyBaked means NOT rebuilt — the record must be untouched by the sweep");
     }
 }

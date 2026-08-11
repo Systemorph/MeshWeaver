@@ -59,6 +59,19 @@ public sealed class DynamicTypePreWarmerHostedService(
     /// </summary>
     public const string BetweenTypesConfigKey = "PreWarm:BetweenTypes";
 
+    /// <summary>
+    /// Config key overriding whether the sweep runs as ONE LINKED BATCH BUILD (issue #1207):
+    /// batched source discovery + direct compiler drive, no per-type hub activations, no
+    /// compile-watcher settles, no cross-silo hops. When the key is absent the mode follows the
+    /// SAME initial-bake discriminator as <see cref="BetweenTypesConfigKey"/>: a pod whose bake
+    /// GATES readiness batches (it serves nobody while it bakes, and every activation round-trip
+    /// it skips is one that cannot land on a wedged peer silo and eat a 5-minute timeout — the
+    /// 2026-08-10/11 20-min/5-h bakes); an ungated pod keeps the activation-driven background
+    /// trickle. Set <c>false</c> to force the activation path on a gated pod (the ops escape
+    /// hatch), or <c>true</c> to batch an ungated warm-up.
+    /// </summary>
+    public const string BatchBakeConfigKey = "PreWarm:BatchBake";
+
     private IDisposable? _warmSubscription;
     private IDisposable? _startedRegistration;
 
@@ -148,9 +161,27 @@ public sealed class DynamicTypePreWarmerHostedService(
                     gate is { GatesReadiness: true } ? "gated (zero)" : "serving (trickle)");
         }
 
+        // Batch mode (issue #1207): explicit config wins; otherwise the SAME initial-bake
+        // discriminator as the pacing above — a readiness-GATED pod runs the bake as one linked
+        // batch build (direct compiler drive — no per-type activations) and an ungated pod keeps
+        // the activation-driven trickle. See BatchBakeConfigKey.
+        var batchBake = gate is { GatesReadiness: true };
+        var batchRaw = services.GetService<IConfiguration>()?[BatchBakeConfigKey];
+        if (!string.IsNullOrWhiteSpace(batchRaw))
+        {
+            if (bool.TryParse(batchRaw, out var parsedBatch))
+                batchBake = parsedBatch;
+            else
+                logger.LogWarning(
+                    "DynamicTypePreWarmer: ignoring invalid {Key}='{Value}' — using the "
+                    + "{Mode} default",
+                    BatchBakeConfigKey, batchRaw,
+                    batchBake ? "gated (batch)" : "serving (activation-driven)");
+        }
+
         logger.LogInformation("DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs");
         _warmSubscription = DynamicTypePreWarmer
-            .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes)
+            .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake)
             .Subscribe(
                 outcome =>
                 {
