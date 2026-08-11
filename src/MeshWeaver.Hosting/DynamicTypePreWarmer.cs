@@ -159,6 +159,17 @@ public static class DynamicTypePreWarmer
     /// members run in parallel either, so the sweep is now strictly sequential and the knob is
     /// gone rather than left lying about what it does.</para>
     /// </summary>
+    /// <remarks>
+    /// 🚨 This is the SERVING-pod default, and on a big mesh it — not Roslyn — is the bake's
+    /// wall-clock. Measured on memex-cloud 2026-08-11 (healthy single silo): 162 types compiled in
+    /// a 7-minute sweep of which the compiles themselves summed to 51 SECONDS (p50 0.2s, p90 0.5s,
+    /// max 3.4s) — the 2s trickle was ~5.4 of the 7 minutes. The trickle exists to protect a pod
+    /// that is SERVING while it warms; an INITIAL BAKE on a readiness-gated pod serves nobody, so
+    /// the hosted service passes <see cref="TimeSpan.Zero"/> there (see
+    /// <c>DynamicTypePreWarmerHostedService</c> — the gated fast path, overridable via
+    /// <c>PreWarm:BetweenTypes</c>). That distinction is what turns "the bake takes 20 minutes"
+    /// into "the bake takes ~2".
+    /// </remarks>
     public static readonly TimeSpan BetweenTypes = TimeSpan.FromSeconds(2);
 
     /// <summary>Per-type warm budget — generous, because a cold Roslyn compile queued behind
@@ -186,9 +197,11 @@ public static class DynamicTypePreWarmer
     public static IObservable<PreWarmOutcome> WarmDynamicTypes(
         IMessageHub mesh,
         ILogger? logger = null,
-        TimeSpan? perTypeBudget = null)
+        TimeSpan? perTypeBudget = null,
+        TimeSpan? betweenTypes = null)
     {
         var budget = perTypeBudget ?? DefaultPerTypeBudget;
+        var pacing = betweenTypes ?? BetweenTypes;
         var meshService = mesh.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
         {
@@ -240,7 +253,8 @@ public static class DynamicTypePreWarmer
                     return NodeTypeBakeStatus
                         .Probe(definitions, store, logger: logger)
                         .SelectMany(report => BakeOrFollow(
-                            mesh, workspace, accessService, definitions, store, report, budget, logger));
+                            mesh, workspace, accessService, definitions, store, report, budget, pacing,
+                            logger));
                 })
                 .Catch<PreWarmOutcome, Exception>(ex =>
                 {
@@ -289,15 +303,16 @@ public static class DynamicTypePreWarmer
         IAssemblyStore store,
         NodeTypeBakeReport report,
         TimeSpan budget,
+        TimeSpan pacing,
         ILogger? logger)
     {
         // Nothing outstanding — no lease needed, and nothing for a follower to wait for.
         if (report.IsComplete)
-            return WarmPending(workspace, accessService, definitions, report, budget, logger);
+            return WarmPending(workspace, accessService, definitions, report, budget, pacing, logger);
 
         var coordination = mesh.ServiceProvider.GetService<BakeCoordination>();
         if (coordination is null)
-            return WarmPending(workspace, accessService, definitions, report, budget, logger);
+            return WarmPending(workspace, accessService, definitions, report, budget, pacing, logger);
 
         var lease = NodeTypeBakeLease.TryAcquire(
             coordination.LeaseDirectory, report.FrameworkVersion, Environment.MachineName, logger);
@@ -308,7 +323,7 @@ public static class DynamicTypePreWarmer
             // fleet out until it went stale.
             return Observable.Using(
                 () => lease,
-                _ => WarmPending(workspace, accessService, definitions, report, budget, logger));
+                _ => WarmPending(workspace, accessService, definitions, report, budget, pacing, logger));
 
         logger?.LogInformation(
             "DynamicTypePreWarmer: another pod holds the bake lease — following the shared assembly "
@@ -336,6 +351,7 @@ public static class DynamicTypePreWarmer
         IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
         NodeTypeBakeReport report,
         TimeSpan budget,
+        TimeSpan pacing,
         ILogger? logger)
     {
         var baked = report.Entries
@@ -494,7 +510,7 @@ public static class DynamicTypePreWarmer
                         : WarmOne(workspace, accessService, p, budget, logger);
 
                     return warm
-                        .DelaySubscription(i == 0 ? TimeSpan.Zero : BetweenTypes)
+                        .DelaySubscription(i == 0 ? TimeSpan.Zero : pacing)
                         .Do(o =>
                         {
                             // A timeout is not a verdict — route it to `unevaluated` so its
