@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -53,6 +54,7 @@ public sealed class OpenGraphPreviewService
     private readonly Func<IIoPool> pool;
     private readonly Func<HttpClient> http;
     private readonly bool allowLoopback;
+    private readonly Func<ILogger?> logger;
 
     /// <summary>The per-URL promise cache: instance state on this mesh-scoped singleton, so it
     /// dies with the mesh.</summary>
@@ -69,7 +71,8 @@ public sealed class OpenGraphPreviewService
             () => serviceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
                   ?? IoPool.Unbounded,
             () => serviceProvider.GetService<IHttpClientFactory>()?.CreateClient(HttpClientName)
-                  ?? SharedHttp)
+                  ?? SharedHttp,
+            logger: () => serviceProvider.GetService<ILogger<OpenGraphPreviewService>>())
     {
     }
 
@@ -78,11 +81,16 @@ public sealed class OpenGraphPreviewService
     /// <paramref name="allowLoopback"/> lets a test point the service at its local listener,
     /// which the production guard refuses.
     /// </summary>
-    internal OpenGraphPreviewService(Func<IIoPool> pool, Func<HttpClient> http, bool allowLoopback = false)
+    internal OpenGraphPreviewService(
+        Func<IIoPool> pool,
+        Func<HttpClient> http,
+        bool allowLoopback = false,
+        Func<ILogger?>? logger = null)
     {
         this.pool = pool;
         this.http = http;
         this.allowLoopback = allowLoopback;
+        this.logger = logger ?? (() => null);
     }
 
     /// <summary>
@@ -106,6 +114,14 @@ public sealed class OpenGraphPreviewService
             // the fetch once. TryRemove is idempotent across concurrent subscribers.
             .Catch<OpenGraphPreview, Exception>(ex =>
             {
+                // Don't swallow the fault silently: a degraded card is byte-identical to the
+                // pre-fetch PLACEHOLDER card — same title (the host), same absent image — so
+                // this line is the only thing that distinguishes "this target is failing" from
+                // "this frame is simply the placeholder". The original catch discarded `ex`,
+                // leaving a genuine fetch fault with no trace anywhere.
+                logger()?.LogWarning(ex,
+                    "Open Graph fetch failed for {Url}; its card falls back to the URL alone.",
+                    url);
                 cache.TryRemove(url, out _);
                 return Observable.Return(OpenGraphPreview.Unavailable(url));
             });
