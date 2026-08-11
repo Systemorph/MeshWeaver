@@ -92,7 +92,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var noAccessUser = new AccessContext { ObjectId = "no-access-user", Name = "No Access" };
         accessService.SetContext(noAccessUser);
-        accessService.SetCircuitContext(noAccessUser);
+        accessService.SetHostIdentity(noAccessUser);
 
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"Restricted/{nodeId}";
@@ -224,7 +224,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         try
         {
             // Switch to a user with no roles (the default admin has claim-based "Admin" role)
-            accessService.SetCircuitContext(new AccessContext
+            accessService.SetHostIdentity(new AccessContext
             {
                 ObjectId = "no-access-user",
                 Name = "No Access"

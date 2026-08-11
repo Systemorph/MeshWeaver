@@ -492,8 +492,17 @@ public record MessageHubConfiguration
                 return next(d);
 
             // Context = per-request AsyncLocal (delivery pipeline).
-            // CircuitContext = per-circuit AsyncLocal (set by CircuitAccessHandler).
-            var context = userService?.Context ?? userService?.CircuitContext;
+            // CircuitContext = per-circuit AsyncLocal (set by CircuitAccessHandler), or a
+            //   single-identity host's standing identity (MAUI / test host).
+            // GetStandingIdentity(hub) = OWNER INJECTION, scoped to THIS hub: a per-node /
+            //   thread / activity hub posts its node OWNER when a deferred continuation has
+            //   wiped both AsyncLocals (the cold-start sync write that otherwise posts a null
+            //   AccessContext and is failed closed by the never-null guard below). Keyed by hub,
+            //   so it can only ever yield this hub's own owner — never whichever user touched
+            //   the process last, which is what the old process-wide fallback did.
+            var context = userService?.Context
+                          ?? userService?.CircuitContext
+                          ?? userService?.GetStandingIdentity(syncPipeline.Hub);
             if (context is not null)
             {
                 d = d.SetAccessContext(context);

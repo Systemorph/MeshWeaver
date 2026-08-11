@@ -182,9 +182,9 @@ public class CircuitAccessHandler : CircuitHandler
     {
         _circuitLogger.LogInformation("Circuit closed: id={CircuitId}, user={UserId}",
             circuit.Id, _userContext?.ObjectId ?? "(anonymous)");
-        // Clear the persistent fallback to prevent stale context
-        var accessService = _hub.ServiceProvider.GetService<AccessService>();
-        accessService?.ClearPersistentCircuitContext();
+        // Nothing process-wide to clear: SetCircuitContext writes only this flow's AsyncLocal,
+        // and the durable per-circuit identity is the scoped accessor cleared just below (which
+        // dies with the circuit's DI scope anyway).
         _circuitContextAccessor.SetUserContext(null);
         _userContext = null;
         // The degraded-identity watcher (if this circuit ever had one) dies with the circuit —

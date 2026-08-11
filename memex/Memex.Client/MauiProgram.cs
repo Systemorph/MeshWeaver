@@ -222,7 +222,7 @@ public static class MauiProgram
         var osName = Environment.UserName;
         if (string.IsNullOrWhiteSpace(osName)) osName = "Device User";
         var deviceUser = new AccessContext { ObjectId = DeviceUserId, Name = osName };
-        hub.ServiceProvider.GetRequiredService<AccessService>().SetCircuitContext(deviceUser);
+        hub.ServiceProvider.GetRequiredService<AccessService>().SetHostIdentity(deviceUser);
         // Onboarding is now INTERACTIVE (OnboardingPage): on first launch the user fills in their full
         // name + bio, and "Get started" runs DeviceOnboarding (creates the User node → framework provisions
         // the user partition + self-admin, then global admin in Admin/_Access). A returning launch detects
@@ -242,7 +242,7 @@ public static class MauiProgram
                 .AddPostPipeline(sync => sync.AddPipeline((d, next) =>
                     next(d.AccessContext is null ? d.SetAccessContext(deviceUser) : d)))
                 .WithInitialization(h => h.RegisterForDisposal(routing.RegisterStream(h))));
-        portalHub!.ServiceProvider.GetRequiredService<AccessService>().SetCircuitContext(deviceUser);
+        portalHub!.ServiceProvider.GetRequiredService<AccessService>().SetHostIdentity(deviceUser);
         var execHolder = hub.ServiceProvider.GetRequiredService<MeshWeaver.Maui.MauiMarkdownExecutionHub>();
         execHolder.Hub = portalHub;
         execHolder.OwnerPath = DeviceUserId;

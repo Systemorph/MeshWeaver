@@ -98,7 +98,7 @@ public class TrainingSimResponderTest(ITestOutputHelper output) : MonolithMeshTe
     public async Task Live_Responder_WithoutModel_EmitsCalmNotice()
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        access.SetCircuitContext(TestUsers.Admin);
+        access.SetHostIdentity(TestUsers.Admin);
 
         var client = GetClient();
         await client.Observe(new PingRequest(), o => o.WithTarget(new Address(OwnerId)))

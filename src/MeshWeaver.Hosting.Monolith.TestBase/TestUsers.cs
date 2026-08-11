@@ -153,10 +153,17 @@ public static class TestUsers
     /// <summary>
     /// Logs in the default admin user (DevLogin) on the given hub.
     /// Called automatically by MonolithMeshTestBase.InitializeAsync().
+    ///
+    /// <para>Uses <see cref="AccessService.SetHostIdentity"/>: the xUnit host is a
+    /// single-identity process (one test at a time — <c>maxParallelThreads: 1</c>), it has no
+    /// Blazor circuit to set the AsyncLocal per activity, and this is normally called from
+    /// <c>InitializeAsync</c>, whose AsyncLocal write is discarded when that async method
+    /// returns. A multi-user server must NEVER use this API — see the remarks on
+    /// <see cref="AccessService.SetHostIdentity"/>.</para>
     /// </summary>
     public static void DevLogin(IMessageHub mesh, AccessContext? user = null)
     {
         var accessService = mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(user ?? Admin);
+        accessService.SetHostIdentity(user ?? Admin);
     }
 }
