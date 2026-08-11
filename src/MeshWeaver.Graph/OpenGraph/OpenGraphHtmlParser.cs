@@ -168,7 +168,13 @@ public static partial class OpenGraphHtmlParser
     /// on ONE axis — effective pixel size — so the winner is simply the icon that renders sharpest
     /// in the card's 48 px box: a scalable SVG beats every raster, a declared <c>sizes</c> is
     /// taken at face value, and a sizeless <c>apple-touch-icon</c> (conventionally 180 px) beats a
-    /// sizeless <c>favicon.ico</c> (conventionally 16–32 px). Ties keep document order.</para>
+    /// sizeless <c>favicon.ico</c> (conventionally 16–32 px).</para>
+    ///
+    /// <para>🚨 <b>A tie is broken by the LAST declaration, as browsers break it.</b> Site chrome
+    /// emits its favicon early (in the shared layout); a PAGE that declares an icon of its own
+    /// emits it later, in the per-page head. Preferring the first would mean a page could never
+    /// override the site-wide mark with its own — every card in a grid of pages would then draw the
+    /// same portal logo, which is exactly the defect this rule exists to prevent.</para>
     ///
     /// <para><c>rel="mask-icon"</c> is deliberately NOT a candidate: it is a monochrome Safari
     /// pinned-tab silhouette, not the site's icon.</para>
@@ -190,7 +196,9 @@ public static partial class OpenGraphHtmlParser
                 continue;
 
             var score = IconScore(rel.Groups[2].Value, tag.Value);
-            if (score is null || score.Value <= bestScore)
+            // `<` not `<=`: an equally-ranked LATER declaration wins, so a page's own icon
+            // overrides the site-wide favicon its layout emitted earlier.
+            if (score is null || score.Value < bestScore)
                 continue;
 
             bestScore = score.Value;
