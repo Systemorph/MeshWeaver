@@ -568,10 +568,11 @@ public class MeshPluginTest : MonolithMeshTestBase
         var createResult = await plugin.Create(createJson);
         createResult.Should().StartWith("Created:");
 
-        // 2. Get
-        var getResult = await plugin.Get($"@{path}");
-        getResult.Should().NotStartWith("Not found");
-        getResult.Should().Contain("CRUD Test Node");
+        // 2. Get — poll, don't snapshot. See GetUntil: a mutation's ack means ACCEPTED, not "every
+        // reader has caught up", so a single Get here races the create's propagation.
+        // (No trailing NotStartWith("Not found") — the predicate already guarantees it, and this PR is
+        // about not shipping assertions that cannot fail.)
+        await GetUntil(plugin, path, r => r.Contains("CRUD Test Node"), "showed the created node");
 
         // 3. Update (Get -> modify -> Update pattern)
         var updateJson = JsonSerializer.Serialize(new object[]
@@ -589,17 +590,43 @@ public class MeshPluginTest : MonolithMeshTestBase
         updateResult.Should().Contain("Updated:");
 
         // 4. Verify update
-        var getAfterUpdate = await plugin.Get($"@{path}");
-        getAfterUpdate.Should().Contain("Updated CRUD Test Node");
+        await GetUntil(plugin, path, r => r.Contains("Updated CRUD Test Node"),
+            "reflected the update");
 
         // 5. Delete
         var deleteResult = await plugin.Delete(JsonSerializer.Serialize(new[] { path }));
         deleteResult.Should().Contain("Deleted:");
 
-        // 6. Verify deletion
-        var getAfterDelete = await plugin.Get($"@{path}");
-        getAfterDelete.Should().StartWith("Not found");
+        // 6. Verify deletion — THE one that actually red CI (see GetUntil).
+        await GetUntil(plugin, path, r => r.StartsWith("Not found"), "reported the node gone");
     }
+
+    /// <summary>
+    /// Reads through <see cref="MeshPlugin.Get"/> until the response satisfies <paramref name="predicate"/>.
+    ///
+    /// <para>🚨 A SINGLE <c>Get</c> immediately after a mutation is a RACE, and it is what red this
+    /// PR's CI. A mutation's ack (<c>"Created:"</c>, <c>"Updated:"</c>, <c>"Deleted:"</c>) means the write
+    /// was ACCEPTED — not that every reader has caught up. <c>Get</c> reads through the per-node
+    /// <c>MeshNodeStreamCache</c> handle, which can still be serving the pre-mutation snapshot when the
+    /// ack returns: CI observed the DELETED node coming back intact at <c>version 2</c>, ~0.6 s after the
+    /// delete was acknowledged. "Still the old value" is a legitimate intermediate state, so asserting a
+    /// terminal one off a single read is asserting that a race resolved in your favour.</para>
+    ///
+    /// <para>The fix is to wait for the CONDITION — never a sleep, never a widened threshold, never a
+    /// re-run. This is the house pattern for a request/response source (AGENTS.md → "Never
+    /// <c>Task.Delay</c> to wait for propagation"; cf. <c>CrossPartitionMoveCopyAccessContextTest.WaitUntil</c>
+    /// and <c>InboxToolIntegrationTest</c>). The timeout carries a message naming what never happened,
+    /// so a real regression here reads as a diagnosis instead of a bare TimeoutException.</para>
+    /// </summary>
+    private static Task<string> GetUntil(
+        MeshPlugin plugin, string path, Func<string, bool> predicate, string what) =>
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => plugin.Get($"@{path}")))
+            .Where(predicate)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(20), Observable.Throw<string>(
+                new TimeoutException($"Get(@{path}) never {what} within 20s")))
+            .ToTask();
 
     #endregion
 
