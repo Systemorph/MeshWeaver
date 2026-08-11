@@ -69,6 +69,7 @@ public static class SendDocumentDispatch
         string subject,
         string htmlBody,
         DocumentDelivery delivery = DocumentDelivery.Attachment,
+        EmailDelivery? identity = null,
         TimeSpan? timeout = null,
         ILogger? logger = null)
     {
@@ -85,7 +86,8 @@ public static class SendDocumentDispatch
 
                 // 2. Run the export through the standard pipeline → RenderedDocument bytes, then send.
                 return ExportThenSend(
-                    hub, workspace, sourcePath, options, emails, subject, htmlBody, delivery, readTimeout, logger);
+                    hub, workspace, sourcePath, options, emails, subject, htmlBody, delivery,
+                    identity ?? EmailDelivery.AsSharedMailbox, readTimeout, logger);
             });
     }
 
@@ -98,6 +100,7 @@ public static class SendDocumentDispatch
         string subject,
         string htmlBody,
         DocumentDelivery delivery,
+        EmailDelivery identity,
         TimeSpan readTimeout,
         ILogger? logger)
         => hub.Observe<ExportDocumentResponse>(
@@ -157,14 +160,14 @@ public static class SendDocumentDispatch
 
                                     return SendToAll(
                                         hub, emails, subject, inlined.Html,
-                                        inlined.Attachments, activityPath, logger);
+                                        inlined.Attachments, identity, activityPath, logger);
                                 });
                         }
 
                         return SendToAll(
                             hub, emails, subject, htmlBody,
                             [new EmailAttachment(rendered.FileName, rendered.MimeType, rendered.Content)],
-                            activityPath, logger);
+                            identity, activityPath, logger);
                     });
             });
 
@@ -218,11 +221,12 @@ public static class SendDocumentDispatch
         string subject,
         string htmlBody,
         IReadOnlyCollection<EmailAttachment> attachments,
+        EmailDelivery identity,
         string activityPath,
         ILogger? logger)
     {
         return emails.ToObservable()
-            .SelectMany(to => hub.SendEmail(to, subject, htmlBody, attachments)
+            .SelectMany(to => hub.SendEmail(to, subject, htmlBody, attachments, identity)
                 .Select(ok => (to, ok))
                 .Catch((Exception ex) =>
                 {

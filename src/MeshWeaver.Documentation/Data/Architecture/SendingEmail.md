@@ -134,9 +134,37 @@ the `IEmailSender` singleton and every `Mesh.SendEmail(...)` call routes through
 
 ---
 
+## Who the mail comes FROM
+
+Two identities exist, and the recipient can tell them apart — so the choice is never implicit.
+
+| Identity | Credential | Use for |
+|---|---|---|
+| **The signed-in user** — `EmailDelivery.AsUser(objectId)` | The user's **delegated** `EaCredential` (Graph `/me/sendMail`) | A personal act: sharing a document. Recipient sees the person, replies come back to them, and it lands in their own Sent Items. |
+| **The shared mailbox** — `EmailDelivery.AsSharedMailbox` | Application credential, `EmailOptions.MailboxAddress` | System mail: notifications, invitations, automation. |
+
+The delegated scope needed is `Mail.Send`, and it is **already part of `EaGraphAuth.Scopes`** —
+connecting the personal assistant grants it, so there is no separate consent step for sending.
+
+- **Probe before composing**: `hub.CanSendAsUser(objectId)`, so the UI can STATE the identity rather
+  than the user discovering it in the recipient's inbox.
+- **Never fall back silently.** If the user is not connected, offer `/auth/ea/connect`; the shared
+  mailbox is only ever an explicitly chosen second option — and then set
+  `EmailDelivery.AsSharedMailboxReplyingTo(userEmail)` so a reply still reaches the human.
+
+🚨 **Mailbox data is queried LIVE from Graph and never replicated into the mesh.** Graph is the
+system of record and always current; a mirror would buy nothing and would leave personal
+correspondence at rest in the mesh. Recipients come from `/me/people`, a reply target from a live
+message query, and a reply from `POST /me/messages/{id}/createReply` (Graph supplies the
+`In-Reply-To`/`References` threading — never hand-roll those headers). The mesh may hold at most an
+`InternetMessageId`/`ConversationId` reference. The inbound mail→agent channel is a separate,
+deliberate path and is unaffected.
+
+---
+
 ## Sending a document AS the email
 
-The node menu's **Email this document** entry (`SendDocumentLayoutArea`, alongside Export to PDF and
+The node menu's **Share ⇒ as email** entry (`SendDocumentLayoutArea`, alongside Export to PDF and
 Export to DOCX) can put a rendered document in the message **body** instead of attaching a file.
 `DocumentDelivery.EmailBody` runs the standard node ⇒ file pipeline with
 `ExportFormat.Html` — `Templates/Export/Html` — and uses the result as `htmlBody`; the sender's

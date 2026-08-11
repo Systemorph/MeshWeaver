@@ -37,6 +37,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class EmailDocumentExportTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string BaseUrl = "https://portal.example.com";
+    private const string SenderObjectId = "11111111-2222-3333-4444-555555555555";
 
     private readonly CapturingEmailSender _email = new();
 
@@ -96,7 +97,8 @@ public class EmailDocumentExportTest(ITestOutputHelper output) : MonolithMeshTes
                 rawEmails: [recipient],
                 subject: "Proposal for review",
                 htmlBody: "<p>Hi, please see below.</p>",
-                delivery: DocumentDelivery.EmailBody)
+                delivery: DocumentDelivery.EmailBody,
+                identity: EmailDelivery.AsUser(SenderObjectId))
             .Should().Within(2.Minutes()).Emit();
 
         result.Error.Should().BeNullOrEmpty("the send should succeed. Error: " + result.Error);
@@ -147,6 +149,11 @@ public class EmailDocumentExportTest(ITestOutputHelper output) : MonolithMeshTes
         sent.Attachments.Should().OnlyContain(a => a.IsInline,
             "sending the document AS the mail must not also attach a file to open");
 
+        // ── The sender identity reaches the mail sender ─────────────────────────────────────
+        // Sharing is a personal act: it must go out as the PERSON, not the portal's mailbox.
+        sent.Delivery.SendAsUserObjectId.Should().Be(SenderObjectId);
+        sent.Delivery.IsUserIdentity.Should().BeTrue();
+
         await NodeFactory.DeleteNode(space).Should().Emit();
     }
 
@@ -180,6 +187,22 @@ public class EmailDocumentExportTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact(Timeout = 60000)]
+    public void SharedMailboxFallback_CarriesReplyToTheSender()
+    {
+        // When the message cannot go out in the person's name, the From is generic — so a reply
+        // must still reach the human rather than a system inbox nobody answers from.
+        var delivery = EmailDelivery.AsSharedMailboxReplyingTo("erin.sender@example.com");
+
+        delivery.IsUserIdentity.Should().BeFalse("this is the shared-mailbox path");
+        delivery.SendAsUserObjectId.Should().BeNull();
+        delivery.ReplyToAddress.Should().Be("erin.sender@example.com");
+
+        EmailDelivery.AsSharedMailbox.ReplyToAddress.Should().BeNull(
+            "a pure system send has no human to reply to");
+        EmailDelivery.AsUser(SenderObjectId).IsUserIdentity.Should().BeTrue();
+    }
+
+    [Fact(Timeout = 60000)]
     public void Absolutize_LeavesAbsoluteAndAnchorLinksAlone()
     {
         EmailHtmlSanitizer.Absolutize("/Node/Path", BaseUrl).Should().Be($"{BaseUrl}/Node/Path");
@@ -193,7 +216,12 @@ public class EmailDocumentExportTest(ITestOutputHelper output) : MonolithMeshTes
             .Should().Be("https://cdn.example.com/x.png");
     }
 
-    /// <summary>Capturing <see cref="IEmailSender"/> — records every send (no mocking).</summary>
+    /// <summary>
+    /// Capturing <see cref="IEmailSender"/> — records every send, INCLUDING the sender identity
+    /// it was asked to use (no mocking). Implementing the identity overload is the point: the
+    /// default interface implementation drops <see cref="EmailDelivery"/>, so a sender that
+    /// silently ignored the identity would look identical to one that honoured it.
+    /// </summary>
     private sealed class CapturingEmailSender : IEmailSender
     {
         public ConcurrentQueue<SentEmail> SentQueue { get; } = new();
@@ -204,12 +232,18 @@ public class EmailDocumentExportTest(ITestOutputHelper output) : MonolithMeshTes
 
         public IObservable<bool> SendEmail(
             string toAddress, string subject, string htmlBody, IReadOnlyCollection<EmailAttachment> attachments)
+            => SendEmail(toAddress, subject, htmlBody, attachments, EmailDelivery.AsSharedMailbox);
+
+        public IObservable<bool> SendEmail(
+            string toAddress, string subject, string htmlBody,
+            IReadOnlyCollection<EmailAttachment> attachments, EmailDelivery delivery)
         {
-            SentQueue.Enqueue(new SentEmail(toAddress, subject, htmlBody, attachments.ToList()));
+            SentQueue.Enqueue(new SentEmail(toAddress, subject, htmlBody, attachments.ToList(), delivery));
             return Observable.Return(true);
         }
     }
 
     private sealed record SentEmail(
-        string To, string Subject, string Body, IReadOnlyList<EmailAttachment> Attachments);
+        string To, string Subject, string Body,
+        IReadOnlyList<EmailAttachment> Attachments, EmailDelivery Delivery);
 }
