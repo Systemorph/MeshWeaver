@@ -614,7 +614,20 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// the existing fallback behaviour (post-pipeline stamps the posting
     /// hub's address) then takes effect.</para>
     /// </summary>
-    private static AccessContext? CaptureCallerAccessContext(IMessageHub hub)
+    private AccessContext? CaptureCallerAccessContext(IMessageHub hub)
+        => CaptureCallerAccessContext(hub, Owner);
+
+    /// <summary>
+    /// Context capture: the live delivery context, then this flow's circuit / single-identity
+    /// host, then OWNER INJECTION for the node this stream belongs to, then for the running hub.
+    ///
+    /// <para>🚨 <paramref name="owner"/> is looked up BEFORE <paramref name="hub"/> and is the arm
+    /// that actually fires: a deferred sync write runs on the SYNC hub, whose address is not the
+    /// node's, so a hub-keyed lookup misses and the write posts a null AccessContext (failed closed
+    /// by the never-null guard — the cold-start submit deadlock). The stream's Owner IS the node
+    /// path that <c>SetStandingIdentity</c> registered under.</para>
+    /// </summary>
+    private static AccessContext? CaptureCallerAccessContext(IMessageHub hub, Address? owner)
     {
         // A late background trigger can reach stream.Update while the hub is tearing down —
         // e.g. a FileSystemWatcher Changed event racing ContentCollection disposal. By then the
@@ -626,13 +639,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         try
         {
             var accessService = hub.ServiceProvider.GetService<AccessService>();
-            // Context (this delivery) → CircuitContext (this flow's circuit / single-identity
-            // host) → this HUB's standing owner identity. The last arm is owner injection: on a
-            // deferred continuation both AsyncLocals are wiped, and the owning per-node hub
-            // carries its node OWNER. It is keyed by hub, so it can only ever yield THIS hub's
-            // owner — never whichever user touched the process most recently.
             return accessService?.Context
                    ?? accessService?.CircuitContext
+                   ?? accessService?.GetStandingIdentity(owner?.ToFullString())
                    ?? accessService?.GetStandingIdentity(hub);
         }
         catch (ObjectDisposedException)
@@ -652,7 +661,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// stream (no real user) therefore captures null and the existing PostPipeline fallback
     /// still applies.
     /// </summary>
-    private static AccessContext? CaptureRealUserContext(IMessageHub hub)
+    private AccessContext? CaptureRealUserContext(IMessageHub hub)
     {
         var ctx = CaptureCallerAccessContext(hub);
         return IsRealUser(ctx) ? ctx : null;
