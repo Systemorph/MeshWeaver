@@ -191,6 +191,10 @@ public static class GraphConfigurationExtensions
                 // Register compilation cache service
                 services.AddSingleton<ICompilationCacheService, CompilationCacheService>();
 
+                // Mesh-scoped Open Graph link-preview reader for the OgCard layout area:
+                // one promise-cached fetch per external URL, replayed to every card render.
+                services.AddSingleton<OpenGraphPreviewService>();
+
                 // NuGet package resolver for #r "nuget:..." directives
                 services.AddNuGetResolver();
 

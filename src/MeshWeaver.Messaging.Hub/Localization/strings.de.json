@@ -439,6 +439,7 @@
   "ui.inviteByEmail": "Per E-Mail einladen",
   "ui.launchScript": "Skript starten",
   "ui.managePartition": "Partition verwalten",
+  "ui.ogCard.noTarget": "Linkziel angeben, z. B. `OgCard?url=https://…`, `OgCard?urls=…,…` oder `OgCard/Some/Node/Path`.",
   "ui.openModule": "Modul öffnen",
   "ui.openOriginal": "Original öffnen",
   "ui.reimportAtCommit": "Bei diesem Commit neu importieren",
