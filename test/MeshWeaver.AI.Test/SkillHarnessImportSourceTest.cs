@@ -42,7 +42,16 @@ public class SkillHarnessImportSourceTest(ITestOutputHelper output) : MonolithMe
         ((MeshWeaver.Mesh.Security.PartitionAccessPolicy)policy!.Content!).PublicRead.Should().BeTrue();
 
         var skills = nodes.Where(n => n.NodeType == SkillNodeType.NodeType).ToList();
-        BuiltInSkillCatalog.AssertMatches(skills.Select(n => n.Id));
+        // What this source must guarantee is that the WHOLE built-in catalog travels to the DB
+        // partition — so assert it against the catalog itself, not against a copy of today's id list.
+        // (A hardcoded list here was blind: a malformed skill file is silently skipped by the provider,
+        // so both the source AND the expectation shrank together and stayed green. The file-set
+        // invariant + no-skipped-file guard live in BuiltInSkillCatalogTest.)
+        skills.Select(n => n.Id).OrderBy(x => x, StringComparer.Ordinal).Should().Equal(
+            new BuiltInSkillProvider().GetStaticNodes()
+                .Where(n => n.NodeType == SkillNodeType.NodeType)
+                .Select(n => n.Id).OrderBy(x => x, StringComparer.Ordinal),
+            "every built-in skill must be imported — one left behind is invisible on the PG path");
         skills.Should().AllSatisfy(n =>
         {
             n.Namespace.Should().Be(SkillNodeType.RootNamespace);
