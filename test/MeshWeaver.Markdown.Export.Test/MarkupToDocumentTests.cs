@@ -16,23 +16,45 @@ namespace MeshWeaver.Markdown.Export.Test;
 /// </summary>
 public class MarkupToDocumentTests
 {
-    /// <summary>Builds the shape AreaMarkupRenderer emits for a grid of link-preview cards.</summary>
+    private const int Columns = 2;
+
+    /// <summary>
+    /// Builds the shape AreaMarkupRenderer emits for a grid of link-preview cards — INCLUDING the
+    /// empty padding cells it appends to a short final row. Reproducing the padding matters: the
+    /// mapper's job is to carry the renderer's column count through, and a helper that silently
+    /// dropped the padding would let a mapper that loses it still look correct.
+    /// </summary>
     private static MarkupNode CardGrid(params (string Title, string Description, string Href)[] cards)
     {
         var rows = cards
-            .Chunk(2)
-            .Select(chunk => (MarkupNode)MarkupNode.El("tr").Add(
-                chunk.Select(card => (MarkupNode)MarkupNode.El("td")
-                    .With("width", "50%")
-                    .Add(MarkupNode.El("table").Add(
-                        MarkupNode.El("tr").Add(
-                            MarkupNode.El("td")
-                                .Add(MarkupNode.El("a").With("href", card.Href)
-                                    .Add(MarkupNode.Text(card.Title)))
-                                .Add(MarkupNode.El("div").Add(MarkupNode.Text(card.Description)))
-                                .Add(MarkupNode.El("div").Add(
-                                    MarkupNode.El("a").With("href", card.Href)
-                                        .Add(MarkupNode.Text(card.Href))))))))));
+            .Chunk(Columns)
+            .Select(chunk =>
+            {
+                var cells = chunk
+                    .Select(card => (MarkupNode)MarkupNode.El("td")
+                        .With("width", "50%")
+                        .Add(MarkupNode.El("table").Add(
+                            MarkupNode.El("tr").Add(
+                                MarkupNode.El("td")
+                                    .Add(MarkupNode.El("a").With("href", card.Href)
+                                        .Style(MarkupStyles.CardTitle)
+                                        .Add(MarkupNode.Text(card.Title)))
+                                    .Add(MarkupNode.El("div").Style(MarkupStyles.CardDescription)
+                                        .Add(MarkupNode.Text(card.Description)))
+                                    .Add(MarkupNode.El("div").Add(
+                                        MarkupNode.El("a").With("href", card.Href)
+                                            .Style(MarkupStyles.CardLink)
+                                            .Add(MarkupNode.Text(card.Href))))))))
+                    .ToList();
+
+                // The renderer pads a short final row with EMPTY cells so every row keeps the same
+                // column widths; reproduce that here so the mapper is tested against what it
+                // actually receives.
+                while (cells.Count < Columns)
+                    cells.Add(MarkupNode.El("td").With("width", "50%"));
+
+                return (MarkupNode)MarkupNode.El("tr").Add(cells);
+            });
 
         return MarkupNode.El("table").Add(rows);
     }
@@ -126,8 +148,15 @@ public class MarkupToDocumentTests
         inlines.OfType<TextInline>().Single().Bold.Should().Be(bold);
     }
 
+    /// <summary>
+    /// A short final row keeps its padding cell, so every row has the SAME number of columns.
+    ///
+    /// <para>This matters to the renderers, not just to tidiness: QuestPDF and Word derive the
+    /// column layout from the row's cell count, so a final row with fewer cells makes its one card
+    /// stretch the full width and the grid visibly loses alignment on the last row.</para>
+    /// </summary>
     [Fact]
-    public void ShortFinalRow_IsPadded_SoColumnsStayAligned()
+    public void ShortFinalRow_KeepsItsPaddingCell_SoEveryRowHasTheSameColumnCount()
     {
         var elements = MarkupToDocument.Convert(CardGrid(
             ("A", "first", "https://portal.example.com/A"),
@@ -136,8 +165,9 @@ public class MarkupToDocumentTests
 
         var table = elements.OfType<TableElement>().Single();
         table.Rows.Should().HaveCount(2);
-        table.Rows[1].Should().HaveCount(1,
-            "the renderer pads the final row; a cell that carries no card contributes no content");
+        table.Rows.Should().AllSatisfy(row => row.Should().HaveCount(Columns,
+            "an empty padding cell is still a cell — dropping it would collapse the last row"));
+        table.Rows[1][1].Should().BeEmpty("the padding cell carries no content");
     }
 
     [Fact]

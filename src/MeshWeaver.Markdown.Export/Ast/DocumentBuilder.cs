@@ -19,8 +19,19 @@ namespace MeshWeaver.Markdown.Export.Ast;
 /// </summary>
 public class DocumentBuilder
 {
-    private readonly MarkdownPipeline _pipeline;
+    private readonly string? _defaultNodePath;
     private readonly ImmutableDictionary<string, ImmutableArray<DocumentElement>> _resolvedAreas;
+
+    /// <summary>
+    /// One pipeline per node path. A pipeline is bound to the path relative embeds resolve
+    /// against, so a document whose chapters come from different nodes needs one each; they are
+    /// cached because building a Markdig pipeline per chapter is pure waste when (as usual) every
+    /// chapter shares a path. Instance state, never static — see AGENTS.md → no static collections.
+    /// </summary>
+    private readonly Dictionary<string, MarkdownPipeline> _pipelines = new(StringComparer.Ordinal);
+
+    /// <summary>The node path of the chapter currently being walked; keys resolved-area lookups.</summary>
+    private string? _currentNodePath;
 
     /// <summary>
     /// Initializes a new instance of the <c>DocumentBuilder</c> class.
@@ -41,15 +52,24 @@ public class DocumentBuilder
         string? currentNodePath = null,
         ImmutableDictionary<string, ImmutableArray<DocumentElement>>? resolvedAreas = null)
     {
-        _pipeline = ExportMarkdownPipeline.For(currentNodePath);
+        _defaultNodePath = currentNodePath;
+        _currentNodePath = currentNodePath;
         _resolvedAreas = resolvedAreas ?? ImmutableDictionary<string, ImmutableArray<DocumentElement>>.Empty;
+    }
+
+    private MarkdownPipeline PipelineFor(string? nodePath)
+    {
+        var key = nodePath ?? string.Empty;
+        if (!_pipelines.TryGetValue(key, out var pipeline))
+            _pipelines[key] = pipeline = ExportMarkdownPipeline.For(nodePath);
+        return pipeline;
     }
 
     /// <summary>
     /// Builds a document from a single markdown source.
     /// </summary>
     public Document Build(string title, string markdown, DocumentExportOptions options, BrandingOptions branding)
-        => Build(title, new[] { (title, markdown) }, options, branding);
+        => Build(title, [new ExportChapter(title, markdown, _defaultNodePath)], options, branding);
 
     /// <summary>
     /// Builds a document from one primary markdown + optional descendant markdowns. Each descendant
@@ -60,6 +80,24 @@ public class DocumentBuilder
         IEnumerable<(string ChapterTitle, string Markdown)> chapters,
         DocumentExportOptions options,
         BrandingOptions branding)
+        => Build(
+            title,
+            chapters.Select(c => new ExportChapter(c.ChapterTitle, c.Markdown, _defaultNodePath)),
+            options,
+            branding);
+
+    /// <summary>
+    /// Builds a document from chapters that each carry their OWN node path.
+    ///
+    /// <para>Per-chapter paths matter: a relative embed resolves against the node it was written
+    /// in, so with <c>IncludeChildren</c> every descendant chapter needs its own path or its
+    /// embeds resolve against the root document's address instead.</para>
+    /// </summary>
+    public Document Build(
+        string title,
+        IEnumerable<ExportChapter> chapters,
+        DocumentExportOptions options,
+        BrandingOptions branding)
     {
         var mermaidIndex = 0;
         var mathIndex = 0;
@@ -67,7 +105,7 @@ public class DocumentBuilder
         var tocHeadings = ImmutableArray.CreateBuilder<HeadingElement>();
 
         var first = true;
-        foreach (var (chapterTitle, markdown) in chapters)
+        foreach (var chapter in chapters)
         {
             if (!first)
             {
@@ -76,11 +114,12 @@ public class DocumentBuilder
                 // at the foot of the previous chapter's last page.
                 if (options.PageBreakBetweenChildren)
                     elements.Add(new PageBreakElement());
-                elements.Add(new ChapterBreakElement(chapterTitle));
+                elements.Add(new ChapterBreakElement(chapter.Title));
             }
             first = false;
 
-            var doc = Markdig.Markdown.Parse(markdown, _pipeline);
+            _currentNodePath = chapter.NodePath ?? _defaultNodePath;
+            var doc = Markdig.Markdown.Parse(chapter.Markdown, PipelineFor(_currentNodePath));
             WalkBlocks(doc, options, elements, tocHeadings, ref mermaidIndex, ref mathIndex);
         }
 
@@ -208,7 +247,7 @@ public class DocumentBuilder
     /// </summary>
     private ImmutableArray<DocumentElement> ResolveArea(LayoutAreaComponentInfo info)
     {
-        var key = Html.DocumentAreaResolution.KeyFor(info);
+        var key = Html.DocumentAreaResolution.KeyFor(_currentNodePath, info);
         if (_resolvedAreas.TryGetValue(key, out var resolved) && !resolved.IsEmpty)
             return resolved;
 

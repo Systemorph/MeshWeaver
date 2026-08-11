@@ -65,7 +65,7 @@ if (rootNode is null)
 
 var jsonOptions = Mesh.JsonSerializerOptions;
 
-List<(string, string)> chapters;
+List<ExportChapter> chapters;
 DocumentExportOptions effectiveOptions;
 string title;
 
@@ -194,10 +194,10 @@ if (rootNode.NodeType == DeckNodeType.NodeType)
     }
 
     chapters = slideNodes
-        .Select(s => (s.Name ?? s.Id, ExtractSlideMarkdown(s, jsonOptions)))
+        .Select(s => new ExportChapter(s.Name ?? s.Id, ExtractSlideMarkdown(s, jsonOptions), s.Path))
         .ToList();
     if (chapters.Count == 0)
-        chapters.Add((title, "*This deck has no slides yet.*"));
+        chapters.Add(new ExportChapter(title, "*This deck has no slides yet.*", sourcePath));
 
     // 16:9 slides read best in landscape, and every slide starts on its own page — and ONLY
     // slide boundaries break pages. A slide whose body opens with a heading must not be split
@@ -221,9 +221,9 @@ else
             + "Exporting content-faithful.", sourcePath, rootNode.NodeType);
     title = explicitTitle ?? options.Title ?? rootNode.Name ?? rootNode.Id;
     effectiveOptions = options;
-    chapters = new List<(string, string)>
+chapters = new List<ExportChapter>
     {
-        (title, ExtractMarkdown(rootNode))
+        new ExportChapter(title, ExtractMarkdown(rootNode), sourcePath)
     };
     if (options.IncludeChildren)
     {
@@ -245,7 +245,7 @@ else
                 }
                 var md = ExtractMarkdown(desc);
                 if (!string.IsNullOrWhiteSpace(md))
-                    chapters.Add((desc.Name ?? desc.Id, md));
+                    chapters.Add(new ExportChapter(desc.Name ?? desc.Id, md, desc.Path));
             }
         }
         finally
@@ -266,7 +266,7 @@ var branding = await brandingResolver.Resolve(brandPath).FirstAsync().ToTask(Ct)
 // instead of the view the author placed.
 Log.LogInformation("Resolving embedded layout areas");
 var resolvedAreas = await DocumentAreaResolution
-    .Resolve(Mesh, chapters, sourcePath, new DocumentHtmlOptions(PortalBaseUrl(Mesh, options)), Log)
+    .Resolve(Mesh, chapters, new DocumentHtmlOptions(PortalBaseUrl(Mesh, options)), Log)
     .FirstAsync()
     .ToTask(Ct);
 

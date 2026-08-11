@@ -98,7 +98,12 @@ public static class TableSizer
             }
         }
 
-        table.SetAttributeValue("role", "presentation");
+        // 🚨 Deliberately NOT role="presentation". These are the document's OWN tables — data the
+        // author wrote — and marking them presentational strips their semantics from a screen
+        // reader, which is a real loss for the reader and buys nothing: the sizing below is what
+        // Word needs, and Word does not consult `role`. Only the LAYOUT tables the card grid is
+        // built from carry role="presentation", and those are set by AreaMarkupRenderer, which
+        // knows they are scaffolding rather than content.
         table.SetAttributeValue("cellpadding", "0");
         table.SetAttributeValue("cellspacing", "0");
         table.SetAttributeValue("border", "0");

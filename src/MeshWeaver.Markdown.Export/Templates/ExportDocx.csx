@@ -55,9 +55,9 @@ Log.LogInformation("Resolving branding");
 var brandingResolver = Mesh.ServiceProvider.GetRequiredService<BrandingResolver>();
 var branding = await brandingResolver.Resolve(brandPath).FirstAsync().ToTask(Ct);
 
-var chapters = new List<(string, string)>
+var chapters = new List<ExportChapter>
 {
-    (title, ExtractMarkdown(rootNode))
+    new ExportChapter(title, ExtractMarkdown(rootNode), sourcePath)
 };
 if (options.IncludeChildren)
 {
@@ -79,7 +79,7 @@ if (options.IncludeChildren)
             }
             var md = ExtractMarkdown(desc);
             if (!string.IsNullOrWhiteSpace(md))
-                chapters.Add((desc.Name ?? desc.Id, md));
+                chapters.Add(new ExportChapter(desc.Name ?? desc.Id, md, desc.Path));
         }
     }
     finally
@@ -94,7 +94,7 @@ if (options.IncludeChildren)
 // instead of the view the author placed; before this change it landed as literal source text.
 Log.LogInformation("Resolving embedded layout areas");
 var resolvedAreas = await DocumentAreaResolution
-    .Resolve(Mesh, chapters, sourcePath, new DocumentHtmlOptions(PortalBaseUrl(Mesh, options)), Log)
+    .Resolve(Mesh, chapters, new DocumentHtmlOptions(PortalBaseUrl(Mesh, options)), Log)
     .FirstAsync()
     .ToTask(Ct);
 

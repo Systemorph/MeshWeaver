@@ -1,3 +1,4 @@
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using HtmlAgilityPack;
@@ -181,24 +182,31 @@ public static class LayoutAreaResolver
         IMessageHub hub,
         DocumentHtmlOptions options,
         AccessContext? caller)
-        => Observable.Defer(() =>
-        {
-            var accessService = hub.ServiceProvider.GetService<AccessService>();
-            using var callerScope = caller is not null
-                ? accessService?.SwitchAccessContext(caller)
-                : null;
+        // 🚨 Observable.Using, NOT Defer + `using var`. With `using var` the caller scope is
+        // disposed when the FACTORY returns — before anything subscribes to the observable it
+        // built — so the area stream was created under the caller's identity but SUBSCRIBED and
+        // rendered without it. That is the bug shape AccessContextPropagation.md is about: the
+        // owner's read gate is evaluated on the subscription, so a caller denied the embedded
+        // content could have received it in their export (and the notice text would resolve in the
+        // wrong language). Observable.Using ties the scope to the SUBSCRIPTION's lifetime instead.
+        => Observable.Using(
+            () => (caller is not null
+                       ? hub.ServiceProvider.GetService<AccessService>()?.SwitchAccessContext(caller)
+                       : null)
+                  ?? Disposable.Empty,
+            _ =>
+            {
+                var reference = new LayoutAreaReference(target.Area) { Id = target.Id ?? string.Empty };
+                var stream = hub.GetWorkspace()
+                    .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(target.Address), reference);
+                if (stream is null)
+                    return Observable.Return<MarkupNode?>(null);
 
-            var reference = new LayoutAreaReference(target.Area) { Id = target.Id ?? string.Empty };
-            var stream = hub.GetWorkspace()
-                .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(target.Address), reference);
-            if (stream is null)
-                return Observable.Return<MarkupNode?>(null);
-
-            return AreaMarkupRenderer
-                .Render(stream, target.Area ?? string.Empty, options)
-                .Select(node => node == MarkupNode.Empty ? null : node)
-                .Finally(stream.Dispose);
-        });
+                return AreaMarkupRenderer
+                    .Render(stream, target.Area ?? string.Empty, options)
+                    .Select(node => node == MarkupNode.Empty ? null : node)
+                    .Finally(stream.Dispose);
+            });
 
     private static string? Attr(HtmlNode node, string suffix)
     {

@@ -94,7 +94,7 @@ public class ExportMarkdownPipelineTests
             .Single();
 
         var resolved = ImmutableDictionary<string, ImmutableArray<DocumentElement>>.Empty
-            .Add(MeshWeaver.Markdown.Export.Html.DocumentAreaResolution.KeyFor(embed),
+            .Add(MeshWeaver.Markdown.Export.Html.DocumentAreaResolution.KeyFor("Some/Doc", embed),
             [
                 new ParagraphElement([new TextInline("RESOLVEDCONTENT", false, false, false)])
             ]);
