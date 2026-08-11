@@ -33,28 +33,61 @@ public static class SkillMarkdown
         .Build();
 
     /// <summary>Parses a skill <c>.md</c> (frontmatter + body) into a <c>Skill</c> MeshNode, or null.</summary>
-    public static MeshNode? Parse(string content, string id)
+    public static MeshNode? Parse(string content, string id) => TryParse(content, id, out _);
+
+    /// <summary>
+    /// Parses a skill <c>.md</c> into a <c>Skill</c> MeshNode, and on failure says WHY.
+    ///
+    /// <para>🚨 The reason is the whole point. A skill that fails to parse is SKIPPED, never thrown on
+    /// — these files load during mesh startup, so an uncaught throw takes the host down (the 2026-08-07
+    /// incident). But a bare <c>null</c> makes "skipped" indistinguishable from "there was never a file
+    /// here": the catalog silently loses an entry and nothing is red anywhere, which the author
+    /// experiences as <i>"my skill doesn't appear and there's no error"</i>. Callers must surface
+    /// <paramref name="error"/> (<see cref="BuiltInSkillProvider"/> records it as an
+    /// <see cref="AiContentLoadFailure"/> and writes it to stderr), and the catalog guard test asserts
+    /// on it — that is what turns a dropped skill into a diagnosable one.</para>
+    /// </summary>
+    /// <param name="content">The file's text (YAML front matter + markdown body).</param>
+    /// <param name="id">The skill id — the file name without its extension, i.e. the slash word.</param>
+    /// <param name="error">Null on success; otherwise an author-actionable reason.</param>
+    /// <returns>The parsed node, or null when <paramref name="error"/> is set.</returns>
+    public static MeshNode? TryParse(string content, string id, out string? error)
     {
-        if (string.IsNullOrEmpty(id)) return null;
+        error = null;
+        if (string.IsNullOrEmpty(id))
+        {
+            error = "no id — a skill's id is its file name, which cannot be empty";
+            return null;
+        }
 
         var document = Markdig.Markdown.Parse(content, Pipeline);
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
-        if (yamlBlock == null) return null;
+        if (yamlBlock == null)
+        {
+            error = "no YAML front matter — a skill file must open with a '---' fenced block "
+                    + "declaring at least 'nodeType: Skill' and a 'description:'";
+            return null;
+        }
 
         SkillFrontMatter? fm;
         try
         {
             fm = YamlIn.Deserialize<SkillFrontMatter>(yamlBlock.Lines.ToString());
         }
-        catch (YamlDotNet.Core.YamlException)
+        catch (YamlDotNet.Core.YamlException ex)
         {
             // Malformed front-matter (e.g. an unquoted ':' inside a description) must never take down
             // skill loading. Built-in skills load during mesh startup, so an uncaught throw here
-            // crashes the whole host (every full-mesh test dies). Skip the bad file instead — the
-            // provider already treats null as "skip this skill".
+            // crashes the whole host (every full-mesh test dies). Skip the bad file instead — but SAY SO.
+            error = "invalid YAML front matter. An unquoted ':' inside a value is the usual cause — "
+                    + $"quote the value. {ex.Message}";
             return null;
         }
-        if (fm == null) return null;
+        if (fm == null)
+        {
+            error = "empty YAML front matter — nothing to build a skill from";
+            return null;
+        }
 
         var body = content[(yamlBlock.Span.End + 1)..].TrimStart('\r', '\n').Trim();
 
