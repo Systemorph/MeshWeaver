@@ -150,7 +150,14 @@ public static class ContentCollectionsExtensions
                 return config;
             config = config.Set(true, nameof(AddContentCollectionsInfrastructure));
             return config
-                .WithTypes(typeof(ContentCollectionReference))
+                // ContentCollectionConfig travels inside a MeshNode's collection declarations, so
+                // it crosses the wire on any hub that carries one — unregistered, such a hub
+                // auto-registers it under its short name on first use and logs the resolver's
+                // warning asking for exactly this. WithTypes registers under the short name, i.e.
+                // the name the auto-registration already agreed on, so nothing on the wire changes;
+                // what it buys is that a RECEIVING hub resolves it typed instead of as an untyped
+                // JsonElement.
+                .WithTypes(typeof(ContentCollectionReference), typeof(ContentCollectionConfig))
                 .WithServices(AddContentService)
                 .AddData(data =>
                 {
