@@ -883,13 +883,16 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         // this shape and resolved 50 Code nodes out of thousands). A request that states no limit at
         // all still gets the fan-out's default: an unanchored UNION over every partition schema
         // needs SOME bound, and changing that default is a separate decision.
-        // 🚨 POSITIVE limits only. `Limit <= 0` means "do not clip" upstream —
-        // MeshQuery.ClipMergedInitial applies a limit only `if (effectiveLimit is int limit &&
-        // limit > 0)` — but propagated into SQL a zero becomes a literal `LIMIT 0`, i.e. ZERO ROWS
-        // returned for a caller that asked for everything. That is the same silent-empty-result
-        // failure this very PR exists to fix (#1216: discovery that cannot see rows reports the
-        // content as missing), so it must not be re-introduced one layer down.
-        if (request.Limit is > 0)
+        // 🚨 Propagate the request limit WHATEVER its sign, including the non-positive "no clip"
+        // encoding (MeshQueryRequest.NoLimit). It used to be dropped for `<= 0` because a zero
+        // reached SQL as a literal `LIMIT 0` — ZERO ROWS for a caller that asked for everything —
+        // but silently substituting the fan-out's default of 50 instead is the bug in the other
+        // direction, and the one that shipped: #1326 left 9 of 43 Spaces permanently stale because
+        // the webhook's `nodeType:GitHubSyncConfig` fan-out got a page it could not distinguish
+        // from the whole set. The translation now happens where the SQL is written —
+        // PostgreSqlSqlGenerator emits no LIMIT clause and PostgreSqlCrossSchemaQueryProvider
+        // passes int.MaxValue — so neither `LIMIT 0` nor `LIMIT -1` can be produced here.
+        if (request.Limit is not null)
             queryForSql = queryForSql with { Limit = request.Limit };
 
         var userId = GetEffectiveUserId(request);

@@ -2813,11 +2813,13 @@ internal static class ThreadExecution
                 .SelectMany(_ => roundCompletion)
                 .Catch<System.Reactive.Unit, Exception>(streamingEx =>
                     {
-                        var disposalRace = streamingEx is ObjectDisposedException
-                            || (streamingEx is InvalidOperationException ioe
-                                && ioe.Message.Contains("disposed", StringComparison.OrdinalIgnoreCase));
-                        if (disposalRace)
+                        if (IsTeardownRace(streamingEx))
+                        {
+                            logger.LogDebug(streamingEx,
+                                "[ThreadExec] streaming round abandoned during teardown for {ThreadPath}",
+                                threadPath);
                             return Observable.Empty<System.Reactive.Unit>();
+                        }
                         logger.LogError(streamingEx,
                             "[ThreadExec] streaming round faulted for {ThreadPath}", threadPath);
                         return Observable.Throw<System.Reactive.Unit>(streamingEx);
@@ -2831,6 +2833,20 @@ internal static class ThreadExecution
                 // watcher). A Timeout/init error short-circuits the SelectMany above and lands here.
                 .Catch<System.Reactive.Unit, Exception>(ex =>
                 {
+                    // 🚨 The thread hub (or an ancestor) is tearing down — NOT an init stall.
+                    // There is nothing to unstick: the node this handler would write to is the
+                    // very node going away, so every recovery write below would re-fault against
+                    // the same disposing hub. Report it as the teardown it is and settle the
+                    // round quietly. Placed FIRST so the LogError beneath can never fire for a
+                    // disposal race (issue #1300: the same wrapped HubDisposingException was
+                    // logged as an error twice — once by the inner streaming Catch, once here).
+                    if (IsTeardownRace(ex))
+                    {
+                        logger.LogDebug(ex,
+                            "[ThreadExec] round abandoned during teardown for {ThreadPath}", threadPath);
+                        return Observable.Empty<System.Reactive.Unit>();
+                    }
+
                     // 🚨 Agent-init stalled or errored — surface and unstick the UI.
                     // Without this, IsExecuting stays true forever and the user sees
                     // a perpetually-"executing" thread (prod symptom 2026-05-20).
@@ -2891,6 +2907,54 @@ internal static class ThreadExecution
                 });
         }); // end of clientObs.SelectMany
         }); // end of requestObs.SelectMany (resume-selection recovery)
+    }
+
+    /// <summary>
+    /// True when <paramref name="exception"/> is — or WRAPS, at any depth — a teardown of the
+    /// hub the round is running on: the thread node was deleted, the agent session was torn
+    /// down, or an ancestor hub began recycling mid-round.
+    ///
+    /// <para>🚨 The whole point is that it walks the chain. The predicate this replaces tested
+    /// only the OUTERMOST type (<c>streamingEx is ObjectDisposedException</c>), and the shape
+    /// that actually reaches here in production is WRAPPED: hosted-hub creation is frozen from
+    /// the first instant of disposal, so <c>SynchronizationStream.Reduce</c> throws
+    /// <see cref="HubDisposingException"/> — which IS an <see cref="ObjectDisposedException"/> —
+    /// through a reflective dispatch that re-wraps it as
+    /// <see cref="System.Reflection.TargetInvocationException"/>. An outermost-type test misses
+    /// it, so a benign delete-while-streaming race was logged as an Error with a full stack
+    /// pageant, TWICE (both nested Catch handlers), and rethrown to the submission watcher as if
+    /// the round had genuinely failed (issue #1300). <c>TargetInvocationException →
+    /// HubDisposingException</c> is exactly the chain
+    /// <see cref="HubDisposingException.IsHubDisposal"/> documents as the deepest observed, which
+    /// is why the typed leg delegates to it rather than re-deriving the walk.</para>
+    ///
+    /// <para>The second leg keeps the legacy message-shaped case (an
+    /// <see cref="InvalidOperationException"/> saying "disposed" — Rx and the renderer both
+    /// raise that shape untyped) and gives it the same chain walk, so it too survives wrapping.</para>
+    /// </summary>
+    /// <param name="exception">The fault to classify; may be null.</param>
+    /// <returns><c>true</c> when the round was abandoned by a teardown rather than failing.</returns>
+    internal static bool IsTeardownRace(Exception? exception)
+    {
+        // Typed leg: HubDisposingException at any depth, including through AggregateException
+        // fan-out. Owned by the framework — do not re-derive the walk here.
+        if (HubDisposingException.IsHubDisposal(exception))
+            return true;
+
+        // Untyped legs. Depth-capped for the same reason IsHubDisposal caps: an exception graph
+        // is caller-supplied data, and 16 is far beyond any real wrapping depth.
+        for (var (e, depth) = (exception, 0); e is not null && depth <= 16; e = e.InnerException, depth++)
+        {
+            if (e is ObjectDisposedException)
+                return true;
+            if (e is InvalidOperationException ioe
+                && ioe.Message.Contains("disposed", StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (e is AggregateException agg && agg.InnerExceptions.Any(IsTeardownRace))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
