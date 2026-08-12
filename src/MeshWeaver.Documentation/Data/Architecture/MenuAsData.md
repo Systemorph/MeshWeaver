@@ -10,9 +10,9 @@ Changing a menu label used to cost a full release: edit a provider (or `strings.
 rollout. Half an hour to rename a button — which is why the node menu accumulated entries nobody
 pruned and wording nobody fixed.
 
-**Menu presentation is now data.** A [`MenuPresentation`](/Doc/Architecture/MenuAsData) node per menu
-context carries the text, icon, order, grouping and visibility of each entry. Editing it is a node
-edit: it takes effect on the next render, for every renderer, with no build.
+**Menu presentation is now data.** A `MenuPresentation` node per menu context carries the text, icon,
+order, grouping and visibility of each entry. Editing it is a node edit: it takes effect on the next
+render, for every renderer, with no build.
 
 ## The split that makes this safe
 
@@ -98,7 +98,10 @@ English for every viewer today, and a catalog entry can translate it without tou
 
 ## Changing a label, end to end
 
-1. Open `Admin/Menu/Node` in the portal (or `patch` it over MCP).
+1. Open `Admin/Menu/Node`. **The first time, it does not exist yet** — create it as a
+   `MenuPresentation` node (there is no seeded catalog, deliberately; see above). The area keys are
+   the `Area` values in [Node Menu Items](/Doc/GUI/NodeMenu) — `Edit`, `Pin`, `Move`, `Copy`,
+   `Delete`, `Files`, `Data`, `Versions`, `StopSync`, `Recycle`, `ExportPdf`, `ExportDocx`, …
 2. Add or edit the entry for the area — e.g. `{ "area": "Delete", "labels": { "de": "Löschen" } }`.
 3. Save.
 
