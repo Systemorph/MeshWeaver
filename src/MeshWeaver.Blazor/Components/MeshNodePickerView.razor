@@ -3,7 +3,7 @@
 @inherits FormComponentBase<MeshNodePickerControl, MeshNodePickerView, string>
 @inject AccessService Access
 
-<div class="mesh-node-picker@(IsThin ? " mesh-node-picker--thin" : "")">
+<div class="@PickerClass" style="@ComputedStyle">
     @if (Label != null)
     {
         <FluentLabel Weight="Microsoft.FluentUI.AspNetCore.Components.FontWeight.Bold" Style="margin-bottom: 4px;">@Label</FluentLabel>

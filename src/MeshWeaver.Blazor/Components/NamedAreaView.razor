@@ -1,5 +1,25 @@
 @inherits BlazorView<NamedAreaControl, NamedAreaView>
 @using MeshWeaver.Layout
+@*
+    🚨 This view deliberately does NOT apply its own Style/Class, and that is a decision, not the
+    omission #1297 swept up elsewhere. A NamedAreaControl is a REFERENCE to an area, not a box: in the
+    steady state below it renders exactly one thing — <DispatchView> on the resolved RootControl — and
+    that control applies its own Style/Class to its own element. It therefore belongs with the other
+    pure-indirection views (DispatchView, EditFormView, PropertyView, ContainerView), not with the
+    views that own a box.
+
+    Giving it a wrapper would be the blanket-wrapper regression #1288 refused, on the single most
+    travelled path in the UI: every layout area reaches the DOM through here (LayoutAreaView), as does
+    every tab and dialog content area, so one extra block box would land around all of them.
+
+    The markup that IS emitted above the DispatchView is the not-yet-loaded placeholder (skeleton /
+    spinner). Styling that instead would apply the author's declaration to a spinner and then remove it
+    when the content arrives — a visible restructure mid-flight, which is exactly the failure mode the
+    "gate on the declaration, not the resolved value" rule exists to avoid.
+
+    If a real call site ever needs a styled named area, the fix is to FORWARD the declaration onto
+    RootControl (as MeshNodeCardView does for its embedded area), NOT to introduce an element here.
+*@
 @using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @using VerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
