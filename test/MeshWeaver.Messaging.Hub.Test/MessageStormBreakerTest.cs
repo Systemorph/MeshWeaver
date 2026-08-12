@@ -282,6 +282,42 @@ public class MessageStormBreakerTest
         breaker.TripCount.Should().Be(0, "sweeping idle keys must not look like — or mask — a storm");
     }
 
+    /// <summary>
+    /// A key that TRIPPED and then went silent must be swept too. Exempting tripped counters would
+    /// break the bound outright — a one-off storm's key would live for the hub's lifetime — and it
+    /// buys nothing: "stale" means no message for a full window+cooldown, which an actively
+    /// storming key can never be (every message restamps its window) and which is already past the
+    /// cooldown, so dropping it is identical to the self-heal its next message would do anyway.
+    /// </summary>
+    [Fact]
+    public void TrackedKeys_Sweep_AlsoReleases_TrippedThenIdleKeys()
+    {
+        const int cap = 10;
+        var breaker = new MessageStormBreaker(NullLogger.Instance, new Address("host", "1"),
+            Threshold, Window, Cooldown, () => _now, TicksPerSecond, maxTrackedKeys: cap);
+
+        // Storm ONE key past the bar so its counter is left Tripped...
+        for (var i = 0; i <= Threshold; i++)
+            breaker.ShouldDrop(Delivery(new KeyedMessage("looping/stream")));
+        breaker.TripCount.Should().Be(1);
+
+        // ...and push the live set over the cap with keys that then all go quiet.
+        for (var i = 0; i < 100; i++)
+            breaker.ShouldDrop(Delivery(new KeyedMessage($"burst/node-{i}")));
+        breaker.TrackedKeyCount.Should().Be(101);
+
+        // Everything goes silent past window+cooldown; the next message arms the sweep.
+        _now += (long)((Window.TotalSeconds + Cooldown.TotalSeconds) * TicksPerSecond) + 1;
+        breaker.ShouldDrop(Delivery(new KeyedMessage("later/node"))).Should().BeFalse();
+
+        breaker.TrackedKeyCount.Should().Be(1,
+            "the tripped-then-idle key is released like any other stale counter");
+
+        // And the formerly-storming key flows again — sweeping it is a self-heal, not an amnesty
+        // that hides a live storm (a still-storming key can never be stale in the first place).
+        breaker.ShouldDrop(Delivery(new KeyedMessage("looping/stream"))).Should().BeFalse();
+    }
+
     [Fact]
     public void LifecycleAndControlMessages_AreNeverDropped()
     {

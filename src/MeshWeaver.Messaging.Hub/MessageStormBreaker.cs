@@ -355,19 +355,31 @@ public sealed class MessageStormBreaker
         };
     }
 
+    /// <summary>
+    /// TryGetValue + TryAdd rather than <c>GetOrAdd</c>: the live-key count must only be
+    /// incremented by the caller that actually INSERTED, and <c>GetOrAdd</c>'s factory can also run
+    /// for a racing loser.
+    ///
+    /// <para>🚨 The retry loop is required, not defensive padding. Returning the locally-built
+    /// counter when <c>TryAdd</c> loses would hand back an instance that is NOT in the dictionary
+    /// whenever the winner's entry is evicted (window roll / sweep) in the gap before the re-read —
+    /// this delivery would then be counted on an orphan nobody else can see, so a storming key's
+    /// count and cooldown would silently reset. Loop until we either observe a published counter or
+    /// publish ours; each pass strictly makes progress (find or insert).</para>
+    /// </summary>
     private Counter GetOrAddCounter(StormKey key, long now)
     {
-        // TryGetValue + TryAdd rather than GetOrAdd: the live-key count must only be incremented
-        // by the caller that actually INSERTED (GetOrAdd's factory can run for a racing loser).
-        if (counters.TryGetValue(key, out var existing))
-            return existing;
-        var fresh = new Counter(now);
-        if (counters.TryAdd(key, fresh))
+        while (true)
         {
-            Interlocked.Increment(ref liveKeys);
-            return fresh;
+            if (counters.TryGetValue(key, out var existing))
+                return existing;
+            var fresh = new Counter(now);
+            if (counters.TryAdd(key, fresh))
+            {
+                Interlocked.Increment(ref liveKeys);
+                return fresh;
+            }
         }
-        return counters.TryGetValue(key, out var raced) ? raced : fresh;
     }
 
     private void RemoveCounter(StormKey key)
@@ -382,6 +394,14 @@ public sealed class MessageStormBreaker
     /// above <see cref="DefaultMaxTrackedKeys"/> and run at most once per window by a single
     /// thread, so the O(n) pass costs at most one traversal of a bounded map per second and the
     /// live set tracks RECENT traffic instead of growing with everything the hub ever saw.
+    ///
+    /// <para>🚨 Staleness is the ONLY criterion — a <c>Tripped</c> counter is swept like any other.
+    /// Exempting tripped keys would break the bound this method exists to provide: a key that
+    /// storms once and is never seen again would live for the hub's lifetime. It is also
+    /// unnecessary, because "stale" means NO message for a full window+cooldown, which a storming
+    /// key can never be (every message restamps its window) and which is strictly past the
+    /// cooldown. Dropping such a counter is behaviourally identical to the self-heal its next
+    /// message would perform anyway: a fresh counter starts at 1 and the message passes.</para>
     /// </summary>
     private void SweepStaleKeys(long now)
     {
@@ -398,7 +418,7 @@ public sealed class MessageStormBreaker
             var counter = pair.Value;
             bool stale;
             lock (counter.Gate)
-                stale = !counter.Tripped && counter.WindowStartTicks < staleBefore;
+                stale = counter.WindowStartTicks < staleBefore;
             if (stale)
                 RemoveCounter(pair.Key);
         }
