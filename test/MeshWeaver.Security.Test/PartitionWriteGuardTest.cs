@@ -275,7 +275,7 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
         var userId = "rsalzmann";
         var ctx = new AccessContext { ObjectId = userId, Name = userId };
         accessService.SetContext(ctx);
-        accessService.SetCircuitContext(ctx);
+        accessService.SetHostIdentity(ctx);
 
         try
         {
@@ -319,7 +319,7 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
         var userId = "rsalzmann";
         var ctx = new AccessContext { ObjectId = userId, Name = userId };
         accessService.SetContext(ctx);
-        accessService.SetCircuitContext(ctx);
+        accessService.SetHostIdentity(ctx);
 
         try
         {

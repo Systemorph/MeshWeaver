@@ -98,13 +98,13 @@ public class ScriptTemplateExecuteAccessTest(ITestOutputHelper output) : Monolit
     {
         var ctx = new AccessContext { ObjectId = OrdinaryUser, Name = "S Glauser" };
         Access.SetContext(ctx);
-        Access.SetCircuitContext(ctx);
+        Access.SetHostIdentity(ctx);
     }
 
     private void SignOut()
     {
         Access.SetContext(null);
-        Access.SetCircuitContext(null);
+        Access.SetHostIdentity(null);
     }
 
     private Task<Permission> EffectivePermissions(string path)

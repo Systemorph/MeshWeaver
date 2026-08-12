@@ -907,13 +907,51 @@ jobs:
           exit "$status"
         fi
 
+  licence-gate:
+    name: "Dependency licences"
+    # MeshWeaver ships dual-licensed Apache-2.0 / MIT. A copyleft (AGPL/GPL/LGPL) or
+    # pay-to-use dependency is a licensing DEFECT — and it is invisible to every other
+    # check we run: one `<PackageVersion>` line adds it, the compiler is happy, and the
+    # tests are happy. #1230 (QuestPDF, pay-to-use above a revenue threshold) and a dead
+    # AGPL `itext7` declaration both sat in the tree unnoticed until a manual audit.
+    #
+    # 🚨 NO `continue-on-error`, and NO input-shaped `if:`. This gate reads only the repo
+    # and the public NuGet feed — it needs no secret, so it has no legitimate reason to be
+    # skipped and no fork exemption. It runs on every PR including forks.
+    needs: [precheck]
+    # Mirrors `build`: the ONLY thing that skips this is the already-green-tree
+    # optimisation, which means this exact tree already passed this exact gate.
+    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    # ⏱️ Depends only on `precheck`, so it runs CONCURRENTLY with the build and the test
+    # shards and costs the PR no wall-clock. It restores (not builds) the solution, which
+    # is what produces the project.assets.json graph it reads.
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v6
+      with: { fetch-depth: 1 }
+    - uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: 10.0.x
+    # The gate resolves licences from the RESTORED graph — direct and transitive — because a
+    # copyleft dependency that arrives transitively binds us exactly as hard as a declared one.
+    # No `continue-on-error`: if the restore fails, the gate has no evidence, and a gate that
+    # passes on absent evidence is worse than no gate (the script fails closed on this too).
+    # Same invocation as the `build` job's restore step, so the graph this gate reads is the
+    # same graph CI actually builds and ships.
+    - name: Restore (produces the dependency graph the gate reads)
+      run: dotnet restore
+    - name: Check dependency licences
+      run: python3 .github/scripts/check-licenses.py --report
+
   collect-results:
     name: "Consolidate test results"
     # plugin-gate is a NEEDS so this required check cannot go green while the plugins are
     # broken by this PR — that is the whole point of the gate (see its step below). preflight
     # is a NEEDS for the same reason one level up: this job is the repo's ONLY required status
-    # check, so anything that must block a merge has to be able to fail it.
-    needs: [precheck, preflight, build, test, plugin-gate]
+    # check, so anything that must block a merge has to be able to fail it. licence-gate is a
+    # NEEDS on the same principle: a licensing defect must be able to block a merge.
+    needs: [precheck, preflight, build, test, plugin-gate, licence-gate]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1107,6 +1145,17 @@ jobs:
             echo "::error::A failing 'compile' check means a public API change here broke plugin node source that is Roslyn-compiled at runtime from the plugins repo."
             ;;
         esac
+        exit 1
+
+    # ── …and a licensing defect decides it too ──────────────────────────────────────────────
+    # 🚨 `needs:` alone is NOT enough under `if: always()` — same lesson as the step above. A
+    # dependency licence that is incompatible with shipping under Apache-2.0 / MIT must be able
+    # to turn the repo's ONLY required status check RED, or the gate is decorative.
+    - name: Fail if the licence gate failed
+      if: needs.licence-gate.result == 'failure'
+      run: |
+        echo "::error::A dependency licence is incompatible with shipping MeshWeaver under Apache-2.0 / MIT — see the 'Dependency licences' job for the offending package(s) and their licence."
+        echo "::error::Fix it by removing the package or replacing it with a permissively-licensed one. Do NOT add it to EXCEPTIONS unless the upstream licence genuinely IS permissive and only the package metadata is missing."
         exit 1
 
     # ── …and a missing CI INPUT decides it too ──────────────────────────────────────────────

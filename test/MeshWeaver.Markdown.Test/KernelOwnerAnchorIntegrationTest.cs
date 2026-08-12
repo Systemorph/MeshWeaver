@@ -94,7 +94,7 @@ public class KernelOwnerAnchorIntegrationTest(ITestOutputHelper output) : Monoli
 
         // Simulate the circuit running as the non-owner viewer (what ResolveCircuitUser yields in the
         // Blazor view). The create eager-captures this identity as CreatedBy, so RLS sees the viewer.
-        accessService.SetCircuitContext(Viewer);
+        accessService.SetHostIdentity(Viewer);
         try
         {
             var kernelId = Guid.NewGuid().ToString("N");
@@ -123,7 +123,7 @@ public class KernelOwnerAnchorIntegrationTest(ITestOutputHelper output) : Monoli
         }
         finally
         {
-            accessService.SetCircuitContext(TestUsers.Admin);
+            accessService.SetHostIdentity(TestUsers.Admin);
         }
     }
 
@@ -139,7 +139,7 @@ public class KernelOwnerAnchorIntegrationTest(ITestOutputHelper output) : Monoli
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
-        accessService.SetCircuitContext(Viewer);
+        accessService.SetHostIdentity(Viewer);
         try
         {
             var kernelId = Guid.NewGuid().ToString("N");
@@ -170,7 +170,7 @@ public class KernelOwnerAnchorIntegrationTest(ITestOutputHelper output) : Monoli
         }
         finally
         {
-            accessService.SetCircuitContext(TestUsers.Admin);
+            accessService.SetHostIdentity(TestUsers.Admin);
         }
     }
 }

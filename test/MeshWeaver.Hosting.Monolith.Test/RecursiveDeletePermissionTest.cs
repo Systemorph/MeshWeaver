@@ -59,7 +59,7 @@ public class RecursiveDeletePermissionTest(ITestOutputHelper output) : MonolithM
     {
         var client = GetClient();
         client.ServiceProvider.GetRequiredService<AccessService>()
-            .SetCircuitContext(new AccessContext { ObjectId = Carol, Name = Carol, Roles = [] });
+            .SetHostIdentity(new AccessContext { ObjectId = Carol, Name = Carol, Roles = [] });
         return client;
     }
 
