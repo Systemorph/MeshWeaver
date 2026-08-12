@@ -79,6 +79,14 @@ startup) and patches its **own** portal + migration Deployments per the `Admin/U
 `Continuous` (the platform default, newest build-numbered tag), `Stable` (newest clean release), or
 `None` (manual only). See [Release & Self-Update Strategy](/Doc/Architecture/ReleaseStrategy).
 
+On installs where the GitHub webhook is wired, the poll is only the fallback: the poller also
+watches the platform repo's `BuildCompletion` node (`Admin/_Build/Systemorph.MeshWeaver` — the same
+fact [plugin updates](/Doc/Architecture/PluginUpdateOnGreenBuild) react to) and runs one immediate
+check when a green build lands, so a roll follows CI by minutes instead of by up to a poll
+interval. `SelfUpdate:BuildTriggerRepository` names the repo (empty disables); an install without
+the webhook simply never sees the node and keeps polling. The watch may never gate or kill the
+poller — a fault re-establishes it silently, same discipline as the policy read.
+
 So the hop is automated *by policy*, and it still fails silently in two ways worth remembering: a
 `None`-policy install never moves, and a commit whose CD run never completed has no selectable
 version tag to move **to** (only the moving `main` pointer and the per-run staging tag, both
