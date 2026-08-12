@@ -299,11 +299,22 @@ post-as-System escalation. Read/query pipelines default to `false` — a null ca
 unwrapped, preserving whatever identity is ambient at emission. Flipping that default to clamp is
 blocked on migrating the ops/MCP call sites that currently depend on the leaked ambient identity.
 
-This is applied by every mesh write primitive — `MeshService.CreateNode/Update/Delete/CopyNode`, `MeshNodeStreamHandle.Update`, `IMeshNodeStreamCache.Update` — so callers keep writing the natural shape:
+This is applied by every mesh write primitive — `MeshService.CreateNode/Update/Delete/CopyNode`, `MeshNodeStreamHandle.Update`, `IMeshNodeStreamCache.Update`, and the content-file writes `hub.ImportContent(path)…Post()` / `hub.SyncContentFiles(path)…Post()` — so callers keep writing the natural shape:
 
 ```csharp
 meshService.CreateNode(node).Subscribe(_ => …);   // identity preserved across the Subscribe seam
 ```
+
+> **Eager capture is half the contract, and the half that is easy to forget.** A primitive that only
+> wraps its result with `CarryAccessContext` still reads the ambient `AsyncLocal` when its
+> `Observable.Defer` body runs — i.e. on the **subscribing** thread. The two content-import builders
+> shipped that way and were the last write primitives without an eager snapshot: an import that built
+> its operations under `ImpersonateAsSystem` and then drained them through a `Concat` pump had every
+> node write land (those capture eagerly) and every content write failed closed for a null
+> `AccessContext` (MeshWeaver.Reinsurance#46 — 412 applied, 409 refused, one call site). Snapshot the
+> context where the caller calls you; pin it on the post with `o.WithAccessContext(captured)`; wrap
+> the result with `CarryAccessContext`. All three, or the primitive is not identity-safe.
+> Pinned by `ContentImportAccessContextTest`.
 
 Phase 2 then happens again from the Subscribe callback's thread, under the right identity. The chain continues.
 

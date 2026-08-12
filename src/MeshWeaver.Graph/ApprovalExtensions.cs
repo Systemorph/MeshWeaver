@@ -66,6 +66,9 @@ public static class ApprovalExtensions
                 ? (IReadOnlyCollection<NodeMenuItemDefinition>)
                     [new NodeMenuItemDefinition(
                         "Request Approval", "RequestApproval",
+                        // Emoji, like every other node-menu entry — a checkmark reads as "sign-off"
+                        // in any locale. (A Fluent icon name would render as a broken <img>.)
+                        Icon: "✅",
                         Order: 30, Href: MeshNodeLayoutAreas.BuildUrl(hubPath, "RequestApproval"))
                         { LabelKey = "menu.requestApproval" }]
                 : []);

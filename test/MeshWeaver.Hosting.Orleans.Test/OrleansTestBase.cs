@@ -163,7 +163,7 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
         var address = CreateClientAddress(clientId);
         var client = ClientMesh.ServiceProvider.CreateMessageHub(address, ConfigureClient);
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
+        accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = userId,
             Name = userId,

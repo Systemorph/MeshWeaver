@@ -148,6 +148,93 @@ public class QueryEvaluatorTests
 
     #endregion
 
+    #region Wildcard Namespace — the ONE vocabulary (#1235)
+
+    /// <summary>A node-shaped row, so a <c>namespace:</c> filter has something to bind to.</summary>
+    private record Row(string Name, string Namespace);
+
+    /// <summary>
+    /// 🚨 THE REGRESSION FOR #1235. A wildcard NAMESPACE filter was the one place the parser
+    /// rewrote the user's <c>*</c> into SQL's <c>%</c>. This evaluator speaks <c>*</c>, so
+    /// <c>%/Source</c> matched neither the leading- nor the trailing-star branch of the old
+    /// hand-rolled comparison and fell through to an EQUALITY test against the literal string
+    /// <c>"%/Source"</c> — which no namespace can equal. The filter therefore matched NOTHING in
+    /// memory, silently: no error, no warning, an empty result.
+    ///
+    /// <para>The asymmetry is what made it survive review: <c>name:*Laptop*</c> (asserted above)
+    /// works, because only the namespace branch did the rewrite.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("acme/SampleData/Source", true)]
+    [InlineData("acme/Source", true)]
+    [InlineData("acme/SampleData/Source/Fixtures", false)] // nested — needs scope:subtree, below
+    [InlineData("acme/SampleData/Other", false)]
+    public void Matches_WildcardNamespace_WithoutScope_MatchesThatLevelOnly(string ns, bool expected)
+    {
+        var query = _parser.Parse("namespace:*/Source");
+
+        _evaluator.Matches(new Row("x", ns), query).Should().Be(expected);
+    }
+
+    /// <summary>
+    /// The MULTI-wildcard half of #1235. <c>scope:subtree</c> widens the filter to
+    /// <c>(*/Source OR */Source/*)</c>, and that second pattern carries TWO wildcards. The old
+    /// matcher split on the FIRST one only and took everything after it as a literal suffix, so
+    /// <c>*/Source/*</c> degenerated to <c>EndsWith("/Source/*")</c> — which nothing ends with.
+    /// Fixing only the <c>%</c>→<c>*</c> spelling would leave this arm still matching nothing,
+    /// which is why the vocabulary and the glob had to be fixed together.
+    /// </summary>
+    [Theory]
+    [InlineData("acme/SampleData/Source", true)]
+    [InlineData("acme/SampleData/Source/Fixtures", true)]
+    [InlineData("acme/SampleData/Source/Fixtures/Deep/Deeper", true)]
+    [InlineData("acme/SampleDataSource", false)]      // no '/' boundary — the literal must match
+    [InlineData("acme/SampleData/Sources", false)]    // '/Source' is not a prefix match
+    [InlineData("acme/SampleData/Other", false)]
+    public void Matches_WildcardNamespace_WithSubtreeScope_ReachesNestedNamespaces(string ns, bool expected)
+    {
+        var query = _parser.Parse("namespace:*/Source scope:subtree");
+
+        _evaluator.Matches(new Row("x", ns), query).Should().Be(expected);
+    }
+
+    /// <summary>
+    /// A pattern may carry wildcards anywhere and in any number — the glob is real, not a
+    /// four-case approximation off <c>Trim('*')</c> (which cannot see an INTERIOR wildcard at all:
+    /// <c>*a*b*</c> trimmed to <c>a*b</c> was compared as a literal containing a star).
+    /// </summary>
+    [Theory]
+    [InlineData("a*c", "abc", true)]
+    [InlineData("a*c", "ac", true)]                    // '*' matches the empty run
+    [InlineData("a*b*c", "a-b-c", true)]
+    [InlineData("a*b*c", "a-c-b", false)]              // interior literals must appear IN ORDER
+    [InlineData("*/x/*/y", "p/x/q/y", true)]
+    [InlineData("*/x/*/y", "p/x/y", false)]            // the second literal needs its own room
+    [InlineData("a*a", "a", false)]                    // suffix may not reuse the prefix's chars
+    [InlineData("**b", "ab", true)]                    // a redundant second wildcard adds nothing
+    [InlineData("%/Source", "acme/Source", false)]     // '%' is a LITERAL here — see below
+    public void Matches_Glob_HandlesAnyNumberOfWildcards(string pattern, string value, bool expected)
+    {
+        QueryWildcard.IsMatch(value, pattern).Should().Be(expected);
+    }
+
+    /// <summary>
+    /// 🚨 The matcher is deliberately INTOLERANT of <c>%</c>. Accepting both spellings is what let
+    /// the two vocabularies drift apart unnoticed in the first place — a <c>%</c> leaking back into
+    /// the AST would keep working in memory while meaning something different in SQL. With <c>*</c>
+    /// as the only wildcard, any re-introduction fails loudly here instead of silently in prod.
+    /// </summary>
+    [Fact]
+    public void Matches_PercentIsALiteral_NotAWildcard()
+    {
+        _evaluator.Matches(new Row("x", "acme/Source"), _parser.Parse("namespace:*/Source"))
+            .Should().BeTrue("the parser emits the `*` form");
+        QueryWildcard.IsMatch("acme/Source", "%/Source")
+            .Should().BeFalse("`%` is SQL dialect — it exists only inside a SQL generator's parameter");
+    }
+
+    #endregion
+
     #region Nested Properties
 
     [Fact]

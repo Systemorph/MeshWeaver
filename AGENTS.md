@@ -106,6 +106,16 @@ Full guidance: [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/
 
 ## GitHub PR Operations
 
+🚨 **Finishing a change set means MERGED — merge it yourself on green, don't ask for permission.**
+A PR left open with a link handed back is unfinished work: it rots against a moving `main` and the
+human has to return to press a button whose only precondition is the one the flow already proves.
+Asking is not extra safety. The safety IS the gate — green CI plus the automatic Copilot review,
+both of which you wait for anyway (and, for anything a portal runs, the image check below). Stop
+only when CI is red for a reason you cannot fix, when the review asks for a decision that changes
+what the change set IS, or when the work turns out to need a scope call the user has not made —
+one line, then stop. A change set spanning repos (education, MeshWeaver.Plugins) is finished when
+every part is merged in dependency order: platform first, then what depends on it.
+
 `gh` CLI has **read + push** only — cannot merge, resolve threads, or request reviewers.
 
 ```bash
@@ -519,6 +529,49 @@ workspace.GetMeshNodeStream().Update(node => node with { … })
 
 Full patterns + mistake ledger: [AsynchronousCalls.md](src/MeshWeaver.Documentation/Data/Architecture/AsynchronousCalls.md)
 
+## 🚨🚨🚨 ABSOLUTE: Never cast an `object` payload — `.As<T>()` / `.ContentAs<T>()`, always
+
+**`node.Content is MyType` / `payload as MyType` is a TRAP-DOOR.** It is correct only when the value
+already happens to be your CLR type, and yields a **silent null** in the three cases that actually
+happen in a running mesh:
+
+1. **Untyped JSON** — the polymorphic converter DEGRADES an unresolvable `$type` to a raw
+   `JsonElement` instead of throwing, so any hub whose TypeRegistry lacks the discriminator hands you
+   JSON, not an instance.
+2. **The as-written DOM** — application code builds content as `JsonObject`, and a change
+   notification forwards that shape verbatim until the materialization pipeline re-types it.
+3. **A same-named type from another assembly** — every recompile of a dynamic NodeType mints a new
+   collectible assembly, so "the same" record has a different CLR identity per build.
+
+Every one of these has caused a production outage, and they all look identical from outside: the
+value reads as absent, the view renders empty, a reactive wait never completes. No exception, no log,
+nothing to grep. That is why this is not a style preference:
+
+```csharp
+// ❌ the trap-door
+var store = node.Content as StoreContent;
+if (delivery.Message.Payload is MySettings s) { … }
+
+// ✅ bad-data tolerant, and it says why when it cannot convert
+var store = node.ContentAs<StoreContent>(hub.JsonSerializerOptions);
+var s = delivery.Message.Payload.As<MySettings>(hub.JsonSerializerOptions, logger);
+```
+
+`ContentAs<T>` is `As<T>` with the node's path in the diagnostics. Both recover a degraded
+`JsonElement`/`JsonNode`, recover a SAME-short-named type from another build by JSON round-trip, and
+return null for a DIFFERENTLY-named type so probe-dispatch call sites keep working.
+
+**🚨 FIRST, though: deserialize as close as possible to where the type IS registered — which usually
+means the RIGHT HUB should be handling it at all.** A `$type` resolves against the TypeRegistry
+behind the options you pass, so a payload read on a hub that never registered the type is untyped by
+construction, and `.As<T>()` is then papering over a routing mistake rather than bad data. The
+durable fix for a repeated degradation is to move the work to the owning hub (the per-node hub for
+its own content; the hub that declares the type via `WithType`) — or to register the type where the
+read happens. Reach for the accessor at genuine boundaries: a cross-hub query result, a control
+payload, storage JSON.
+
+Full reference: `src/MeshWeaver.Mesh.Contract/ObjectAsExtensions.cs`.
+
 ## 🚨 CQRS — Never Query for a Single Node's Content
 
 `QueryAsync`/`ObserveQuery` are eventually consistent — **stale after writes**. To read a specific node:
@@ -612,7 +665,7 @@ Never use `IMeshStorage` or `IMeshCatalog` directly — internal infrastructure 
 
 | Operation | API |
 |---|---|
-| Read (query) | `IMeshService.QueryAsync(...)` |
+| Read (query) | `IMeshService.Query<T>(request)` — reactive. 🚨 There is **no** `QueryAsync` on the production interface; it survives only as a test-only bridge in `MeshWeaver.Fixture`. One-shot snapshot = `.Where(c => c.ChangeType == QueryChangeType.Initial).Select(c => c.Items).FirstAsync()` |
 | Read (single node) | `workspace.GetMeshNodeStream(path)` |
 | Create/Delete | `meshService.CreateNode(node).Subscribe(...)` / `meshService.DeleteNode(path).Subscribe(...)` |
 | Update | `workspace.GetMeshNodeStream(path).Update(current => current with { … })` |

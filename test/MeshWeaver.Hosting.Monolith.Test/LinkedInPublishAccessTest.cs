@@ -99,7 +99,7 @@ public class LinkedInPublishAccessTest(ITestOutputHelper output) : MonolithMeshT
 
     private void Login(string userId)
         => Mesh.ServiceProvider.GetRequiredService<AccessService>()
-            .SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
+            .SetHostIdentity(new AccessContext { ObjectId = userId, Name = userId });
 
     private Task CreateAsSystem(MeshNode node)
     {

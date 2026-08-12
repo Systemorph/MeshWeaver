@@ -88,7 +88,7 @@ public class OrleansThreadColdLoadHangPostgresTest(ITestOutputHelper output) : T
                 return config.AddLayoutClient();
             });
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
+        accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = userPartition, Name = userPartition,
             Email = $"{userPartition}@meshweaver.io"

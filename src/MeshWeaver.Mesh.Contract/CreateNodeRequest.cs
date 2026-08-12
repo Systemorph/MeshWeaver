@@ -14,8 +14,16 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 /// <param name="Node">The MeshNode to create</param>
 [CreateNodePermission]
-public record CreateNodeRequest(MeshNode Node) : IRequest<CreateNodeResponse>
+public record CreateNodeRequest(MeshNode Node) : IRequest<CreateNodeResponse>, IDiagnosticKeyed
 {
+    /// <summary>
+    /// The path of the node being created — so a bulk fan-out (N creates for N DISTINCT paths from
+    /// one importer to the mesh hub) is told apart from ONE create retried in a loop. Both the
+    /// pending-callback diagnostic and the ingestion storm breaker key on it; without it the whole
+    /// fan-out is one bucket and the breaker drops it. See <see cref="IDiagnosticKeyed"/>.
+    /// </summary>
+    string IDiagnosticKeyed.DiagnosticKey => Node is { } node ? node.Path : string.Empty;
+
     /// <summary>
     /// The user or system requesting the creation.
     /// </summary>
@@ -216,8 +224,14 @@ public class CreateNodesPermissionAttribute() : RequiresPermissionAttribute(Perm
 /// </summary>
 /// <param name="Path">The path of the node to delete</param>
 [RequiresPermission(Permission.Delete)]
-public record DeleteNodeRequest(string Path) : IRequest<DeleteNodeResponse>
+public record DeleteNodeRequest(string Path) : IRequest<DeleteNodeResponse>, IDiagnosticKeyed
 {
+    /// <summary>
+    /// The path being deleted — tells a wide prune (N distinct paths) apart from one delete
+    /// retried in a loop. See <see cref="IDiagnosticKeyed"/>.
+    /// </summary>
+    string IDiagnosticKeyed.DiagnosticKey => Path ?? string.Empty;
+
     /// <summary>
     /// If true, also delete all descendant nodes.
     /// </summary>
@@ -361,8 +375,15 @@ public enum NodeDeletionRejectionReason
 /// Both checks run through the standard permission pipeline.</para>
 /// </summary>
 [CreateOrUpdateNodePermission]
-public record CreateOrUpdateNodeRequest(MeshNode Node) : IRequest<CreateOrUpdateNodeResponse>
+public record CreateOrUpdateNodeRequest(MeshNode Node) : IRequest<CreateOrUpdateNodeResponse>, IDiagnosticKeyed
 {
+    /// <summary>
+    /// The path being upserted. This is THE bulk verb — <c>StaticRepoImporter</c> issues one per
+    /// source node from a single import hub to a single mesh hub, so without this component the
+    /// entire import is one storm-breaker bucket. See <see cref="IDiagnosticKeyed"/>.
+    /// </summary>
+    string IDiagnosticKeyed.DiagnosticKey => Node is { } node ? node.Path : string.Empty;
+
     /// <summary>Optional JSON Patch payload (Json.Patch.JsonPatch) to apply to
     /// the existing node. When null, <see cref="Node"/> is the full instance
     /// to upsert. Typed as <c>object?</c> so the patch type is owned by the
@@ -459,8 +480,14 @@ public class CreateOrUpdateNodePermissionAttribute() : RequiresPermissionAttribu
 /// </summary>
 /// <param name="SourcePath">The path to copy from.</param>
 /// <param name="TargetPath">The path to copy to.</param>
-public record CopyNodeRequest(string SourcePath, string TargetPath) : IRequest<CopyNodeResponse>
+public record CopyNodeRequest(string SourcePath, string TargetPath) : IRequest<CopyNodeResponse>, IDiagnosticKeyed
 {
+    /// <summary>
+    /// The target path — the thing being produced. Tells a wide copy fan-out apart from one copy
+    /// retried in a loop. See <see cref="IDiagnosticKeyed"/>.
+    /// </summary>
+    string IDiagnosticKeyed.DiagnosticKey => TargetPath ?? string.Empty;
+
     /// <summary>If <c>true</c>, copies all descendant nodes (subtree) under the source.</summary>
     public bool IncludeDescendants { get; init; } = true;
 
@@ -530,7 +557,14 @@ public enum NodeCopyRejectionReason
 /// <param name="SourcePath">The current path of the node</param>
 /// <param name="TargetPath">The new path for the node</param>
 [MoveNodePermission]
-public record MoveNodeRequest(string SourcePath, string TargetPath) : IRequest<MoveNodeResponse>;
+public record MoveNodeRequest(string SourcePath, string TargetPath) : IRequest<MoveNodeResponse>, IDiagnosticKeyed
+{
+    /// <summary>
+    /// The source path — the node being moved. Tells a wide move fan-out apart from one move
+    /// retried in a loop. See <see cref="IDiagnosticKeyed"/>.
+    /// </summary>
+    string IDiagnosticKeyed.DiagnosticKey => SourcePath ?? string.Empty;
+}
 
 /// <summary>
 /// Custom permission attribute for MoveNodeRequest.

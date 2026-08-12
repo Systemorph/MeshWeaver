@@ -46,7 +46,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var unauthorizedUser = new AccessContext { ObjectId = "unauthorized-user", Name = "Unauthorized" };
         accessService.SetContext(unauthorizedUser);
-        accessService.SetCircuitContext(unauthorizedUser);
+        accessService.SetHostIdentity(unauthorizedUser);
 
         const string parentPath = "Restricted/Parent";
         var nodePath = $"{parentPath}/TestNode_{Guid.NewGuid().AsString()}";
@@ -256,7 +256,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         var userId = "self-access-user";
         var userContext = new AccessContext { ObjectId = userId, Name = "Self Access User" };
         accessService.SetContext(userContext);
-        accessService.SetCircuitContext(userContext);
+        accessService.SetHostIdentity(userContext);
 
         try
         {
@@ -295,7 +295,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var attackerContext = new AccessContext { ObjectId = "attacker-user", Name = "Attacker" };
         accessService.SetContext(attackerContext);
-        accessService.SetCircuitContext(attackerContext);
+        accessService.SetHostIdentity(attackerContext);
 
         try
         {

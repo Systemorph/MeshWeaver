@@ -776,6 +776,105 @@ public class QueryParserTests
 
     #endregion
 
+    #region Wildcard Namespace + scope (issue #1216 — `scope:subtree` was silently dropped)
+
+    /// <summary>
+    /// Every <c>namespace LIKE</c> pattern in <paramref name="node"/>, in tree order. A wildcard
+    /// namespace never becomes a <see cref="ParsedQuery.Path"/> — it is a FILTER — so the patterns
+    /// are the entire reach of the query and asserting on them asserts on what the backend sees.
+    /// </summary>
+    private static List<string> NamespaceLikePatterns(QueryNode? node)
+    {
+        var found = new List<string>();
+        void Walk(QueryNode? n)
+        {
+            switch (n)
+            {
+                case QueryComparison c
+                    when c.Condition.Selector.Equals("namespace", System.StringComparison.OrdinalIgnoreCase)
+                         && c.Condition.Operator == QueryOperator.Like:
+                    found.Add(c.Condition.Value);
+                    break;
+                case QueryAnd a:
+                    foreach (var child in a.Children) Walk(child);
+                    break;
+                case QueryOr o:
+                    foreach (var child in o.Children) Walk(child);
+                    break;
+            }
+        }
+        Walk(node);
+        return found;
+    }
+
+    /// <summary>
+    /// 🚨 THE PARSER-LEVEL REGRESSION FOR #1216. Without <c>scope:</c> a wildcard namespace means
+    /// "the nodes whose namespace IS something ending in /Source" — one LIKE, no subtree. That part
+    /// is unchanged and asserted here so the widening below cannot quietly become the default.
+    /// </summary>
+    [Fact]
+    public void Parse_WildcardNamespace_WithoutScope_MatchesThatLevelOnly()
+    {
+        var result = _parser.Parse("namespace:*/Source nodeType:Code");
+
+        result.Path.Should().BeNull("a wildcard namespace spans partitions — there is no path to walk");
+        NamespaceLikePatterns(result.Filter).Should().Equal(
+            new[] { "*/Source" },
+            "the AST speaks ONE wildcard vocabulary — `*`, the character the user typed (#1235). "
+            + "This used to be rewritten to SQL's `%` right here, which every SQL generator then "
+            + "re-derived anyway while the in-memory evaluators, which speak `*`, matched nothing");
+    }
+
+    /// <summary>
+    /// 🚨 <c>scope:subtree</c> on a WILDCARD namespace must reach nodes nested BELOW the matched
+    /// namespace, exactly as it does for a concrete <c>namespace:A/B scope:subtree</c> (which walks
+    /// the path). It did not: the scope qualifier was parsed, stored — and then never consulted,
+    /// because the wildcard form produces a filter and only a Path is walked. So
+    /// <c>namespace:*/Source scope:subtree</c> silently returned only the Code nodes sitting
+    /// DIRECTLY in a <c>…/Source</c> folder.
+    ///
+    /// <para>That is the whole of the memex-cloud rollout stall: the batch bake's global source
+    /// fetch is this exact query, four NodeTypes referenced a shared source at
+    /// <c>…/Source/Fixtures/MtplClaimFixtures</c> — one level deeper — and the resulting PARTIAL
+    /// source set compiled to a convincing <c>CS0103</c> that the bake gate read as a regression.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("namespace:*/Source scope:subtree nodeType:Code")]
+    [InlineData("namespace:*/Source scope:descendants nodeType:Code")]
+    // The scope qualifier BEFORE the namespace must widen it too — the parser reads tokens in
+    // order, so this is the case a fix applied inline (rather than post-loop) would miss.
+    [InlineData("scope:subtree namespace:*/Source nodeType:Code")]
+    public void Parse_WildcardNamespace_WithSubtreeScope_ReachesNestedNamespaces(string query)
+    {
+        var result = _parser.Parse(query);
+
+        NamespaceLikePatterns(result.Filter).Should().Equal(
+            new[] { "*/Source", "*/Source/*" },
+            "scope:subtree on a wildcard namespace has no path to walk, so the only way it can "
+            + "reach a nested namespace is for the LIKE filter itself to cover self AND below");
+    }
+
+    /// <summary>The widened pair is an OR, not an AND — an AND would match NOTHING.</summary>
+    [Fact]
+    public void Parse_WildcardNamespace_WithSubtreeScope_CombinesTheTwoPatternsWithOr()
+    {
+        var result = _parser.Parse("namespace:*/Source scope:subtree nodeType:Code");
+
+        var or = FindNode<QueryOr>(result.Filter);
+        or.Should().NotBeNull("self-or-below is a disjunction; ANDing the two patterns is unsatisfiable");
+        NamespaceLikePatterns(or).Should().Equal(new[] { "*/Source", "*/Source/*" });
+    }
+
+    private static T? FindNode<T>(QueryNode? node) where T : QueryNode => node switch
+    {
+        T match => match,
+        QueryAnd a => a.Children.Select(FindNode<T>).FirstOrDefault(x => x is not null),
+        QueryOr o => o.Children.Select(FindNode<T>).FirstOrDefault(x => x is not null),
+        _ => null
+    };
+
+    #endregion
+
     #region Namespace Alternation (A|B|C exact membership — the agent / model registry union)
 
     private static QueryCondition? FindCondition(QueryNode? node, string selector) => node switch

@@ -79,7 +79,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     /// a null context fail-closing the post at the never-null PostPipeline guard.
     /// </summary>
     private static void SetAnonymous(AccessService accessService)
-        => accessService.SetCircuitContext(new AccessContext
+        => accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = WellKnownUsers.Anonymous,
             Name = WellKnownUsers.Anonymous,
@@ -266,7 +266,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         // emit the updated snapshot directly.
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var original = accessService.CircuitContext;
-        accessService.SetCircuitContext(new AccessContext { ObjectId = editorId, Name = editorId });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = editorId, Name = editorId });
         MeshNode updated;
         try
         {
@@ -275,7 +275,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         }
         finally
         {
-            accessService.SetCircuitContext(original);
+            accessService.SetHostIdentity(original);
         }
 
         // Assert - the editor's update was accepted and the canonical API returned the new
@@ -310,7 +310,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         // Act — viewer (no Update rights) attempts a stream.Update under their identity.
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var original = accessService.CircuitContext;
-        accessService.SetCircuitContext(new AccessContext { ObjectId = viewerId, Name = viewerId });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = viewerId, Name = viewerId });
         Exception? updateError = null;
         try
         {
@@ -335,7 +335,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         finally
         {
             // Restore the admin identity so the read-back (and RLS read gate) works.
-            accessService.SetCircuitContext(original);
+            accessService.SetHostIdentity(original);
         }
 
         // Security invariant: a denied update MUST NOT mutate the node.
@@ -397,7 +397,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
 
         // Submitter: viewer (no Update rights) attempts a write under their identity.
         var original = accessService.CircuitContext;
-        accessService.SetCircuitContext(new AccessContext { ObjectId = viewerId, Name = viewerId });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = viewerId, Name = viewerId });
         Exception? submitterError = null;
         try
         {
@@ -418,7 +418,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         }
         finally
         {
-            accessService.SetCircuitContext(original);
+            accessService.SetHostIdentity(original);
         }
 
         // 1. The submitting caller MUST see the denial as an error.
