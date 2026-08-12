@@ -1,13 +1,19 @@
 # MeshWeaver.Markdown.Export.Contract
 
 The wire contract for document export — the types a **caller** needs to request an export and read
-the result back. It carries no renderer and no rendering package (`Markdig`,
-`DocumentFormat.OpenXml`, `HtmlAgilityPack` all stay in
-[MeshWeaver.Markdown.Export](../MeshWeaver.Markdown.Export/README.md)).
+the result back. It carries no renderer: the document model, the DOCX writer, the print composers
+and the browser-driving PDF path all stay in
+[MeshWeaver.Markdown.Export](../MeshWeaver.Markdown.Export/README.md), along with the packages they
+need.
 
 That split exists so a UI can drive an export without depending on the engine that performs it.
-`MeshWeaver.Blazor` references this assembly only, which keeps the document renderer — and the
-headless browser the PDF path drives — out of the Blazor layer's transitive closure.
+`MeshWeaver.Blazor` references this assembly only, which keeps the ~6.5k-line renderer out of the
+Blazor layer's project graph.
+
+> Scope note: this removes the *engine assembly*, not the third-party packages. Blazor still
+> resolves `DocumentFormat.OpenXml` (through `MeshWeaver.ContentCollections` →
+> ClosedXML / DocSharp.Docx), `HtmlAgilityPack` (used directly by `MarkdownHtmlRenderer`) and
+> `Markdig` (with `MeshWeaver.Markdown`). Those arrive by their own routes and are unaffected.
 
 Contents:
 
