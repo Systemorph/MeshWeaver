@@ -2,6 +2,7 @@ using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Graph;
+using MeshWeaver.Mesh.Diagnostics;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -237,6 +238,13 @@ public sealed class DynamicTypePreWarmerHostedService(
                 "DynamicTypePreWarmer: waiting for the static repo import to settle before "
                 + "enumerating — types it has not written yet would be missed by the bake");
 
+        // What the whole sweep COSTS, appended to the summary line that already exists — no new log
+        // volume. This is the measurement that turned "the bake must be leaking" into a fact on
+        // memex-cloud: the pod sat at 2.5 GB minutes after baking all 279 types, so one linked build
+        // for the fleet is cheap and the growth is elsewhere. Keep it, so nobody has to re-derive
+        // that from a container gauge. See MemoryDelta.
+        var sweepMemory = MemoryDelta.Start();
+
         logger.LogInformation("DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs");
         _warmSubscription = (importSettled?.Settled ?? Observable.Return(Unit.Default))
             .SelectMany(_ => DynamicTypePreWarmer
@@ -309,11 +317,12 @@ public sealed class DynamicTypePreWarmerHostedService(
                     var elapsed = DateTimeOffset.UtcNow - startedAt;
                     logger.LogInformation(
                         "DynamicTypePreWarmer: warm-up complete in {Elapsed} — compiled={Compiled} alreadyBaked={AlreadyBaked} "
-                        + "compileErrors={Errored} timedOut={TimedOut} skipped={Skipped} contentBroken={ContentBroken} faulted={Faulted}",
+                        + "compileErrors={Errored} timedOut={TimedOut} skipped={Skipped} contentBroken={ContentBroken} faulted={Faulted} "
+                        + "— {Memory}",
                         elapsed,
                         Volatile.Read(ref compiled), Volatile.Read(ref alreadyBaked), Volatile.Read(ref errored),
                         Volatile.Read(ref timedOut), Volatile.Read(ref skipped), Volatile.Read(ref contentBroken),
-                        Volatile.Read(ref faulted));
+                        Volatile.Read(ref faulted), sweepMemory);
 
                     // MarkComplete keeps a recorded regression red — completion is not absolution.
                     gate?.MarkComplete(
