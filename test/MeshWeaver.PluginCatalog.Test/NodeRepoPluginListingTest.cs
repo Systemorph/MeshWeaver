@@ -31,6 +31,11 @@ public class NodeRepoPluginListingTest
         // A free-to-browse plugin root without a price — listed, Price null.
         new("Chess/index.json",
             """{"$type":"MeshNode","id":"Chess","path":"Chess","name":"Chess","nodeType":"Store/Plugin","category":"Games","content":{"$type":"PluginContent"}}"""),
+        // Sold contact-sales: NO price, a sales contact. The contact has to reach the manifest —
+        // it is what makes the package commercial (PackageEntitlement.IsCommercial), and while it
+        // went unread such a package installed as free: no admin required, partition published.
+        new("Reinsurance/index.json",
+            """{"$type":"MeshNode","id":"Reinsurance","path":"Reinsurance","name":"Reinsurance","nodeType":"Store/Plugin","category":"Insurance","content":{"$type":"PluginContent","description":"Talk to us.","contactEmail":"info@systemorph.com"}}"""),
         // The Store package's own root (the /Store catalog page) — listed too.
         new("Store/index.json",
             """{"$type":"MeshNode","id":"Store","path":"Store","name":"Store","nodeType":"Store/Catalog","content":{"$type":"StoreContent"}}"""),
@@ -54,7 +59,8 @@ public class NodeRepoPluginListingTest
     {
         var packages = await Source().ListPackages("HEAD").FirstAsync().ToTask();
 
-        packages.Select(p => p.Id).Should().Equal("AgenticEngineering", "Chess", "Store", "Widget");
+        packages.Select(p => p.Id).Should()
+            .Equal("AgenticEngineering", "Chess", "Reinsurance", "Store", "Widget");
 
         var course = packages.Single(p => p.Id == "AgenticEngineering");
         course.Name.Should().Be("Agentic Engineering");
@@ -68,6 +74,14 @@ public class NodeRepoPluginListingTest
         var chess = packages.Single(p => p.Id == "Chess");
         chess.Category.Should().Be("Games");
         chess.Price.Should().BeNull("no price = not purchasable, still listed");
+        chess.IsCommercial().Should().BeFalse("nothing to pay and nobody to ask = free");
+
+        var contactSales = packages.Single(p => p.Id == "Reinsurance");
+        contactSales.Price.Should().BeNull("a contact-sales package sells nothing self-service");
+        contactSales.ContactEmail.Should().Be("info@systemorph.com");
+        contactSales.IsCommercial().Should()
+            .BeTrue("a named sales contact makes the package commercial — admin to install, "
+                + "gated on install, exactly like a priced one");
 
         var widget = packages.Single(p => p.Id == "Widget");
         widget.Category.Should().BeNull();
