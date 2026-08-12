@@ -52,7 +52,9 @@ public partial class DialogView : BlazorView<DialogControl, DialogView>
             style += $" --dialog-height: {height};";
         }
 
-        return style;
+        // The author's declaration goes LAST so it overrides the Size-derived variables rather than
+        // being dropped; StyleSuffix is empty when nothing was declared.
+        return style + StyleSuffix;
     }
 
     private string GetDialogWidth(string size) => size switch

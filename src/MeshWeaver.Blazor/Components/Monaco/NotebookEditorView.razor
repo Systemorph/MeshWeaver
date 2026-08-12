@@ -6,6 +6,7 @@
 @using MeshWeaver.Data
 @using System.Collections.Immutable
 @using System.Text.Json
+@using System.Reactive.Disposables
 @using System.Reactive.Linq
 @using System.Reactive.Threading.Tasks
 @using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
@@ -105,7 +106,8 @@
     private int executionCounter = 0;
     private bool isRunningAll = false;
     private IJSObjectReference? jsModule;
-    private List<IDisposable> subscriptions = new();
+    // CompositeDisposable, not List<IDisposable> — see CodeEditorView (#1308).
+    private readonly CompositeDisposable subscriptions = new();
 
     // Bound values from ViewModel
     private bool BoundReadonly = false;
@@ -478,11 +480,7 @@
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var sub in subscriptions)
-        {
-            sub.Dispose();
-        }
-        subscriptions.Clear();
+        subscriptions.Dispose();
 
         if (jsModule != null)
         {

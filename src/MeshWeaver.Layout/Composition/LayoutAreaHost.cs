@@ -987,6 +987,14 @@ public record LayoutAreaHost : IDisposable
     /// <paramref name="id"/>, deserialized as <typeparamref name="T"/>. Skips nulls; applies
     /// DistinctUntilChanged.
     /// </summary>
+    /// <remarks>
+    /// 🚨 An id that was <b>never written</b> emits <b>nothing at all</b> — not <c>null</c>, not a
+    /// default — and never completes. So <c>GetDataStream&lt;T&gt;(id).Take(1)</c> is NOT a once-guard:
+    /// on an unset id it does not prevent a duplicate run, it prevents the <b>first</b> one, silently.
+    /// Need a value for an id that may not be set? <c>.StartWith(default)</c>, or seed it with
+    /// <see cref="UpdateData"/> first. The semantics are pinned by <c>GetDataStreamUnsetIdTest</c>
+    /// (test/MeshWeaver.Layout.Test) — change them there, not by reading this comment.
+    /// </remarks>
     /// <typeparam name="T">The expected type of the data item (must be a reference type).</typeparam>
     /// <param name="id">The key in the Data collection to observe.</param>
     public IObservable<T?> GetDataStream<T>(string id)
