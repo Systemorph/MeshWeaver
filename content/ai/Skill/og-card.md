@@ -42,6 +42,8 @@ If it is missing, set it — one `patch` with a `description` field — and re-r
 
 A 200 makes this invisible to every status-code check. Paste the URL into a browser once — "Page not found" is unmistakable, and it is the only cheap test.
 
+🚨 **If you see that error and you did NOT write the `&`, it is not your typo — it is the last card in the grid.** An `@@` embed appends `showHeader=false` to the reference id, and because this area's id already is a query, the append arrives as `?urls=A,B,C&showHeader=false`. The target list splits on COMMAS, so the parameter used to be swallowed into the FINAL entry, breaking exactly one card per grid — always the last. Fixed in MeshWeaver #1261; on any build without it, the last card of every `@@`-embedded grid is blank by construction. **Symptom to recognise: N identically-authored targets, only the Nth blank.**
+
 # 2. The embed forms
 
 ```
@@ -107,6 +109,16 @@ For a square raster icon of an inline-SVG node there is currently **no route** �
 ### Ties between icons are broken by the LAST declaration
 
 Site chrome emits its favicon early; a page that declares its own icon emits it later. Preferring the first would mean a page could never override the site-wide mark, and every card in a grid would draw the same portal logo.
+
+### Position, not content, is sometimes the discriminator
+
+When several targets are authored identically and only SOME cards are blank, compare what is
+different about the failing targets — and if the answer is "nothing", stop looking at them. Check
+their **position** in the list instead. Two live grids of eight cards each had only the eighth
+blank; the eight targets published byte-identical head structure and every one of them was
+anonymously fetchable from inside the rendering pod. Every hypothesis aimed at the *targets*
+(access, sync, missing content, icons, the build) was therefore dead on arrival, and the position
+was the whole answer (rule 3).
 
 ### Only anonymous-readable pages have a head worth fetching
 
