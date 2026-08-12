@@ -303,6 +303,28 @@ public sealed record DataContext : IDisposable
                     logger.LogDebug(
                         "DataContext initialization for {Address} ended by hub disposal — recognized "
                         + "shutdown outcome, no failure state recorded.", Hub.Address);
+                    // 🚨 …but "no failure state" must never mean "no answer". Returning here used
+                    // to leave InitializationGateName SHUT FOREVER — shutdown is precisely the
+                    // outcome after which nothing can ever open it — and every delivery already
+                    // parked behind it (plus every one that arrives during the remaining teardown,
+                    // which can be the full QuiesceTimeout) was stranded. The sender's
+                    // hub.Observe(...) then heard nothing until an unrelated deadline expired: the
+                    // 30 s per-message deferral timeout, or whenever the teardown finally reached
+                    // messageService.Dispose(). Observed in production shape as a CreateNodeRequest
+                    // recorded `DEFERRED gates=[DataContextInit]` at runLevel=Quiescing that never
+                    // drained (issue #1270; the SkillAutocompleteTest teardown hang #1269 fixed at
+                    // the CALLER — the gate itself still stranded anything that parked there).
+                    //
+                    // FailGate is the terminal ANSWER, not a timeout: shutdown is a KNOWN outcome,
+                    // so every deferred caller gets a transient DeliveryFailure ("the address may
+                    // reactivate; retry") immediately. It records no InitializationError, no
+                    // fail-level log and no errored data streams — the post-mortem FAILED residue
+                    // #1122 removed stays removed.
+                    Hub.FailGate(InitializationGateName,
+                        $"Hub '{Hub.Address}' is shutting down; its DataContext initialization ended "
+                        + $"without opening '{InitializationGateName}', which can therefore never open. "
+                        + "The address may reactivate (recycle / restart); retry to get the "
+                        + "authoritative answer.");
                     return;
                 }
 

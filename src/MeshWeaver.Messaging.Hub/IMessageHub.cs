@@ -196,6 +196,29 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// <returns>True if the gate was found and opened, false if already opened or not found</returns>
     bool OpenGate(string name);
 
+    /// <summary>
+    /// Declares a named initialization gate DEAD: it will never open, so everything held behind
+    /// it is answered NOW with a <see cref="DeliveryFailure"/> carrying <paramref name="reason"/>,
+    /// and every later message that would have been deferred is answered the same way instead of
+    /// being parked.
+    ///
+    /// <para>🚨 This is the counterpart to <see cref="OpenGate"/> for an outcome that is KNOWN to
+    /// be terminal — the canonical case being an initializer that resolves while the hub is
+    /// already shutting down (<see cref="IsShuttingDown"/>), where no later event can open the
+    /// gate. Leaving such a gate merely SHUT is a silent hang: the deferred deliveries sit in the
+    /// queue with nothing to release them, and the sender's <c>hub.Observe(...)</c> hears nothing
+    /// until some unrelated deadline — the 30 s per-message deferral timeout, or whenever the
+    /// hub's teardown finally reaches <c>messageService.Dispose()</c> — expires. A caller given a
+    /// prompt failure can react; a caller parked for 30 s cannot. See issue #1270.</para>
+    ///
+    /// <para>The failure is TRANSIENT (<c>ErrorType.ShuttingDown</c>) whenever the address can
+    /// come back, exactly as the disposal drain classifies it — "ask again", never "gone".</para>
+    /// </summary>
+    /// <param name="name">The name of the gate that can never open.</param>
+    /// <param name="reason">Why it can never open; becomes the failure message senders receive.</param>
+    /// <returns>True if the gate existed and was failed; false if it was not found (already opened).</returns>
+    bool FailGate(string name, string reason);
+
 
     internal IObservable<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,
