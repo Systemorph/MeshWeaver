@@ -54,4 +54,61 @@ public class CodeIncludePatternTest
         var match = Assert.Single(MeshNodeCompilationService.CodeIncludePattern.Matches(sourceLine).Cast<System.Text.RegularExpressions.Match>());
         Assert.Equal(expectedPath, match.Groups[1].Value);
     }
+
+    /// <summary>
+    /// An include path is authored MOUNT-relative, so it must resolve from whichever prefix the
+    /// including node is served under (<see cref="MeshNodeCompilationService.AnchorIncludePath"/>).
+    ///
+    /// <para>memex-cloud 2026-08-12: <c>samples/Graph/Data/FutuRe/GroupAnalysis/Source/ExternalDependencies</c>
+    /// is nothing but <c>@@FutuRe/&lt;sibling&gt;/Source/…</c> lines. Mounted at the mesh root (what
+    /// <c>FutuReAnalysisTest</c> exercises) they resolve; served from the imported
+    /// <c>MeshWeaver/samples/Graph/Data/…</c> partition they did not, and an unresolved include is
+    /// left VERBATIM — so Roslyn parsed the <c>@@</c> lines themselves and reported CS9008 / CS8803 /
+    /// CS0103 on path segments ('FutuRe', 'GroupAnalysis', 'Source') as if they were symbols. 15
+    /// NodeTypes parked that way, each burning a serial 15s read per include first.</para>
+    /// </summary>
+    [Theory]
+    // The incident: authored at the root, served under a prefix → rebased onto that prefix.
+    [InlineData(
+        "FutuRe/AmountType/Source/AmountType",
+        "MeshWeaver/samples/Graph/Data/FutuRe/GroupAnalysis/Source/ExternalDependencies",
+        "MeshWeaver/samples/Graph/Data/FutuRe/AmountType/Source/AmountType")]
+    // Self-referencing include inside the same prefixed subtree.
+    [InlineData(
+        "FutuRe/GroupAnalysis/Source/FutuReDataCube",
+        "MeshWeaver/samples/Graph/Data/FutuRe/GroupAnalysis/Source/ExternalDependencies",
+        "MeshWeaver/samples/Graph/Data/FutuRe/GroupAnalysis/Source/FutuReDataCube")]
+    // Root mount (the Monolith / CI shape): the anchor adds nothing — behaviour unchanged.
+    [InlineData(
+        "FutuRe/AmountType/Source/AmountType",
+        "FutuRe/GroupAnalysis/Source/ExternalDependencies",
+        "FutuRe/AmountType/Source/AmountType")]
+    // Already absolute: the include's first segment IS the anchor's root → unchanged.
+    [InlineData(
+        "MeshWeaver/src/MeshWeaver.Documentation/Data/Architecture/BusinessRules/Cession/Source/CessionSampleData",
+        "MeshWeaver/samples/Graph/Data/Doc/Architecture/BusinessRules/Cession/Source/Deps",
+        "MeshWeaver/src/MeshWeaver.Documentation/Data/Architecture/BusinessRules/Cession/Source/CessionSampleData")]
+    // Nothing to anchor on → unchanged, so an unrelated tree is never silently rewritten.
+    [InlineData("Edu/Shared/NodeContent", "Store/Plugin/Source/PluginGate", "Edu/Shared/NodeContent")]
+    // The DEEPEST occurrence wins — the most local reading of a repeated segment.
+    [InlineData(
+        "Source/Helper",
+        "Space/Source/Nested/Source/Deps",
+        "Space/Source/Nested/Source/Helper")]
+    public void IncludePathAnchorsOntoTheIncludingNodesMount(
+        string authored, string anchorPath, string expected)
+    {
+        Assert.Equal(expected, MeshNodeCompilationService.AnchorIncludePath(authored, anchorPath));
+    }
+
+    /// <summary>With no anchor there is nothing to rebase against — the authored path stands.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void NoAnchorLeavesThePathAlone(string? anchorPath)
+    {
+        Assert.Equal(
+            "FutuRe/AmountType/Source/AmountType",
+            MeshNodeCompilationService.AnchorIncludePath("FutuRe/AmountType/Source/AmountType", anchorPath));
+    }
 }

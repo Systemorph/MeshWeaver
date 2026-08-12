@@ -260,7 +260,42 @@ internal class MeshNodeCompilationService(
     /// </summary>
     internal static readonly Regex CodeIncludePattern = new(@"@@([\w][\w\-./]*)", RegexOptions.Compiled);
 
-    private IObservable<string> ResolveCodeIncludes(string code, HashSet<string> resolved)
+    /// <summary>
+    /// Rebases a mount-relative <c>@@</c> include path onto the prefix the INCLUDING node lives
+    /// under, so the same content resolves from whichever mount point it is served.
+    ///
+    /// <para>🚨 Why this exists: include paths are authored mount-relative. A sample tree that sits
+    /// at the mesh root in the Monolith (<c>FutuRe/GroupAnalysis/Source/…</c>, which is what
+    /// <c>FutuReAnalysisTest</c> exercises) is served from a PREFIX in a statically-imported
+    /// partition (<c>MeshWeaver/samples/Graph/Data/FutuRe/…</c>). Resolving the authored path
+    /// verbatim there finds nothing, and an unresolved include is left VERBATIM in the source —
+    /// so Roslyn parses the <c>@@</c> line itself and reports CS9008 / CS8803 / CS0103 on symbol
+    /// names that are really path segments. On memex-cloud 2026-08-12 that parked 15 NodeTypes
+    /// (FutuRe, Cession, SocialMedia, Northwind/AnalyticsCatalog, Type/article) and cost a serial
+    /// 15s read per unresolved include on the ACTIVATION path — the "waiting for code" stall.</para>
+    ///
+    /// <para>The anchor is the DEEPEST occurrence of the include's first segment in the including
+    /// node's path — the most local reading. An already-absolute include anchors at index 0 and is
+    /// returned unchanged, so a root mount keeps behaving exactly as before.</para>
+    /// </summary>
+    internal static string AnchorIncludePath(string includePath, string? anchorPath)
+    {
+        if (string.IsNullOrEmpty(anchorPath) || string.IsNullOrEmpty(includePath))
+            return includePath;
+
+        var slash = includePath.IndexOf('/');
+        var first = slash < 0 ? includePath : includePath[..slash];
+        var segments = anchorPath.Split('/');
+        for (var i = segments.Length - 1; i > 0; i--)
+        {
+            if (string.Equals(segments[i], first, StringComparison.Ordinal))
+                return string.Join('/', segments, 0, i) + '/' + includePath;
+        }
+        return includePath;
+    }
+
+    private IObservable<string> ResolveCodeIncludes(
+        string code, HashSet<string> resolved, string? anchorPath)
     {
         if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
             return Observable.Return(code);
@@ -276,28 +311,34 @@ internal class MeshNodeCompilationService(
         IObservable<string> chain = Observable.Return(code);
         foreach (Match match in matches)
         {
-            var path = match.Groups[1].Value;
+            var authored = match.Groups[1].Value;
+            var anchored = AnchorIncludePath(authored, anchorPath);
             var matchValue = match.Value;
             chain = chain.SelectMany(current =>
             {
-                if (!resolved.Add(path))
+                if (!resolved.Add(anchored))
                     return Observable.Return(current.Replace(matchValue, string.Empty));
 
-                // EmitNull — see the note on the NodeType-definition reads below: this is the
-                // hub-ACTIVATION path, where turning a transient stall into a hard fault would
-                // park the type. Behaviour is unchanged (the include stays unresolved and the
-                // LogWarning below fires); the read itself now also logs the stall + diagnostics.
-                return hub.GetMeshNode(path, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
-                    .SelectMany(referencedNode =>
+                // The anchored candidate is tried FIRST and the authored path only as a fallback:
+                // on a root mount the two are identical (one read, unchanged behaviour), and the
+                // second read is reached only where today's single read already failed.
+                return ReadIncludeNode(anchored, anchored == authored ? null : authored)
+                    .SelectMany(hit =>
                     {
-                        if (referencedNode?.Content is CodeConfiguration cf
+                        if (hit.Node?.Content is CodeConfiguration cf
                             && !string.IsNullOrWhiteSpace(cf.Code))
                         {
-                            logger.LogDebug("Resolved code include @@{Path}", path);
-                            return ResolveCodeIncludes(cf.Code, resolved)
+                            logger.LogDebug("Resolved code include @@{Path}", hit.Path);
+                            // Nested includes anchor from where THIS one was found, so a chain of
+                            // mount-relative includes stays inside the same mount.
+                            return ResolveCodeIncludes(cf.Code, resolved, hit.Path)
                                 .Select(resolvedInner => current.Replace(matchValue, resolvedInner));
                         }
-                        logger.LogWarning("Could not resolve code include @@{Path}", path);
+                        logger.LogWarning(
+                            "Could not resolve code include @@{Path} referenced from {Anchor} "
+                            + "— it stays VERBATIM in the source, so the compiler will report "
+                            + "errors on the @@ line itself",
+                            authored, anchorPath ?? "(no anchor)");
                         return Observable.Return(current);
                     });
             });
@@ -305,6 +346,24 @@ internal class MeshNodeCompilationService(
 
         return chain;
     }
+
+    /// <summary>
+    /// Reads one include target — <paramref name="path"/> first, then
+    /// <paramref name="fallbackPath"/> when it differs and the first read found nothing — and
+    /// reports which path actually produced the node so nested includes anchor from there.
+    ///
+    /// <para>EmitNull, not a fault: this runs on the hub-ACTIVATION path, where turning a
+    /// transient stall into a hard fault would park the type. A miss leaves the include
+    /// unresolved and logs the warning at the call site.</para>
+    /// </summary>
+    private IObservable<(MeshNode? Node, string Path)> ReadIncludeNode(
+        string path, string? fallbackPath)
+        => hub.GetMeshNode(path, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
+            .SelectMany(node => node is not null || fallbackPath is null
+                ? Observable.Return<(MeshNode? Node, string Path)>((node, path))
+                : hub.GetMeshNode(fallbackPath, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
+                    .Select<MeshNode?, (MeshNode? Node, string Path)>(
+                        fallback => (fallback, fallbackPath)));
 
     /// <inheritdoc />
     public IObservable<string?> GetAssemblyLocation(MeshNode node)
@@ -948,7 +1007,7 @@ internal class MeshNodeCompilationService(
                 {
                     var cf = codeFile;
                     includeChain = includeChain.SelectMany(acc =>
-                        ResolveCodeIncludes(cf.Code!, new HashSet<string>())
+                        ResolveCodeIncludes(cf.Code!, new HashSet<string>(), node.Path)
                             .Select(resolvedCode =>
                             {
                                 acc.Add(resolvedCode != cf.Code ? cf with { Code = resolvedCode } : cf);
@@ -1480,7 +1539,7 @@ internal class MeshNodeCompilationService(
         {
             var pair = p;
             chain = chain.SelectMany(acc =>
-                ResolveCodeIncludes(pair.Config.Code!, new HashSet<string>())
+                ResolveCodeIncludes(pair.Config.Code!, new HashSet<string>(), pair.Path)
                     .Select(resolvedCode =>
                     {
                         var resolvedConfig = !ReferenceEquals(resolvedCode, pair.Config.Code)
