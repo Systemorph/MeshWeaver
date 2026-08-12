@@ -4,12 +4,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Deliberately NO Markdig / DocumentFormat.OpenXml / HtmlAgilityPack. This assembly holds
-         only the wire shapes an export CALLER needs; the rendering engine and its package
-         dependencies stay in MeshWeaver.Markdown.Export. That split is the whole point: it is what
-         keeps the renderer (and a headless-browser-driven PDF path) out of MeshWeaver.Blazor's
-         transitive closure. If you find yourself adding a package reference here, the type you are
-         adding almost certainly belongs in the engine instead. -->
+    <!-- Deliberately NO package references at all. This assembly holds only the wire shapes an
+         export CALLER needs; the rendering engine and its package dependencies stay in
+         MeshWeaver.Markdown.Export. That split is what keeps the renderer — and the
+         headless-browser-driven PDF path — out of MeshWeaver.Blazor's project graph. If you find
+         yourself adding a package reference here, the type you are adding almost certainly
+         belongs in the engine instead. -->
     <ProjectReference Include="..\MeshWeaver.Domain\MeshWeaver.Domain.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Contract\MeshWeaver.Messaging.Contract.csproj" />
     <!-- For ExportDocumentControl, which AddMarkdownExportTypes registers. The control itself

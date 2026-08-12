@@ -32,8 +32,11 @@
         <ProjectReference Include="..\MeshWeaver.Markdown.Collaboration\MeshWeaver.Markdown.Collaboration.csproj" />
         <!-- The export CONTRACT only — never the engine. The export dialog posts a request and
              reads the rendered bytes back off the Activity; it does not render anything itself,
-             so the renderer (and Markdig / DocumentFormat.OpenXml / HtmlAgilityPack behind it)
-             has no business in the Blazor layer's dependency graph. -->
+             so the ~6.5k-line renderer has no business in the Blazor layer's project graph.
+             (This does NOT shed DocumentFormat.OpenXml, HtmlAgilityPack or Markdig: OpenXml
+             arrives via ContentCollections' ClosedXML/DocSharp.Docx, HtmlAgilityPack is used
+             directly by MarkdownHtmlRenderer, and Markdig comes with MeshWeaver.Markdown. The
+             engine assembly is what leaves.) -->
         <ProjectReference Include="..\MeshWeaver.Markdown.Export.Contract\MeshWeaver.Markdown.Export.Contract.csproj" />
         <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
