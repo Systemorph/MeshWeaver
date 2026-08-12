@@ -84,20 +84,20 @@ internal static class MenuPresentationOverlay
         if (index is null || index.Count == 0)
             return items;
 
-        // 1. Patch + drop hidden.
+        // 1. Patch + drop hidden — at EVERY depth, not just the top level.
         var patched = new List<(NodeMenuItemDefinition Item, string? Parent)>(items.Count);
         foreach (var item in items)
         {
             if (item.Area is not { Length: > 0 } area || !index.TryGetValue(area, out var entry))
             {
-                patched.Add((item, null));
+                patched.Add((PatchDescendants(item, index, locale), null));
                 continue;
             }
 
             if (entry.Hidden)
                 continue;
 
-            patched.Add((entry.Apply(item, locale), entry.Parent));
+            patched.Add((PatchDescendants(entry.Apply(item, locale), index, locale), entry.Parent));
         }
 
         // 2. Nest. A parent is matched by Area among the items that survived; an unresolvable or
@@ -159,6 +159,44 @@ internal static class MenuPresentationOverlay
     /// but as a stable <c>OrderBy</c> rather than a sorted SET: two entries can be patched into the
     /// same Order, and a set would silently drop one of them.
     /// </summary>
+    /// <summary>
+    /// Applies the catalog to children a PROVIDER already nested, recursively.
+    ///
+    /// <para>The catalog's contract is "every entry is addressable by its stable <c>Area</c>", and that
+    /// has to hold at every depth — otherwise moving entries into a compiled group would quietly make
+    /// them un-editable. That is exactly what grouping the export block under 📦 Export would have done:
+    /// PDF / Email / DOCX are no longer top-level, so a top-level-only overlay could no longer re-word,
+    /// re-icon, re-order or hide any of them.</para>
+    ///
+    /// <para><b>Re-parenting is deliberately NOT applied here.</b> <c>Parent</c> stays a top-level-only
+    /// operation, so nesting remains exactly one level deep by construction and a parent cycle stays
+    /// structurally impossible. A nested entry may be re-dressed or hidden; it cannot be moved.</para>
+    /// </summary>
+    private static NodeMenuItemDefinition PatchDescendants(
+        NodeMenuItemDefinition item,
+        IReadOnlyDictionary<string, MenuEntryPresentation> index,
+        string locale)
+    {
+        if (item.Children is not { Count: > 0 } children)
+            return item;
+
+        var patched = new List<NodeMenuItemDefinition>(children.Count);
+        foreach (var child in children)
+        {
+            if (child.Area is { Length: > 0 } area && index.TryGetValue(area, out var entry))
+            {
+                if (entry.Hidden)
+                    continue;
+                patched.Add(PatchDescendants(entry.Apply(child, locale), index, locale));
+                continue;
+            }
+
+            patched.Add(PatchDescendants(child, index, locale));
+        }
+
+        return item with { Children = [.. Sort(patched)] };
+    }
+
     private static IEnumerable<NodeMenuItemDefinition> Sort(IEnumerable<NodeMenuItemDefinition> items)
         => items
             .OrderBy(i => i.Order)
