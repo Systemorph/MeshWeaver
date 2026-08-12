@@ -1,7 +1,7 @@
 ---
 Name: Platform updates keep using the proven preparation path
 Category: Fix
-Description: The new batched preparation is now opt-in after it mis-read content at production scale; updates use the proven path by default.
+Description: The new batched preparation is now opt-in after it misread content at production scale; updates use the proven path by default.
 Icon: Sparkle
 Order: -20260811
 ---

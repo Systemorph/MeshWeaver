@@ -91,4 +91,24 @@ public static class MeshScriptEnvironment
     /// </summary>
     public static ImmutableArray<MetadataReference> References(IServiceProvider serviceProvider)
         => KernelScriptReferences.GetReferences(SessionAssemblies(serviceProvider));
+
+    /// <summary>
+    /// Whether an assembly is TEST SCAFFOLDING and must therefore be kept out of the script
+    /// reference set — identified by the naming convention this repo uses: the shared fixture, the
+    /// per-host test bases, and the test assemblies themselves. None exists in a deployed portal.
+    ///
+    /// <para>🚨 This is what keeps script compilation in a test IDENTICAL to production. The
+    /// reference set is built from the assemblies loaded in the process, and a test process always
+    /// has <c>MeshWeaver.Fixture</c> loaded — whose test-only <c>IMeshService.QueryAsync</c> lives
+    /// in the very namespace scripts import. Without this filter, tests compile scripts against APIs
+    /// production does not have: the export templates bound that method, passed eleven tests that
+    /// really executed them, and threw CS1061 on the first export a user attempted.</para>
+    /// </summary>
+    /// <param name="assemblyName">The simple assembly name (no extension).</param>
+    /// <returns>True when the assembly is test-only.</returns>
+    public static bool IsTestScaffolding(string assemblyName)
+        => assemblyName.Equals("MeshWeaver.Fixture", StringComparison.Ordinal)
+           || assemblyName.EndsWith(".TestBase", StringComparison.Ordinal)
+           || assemblyName.EndsWith(".Test", StringComparison.Ordinal)
+           || assemblyName.EndsWith(".Tests", StringComparison.Ordinal);
 }
