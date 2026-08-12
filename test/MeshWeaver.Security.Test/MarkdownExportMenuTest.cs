@@ -128,4 +128,87 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         pdfItem.Area.Should().Be(ExportDocumentLayoutArea.PdfArea,
             "PDF item must navigate to the PDF export layout area");
     }
+
+    /// <summary>
+    /// The export group reads <b>PDF, Email, DOCX</b> — bare format/action names, in that sequence,
+    /// each with a tooltip.
+    ///
+    /// <para>Order is asserted as a SEQUENCE rather than as three <c>Order</c> values, because the
+    /// number is an implementation detail and the sequence is the thing the user asked for; a
+    /// renumbering that preserves the reading order should not fail, and one that scrambles it
+    /// must.</para>
+    ///
+    /// <para>The tooltip assertion is the other half of the shape: once a label is shortened to
+    /// "PDF", the tooltip is the ONLY place left that says what the entry does, so an entry that
+    /// loses it becomes unexplainable rather than merely terse.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task ExportGroup_ReadsPdfEmailDocx_InThatOrder_EachWithATooltip()
+    {
+        var client = GetClient();
+        var items = await FetchNodeMenuItems(client, new Address(MarkdownNodePath));
+
+        var group = items
+            .Where(i => i.Area is ExportDocumentLayoutArea.PdfArea
+                        or ExportDocumentLayoutArea.DocxArea
+                        or SendDocumentLayoutArea.SendArea)
+            .OrderBy(i => i.Order)
+            .ToArray();
+
+        foreach (var item in group)
+            Output.WriteLine($"  {item.Order}: {item.Icon} {item.Label} — \"{item.Tooltip}\"");
+
+        group.Select(i => i.Label).Should().Equal(
+            MarkdownExportMenuProvider.PdfLabel,      // "PDF"
+            SendDocumentLayoutArea.SendLabel,         // "Email"
+            MarkdownExportMenuProvider.DocxLabel);    // "DOCX"
+
+        group.Where(i => string.IsNullOrWhiteSpace(i.Tooltip)).Select(i => i.Label)
+            .Should().BeEmpty(
+                "a bare format name is only usable when the tooltip carries the explanation");
+    }
+
+    /// <summary>
+    /// Every node-menu entry carries an icon, and it is an EMOJI.
+    ///
+    /// <para>Asserted as an invariant over the whole menu rather than item by item, because the
+    /// defect it guards is precisely an entry that joins the menu without one: the export/share
+    /// block shipped icon-less and read as a foreign group wedged between two iconed ones. A
+    /// per-item assertion would have to be remembered for each new entry; this one cannot be
+    /// forgotten, since any icon-less addition fails it.</para>
+    ///
+    /// <para>The emoji check is not cosmetic. The renderer treats a non-emoji value as an image
+    /// URL (<c>&lt;img src="…"&gt;</c>), so a Fluent icon NAME — the natural wrong guess, and what
+    /// two dead <c>Icon:</c> values elsewhere in the codebase still contain — renders as a broken
+    /// image rather than failing loudly.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task EveryNodeMenuItem_HasAnEmojiIcon()
+    {
+        var client = GetClient();
+        var items = await FetchNodeMenuItems(client, new Address(MarkdownNodePath));
+
+        // Dividers are the one legitimately icon-less, label-less kind.
+        var actionable = items.Where(i => i.Area != "_separator").ToArray();
+
+        // Non-vacuity: the export/share entries this test exists for are actually in the slice.
+        actionable.Select(i => i.Label).Should().Contain(
+            new[]
+            {
+                MarkdownExportMenuProvider.PdfLabel,
+                MarkdownExportMenuProvider.DocxLabel,
+                SendDocumentLayoutArea.SendLabel
+            },
+            "otherwise the invariant below would pass without ever seeing the group it guards");
+
+        foreach (var item in actionable)
+            Output.WriteLine($"  {item.Icon ?? "(none)"} {item.Label} (Order={item.Order})");
+
+        actionable.Where(i => string.IsNullOrEmpty(i.Icon)).Select(i => i.Label)
+            .Should().BeEmpty("every node-menu entry is icon + label — none may render bare");
+
+        actionable.Where(i => !MeshNodeImageHelper.IsEmoji(i.Icon)).Select(i => $"{i.Label}={i.Icon}")
+            .Should().BeEmpty(
+                "icons here must be emoji; a Fluent icon name would render as a broken <img src=\"Name\">");
+    }
 }
