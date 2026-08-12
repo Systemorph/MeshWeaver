@@ -68,6 +68,15 @@ public class CommercialPackageAuthorizationTest(ITestOutputHelper output) : Mono
         Currency = "CHF",
     };
 
+    /// <summary>
+    /// Sold with a person in the loop: NO price — "nothing to self-serve" — and a sales contact.
+    /// Commercial all the same, which is the half the price-only test used to miss.
+    /// </summary>
+    private static PackageManifest ContactSales(string id) => Free(id) with
+    {
+        ContactEmail = "info@systemorph.com",
+    };
+
     /// <summary>A source serving one package's single file — the shape both install paths consume.</summary>
     private sealed class SingleFileSource(PackageManifest manifest) : IPackageSource
     {
@@ -135,6 +144,34 @@ public class CommercialPackageAuthorizationTest(ITestOutputHelper output) : Mono
         refusedUnattended.Should().BeOfType<PackageAuthorizationException>(
             "an unattended install has no principal — for a priced package that fails closed");
         (await Read($"{PackageInstaller.InstalledPartition}/paid-unattended")).Should().BeNull();
+    }
+
+    /// <summary>
+    /// A CONTACT-SALES package is commercial without carrying a price, so the same gate applies:
+    /// refused for a plain principal and for the unattended paths. Before this, such a package read
+    /// as free and any instance that could see the catalog auto-installed it — the opposite of what
+    /// "call us before you use this" means. The refusal names the contact instead of an absent
+    /// price, so the log line does not read as a broken gate.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ContactSalesPackage_IsRefusedForANonAdmin_AndForAnUnattendedInstall()
+    {
+        var refusedForUser = await Record.ExceptionAsync(
+            () => Install(ContactSales("contact-by-user"), PlainUser));
+        refusedForUser.Should().BeOfType<PackageAuthorizationException>(
+            "a contact-sales package requires Global Admin to be installed at all");
+        refusedForUser!.Message.Should().Contain("contact sales: info@systemorph.com",
+            "the refusal must name what made it commercial — there is no price to print");
+        refusedForUser.Message.Should().Contain("contact-by-user", "the reason must name the package");
+
+        (await Read($"{PackageInstaller.InstalledPartition}/contact-by-user"))
+            .Should().BeNull("a refused install must write nothing — not even the record");
+
+        var refusedUnattended = await Record.ExceptionAsync(
+            () => Install(ContactSales("contact-unattended"), authorizingUserId: null));
+        refusedUnattended.Should().BeOfType<PackageAuthorizationException>(
+            "an unattended install has no principal — for a contact-sales package that fails closed");
+        (await Read($"{PackageInstaller.InstalledPartition}/contact-unattended")).Should().BeNull();
     }
 
     [Fact(Timeout = 180_000)]
