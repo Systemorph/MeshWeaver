@@ -2,6 +2,7 @@ using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Threading;
@@ -68,7 +69,9 @@ public class SelfUpdateHostedService : IHostedService
             // re-subscribed when the admin ACTUALLY changes the policy (human-rare) — not a storm.
             .Select(content => content.Policy == UpdatePolicyKind.None
                 ? Observable.Empty<Unit>()                            // None => never poll
-                : Observable.Interval(_options.PollInterval).StartWith(-1L)
+                : Observable.Merge(
+                        Observable.Interval(_options.PollInterval).StartWith(-1L),
+                        BuildCompletionTicks())
                     .SelectMany(_ => RunOnce(content)
                         .Catch((Exception ex) =>
                         {
@@ -136,6 +139,52 @@ public class SelfUpdateHostedService : IHostedService
         return workspace.GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
             .Select(node => UpdatePolicyNodeType.Parse(node, jsonOptions));
     }
+
+    /// <summary>
+    /// Ticks once per NEW green build of <see cref="SelfUpdateOptions.BuildTriggerRepository"/> —
+    /// the event-driven complement to the interval. The <c>BuildCompletion</c> node is a FACT the
+    /// GitHub webhook writes; on an install without the webhook the query never yields and the
+    /// interval still drives everything. Throttled so a burst of workflow completions coalesces
+    /// into one check. This is a THIRD mesh touch, and the standing invariant applies: it may never
+    /// gate or kill the poller — a fault re-establishes the watch silently at the polling cadence,
+    /// and <see cref="RunOnce"/> still lists ACR itself, so a spurious tick costs one cheap tag
+    /// list and can never cause a wrong roll.
+    /// </summary>
+    protected virtual IObservable<long> BuildCompletionTicks()
+    {
+        var parts = (_options.BuildTriggerRepository ?? "")
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 2)
+            return Observable.Empty<long>();
+
+        var path = BuildCompletion.PathFor(parts[0], parts[1]);
+        return Observable
+            .Defer(() => NewBuildEvents(_hub
+                .GetQuery($"SelfUpdate.BuildTrigger:{_hub.Address}", $"path:{path}")
+                .Select(nodes => nodes?.FirstOrDefault())))
+            .Throttle(TimeSpan.FromMinutes(1))
+            .Select(_ => -2L)
+            .RetryWhen(ResubscribeAfterPollInterval("build-completion watch"));
+    }
+
+    /// <summary>
+    /// Turns a live read of one node into "a NEW write happened while we were watching": the
+    /// replayed current state (or its absence) is baseline, never an event — a pod start must not
+    /// look like a fresh build — and every subsequent version change is one event. Pure and static,
+    /// so the distinction is pinned by a unit test rather than re-derived from Rx operator lore.
+    /// </summary>
+    public static IObservable<Unit> NewBuildEvents(IObservable<MeshNode?> node) =>
+        node.Scan(
+                (Baselined: false, Version: 0L, IsEvent: false),
+                (state, current) => current is null
+                    ? (true, state.Version, false)                 // absent baseline (or deleted)
+                    : !state.Baselined
+                        ? (true, current.Version, false)           // replayed current state
+                        : current.Version != state.Version
+                            ? (true, current.Version, true)        // a NEW green build
+                            : (true, current.Version, false))
+            .Where(s => s.IsEvent)
+            .Select(_ => Unit.Default);
 
     /// <summary>Retry signal for <c>RetryWhen</c>: log the fault and resubscribe after one poll
     /// interval (delayed, Rx-composed — no hot loop).</summary>

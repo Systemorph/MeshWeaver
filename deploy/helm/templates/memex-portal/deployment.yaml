@@ -36,10 +36,17 @@ spec:
       # projected token (RBAC in rbac.yaml). See Doc/Architecture/ReleaseStrategy.
       serviceAccountName: "memex-portal-sa"
       # Graceful drain budget: the host's ShutdownTimeout is 90s (Memex.Portal.Distributed
-      # Program.cs) and the preStop below sleeps 15s — the k8s default of 30s SIGKILLed the
-      # portal mid-drain on every rollout (circuits and the Orleans silo torn down abruptly).
-      # 120 is a ceiling, not a delay: a fast shutdown still exits fast.
-      terminationGracePeriodSeconds: 120
+      # Program.cs) and the preStop below waits for this pod's SESSIONS to end — the k8s default
+      # of 30s SIGKILLed the portal mid-drain on every rollout (circuits and the Orleans silo torn
+      # down abruptly). A ceiling, not a delay: a pod with no circuits still exits in seconds.
+      #
+      # 🚨 This number is now the answer to "how long may a user keep working on the OLD build
+      # after a roll?", because preStop blocks until the last circuit closes. Sized for a working
+      # session, not for a request: at 120s a rollout still cut people off mid-task, which is the
+      # complaint this closes. Grains follow the same budget for free — MessageHubGrain is
+      # [PreferLocalPlacement], so a circuit's hubs live on the pod serving that circuit, and a pod
+      # that stays alive keeps them running against the code they activated with.
+      terminationGracePeriodSeconds: {{ .Values.portal.drainSeconds | default 1800 }}
       initContainers:
         # Postgres and the portal start concurrently on a fresh install; the portal's hub
         # init FAILS (and the host aborts) if Postgres isn't yet accepting connections.
@@ -53,15 +60,33 @@ spec:
       containers:
         - image: "{{ .Values.portal.image }}"
           name: "memex-portal"
-          # On rollout, endpoint removal propagates to the ingress-nginx upstreams asynchronously —
-          # without this grace window the pod stops accepting the instant it is SIGTERMed and
-          # in-flight/new requests briefly hit a dead socket (the deploy 502 blip). Sleep first so
-          # the endpoint drains from the upstream set BEFORE the host begins shutting down.
-          # (Base image is Debian aspnet — sh exists.)
+          # Two drains, in order, and they are not the same thing:
+          #
+          #  1. 15s — the INGRESS drain. Endpoint removal reaches the ingress-nginx upstreams
+          #     asynchronously; without this window the pod stops accepting the instant it is
+          #     SIGTERMed and in-flight/new requests hit a dead socket (the deploy 502 blip).
+          #
+          #  2. /drain — the SESSION drain. This was the missing half: after those 15 seconds the
+          #     host shut down and every Blazor circuit still open on this pod died mid-sentence,
+          #     taking its grains with it ([PreferLocalPlacement] puts a circuit's hubs on the pod
+          #     serving it). New sessions already go to the new pod — it is in the Service, this
+          #     pod is not — so waiting costs the rollout nothing and costs a working user nothing.
+          #     Poll until the pod reports "drained", i.e. its last circuit closed.
+          #
+          # Bounded by terminationGracePeriodSeconds above: a forgotten open tab delays the pod's
+          # exit, it cannot block the rollout for ever — k8s SIGKILLs at the ceiling. curl is not
+          # in the base image; wget is (Debian aspnet).
           lifecycle:
             preStop:
               exec:
-                command: ["sh", "-c", "sleep 15"]
+                command:
+                  - "sh"
+                  - "-c"
+                  - >-
+                    sleep 15;
+                    while ! wget -q -T 5 -O /dev/null http://127.0.0.1:8080/drain 2>/dev/null; do
+                      sleep 5;
+                    done
           envFrom:
             - configMapRef:
                 name: "memex-portal-config"
