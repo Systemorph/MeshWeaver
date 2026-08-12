@@ -119,12 +119,14 @@ Every login user needs an **AccessAssignment** node that grants a role. These li
     "$type": "AccessAssignment",
     "accessObject": "Admin",
     "displayName": "Admin",
-    "roles": [{ "role": "Admin" }]
+    "roles": [{ "role": "Viewer" }]
   }
 }
 ```
 
-> Without an access assignment, a user can log in but receives "Access denied" on every page. In the sample data, `User/_Access/` carries the global assignments (e.g. `TestUser_Access` with the `Admin` role) and `ACME/_Access/` the partition-scoped ones.
+> Without an access assignment, a user can log in but receives "Access denied" on every page. In the sample data, `User/_Access/` carries the global assignments and `ACME/_Access/` the partition-scoped ones — **all of them read-only (`Viewer`)**.
+
+> 🚨 **A shipped `_Access` file may never confer WRITE** (`Admin`, `Editor`, `PlatformAdmin`, or any role the mesh does not define — the guard's allowlist is `Viewer`/`Commenter` and fail-closed). A data tree that is imported from a repo makes its partition SYSTEM-OWNED: `AccessAssignmentGuard.IsForbiddenOnSystemOwned` refuses every privileged grant in it, and `SystemOwnedAccessRetractionHandler` deletes any that predate the sync. Platform admin comes from `Auth:GlobalAdmins` in `appsettings` (`GlobalAdminSeed` writes the `Admin/_Access` grant at startup); per-space write is granted on the live mesh through the access UI. `ShippedAccessGrantsTest` enforces this over the whole repo.
 
 ### Graph Storage Configuration
 
