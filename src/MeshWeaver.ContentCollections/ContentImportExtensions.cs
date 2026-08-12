@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -44,6 +45,18 @@ public static class ContentImportExtensions
     /// ("AccessContext must never be null for an application post"), and the content write is
     /// REFUSED while the node writes around it — which capture eagerly — succeed. That asymmetry is
     /// exactly MeshWeaver.Reinsurance#46: every node landed, all 409 attachment groups were rejected.</para>
+    ///
+    /// <para>🚨 Eager is necessary but NOT sufficient, which is the second half of #46 and the reason
+    /// <see cref="SyncContentFilesBuilder.ImpersonateAsSystem"/> exists. Eager only means "at
+    /// <c>Post()</c>" — if the CALL to <c>Post()</c> itself happens on a pump thread, the ambient it
+    /// reads is already gone. A caller that scopes its identity with
+    /// <c>Observable.Using(() =&gt; access.ImpersonateAsSystem(), _ =&gt; a.Concat(b))</c> covers only
+    /// what runs synchronously at the outer Subscribe — stage <c>a</c>. Stage <c>b</c> is subscribed
+    /// from <c>a</c>'s completion, on another thread, and everything it builds there (its LINQ
+    /// projection AND its <c>Defer</c> bodies) reads a null ambient. Measured on the #46 pipeline: the
+    /// node stage read the impersonated identity on its thread, the file stage read null on another —
+    /// same run, same enclosing scope. When the post cannot be BUILT inside the scope, carry the
+    /// identity as a value instead of hoping the scope reaches it.</para>
     /// </summary>
     internal static AccessContext? CaptureCallerContext(IMessageHub hub)
     {
@@ -52,7 +65,7 @@ public static class ContentImportExtensions
     }
 
     /// <summary>
-    /// Targets the owning node's hub and pins the eagerly-captured caller identity onto the delivery,
+    /// Targets the owning node's hub and pins the resolved caller identity onto the delivery,
     /// so the post never depends on the ambient <c>AsyncLocal</c> surviving the Subscribe hop.
     /// A null capture is left unstamped deliberately — the never-null invariant then FAILS the post
     /// closed rather than inventing an identity (legitimate system work opts in explicitly via
@@ -63,6 +76,26 @@ public static class ContentImportExtensions
         o = o.WithTarget(address);
         return captured is null ? o : o.WithAccessContext(captured);
     }
+
+    /// <summary>
+    /// Restores the identity the post was stamped with around each emission of a builder's result,
+    /// so a caller chaining further work inside its <c>Subscribe</c> callback runs as that same
+    /// identity (the wrap every <c>MeshService</c> write primitive applies —
+    /// Doc/Architecture/AccessContextPropagation).
+    ///
+    /// <para>🚨 The two routes are deliberately NOT collapsed. A DECLARED identity is restored as
+    /// declared. An ambient capture defers to the standard
+    /// <see cref="AccessContextCaptureExtensions.CarryAccessContext{T}(IObservable{T},IServiceProvider,bool)"/>,
+    /// which re-reads <c>Context</c> ONLY — never <c>CircuitContext</c>. Passing the
+    /// <c>Context ?? CircuitContext</c> capture used for the POST here instead would synthesise the
+    /// Blazor circuit identity into background-Subscribe callbacks that never asked for it (the
+    /// 757d2a296 anti-pattern that helper's xmldoc calls out).</para>
+    /// </summary>
+    internal static IObservable<T> CarryPostIdentity<T>(
+        IObservable<T> source, IMessageHub hub, AccessContext? declared)
+        => declared is null
+            ? source.CarryAccessContext(hub.ServiceProvider)
+            : source.CarryAccessContext(hub.ServiceProvider, declared);
 
     /// <summary>
     /// Registers the <see cref="ImportContentRequest"/> + <see cref="SyncContentFilesRequest"/> handlers.
@@ -305,12 +338,23 @@ public sealed class ContentImportBuilder
     private string _sourcePath = "";
     private string _targetCollection = "content";
     private string _targetPath = "";
+    private AccessContext? _identity;
 
     internal ContentImportBuilder(IMessageHub hub, string nodePath)
     {
         _hub = hub;
         _nodePath = nodePath;
     }
+
+    /// <inheritdoc cref="SyncContentFilesBuilder.WithAccessContext"/>
+    public ContentImportBuilder WithAccessContext(AccessContext identity)
+    {
+        _identity = identity ?? throw new ArgumentNullException(nameof(identity));
+        return this;
+    }
+
+    /// <inheritdoc cref="SyncContentFilesBuilder.ImpersonateAsSystem"/>
+    public ContentImportBuilder ImpersonateAsSystem() => WithAccessContext(WellKnownUsers.SystemContext);
 
     /// <summary>Source content collection + folder within it to copy from.</summary>
     public ContentImportBuilder From(string sourceCollection, string sourcePath = "")
@@ -331,11 +375,13 @@ public sealed class ContentImportBuilder
     /// <summary>Post the import to the owning node's hub. Cold — subscribe to run.</summary>
     public IObservable<ImportContentResponse> Post()
     {
-        // 🚨 Capture the caller's identity EAGERLY — here, on the caller's thread, where the
-        // ambient AsyncLocal is still correct — and pin it on the delivery below. The Defer's
-        // body runs at SUBSCRIBE, which in any real pipeline lands on a pump/emission thread
-        // where that AsyncLocal is gone. See ContentImportExtensions.CaptureCallerContext.
-        var captured = ContentImportExtensions.CaptureCallerContext(_hub);
+        // 🚨 An identity declared with WithAccessContext / ImpersonateAsSystem wins outright — it is
+        // a VALUE the caller supplied, so it is immune to which thread this Post() runs on. Only
+        // without one do we capture the ambient EAGERLY — here, on the caller's thread, where the
+        // AsyncLocal is still correct — and pin it on the delivery below. The Defer's body runs at
+        // SUBSCRIBE, which in any real pipeline lands on a pump/emission thread where that AsyncLocal
+        // is gone. See ContentImportExtensions.CaptureCallerContext.
+        var captured = _identity ?? ContentImportExtensions.CaptureCallerContext(_hub);
         var request = new ImportContentRequest(_targetCollection, _sourcePath, _targetPath)
         {
             SourceCollection = _sourceCollection
@@ -349,14 +395,12 @@ public sealed class ContentImportBuilder
         // straight back at mesh/{id} — the production ROUTER_TRAFFIC line "ImportContentResponse
         // has the mesh hub as target (sender: Agent…)". NodeOperationIssuingHub is a no-op for
         // every non-router hub, so node/import/portal-hub callers are unchanged.
-        return Observable.Defer(() => _hub.NodeOperationIssuingHub()
+        return ContentImportExtensions.CarryPostIdentity(
+            Observable.Defer(() => _hub.NodeOperationIssuingHub()
                 .Observe(request, o => ContentImportExtensions.ConfigurePost(o, address, captured))
                 .Select(d => d.Message)
-                .Take(1))
-            // …and restore that identity around every emission, so a caller chaining further
-            // work inside its Subscribe callback still runs as itself (the same wrap every
-            // MeshService write primitive applies — Doc/Architecture/AccessContextPropagation).
-            .CarryAccessContext(_hub.ServiceProvider);
+                .Take(1)),
+            _hub, _identity);
     }
 }
 
@@ -379,6 +423,7 @@ public sealed class SyncContentFilesBuilder
     private string _targetPath = "";
     private bool _mirror = true;
     private IReadOnlyList<string>? _sourceOwnedPaths;
+    private AccessContext? _identity;
     private readonly List<InlineContentFile> _files = new();
 
     internal SyncContentFilesBuilder(IMessageHub hub, string nodePath)
@@ -386,6 +431,42 @@ public sealed class SyncContentFilesBuilder
         _hub = hub;
         _nodePath = nodePath;
     }
+
+    /// <summary>
+    /// Declares the identity this sync is posted under EXPLICITLY, as a value carried on the
+    /// delivery — instead of snapshotting whatever <c>AccessContext</c> is ambient when
+    /// <see cref="Post"/> runs.
+    ///
+    /// <para>🚨 Use this whenever <see cref="Post"/> is not called on the thread that established
+    /// the identity. An <c>AsyncLocal</c> scope
+    /// (<c>AccessService.ImpersonateAsSystem</c>/<c>SwitchAccessContext</c>, however it is opened —
+    /// <c>using</c> block or <c>Observable.Using</c>) covers only what runs synchronously inside it.
+    /// In a multi-stage reactive pipeline every stage after the first is subscribed from the previous
+    /// stage's completion callback, on a pool or hub thread the scope never reached — so the second
+    /// stage builds its posts against a NULL ambient and the owning hub fails them closed
+    /// ("AccessContext must never be null for an application post"). That is
+    /// MeshWeaver.Reinsurance#46: node writes (built in the first stage) all landed, all 409
+    /// attachment groups (built in the second) were refused, under one enclosing System scope.
+    /// A declared identity cannot be broken that way — nor by someone later moving a Subscribe.</para>
+    ///
+    /// <para>Deliberately NOT a fallback: with no identity declared and no ambient one to capture,
+    /// the post stays unstamped and FAILS CLOSED. Inventing an identity for a caller that has none
+    /// is what the 2026-05-21 hub-self-fallback deletion removed, and it masked a real prod bug.</para>
+    /// </summary>
+    /// <param name="identity">The identity to post under; never null.</param>
+    public SyncContentFilesBuilder WithAccessContext(AccessContext identity)
+    {
+        _identity = identity ?? throw new ArgumentNullException(nameof(identity));
+        return this;
+    }
+
+    /// <summary>
+    /// Declares that this sync is platform infrastructure and posts it under the well-known
+    /// <see cref="WellKnownUsers.System"/> identity — the explicit, thread-independent equivalent of
+    /// wrapping the call in <c>AccessService.ImpersonateAsSystem()</c>. See
+    /// <see cref="WithAccessContext"/> for why the ambient scope is not enough.
+    /// </summary>
+    public SyncContentFilesBuilder ImpersonateAsSystem() => WithAccessContext(WellKnownUsers.SystemContext);
 
     /// <summary>Target content collection (default <c>"content"</c>) + folder within it.</summary>
     public SyncContentFilesBuilder To(string targetCollection, string targetPath = "")
@@ -431,11 +512,14 @@ public sealed class SyncContentFilesBuilder
     /// <summary>Post the sync to the target node's hub. Cold — subscribe to run.</summary>
     public IObservable<ImportContentResponse> Post()
     {
-        // 🚨 Eager identity capture — see ContentImportExtensions.CaptureCallerContext. Without
-        // it this post read the ambient AsyncLocal at Subscribe time, which is null on every
-        // Concat/Merge pump thread: MeshWeaver.Reinsurance#46 landed all 412 node writes and had
-        // all 409 SyncContentFilesRequest posts failed closed for a null AccessContext.
-        var captured = ContentImportExtensions.CaptureCallerContext(_hub);
+        // 🚨 A declared identity (WithAccessContext / ImpersonateAsSystem) wins outright: it is a
+        // value, so no thread hop can lose it. Only without one do we fall back to an EAGER capture
+        // of the ambient — see ContentImportExtensions.CaptureCallerContext. Eager capture alone is
+        // not enough when Post() ITSELF runs on a pump thread, which is why the declared route
+        // exists: MeshWeaver.Reinsurance#46 landed all 412 node writes (built in the pipeline's
+        // first stage, inside the System scope) and had all 409 SyncContentFilesRequest posts
+        // (built in its second stage, outside) failed closed for a null AccessContext.
+        var captured = _identity ?? ContentImportExtensions.CaptureCallerContext(_hub);
         var request = new SyncContentFilesRequest(_targetCollection, _targetPath, _files.ToArray())
         {
             Mirror = _mirror,
@@ -444,10 +528,11 @@ public sealed class SyncContentFilesBuilder
         var address = new Address(_nodePath);
         // Off-router issuing, same reason as ContentImportBuilder.Post: the router must be neither
         // end of the request/response pair (ROUTER_TRAFFIC); a non-router hub gets itself back.
-        return Observable.Defer(() => _hub.NodeOperationIssuingHub()
+        return ContentImportExtensions.CarryPostIdentity(
+            Observable.Defer(() => _hub.NodeOperationIssuingHub()
                 .Observe(request, o => ContentImportExtensions.ConfigurePost(o, address, captured))
                 .Select(d => d.Message)
-                .Take(1))
-            .CarryAccessContext(_hub.ServiceProvider);
+                .Take(1)),
+            _hub, _identity);
     }
 }

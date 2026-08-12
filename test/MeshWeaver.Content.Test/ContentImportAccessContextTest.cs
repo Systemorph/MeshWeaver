@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -174,6 +175,164 @@ public class ContentImportAccessContextTest(ITestOutputHelper output) : Monolith
         landed.Should().HaveCount(1, "the attachment lands in the node's content collection");
         File.ReadAllBytes(landed[0]).SequenceEqual(PackDocument)
             .Should().BeTrue("the bytes are written stream-to-stream, not through the text API");
+    }
+
+    /// <summary>The identity each outgoing <c>CreateOrUpdateNodeRequest</c> delivery carries.</summary>
+    private readonly ReplaySubject<string?> _nodeStamps = new();
+
+    /// <summary>
+    /// A SECOND identity, distinct from both <see cref="Importer"/> and the host's standing admin, so
+    /// "the declared value is what shipped" cannot be confused with "something ambient happened to
+    /// match".
+    /// </summary>
+    private static readonly AccessContext Attacher = new()
+    {
+        ObjectId = "pack-attacher",
+        Name = "Pack Attacher"
+    };
+
+    /// <summary>
+    /// The ambient <c>AccessContext</c> observed while the pipeline's SECOND stage builds its posts —
+    /// the exact place MeshWeaver.Reinsurance#46 lost the identity. Recorded, then asserted on: the
+    /// test is only meaningful while that ambient is NOT the enclosing scope's.
+    /// </summary>
+    private readonly ReplaySubject<string?> _secondStageAmbient = new();
+
+    /// <summary>
+    /// 🚨 The whole of MeshWeaver.Reinsurance#46, pinned: an import that writes NODES and then
+    /// attaches FILES, under ONE enclosing impersonation scope, must post BOTH under a real identity.
+    ///
+    /// <para><b>Why the demo's shape is the test's shape.</b> The importer is
+    /// <c>Observable.Using(() =&gt; access.ImpersonateAsSystem(), _ =&gt; nodeWrites.Concat(fileWrites))</c>.
+    /// An <c>AsyncLocal</c> scope opened at Subscribe covers only what runs synchronously on that
+    /// thread — the FIRST stage. The second stage is subscribed from the first's completion, on a
+    /// pool/hub thread, and everything it builds there (its LINQ projection AND its <c>Defer</c>
+    /// bodies) reads a NULL ambient. Measured on this very pipeline before the fix:
+    /// <c>nodeProjection[0..2] ambient=content-importer thread=13</c> · <c>projection[0..2]
+    /// ambient=(null) thread=19</c>. So all 412 node writes landed and all 409 attachment groups were
+    /// failed closed — "AccessContext must never be null for an application post". The split was never
+    /// about node-vs-file; it was about WHICH STAGE built the post.</para>
+    ///
+    /// <para><b>Why eager capture (#1263) did not fix it.</b> Eager means "at <c>Post()</c>" — and
+    /// here <c>Post()</c> is itself called on the pump thread, so it eagerly captures nothing. The
+    /// cure is to stop reading the ambient at all: declare the identity as a VALUE
+    /// (<c>WithAccessContext</c>/<c>ImpersonateAsSystem</c> on the builder), which no thread hop and
+    /// no later re-ordering of a Subscribe can lose.</para>
+    ///
+    /// <para><b>Why the assertions are on IDENTITY, never on "it landed".</b> The xUnit host sets a
+    /// standing <c>hostIdentity</c>, so <c>CircuitContext</c> resolves to the DevLogin admin on every
+    /// thread: unfixed, this pipeline still wrote all six files — as "Roland" — and any
+    /// landed/Success assertion passed. Only the stamped ObjectId separates the fix from the bug.</para>
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task DeclaredIdentity_SurvivesAPipelineStageTheAmbientScopeNeverReaches()
+    {
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        using (access.ImpersonateAsSystem())
+        {
+            await NodeFactory.CreateNode(new MeshNode("DemoSpace") { NodeType = "Space", Name = "Demo Space" })
+                .Should().Within(StepTimeout).Emit();
+        }
+
+        var client = GetClient(c => ConfigureClient(c)
+            .AddPostPipeline(p => p.AddPipeline((delivery, next) =>
+            {
+                var posted = next(delivery);
+                if (posted.Message is SyncContentFilesRequest)
+                    _stampedIdentities.OnNext(posted.AccessContext?.ObjectId);
+                else if (posted.Message is CreateOrUpdateNodeRequest)
+                    _nodeStamps.OnNext(posted.AccessContext?.ObjectId);
+                return posted;
+            })));
+        var mesh = client.ServiceProvider.GetRequiredService<IMeshService>();
+
+        // === STAGE 1: node writes. Built synchronously at the outer Subscribe, i.e. INSIDE the
+        // scope, so MeshService's eager capture snapshots the impersonated identity. ===
+        var nodeWrites = Enumerable.Range(0, 3)
+            .Select(i => mesh
+                .CreateOrUpdateNode(new MeshNode($"Child{i}", "DemoSpace")
+                {
+                    NodeType = "Markdown",
+                    Name = $"Child {i}"
+                })
+                .Take(1)
+                .Timeout(StepTimeout)
+                .Select(_ => true)
+                .Catch((Exception e) =>
+                {
+                    Output.WriteLine($"node {i} failed: {e.Message}");
+                    return Observable.Return(false);
+                }))
+            .ToObservable()
+            .Concat();
+
+        // === STAGE 2: file writes. Built on the thread that completes stage 1 — outside the scope.
+        // Declaring the identity is what makes it survive; nothing here may read the ambient. ===
+        var fileWrites = Enumerable.Range(0, 3)
+            .Select(i =>
+            {
+                _secondStageAmbient.OnNext(access.Context?.ObjectId);
+                return Observable.Defer(() =>
+                    {
+                        _secondStageAmbient.OnNext(access.Context?.ObjectId);
+                        return client.SyncContentFiles("DemoSpace")
+                            .To(ContentCollectionsExtensions.DefaultCollectionName, $"grp{i}")
+                            .Add("pack.bin", PackDocument)
+                            .Mirror(false)
+                            .WithAccessContext(Attacher)
+                            .Post();
+                    })
+                    .Take(1)
+                    .Timeout(StepTimeout)
+                    .Select(r => r.Success)
+                    .Catch((Exception e) =>
+                    {
+                        Output.WriteLine($"files {i} failed: {e.Message}");
+                        return Observable.Return(false);
+                    });
+            })
+            .ToObservable()
+            .Concat();
+
+        var ct = TestContext.Current.CancellationToken;
+        var results = await Task.Run(() => Observable.Using(
+                    () => access.SwitchAccessContext(Importer),
+                    _ => nodeWrites.Concat(fileWrites).ToList())
+                .Timeout(StepTimeout)
+                .FirstAsync()
+                .ToTask(ct), ct);
+
+        var nodeStamp = await _nodeStamps.FirstAsync().Timeout(StepTimeout).ToTask(ct);
+        var fileStamp = await _stampedIdentities.FirstAsync().Timeout(StepTimeout).ToTask(ct);
+        // The run is over, so the sample set is complete: close the subject and take ALL of it.
+        // Asserting only the first sample would let a later one silently see the enclosing scope.
+        _secondStageAmbient.OnCompleted();
+        var stage2Ambients = await _secondStageAmbient.ToList().Timeout(StepTimeout).ToTask(ct);
+        Output.WriteLine($"ok={results.Count(r => r)}/{results.Count} nodeStamp={nodeStamp} " +
+                         $"fileStamp={fileStamp} " +
+                         $"stage2Ambients=[{string.Join(", ", stage2Ambients.Select(a => a ?? "(null)"))}]");
+
+        stage2Ambients.Should().NotBeEmpty("the second stage must actually have built its posts");
+        stage2Ambients.Should().NotContain(Importer.ObjectId,
+            because: "the hop must be real, at EVERY sample. The enclosing Observable.Using scope " +
+                     "covers only the first stage; if any part of the second stage could see it, this " +
+                     "test would pass whether or not the identity is declared and would pin nothing. " +
+                     "That escape IS the defect — in production the ambient here is null and every " +
+                     "post built here is refused");
+
+        nodeStamp.Should().Be(Importer.ObjectId,
+            because: "stage one is built inside the scope, so MeshService's eager capture pins the " +
+                     "impersonated caller — the half of MeshWeaver.Reinsurance#46 that always worked");
+
+        fileStamp.Should().Be(Attacher.ObjectId,
+            because: "the sync declares its identity as a VALUE, so the delivery carries it no matter " +
+                     "which thread built the post. Reading the ambient instead yields null in " +
+                     $"production (and the host's standing '{TestUsers.Admin.ObjectId}' here) — the " +
+                     "409 refused attachment groups of MeshWeaver.Reinsurance#46");
+
+        results.Should().AllSatisfy(r => r.Should().BeTrue("every write in the run must land"));
+        Directory.GetFiles(_contentRoot, "pack.bin", SearchOption.AllDirectories)
+            .Should().HaveCount(3, "each attachment group writes its pack document");
     }
 
     [Fact(Timeout = 60000)]

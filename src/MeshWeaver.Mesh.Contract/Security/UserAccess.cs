@@ -1,3 +1,5 @@
+using MeshWeaver.Messaging;
+
 namespace MeshWeaver.Mesh.Security;
 
 /// <summary>
@@ -23,6 +25,19 @@ public static class WellKnownUsers
     /// PartitionAccessPolicy nodes) must not be blocked by the permissions they manage.
     /// </summary>
     public const string System = "system-security";
+
+    /// <summary>
+    /// The <see cref="AccessContext"/> of the <see cref="System"/> identity — the value to stamp on a
+    /// post that must run as platform infrastructure.
+    ///
+    /// <para>🚨 Use this when the post cannot rely on the ambient AsyncLocal.
+    /// <c>AccessService.ImpersonateAsSystem()</c> pushes the same identity onto AsyncLocal, but an
+    /// AsyncLocal scope only covers the code that runs synchronously inside it — in a multi-stage Rx
+    /// pipeline every stage after the first is subscribed from the previous stage's completion, on a
+    /// pool/hub thread the scope never reached. Code that posts from there must carry the identity as
+    /// a VALUE (<c>PostOptions.WithAccessContext</c>), not read it from the ambient.</para>
+    /// </summary>
+    public static AccessContext SystemContext { get; } = new() { ObjectId = System, Name = System };
 
     /// <summary>
     /// 🚨 THE ONE definition of "this caller is signed in" — the predicate every
