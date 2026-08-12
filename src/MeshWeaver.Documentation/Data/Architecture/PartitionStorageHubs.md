@@ -164,7 +164,6 @@ Each backend gets its own `IPartitionStorageProvider`. The contract is identical
 |---|---|---|
 | **Postgres** | Real — one table per satellite (`mesh_nodes`, `threads`, `activities`, …) | Builds a fresh `NpgsqlDataSource(MaxPoolSize=1, SearchPath=schema)` per `(schema, table)`. One hub per `(schema, table)`. |
 | **Cosmos DB** | Real — one container per logical table | Builds a fresh `Microsoft.Azure.Cosmos.Container` client per `(database, container)`. One hub per `(database, container)`. |
-| **Azure Blob** | Degenerate — blob paths are the only namespace | Returns one shared `AzureBlobStorageAdapter` per container regardless of `table`. One hub per container. |
 | **FileSystem** | Degenerate — directory paths only | Returns one shared `FileSystemStorageAdapter` per directory regardless of `table`. One hub per directory. |
 | **Embedded resource** | Degenerate | Returns the same shared adapter; one hub per namespace. |
 | **Static node** | Degenerate | Returns the same shared adapter; one hub per namespace. |
