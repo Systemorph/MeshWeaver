@@ -31,8 +31,10 @@ public sealed class ExecutiveAssistantPlugin(
     private string? Me => access.Context?.ObjectId ?? access.Context?.Name
                           ?? access.CircuitContext?.ObjectId ?? access.CircuitContext?.Name;
 
+    // Absolute (agent-facing): a link pasted into chat must be clickable out of context. The PATH
+    // comes from the controller that registers it, so the route has exactly one definition.
     private string ConsentLink =>
-        $"{(options.WebhookBaseUrl ?? "").TrimEnd('/')}/auth/ea/connect";
+        $"{(options.WebhookBaseUrl ?? "").TrimEnd('/')}{EaConsentController.ConnectPath}";
 
     /// <summary>Builds a Graph client bound to the acting user's delegated token, or a "please connect" message.</summary>
     private async Task<(GraphServiceClient? graph, string? notConnected)> ClientAsync()

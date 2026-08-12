@@ -50,18 +50,26 @@ public class DeckExportMenuProvider : INodeMenuProvider
 
                 return
                 [
+                    // Same icons AND the same LabelKeys as the Markdown provider: a Deck's entries
+                    // are the identical actions, so they must read identically — including for a
+                    // German viewer. These two carried no LabelKey at all, so they rendered English
+                    // regardless of locale while the Markdown node's twins translated correctly.
                     new NodeMenuItemDefinition(
                         Label: MarkdownExportMenuProvider.PdfLabel,
                         Area: ExportDocumentLayoutArea.PdfArea,
+                        Icon: MarkdownExportMenuProvider.PdfIcon,
                         RequiredPermission: Permission.Read,
                         Order: 27,
-                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea)),
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea))
+                        { LabelKey = "menu.exportPdf" },
                     new NodeMenuItemDefinition(
                         Label: SendDocumentLayoutArea.SendLabel,
                         Area: SendDocumentLayoutArea.SendArea,
+                        Icon: MarkdownExportMenuProvider.SendIcon,
                         RequiredPermission: Permission.Read,
                         Order: 29,
-                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea)),
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea))
+                        { LabelKey = "menu.sendToContacts" },
                 ];
             });
     }

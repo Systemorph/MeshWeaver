@@ -23,6 +23,24 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
     /// <summary>Menu item label for the DOCX export.</summary>
     public const string DocxLabel = "Export to DOCX";
 
+    // Icons are EMOJI, matching every other node-menu entry (✏️ 🔖 ➡️ 📋 🗑️ 📁 🧾 🕘 ♻️ ✉️ 🔄).
+    // A Fluent icon NAME must never be used here: the renderer treats a non-emoji value as an image
+    // URL and would emit a broken <img src="DocumentPdf">. These three sat icon-less, which is what
+    // made the export block read as a foreign group wedged between two iconed ones.
+
+    /// <summary>Icon for the PDF export — a page, the thing the export produces.</summary>
+    public const string PdfIcon = "📄";
+
+    /// <summary>Icon for the DOCX export — a written document, distinct from the plain PDF page.</summary>
+    public const string DocxIcon = "📝";
+
+    /// <summary>
+    /// Icon for the email share — an outbox tray. Deliberately NOT an envelope: ✉️ already belongs
+    /// to "Invite people" in this same menu, and two envelopes at 16 px are indistinguishable.
+    /// The tray also says the right thing — this entry SENDS the document out.
+    /// </summary>
+    public const string SendIcon = "📤";
+
     /// <summary>The menu context this provider contributes to — the Node menu.</summary>
     public string Context => NodeMenuItemsExtensions.NodeMenuContext;
 
@@ -56,6 +74,7 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
                     new NodeMenuItemDefinition(
                         Label: PdfLabel,
                         Area: ExportDocumentLayoutArea.PdfArea,
+                        Icon: PdfIcon,
                         RequiredPermission: Permission.Read,
                         Order: 27,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea))
@@ -63,6 +82,7 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
                     new NodeMenuItemDefinition(
                         Label: DocxLabel,
                         Area: ExportDocumentLayoutArea.DocxArea,
+                        Icon: DocxIcon,
                         RequiredPermission: Permission.Read,
                         Order: 28,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea))
@@ -74,6 +94,7 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
                     new NodeMenuItemDefinition(
                         Label: SendDocumentLayoutArea.SendLabel,
                         Area: SendDocumentLayoutArea.SendArea,
+                        Icon: SendIcon,
                         RequiredPermission: Permission.Read,
                         Order: 29,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea))
