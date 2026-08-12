@@ -346,7 +346,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// writes: it landed inside a <c>path:{root} scope:descendants</c> subscription and turned
     /// <c>SearchResultStormTest</c>'s exact re-render count into a coin flip. The add-then-remove
     /// of an unchanged node is self-evidently wrong — nothing about it changed between the two
-    /// frames; only which code path judged it did. #1193 taught that admission to apply these
+    /// frames; only which code path judged it did. #1193 made that admission apply these
     /// exclusions; #1250 deleted the admission outright, because the SAME shape also bypassed
     /// row-level security (<c>Matches</c> performs no permission check) and covered no real
     /// write lag.</para>
