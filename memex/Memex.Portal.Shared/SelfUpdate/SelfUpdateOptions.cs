@@ -36,6 +36,16 @@ public record SelfUpdateOptions
     /// <summary>How often the running install polls the registry ("a few times a day").</summary>
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromHours(6);
 
+    /// <summary>
+    /// The repository ("owner/repo") whose green builds trigger an IMMEDIATE check, on top of the
+    /// interval. The platform image is built by this repo's CD, so reacting to its
+    /// <c>BuildCompletion</c> node (written by the GitHub webhook — see
+    /// <c>Doc/Architecture/PluginUpdateOnGreenBuild</c>) turns "up to a PollInterval late" into
+    /// "minutes after the image lands". On an install without the webhook the stream simply never
+    /// emits and the interval still drives everything. Empty disables the trigger.
+    /// </summary>
+    public string BuildTriggerRepository { get; init; } = "Systemorph/MeshWeaver";
+
     /// <summary>The policy seeded onto <c>Admin/UpdatePolicy</c> when it doesn't exist yet, and the
     /// fallback used before the policy node's first live emission.</summary>
     public UpdatePolicyKind DefaultPolicy { get; init; } = UpdatePolicyKind.Continuous;
