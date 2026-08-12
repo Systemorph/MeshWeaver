@@ -64,10 +64,9 @@ navigation for **every** viewer: that is a platform-admin act, not a per-space o
   "context": "Node",
   "entries": [
     { "area": "Delete", "order": 90, "icon": "🗑️" },
-    { "area": "ExportPdf",  "parent": "ExportDocument",
-      "labels": { "en": "PDF", "de": "PDF" } },
-    { "area": "ExportDocx", "parent": "ExportDocument",
-      "labels": { "en": "DOCX", "de": "DOCX" } },
+    { "area": "_group:Export", "labels": { "en": "Share", "de": "Teilen" } },
+    { "area": "ExportDocx", "hidden": true },
+    { "area": "Files", "parent": "Data" },
     { "area": "StopSync", "hidden": true }
   ]
 }
@@ -85,8 +84,24 @@ patch rather than a replacement — an entry that sets nothing is a no-op, not a
 | `tooltips` | Locale tag → hover text. Same fallback chain. |
 | `icon` | Replacement emoji or SVG URL. |
 | `order` | Replacement sort position — the menu is re-sorted after the overlay. |
-| `hidden` | Drops the entry. |
-| `parent` | `area` of the entry this nests under, rendered as a hover sub-menu. |
+| `hidden` | Drops the entry — at any depth. Hiding a group drops the group and everything in it. |
+| `parent` | `area` of an existing **top-level** entry this one nests under, rendered as a sub-menu. |
+
+**Entries are addressable at every depth.** The overlay descends into sub-menus a provider already
+emitted, so a nested entry can be re-worded, re-icon'd, re-ordered or hidden by its own `area` exactly
+like a top-level one — `ExportDocx` above is inside the compiled 📦 Export group and is hidden from
+there. Without that, moving entries into a group in code would quietly make them un-editable.
+
+**A group is an entry like any other.** A provider ships a group with a
+`NodeMenuItemDefinition.GroupArea(name)` area — `_group:Export` for the export block — and that area is
+its stable key here: re-word it, re-icon it, re-order it or hide it wholesale. Each group gets its own
+key rather than one shared sentinel precisely so it stays individually addressable.
+
+🚨 **`parent` moves entries; it never creates one.** The named parent must be an entry a provider
+already emits at top level. The overlay is override-only for the same reason it never introduces an
+entry: nothing on this menu filters on `RequiredPermission`, so a data-added item would carry no gate.
+To ship a *new* group, a provider emits it. Re-parenting also applies to top-level entries only, which
+is what keeps `parent` nesting exactly one level deep and a parent cycle structurally impossible.
 
 ### Per-locale text is the point
 
@@ -124,6 +139,7 @@ applied" — and every dropped input is *named* in the log rather than silently 
 | Two entries for one `area` | The first entry wins | `entry #N … repeats Area 'X'` |
 | `parent` naming an unknown area | Entry stays **top-level** | `names Parent 'X', which no visible menu item provides` |
 | `parent` pointing at itself | Entry stays top-level | `names itself as Parent` |
+| Every child of a group hidden | The group disappears too | nothing — an empty group would open onto nothing |
 | A label that is blank in every locale | The compiled label, still translated | nothing — an unusable override is simply not applied |
 
 There is no state in which a catalog edit produces an empty menu, because the catalog never *sources*

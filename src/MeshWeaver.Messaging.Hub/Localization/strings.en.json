@@ -104,6 +104,8 @@
   "menu.editProfile": "Edit profile",
   "menu.editHomePage": "Edit home page",
   "menu.resetHome": "Reset home to default",
+  "menu.exportGroup": "Export",
+  "menu.exportGroup.tooltip": "Export or share this document",
   "menu.exportPdf": "PDF",
   "menu.exportPdf.tooltip": "Export this document as a PDF file",
   "menu.exportDocx": "DOCX",

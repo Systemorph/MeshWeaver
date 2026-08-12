@@ -138,10 +138,17 @@ public static class NodeMenuItemsExtensions
                     .CombineLatest(catalogStream, (slice, catalog) => (slice, catalog))
                     .Select(t => (IReadOnlyList<NodeMenuItemDefinition>)
                     [
-                        .. MenuPresentationOverlay
-                            .Apply(t.slice, t.catalog, access.ViewerLocale(),
-                                reason => logger?.LogWarning(
-                                    "Menu catalog for context '{Context}': {Reason}", context, reason))
+                        // 🚨 Normalize runs AFTER the overlay, never before. The overlay is itself a
+                        // source of nesting — a catalog entry's `parent` moves an item under another
+                        // — so a normalization that ran on the pre-overlay slice would sort and prune
+                        // a tree that does not exist yet, and a grouping created purely by DATA would
+                        // silently skip both. Running here means one rule for both origins: children
+                        // ordered by Order at every depth, and a group left with no surviving children
+                        // pruned bottom-up, whether the grouping came from a provider or the catalog.
+                        .. Normalize(MenuPresentationOverlay
+                                .Apply(t.slice, t.catalog, access.ViewerLocale(),
+                                    reason => logger?.LogWarning(
+                                        "Menu catalog for context '{Context}': {Reason}", context, reason)))
                             .Select(i => i.Localized(access))
                     ])
                     // The catalog is a SECOND emission source, so the pre-overlay dedup above no
@@ -502,6 +509,59 @@ public static class NodeMenuItemsExtensions
                             builder.Add(item);
                 return (IReadOnlyCollection<NodeMenuItemDefinition>)builder.ToImmutable();
             });
+    }
+
+    /// <summary>
+    /// Recursively sorts every nested <see cref="NodeMenuItemDefinition.Children"/> list by the same
+    /// <see cref="MenuItemComparer"/> the top level uses, and drops grouping parents that have no
+    /// surviving children.
+    ///
+    /// <para><b>Why the server and not each renderer.</b> The top-level merge sorts through an
+    /// <see cref="ImmutableSortedSet{T}"/>, but that comparer never looks at <c>Children</c> — so before
+    /// this, a submenu came out in whatever order it happened to be appended, and each of the four
+    /// renderers would have had to re-sort it identically. Doing it once here means <c>Order</c> means the
+    /// same thing at every depth, on every client.</para>
+    ///
+    /// <para><b>Why AFTER the overlay.</b> Nesting has TWO origins: a provider emitting
+    /// <c>Children</c>, and a <c>MenuPresentation</c> catalog entry whose <c>Parent</c> moves an item
+    /// under another (<see cref="MenuPresentationOverlay"/>). Normalizing before the overlay would sort
+    /// and prune a tree that does not exist yet, and a grouping created purely by DATA would skip both
+    /// rules. Running last gives one rule for both origins.</para>
+    ///
+    /// <para><b>Why empty groups are dropped.</b> Menu items are permission-filtered by the PROVIDER, not
+    /// by this renderer (see <see cref="INodeMenuProvider.GetItems"/>) — a provider that gates each child
+    /// individually can legitimately end up emitting a parent whose children all vanished for this viewer.
+    /// Rendering that would give a submenu that opens onto nothing. Only a pure
+    /// <see cref="NodeMenuItemDefinition.IsGroup"/> parent is pruned; a parent with a real navigable
+    /// <c>Area</c> of its own survives, because it still has somewhere to go — which is also what keeps
+    /// the overlay's documented "a dangling <c>Parent</c> leaves the entry top-level" behaviour intact.
+    /// Pruning runs bottom-up, so a group whose only child was itself an emptied group disappears too.</para>
+    /// </summary>
+    // internal for unit testing (InternalsVisibleTo MeshWeaver.Graph.Test) — the composition with
+    // MenuPresentationOverlay.Apply is the part worth pinning, and both halves are internal.
+    internal static IReadOnlyCollection<NodeMenuItemDefinition> Normalize(
+        IReadOnlyCollection<NodeMenuItemDefinition> items)
+    {
+        var result = ImmutableList.CreateBuilder<NodeMenuItemDefinition>();
+        foreach (var item in items)
+        {
+            if (!item.HasChildren)
+            {
+                // A group that never had children (or lost them upstream) has nothing to open.
+                if (item.IsGroup)
+                    continue;
+                result.Add(item);
+                continue;
+            }
+
+            // OrderBy, not a sorted set: children are a LIST, and two children that compare equal are a
+            // provider's business to emit, not ours to silently collapse.
+            var children = Normalize([.. item.Children!.OrderBy(c => c, MenuItemComparer)]);
+            if (children.Count == 0 && item.IsGroup)
+                continue;
+            result.Add(item with { Children = [.. children] });
+        }
+        return result.ToImmutable();
     }
 
     /// <summary>
