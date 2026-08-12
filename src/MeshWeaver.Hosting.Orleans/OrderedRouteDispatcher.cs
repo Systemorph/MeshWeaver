@@ -66,6 +66,38 @@ internal sealed class OrderedRouteDispatcher(IIoPool pool, ILogger logger)
     }
 
     /// <summary>
+    /// One lock acquisition, both numbers — the pair that tells the two shapes of a routing backlog
+    /// apart, which the in-flight COUNT alone provably cannot (see
+    /// <c>RoutingGrain.ReportSaturation</c>).
+    ///
+    /// <para><b>Why the count is ambiguous.</b> A leg's in-flight slot is claimed at ENQUEUE, not at
+    /// subscribe. So N destinations holding one executing leg each, and ONE wedged destination with
+    /// N-1 legs stacked behind its head, produce the IDENTICAL in-flight count. Those are opposite
+    /// situations: the first is breadth (nothing waits on anything), the second is head-of-line
+    /// blocking on a channel that cannot overtake itself. <c>Deepest</c> is what separates them —
+    /// above 1 it means legs are waiting on a leg, not merely on the CPU.</para>
+    /// </summary>
+    /// <returns>
+    /// <c>Destinations</c>: how many addresses currently hold a queue.
+    /// <c>Deepest</c>: the largest number of legs queued behind the one executing leg of any single
+    /// destination (0 when every destination is down to its in-flight leg).
+    /// </returns>
+    internal (int Destinations, int Deepest) QueueSnapshot()
+    {
+        lock (gate)
+        {
+            var deepest = 0;
+            foreach (var queue in queues.Values)
+            {
+                var depth = 0;
+                foreach (var _ in queue.Pending) depth++;
+                if (depth > deepest) deepest = depth;
+            }
+            return (queues.Count, deepest);
+        }
+    }
+
+    /// <summary>
     /// Enqueues one composed (cold) route leg for <paramref name="destination"/> and starts
     /// draining if this destination is idle. Returns immediately — the leg runs on the pool.
     /// </summary>
