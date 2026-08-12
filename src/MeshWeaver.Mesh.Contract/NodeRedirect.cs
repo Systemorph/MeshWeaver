@@ -83,7 +83,20 @@ public enum RedirectDiagnostic
     /// <summary>The chain was still redirecting after <see cref="NodeRedirectRules.MaxHops"/> hops.</summary>
     DepthExceeded,
 
-    /// <summary>The declaration named a target, but nothing resolves at that target path.</summary>
+    /// <summary>
+    /// The chain had nowhere to go. Covers BOTH shapes of that, because they are one condition for
+    /// the viewer and one fix for the author — point the declaration at something real:
+    /// <list type="bullet">
+    ///   <item>the declaration carries no <see cref="NodeRedirect.TargetPath"/> at all (or a blank
+    ///     one), so it is inert; and</item>
+    ///   <item>it names a target that resolves to <b>nothing</b> — not even an ancestor.</item>
+    /// </list>
+    /// <para>Note what is NOT reported here: a target that resolves to an ancestor with an unmatched
+    /// remainder is <b>followed</b>, deliberately. A destination may legitimately name a layout AREA
+    /// rather than a node (<c>Underwriting/Overview</c>), and the resolver cannot tell that apart
+    /// from a dead deep path — so it rewrites, and the navigation layer's nearest-existing-ancestor
+    /// fallback handles the dead case at the point where the answer is actually known.</para>
+    /// </summary>
     TargetMissing
 }
 
