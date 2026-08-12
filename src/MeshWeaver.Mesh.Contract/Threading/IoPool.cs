@@ -26,6 +26,15 @@ public sealed class IoPool : IIoPool, IDisposable
     // A ManualResetEventSlim here is consistent with this file being the ONE sanctioned home for
     // such a primitive: IoPool IS the boundary between the turn-based schedulers and blocking I/O.
     private readonly ManualResetEventSlim _blockingIdle = new(initialState: true);
+
+    // 🚨 A DEDICATED counter, not _inFlight. _inFlight is shared with Invoke / InvokeStream /
+    // SubscribeThroughPool, so 0↔1 transitions on it do NOT correspond to blocking work starting or
+    // stopping — and the signal was driven off exactly those transitions. Both directions broke: a
+    // blocking leaf starting while an async leaf ran incremented to 2, so the Reset never fired and
+    // Drain saw "idle" (the original bug, unfixed), and a blocking leaf finishing while an async leaf
+    // ran decremented to 1, so the Set never fired and Drain waited out its whole budget then
+    // reported a survivor that had already unwound. (Copilot review, #1334.)
+    private int _blockingInFlight;
     private volatile bool _disposed;
 
     // Teardown safety net for the drain join: cancellation makes in-flight leaves release in ms,
@@ -133,7 +142,8 @@ public sealed class IoPool : IIoPool, IDisposable
                     // _inFlight increments only once the scheduler grants a slot —
                     // so CurrentInFlight reflects actually-running blocking work,
                     // capped at the scheduler's MaximumConcurrencyLevel.
-                    if (Interlocked.Increment(ref _inFlight) == 1)
+                    Interlocked.Increment(ref _inFlight);
+                    if (Interlocked.Increment(ref _blockingInFlight) == 1)
                         _blockingIdle.Reset();
                     try
                     {
@@ -141,7 +151,13 @@ public sealed class IoPool : IIoPool, IDisposable
                     }
                     finally
                     {
-                        if (Interlocked.Decrement(ref _inFlight) == 0)
+                        // 🚨 ORDER MATTERS: the signal is set LAST. Drain() wakes on _blockingIdle, so
+                        // anything it releases must already observe fully-updated counters — setting
+                        // the signal before decrementing _inFlight let Drain return while
+                        // CurrentInFlight was still 1, which is both a false "no pool thread is
+                        // running" and a flake in this file's own assertion. (Copilot review, #1338.)
+                        Interlocked.Decrement(ref _inFlight);
+                        if (Interlocked.Decrement(ref _blockingInFlight) == 0)
                             _blockingIdle.Set();
                     }
                 }, cts.Token)
@@ -272,7 +288,9 @@ public sealed class IoPool : IIoPool, IDisposable
         // and our wait would otherwise be reported as surviving.
         if (!_blockingIdle.Wait(DrainTimeout))
         {
-            var stillRunning = Volatile.Read(ref _inFlight);
+            // _blockingInFlight, never _inFlight: an async leaf that ignored its token is ALREADY
+            // reported through gateResidual, so adding it again would double-count it.
+            var stillRunning = Volatile.Read(ref _blockingInFlight);
             return gateResidual + stillRunning;
         }
 
@@ -287,6 +305,17 @@ public sealed class IoPool : IIoPool, IDisposable
     public void Dispose()
     {
         if (_disposed) return;
+        // 🚨 Dispose() joins NOTHING today: it sets _disposed and only THEN calls Drain(), whose
+        // idempotence guard returns early on exactly that flag — so the promise in this method's
+        // summary ("when it returns, no pool thread is running, so the caller may safely unload the
+        // node ALCs whose types that work referenced") is unbacked on the disposal path, which is the
+        // path that unloads every ALC.
+        //
+        // Deliberately NOT fixed here. Swapping the two lines makes Dispose actually cancel and join,
+        // which CHANGES TEARDOWN SEMANTICS repo-wide, and the first CI run that carried it saw
+        // OrderedRouteDispatcherTest hang for its full 30s budget (it passes locally in 1s, so the
+        // attribution is unproven either way). That belongs in its own PR where a hang can only have
+        // one cause. Tracked with the evidence in #1338's review thread.
         _disposed = true;
         Drain();
         _poolCts.Dispose();
