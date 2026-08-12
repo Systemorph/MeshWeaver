@@ -349,21 +349,36 @@ internal class MeshNodeCompilationService(
 
     /// <summary>
     /// Reads one include target — <paramref name="path"/> first, then
-    /// <paramref name="fallbackPath"/> when it differs and the first read found nothing — and
-    /// reports which path actually produced the node so nested includes anchor from there.
+    /// <paramref name="fallbackPath"/> when it differs and the first read found the node genuinely
+    /// ABSENT — and reports which path actually produced the node so nested includes anchor there.
     ///
-    /// <para>EmitNull, not a fault: this runs on the hub-ACTIVATION path, where turning a
-    /// transient stall into a hard fault would park the type. A miss leaves the include
-    /// unresolved and logs the warning at the call site.</para>
+    /// <para>🚨 The anchored read uses <see cref="ReadTimeoutBehavior.Throw"/>, not
+    /// <c>EmitNull</c>, for one reason: only "absent" justifies spending a second 15s read, and
+    /// <c>EmitNull</c> collapses a STALL into the same null — which would let one I/O stall cost
+    /// 30s per include instead of 15s. The <see cref="TimeoutException"/> is caught here and
+    /// degrades to exactly what <c>EmitNull</c> produced (an unresolved include, warned at the call
+    /// site), so a stalled include still costs ONE read. The exception's diagnostics — elapsed
+    /// time, the reading hub's in-flight snapshot — are logged rather than swallowed.</para>
+    ///
+    /// <para>Not a fault either way: this runs on the hub-ACTIVATION path, where turning a
+    /// transient stall into a hard fault would park the type.</para>
     /// </summary>
     private IObservable<(MeshNode? Node, string Path)> ReadIncludeNode(
         string path, string? fallbackPath)
-        => hub.GetMeshNode(path, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
+        => hub.GetMeshNode(path, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.Throw)
             .SelectMany(node => node is not null || fallbackPath is null
                 ? Observable.Return<(MeshNode? Node, string Path)>((node, path))
+                // Genuinely absent (no timeout) — the authored path is the other legal reading.
                 : hub.GetMeshNode(fallbackPath, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
                     .Select<MeshNode?, (MeshNode? Node, string Path)>(
-                        fallback => (fallback, fallbackPath)));
+                        fallback => (fallback, fallbackPath)))
+            .Catch<(MeshNode? Node, string Path), TimeoutException>(ex =>
+            {
+                logger.LogWarning(ex,
+                    "Code include @@{Path} STALLED (not absent) — the include stays unresolved and "
+                    + "no fallback read is attempted, so one stall costs one read, not two", path);
+                return Observable.Return<(MeshNode? Node, string Path)>((null, path));
+            });
 
     /// <inheritdoc />
     public IObservable<string?> GetAssemblyLocation(MeshNode node)
