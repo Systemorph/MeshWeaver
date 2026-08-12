@@ -93,6 +93,12 @@ public class SearchResultStormTest(ITestOutputHelper output) : MonolithMeshTestB
     /// </summary>
     private const string QuiesceId = "zz-quiesce";
 
+    /// <summary>
+    /// Id of the satellite node written under the catalog root by
+    /// <see cref="CatalogSubscription_SatelliteWriteUnderTheRoot_NeverEntersTheResultSet"/>.
+    /// </summary>
+    private const string SatelliteId = "leaked-satellite";
+
     private static Task WaitUntil(Func<bool> condition, TimeSpan timeout) =>
         Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Select(_ => condition())
@@ -192,5 +198,93 @@ public class SearchResultStormTest(ITestOutputHelper output) : MonolithMeshTestB
             "content-only Updated emissions must add no re-renders to the catalog grid (the storm fix)");
         Volatile.Read(ref updatedForTarget).Should().BeGreaterThanOrEqualTo(updateCount,
             "the change feed delivered every content update — the storm is real; the fix is in the consumer");
+    }
+
+    /// <summary>
+    /// Pins the defect that made the storm test above a coin flip: the live catalog feed must apply
+    /// the SAME result-set exclusions its snapshot does.
+    ///
+    /// <para>A content query never returns satellite nodes — they live in their own storage tables
+    /// (<c>_Activity</c>→activities, <c>_Access</c>→access, …) and the initial snapshot filters them
+    /// out. The live path did not: its write-lag supplement admitted any notified entity that passed
+    /// <c>QueryEvaluator.Matches</c>, and for a bare <c>path:X scope:descendants</c> listing (no
+    /// filter, no free-text term) <c>Matches</c> is true for EVERYTHING. So a satellite write under
+    /// the root arrived as a structural <c>Added</c> and the next re-query took it straight back out
+    /// as <c>Removed</c> — a phantom row that flashes into a live search grid, and two re-renders of
+    /// the whole result list that nothing in the result set justifies.</para>
+    ///
+    /// <para>The storm test hit it because a <c>MonotonicWriteGuard</c> resolution writes a
+    /// <c>{path}/_Activity/write-conflict-{n}</c> satellite, and whether the 25-update storm produced
+    /// a conflict at all was timing. This test does not race anything: it WRITES the satellite
+    /// directly through storage — the exact change notification the live pipeline consumes — and uses
+    /// an ordinary node created afterwards as the ordered proof that the feed processed it.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task CatalogSubscription_SatelliteWriteUnderTheRoot_NeverEntersTheResultSet()
+    {
+        var root = $"{TestPartition}/leak";
+        var catalogQuery = $"path:{root} scope:descendants";
+        var mainPath = $"{root}/main";
+        var satellitePath = $"{mainPath}/_Activity/{SatelliteId}";
+        var markerPath = $"{root}/{QuiesceId}";
+
+        await NodeFactory.CreateNode(
+            new MeshNode("leak", TestPartition) { Name = "Leak", NodeType = "Group" }).Should().Emit();
+        await NodeFactory.CreateNode(
+            new MeshNode("main", root) { Name = "Main", NodeType = "Markdown" }).Should().Emit();
+
+        var accumulator = new SearchResultAccumulator();
+        var structuralFrames = 0;
+        var satelliteFrames = 0;
+        var markerApplied = 0;
+
+        using var subscription = Query.Query<MeshNode>(MeshQueryRequest.FromQuery(catalogQuery))
+            .Subscribe(change =>
+            {
+                // Counted on the RAW frame, not on the accumulator: an Added the accumulator folds in
+                // and a Removed it folds back out are both this defect, and both re-render the grid.
+                if (change.Items.Any(n => string.Equals(n.Path, satellitePath, StringComparison.OrdinalIgnoreCase)))
+                    Interlocked.Increment(ref satelliteFrames);
+
+                if (accumulator.Apply(change))
+                    Interlocked.Increment(ref structuralFrames);
+
+                if (accumulator.Nodes.Any(n => string.Equals(n.Path, markerPath, StringComparison.OrdinalIgnoreCase)))
+                    Volatile.Write(ref markerApplied, 1);
+            });
+
+        // Same ordering discipline as the storm test: act only once the Initial frame has provably
+        // arrived, so everything after it is an ordered post-snapshot change.
+        await WaitUntil(() => Volatile.Read(ref structuralFrames) >= 1, ReadNodeTimeout);
+
+        // The satellite write, straight through storage — the same notification a guard-written
+        // write-conflict log, a comment, or an access grant produces. CreateNodeRequest deliberately
+        // refuses satellite paths (they are per-node lifecycle), so storage is the honest way to
+        // deliver exactly the input the live query pipeline sees.
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        await storage.Write(
+            new MeshNode(SatelliteId, $"{mainPath}/_Activity")
+            {
+                Name = "satellite that must never be a search result",
+                NodeType = "ActivityLog",
+                MainNode = mainPath,
+                State = MeshNodeState.Active,
+                Version = 1,
+            },
+            Mesh.JsonSerializerOptions).Should().Emit();
+
+        // An ORDINARY node created after it. The change feed is ordered, so once the marker has been
+        // applied every frame the satellite write could have produced is already delivered and
+        // counted — no sleep, no tolerance.
+        await NodeFactory.CreateNode(
+            new MeshNode(QuiesceId, root) { Name = "quiesce marker", NodeType = "Markdown" }).Should().Emit();
+        await WaitUntil(() => Volatile.Read(ref markerApplied) == 1, ReadNodeTimeout);
+
+        Volatile.Read(ref satelliteFrames).Should().Be(0,
+            "a satellite node is not a content-query result — the snapshot excludes it, so the live "
+            + "feed must never emit it either, as an Added or as the Removed that takes it back out");
+        accumulator.Nodes.Should().NotContain(
+            n => string.Equals(n.Path, satellitePath, StringComparison.OrdinalIgnoreCase),
+            "the satellite must never reach the rendered result set");
     }
 }
