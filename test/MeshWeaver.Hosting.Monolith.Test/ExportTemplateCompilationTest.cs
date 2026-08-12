@@ -5,6 +5,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Markdown.Export;
+using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Mesh;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
@@ -39,6 +40,30 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class ExportTemplateCompilationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>
+    /// 🚨 <c>AddMarkdownExport()</c> IS PART OF THE SURFACE UNDER TEST — without it this fixture
+    /// does not reproduce production, it reproduces a portal that does not have the export feature
+    /// installed, and the templates fail to resolve their OWN namespace.
+    ///
+    /// <para>The script reference set is the process-global snapshot of loaded assemblies UNION the
+    /// per-session <c>KernelScriptAssembly</c> contributions, and <c>AddMarkdownExport</c> is what
+    /// contributes <c>MeshWeaver.Markdown.Export</c> — its registration says so in as many words:
+    /// <i>"Without this the export template .csx files can't resolve using
+    /// MeshWeaver.Markdown.Export.* when AppDomain hasn't eagerly loaded the assembly before the
+    /// first script run."</i> A default <c>MonolithMeshTestBase</c> mesh never calls it, so the
+    /// templates compiled against a surface MISSING the assembly that defines
+    /// <c>DocumentBuilder</c>, <c>ExportFormat</c>, <c>RenderedDocument</c> and the rest —
+    /// CS0234 on the namespace, then a cascade of CS0246.</para>
+    ///
+    /// <para><b>Why it ever passed.</b> The snapshot is a process-global <c>Lazy</c>, so the
+    /// assembly was present iff something ELSE in the same test process had already loaded it when
+    /// the snapshot was first materialized. That made the result depend on which class ran first in
+    /// the shard — green by luck, and silently. Registering the module makes it deterministic: the
+    /// session contribution is recomputed per call, never memoized.</para>
+    /// </summary>
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder).AddMarkdownExport();
+
     public static IEnumerable<object[]> Templates() =>
         MarkdownExportTemplates.GetStaticNodes()
             .Where(n => n.Content is CodeConfiguration)
@@ -65,10 +90,15 @@ public class ExportTemplateCompilationTest(ITestOutputHelper output) : MonolithM
             .Select(d => d.ToString())
             .ToArray();
 
+        // 🚨 The message NAMES the diagnostics. A bare "expected collection to be empty, but found
+        // 40 item(s)" tells the next reader the templates broke and nothing about how — which for a
+        // script compiled at runtime is the entire content of the failure. Whoever sees this red
+        // must be able to act on it without re-deriving the compile locally.
         errors.Should().BeEmpty(
             $"the export template {templatePath} is compiled at RUNTIME and is invisible to " +
             "dotnet build — a reference to an API that does not exist on the production surface " +
-            "only ever surfaces as a failed export in front of a user");
+            "only ever surfaces as a failed export in front of a user. Diagnostics:\n" +
+            string.Join("\n", errors));
     }
 
     [Fact(Timeout = 30000)]

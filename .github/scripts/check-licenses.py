@@ -78,16 +78,6 @@ EXCEPTIONS = {
     # (questpdf lived here from 2026-08-11 until #1230 removed the package: the portal base
     #  image now ships a headless Chromium and the PDF renderer prints CSS Paged Media with
     #  it, so there is nothing left to except. Deleted with the dependency, as it said.)
-    "jsonpatch.net": (
-        "Open Source Maintenance Fee (OSMFEULA.txt); decision tracked by #1231. The "
-        "SOURCE is MIT and the EULA states the fee is not a licence fee and that the "
-        "OSI licence governs on conflict - so this is a fee expectation on the "
-        "published binary, not a licence breach. Core dependency: the RFC 7396 "
-        "merge-patch path behind every cross-hub stream.Update."
-    ),
-    "jsonpath.net": ("Open Source Maintenance Fee; see jsonpatch.net above and #1231."),
-    "json.more.net": ("Transitive under the json-everything family; see #1231."),
-    "jsonpointer.net": ("Transitive under the json-everything family; see #1231."),
     # --- Permissive upstream, metadata simply absent from the package. ---
     "uglytoad.pdfpig": (
         "Apache-2.0 upstream (github.com/UglyToad/PdfPig). The 1.7.0-custom-* "

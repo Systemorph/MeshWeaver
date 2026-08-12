@@ -59,12 +59,27 @@ public interface IPathResolver
     IObservable<AddressResolution?> ResolveRoute(string path) => ResolvePath(path);
 
     /// <summary>
-    /// Navigation-only resolution: <see cref="ResolvePath"/> plus the legacy
-    /// <c>/User/{id}[/area]</c> home rewrite (strips the obsolete <c>User/</c> prefix and
-    /// re-resolves against the user's own root partition so the home area renders on the
-    /// right hub). Used exclusively by the GUI URL→area consumers (Blazor
-    /// <c>NavigationService</c> / area pages). Message routing and node reads must NOT use
-    /// this — they use <see cref="ResolvePath"/> so <c>User/{id}</c> stays unmodified.
+    /// Navigation-only resolution: <see cref="ResolvePath"/> plus the URL-shape rewrites that
+    /// belong to browsing and to nothing else. Used exclusively by the GUI/agent URL→area consumers
+    /// (Blazor <c>NavigationService</c>, area pages, <c>MeshOperations.NavigateTo</c>). Message
+    /// routing and node reads must NOT use this — they use <see cref="ResolvePath"/>, which stays
+    /// literal so a read can never silently answer with a DIFFERENT node than the caller named.
+    ///
+    /// <para>Two rewrites, in order:</para>
+    /// <list type="number">
+    ///   <item>the legacy <c>/User/{id}[/area]</c> home rewrite (strips the obsolete <c>User/</c>
+    ///     prefix and re-resolves against the user's own root partition);</item>
+    ///   <item><b>moved-node redirects</b> — a <c>Redirect</c> node (content
+    ///     <see cref="NodeRedirect"/>) left at a retired path sends the whole subtree under it to
+    ///     the new location, chained up to <see cref="NodeRedirectRules.MaxHops"/> hops with cycle
+    ///     detection. A followed resolution carries <see cref="AddressResolution.RedirectedFrom"/>;
+    ///     a chain that loops, overruns the cap or names a missing target stops at the redirect node
+    ///     and reports <see cref="AddressResolution.RedirectDiagnostic"/>.</item>
+    /// </list>
+    ///
+    /// <para>🚨 A redirect rewrites a PATH — it confers no access. The rewritten target is gated and
+    /// read exactly as if the viewer had typed the target URL, so a redirect can never widen what
+    /// someone can see. See <c>Doc/Architecture/NodeRedirects.md</c>.</para>
     /// </summary>
     IObservable<AddressResolution?> ResolveNavigationPath(string path);
 }
@@ -83,7 +98,27 @@ public record AddressResolution(
     string Prefix,
     string? Remainder,
     MeshNode? Node = null
-);
+)
+{
+    /// <summary>
+    /// The path the caller ORIGINALLY asked for, when a <c>Redirect</c> declaration moved this
+    /// resolution somewhere else — <c>null</c> on every normal resolution. Set only by
+    /// <see cref="IPathResolver.ResolveNavigationPath"/> (the one surface that follows redirects;
+    /// routing and node reads stay literal). The GUI uses it for two things: to rewrite the browser
+    /// URL to the canonical target — so relative links inside the page resolve against the right
+    /// path and the bookmark heals — and to TELL the viewer they were moved.
+    /// </summary>
+    public string? RedirectedFrom { get; init; }
+
+    /// <summary>
+    /// Why a redirect chain stopped short, when it did: a cycle, the hop cap, or a target that does
+    /// not exist. <c>null</c> whenever no chain was walked or the chain arrived. The resolution
+    /// itself then points at the last <c>Redirect</c> node, so the viewer lands on a page that names
+    /// the intended destination instead of a dead end — and the reason is a value the GUI and the
+    /// tests can read, not just a log line.
+    /// </summary>
+    public RedirectDiagnostic? RedirectDiagnostic { get; init; }
+}
 
 /// <summary>Information about storage configuration.</summary>
 public record StorageInfo(

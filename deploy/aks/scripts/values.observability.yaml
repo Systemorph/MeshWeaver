@@ -1,0 +1,125 @@
+# Values for the `grafana/loki-stack` install (see install-observability.sh).
+#
+# 🚨 WHY THIS FILE EXISTS — the chart defaults make the log store the FIRST casualty of the very
+# incident you need it for. On memex-cloud 2026-08-12 a NodeType-recompile storm drove the portal to
+# 20.3 GiB (Burstable: requests 10Gi, limit 28Gi, pinned `workload=silos`). Loki had NO resource
+# requests at all, so it was **BestEffort** — the class the kubelet evicts FIRST under node memory
+# pressure — and it had NO nodeSelector, so it had been scheduled onto a *silos* node: the one pool
+# licensed to balloon to 28 GiB. It was evicted, and because its `storage` volume was an **emptyDir**
+# the eviction did not cost the last few minutes of head chunks, it cost THE WHOLE STORE. Promtail
+# then logged `connect: connection refused` for minutes and dropped the batches it was holding.
+#
+# Net effect: the entire incident window is unqueryable, and `mw-log-watcher` — which reads FROM Loki
+# (`LogWatcher__LokiUrl`) — went blind at the same moment, so the red-log ticketing filed nothing for
+# the storm that needed it. The detector and the evidence shared a fate with the thing they observe.
+#
+# The three changes below break that chain. They are containment, not the cure: the portal's 20 GiB
+# is a NodeType-recompile AssemblyLoadContext leak and that is fixed separately. Never "fix" this by
+# raising the portal's memory limit or the node size — that only moves the ceiling.
+
+loki:
+  # 1. OUT OF BestEffort. Requests are what the eviction ranking reads: a pod inside its requests is
+  #    protected relative to any BestEffort pod on the node. Sized from observed steady state
+  #    (~150-300Mi), with headroom for query bursts rather than for retained data (that is the PVC).
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 3Gi
+
+  # 2. OFF THE WORKLOAD POOL. The portal pins to `workload=silos` and is allowed to burst to 28 GiB
+  #    there; observability must not be its co-tenant. The system pool has two nodes and carries no
+  #    taints (verified 2026-08-12), so a plain nodeSelector is enough — no tolerations needed.
+  nodeSelector:
+    agentpool: system
+
+  # 3. DURABLE STORE. With the default emptyDir, ANY reschedule — eviction, node upgrade, a chart
+  #    upgrade — silently wipes every log the cluster has. This is the single change that would have
+  #    preserved the 2026-08-12 window.
+  persistence:
+    enabled: true
+    size: 30Gi
+    storageClassName: default
+
+promtail:
+  # Deliberately NO nodeSelector: Promtail is a DaemonSet and must run on EVERY node, including the
+  # silos pool, or those nodes' logs are never shipped. Only the QoS class changes.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  # 🚨 NOT DONE HERE — Promtail's WAL, which is what would stop a Loki outage from DROPPING the
+  # batches Promtail is holding (it retried `connect: connection refused` for minutes on 2026-08-12
+  # and then discarded them). The binary supports it (3.5.1; WAL landed in 2.8) and `/run/promtail`
+  # is already a writable hostPath, so the mechanism is there — but this DEPRECATED loki-stack chart
+  # does not pass a `promtail.config.wal` block through to the rendered config. VERIFIED, not
+  # assumed: rendering with `--set promtail.config.wal.enabled=true` yields ZERO occurrences of
+  # "wal" in the output. Setting it anyway would be a silent no-op that reads like coverage.
+  #
+  # Getting it needs either a full `promtail.config.file` override or migrating off loki-stack to the
+  # maintained grafana/loki + grafana/promtail charts (`helm template` also warns "This chart is
+  # deprecated"). That migration is its own operation — do it deliberately, not folded into this.
+
+grafana:
+  nodeSelector:
+    agentpool: system
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+prometheus:
+  server:
+    nodeSelector:
+      agentpool: system
+  alertmanager:
+    nodeSelector:
+      agentpool: system
+
+  # 🚨 ALERT ON THE PIPELINE ITSELF. Silent log loss is the worst failure mode there is: you discover
+  # it during the incident review that needs the logs. On 2026-08-12 Loki was down from 05:35 and
+  # nothing said so — the outage was found hours later, by hand, while reconstructing the timeline.
+  # These fire on the log path being broken, not on anything the log path reports.
+  serverFiles:
+    alerting_rules.yml:
+      groups:
+        - name: log-pipeline
+          rules:
+            - alert: LokiDown
+              expr: up{job=~".*loki.*"} == 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: Loki is down — logs are being dropped, and mw-log-watcher is blind
+                description: >-
+                  The log store is unreachable, so Promtail is buffering in memory and will discard
+                  batches, and mw-log-watcher (which reads FROM Loki) files no incidents while this
+                  lasts. Check whether Loki was evicted: it must not be BestEffort and must not run
+                  on the `workload=silos` pool.
+            - alert: PromtailDroppingLogs
+              expr: rate(promtail_dropped_bytes_total[5m]) > 0
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: Promtail is discarding log lines — the window being dropped is unrecoverable
+                description: >-
+                  Dropped bytes are gone for good: this chart cannot enable Promtail's WAL (see the
+                  promtail section), and once a pod is deleted its node-local log files go with it.
+            - alert: PromtailNotShipping
+              expr: rate(promtail_sent_entries_total[10m]) == 0
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: Promtail has shipped nothing for 10 minutes
+                description: >-
+                  Either every watched pod is genuinely silent, or the pipeline is broken upstream of
+                  Loki. mw-log-watcher cannot tell those apart from an empty query result.

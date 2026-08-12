@@ -3,8 +3,7 @@ using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
-using Json.Patch;
-using Json.Pointer;
+using MeshWeaver.Json;
 using Xunit;
 
 namespace MeshWeaver.Data.Test;

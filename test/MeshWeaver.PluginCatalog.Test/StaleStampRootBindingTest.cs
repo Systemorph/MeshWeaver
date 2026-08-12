@@ -247,6 +247,22 @@ public class StaleStampRootBindingTest(ITestOutputHelper output) : MonolithMeshT
         installMs.Should().BeLessThan(30_000,
             "the install must not post into a root it cannot activate and then wait out the hub's "
             + $"whole request timeout — it did exactly that before the fix (60.9 s); took {installMs}ms");
+
+        // 🅿️ The same install AGAIN — the RECORDED-fact case in its purest form (#1277). Nothing
+        // changed, so no release is requested and NOTHING will ever emit on the type's stream
+        // again. A publish gate that insists on WITNESSING a rebuild has nothing left to witness
+        // and can only end on its 90 s cap; one that reads NodeTypeCompileParkRegistry answers
+        // from state the process already holds. This is the half the first install cannot pin: it
+        // still sees a live compile on its way past, which is exactly why the regression was
+        // bimodal rather than constant.
+        var again = System.Diagnostics.Stopwatch.StartNew();
+        await Install(id, broken);
+        var againMs = again.ElapsedMilliseconds;
+        Output.WriteLine($"re-install of the broken package returned at +{againMs}ms");
+        againMs.Should().BeLessThan(15_000,
+            "a re-install of a package whose NodeType is PARKED compiles nothing at all, so the "
+            + "publish gate must answer from the recorded park rather than wait out its settle "
+            + $"budget; took {againMs}ms");
     }
 
     /// <summary>Installs the fixture package through the standard installer.</summary>
