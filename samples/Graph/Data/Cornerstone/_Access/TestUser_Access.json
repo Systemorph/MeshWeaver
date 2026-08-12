@@ -10,7 +10,7 @@
     "displayName": "Test User",
     "roles": [
       {
-        "role": "Admin"
+        "role": "Viewer"
       }
     ]
   }
