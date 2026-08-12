@@ -19,9 +19,10 @@ namespace MeshWeaver.ContentCollections.Indexing.Graph;
 /// </summary>
 public sealed class ContentIndexingActivityContext
 {
-    private readonly Action<string, LogLevel> append;
+    private readonly Action<IReadOnlyList<LogMessage>> append;
 
-    internal ContentIndexingActivityContext(string activityPath, CancellationToken ct, Action<string, LogLevel> append)
+    internal ContentIndexingActivityContext(
+        string activityPath, CancellationToken ct, Action<IReadOnlyList<LogMessage>> append)
     {
         ActivityPath = activityPath;
         CancellationToken = ct;
@@ -34,8 +35,26 @@ public sealed class ContentIndexingActivityContext
     /// <summary>Trips when the user requests cancel (<c>RequestedStatus = Cancelled</c> on the activity).</summary>
     public CancellationToken CancellationToken { get; }
 
-    /// <summary>Appends a progress line to the activity's <see cref="ActivityLog.Messages"/> (shown live).</summary>
-    public void Log(string message, LogLevel level = LogLevel.Information) => append(message, level);
+    /// <summary>
+    /// Appends ONE progress line to the activity's <see cref="ActivityLog.Messages"/> (shown live).
+    ///
+    /// <para>🚨 One call = one <c>stream.Update</c>, and a write is <b>O(size of the whole activity
+    /// node)</b> — the patcher re-serialises the entire content and diffs it on EVERY update. So N
+    /// calls cost <b>O(N²)</b>. Never call this per item; collect the lines and use
+    /// <see cref="LogRange"/>.</para>
+    /// </summary>
+    public void Log(string message, LogLevel level = LogLevel.Information) =>
+        append([new LogMessage(message, level)]);
+
+    /// <summary>
+    /// Appends MANY lines in a <b>SINGLE</b> <c>stream.Update</c> — the form to use for anything that
+    /// produces a line PER ITEM. Appending N lines one at a time is O(N²) in CPU and allocation;
+    /// appending them together is O(N). No-op when <paramref name="messages"/> is empty.
+    /// </summary>
+    public void LogRange(IReadOnlyList<LogMessage> messages)
+    {
+        if (messages.Count > 0) append(messages);
+    }
 }
 
 /// <summary>
@@ -130,7 +149,7 @@ internal static class ContentIndexingActivity
                         });
 
                     var ctx = new ContentIndexingActivityContext(activityPath, cts.Token,
-                        (msg, level) => Append(workspace, accessService, owner, activityPath, msg, level, logger));
+                        messages => Append(workspace, accessService, owner, activityPath, messages, logger));
 
                     return command(ctx)
                         .DefaultIfEmpty(Unit.Default)
@@ -172,10 +191,19 @@ internal static class ContentIndexingActivity
             ? null
             : new AccessContext { ObjectId = created.CreatedBy, Name = created.CreatedBy };
 
+    /// <summary>
+    /// Appends <paramref name="messages"/> to the activity log in ONE <c>stream.Update</c>.
+    ///
+    /// <para>🚨 The write is O(size of the WHOLE activity node): the patcher <c>SerializeToNode</c>s
+    /// the entire content and diffs every element on every update. That is why callers batch — a
+    /// per-item append over n items serialises 1 + 2 + … + n copies of a growing document, which is
+    /// the O(n²) CPU shape that put memex-cloud at 51% of CFS periods throttled (#1341, #1172).</para>
+    /// </summary>
     private static void Append(
         IWorkspace workspace, AccessService? accessService, AccessContext? owner,
-        string activityPath, string message, LogLevel level, ILogger? logger)
+        string activityPath, IReadOnlyList<LogMessage> messages, ILogger? logger)
     {
+        if (messages.Count == 0) return;
         // 🚨 Re-establish the owner identity at THIS write's .Update() invocation — ctx.Log
         // fires from the command's own threads (IIoPool body / reactive hops) where the
         // ambient AccessContext has cleared; without re-stamping, the cross-hub patch posts
@@ -191,7 +219,7 @@ internal static class ContentIndexingActivity
                 // (project_baddata_contentas_pattern.)
                 var log = node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger);
                 if (log is null) return node;
-                return node with { Content = log with { Messages = log.Messages.Add(new LogMessage(message, level)) } };
+                return node with { Content = log with { Messages = log.Messages.AddRange(messages) } };
             }).Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Indexing activity log append failed for {Path}", activityPath));
         }
     }
