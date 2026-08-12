@@ -949,16 +949,18 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         }
 
         // Wildcard namespace mapping — `namespace:*/_Thread` is parsed as a
-        // `namespace LIKE '%/_Thread'` filter (NOT as a Path), so the
+        // `namespace LIKE '*/_Thread'` filter (NOT as a Path), so the
         // path-based check above doesn't see it. Walk the parsed filter for
         // a namespace LIKE node and inspect its value for a satellite segment.
         var nsLikeValue = ExtractNamespaceLikeValue(parsed.Filter);
         if (!string.IsNullOrEmpty(nsLikeValue))
         {
-            // Strip SQL wildcards so PathContainsSegment can do its
-            // boundary check ("partition/%/_Thread" → "partition//_Thread"
-            // → still has '_Thread' bounded by '/').
-            var sanitized = nsLikeValue.Replace("%", "");
+            // Strip the wildcards so PathContainsSegment can do its boundary
+            // check ("partition/*/_Thread" → "partition//_Thread" → still has
+            // '_Thread' bounded by '/'). Both spellings are removed: this is a
+            // sanitiser, not a matcher, and a hand-built ParsedQuery may still
+            // carry a SQL-shaped pattern the parser would never produce.
+            var sanitized = QueryWildcard.StripWildcards(nsLikeValue);
             foreach (var (suffix, table) in segmentTables.OrderByDescending(kv => kv.Key.Length))
             {
                 if (PathContainsSegment(sanitized, suffix))
@@ -984,7 +986,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     /// <see cref="QueryParser"/> emits exactly this shape for
     /// <c>namespace:VALUE_WITH_*</c> (e.g. <c>namespace:*/_Thread</c>) —
     /// stashing the matched pattern as the LIKE argument. Returns the raw
-    /// pattern (with <c>%</c> still in place) for the caller to sanitise.
+    /// pattern (wildcards still in place) for the caller to sanitise.
     /// <see langword="null"/> if no matching node.
     /// </summary>
     private static string? ExtractNamespaceLikeValue(QueryNode? node)
