@@ -352,10 +352,14 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(activityPath), reference);
 
-        // The result hangs off the Progress root under its OWN named area, after the status
-        // indicator and the log — a notebook cell's reading order.
+        // The result hangs off the Progress root under its OWN named area, after the log —
+        // and WITHOUT a "✓ Done" status heading: a succeeded run whose result renders shows
+        // the result alone (ActivityLayoutAreas.ShowsStatusLine — the cell toolbar carries the
+        // idle state instead, 2026-08-12 UX feedback). Exactly two areas: the (empty) log and
+        // the result.
         var root = (StackControl)(await stream.GetControlStream(reference.Area!)
             .Should().Within(60.Seconds()).Match(c => c is StackControl s
+                && s.Areas.Count == 2
                 && s.Areas.Any(a => IsArea(a, ActivityLayoutAreas.ResultArea))))!;
         var resultArea = root.Areas.First(a => IsArea(a, ActivityLayoutAreas.ResultArea)).Area!.ToString()!;
 
@@ -371,8 +375,9 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
                 && m.Markdown.ToString()!.Contains(marker));
 
         // The log says nothing: "This run produced no output." beside a rendered result would
-        // contradict the very thing under it.
-        var logArea = root.Areas[1].Area!.ToString()!;
+        // contradict the very thing under it. With the status heading gone the log is the
+        // root's FIRST area (the result is the second).
+        var logArea = root.Areas[0].Area!.ToString()!;
         await stream.GetControlStream(logArea)
             .Should().Within(30.Seconds()).Match(c => c is StackControl s && s.Areas.Count == 0);
     }
