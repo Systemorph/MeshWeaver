@@ -86,6 +86,19 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     /// <summary>Inline CSS style string bound from <c>ViewModel.Style</c>; applied to the root element.</summary>
     protected string? Style { get; set; }
 
+    /// <summary>
+    /// <see cref="Style"/> rendered as a space-prefixed suffix, for views whose root element already
+    /// carries FIXED declarations of its own (<c>style="max-width: 720px;@StyleSuffix"</c>). It goes
+    /// LAST so the author's declarations win the cascade over the view's defaults, and it is the empty
+    /// string when nothing was declared, so an unstyled control's markup stays byte-identical.
+    /// </summary>
+    /// <remarks>
+    /// Views whose root has no style of its own use <c>style="@Style"</c> directly, and views that
+    /// forward to a Fluent component pass <c>Style="@Style"</c>. Form views fold Style with Width and
+    /// Height through <c>FormComponentBase.ComputedStyle</c> instead.
+    /// </remarks>
+    protected string StyleSuffix => string.IsNullOrWhiteSpace(Style) ? string.Empty : " " + Style;
+
     // Snapshot of the binding-relevant parameters at the last actual bind — OnParametersSet compares
     // against these to skip redundant re-binds (see the guard there).
     private TViewModel? _boundViewModel;
