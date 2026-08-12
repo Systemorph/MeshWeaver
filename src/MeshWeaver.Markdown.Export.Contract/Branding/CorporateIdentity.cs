@@ -5,7 +5,9 @@ namespace MeshWeaver.Markdown.Export.Branding;
 /// <summary>
 /// Content of a <c>CorporateIdentity</c> mesh node. Carries the visual brand data
 /// a document export applies: logo, colors, header/footer text, typography.
-/// Resolved by <see cref="BrandingResolver"/> from the selected brand node path.
+/// Resolved by <c>BrandingResolver</c> from the selected brand node path — that resolver lives in
+/// the rendering engine (<c>MeshWeaver.Markdown.Export</c>), which references this assembly, so it
+/// cannot be a <c>cref</c> from here.
 /// </summary>
 public record CorporateIdentity
 {
