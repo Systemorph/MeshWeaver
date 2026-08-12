@@ -84,10 +84,15 @@ public static class ActivityLayoutAreas
         // `activityId = submissionId`), and the hub's address is that node's path.
         var submissionId = host.Hub.Address.Segments[^1];
         var controls = host.Hub.ServiceProvider.GetRequiredService<IUiControlService>();
+        // Project to THIS submission's entry and dedupe before converting: the dictionary is
+        // hub-wide, so an unrelated submission's update must not re-render this pane (or pay for
+        // another Convert). The seed makes the dedupe cover the initial null too, so a hub whose
+        // dictionary is simply empty emits exactly one.
         return areas
             .Select(change => change.Value?.GetValueOrDefault(submissionId))
-            .Select(value => value is IUiControl ? controls.Convert(value!) : null)
-            .StartWith((UiControl?)null);
+            .StartWith((object?)null)
+            .DistinctUntilChanged()
+            .Select(value => value is IUiControl ? controls.Convert(value!) : null);
     }
 
     /// <summary>
