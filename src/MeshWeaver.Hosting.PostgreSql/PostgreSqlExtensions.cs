@@ -57,7 +57,18 @@ public class PostgreSqlStorageAdapterFactory(
         }
 
         var embeddingProvider = serviceProvider.GetService<IEmbeddingProvider>();
-        return new PostgreSqlStorageAdapter(dataSource, embeddingProvider);
+        // Both bounds, from the MESH-SCOPED registry (never a second instance) — the same wiring
+        // the partitioned provider does. Without it this adapter runs every read AND write on
+        // IoPool.Unbounded against its shared data source, which is how #1310 happened on the
+        // partitioned path. Pool NAMES match PostgreSqlPartitionStorageProvider.Name ("Postgres")
+        // on purpose: when Aspire injects the data source, that IS the same connection pool, so
+        // the bound has to be the same bound.
+        var ioPoolRegistry = serviceProvider.GetService<IoPoolRegistry>();
+        return new PostgreSqlStorageAdapter(
+            dataSource,
+            embeddingProvider,
+            readPool: ioPoolRegistry?.Get(IoPoolNames.PostgresReadAdapterPrefix + "Postgres"),
+            ioPool: ioPoolRegistry?.Get(IoPoolNames.PostgresAdapterPrefix + "Postgres"));
     }
 }
 
