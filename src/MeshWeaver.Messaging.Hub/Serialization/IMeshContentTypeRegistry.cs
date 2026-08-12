@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
 // 🚨 Namespace deliberately NOT MeshWeaver.Messaging.Serialization (where the file now lives).
 // The type used to sit in MeshWeaver.Mesh.Contract, but MeshWeaver.Mesh.Contract REFERENCES
@@ -46,18 +47,49 @@ namespace MeshWeaver.Mesh.Services;
 /// None of them ADOPT the type into a hub's <c>ITypeRegistry</c>: they deserialise to the concrete
 /// type explicitly, so a per-compile collectible identity never becomes a hub's long-lived answer for
 /// that discriminator (see <c>PolymorphicTypeInfoResolver.WarnCollectibleSerialization</c>).</para>
+///
+/// <para>🚨 <b>A discriminator is a package-local name, so the map answers only where that name is
+/// mesh-wide unique.</b> Two packages may each define a <c>Currency</c>; when both have registered,
+/// the name resolves to NEITHER (see <see cref="TryResolveByDiscriminator"/>) and the content stays
+/// a <see cref="JsonElement"/> for any hub that has not registered the type itself. The exact route
+/// — <see cref="TryResolveByNodeType"/>, keyed on the node's own NodeType path — is never ambiguous
+/// and is the durable answer for a caller that has the node in hand.</para>
 /// </summary>
 public interface IMeshContentTypeRegistry
 {
     /// <summary>
     /// Records <paramref name="contentType"/> under its short name and full name (both are valid
     /// <c>$type</c> discriminators), and — when supplied — under its <paramref name="nodeTypePath"/>.
-    /// Idempotent; last-writer-wins on a short-name collision (the same accepted risk the rest of the
-    /// framework's short-name <c>$type</c> resolution already carries).
+    /// Idempotent, and last-writer-wins for a REBUILD of the same declaration (a recompiled NodeType
+    /// mints a new CLR identity under the same assembly name).
+    ///
+    /// <para>🚨 A discriminator claimed by two DIFFERENT declarations becomes
+    /// <b>ambiguous</b> and stops resolving by name — see
+    /// <see cref="TryResolveByDiscriminator"/>.</para>
     /// </summary>
     void Register(Type contentType, string? nodeTypePath = null);
 
-    /// <summary>Resolves a <c>$type</c> discriminator (short or full name) to its CLR type.</summary>
+    /// <summary>
+    /// Resolves a <c>$type</c> discriminator (short or full name) to its CLR type — and REFUSES
+    /// (returns <c>false</c>) a discriminator two different declarations have claimed.
+    ///
+    /// <para>🚨 <b>Why refusing beats answering.</b> A dynamically-compiled content type's
+    /// discriminator is its bare CLR name, and that name is unique only inside its own package:
+    /// one customer node repo ships <c>Currency</c> four times (<c>Reinsurance/Currency</c>,
+    /// <c>ClaimsDeepfield/Currency</c>, <c>UWDeepfield/Currency</c>, <c>Ifrs17/Currency</c>) and
+    /// eleven further names twice or more. With last-writer-wins, "the" <c>Currency</c> was
+    /// whichever package's NodeType had compiled most recently — so one package's content
+    /// deserialised into ANOTHER package's CLR record, dropping every member that record does not
+    /// declare and materialising defaults it does. Which package won changed run to run, because
+    /// registration happens at each type's compile, so the SAME input produced different results
+    /// (Systemorph/MeshWeaver#1299).</para>
+    ///
+    /// <para>An unresolvable name leaves the content a <see cref="JsonElement"/> — honest,
+    /// deterministic, and recoverable by <c>ContentAs&lt;T&gt;</c> at a consumer that knows which
+    /// type it wants. A wrong answer is silent and lossy. <see cref="TryResolveByNodeType"/> stays
+    /// exact and is unaffected: a caller that knows the node's NodeType always gets the right
+    /// type.</para>
+    /// </summary>
     bool TryResolveByDiscriminator(string discriminator, out Type contentType);
 
     /// <summary>Resolves a NodeType path to its content CLR type, when one was registered.</summary>
@@ -70,39 +102,110 @@ public interface IMeshContentTypeRegistry
     /// target is passed explicitly, so the caller hub's registry need not know the type). Returns
     /// <c>null</c> when the element carries no resolvable <c>$type</c> or deserialisation fails —
     /// leaving the caller to keep the existing untyped-JsonElement warning for the genuinely
-    /// unresolvable case.
+    /// unresolvable case. An AMBIGUOUS discriminator (two declarations, see
+    /// <see cref="TryResolveByDiscriminator"/>) is one of the unresolvable cases.
     /// </summary>
     object? TryRecover(JsonElement content, JsonSerializerOptions options);
 }
 
 /// <summary>
 /// Default <see cref="IMeshContentTypeRegistry"/>: two lock-free concurrent maps
-/// (discriminator → type, NodeType path → type). No mutable static state; one instance per mesh,
+/// (discriminator → claim, NodeType path → type). No mutable static state; one instance per mesh,
 /// held as a DI singleton for the process lifetime.
 /// </summary>
-public sealed class MeshContentTypeRegistry : IMeshContentTypeRegistry
+/// <param name="logger">Names an ambiguous discriminator once, with both declarations — the only
+/// place the collision is visible, and the one thing an operator needs to fix it (rename one of the
+/// two content records).</param>
+public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? logger = null)
+    : IMeshContentTypeRegistry
 {
-    private readonly ConcurrentDictionary<string, Type> _byDiscriminator = new(StringComparer.Ordinal);
+    /// <summary>
+    /// One discriminator's claim: the CLR type, WHICH declaration claimed it, and whether a second,
+    /// different declaration has since claimed the same name (making the name unusable).
+    /// </summary>
+    /// <param name="ContentType">The type the (first) declaration registered.</param>
+    /// <param name="Declaration">The declaring identity — see <see cref="DeclarationOf"/>.</param>
+    /// <param name="Ambiguous">Set once and never cleared: a later rebuild of either claimant must
+    /// not "heal" a name that two packages genuinely share.</param>
+    private sealed record DiscriminatorClaim(Type ContentType, string Declaration, bool Ambiguous);
+
+    private readonly ConcurrentDictionary<string, DiscriminatorClaim> _byDiscriminator = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Type> _byNodeType = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// WHO declared a content type — the NodeType path when the caller knows it, otherwise the
+    /// declaring assembly's simple name. For a runtime-compiled NodeType that assembly name is
+    /// derived from the NodeType's own path (<c>NodeTypeRelease.GetSanitizedPath</c>), so it is
+    /// stable across REBUILDS of one type and differs between two types that merely share a short
+    /// name. That is exactly the distinction the ambiguity rule needs, and it needs no plumbing at
+    /// the single <c>WithContentType</c> call site.
+    /// </summary>
+    private static string DeclarationOf(Type contentType, string? nodeTypePath) =>
+        !string.IsNullOrEmpty(nodeTypePath)
+            ? "nodeType:" + nodeTypePath
+            : "assembly:" + (contentType.Assembly.GetName().Name ?? contentType.Assembly.FullName ?? "?");
 
     /// <inheritdoc />
     public void Register(Type contentType, string? nodeTypePath = null)
     {
         if (contentType is null)
             return;
-        _byDiscriminator[contentType.Name] = contentType;
-        if (contentType.FullName is { } fullName)
-            _byDiscriminator[fullName] = contentType;
+        var declaration = DeclarationOf(contentType, nodeTypePath);
+        ClaimDiscriminator(contentType.Name, contentType, declaration);
+        if (contentType.FullName is { } fullName && !string.Equals(fullName, contentType.Name, StringComparison.Ordinal))
+            ClaimDiscriminator(fullName, contentType, declaration);
         if (!string.IsNullOrEmpty(nodeTypePath))
             _byNodeType[nodeTypePath] = contentType;
+    }
+
+    private void ClaimDiscriminator(string discriminator, Type contentType, string declaration)
+    {
+        var claim = _byDiscriminator.AddOrUpdate(
+            discriminator,
+            _ => new DiscriminatorClaim(contentType, declaration, Ambiguous: false),
+            (_, previous) => previous.Ambiguous
+                // Already contested — keep it contested. A rebuild of one claimant does not make
+                // the name unique again.
+                ? previous
+                // The SAME CLR type registered again — two NodeTypes sharing one compiled record
+                // (a package's shared Source folder). One type, one answer: never ambiguous.
+                : ReferenceEquals(previous.ContentType, contentType)
+                    ? previous
+                    : string.Equals(previous.Declaration, declaration, StringComparison.Ordinal)
+                        // Same declaration, new identity: a REBUILD. The newest one is the answer.
+                        ? new DiscriminatorClaim(contentType, declaration, Ambiguous: false)
+                        : previous with { Ambiguous = true });
+        if (claim.Ambiguous && !ReferenceEquals(claim.ContentType, contentType))
+            WarnAmbiguous(discriminator, claim.Declaration, declaration);
+    }
+
+    // Once per (discriminator, second declaration): the collision is a permanent property of the
+    // installed content, so repeating it on every recompile would be noise — but staying silent
+    // would make "renders empty" unexplainable, since the refusal to resolve is deliberate.
+    private readonly ConcurrentDictionary<string, byte> _warned = new(StringComparer.Ordinal);
+
+    private void WarnAmbiguous(string discriminator, string first, string second)
+    {
+        if (logger is null || !_warned.TryAdd(discriminator + "|" + second, 0))
+            return;
+        logger.LogWarning(
+            "Content type discriminator '{Discriminator}' is claimed by two different declarations "
+            + "({First} and {Second}) — it can no longer be resolved by name, and content carrying it "
+            + "stays an untyped JsonElement on any hub that has not registered the type itself. "
+            + "Answering with one of the two would deserialise one package's content into the other's "
+            + "record (members dropped, foreign defaults materialised) and the winner would depend on "
+            + "compile order. Rename one of the two content records to make the name unique.",
+            discriminator, first, second);
     }
 
     /// <inheritdoc />
     public bool TryResolveByDiscriminator(string discriminator, out Type contentType)
     {
-        if (!string.IsNullOrEmpty(discriminator) && _byDiscriminator.TryGetValue(discriminator, out var t))
+        if (!string.IsNullOrEmpty(discriminator)
+            && _byDiscriminator.TryGetValue(discriminator, out var claim)
+            && !claim.Ambiguous)
         {
-            contentType = t;
+            contentType = claim.ContentType;
             return true;
         }
         contentType = null!;
