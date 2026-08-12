@@ -139,7 +139,7 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
     public async Task PassThrough_Does_Not_Synthesize_Context_From_CircuitContext()
     {
         _access.SetContext(null);
-        _access.SetCircuitContext(new AccessContext { ObjectId = "bob-circuit", Name = "Bob" });
+        _access.SetHostIdentity(new AccessContext { ObjectId = "bob-circuit", Name = "Bob" });
 
         var subject = new Subject<int>();
         var wrapped = subject.CarryAccessContext(_serviceProvider);

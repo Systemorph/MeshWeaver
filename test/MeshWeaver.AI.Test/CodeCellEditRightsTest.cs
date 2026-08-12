@@ -123,7 +123,7 @@ public class CodeCellEditRightsTest(ITestOutputHelper output) : MonolithMeshTest
         // Switch the circuit to the read-only Viewer (no Admin claim, no
         // Update grant — only the static Viewer role on the partition).
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = ViewerUser, Name = ViewerUser });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = ViewerUser, Name = ViewerUser });
         try
         {
             var edit = await RenderEditButton(codePath);
@@ -135,7 +135,7 @@ public class CodeCellEditRightsTest(ITestOutputHelper output) : MonolithMeshTest
         }
         finally
         {
-            accessService.SetCircuitContext(null);
+            accessService.SetHostIdentity(null);
         }
     }
 }

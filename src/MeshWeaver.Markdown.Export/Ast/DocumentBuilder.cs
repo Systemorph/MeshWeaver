@@ -19,25 +19,57 @@ namespace MeshWeaver.Markdown.Export.Ast;
 /// </summary>
 public class DocumentBuilder
 {
-    private readonly MarkdownPipeline _pipeline;
+    private readonly string? _defaultNodePath;
+    private readonly ImmutableDictionary<string, ImmutableArray<DocumentElement>> _resolvedAreas;
 
     /// <summary>
-    /// Initializes a new instance of the <c>DocumentBuilder</c> class, building the Markdig
-    /// pipeline with advanced extensions and page-break support enabled.
+    /// One pipeline per node path. A pipeline is bound to the path relative embeds resolve
+    /// against, so a document whose chapters come from different nodes needs one each; they are
+    /// cached because building a Markdig pipeline per chapter is pure waste when (as usual) every
+    /// chapter shares a path. Instance state, never static — see AGENTS.md → no static collections.
     /// </summary>
-    public DocumentBuilder()
+    private readonly Dictionary<string, MarkdownPipeline> _pipelines = new(StringComparer.Ordinal);
+
+    /// <summary>The node path of the chapter currently being walked; keys resolved-area lookups.</summary>
+    private string? _currentNodePath;
+
+    /// <summary>
+    /// Initializes a new instance of the <c>DocumentBuilder</c> class.
+    /// </summary>
+    /// <param name="currentNodePath">
+    /// The exported node's own path, which is what makes a RELATIVE <c>@@("area:…")</c> embed
+    /// resolvable. Null still parses embeds; only relative resolution is lost.
+    /// </param>
+    /// <param name="resolvedAreas">
+    /// Embedded layout areas already resolved to document content, keyed as
+    /// <see cref="Html.DocumentAreaResolution.KeyFor"/> forms them. Reading an area is reactive and
+    /// cross-hub while this walk is synchronous, so resolution happens in a prior pass and the
+    /// result is looked up here — the same split the export already uses for client-captured
+    /// Mermaid/Math SVGs. Passing nothing renders embeds as a visible notice rather than silently
+    /// dropping them.
+    /// </param>
+    public DocumentBuilder(
+        string? currentNodePath = null,
+        ImmutableDictionary<string, ImmutableArray<DocumentElement>>? resolvedAreas = null)
     {
-        _pipeline = new MarkdownPipelineBuilder()
-            .UseAdvancedExtensions()
-            .UsePageBreaks()
-            .Build();
+        _defaultNodePath = currentNodePath;
+        _currentNodePath = currentNodePath;
+        _resolvedAreas = resolvedAreas ?? ImmutableDictionary<string, ImmutableArray<DocumentElement>>.Empty;
+    }
+
+    private MarkdownPipeline PipelineFor(string? nodePath)
+    {
+        var key = nodePath ?? string.Empty;
+        if (!_pipelines.TryGetValue(key, out var pipeline))
+            _pipelines[key] = pipeline = ExportMarkdownPipeline.For(nodePath);
+        return pipeline;
     }
 
     /// <summary>
     /// Builds a document from a single markdown source.
     /// </summary>
     public Document Build(string title, string markdown, DocumentExportOptions options, BrandingOptions branding)
-        => Build(title, new[] { (title, markdown) }, options, branding);
+        => Build(title, [new ExportChapter(title, markdown, _defaultNodePath)], options, branding);
 
     /// <summary>
     /// Builds a document from one primary markdown + optional descendant markdowns. Each descendant
@@ -48,6 +80,24 @@ public class DocumentBuilder
         IEnumerable<(string ChapterTitle, string Markdown)> chapters,
         DocumentExportOptions options,
         BrandingOptions branding)
+        => Build(
+            title,
+            chapters.Select(c => new ExportChapter(c.ChapterTitle, c.Markdown, _defaultNodePath)),
+            options,
+            branding);
+
+    /// <summary>
+    /// Builds a document from chapters that each carry their OWN node path.
+    ///
+    /// <para>Per-chapter paths matter: a relative embed resolves against the node it was written
+    /// in, so with <c>IncludeChildren</c> every descendant chapter needs its own path or its
+    /// embeds resolve against the root document's address instead.</para>
+    /// </summary>
+    public Document Build(
+        string title,
+        IEnumerable<ExportChapter> chapters,
+        DocumentExportOptions options,
+        BrandingOptions branding)
     {
         var mermaidIndex = 0;
         var mathIndex = 0;
@@ -55,7 +105,7 @@ public class DocumentBuilder
         var tocHeadings = ImmutableArray.CreateBuilder<HeadingElement>();
 
         var first = true;
-        foreach (var (chapterTitle, markdown) in chapters)
+        foreach (var chapter in chapters)
         {
             if (!first)
             {
@@ -64,11 +114,12 @@ public class DocumentBuilder
                 // at the foot of the previous chapter's last page.
                 if (options.PageBreakBetweenChildren)
                     elements.Add(new PageBreakElement());
-                elements.Add(new ChapterBreakElement(chapterTitle));
+                elements.Add(new ChapterBreakElement(chapter.Title));
             }
             first = false;
 
-            var doc = Markdig.Markdown.Parse(markdown, _pipeline);
+            _currentNodePath = chapter.NodePath ?? _defaultNodePath;
+            var doc = Markdig.Markdown.Parse(chapter.Markdown, PipelineFor(_currentNodePath));
             WalkBlocks(doc, options, elements, tocHeadings, ref mermaidIndex, ref mathIndex);
         }
 
@@ -171,11 +222,42 @@ public class DocumentBuilder
                     // Render raw HTML as a code block fallback — pure C# can't faithfully reproduce HTML.
                     elements.Add(new CodeBlockElement("html", html.Lines.ToString()));
                     break;
+                // 🚨 MUST precede the generic ContainerBlock case: LayoutAreaComponentInfo IS a
+                // ContainerBlock, so falling through would walk an embed's (empty) children and
+                // emit nothing at all — a silent hole exactly where the author put a view.
+                case LayoutAreaComponentInfo areaInfo:
+                    elements.AddRange(ResolveArea(areaInfo));
+                    break;
                 case ContainerBlock container2:
                     WalkBlocks(container2, options, elements, tocHeadings, ref mermaidIndex, ref mathIndex);
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// Substitutes an embedded layout area with the content resolved for it beforehand.
+    ///
+    /// <para>When no entry exists the embed becomes a VISIBLE notice naming the area, never
+    /// nothing: a missing entry means the resolution pass did not run for this document, and a
+    /// document that silently omits a section its author embedded is the defect this whole change
+    /// exists to remove. (Areas that ran but produced nothing already carry a localized notice
+    /// placed by <see cref="Html.DocumentAreaResolution"/>; this fallback covers the caller that
+    /// never resolved at all, so it deliberately stays free of hub/localization dependencies.)</para>
+    /// </summary>
+    private ImmutableArray<DocumentElement> ResolveArea(LayoutAreaComponentInfo info)
+    {
+        var key = Html.DocumentAreaResolution.KeyFor(_currentNodePath, info);
+        if (_resolvedAreas.TryGetValue(key, out var resolved) && !resolved.IsEmpty)
+            return resolved;
+
+        var label = info.Area ?? info.RawPath ?? string.Empty;
+        return
+        [
+            new ParagraphElement(
+                ImmutableArray.Create<InlineElement>(
+                    new TextInline($"[{label}]", Bold: false, Italic: true, Strike: false)))
+        ];
     }
 
     private static TableElement ReadTable(Table table)

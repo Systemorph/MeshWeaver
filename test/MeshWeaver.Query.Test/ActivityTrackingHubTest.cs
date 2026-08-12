@@ -102,7 +102,7 @@ public class ActivityTrackingHubTest(ITestOutputHelper output) : MonolithMeshTes
             new Address("client", Guid.NewGuid().ToString("N")[..12]),
             c => c.AddData().WithGraphTypes());
         connHub.ServiceProvider.GetRequiredService<AccessService>()
-            .SetCircuitContext(new AccessContext { ObjectId = user, Name = user });
+            .SetHostIdentity(new AccessContext { ObjectId = user, Name = user });
 
         // Sanity: the calling hub is NOT the tracking hub, yet both resolve the same shared
         // cache — so wherever the request is handled, the write goes through cache/{meshRootId}.
@@ -165,7 +165,7 @@ public class ActivityTrackingHubTest(ITestOutputHelper output) : MonolithMeshTes
     private async Task OnboardPartitionRoot(string user)
     {
         Mesh.ServiceProvider.GetRequiredService<AccessService>()
-            .SetCircuitContext(new AccessContext { ObjectId = user, Name = user });
+            .SetHostIdentity(new AccessContext { ObjectId = user, Name = user });
 
         await NodeFactory.CreateNode(new MeshNode(user)
         {

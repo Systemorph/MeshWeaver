@@ -7,6 +7,10 @@
     <PackageReference Include="Markdig" />
     <PackageReference Include="QuestPDF" />
     <PackageReference Include="DocumentFormat.OpenXml" />
+    <!-- Email export walks the rendered markdown DOM to substitute layout-area placeholders and
+         to strip what mail clients cannot render. Same parser the Blazor MarkdownHtmlRenderer
+         uses for the identical walk, so the two agree on what a placeholder div is. -->
+    <PackageReference Include="HtmlAgilityPack" />
   </ItemGroup>
 
   <ItemGroup>
@@ -15,6 +19,7 @@
          inside the assembly with no file-system lookup at runtime. -->
     <EmbeddedResource Include="Templates\ExportPdf.csx" />
     <EmbeddedResource Include="Templates\ExportDocx.csx" />
+    <EmbeddedResource Include="Templates\ExportHtml.csx" />
 
     <!-- Pixel-faithful print templates. Markup and stylesheet stay real .html/.css files
          (never interpolated strings in C#) and travel inside the assembly. -->

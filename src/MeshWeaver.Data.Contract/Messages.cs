@@ -194,8 +194,17 @@ public record PatchDataChangeRequest(
 /// <param name="StreamId">The identifier to use for the subscription stream.</param>
 /// <param name="Reference">The workspace reference describing the data to subscribe to.</param>
 [RequiresPermission(Permission.Read)]
-public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : IRequest<SubscribeAck>
+public record SubscribeRequest(string StreamId, WorkspaceReference Reference)
+    : IRequest<SubscribeAck>, IDiagnosticKeyed
 {
+    /// <summary>
+    /// The stream id — so the pending-callback diagnostic can tell N unanswered subscribes for N
+    /// DIFFERENT streams (a fan-out) from one stream re-asking (a resubscribe loop). See
+    /// <see cref="IDiagnosticKeyed"/>; the 167-pending pile on memex-cloud 2026-08-12 was
+    /// indistinguishable between the two.
+    /// </summary>
+    string IDiagnosticKeyed.DiagnosticKey => StreamId;
+
     /// <summary>The address of the subscriber that will receive change events.</summary>
     public Address Subscriber { get; init; } = null!;
 

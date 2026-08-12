@@ -55,7 +55,10 @@ public sealed class MessageHub : IMessageHub
         System.Reactive.Subjects.AsyncSubject<IMessageDelivery> Subject,
         string RequestType,
         Address? Target,
-        long RegisteredAtTicks);
+        long RegisteredAtTicks,
+        // Opt-in sub-key from the request itself (IDiagnosticKeyed) — what makes N identical-looking
+        // pending callbacks legible: N distinct keys is a fan-out, one key repeated is a retry loop.
+        string? DiagnosticKey = null);
 
     /// <summary>
     /// Handler-side trail for the requests this hub TREE is awaiting (see
@@ -929,7 +932,8 @@ public sealed class MessageHub : IMessageHub
         // gets the same composed PostOptions via WithMessageId chaining.
         var probeOptions = options(new PostOptions(Address));
         var requestType = r?.GetType().Name ?? "<null>";
-        var subject = GetOrAddResponseSubject(messageId, requestType, probeOptions.Target);
+        var subject = GetOrAddResponseSubject(messageId, requestType, probeOptions.Target,
+            (r as IDiagnosticKeyed)?.DiagnosticKey);
         // 🔍 DIAGNOSTIC ONLY (#981) — records and RETHROWS; it changes no behaviour.
         //
         // The callback is registered on the line above and the delivery is posted on the line
@@ -1054,7 +1058,8 @@ public sealed class MessageHub : IMessageHub
     private System.Reactive.Subjects.AsyncSubject<IMessageDelivery> GetOrAddResponseSubject(
         string messageId,
         string requestType = "<unknown>",
-        Address? target = null)
+        Address? target = null,
+        string? diagnosticKey = null)
     {
         lock (responseSubjects)
         {
@@ -1071,7 +1076,8 @@ public sealed class MessageHub : IMessageHub
                     new System.Reactive.Subjects.AsyncSubject<IMessageDelivery>(),
                     requestType,
                     target,
-                    Stopwatch.GetTimestamp());
+                    Stopwatch.GetTimestamp(),
+                    diagnosticKey);
                 responseSubjects[messageId] = entry;
                 // THE one place a hub starts awaiting a reply — so it is also the one place the
                 // handler-side trail starts. "Tracked" and "awaited" are the same set by
@@ -2048,7 +2054,8 @@ public sealed class MessageHub : IMessageHub
     private void OnQuiesceComplete(
         bool drainedOk,
         Stopwatch quiesceSw,
-        (string MessageId, string RequestType, Address? Target, long AgeMs)[] initialPendingSnapshot)
+        (string MessageId, string RequestType, Address? Target, long AgeMs, string? DiagnosticKey)[]
+            initialPendingSnapshot)
     {
         try
         {
@@ -2213,7 +2220,8 @@ public sealed class MessageHub : IMessageHub
     /// phase and by <see cref="GetDisposalDiagnostics"/> so a hung dispose names *what*
     /// the hub was waiting on, not just that it was waiting.
     /// </summary>
-    private (string MessageId, string RequestType, Address? Target, long AgeMs)[] SnapshotPendingCallbacks()
+    private (string MessageId, string RequestType, Address? Target, long AgeMs, string? DiagnosticKey)[]
+        SnapshotPendingCallbacks()
     {
         lock (responseSubjects)
         {
@@ -2223,7 +2231,8 @@ public sealed class MessageHub : IMessageHub
                     kv.Key,
                     kv.Value.RequestType,
                     kv.Value.Target,
-                    (long)((nowTicks - kv.Value.RegisteredAtTicks) * 1000.0 / Stopwatch.Frequency)))
+                    (long)((nowTicks - kv.Value.RegisteredAtTicks) * 1000.0 / Stopwatch.Frequency),
+                    kv.Value.DiagnosticKey))
                 .ToArray();
         }
     }
@@ -2231,7 +2240,7 @@ public sealed class MessageHub : IMessageHub
     private const int PendingCallbackLogCap = 20;
 
     private static string FormatPendingCallbacks(
-        (string MessageId, string RequestType, Address? Target, long AgeMs)[] pending)
+        (string MessageId, string RequestType, Address? Target, long AgeMs, string? DiagnosticKey)[] pending)
     {
         if (pending.Length == 0)
             return "<none>";
@@ -2247,11 +2256,14 @@ public sealed class MessageHub : IMessageHub
         }
         var head = string.Join(", ", pending.Take(PendingCallbackLogCap).Select(p =>
             $"{p.MessageId}={p.RequestType}@{p.Target}({p.AgeMs}ms)"));
-        var rest = pending.Skip(PendingCallbackLogCap)
-            .GroupBy(p => $"{p.RequestType}@{p.Target}")
-            .OrderByDescending(g => g.Count())
-            .Select(g => $"{g.Key}×{g.Count()}");
-        return $"{head}, …+{pending.Length - PendingCallbackLogCap} more [{string.Join(", ", rest)}]";
+        // 🚨 The tally groups by (type, target) — which on memex-cloud 2026-08-12 collapsed 167
+        // pending SubscribeRequests into one indistinguishable bucket. `keys=` is what tells the two
+        // mechanisms apart: keys≈count ⇒ that many SEPARATE streams (a fan-out); keys=1 ⇒ one stream
+        // re-asking (a retry loop). See IDiagnosticKeyed. Groups whose requests carry no key print
+        // no `keys=`, so nothing changes for message types that opt out.
+        var rest = PendingCallbackReport.Tally(pending.Skip(PendingCallbackLogCap)
+            .Select(p => new PendingCallbackInfo(p.RequestType, p.Target?.ToString(), p.DiagnosticKey)));
+        return $"{head}, …+{pending.Length - PendingCallbackLogCap} more [{rest}]";
     }
 
     /// <summary>
@@ -2270,7 +2282,7 @@ public sealed class MessageHub : IMessageHub
     /// <param name="pending">The still-pending callbacks, as snapshotted at the timeout.</param>
     /// <returns>A newline-prefixed block, or the empty string when there is nothing to report.</returns>
     private string FormatPendingCallbackFates(
-        (string MessageId, string RequestType, Address? Target, long AgeMs)[] pending)
+        (string MessageId, string RequestType, Address? Target, long AgeMs, string? DiagnosticKey)[] pending)
     {
         if (pending.Length == 0)
             return string.Empty;

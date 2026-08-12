@@ -136,6 +136,22 @@ public record PackageManifest
     /// <summary>ISO currency code of <see cref="Price"/>.</summary>
     public string? Currency { get; init; }
 
+    /// <summary>
+    /// The sales contact (the root content's <c>contactEmail</c>). Set = the package is sold
+    /// CONTACT-SALES rather than self-service: the Store's cover offers "Contact sales" instead of a
+    /// buy button, and the content is gated exactly as a priced package's is.
+    ///
+    /// <para>🚨 Read here because the ENTITLEMENT and ACCESS decisions key on the manifest, not on
+    /// the Store's own view of the root: a contact-sales package that named no price used to arrive
+    /// as FREE, so <see cref="PackageEntitlement.Authorize"/> waved it through with no admin and
+    /// <see cref="PackageInstaller.EnsureDeclaredAccess"/> published the whole partition
+    /// (<c>_Policy · PublicRead = true</c>) until the Store's <c>PluginGate</c> darkened it again.
+    /// The package said "talk to us before you use this" and the install path could not hear it —
+    /// the same dead-metadata defect <c>preInstalled</c> and <c>publicSegments</c> each had (#920).
+    /// <see cref="PackageEntitlement.IsCommercial"/> now counts it.</para>
+    /// </summary>
+    public string? ContactEmail { get; init; }
+
     /// <summary>The store-card picture URL (the root content's <c>poster</c>).</summary>
     public string? Poster { get; init; }
 
