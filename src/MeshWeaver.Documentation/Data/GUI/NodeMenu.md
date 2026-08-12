@@ -167,7 +167,7 @@ The built-in node menu does **not** use this pattern. `DefaultNodeMenuProvider` 
 | Order band | Section | Icons |
 |---|---|---|
 | 10–18 | edit / organize | ✏️ 🔖 ➡️ 📋 🗑️ |
-| 27–30 | export / share / approval (contributed by other packages) | 📄 📝 📤 ✅ |
+| 27–30 | export / share / approval (contributed by other packages) — **PDF 📄, Email 📤, DOCX 📝**, Request Approval ✅ | 📄 📤 📝 ✅ |
 | 30–38 | content / history / sync | 📁 🧾 🕘 🔌 🔄 |
 | 50 | lifecycle | ♻️ |
 
@@ -175,8 +175,17 @@ The built-in node menu does **not** use this pattern. `DefaultNodeMenuProvider` 
 as an image URL, so a Fluent icon *name* (`"DocumentPdf"`) silently becomes a broken
 `<img src="DocumentPdf">` rather than failing. An entry that omits `Icon` altogether renders as a
 bare label and reads as a foreign group wedged between the iconed ones — which is exactly what the
-export/share block did before it was given 📄 📝 📤. `MarkdownExportMenuTest` asserts this as an
+export/share block did before it was given 📄 📤 📝. `MarkdownExportMenuTest` asserts this as an
 invariant over the whole menu, so a new icon-less entry fails the build rather than shipping.
+
+**Prefer a short label + a translated tooltip over a sentence-shaped label.** The export group is
+the worked example: the entries are `PDF`, `Email`, `DOCX` — not "Export to PDF" — with the
+explanation moved to `TooltipKey` (`menu.exportPdf.tooltip`, …). This is the AGENTS.md-preferred
+shape (language-neutral glyph + short label + translated tooltip) and it shrinks the translation
+surface: **`PDF` and `DOCX` are format names and are deliberately identical in every catalog**,
+while `Email` → German `E-Mail` is a real word and is translated. Once a label is this short the
+tooltip is the only remaining explanation, so `TooltipKey` stops being optional polish — the same
+test asserts the group carries one.
 
 Because the aggregator re-sorts every provider's items by `Order`, a plugin's item slots into the right section just by picking a number in that band — which is why the built-in set stays flat. Use `Children` when you genuinely want a hover sub-menu of your own.
 
