@@ -204,4 +204,25 @@ public class LogIncidentMergeTest
         LogIncidentIngestService.Merge(ticketed, Repeat(at: T0.AddMinutes(5)), options)
             .RequestedStatus.Should().Be(LogIncidentRequest.None);
     }
+
+    [Fact]
+    public void Merge_LeavesAnExplicitRequestAloneWhileFiling()
+    {
+        // 🚨 The re-ask above is a RECOVERY, and a recovery must never outrank an instruction.
+        // The stranded case is by definition RequestedStatus.None — the claim consumes the request
+        // before writing Filing — so an incident sitting at Filing WITH a request pending is not
+        // stranded at all: somebody asked for something. Unscoped, the re-ask rule overwrote it on
+        // the very next occurrence report, and since reports repeat, the instruction could never
+        // survive long enough to be acted on: the incident would file itself regardless of what
+        // was asked.
+        var suppressing = Existing(LogIncidentStatus.Filing) with
+        {
+            RequestedStatus = LogIncidentRequest.Suppress,
+        };
+
+        LogIncidentIngestService.Merge(suppressing, Repeat(), Options)
+            .RequestedStatus.Should().Be(LogIncidentRequest.Suppress,
+                "a pending request outranks the stranded-Filing recovery — the recovery exists for "
+                + "incidents nobody is steering, not to overrule the ones somebody is");
+    }
 }
