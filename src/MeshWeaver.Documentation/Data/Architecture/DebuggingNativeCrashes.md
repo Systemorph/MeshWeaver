@@ -354,18 +354,18 @@ process's record was whole — which is what makes "zero quiesce leaks" evidence
 
 ### 2026-08-12: on runtime `10.0.11` it is **`plan_phase`**, not `background_sweep` — the frame moved, the fault did not
 
-Two dumps from the post-#1274 window, resolved against `10.0.11`. Both fault at the **same
+Three dumps from the post-#1274 window, resolved against `10.0.11`. All fault at the **same
 instruction with the same registers** as the three `10.0.10` sightings — and in a **different GC
 function**.
 
-| | `dotnet-3592.dmp` (run `31590331741`, 11:05Z) | `dotnet-3500.dmp` (run `31597122789`, 12:34Z) |
-|---|---|---|
-| runtime (from `NT_FILE`) | `10.0.11` | `10.0.11` |
-| `si_signo`/`si_code`/`si_addr` | 11 / 1 (`SEGV_MAPERR`) / **`0x0`** | 11 / 1 / **`0x0`** |
-| `TRAPNO`/`ERR`/`CR2` | 14 / `0x4` / `0x0` | 14 / `0x4` / `0x0` |
-| instruction | **`8b 08` = `mov ecx,[rax]`, `RAX=0x0`** | **`8b 08`, `RAX=0x0`** |
-| faulting RVA | **`0x5cf24c`** | **`0x5cf24c`** |
-| resolves to | **`WKS::gc_heap::plan_phase(int)+0x24fc`** | **`WKS::gc_heap::plan_phase(int)+0x24fc`** |
+| | `dotnet-3592.dmp` (`31590331741`, 11:05Z) | `dotnet-3500.dmp` (`31597122789`, 12:34Z) | `dotnet-3433.dmp` (`31603530862`, 14:06Z) |
+|---|---|---|---|
+| runtime (from `NT_FILE`) | `10.0.11` | `10.0.11` | `10.0.11` |
+| `si_signo`/`si_code`/`si_addr` | 11 / 1 (`SEGV_MAPERR`) / **`0x0`** | 11 / 1 / **`0x0`** | 11 / 1 / **`0x0`** |
+| `TRAPNO`/`ERR`/`CR2` | 14 / `0x4` / `0x0` | 14 / `0x4` / `0x0` | 14 / `0x4` / `0x0` |
+| instruction | **`8b 08` = `mov ecx,[rax]`, `RAX=0x0`** | **`8b 08`, `RAX=0x0`** | **`8b 08`, `RAX=0x0`** |
+| faulting RVA | **`0x5cf24c`** | **`0x5cf24c`** | **`0x5cf24c`** |
+| resolves to | **`WKS::gc_heap::plan_phase(int)+0x24fc`** | **same** | **same** |
 
 **This is not RVA drift.** Resolved against the same `10.0.11` `coreclr.debug`, the old fingerprint
 `0x5cb1e1` still lands in `background_sweep` (`+0xad1`, versus `+0xa61` on `10.0.10` — the function
@@ -398,6 +398,26 @@ moment of the fault. What five dumps do establish is the invariant: **the GC wal
 an object header holding exactly zero.** Which phase discovers it is incidental — and "background-GC
 bug" named the incidental part. Anything built on that name (a mitigation, an upstream report, a
 closure as external) needs re-deriving from the invariant instead.
+
+#### Two hypotheses these dumps falsify — check them off, do not re-open them
+
+Both were proposed again while this was being analysed, and both are decidable from the dump alone:
+
+- **Use-after-unload of a collectible ALC** (the `MessageHubGrain.OnDeactivateAsync` "KNOWN GAP":
+  `loadContext.Unload()` orders only on the hub's `DisposalCompleted`, and pooled I/O leaves are
+  mesh-shared). **Falsified twice over.** `RIP` is inside a **file-backed** mapping —
+  `/usr/share/dotnet/shared/Microsoft.NETCore.App/10.0.11/libcoreclr.so`, resolving to a named
+  runtime symbol — not in unloaded or collected JIT code. And a freed `LoaderAllocator` yields a
+  **non-null unmapped** pointer; `si_addr` here is exactly `0x0`. This is the same distinction the
+  `exit=134` analysis already drew, in the other direction. The gap may be real and worth closing on
+  its own merits; it does not produce *this* fault.
+- **"Bounded disposal gives up and unloads on top of live work."** **Falsified for all three.**
+  `dotnet-3433`'s trace has **29** `DISPOSE_DONE … teardown clean`, **zero**
+  `DISPOSE_QUIESCE_LEAK`, **zero** `DISPOSE_DIRTY_TEARDOWN`, and no disposal-timeout record of any
+  kind — the only timeout-shaped lines are `MEM_WATCHDOG` memory samples. Its last teardown finished
+  cleanly in 2009 ms and the **next fixture had already started** (`CTOR` / `INIT_START` /
+  `INIT_BASE_DONE` at `14:06:27.943`) when the fault landed ~1 s later. `dotnet-3592` is the same
+  shape: 40 clean `DISPOSE_DONE`, zero leaks.
 
 #### Consequences recorded here so they are not re-litigated
 
