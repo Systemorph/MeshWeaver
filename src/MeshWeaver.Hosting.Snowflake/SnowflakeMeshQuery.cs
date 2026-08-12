@@ -144,22 +144,15 @@ public class SnowflakeMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     public SnowflakeStorageAdapter Adapter => _adapter;
 
     /// <summary>
-    /// Gets the effective user ID from the request or from the current access context.
-    /// Returns WellKnownUsers.Anonymous for unauthenticated/virtual access.
+    /// The viewer this read runs behind, as the RLS predicate takes it (<c>""</c> = the System
+    /// bypass, i.e. no user filter). Delegates to <see cref="QueryIdentityResolver"/> — the ONE
+    /// definition of the rule, shared with the pedestrian and Postgres providers.
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
-    {
-        // System identity bypasses access control (infrastructure queries)
-        if (request.UserId == WellKnownUsers.System)
-            return "";
-
-        if (!string.IsNullOrEmpty(request.UserId))
-            return request.UserId;
-
-        var userId = _accessService?.Context?.ObjectId
-                     ?? _accessService?.CircuitContext?.ObjectId;
-        return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
-    }
+        => QueryIdentityResolver
+            .Resolve(request, _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId)
+            .EnsureResolved(request)
+            .RlsUserId;
 
     /// <inheritdoc/>
     /// <remarks>

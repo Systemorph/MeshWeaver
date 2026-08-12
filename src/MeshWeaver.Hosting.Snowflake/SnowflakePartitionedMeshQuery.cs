@@ -637,14 +637,13 @@ public sealed class SnowflakePartitionedMeshQuery : IMeshQueryProvider
             ? def.Schema
             : null;
 
+    /// <summary>
+    /// The viewer this read runs behind. Delegates to <see cref="QueryIdentityResolver"/> — the ONE
+    /// definition of the rule, which this method used to duplicate.
+    /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
-    {
-        if (request.UserId == WellKnownUsers.System)
-            return WellKnownUsers.System;
-        if (!string.IsNullOrEmpty(request.UserId))
-            return request.UserId;
-        var userId = _accessService?.Context?.ObjectId
-                     ?? _accessService?.CircuitContext?.ObjectId;
-        return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
-    }
+        => QueryIdentityResolver
+            .Resolve(request, _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId)
+            .EnsureResolved(request)
+            .UserId;
 }
