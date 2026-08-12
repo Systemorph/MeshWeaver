@@ -29,31 +29,32 @@ namespace MeshWeaver.Graph.Test;
 /// <para><b>Why forbidding rather than widening.</b> No query in the language addresses "everything
 /// in the code table"; the only shape that reaches it is a namespace pattern, which is precisely
 /// what this node evades. So the union's completeness is secured at the write boundary instead.</para>
+///
+/// <para>🚨 The validator is STATELESS — no hub, no DI, no mesh — so these cases construct it
+/// directly. Deriving the whole class from <c>MonolithMeshTestBase</c> would spin up a full mesh
+/// PER CASE; at 13 cases that added ~29 s to MeshWeaver.Graph.Test on a CI shard and pushed a
+/// neighbouring 30 s compile-probe assertion over its limit. The one case that genuinely needs a
+/// mesh — proving <c>AddGraph()</c> REGISTERS the guard — lives in
+/// <see cref="CodeNodeSegmentNameValidatorRegistrationTest"/> below.</para>
 /// </summary>
-public class CodeNodeSegmentNameValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+public class CodeNodeSegmentNameValidatorTest
 {
-    /// <summary>
-    /// Resolved from DI, not constructed — that is what proves <c>AddGraph()</c> actually REGISTERS
-    /// the guard. A validator that is correct but unwired protects nothing.
-    /// </summary>
-    private CodeNodeSegmentNameValidator Guard() =>
-        Mesh.ServiceProvider.GetServices<INodeValidator>()
-            .OfType<CodeNodeSegmentNameValidator>()
-            .First();
+    private static readonly CodeNodeSegmentNameValidator Guard = new();
 
     private static NodeValidationContext Context(MeshNode node) =>
         new() { Operation = NodeOperation.Create, Node = node };
 
-    private static MeshNode Code(string id, string ns) =>
-        new(id, ns) { NodeType = CodeNodeType.NodeType, Name = id };
+    private static async Task<NodeValidationResult> Validate(string id, string ns, string nodeType) =>
+        await Guard.Validate(Context(new MeshNode(id, ns) { NodeType = nodeType, Name = id }))
+            .Should().Emit();
 
     [Theory]
     [InlineData("Source")]
     [InlineData("Test")]
     [InlineData("source")] // routing's segment check is case-insensitive, so the hole is too
-    public async Task Validate_CodeNodeNamedAfterACodeTableSegment_IsRejected(string id)
+    public async Task CodeNodeNamedAfterACodeTableSegment_IsRejected(string id)
     {
-        var result = await Guard().Validate(Context(Code(id, "Acme/Model"))).Should().Emit();
+        var result = await Validate(id, "Acme/Model", CodeNodeType.NodeType);
 
         result.IsValid.Should().BeFalse(
             "its namespace would be 'Acme/Model', which matches neither `*/Source` nor `*/Source/*`, "
@@ -75,14 +76,8 @@ public class CodeNodeSegmentNameValidatorTest(ITestOutputHelper output) : Monoli
     // A Source/Test FOLDER is a Group, not Code — the required layout, untouched by the rule.
     [InlineData("Source", "Acme/Model", "Group")]
     [InlineData("Test", "Acme/Model", "Markdown")]
-    public async Task Validate_EverythingTheNormalLayoutNeeds_IsAllowed(string id, string ns, string nodeType)
-    {
-        var node = new MeshNode(id, ns) { NodeType = nodeType, Name = id };
-
-        var result = await Guard().Validate(Context(node)).Should().Emit();
-
-        result.IsValid.Should().BeTrue();
-    }
+    public async Task EverythingTheNormalLayoutNeeds_IsAllowed(string id, string ns, string nodeType)
+        => (await Validate(id, ns, nodeType)).IsValid.Should().BeTrue();
 
     /// <summary>
     /// 🚨 The invariant the guard exists to protect, asserted directly rather than implied: the
@@ -110,5 +105,37 @@ public class CodeNodeSegmentNameValidatorTest(ITestOutputHelper output) : Monoli
         covered.Should().Be(!forbidden,
             "the guard must forbid PRECISELY the paths the global namespace patterns cannot reach — "
             + "narrower would leave the hole open, wider would ban legitimate content");
+    }
+}
+
+/// <summary>
+/// The ONE case that needs a real mesh: a validator that is correct but unwired protects nothing,
+/// so this proves <c>AddGraph()</c> actually registers the guard — and that the registered instance
+/// rejects the forbidden name. Deliberately a single test (one mesh construction); every other case
+/// is pure logic in <see cref="CodeNodeSegmentNameValidatorTest"/>.
+/// </summary>
+public class CodeNodeSegmentNameValidatorRegistrationTest(ITestOutputHelper output)
+    : MonolithMeshTestBase(output)
+{
+    [Fact(Timeout = 30000)]
+    public async Task AddGraph_RegistersTheGuard_AndItRejectsTheForbiddenName()
+    {
+        var guard = Mesh.ServiceProvider.GetServices<INodeValidator>()
+            .OfType<CodeNodeSegmentNameValidator>()
+            .SingleOrDefault();
+
+        guard.Should().NotBeNull("AddGraph() must register the guard — otherwise it protects nothing");
+
+        var node = new MeshNode("Source", "Acme/Model")
+        {
+            NodeType = CodeNodeType.NodeType,
+            Name = "Source"
+        };
+        var result = await guard!
+            .Validate(new NodeValidationContext { Operation = NodeOperation.Create, Node = node })
+            .Should().Emit();
+
+        result.IsValid.Should().BeFalse();
+        result.Reason.Should().Be(NodeRejectionReason.InvalidPath);
     }
 }
