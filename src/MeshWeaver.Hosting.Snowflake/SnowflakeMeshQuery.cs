@@ -11,6 +11,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Snowflake;
 
@@ -23,6 +24,8 @@ public class SnowflakeMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 {
     private readonly SnowflakeStorageAdapter _adapter;
     private readonly AccessService? _accessService;
+    // Diagnostic sink for the unresolved-viewer warning (QueryIdentityResolver.ResolveAndReport).
+    private readonly ILogger<SnowflakeMeshQuery>? _logger;
     private readonly MeshConfiguration? _meshConfiguration;
     private readonly QueryParser _parser = new();
     private long _version;
@@ -79,8 +82,10 @@ public class SnowflakeMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         MeshConfiguration? meshConfiguration = null,
         IEnumerable<string>? excludedNamespaces = null,
         IEmbeddingProvider? embeddingProvider = null,
-        IoPoolRegistry? ioPoolRegistry = null)
+        IoPoolRegistry? ioPoolRegistry = null,
+        ILogger<SnowflakeMeshQuery>? logger = null)
     {
+        _logger = logger;
         _adapter = adapter;
         _accessService = accessService;
         _meshConfiguration = meshConfiguration;
@@ -144,22 +149,15 @@ public class SnowflakeMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     public SnowflakeStorageAdapter Adapter => _adapter;
 
     /// <summary>
-    /// Gets the effective user ID from the request or from the current access context.
-    /// Returns WellKnownUsers.Anonymous for unauthenticated/virtual access.
+    /// The viewer this read runs behind, as the RLS predicate takes it (<c>""</c> = the System
+    /// bypass, i.e. no user filter). Delegates to <see cref="QueryIdentityResolver"/> — the ONE
+    /// definition of the rule, shared with the pedestrian and Postgres providers.
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
-    {
-        // System identity bypasses access control (infrastructure queries)
-        if (request.UserId == WellKnownUsers.System)
-            return "";
-
-        if (!string.IsNullOrEmpty(request.UserId))
-            return request.UserId;
-
-        var userId = _accessService?.Context?.ObjectId
-                     ?? _accessService?.CircuitContext?.ObjectId;
-        return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
-    }
+        => QueryIdentityResolver.ResolveAndReport(
+            request,
+            _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId,
+            _logger).RlsUserId;
 
     /// <inheritdoc/>
     /// <remarks>
