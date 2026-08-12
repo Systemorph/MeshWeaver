@@ -89,12 +89,18 @@ public static class ObjectAsExtensions
                 {
                     return je.Deserialize<T>(options);
                 }
-                catch (JsonException ex)
+                catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
                 {
                     // Don't rethrow (a throw on read faults the caller), don't swallow: log loud
                     // with the raw JSON so the corruption is visible.
+                    //
+                    // The catch set matches the foreign-type branch below on purpose. A missing
+                    // converter throws NotSupportedException and an unsupported target shape throws
+                    // InvalidOperationException — neither derives from JsonException, so catching
+                    // JsonException alone would let a read fault its caller, which is the one thing
+                    // this accessor exists to prevent.
                     logger?.LogError(ex, "As<{TargetType}> could not recover {What}: {RawJson}",
-                        typeof(T).Name, what ?? "value", je.GetRawText());
+                        typeof(T).Name, what ?? "value", Excerpt(je.GetRawText()));
                     return null;
                 }
             case JsonNode jn:
@@ -102,10 +108,10 @@ public static class ObjectAsExtensions
                 {
                     return jn.Deserialize<T>(options);
                 }
-                catch (JsonException ex)
+                catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
                 {
                     logger?.LogError(ex, "As<{TargetType}> could not recover {What}: {RawJson}",
-                        typeof(T).Name, what ?? "value", jn.ToJsonString());
+                        typeof(T).Name, what ?? "value", Excerpt(jn.ToJsonString()));
                     return null;
                 }
             default:
@@ -156,4 +162,17 @@ public static class ObjectAsExtensions
                 return null;
         }
     }
+
+    /// <summary>
+    /// The head of a payload, for a diagnostic log line. Bounded because the value being logged is
+    /// by definition the one we could NOT parse — a degraded content blob or a whole snapshot can be
+    /// megabytes, and these lines ship to the log store. The first 2 KB is what a human reads to
+    /// recognise the shape; the tail never adds diagnosis, it only adds cost.
+    /// </summary>
+    private static string Excerpt(string raw) =>
+        raw.Length <= RawJsonLogLimit
+            ? raw
+            : $"{raw[..RawJsonLogLimit]}… [{raw.Length - RawJsonLogLimit} more chars]";
+
+    private const int RawJsonLogLimit = 2048;
 }
