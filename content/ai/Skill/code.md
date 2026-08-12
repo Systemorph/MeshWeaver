@@ -220,7 +220,22 @@ stream.Subscribe(async node => { await mesh.UpdateNode(node with { ... }); });
 var node = await Mesh.ReadNodeAsync(path);  // ← doesn't exist; don't invent it
 ```
 
-**Rule of thumb for Scripts:** read known paths one-shot via `Mesh.GetMeshNode(path, timeout).ToTask()`; wait for state changes via `workspace.GetMeshNodeStream(path).Where(predicate).Take(1).Timeout(...)`. Use `mesh.QueryAsync(...)` / `mesh.Query(...)` only for searching / listing / counting (sets, not specific node content). Reach for `QueryAsync(path:X)` and you've written a stale-read bug.
+**Rule of thumb for Scripts:** read known paths one-shot via `Mesh.GetMeshNode(path, timeout).ToTask()`; wait for state changes via `workspace.GetMeshNodeStream(path).Where(predicate).Take(1).Timeout(...)`. Use `mesh.Query<T>(...)` only for searching / listing / counting (sets, not specific node content). Reach for a query on `path:X` and you've written a stale-read bug.
+
+> 🚨 **`QueryAsync` does not exist on the production `IMeshService`.** It survives only as a
+> test-only bridge in `MeshWeaver.Fixture`, so a script calling it compiles in a test process (which
+> loads that assembly) and fails at runtime in the portal with `CS1061`. That is exactly how every
+> PDF/DOCX/email export died in production on 2026-08-12. The script reference set now excludes test
+> scaffolding, so this fails identically everywhere — but write the reactive shape:
+>
+> ```csharp
+> var items = await meshService
+>     .Query<MeshNode>(MeshQueryRequest.FromQuery("path:" + p + " scope:descendants"))
+>     .Where(c => c.ChangeType == QueryChangeType.Initial)   // filter on SHAPE, never a count
+>     .Select(c => c.Items)
+>     .FirstAsync()
+>     .ToTask(Ct);
+> ```
 
 # Decision Rule: NodeType vs Markdown
 

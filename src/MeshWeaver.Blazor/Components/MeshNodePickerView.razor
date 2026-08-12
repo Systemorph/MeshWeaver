@@ -16,7 +16,14 @@
                 @{ var selInitial = GetInitial(_selectedNode); }
                 @RenderAvatar(_selectedNode, selInitial)
                 <div class="mesh-node-picker-info">
-                    <div class="mesh-node-picker-name" title="@_selectedNode.Path">@(_selectedNode.Name ?? _selectedNode.Id)</div>
+                    <div class="mesh-node-picker-name" title="@_selectedNode.Path">
+                        @(_selectedNode.Name ?? _selectedNode.Id)
+                        @{ var selEmail = GetEmail(_selectedNode); }
+                        @if (!string.IsNullOrEmpty(selEmail))
+                        {
+                            <span class="mesh-node-picker-email">&lt;@selEmail&gt;</span>
+                        }
+                    </div>
                 </div>
                 @if (!string.IsNullOrEmpty(_selectedNode.Category))
                 {
@@ -81,7 +88,14 @@
                          @onclick="() => SelectNode(node)">
                         @RenderAvatar(node, initial)
                         <div class="mesh-node-picker-item-info">
-                            <div class="mesh-node-picker-item-name" title="@node.Path">@(node.Name ?? node.Id)</div>
+                            <div class="mesh-node-picker-item-name" title="@node.Path">
+                                @(node.Name ?? node.Id)
+                                @{ var itemEmail = GetEmail(node); }
+                                @if (!string.IsNullOrEmpty(itemEmail))
+                                {
+                                    <span class="mesh-node-picker-email">&lt;@itemEmail&gt;</span>
+                                }
+                            </div>
                         </div>
                         @if (!string.IsNullOrEmpty(node.Category))
                         {
@@ -99,6 +113,26 @@
     {
         var name = node.Name ?? node.Id;
         return !string.IsNullOrEmpty(name) ? name[0].ToString().ToUpper() : "?";
+    }
+
+    /// <summary>
+    /// The node's email address, when it has one. Two similarly-named contacts are otherwise
+    /// indistinguishable in the dropdown, and someone picking a recipient for a mail wants to see
+    /// the address the mail will actually go to — so a suggestion reads "First Last &lt;a@b.com&gt;".
+    /// Probed off the raw content the way the avatar is: the picker's query carries no `select:`,
+    /// so content comes back whole.
+    /// </summary>
+    private static string? GetEmail(MeshNode node)
+    {
+        if (node.Content is System.Text.Json.JsonElement json
+            && json.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            if (json.TryGetProperty("email", out var e) && e.ValueKind == System.Text.Json.JsonValueKind.String)
+                return e.GetString();
+            if (json.TryGetProperty("Email", out var E) && E.ValueKind == System.Text.Json.JsonValueKind.String)
+                return E.GetString();
+        }
+        return null;
     }
 
     private string? GetImageUrl(MeshNode node)
