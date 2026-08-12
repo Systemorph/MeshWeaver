@@ -77,4 +77,13 @@ public static class HubEmailExtensions
             ? Observable.Return(false)
             : sender.CanSendAsUser(userObjectId);
     }
+
+    /// <summary>
+    /// The app-relative path where a user connects their own mailbox on this deployment, or
+    /// <c>null</c> when no such flow exists (no sender registered, or a sender that cannot act as a
+    /// person). UI must render a connect affordance ONLY when this returns non-null — and must
+    /// navigate to it with <c>forceLoad: true</c>, since it is a server-side endpoint.
+    /// </summary>
+    public static string? ConnectAsUserHref(this IMessageHub hub) =>
+        (hub.ServiceProvider.GetService(typeof(IEmailSender)) as IEmailSender)?.ConnectAsUserHref;
 }
