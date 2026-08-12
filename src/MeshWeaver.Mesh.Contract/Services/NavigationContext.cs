@@ -30,6 +30,17 @@ public record NavigationContext
     public required AddressResolution Resolution { get; init; }
 
     /// <summary>
+    /// The path the viewer actually asked for, when they were sent here from somewhere else —
+    /// <c>null</c> on a normal navigation. Set for both redirect kinds (see
+    /// <see cref="RedirectKind"/>). The GUI shows a notice naming it: serving a different page than
+    /// the URL asked for WITHOUT saying so is how people conclude the product is broken.
+    /// </summary>
+    public string? RedirectedFrom { get; init; }
+
+    /// <summary>Why this navigation was redirected, or <c>null</c> if it was not.</summary>
+    public NavigationRedirectKind? RedirectKind { get; init; }
+
+    /// <summary>
     /// The mesh node for the resolved path, if available.
     /// </summary>
     public MeshNode? Node { get; init; }
@@ -67,4 +78,26 @@ public record NavigationContext
     /// True when MainNode is set and differs from Path.
     /// </summary>
     public bool IsSatellite => Node != null && Node.MainNode != Node.Path;
+}
+
+/// <summary>
+/// Why a navigation landed somewhere other than the URL the viewer asked for. Both kinds are
+/// NAVIGATION-only: message routing, node reads and search stay literal, so nothing downstream can
+/// mistake a redirected page for the node the caller named.
+/// </summary>
+public enum NavigationRedirectKind
+{
+    /// <summary>
+    /// A <c>Redirect</c> node (content <see cref="MeshWeaver.Mesh.NodeRedirect"/>) declared at the
+    /// old path sent the viewer to its new home — an author's explicit, durable decision.
+    /// </summary>
+    Declared,
+
+    /// <summary>
+    /// Nothing exists at the requested path, so the viewer was sent up to the nearest ancestor that
+    /// DOES exist rather than to a dead end. A best-effort default, not a declaration — and it fires
+    /// ONLY on a typed "no such node/area" outcome, never on a denial, a fault or a timeout, which
+    /// keep failing with their own reason.
+    /// </summary>
+    ParentFallback
 }
