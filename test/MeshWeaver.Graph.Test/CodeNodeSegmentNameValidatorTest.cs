@@ -1,9 +1,14 @@
+using System;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -137,5 +142,58 @@ public class CodeNodeSegmentNameValidatorRegistrationTest(ITestOutputHelper outp
 
         result.IsValid.Should().BeFalse();
         result.Reason.Should().Be(NodeRejectionReason.InvalidPath);
+    }
+
+    /// <summary>
+    /// 🚨 A RENAME must not re-open the hole. The guard declares only Create + Update, so the
+    /// obvious worry (raised in review) is that <c>MoveNodeRequest</c> could rename a Code node to
+    /// <c>…/Source</c> behind its back.
+    ///
+    /// <para>It cannot, and the reason is worth recording because the obvious mechanism is a red
+    /// herring: <c>MeshExtensions.RunMoveValidatorsObs</c> — which would filter on
+    /// <c>SupportedOperations.Contains(Move)</c> — is <b>dead code with zero callers</b>. The real
+    /// <c>HandleMoveNodeRequest</c> implements move as <c>CopyNode → delete the source paths</c>,
+    /// and the copy issues a <c>CreateNode</c> at the TARGET path, which runs the Create validators
+    /// (<c>RunCreationValidatorsObs</c>, two live call sites). So the guard sees the node at its NEW
+    /// path and rejects it there.</para>
+    ///
+    /// <para>Adding <c>Move</c> to <c>SupportedOperations</c> would therefore be inert — and worse
+    /// than inert as documentation, since it would imply a path that does not run. This test pins
+    /// the behaviour that actually holds, so a future change to the move implementation (e.g. a real
+    /// rename that no longer goes through Create) fails HERE instead of silently re-opening the
+    /// invisibility hole. It also asserts the source survives: copy fails, so the delete leg never
+    /// runs.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task RenamingACodeNodeOntoTheForbiddenName_IsRejected_AndLeavesTheSourceIntact()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var ns = $"cnv{Guid.NewGuid():N}"[..12];
+        var sourcePath = $"{ns}/Model/Spine";
+
+        await meshService.CreateNode(new MeshNode("Spine", $"{ns}/Model")
+        {
+            Name = "Spine",
+            NodeType = CodeNodeType.NodeType,
+            State = MeshNodeState.Active,
+            Content = new CodeConfiguration { Code = "public static class Spine { }" }
+        }).Should().Within(30.Seconds()).Emit();
+
+        var delivery = await Mesh
+            .Observe<MoveNodeResponse>(new MoveNodeRequest(sourcePath, $"{ns}/Model/Source"), o => o)
+            .Should().Within(30.Seconds()).Emit();
+
+        delivery.Message.Success.Should().BeFalse(
+            "renaming a Code node to a code-table routing segment would make it invisible to every "
+            + "global source query — the move's copy leg creates at the TARGET path and the Create "
+            + "validator rejects it there");
+
+        // The source must still be there: CopyNode errored, so the SelectMany that deletes the
+        // source paths never ran.
+        var survivor = await Mesh.GetWorkspace().GetMeshNodeStream(sourcePath)
+            .Where(n => n is not null)
+            .FirstAsync()
+            .Should().Within(30.Seconds()).Emit();
+        survivor.Path.Should().Be(sourcePath, "a rejected move must not destroy the original");
     }
 }
