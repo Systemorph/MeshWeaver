@@ -335,7 +335,18 @@ internal static class NodeTypeEnrichmentHelpers
                 // elapsed, so the operator can tell a slow storage/mesh-hub from a genuinely
                 // unsettled compile.
                 var lookupNeverAnswered = timedOut && afterIndeterminateProbe;
-                var userMessage = lookupNeverAnswered
+                // 🚨 A PARKED type is a compile error, not an unsettled build. It reaches this
+                // handler in ~0 ms (WaitForCompileSettled's parked short-circuit) instead of after
+                // a 60 s budget, and it must render the "correct the code" copy — the recorded
+                // Roslyn error IS the remedy. Routing it through BuildNotSettled would tell the
+                // operator "no code change needed; it will self-heal" about a type that has
+                // deliberately stopped recompiling until its source changes.
+                var parked = ex as NodeTypeParkedException;
+                var userMessage = parked is not null
+                    ? $"NodeType '{nodeType}' failed to compile and is parked — instance "
+                      + $"'{node.Path}' cannot bind to it until the type's source is fixed.\n"
+                      + $"{parked.ParkedError ?? "(no error text recorded)"}"
+                    : lookupNeverAnswered
                     ? $"The registration lookup for NodeType '{nodeType}' did not complete within "
                       + $"{NodeTypeProbeTimeout.TotalSeconds:0}s, and the type did not show up on its own "
                       + $"stream within a further {SlowPathTimeout.TotalSeconds:0}s.\n"
@@ -348,7 +359,8 @@ internal static class NodeTypeEnrichmentHelpers
                     : $"NodeType '{nodeType}' could not be prepared for instance '{node.Path}'\n"
                       + $"{ex.GetType().Name}: {ex.Message}";
                 var (intro, callToAction, guidance) = OverlayCopy(
-                    lookupNeverAnswered ? OverlayCause.LookupTimedOut
+                    parked is not null ? OverlayCause.CompileFailed
+                    : lookupNeverAnswered ? OverlayCause.LookupTimedOut
                     : timedOut ? OverlayCause.BuildNotSettled
                     : OverlayCause.EnrichmentFaulted);
                 // Self-heal with a NULL version gate: no type node is in hand
@@ -454,7 +466,8 @@ internal static class NodeTypeEnrichmentHelpers
                     $"NodeType '{nodeType}' has no compile in flight and did not settle " +
                     $"within {SlowPathTimeout.TotalSeconds:0}s."),
                 scheduler: null, options: meshHub.JsonSerializerOptions,
-                inFlightGrace: InFlightOverlayGrace)
+                inFlightGrace: InFlightOverlayGrace,
+                parkedFault: ParkedFaultProbe(meshHub, nodeType))
             .Finally(healSub.Dispose)
             // An in-flight emission is the grace path, never a settle (every settle
             // predicate rejects Pending/Compiling): activate the progress overlay now
@@ -587,15 +600,37 @@ internal static class NodeTypeEnrichmentHelpers
     /// dropped the package's binaries. A wait that ends only at someone else's timeout is a silent
     /// hang; re-arming turns it back into the graceful sink the caller can overlay.</para>
     ///
-    /// <para>Reactive-only: the in-flight LEVEL selects either <c>Observable.Never</c> (disarmed)
-    /// or a fresh <c>Observable.Timer</c> (armed), flattened with <c>Switch</c> so only the
-    /// current one is live. <c>DistinctUntilChanged</c> is load-bearing: without it every
+    /// <para>🚨 <b>Phase A is not a wait when the answer is already recorded — the PARKED
+    /// short-circuit.</b> Phase A's premise is "a compile might still start". For a NodeType in
+    /// <see cref="NodeTypeCompileParkRegistry"/>'s terminal PARKED state that premise is false by
+    /// construction: parking exists precisely so the compile watcher stops dispatching Roslyn for
+    /// that type, so no compile is EVER coming and the budget can only expire. Burning it is not
+    /// merely wasteful — it is the memex 2026-08-10 boot failure. <c>Store/Plugin</c> parked on a
+    /// source error (a node-repo <c>.cs</c> calling a framework method that had been deleted);
+    /// every plugin partition root is typed by it, so each activation entered the framework-stale
+    /// heal, sat out the full 60 s, and only then overlaid. The writer that triggered the
+    /// activation — <c>UpdateRemote</c>'s initial-state read — bounds at 30 s, so it ALWAYS
+    /// failed first with "no initial state arrived within 30s": every default-install package
+    /// (Agent, Collaboration, DataModelling, Edu, Essentials, Publish) failed on every boot, and
+    /// the operator's overlay blamed a build that "did not settle" rather than the compile error
+    /// that had already been recorded and notified. Consulting the registry is the ORDERING fix —
+    /// no bound moves, nothing is retried; a wait for an event that provably cannot occur is
+    /// replaced by the answer the process already holds, so the instance reaches its overlay in
+    /// ~0 ms and comfortably inside every caller's budget.</para>
+    ///
+    /// <para>Reactive-only: the in-flight LEVEL selects either <c>Observable.Never</c> (disarmed),
+    /// the recorded parked fault (terminal), or a fresh <c>Observable.Timer</c> (armed), flattened
+    /// with <c>Switch</c> so only the current one is live. <c>DistinctUntilChanged</c> is load-bearing: without it every
     /// non-in-flight emission would restart the budget, and a chatty stream would never elapse —
     /// the same silent hang by another route. <c>StartWith(false)</c> arms it at subscribe, so
     /// Phase A is unchanged. The timer never emits OnNext, so <c>Merge</c> forwards only the
     /// settled node. <paramref name="scheduler"/> is for deterministic virtual-time tests;
     /// production uses the default scheduler.</para>
     /// </summary>
+    /// <param name="parkedFault">Probe for the terminal PARKED state — returns the fault to raise
+    /// when <see cref="NodeTypeCompileParkRegistry"/> has already recorded this NodeType as parked,
+    /// or <c>null</c> when it has not. See the "Phase A is not a wait when the answer is already
+    /// recorded" remarks above.</param>
     internal static IObservable<MeshNode> WaitForCompileSettled(
         IObservable<MeshNode> typeStream,
         IObservable<MeshNode> settled,
@@ -603,7 +638,8 @@ internal static class NodeTypeEnrichmentHelpers
         Func<Exception> onNoProgress,
         System.Reactive.Concurrency.IScheduler? scheduler = null,
         System.Text.Json.JsonSerializerOptions? options = null,
-        TimeSpan? inFlightGrace = null)
+        TimeSpan? inFlightGrace = null,
+        Func<Exception?>? parkedFault = null)
     {
         var clock = scheduler ?? System.Reactive.Concurrency.Scheduler.Default;
 
@@ -621,10 +657,16 @@ internal static class NodeTypeEnrichmentHelpers
 
         var noProgressDeadline = inFlightLevel
             .Select(x => x.InFlight
-                ? Observable.Never<long>()          // disarmed while a compile runs
-                : Observable.Timer(noProgressBudget, clock))
+                ? Observable.Never<Exception>()     // disarmed while a compile runs
+                // 🚨 Phase A is a WAIT only while the answer is still unknown. Deferred so the
+                // park is re-read on every re-arm: a compile that fails WHILE we wait parks the
+                // type on its terminal write, and the in-flight level drops to false immediately
+                // after — that re-arm must take the parked branch, not start a fresh 60 s.
+                : Observable.Defer(() => parkedFault?.Invoke() is { } parked
+                    ? Observable.Return(parked)     // already terminal — no budget to burn
+                    : Observable.Timer(noProgressBudget, clock).Select(_ => onNoProgress())))
             .Switch()
-            .SelectMany(_ => Observable.Throw<MeshNode>(onNoProgress()));
+            .SelectMany(Observable.Throw<MeshNode>);
 
         // Phase-B visibility bound: when a compile has been CONTINUOUSLY in flight for
         // inFlightGrace, emit the (unsettled — CompilationStatus Pending/Compiling, the
@@ -646,6 +688,28 @@ internal static class NodeTypeEnrichmentHelpers
         // Merge are the settled node and the grace-elapsed in-flight node. Take(1) then
         // unsubscribes the still-armed timers on the happy path.
         return settled.Merge(noProgressDeadline).Merge(inFlightOverlay).Take(1);
+    }
+
+    /// <summary>
+    /// The PARKED probe handed to <see cref="WaitForCompileSettled"/>: reads
+    /// <see cref="NodeTypeCompileParkRegistry"/> at the moment the no-progress budget would arm,
+    /// and yields the terminal fault carrying the RECORDED compile error when the type is parked.
+    ///
+    /// <para>Re-read per call (never captured once) because a type can park while the wait is
+    /// already running — the compile whose terminal Error write drops the in-flight level is the
+    /// same event that parks it.</para>
+    ///
+    /// <para>No registry (a host without <c>AddGraph</c>, a unit-test hub) ⇒ a probe that always
+    /// answers "not parked", so behaviour is exactly the pre-existing two-phase bound.</para>
+    /// </summary>
+    private static Func<Exception?> ParkedFaultProbe(IMessageHub meshHub, string nodeType)
+    {
+        var parkRegistry = meshHub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>();
+        if (parkRegistry is null)
+            return static () => null;
+        return () => parkRegistry.IsParked(nodeType)
+            ? new NodeTypeParkedException(nodeType, parkRegistry.GetParkedError(nodeType))
+            : null;
     }
 
     /// <summary>
@@ -1137,7 +1201,13 @@ internal static class NodeTypeEnrichmentHelpers
                     $"NodeType '{nodeType}' recompile did not settle and no compile is " +
                     $"in flight (within {SlowPathTimeout.TotalSeconds:0}s)."),
                 scheduler: null, options: meshHub.JsonSerializerOptions,
-                inFlightGrace: InFlightOverlayGrace)
+                inFlightGrace: InFlightOverlayGrace,
+                // 🚨 THE memex 2026-08-10 PATH. A parked source error that still carries the
+                // assembly coordinates of an EARLIER good build routes here (ApplyStreamResult
+                // reads it as "ABI-stale, recompile"), and IsRecompileSettled then accepts only a
+                // genuinely usable build — which a parked type can never produce. Without the
+                // probe this wait is a guaranteed 60 s, longer than the 30 s any writer allows.
+                parkedFault: ParkedFaultProbe(meshHub, nodeType))
                 // Grace path (still Pending/Compiling — the framework-bump sweep queues
                 // every dynamic type): stop holding the activation and serve the live
                 // progress overlay; its self-heal recycles the instance when the build lands.

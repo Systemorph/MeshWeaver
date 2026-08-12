@@ -1272,10 +1272,23 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
+        // 🚨 `**Area not found**` is a TRANSIENT frame, never a terminal verdict — do not
+        // latch it. A global `WithRenderer(_ => true, RenderMenus)` runs on every hub, so
+        // `applicable.Count` is always >= 1 and LayoutDefinition emits its not-found
+        // placeholder SYNCHRONOUSLY for an area whose real renderer has not registered yet
+        // (the instance hub re-registers its layout after a cold compile / activation).
+        // `x is not null` accepts that placeholder, so on a loaded CI runner the first frame
+        // won this race and the test read the placeholder as the answer — which is how
+        // EuropeRe_AnnualReport_EmbeddedCharts_ShouldRenderViaPathResolution went red on CI
+        // while passing on every local run. Wait for the REAL condition (a frame that is not
+        // the placeholder) instead of the first non-null one; the existing timeout still
+        // bounds a renderer that genuinely never appears.
+        // Same lesson already recorded in tools/MeshWeaver.PluginTester/AreaProbe.cs.
         var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(Math.Max(timeoutSeconds, ActivationBudgetSeconds).Seconds())
-            .Match(x => x is not null, $"{areaName} should render at {addressPath}");
+            .Match(x => x is not null && !IsAreaNotFound(x),
+                $"{areaName} should render at {addressPath} (not the 'Area not found' placeholder)");
 
         if (unwrap)
         {
@@ -1294,7 +1307,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
                 control = await stream
                     .GetControlStream(childKey)
                     .Should().Within(timeoutSeconds.Seconds())
-                    .Match(x => x is not null && (!waitForData || HasNonTrivialData(x)));
+                    .Match(x => x is not null && !IsAreaNotFound(x)
+                                && (!waitForData || HasNonTrivialData(x)));
                 Output.WriteLine($"  Ã¢â€ â€™ {control?.GetType().Name}");
             }
         }
@@ -1308,6 +1322,21 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         return control;
     }
+
+    /// <summary>
+    /// True for the framework's <c>**Area not found**</c> placeholder
+    /// (<c>LayoutDefinition.BuildNotFoundControl</c>).
+    ///
+    /// <para>🚨 This frame is TRANSIENT, not a verdict. Every hub carries a global
+    /// <c>WithRenderer(_ => true, RenderMenus)</c>, so the composed stream always has an
+    /// applicable renderer and LayoutDefinition emits the placeholder immediately for an area
+    /// whose real renderer has not registered yet. Any wait of the shape
+    /// <c>Match(x => x is not null)</c> can therefore latch it on a loaded runner — the whole
+    /// reason this helper exists. Treat it as "keep waiting", never as the rendered control.</para>
+    /// </summary>
+    private static bool IsAreaNotFound(UiControl? control)
+        => control is MarkdownControl md
+           && (md.Markdown?.ToString() ?? "").Contains("**Area not found**", StringComparison.Ordinal);
 
     /// <summary>
     /// Checks if a control has meaningful data (not all zeros).
