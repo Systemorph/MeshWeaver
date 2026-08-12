@@ -49,6 +49,9 @@ public static class CodeLayoutAreas
     public const string RunButtonArea = "Run";
     /// <summary>Area id of the "code changed — re-run" chip inside the cell toolbar.</summary>
     public const string StaleChipArea = "StaleChip";
+
+    /// <summary>Area id of the toolbar's execution-state chip (Running… / ✓ Done / ✗ Failed).</summary>
+    public const string StatusChipArea = "StatusChip";
     /// <summary>Area id of the Cancel button inside the cell toolbar.</summary>
     public const string CancelButtonArea = "Cancel";
     /// <summary>Area id of the Edit button inside the cell toolbar.</summary>
@@ -337,11 +340,16 @@ public static class CodeLayoutAreas
                 EditButtonArea);
         }
 
-        // Right-aligned, subtle metadata: language badge + last-run provenance.
+        // Right-aligned, subtle metadata: execution state, language badge, last-run provenance.
         var meta = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("display: flex; align-items: baseline; gap: 12px; margin-left: auto; " +
                        "color: var(--neutral-foreground-hint); font-size: 0.8rem;");
+        // The execution state lives HERE, in the toolbar — not as a heading above the output.
+        // Running shows live progress in the pane; once terminal, the chip is what says the cell
+        // is idle (✓ Done / ✗ Failed / …) so the output pane can show the result alone.
+        if (isExecutable && CellStatusChip(lastActivity, locale) is { } statusChip)
+            meta = meta.WithView(statusChip, StatusChipArea);
         meta = meta.WithView(Controls.Body(language)
             .WithStyle("font-family: monospace; padding: 1px 8px; " +
                        "border: 1px solid var(--neutral-stroke-rest); border-radius: 10px;"));
@@ -356,6 +364,31 @@ public static class CodeLayoutAreas
         toolbar = toolbar.WithView(meta);
 
         return toolbar;
+    }
+
+    /// <summary>
+    /// The toolbar's execution-state chip — the ONE place that says whether the cell is actively
+    /// executing: "Running…" (accent) while the last activity runs, the terminal status word with
+    /// its glyph (✓ Done / ✗ Failed / ⚠ warnings / ⊘ Cancelled, coloured like the output pane)
+    /// once it is idle, and <c>null</c> for a cell that was never run (the provenance text already
+    /// says "never executed" — a second control saying the same would be noise). Pure — the
+    /// vocabulary is <see cref="ActivityLayoutAreas.StatusGlyph"/>, shared with the output pane,
+    /// so the two surfaces cannot drift apart.
+    /// </summary>
+    /// <param name="lastActivity">The cell's last run, or null when it never ran.</param>
+    /// <param name="locale">Viewer locale for the status words; null falls back to English.</param>
+    public static UiControl? CellStatusChip(ActivityLog? lastActivity, string? locale = null)
+    {
+        if (lastActivity is null)
+            return null;
+
+        if (lastActivity.Status == ActivityStatus.Running)
+            return Controls.Body(LocalizationCatalog.Get("ui.running", locale))
+                .WithStyle("font-weight: 600; color: var(--accent-fill-rest);");
+
+        var (glyph, label) = ActivityLayoutAreas.StatusGlyph(lastActivity.Status, locale);
+        return Controls.Body($"{glyph} {label}")
+            .WithStyle($"font-weight: 600; color: {ActivityLayoutAreas.StatusColor(lastActivity.Status)};");
     }
 
     /// <summary>

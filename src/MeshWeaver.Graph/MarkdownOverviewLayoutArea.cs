@@ -95,6 +95,32 @@ public static class MarkdownOverviewLayoutArea
     public const string CurrentMarker = "▸";
 
     /// <summary>
+    /// Area id of the STANDALONE supplied-navigation menu, registered on every node
+    /// (<c>MeshNodeLayoutAreas.AddDefaultLayoutAreas</c>). A page whose layout is NOT the markdown
+    /// Overview — a plugin's own lesson area, say — embeds this by name
+    /// (<c>new LayoutAreaControl(address, new LayoutAreaReference(SuppliedNavArea))</c>) to get the
+    /// SAME whole-course left menu the markdown pages get. Renders null when no provider claims
+    /// the page, so embedding it on a non-course page costs an empty area, never an error box.
+    /// </summary>
+    public const string SuppliedNavArea = "NodeNavigation";
+
+    /// <summary>
+    /// The standalone supplied-navigation menu — the nav rail of
+    /// <see cref="BuildWithSubNodeNav"/> without the content pane, for layouts that compose their
+    /// own page around it. Null (nothing) when no <see cref="INodeNavigationProvider"/> claims the
+    /// page: unlike the Overview there is no default-child-list fallback here, because the layouts
+    /// that embed this render their own content and only want the course index.
+    /// </summary>
+    [System.ComponentModel.Browsable(false)]
+    public static IObservable<UiControl?> SuppliedNavigationMenu(LayoutAreaHost host, RenderingContext _)
+        => SuppliedNavigation(host)
+            .Select(supplied => supplied is { Entries.Count: > 0 }
+                ? (UiControl?)Controls.NavMenu
+                    .WithSkin(s => s.WithWidth(240).WithCollapsible(true))
+                    .WithNavGroup(BuildSuppliedGroup(host, supplied))
+                : null);
+
+    /// <summary>
     /// Asks each registered <see cref="INodeNavigationProvider"/> for this page's navigation, first
     /// one that claims it wins. A provider that declines — synchronously by returning null, or
     /// reactively by emitting null / no entries — leaves core's default child list in place, and one
