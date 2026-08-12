@@ -424,7 +424,11 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // parsedQuery.Limit is the per-query limit:N hint and is still honoured
         // separately if no request-level limit was set.
         var skip = request.Skip ?? 0;
-        int? limit = request.Limit ?? parsedQuery.Limit;
+        // Non-positive is "no clip" (MeshQueryRequest.NoLimit), i.e. no load cap either — never a
+        // cap of `skip - 1`, which downstream would read as "load almost nothing".
+        int? limit = request.Limit is > 0 ? request.Limit
+            : request.Limit is null && parsedQuery.Limit is > 0 ? parsedQuery.Limit
+            : null;
         return limit is int l ? skip + l : null;
     }
 
