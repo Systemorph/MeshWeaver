@@ -117,10 +117,12 @@ public class CosmosMeshQuery : IMeshQueryProvider
 
         var parsedQuery = _parser.Parse(request.Query);
 
-        // Override limit from request if provided
+        // Override limit from request if provided. A NON-POSITIVE request limit is the framework's
+        // "return every match" encoding (MeshQueryRequest.NoLimit) — it must clear the in-query
+        // limit rather than become a `TOP -1` (invalid) or a `count >= -1` early return (one row).
         if (request.Limit.HasValue)
         {
-            parsedQuery = parsedQuery with { Limit = request.Limit };
+            parsedQuery = parsedQuery with { Limit = request.Limit is > 0 ? request.Limit : null };
         }
 
         // Strip $type filters — all items in the nodes container are MeshNodes,
