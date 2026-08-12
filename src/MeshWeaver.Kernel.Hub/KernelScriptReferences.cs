@@ -58,11 +58,47 @@ internal static class KernelScriptReferences
 
     private static ImmutableArray<PortableExecutableReference> CreateSharedSnapshot()
         => AppDomain.CurrentDomain.GetAssemblies()
+            .Where(IsProductionReferenceable)
             .Select(TryGetOrCreate)
             .Where(r => r is not null)
             .Select(r => r!)
             .Distinct()
             .ToImmutableArray();
+
+    /// <summary>
+    /// 🚨 The script reference set must be the set a PRODUCTION portal would have —
+    /// never "whatever this process happens to have loaded".
+    ///
+    /// <para><b>The defect this closes (2026-08-12, exports dead in prod):</b> the
+    /// reference set is built from <see cref="AppDomain.CurrentDomain"/>, and a TEST
+    /// process always has <c>MeshWeaver.Fixture</c> loaded (<c>MonolithMeshTestBase</c>
+    /// derives from <c>Fixture.TestBase</c>). That assembly declares, in namespace
+    /// <c>MeshWeaver.Mesh</c> — which <see cref="MeshScriptEnvironment.Imports"/> puts
+    /// in scope for every script — the test-only <c>IMeshService.QueryAsync&lt;T&gt;</c>
+    /// bridge whose own doc comment says <i>"Production code MUST NOT use these"</i>.
+    /// So the three export <c>.csx</c> templates bound to it, compiled green in ELEVEN
+    /// tests that genuinely execute them, and threw CS1061 on the first real export in
+    /// production. Test compilation was strictly MORE permissive than production, which
+    /// makes those tests unable to gate the thing they exist to gate.</para>
+    ///
+    /// <para>Excluding test scaffolding here makes script compilation in a test process
+    /// IDENTICAL to production, so every existing script test becomes a real gate for
+    /// dead-API references. This enforces a contract the Fixture already states about
+    /// itself; it is not a heuristic about what scripts "should" use.</para>
+    ///
+    /// <para>Note this bounds only the <b>script</b> reference set. Test assemblies keep
+    /// their ordinary project references, so test C# still calls the Fixture bridges
+    /// normally — it is only script text that loses the production-shadowing surface.</para>
+    /// </summary>
+    private static bool IsProductionReferenceable(Assembly asm)
+    {
+        var name = asm.GetName().Name;
+        if (string.IsNullOrEmpty(name)) return true;
+        return !IsTestScaffolding(name);
+    }
+
+    private static bool IsTestScaffolding(string assemblyName)
+        => MeshScriptEnvironment.IsTestScaffolding(assemblyName);
 
     /// <summary>
     /// The shared reference for <paramref name="asm"/>, or null when the assembly
@@ -131,6 +167,9 @@ internal static class KernelScriptReferences
         }
         foreach (var asm in sessionAssemblies)
         {
+            // Same production-parity gate as the snapshot — a DI-contributed module
+            // assembly in a test process must not widen the script surface either.
+            if (!IsProductionReferenceable(asm)) continue;
             var reference = TryGetOrCreate(asm);
             if (reference is not null && seen.Add(reference))
                 result.Add(reference);

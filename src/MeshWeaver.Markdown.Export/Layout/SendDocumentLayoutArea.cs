@@ -73,32 +73,54 @@ public static class SendDocumentLayoutArea
     {
         var hubPath = host.Hub.Address.ToString();
         var nodeName = hubPath.Contains('/') ? hubPath[(hubPath.LastIndexOf('/') + 1)..] : hubPath;
-
-        // Seed the form ONCE, outside the reactive projection. The capability probe below re-emits
-        // (false, then the real answer), so the form re-renders — and a fresh formId per render
-        // would wipe whatever the user had already typed.
-        var formId = $"send_document_form_{Guid.NewGuid().AsString()}";
-        host.UpdateData(formId, NewForm(host, nodeName));
+        var logger = Logger(host);
 
         var sender = Signed(host);
 
-        // Probed at paint time for ONE purpose: whether to show the "From: you" line. It never
-        // produces a connect button any more, so a false answer costs the user nothing — the form
-        // is fully usable either way and the identity question is put at send time instead.
-        var canSendAsUser = (string.IsNullOrEmpty(sender.ObjectId)
-                ? Observable.Return(false)
-                : host.Hub.CanSendAsUser(sender.ObjectId)
-                    .Catch((Exception _) => Observable.Return(false)))
+        // Composing requires an identity — the draft is filed under the author's own partition
+        // (that is what makes it private), and a mail with no sender to reply to should not leave
+        // the shared mailbox in the first place.
+        if (string.IsNullOrEmpty(sender.ObjectId))
+            return Observable.Return<UiControl?>(Notice(host,
+                host.Localize("ui.sendDocument.signInTitle"),
+                host.Localize("ui.sendDocument.signInBody")));
+
+        // Whether this user's own mailbox is connected. Probed when the dialog OPENS, because the
+        // answer decides whether the user is asked to connect BEFORE composing — being sent through
+        // consent only after filling the whole form is what made the round trip so expensive.
+        var canSendAsUser = (host.Hub.CanSendAsUser(sender.ObjectId)
+                .Catch((Exception _) => Observable.Return(false)))
             .StartWith(false)
             .DistinctUntilChanged();
 
+        // 🚨 The compose state is a NODE, not circuit memory. Connecting Microsoft 365 is a
+        // server-side endpoint, so the connect button must navigate with forceLoad — which tears
+        // down the Blazor circuit. Anything held in the layout area's /data store dies with it,
+        // which is exactly how a fully filled-in form used to come back empty from consent.
+        // Bound to the node stream, the form re-reads its own state and the round trip is a no-op.
+        // EnsureExists emits a single path and CombineLatest holds it across the capability probe's
+        // re-emissions — so the draft is created once per (author, document), never once per render.
+        // Gated BEHIND the permission check: someone who cannot read the document gets no draft node.
+        var draft = EmailDraftNodeType.EnsureExists(
+            host.Hub, sender.ObjectId, hubPath, NewDraft(host, nodeName), logger);
+
         return host.Hub.CheckPermission(hubPath, Permission.Read)
-            .CombineLatest(canSendAsUser, (canRead, asUser) => canRead
-                ? (UiControl?)BuildSendForm(host, hubPath, nodeName, formId, asUser, sender)
-                : (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
-                    .WithView(Controls.H2(host.Localize("error.accessDenied")).WithStyle("margin: 0 0 16px 0;"))
-                    .WithView(Controls.Markdown(host.Localize("ui.noPermissionToSend"))));
+            .SelectMany(canRead => canRead
+                ? draft.CombineLatest(canSendAsUser, (draftPath, asUser) =>
+                    (UiControl?)BuildSendForm(host, hubPath, nodeName, draftPath, asUser, sender))
+                : Observable.Return<UiControl?>(Notice(host,
+                    host.Localize("error.accessDenied"),
+                    host.Localize("ui.noPermissionToSend"))));
     }
+
+    private static ILogger? Logger(LayoutAreaHost host) =>
+        host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(SendDocumentLayoutArea).FullName!);
+
+    private static UiControl Notice(LayoutAreaHost host, string title, string body) =>
+        Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
+            .WithView(Controls.H2(title).WithStyle("margin: 0 0 16px 0;"))
+            .WithView(Controls.Markdown(body));
 
     /// <summary>The signed-in person — who the mail should come from, and who replies must reach.</summary>
     private static (string ObjectId, string Email, string Name) Signed(LayoutAreaHost host)
@@ -108,35 +130,60 @@ public static class SendDocumentLayoutArea
         return (ctx?.ObjectId ?? string.Empty, ctx?.Email ?? string.Empty, ctx?.Name ?? string.Empty);
     }
 
-    private static Dictionary<string, object?> NewForm(LayoutAreaHost host, string nodeName) =>
+    /// <summary>The clean form — what a first-time draft is seeded with, and what a stale one is
+    /// reset to.</summary>
+    private static EmailDraft NewDraft(LayoutAreaHost host, string nodeName) =>
         new()
         {
-            ["recipient"] = "",
-            ["email"] = "",
-            ["subject"] = $"{host.Localize("ui.sendDocument.defaultSubject")}: {nodeName}",
-            ["message"] = host.Localize("ui.sendDocument.defaultMessage"),
+            Recipient = "",
+            Email = "",
+            Subject = $"{host.Localize("ui.sendDocument.defaultSubject")}: {nodeName}",
+            Message = host.Localize("ui.sendDocument.defaultMessage"),
             // Reading the document IN the message is the better default: nothing to open, and no
             // attachment for a mail gateway to strip. Attachment stays one click away.
-            ["delivery"] = DeliveryBody,
+            Delivery = DeliveryBody,
         };
 
     private static UiControl BuildSendForm(
-        LayoutAreaHost host, string hubPath, string nodeName, string formId,
+        LayoutAreaHost host, string hubPath, string nodeName, string draftPath,
         bool canSendAsUser, (string ObjectId, string Email, string Name) sender)
     {
-        var dataContext = LayoutAreaReference.GetDataPointer(formId);
+        // 🚨 THE fix for the lost form: a node-bound DataContext. Every control below is unchanged
+        // — TextField, MeshNodePicker, TextArea and RadioGroup all route their writes through
+        // FormComponentBase → BlazorView.UpdatePointer → GetMeshNodeStream(path).Update, debounced,
+        // per field. One source of truth (the node stream), no /data replica, no save subscription.
+        var dataContext = LayoutAreaReference.GetMeshNodeDataContext(draftPath, bindContent: true);
 
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; max-width: 640px;");
         stack = stack.WithView(Controls.H2($"{host.Localize("ui.sendDocument.title")}: “{nodeName}”")
             .WithStyle("margin: 0 0 12px 0;"));
 
-        // The ONLY identity text before sending, and only when there IS something reassuring to say:
-        // this mail leaves from your address. Not connected ⇒ nothing here at all; the user gets to
-        // fill the form without being told about a mailbox they have not asked about yet.
+        // Connected ⇒ one reassuring line naming the address the mail leaves from.
         if (canSendAsUser && !string.IsNullOrEmpty(sender.Email))
             stack = stack.WithView(Controls.Markdown(
                     $"{host.Localize("ui.sendDocument.fromLabel")}: {sender.Email}")
                 .WithStyle("margin: 0 0 16px 0; opacity: 0.7; font-size: 0.9em;"));
+
+        // NOT connected ⇒ the connect step goes FIRST, before the fields. Discovering the
+        // authentication requirement only after filling in recipient, subject and message is the
+        // expensive order, and it is the order that lost people's work. It stays an OFFER, not a
+        // gate: the form below is fully usable, and sending without connecting simply goes from the
+        // shared mailbox with a reply-to. Either way the draft is already on its node, so taking
+        // the round trip now costs nothing.
+        else if (!canSendAsUser && ConnectUrl(host) is { } connectUrl)
+            stack = stack.WithView(Controls.Stack
+                .WithWidth("100%")
+                .WithStyle("padding: 12px 16px; margin: 0 0 16px 0; border-radius: 6px; "
+                           + "background: var(--neutral-layer-2);")
+                .WithView(Controls.Markdown(host.Localize("ui.sendDocument.connectFirst"))
+                    .WithStyle("margin: 0 0 8px 0; font-size: 0.9em;"))
+                .WithView(Controls.Button(host.Localize("ui.sendDocument.connect"))
+                    .WithAppearance(Appearance.Accent)
+                    .WithClickAction((Action<UiActionContext>)(c =>
+                        // 🚨 forceLoad: this leaves the Blazor app for a server-side MVC endpoint.
+                        // The circuit dies here — which is safe now only because the compose state
+                        // lives on the draft node rather than in this circuit.
+                        c.NavigateTo(connectUrl, forceLoad: true)))));
 
         // PRIMARY recipient: a plain email address. This is what sharing a document normally means,
         // and it is the field the user reaches for first.
@@ -196,29 +243,52 @@ public static class SendDocumentLayoutArea
             .WithStyle("gap: 8px;")
             .WithView(Controls.Button(host.Localize("common.send"))
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(actx => SubmitSend(actx, host, hubPath, formId)))
+                .WithClickAction(actx => SubmitSend(actx, host, hubPath, draftPath)))
+            // Cancel IS the discard affordance: it drops the draft and leaves. Abandoning the page
+            // any other way (closing the tab, navigating off, going through consent) deliberately
+            // KEEPS it — that is the whole point of persisting it.
             .WithView(Controls.Button(host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
-                .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.OverviewArea))));
+                .WithClickAction((Action<UiActionContext>)(c =>
+                {
+                    EmailDraftNodeType.Discard(host.Hub, draftPath)
+                        .Subscribe(_ => { }, ex => Logger(host)?.LogWarning(
+                            ex, "SendDocument: discarding draft {Path} failed", draftPath));
+                    c.NavigateTo(MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.OverviewArea));
+                }))));
 
         return stack;
     }
 
-    private static void SubmitSend(UiActionContext actx, LayoutAreaHost host, string hubPath, string formId)
+    /// <summary>
+    /// The consent URL for this deployment, with a return URL that lands back on THIS dialog —
+    /// or null when the deployment has no connect flow at all.
+    /// </summary>
+    private static string? ConnectUrl(LayoutAreaHost host)
     {
-        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger(typeof(SendDocumentLayoutArea).FullName!);
+        var connectHref = host.Hub.ConnectAsUserHref();
+        if (string.IsNullOrEmpty(connectHref))
+            return null;
+        var returnUrl = MeshNodeLayoutAreas.BuildUrl(host.Hub.Address.ToString(), SendArea);
+        return $"{connectHref}?returnUrl={Uri.EscapeDataString(returnUrl)}";
+    }
 
-        actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+    private static void SubmitSend(UiActionContext actx, LayoutAreaHost host, string hubPath, string draftPath)
+    {
+        var logger = Logger(host);
+
+        // Read the state from the DRAFT NODE — the same single source of truth the form writes to.
+        // Not from a /data replica, which would not have survived a consent round trip.
+        host.Workspace.GetMeshNodeStream(draftPath)
+            .Where(n => n is not null)
             .Take(1)
+            .Select(n => n!.ContentAs<EmailDraft>(host.Hub.JsonSerializerOptions) ?? new EmailDraft())
             .Subscribe(form =>
             {
-                string Get(string key) => form.GetValueOrDefault(key)?.ToString()?.Trim() ?? "";
-
-                var recipient = Get("recipient");
-                var email = Get("email");
-                var subject = Get("subject");
-                var message = Get("message");
+                var recipient = form.Recipient?.Trim() ?? "";
+                var email = form.Email?.Trim() ?? "";
+                var subject = form.Subject?.Trim() ?? "";
+                var message = form.Message?.Trim() ?? "";
 
                 if (string.IsNullOrWhiteSpace(recipient) && string.IsNullOrWhiteSpace(email))
                 {
@@ -235,7 +305,7 @@ public static class SendDocumentLayoutArea
 
                 // Body delivery needs the email-safe HTML export — the only format that is inline
                 // -CSS/table-based AND that resolves embedded layout areas. Attachment keeps PDF.
-                var asBody = !string.Equals(Get("delivery"), DeliveryAttachment, StringComparison.Ordinal);
+                var asBody = !string.Equals(form.Delivery, DeliveryAttachment, StringComparison.Ordinal);
                 var delivery = asBody ? DocumentDelivery.EmailBody : DocumentDelivery.Attachment;
                 var options = new DocumentExportOptions
                 {
@@ -275,9 +345,16 @@ public static class SendDocumentLayoutArea
                         result =>
                         {
                             if (result.Success)
+                            {
+                                // The mail is out — the draft has served its purpose and must not
+                                // resurface the next time this document is shared.
+                                EmailDraftNodeType.Discard(host.Hub, draftPath)
+                                    .Subscribe(_ => { }, ex => logger?.LogWarning(
+                                        ex, "SendDocument: discarding sent draft {Path} failed", draftPath));
                                 ShowDialog(actx, host.Localize("ui.sendDocument.sent"),
                                     $"**{hubPath.Split('/').Last()}** →\n\n"
                                     + string.Join("\n", result.SentTo.Select(r => $"- {r}")));
+                            }
                             else
                                 ShowDialog(actx, host.Localize("ui.sendDocument.failed"),
                                     result.Error ?? host.Localize("ui.sendDocument.failedBody"));
@@ -307,8 +384,6 @@ public static class SendDocumentLayoutArea
     private static void AskWhichMailbox(
         UiActionContext actx, LayoutAreaHost host, string replyTo, Action sendFromShared)
     {
-        var connectHref = host.Hub.ConnectAsUserHref();
-
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px; flex-wrap: wrap;")
@@ -324,10 +399,8 @@ public static class SendDocumentLayoutArea
                     sendFromShared();
                 })));
 
-        if (!string.IsNullOrEmpty(connectHref))
+        if (ConnectUrl(host) is { } url)
         {
-            var returnUrl = MeshNodeLayoutAreas.BuildUrl(host.Hub.Address.ToString(), SendArea);
-            var url = $"{connectHref}?returnUrl={Uri.EscapeDataString(returnUrl)}";
             actions = actions.WithView(Controls.Button(host.Localize("ui.sendDocument.connect"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction((Action<UiActionContext>)(c =>
