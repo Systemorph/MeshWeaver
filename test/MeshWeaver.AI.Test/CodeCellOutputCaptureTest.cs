@@ -361,11 +361,13 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
         var root = (StackControl)(await stream.GetControlStream(reference.Area!)
             .Should().Within(60.Seconds()).Match(c => c is StackControl s
                 && s.Areas.Any(a => IsArea(a, ActivityLayoutAreas.ResultArea))))!;
-        var order = root.Areas.Select(a => a.Area?.ToString() ?? "").ToList();
-        order.FindIndex(a => a.EndsWith("/" + ActivityLayoutAreas.ResultArea, StringComparison.Ordinal))
+        // Positions via IsArea, which accepts a bare id as well as the rendered "Progress/…"
+        // prefix — the same tolerance the rest of this test uses, so a change of rendering root
+        // cannot turn the ORDER assertion into a "not found" (-1) that reads as a wrong position.
+        root.Areas.FindIndex(a => IsArea(a, ActivityLayoutAreas.ResultArea))
             .Should().Be(0, "the result leads the output pane");
-        order.FindIndex(a => a.EndsWith("/" + ActivityLayoutAreas.StatusArea, StringComparison.Ordinal))
-            .Should().Be(order.Count - 1, "the status is the pane's footer, never its headline");
+        root.Areas.FindIndex(a => IsArea(a, ActivityLayoutAreas.StatusArea))
+            .Should().Be(root.Areas.Count - 1, "the status is the pane's footer, never its headline");
         var resultArea = root.Areas.First(a => IsArea(a, ActivityLayoutAreas.ResultArea)).Area!.ToString()!;
 
         // …and it is the LIVE control tree: the returned Stack's child renders as the markdown
