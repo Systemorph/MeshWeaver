@@ -31,9 +31,20 @@ git worktree remove /Users/roland/code/MW-my-change   # once merged/abandoned
 
 CI builds **Release with warnings-as-errors**: `dotnet build --no-restore -c Release -p:CIRun=true -warnaserror`. A plain local `dotnet build` (Debug, no `-warnaserror`) passes while CI fails — warnings are promoted to errors there. Pushing a red branch wastes a CI cycle and, per the green-merge gate, blocks the pull-based self-update if it reaches main. So **before every push**:
 
-1. **🚨 Sync with `main` FIRST — every push, every PR, no exceptions.** `git fetch origin main && git merge origin/main` (or rebase), and do it again before you merge if main has moved since. A PR check builds your branch **merged with current main** — a stale branch inherits main's state (including any half-committed-WIP red, e.g. a `.razor` referencing a type whose `.cs` wasn't committed), and you discover it only on CI. Build what CI builds.
+1. **The bar is MERGEABLE, not merged.** A branch that is merely *behind* main merges fine — do NOT re-sync and re-run CI just to catch up. The `main pr protection` ruleset has **`strict_required_status_checks_policy: false`** and exactly ONE required check, `Consolidate test results`. Verify rather than trust this line:
 
-   **This is now enforced**: the `main pr protection` ruleset sets `strict_required_status_checks_policy`, so GitHub refuses to merge a branch that is behind main. The rule exists because the cost is invisible and large — a stale branch re-samples flakes that main has ALREADY fixed, and every one of those looks like a defect in *your* change. PR #794 burned five CI runs and most of a day that way: three different red tests, two of them already fixed on main, none of them caused by the branch. **If CI fails on something your diff does not touch, merge main before you investigate anything.**
+   ```bash
+   gh api repos/Systemorph/MeshWeaver/rulesets/2128472 \
+     --jq '.rules[] | select(.type=="required_status_checks") | .parameters | {strict: .strict_required_status_checks_policy, checks: [.required_status_checks[].context]}'
+   ```
+
+   Merging main into every branch before every push costs a full CI cycle per PR and, with several PRs in flight, most of the throughput — the first merge makes every other branch stale again. Merge to main, then let main's own build recompile. What you DO owe: no conflicts, and a green required check.
+
+   **Merge main only when it actually buys something**, which is exactly two cases:
+   - **The PR is `DIRTY`** (real conflicts). Resolve it — and afterwards run the revert-check: `git diff origin/main...HEAD --stat` (THREE dots) must show only your intended files. A branch-favoured hunk silently undoing someone else's merged work is a real failure mode here, not a hypothetical.
+   - **CI fails on something your diff does not touch.** Merge main *before* investigating: a stale branch re-samples flakes main has ALREADY fixed, and each one looks like a defect in your change. PR #794 burned five CI runs and most of a day that way — three different red tests, two already fixed on main, none caused by the branch.
+
+   🚨 But do not let that second case become a blanket excuse. Before attributing a red to main, check whether your diff can actually reach the failing test. "It's only markdown" is NOT such a check: `content/ai/**` ships as loadable Skill/Agent nodes with tests over them, and an unquoted `: ` in front matter stops a skill loading (2026-08-12).
 2. **Build with CI's flags**: `dotnet build -c Release -warnaserror` for at least the projects you touched and their dependents. Green here ⇒ green there for compile/warning errors. The classic miss: **CS9107** — a primary-constructor parameter captured *and* passed to a base ctor (warning in Debug, ERROR under `-warnaserror`). Fix it at the root: use the base's exposed member (e.g. `protected Output`) instead of capturing the param; do NOT just `NoWarn` it.
 3. **Only push when that Release/`-warnaserror` build is clean.** Then verify the PR check went green (`gh pr checks`) before declaring done.
 
