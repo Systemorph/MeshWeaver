@@ -18,20 +18,28 @@ public static class LogPipelineGap
 {
     /// <summary>
     /// True when a query result proves lost evidence: NOTHING came back for a window far longer than
-    /// a poll interval.
+    /// a poll interval, over a stretch we were CONTINUOUSLY WATCHING.
     ///
-    /// <para>The window's LENGTH is what separates the two empty cases, and it does so without any
-    /// heuristic. In steady state the window is about one poll wide, so a genuinely idle namespace
-    /// (a deployment scaled to zero) yields short empty windows — not worth ticketing. A LONG window
-    /// exists only because the cursor could not advance, i.e. every poll during an outage threw. An
-    /// unfiltered query over such a window returning zero therefore means the store cannot show that
-    /// stretch, which is always worth knowing.</para>
+    /// <para>Both conditions are load-bearing. The window's LENGTH separates the two empty cases
+    /// without a heuristic: in steady state the window is about one poll wide, so a genuinely idle
+    /// namespace (a deployment scaled to zero) yields short empty windows that are not worth
+    /// ticketing. And CONTINUITY is what licenses the conclusion — a long window can also come from
+    /// a cold start (<see cref="LogWatcherOptions.ColdStartLookback"/> synthesises one 15 min wide,
+    /// already past the alarm threshold) or from a cursor floored by
+    /// <see cref="LogWatcherOptions.MaxCatchUp"/> after real watcher downtime. In those the watcher
+    /// simply was not there, so emptiness says nothing about the store. Only when we polled that
+    /// stretch ourselves and the store now shows nothing has evidence gone missing.</para>
     /// </summary>
     /// <param name="lineCount">Lines the (UNFILTERED) query returned.</param>
     /// <param name="window">The queried window's length.</param>
     /// <param name="alarmAfter">Minimum window length for an empty result to count as loss.</param>
-    public static bool IsLostWindow(int lineCount, TimeSpan window, TimeSpan alarmAfter) =>
-        lineCount == 0 && window >= alarmAfter;
+    /// <param name="continuouslyWatched">
+    /// Whether the window came from a persisted, un-floored cursor —
+    /// <see cref="WatcherState.IsContinuousCursor"/>.
+    /// </param>
+    public static bool IsLostWindow(
+        int lineCount, TimeSpan window, TimeSpan alarmAfter, bool continuouslyWatched) =>
+        lineCount == 0 && window >= alarmAfter && continuouslyWatched;
 
     /// <summary>
     /// The incident for a lost window.

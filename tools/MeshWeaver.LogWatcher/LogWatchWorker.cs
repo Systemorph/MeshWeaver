@@ -85,23 +85,28 @@ public sealed class LogWatchWorker(
         if (end <= start)
             return Observable.Return(Unit.Default);
 
+        // Captured with the SAME `now` the window was derived from, before the query — the lost-window
+        // verdict below is only sound for a stretch we were actually present for.
+        var continuouslyWatched = state.IsContinuousCursor(ns, now);
+
         return loki.Query(ns, start, end, options.QueryLimit).SelectMany(entries =>
         {
             var reports = BurstAggregator.Aggregate(
                 entries, options.MaxSamplesPerReport, options.MaxSampleLength, options.IgnoreCategories);
 
-            // 🚨 REACHABLE BUT EMPTY over a LONG window = the store lost that stretch. Report it as
-            // an incident of its own instead of accepting silence as good news. See
-            // LogWatcherOptions.SilentWindowAlarm for why the window's LENGTH is the discriminator
-            // (a short empty window is just a quiet minute; a long one only exists because every
-            // poll during an outage threw and the cursor could not advance).
+            // 🚨 REACHABLE BUT EMPTY over a LONG window WE WATCHED = the store lost that stretch.
+            // Report it instead of accepting silence as good news. Both qualifiers matter: a short
+            // empty window is just a quiet minute, and a long window we were NOT present for (a cold
+            // start's ColdStartLookback, or a cursor floored by MaxCatchUp after watcher downtime)
+            // says nothing about the store — see LogPipelineGap.IsLostWindow.
             //
             // Note the asymmetry that makes this the ONLY hole worth plugging: while Loki is
             // unreachable the query THROWS, Tick's Catch logs it loudly and the cursor stays put —
             // that half was already safe. It is the recovery, with an empty store, that used to pass
             // silently.
             var silentWindow = end - start;
-            if (LogPipelineGap.IsLostWindow(entries.Count, silentWindow, options.SilentWindowAlarm))
+            if (LogPipelineGap.IsLostWindow(
+                    entries.Count, silentWindow, options.SilentWindowAlarm, continuouslyWatched))
             {
                 logger?.LogCritical(
                     "{Namespace}: Loki returned ZERO lines for a {Minutes:F0} minute window "

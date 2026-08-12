@@ -33,11 +33,21 @@ helm repo update >/dev/null 2>&1
 #
 # Accept before doing it: whatever the old emptyDir held is discarded. That is the one-time cost of
 # never losing a window again.
-helm upgrade --install loki grafana/loki-stack -n monitoring --create-namespace \
+# 🚨 Check helm's exit EXPLICITLY. This script runs without `set -e` (the `helm repo add` above is
+# allowed to fail when the repo already exists), so without this a failed install would be followed
+# by the verification echoes below and the script would still exit 0 — an install failure that reads
+# like success. Exactly the shape the repo bans in CI gates, and it belongs here too.
+if ! helm upgrade --install loki grafana/loki-stack -n monitoring --create-namespace \
   -f "$VALUES" \
   --set grafana.enabled=true --set prometheus.enabled=true \
   --set grafana.adminPassword="$GRAFANA_PW" --set grafana.service.type=ClusterIP \
   --wait --timeout 10m
+then
+  echo "FATAL: helm upgrade failed — the stack was NOT installed/updated." >&2
+  echo "If it complains about immutable StatefulSet fields, that is the persistence change:" >&2
+  echo "  kubectl -n monitoring delete sts loki --cascade=orphan   # then re-run, then delete pod loki-0" >&2
+  exit 1
+fi
 
 echo
 echo "Verify the three things chart defaults get wrong (all must be non-empty / true):"

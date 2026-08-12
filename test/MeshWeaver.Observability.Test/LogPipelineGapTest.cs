@@ -15,11 +15,13 @@ namespace MeshWeaver.Observability.Test;
 /// never ticketed — and `mw-log-watcher` reads FROM Loki, so it was blind for exactly as long as it
 /// mattered.</para>
 ///
-/// <para>What makes this decidable without a heuristic is the WINDOW'S LENGTH, and that is what these
-/// tests pin. The Loki query is UNFILTERED (see <c>LokiQueryShapeTest</c>), so a running portal cannot
-/// legitimately return nothing — but in steady state the window is only about one poll interval wide,
-/// and a namespace with nothing deployed does legitimately return zero for those. A LONG window
-/// exists only because the cursor could not advance, i.e. every poll during an outage threw.</para>
+/// <para>What makes this decidable without a heuristic is the window's LENGTH plus whether we were
+/// CONTINUOUSLY WATCHING it, and that pair is what these tests pin. The Loki query is UNFILTERED (see
+/// <c>LokiQueryShapeTest</c>), so a running portal cannot legitimately return nothing — but in steady
+/// state the window is only about one poll interval wide, and a namespace with nothing deployed does
+/// legitimately return zero for those. Long windows arise three ways and only one is evidence: the
+/// cursor could not advance because every poll threw (we watched, the store lost it) versus a cold
+/// start's synthesised lookback or a cursor floored after watcher downtime (we were never there).</para>
 /// </summary>
 public class LogPipelineGapTest
 {
@@ -29,7 +31,7 @@ public class LogPipelineGapTest
     [Fact]
     public void LongEmptyWindow_IsLost()
     {
-        LogPipelineGap.IsLostWindow(0, TimeSpan.FromMinutes(51), Alarm).Should().BeTrue(
+        LogPipelineGap.IsLostWindow(0, TimeSpan.FromMinutes(51), Alarm, continuouslyWatched: true).Should().BeTrue(
             "a window that long only exists because the cursor could not advance — an unfiltered "
             + "query returning nothing for it means the store cannot show that stretch");
     }
@@ -40,7 +42,7 @@ public class LogPipelineGapTest
     [InlineData(4)]
     public void ShortEmptyWindow_IsNotLost(int minutes)
     {
-        LogPipelineGap.IsLostWindow(0, TimeSpan.FromMinutes(minutes), Alarm).Should().BeFalse(
+        LogPipelineGap.IsLostWindow(0, TimeSpan.FromMinutes(minutes), Alarm, continuouslyWatched: true).Should().BeFalse(
             "in steady state the window is about one poll wide, and a namespace with nothing "
             + "deployed returns zero for those — ticketing it would cry wolf every minute");
     }
@@ -49,7 +51,7 @@ public class LogPipelineGapTest
     [Fact]
     public void LongWindowWithLines_IsNotLost()
     {
-        LogPipelineGap.IsLostWindow(1, TimeSpan.FromHours(6), Alarm).Should().BeFalse(
+        LogPipelineGap.IsLostWindow(1, TimeSpan.FromHours(6), Alarm, continuouslyWatched: true).Should().BeFalse(
             "the store answered — a long window is exactly what catching up after downtime looks "
             + "like, and one line is proof the stretch is readable");
     }
@@ -58,7 +60,30 @@ public class LogPipelineGapTest
     [Fact]
     public void AtTheThreshold_IsLost()
     {
-        LogPipelineGap.IsLostWindow(0, Alarm, Alarm).Should().BeTrue();
+        LogPipelineGap.IsLostWindow(0, Alarm, Alarm, continuouslyWatched: true).Should().BeTrue();
+    }
+
+
+    /// <summary>
+    /// 🚨 THE FALSE POSITIVE THIS NEARLY SHIPPED WITH (Copilot review, #1265). A long window is not
+    /// by itself evidence: <c>CursorFor</c> synthesises one <c>ColdStartLookback</c> wide (15 min —
+    /// already past the 5 min alarm) when there is no persisted cursor, and floors a stale one to
+    /// <c>MaxCatchUp</c> after watcher downtime. In both the watcher simply was not there, so
+    /// emptiness says nothing about the store — a fresh watcher pointed at a quiet namespace would
+    /// otherwise file a bogus "lost window" incident on its very first tick.
+    /// </summary>
+    [Fact]
+    public void LongEmptyWindow_WeWereNotWatching_IsNotLost()
+    {
+        LogPipelineGap.IsLostWindow(0, TimeSpan.FromMinutes(15), Alarm, continuouslyWatched: false)
+            .Should().BeFalse(
+                "a cold start's synthesised lookback window is wider than the alarm threshold, but "
+                + "we were not polling that stretch — its emptiness is not evidence of loss");
+
+        LogPipelineGap.IsLostWindow(0, TimeSpan.FromHours(6), Alarm, continuouslyWatched: false)
+            .Should().BeFalse(
+                "a cursor floored by MaxCatchUp is precisely the case where we KNOW we were not "
+                + "watching — the skipped window is already reported by CursorFor's own warning");
     }
 
     /// <summary>
