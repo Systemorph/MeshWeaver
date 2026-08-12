@@ -376,6 +376,16 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         };
         var clippedByDefault = query.Limit is null;
 
+        // 🚨 Fetch ONE row past the default so the warning below can state truncation as a FACT.
+        // "rows == the limit" does not mean rows were dropped — a query with exactly
+        // DefaultFanOutLimit matches is complete — and a warning that cries truncation on a
+        // complete result trains readers to ignore it, which is how the next real one gets missed.
+        // The probe row is read but never yielded, so the caller's result is unchanged; the cost is
+        // one row on a query that already scanned every partition schema. Only for the default
+        // clip: a stated limit is the caller's own paging (no claim to make) and NoLimit is already
+        // int.MaxValue (where +1 would overflow).
+        var fetchLimit = clippedByDefault ? limit + 1 : limit;
+
         _logger?.LogInformation(
             "[CrossSchema] search_across_schemas(where='{Where}', user='{User}', order='{Order}', limit={Limit})",
             filterClause, userId, orderBy, limit);
@@ -389,7 +399,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         cmd.Parameters.Add(new NpgsqlParameter("@p_where", string.IsNullOrEmpty(filterClause) ? "" : filterClause));
         cmd.Parameters.Add(new NpgsqlParameter("@p_user", (object?)userId ?? DBNull.Value));
         cmd.Parameters.Add(new NpgsqlParameter("@p_order", orderBy));
-        cmd.Parameters.Add(new NpgsqlParameter("@p_limit", limit));
+        cmd.Parameters.Add(new NpgsqlParameter("@p_limit", fetchLimit));
 
         // ⏱️ TIMED, because this is the expensive shape and nothing used to measure it.
         // search_across_schemas builds a UNION ALL over EVERY row of public.searchable_schemas,
@@ -402,6 +412,8 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var rows = 0;
         var firstRowMs = -1L;
+        // Set only when the probe row exists — i.e. matches were genuinely dropped.
+        var truncated = false;
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         // 🚨 try/FINALLY, not a call after the loop. A caller that stops enumerating early — a
         // `.Take(n)`, a `break`, a cancellation, or a throw out of ReadMeshNode — disposes the
@@ -412,6 +424,12 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         {
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
+                // The probe row proves there was more, and is NOT part of the answer.
+                if (rows == limit)
+                {
+                    truncated = true;
+                    break;
+                }
                 if (rows++ == 0)
                     firstRowMs = sw.ElapsedMilliseconds;
                 yield return ReadMeshNode(reader, options);
@@ -429,13 +447,17 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             // the window and the stragglers sink further. #1216 (batch bake saw 50 of thousands of
             // Code nodes) and #1326 (9 of 43 Spaces never re-synced while the webhook reported
             // success) are the same line of code seen twice. Say so, and name the cure.
-            if (clippedByDefault && rows >= DefaultFanOutLimit)
+            //
+            // `truncated` is a FACT, not an inference from the row count: it is set only when a row
+            // beyond the limit actually existed. A query with exactly DefaultFanOutLimit matches is
+            // complete and stays silent.
+            if (truncated)
                 _logger?.LogWarning(
-                    "[CrossSchema] TRUNCATED at the default fan-out limit of {Limit} rows "
-                    + "(where='{Where}', order='{Order}'). The caller stated no limit, so this result "
-                    + "is a PAGE — the most recently modified matches — not the complete set, and "
-                    + "there is no way for it to tell. If the caller enumerates the result as the "
-                    + "whole set, it must say MeshQueryRequest.Complete().",
+                    "[CrossSchema] TRUNCATED at the default fan-out limit of {Limit} rows — matches "
+                    + "beyond it were DROPPED (where='{Where}', order='{Order}'). The caller stated no "
+                    + "limit, so this result is a PAGE — the most recently modified matches — not the "
+                    + "complete set, and there is no way for it to tell. If the caller enumerates the "
+                    + "result as the whole set, it must say MeshQueryRequest.Complete().",
                     DefaultFanOutLimit, filterClause, orderBy);
         }
     }
