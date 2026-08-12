@@ -512,15 +512,22 @@ public partial class QueryParser
                         namespaceUsed = true;
                         continue;
                     }
-                    if (value.Contains('*'))
+                    if (QueryWildcard.ContainsWildcard(value))
                     {
                         // Wildcard namespace: add as LIKE filter (e.g., namespace:*/_Thread).
                         // REMEMBER where it landed — `scope:` may still be ahead of us in the token
                         // stream, and a subtree scope widens this single LIKE into a self-or-below
                         // OR pair (WidenWildcardNamespacesToSubtree).
+                        //
+                        // 🚨 The pattern keeps the user's `*` (issue #1235). It used to be rewritten
+                        // to SQL's `%` right here — the ONLY Like filter in the language that did —
+                        // which forked the vocabulary: the SQL generators translate `*`→`%` anyway
+                        // when they bind the parameter, so the rewrite bought nothing, while every
+                        // in-memory evaluator (which speaks `*`) silently matched NOTHING against
+                        // the `%` form. See QueryWildcard for the full vocabulary contract.
                         (namespaceWildcardIndices ??= []).Add(filterTokens.Count);
                         filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
-                            new QueryCondition("namespace", QueryOperator.Like, [value.Replace("*", "%")])));
+                            new QueryCondition("namespace", QueryOperator.Like, [value])));
                     }
                     else
                     {
@@ -666,7 +673,8 @@ public partial class QueryParser
 
     /// <summary>
     /// Widens every wildcard <c>namespace:*/X</c> LIKE filter to cover the whole SUBTREE:
-    /// <c>(namespace LIKE '%/X' OR namespace LIKE '%/X/%')</c>.
+    /// <c>(namespace LIKE '*/X' OR namespace LIKE '*/X/*')</c> — in the AST's own <c>*</c>
+    /// vocabulary; each backend spells those as its dialect requires (<c>%</c> on SQL).
     ///
     /// <para><b>Why this exists (issue #1216).</b> A concrete <c>namespace:A/B</c> becomes a
     /// <see cref="ParsedQuery.Path"/> plus a <see cref="QueryScope"/>, and every backend walks that
@@ -706,8 +714,12 @@ public partial class QueryParser
             if (filterTokens[index].Condition is not { } self || self.Value.Length == 0)
                 continue;
             var pattern = self.Value;
+            // Same vocabulary as the pattern being widened: `*`, not SQL's `%` (issue #1235). The
+            // widened form carries TWO wildcards (`*/Source/*`), which is exactly the shape both
+            // in-memory matchers used to mishandle by splitting on the first one only.
             var below = new QueryCondition(
-                self.Selector, QueryOperator.Like, [$"{pattern.TrimEnd('/')}/%"]);
+                self.Selector, QueryOperator.Like,
+                [$"{pattern.TrimEnd('/')}/{QueryWildcard.Wildcard}"]);
             filterTokens.RemoveAt(index);
             filterTokens.InsertRange(index,
             [
