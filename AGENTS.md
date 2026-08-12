@@ -39,6 +39,35 @@ CI builds **Release with warnings-as-errors**: `dotnet build --no-restore -c Rel
 
 Full PR/merge gate: the `pullrequest` skill (CI must be GREEN before merge — main's image feeds the self-update).
 
+### 🚨 A verification step that cannot fail is not a verification step
+
+Every command below has produced a **false pass** on this repo — it looked like it succeeded and it
+did nothing. The cure is always the same shape: **demand a positive, specific success signal** —
+`0 Error(s)`, a `.trx` that exists, an elapsed time that makes sense — never "the command returned".
+
+| Trap | What you see | What actually happened | Instead |
+|---|---|---|---|
+| **`timeout` / `gtimeout`** | `command not found`, lost in a long log | Neither binary exists on this macOS host — the wrapped command **never ran** | Background it and enforce your own deadline (below) |
+| **`dotnet test --no-restore` on a project never built in this worktree** | **Zero output, exit 0, no `.trx`** | Nothing was built, so no test ran. A fresh worktree has no `bin/` — this is its default state, and `--no-build` behaves the same | `dotnet build <project>.csproj` first, then require a fresh `.trx` |
+| **`dotnet build a.csproj b.csproj`** (several project args) | `MSB1008: Only one project can be specified`, exit 1 | Nothing built. Reads like a transient and gets retried instead of fixed | One project per invocation |
+| **Piping a build into `tail`/`head`** | A tidy tail with no error lines | `Build FAILED` scrolled off, and `$?` is **the pager's** status, not the build's | Don't pipe it; capture the build's own exit code and grep the `0 Error(s)` summary |
+| **A build that finishes suspiciously fast** | `Build succeeded` in ~2 s | Up-to-date no-op — your edit may not be in it at all | Re-run with `--no-incremental` to prove a real compile happened |
+| **`--no-build` after editing a doc / non-`.cs` asset** | Tests pass, so the edit is fine | `src/MeshWeaver.Documentation/Data/**` ships as `<EmbeddedResource>`; a stale DLL still holds the **old** file, so the test never saw your change. Caught while writing this table — the run predated the edit by 54 s | Rebuild after editing embedded content, and check the DLL's mtime is newer than the file's |
+| **Reading a background task's output file right after launching it** | Plausible contents, so "the wait completed" | You read a stale, empty, or partial file. One session's "29 minutes of sleeps" had actually elapsed **2 minutes** | Compare wall-clock elapsed against the expected duration, not just the contents |
+
+**Capping a run without `timeout`** — `timeout` exists on CI's Linux runners, NOT on this macOS host.
+Locally: start the run in the background, hold the deadline yourself, and finish on the positive signal.
+
+```bash
+date -u                                                       # 1. record the start — UTC, so it compares with CI
+dotnet build test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj   # 2. never skip: --no-restore alone runs nothing
+dotnet test test/MeshWeaver.Data.Test --no-build --logger trx        # 3. run_in_background: true
+date -u                                                       # 4. poll; over budget ⇒ WEDGED, not slow
+ls -la test/MeshWeaver.Data.Test/TestResults/*.trx            # 5. the pass signal: a .trx newer than step 1
+```
+
+Over budget means **stuck** — find what is not completing (see "No band-aids"), never raise the bound.
+
 ## 🚨🚨🚨 ABSOLUTE: Green CI does NOT mean the mesh compiles — in-mesh source is invisible to `dotnet build`
 
 **Every `.cs` stored in a mesh node — NodeType `Source/*.cs`, Scripts, layout areas — compiles at RUNTIME in the portal, NEVER in CI.** The repo's node trees are `<None>` content (`samples/Graph/MeshWeaver.Samples.Graph.csproj`), so **12k+ lines of C# under `samples/Graph/Data/` and `content/` are never type-checked by any build or any test.** Worse, **a NodeType's `configuration` lambda is C# stored in a JSON string field** — so it is invisible to every `.cs`-shaped habit at once: `grep --include='*.cs'`, `dotnet build`, and any compile gate that only scans `Source/`. When you delete a framework symbol, search the node **JSON** too.
@@ -99,8 +128,9 @@ If a Log call is genuinely too noisy or too quiet at the level it's written, fix
 When CI fails, **DO NOT run entire test projects** — iterate one test at a time:
 
 1. Read failed test names from CI logs (`gh run view <id> --log`)
-2. `dotnet test <project> --filter "FullyQualifiedName~<TestName>" --no-build --no-restore`
-3. **No skipping** — CI-only failures catch real timing/state bugs
+2. `dotnet build <project>.csproj` — in a fresh worktree, skipping this makes step 3 a silent no-op (exit 0, no output, no `.trx`)
+3. `dotnet test <project> --filter "FullyQualifiedName~<TestName>" --no-build`
+4. **No skipping** — CI-only failures catch real timing/state bugs
 
 Full guidance: [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md) · [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) · [TestStateIsolation.md](src/MeshWeaver.Documentation/Data/Architecture/TestStateIsolation.md)
 
@@ -358,13 +388,17 @@ Routes + full reference: [Deployment.md](src/MeshWeaver.Documentation/Data/Archi
 
 ## Bash Command Guidelines
 
-**Stay in root** (`C:\dev\MeshWeaver`). Avoid chained commands (`&&`, `||`), `for` loops, and `cd` — they all require user confirmation.
+**Stay at the root of your worktree** — never the primary checkout, and never a hard-coded path (the
+old `C:\dev\MeshWeaver` here predated the worktree rule above). Avoid chained commands (`&&`, `||`),
+`for` loops, and `cd` — they all require user confirmation. Avoid piping a build or test through
+`tail`/`head` too: the pipeline's exit code becomes the pager's, hiding `Build FAILED`.
 
 ## Development Commands
 
 ```bash
-dotnet build                                              # Build solution
-dotnet test test/MeshWeaver.Data.Test --no-restore        # Run one test project
+dotnet build                                              # Build solution (ONE project arg max — several is an MSB1008 no-op)
+dotnet build test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj   # Build one project — required before --no-build
+dotnet test test/MeshWeaver.Data.Test --no-build          # Run one test project (built above; unbuilt = silent exit 0)
 dotnet run --project memex/Memex.Portal.Monolith          # Monolith standalone (https://localhost:7122, http://localhost:5022)
 dotnet run --project memex/aspire/Memex.AppHost           # Aspire (requires Docker) — portal at https://localhost:7202, http://localhost:5202
 aspire run --project memex/aspire/Memex.AppHost           # Aspire via CLI (registers with `aspire mcp`) — same URLs as above
@@ -725,25 +759,29 @@ xUnit v3 config (`test/xunit.runner.json`): `parallelizeAssembly: false`,
 construction, class init, or teardown is outside it and runs unbounded — on 2026-08-04 an
 orphaned local run sat at a pegged core for 25+ minutes, and together with a leaking e2e
 container drove the colima VM to 128 MB free / load average 195, OOM-killing unrelated
-containers. So **always give a local test run its own wall-clock cap**:
+containers. So **always give a local test run its own wall-clock cap** — but **not with `timeout`**:
+neither `timeout` nor `gtimeout` exists on this macOS host, so `timeout 20m dotnet test …` runs
+**nothing** and reports `command not found`. Background the run and hold the deadline yourself,
+against `date -u`: see "A verification step that cannot fail is not a verification step" above for
+the five-step shape (build first, run in background, poll elapsed, require a fresh `.trx`).
 
-```bash
-timeout 20m dotnet test test/MeshWeaver.Data.Test --no-restore    # hard cap, always
-```
-
-CI has the equivalent at two levels: `timeout 8m` per project inside the shard loop, and
-`timeout-minutes: 20` on the shard job itself for a wedge BETWEEN projects (which the
-per-project cap cannot see). If a run hits either, it is stuck — do not raise the bound,
-find what is not completing (AGENTS.md → "No band-aids").
+CI has the equivalent at two levels — its runners are Linux, where `timeout` does exist: `timeout 8m`
+per project inside the shard loop, and `timeout-minutes: 20` on the shard job itself for a wedge
+BETWEEN projects (which the per-project cap cannot see). If a run hits either, it is stuck — do not
+raise the bound, find what is not completing (AGENTS.md → "No band-aids").
 
 Full guidance: [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md)
 
 ### Running Tests
 
 ```bash
-dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore
-dotnet test test/MeshWeaver.Graph.Test --filter "ClassName~AccessAssignment" --no-restore
+dotnet build test/MeshWeaver.Hosting.Monolith.Test/MeshWeaver.Hosting.Monolith.Test.csproj
+dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-build
+dotnet test test/MeshWeaver.Graph.Test --filter "FullyQualifiedName~AccessAssignment" --no-build
 ```
+
+Build first, every time: `dotnet test --no-restore`/`--no-build` against a project this worktree has
+never built exits **0 with no output and no `.trx`** — an unmissable-looking pass that ran nothing.
 
 Workflow: run once in background → read failures → fix → run once more. **🚨 NEVER re-run a test (single or suite) unless code under test has changed.** Re-running to "see if it was a flake" hides the bug — flakes are real races. Either fix the race or pin the failure with a smaller repro; do not retry. The only exceptions: (a) the test harness itself crashed (MSBuild MSB4166, infrastructure error — re-run is the same input), (b) the previous run was killed by the user before completion.
 
