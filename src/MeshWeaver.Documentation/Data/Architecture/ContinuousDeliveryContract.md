@@ -17,7 +17,6 @@ two properties that make a partial or missing release impossible rather than mer
 |---|---|---|
 | `memex-portal-ai` | linux/amd64 + arm64 | **the self-updater** — the only repository it lists |
 | `memex-migration` | linux/amd64 + arm64 | rolled to the same version as the portal, applies schema |
-| `memex-bake` | linux/amd64 + arm64 | the NodeType bake gate — certifies the node repos compile |
 | `mw-plugin-test` | linux/amd64 + arm64 | the plugins repo's CI (ACR **and** a GHCR mirror) |
 | `memex-portal-next` | linux/amd64 (by design) | pinned explicitly by deployments |
 
@@ -177,7 +176,7 @@ computes `3.0.0-rc1.ci.<n>`, so its version tag has never matched its siblings'.
 (the self-updater reads `memex-portal-ai` only; deployments pin portal-next explicitly), and changing
 a published tag shape would break whatever is pinned today. It is documented at the line that
 produces it rather than silently "fixed". This is also why `check-image-set.sh` identifies the set by
-**short SHA** and not by version tag: the SHA is the one identity all five images share.
+**short SHA** and not by version tag: the SHA is the one identity all four images share.
 
 ## See also
 
